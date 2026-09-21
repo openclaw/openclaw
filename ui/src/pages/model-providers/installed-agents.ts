@@ -36,7 +36,7 @@ type InstalledAgent = {
 };
 
 const INSTALLATION_STATUS = {
-  installed: { kind: "ok", labelKey: "modelProviders.installedAgents.status.installed" },
+  installed: { kind: "muted", labelKey: "modelProviders.installedAgents.status.installed" },
   missing: { kind: "muted", labelKey: "modelProviders.installedAgents.status.missing" },
   unverified: { kind: "warn", labelKey: "modelProviders.installedAgents.status.unverified" },
 } as const;
@@ -172,9 +172,37 @@ export class InstalledAgentsController {
     return true;
   }
 
-  private renderAgent(agent: InstalledAgent, blocked: boolean, configuredEnabled: unknown) {
+  private renderAgent(
+    agent: InstalledAgent,
+    blocked: boolean,
+    configuredEnabled: unknown,
+    card: ModelProviderCard | undefined,
+  ) {
     const pending = this.pending.get(agent.id);
-    const status = INSTALLATION_STATUS[agent.installation];
+    const enabled =
+      pending ?? (typeof configuredEnabled === "boolean" ? configuredEnabled : agent.enabled);
+    let status: { kind: "ok" | "muted" | "warn" | "danger"; labelKey: string } =
+      INSTALLATION_STATUS[agent.installation];
+    let hint = "";
+    if (agent.installation === "missing") {
+      hint = t("modelProviders.installedAgents.installHint", { name: agent.name });
+    } else if (agent.installation === "unverified") {
+      hint = t("modelProviders.installedAgents.unverifiedHint");
+    } else if (!enabled) {
+      hint = t("modelProviders.installedAgents.disabledHint");
+    } else if (card?.catalogStatus === "auth-rejected") {
+      status = { kind: "danger", labelKey: "modelProviders.installedAgents.status.signIn" };
+      hint = t("modelProviders.installedAgents.signInHint", { name: agent.name });
+    } else if (card?.catalogStatus === "unavailable") {
+      status = { kind: "warn", labelKey: "modelProviders.status.modelsUnavailable" };
+      hint = t("modelProviders.installedAgents.discoveryHint", { name: agent.name });
+    } else if (card?.checkingModels) {
+      status = { kind: "muted", labelKey: "modelProviders.installedAgents.status.discovering" };
+    } else if (card && card.availableModelCount > 0) {
+      status = { kind: "ok", labelKey: "modelProviders.installedAgents.status.modelsAvailable" };
+    } else {
+      hint = t("modelProviders.installedAgents.signInHint", { name: agent.name });
+    }
     const message = this.messages.get(agent.id);
     return html`
       <div class="model-providers__installed-agent" data-installed-agent=${agent.id}>
@@ -190,17 +218,11 @@ export class InstalledAgentsController {
           ariaLabel: t("modelProviders.installedAgents.toggle", { name: agent.name }),
           description:
             pending === undefined
-              ? html`<span
-                  title=${
-                    agent.installation === "unverified"
-                      ? t("modelProviders.installedAgents.unverifiedHint")
-                      : nothing
-                  }
-                  >${renderSettingsStatus({ kind: status.kind, label: t(status.labelKey) })}</span
-                >`
+              ? html`${renderSettingsStatus({ kind: status.kind, label: t(status.labelKey) })}${
+                  hint ? html`<br />${hint}` : nothing
+                }`
               : renderSettingsStatus({ kind: "muted", label: t("modelProviders.saving") }),
-          checked:
-            pending ?? (typeof configuredEnabled === "boolean" ? configuredEnabled : agent.enabled),
+          checked: enabled,
           disabled: blocked || pending !== undefined,
           onChange: (checked) => this.setEnabled(agent, checked),
         })}
@@ -218,7 +240,7 @@ export class InstalledAgentsController {
     `;
   }
 
-  render() {
+  render(cards: readonly ModelProviderCard[], retryDiscovery: () => void) {
     if (!this.available()) {
       return nothing;
     }
@@ -253,7 +275,12 @@ export class InstalledAgentsController {
             this.agents.length === 0
               ? renderSettingsEmpty(t("modelProviders.installedAgents.empty"))
               : this.agents.map((agent) =>
-                  this.renderAgent(agent, blocked, nativeFlags?.[agent.id]),
+                  this.renderAgent(
+                    agent,
+                    blocked,
+                    nativeFlags?.[agent.id],
+                    cards.find((card) => card.id === agent.runtimeId),
+                  ),
                 )
           }`;
     const checkLabel = this.loading
@@ -274,7 +301,10 @@ export class InstalledAgentsController {
                   class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
                   aria-label=${checkLabel}
                   ?disabled=${this.loading || this.pending.size > 0}
-                  @click=${() => void this.list.run()}
+                  @click=${() => {
+                    void this.list.run();
+                    retryDiscovery();
+                  }}
                 >
                   ${icons.refresh}
                 </button>

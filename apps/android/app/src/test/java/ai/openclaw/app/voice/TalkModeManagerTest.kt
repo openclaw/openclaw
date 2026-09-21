@@ -67,7 +67,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -1056,6 +1058,10 @@ class TalkModeManagerTest {
         proof.scheduler.runCurrent()
         assertEquals(1, proof.player.playCalls)
         assertTrue(proof.manager.isSpeaking.value)
+        assertEquals(
+          "Speaking… — Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice.",
+          proof.manager.statusText.value,
+        )
 
         proof.player.finished.complete(Unit)
         awaitTalkWork(proof) { proof.manager.isListening.value }
@@ -1065,6 +1071,88 @@ class TalkModeManagerTest {
         assertFalse(proof.manager.isSpeaking.value)
         assertTrue(currentRecognizer() !== recognizer)
         assertFalse(currentRecognizer().isDestroyed)
+        assertEquals(
+          "Listening — Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice.",
+          proof.manager.statusText.value,
+        )
+        proof.manager.setEnabled(false)
+        assertEquals("Off", proof.manager.statusText.value)
+        assertNull(proof.manager.failureText.value)
+      }
+    }
+
+  @Test
+  fun publishedGatewayRelayContractsStartTheAdvertisedTransport() =
+    runBlocking {
+      installSpeechRecognitionService()
+      for (fixture in realtimeRelayContractCases()) {
+        val id = fixture.getValue("id").jsonPrimitive.content
+        val realtime = fixture.getValue("realtime").jsonPrimitive.boolean
+        val requests = ConcurrentLinkedQueue<JsonObject>()
+        val payload = buildJsonObject { put("config", fixture.getValue("config")) }.toString()
+        withStartedTalk(responseForRequest = { request, _ ->
+          requests.add(request)
+          payload.takeIf { request.getValue("method").jsonPrimitive.content == "talk.config" }
+        }) { proof ->
+          val creates = requests.filter { it.getValue("method").jsonPrimitive.content == "talk.session.create" }
+          assertEquals("$id must use the Gateway-advertised transport", if (realtime) 1 else 0, creates.size)
+          if (realtime) {
+            val params = creates.single().getValue("params").jsonObject
+            assertEquals("gateway-relay", params.getValue("transport").jsonPrimitive.content)
+            assertFalse("The Gateway retains model selection", params.containsKey("model"))
+            assertEquals("Listening", proof.manager.statusText.value)
+            val track = startRealtimeAudio(proof)
+            finishRealtimeAudio(proof, track, clear = true)
+          } else {
+            assertTrue(
+              "$id explains native speech startup",
+              proof.manager.statusText.value
+                .contains("Native Talk:"),
+            )
+          }
+          assertNull(proof.manager.failureText.value)
+          assertFalse(requests.any { it.getValue("method").jsonPrimitive.content in setOf("chat.send", "talk.speak") })
+          assertFalse("Realtime audio must not synthesize a native TTS reply", proof.synthesizer.requested.isCompleted)
+        }
+      }
+    }
+
+  private fun realtimeRelayContractCases(): List<JsonObject> {
+    val fixture =
+      generateSequence(java.io.File(checkNotNull(System.getProperty("user.dir"))).absoluteFile) { it.parentFile }
+        .map { java.io.File(it, "test/fixtures/talk-realtime-relay-contract.json") }
+        .first { it.isFile }
+    return Json
+      .parseToJsonElement(fixture.readText())
+      .jsonObject
+      .getValue("cases")
+      .jsonArray
+      .map { it.jsonObject }
+  }
+
+  @Test
+  fun activeNativeRouteSurvivesConfigRefreshUntilRelayRestart() =
+    runBlocking {
+      installSpeechRecognitionService()
+      val config = AtomicReference(nativeTalkConfig("en-US"))
+      withStartedTalk(responseForRequest = { request, _ ->
+        config.get().takeIf { request.getValue("method").jsonPrimitive.content == "talk.config" }
+      }) { proof ->
+        val nativeStatus = proof.manager.statusText.value
+        assertTrue(nativeStatus.contains("Gateway did not advertise GPT-Live relay support"))
+        config.set("""{"config":{"talk":{"realtime":{"model":"gpt-realtime-2.1"}}}}""")
+        val refresh = proof.scope.async { proof.manager.refreshConfig() }
+        awaitTalkWork(proof) { refresh.isCompleted }
+        refresh.await()
+        currentRecognizer().triggerOnReadyForSpeech(Bundle())
+        assertEquals("Refreshing settings must not relabel the running native loop", nativeStatus, proof.manager.statusText.value)
+
+        proof.manager.setEnabled(false)
+        assertEquals("Off", proof.manager.statusText.value)
+        proof.manager.setEnabled(true)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        assertEquals("The replacement relay must not inherit a native fallback reason", "Listening", proof.manager.statusText.value)
+        assertNull(proof.manager.failureText.value)
       }
     }
 
@@ -1322,7 +1410,10 @@ class TalkModeManagerTest {
         }
       },
     ) { proof ->
-      assertEquals("Listening", proof.manager.statusText.value)
+      assertEquals(
+        "Listening — Native Talk: Gateway did not advertise GPT-Live relay support; using device speech recognition and configured Talk voice.",
+        proof.manager.statusText.value,
+      )
       assertTrue(relayCreates.isEmpty())
       block(proof, sends)
     }
@@ -2533,10 +2624,14 @@ class TalkModeManagerTest {
   @Test
   fun rejectedSessionStartLeavesAFailureNoticeUntilTalkStartsAgain() =
     runBlocking {
+      val subscription = realtimeRelayContractCases().single { it.getValue("id").jsonPrimitive.content == "subscription" }
+      val config = buildJsonObject { put("config", subscription.getValue("config")) }.toString()
       val creates =
         java.util.concurrent.atomic
           .AtomicInteger()
-      withStartedTalk(interceptRequest = { request, socket ->
+      withStartedTalk(responseForRequest = { request, _ ->
+        config.takeIf { request.getValue("method").jsonPrimitive.content == "talk.config" }
+      }, interceptRequest = { request, socket ->
         if (request.getValue("method").jsonPrimitive.content == "talk.session.create" && creates.incrementAndGet() == 2) {
           val id = request.getValue("id").jsonPrimitive.content
           socket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"provider unavailable"}}""")

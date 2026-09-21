@@ -45,7 +45,6 @@ beforeEach(() => {
       assertCurrent: () => {},
     },
   });
-  vi.spyOn(coordinator, "prepareStateDatabaseCanonicalMutation").mockReturnValue(undefined);
   vi.spyOn(coordinator, "prepareStateDatabaseSourceExclusion").mockReturnValue(undefined);
   child.read.mockReset().mockResolvedValue(rows);
 });

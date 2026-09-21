@@ -21,7 +21,11 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
+import type {
+  SessionPatchOptions,
+  SessionPatchResult,
+  SessionPatchRoute,
+} from "../../lib/sessions/patch.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
@@ -30,6 +34,7 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -151,11 +156,7 @@ const buildChatItemsMock = vi.fn(
           key: "divider:compaction:test",
           icon: "foldVertical",
           label: "Compacted history",
-          description: "The compacted transcript is preserved as a checkpoint.",
-          action: {
-            kind: "session-checkpoints",
-            label: "Open checkpoints",
-          },
+          description: "Earlier messages were summarized to make room in the context window.",
           timestamp: 1,
         },
       ] as ReturnType<typeof chatThread.buildCachedChatItems>;
@@ -356,6 +357,36 @@ function createSessionsResultFromRows(sessions: GatewaySessionRow[]): SessionsLi
     defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
     sessions,
   };
+}
+
+function createSettingsLaneHost(
+  patch: SessionPatchRoute,
+  refresh: () => Promise<void> = async () => {},
+) {
+  const host = makeChatHost({
+    requestHandlers: {},
+    sessionKey: "main",
+    chatModelSwitchPromises: {},
+    chatThinkingLevel: "high",
+    sessionsResult: createSessionsResultFromRows([
+      {
+        key: "main",
+        agentId: "main",
+        sessionId: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "claude-fable-5",
+        modelProvider: "anthropic",
+        thinkingLevel: "high",
+        fastMode: false,
+        effectiveFastMode: false,
+      },
+    ]),
+  });
+  vi.spyOn(host.sessions, "patch").mockImplementation(patch);
+  vi.spyOn(host.sessions, "refresh").mockImplementation(refresh);
+  onTestFinished(() => host.sessions.dispose());
+  return host;
 }
 
 function createChatHeaderState(
@@ -728,7 +759,6 @@ function createBackgroundTasks(
       rows: [],
       overflowCount: 0,
       taskIds: new Set<string>(),
-      nextExpiryAt: null,
     },
     cancellingTaskIds: new Set<string>(),
     finishedCollapsed: false,
@@ -1025,25 +1055,17 @@ describe("chat run error", () => {
 });
 
 describe("chat compaction divider", () => {
-  it("renders checkpoint recovery copy and action", () => {
-    const onOpenSessionCheckpoints = vi.fn();
+  it("renders compaction copy without a checkpoint action", () => {
     const container = renderChatView({
       messages: [{ testDividerMarker: "compaction" }],
-      onOpenSessionCheckpoints,
     });
 
     expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Compacted history");
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "The compacted transcript is preserved as a checkpoint.",
+      "Earlier messages were summarized to make room in the context window.",
     );
     expect(container.querySelector(".chat-divider__icon svg")).not.toBeNull();
-    const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
-    expect(button?.textContent?.trim()).toBe("Open checkpoints");
-
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    button!.click();
-
-    expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".chat-divider__action")).toBeNull();
   });
 
   it("renders the session reset divider title", () => {
@@ -2776,89 +2798,6 @@ describe("chat loading skeleton", () => {
     expect(replyCall?.[1].activeContinuation).toBeUndefined();
   });
 
-  it("keeps multi-part run usage current when only output tokens change", () => {
-    const runId = "run-composed";
-    const user = {
-      kind: "group",
-      key: "group:user:run-composed",
-      role: "user",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:user:run-composed",
-          message: {
-            role: "user",
-            content: "Start the work.",
-            timestamp: 0,
-            __openclaw: { id: "user:run-composed", idempotencyKey: `${runId}:user` },
-          },
-        },
-      ],
-      timestamp: 0,
-      isStreaming: false,
-    };
-    const assistant = {
-      kind: "group",
-      key: "group:assistant:run-start",
-      role: "assistant",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:assistant:run-start",
-          message: { role: "assistant", content: "Starting the work.", timestamp: 1 },
-        },
-      ],
-      timestamp: 1,
-      isStreaming: false,
-      runId,
-    };
-    const tool = {
-      kind: "group",
-      key: "group:tool:run-work",
-      role: "tool",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:tool:run-work",
-          message: { role: "toolResult", content: "Tool complete.", timestamp: 2 },
-        },
-      ],
-      timestamp: 2,
-      isStreaming: false,
-      runId,
-    };
-    const reading = {
-      kind: "reading-indicator",
-      key: "reading:run-composed",
-      startedAt: 1,
-      runId,
-    };
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
-      user,
-      assistant,
-      tool,
-      reading,
-    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
-    const container = document.createElement("div");
-    const streamPartsSpy = vi.spyOn(chatMessage, "renderStreamGroupParts");
-
-    renderChatInto(container, {
-      canAbort: true,
-      runId,
-      runUsageById: new Map([[runId, { outputTokens: 5_500, seq: 1 }]]),
-      stream: null,
-    });
-    streamPartsSpy.mockClear();
-    renderChatInto(container, {
-      canAbort: true,
-      runId,
-      runUsageById: new Map([[runId, { outputTokens: 7_200, seq: 2 }]]),
-      stream: null,
-    });
-
-    expect(streamPartsSpy.mock.calls.at(-1)?.[1].runOutputTokens).toBe(7_200);
-  });
-
   it("keeps the completed recap on one composed multi-part run", () => {
     const runId = "run-composed";
     vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
@@ -3198,7 +3137,6 @@ describe("chat voice controls", () => {
       'video[aria-label="Camera preview"]',
       "camera preview",
     ) as HTMLVideoElement;
-
     expect(onToggleRealtimeCamera).toHaveBeenCalledTimes(2);
     expect(preview.srcObject).toBe(stream);
     expect(preview.autoplay).toBe(true);
@@ -3597,7 +3535,6 @@ describe("chat composer IME composition", () => {
     });
 
     textarea.dispatchEvent(arrowEvent);
-
     expect(arrowEvent.defaultPrevented).toBe(true);
     expect(onHistoryKeydown).toHaveBeenCalledOnce();
     expect(onRequestUpdate).toHaveBeenCalledOnce();
@@ -4398,7 +4335,6 @@ describe("chat slash menu accessibility", () => {
 
     inputDraftAtEnd(container, "Please /reset");
     keydownComposer(container, "Enter");
-
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/reset");
     expect(draft).toBe("Please ");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
@@ -5602,16 +5538,14 @@ describe("chat attachment picker", () => {
     });
     document.body.append(remounted);
     await waitForFast(() => {
-      expect(remounted.querySelector(".chat-selection-annotations__chip")?.textContent).toContain(
+      expect(remounted.querySelector(".chat-attachment-file__open")?.textContent).toContain(
         "First words from a remounted p…",
       );
     });
     expect(attachments[0]?.origin).toBe("paste");
-    requireElement(
-      remounted,
-      ".chat-selection-annotations__chip",
-      "pasted text chip",
-    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireElement(remounted, ".chat-attachment-file__open", "pasted text excerpt").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
     requireElement(
       sidebar.container,
       ".chat-attachment-text-action",
@@ -6173,7 +6107,6 @@ describe("chat model controls", () => {
         expect(heading.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
           loaded ? expected : "",
         );
-        expect(heading.getAttribute("title")).toBe(loaded && expected ? expected : null);
         expect(heading.textContent).not.toContain("claude@example.com");
       }
     },
@@ -7421,12 +7354,12 @@ describe("chat model controls", () => {
     },
   );
 
-  it("matches the default model by its localized marker", () => {
+  it("matches the default model by its localized marker and canonical reference", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
       models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "gpt-5.5", name: "Chat Model", provider: "openai" },
         { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
       ],
     });
@@ -7439,14 +7372,14 @@ describe("chat model controls", () => {
     const container = renderModelControls(state);
     const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
 
-    search!.value = "default";
-    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    for (const query of ["default", "gpt-5.5", "OPENAI/GPT-5.5"]) {
+      search!.value = query;
+      search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
 
-    const visibleOptions = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
-    ).filter((option) => !option.hidden);
-    expect(visibleOptions).toHaveLength(1);
-    expect(visibleOptions[0]?.dataset.chatModelDefault).toBe("true");
+      const visibleOptions = container.querySelectorAll("[data-chat-model-option]:not([hidden])");
+      expect(visibleOptions, query).toHaveLength(1);
+      expect(visibleOptions[0]?.getAttribute("data-chat-model-default")).toBe("true");
+    }
   });
 
   it("leaves digit keys to nested controls and selects the numbered row from the picker", () => {
@@ -7766,65 +7699,6 @@ describe("chat model controls", () => {
     expect(overrideOption?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
   });
 
-  it("distinguishes model rows that use different agent runtimes", () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.6",
-      modelProvider: "openai",
-      models: [
-        {
-          id: "gpt-5.6",
-          name: "GPT-5.6",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "openclaw", source: "model" },
-        },
-        {
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "codex", source: "model" },
-        },
-        {
-          id: "claude-opus-4-5",
-          name: "Claude Opus 4.5",
-          provider: "anthropic",
-          contextWindow: 200_000,
-          agentRuntime: { id: "claude-cli", source: "model" },
-        },
-        {
-          id: "gemini-3-pro",
-          name: "Gemini 3 Pro",
-          provider: "google",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "google-gemini-cli", source: "model" },
-        },
-        {
-          id: "gpt-5.6-terra",
-          name: "GPT-5.6 Terra",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "openclaw", source: "implicit" },
-        },
-      ],
-    });
-    const container = renderModelControls(state);
-    const metaFor = (value: string) =>
-      container.querySelector(
-        `[data-chat-model-option="${value}"] .chat-controls__model-option-meta`,
-      )?.textContent;
-
-    expect(metaFor("openai/gpt-5.6")).toBe("1M · OpenClaw");
-    expect(metaFor("openai/gpt-5.6")).not.toContain("Codex");
-    expect(metaFor("openai/gpt-5.6-sol")).toBe("1M · Codex");
-    // Known CLI runtime ids map to their product labels, not capitalized ids.
-    expect(metaFor("anthropic/claude-opus-4-5")).toBe("200k · Claude CLI");
-    expect(metaFor("google/gemini-3-pro")).toBe("1M · Gemini CLI");
-    // Implicitly resolved runtimes stay unlabeled; only operator-pinned
-    // (source model/provider) rows carry the runtime meta.
-    expect(metaFor("openai/gpt-5.6-terra")).toBe("1M");
-  });
-
   it("shows canonical OpenAI model names instead of command aliases", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
@@ -8046,56 +7920,30 @@ describe("chat model controls", () => {
   });
 
   it("orders model-dependent patches after a pending model switch", async () => {
-    const modelPatch = createDeferred<unknown>();
-    const thinkingUpdate = createDeferred<unknown>();
+    const modelPatch = createDeferred<SessionPatchResult | null>();
+    const thinkingUpdate = createDeferred<SessionPatchResult | null>();
     const patches: Array<Record<string, unknown>> = [];
-    const patchResult = {
+    const patchResult: SessionPatchResult = {
       ok: true,
       path: "",
       key: "main",
       entry: { sessionId: "main" },
     };
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          if (Object.hasOwn(patch, "model")) {
-            return modelPatch.promise;
-          }
-          if (Object.hasOwn(patch, "thinkingLevel")) {
-            return thinkingUpdate.promise;
-          }
-          return patchResult;
-        },
-      ),
-      refresh: async () => {},
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-          fastMode: false,
-          effectiveFastMode: false,
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        if (Object.hasOwn(patch, "model")) {
+          return modelPatch.promise;
+        }
+        if (Object.hasOwn(patch, "thinkingLevel")) {
+          return thinkingUpdate.promise;
+        }
+        return patchResult;
+      },
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     const thinkingPatch = switchChatThinkingLevel(host, "ultra");
@@ -8124,50 +7972,25 @@ describe("chat model controls", () => {
     const reconciliationStarted = createDeferred();
     const releaseReconciliation = createDeferred();
     const patches: Array<Record<string, unknown>> = [];
-    const patchResult = {
+    const patchResult: SessionPatchResult = {
       ok: true,
       path: "",
       key: "main",
       entry: { sessionId: "main" },
     };
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          return patchResult;
-        },
-      ),
-      // The list refresh is the reconcile step switchChatModel awaits; holding
-      // it open models a slow reconciliation inside the settings lane.
-      refresh: async () => {
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        return patchResult;
+      },
+      async () => {
         reconciliationStarted.resolve();
         await releaseReconciliation.promise;
       },
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     await reconciliationStarted.promise;
@@ -8181,41 +8004,17 @@ describe("chat model controls", () => {
   });
 
   it("validates queued settings independently after a model switch fails", async () => {
-    const modelPatch = createDeferred<unknown>();
+    const modelPatch = createDeferred<SessionPatchResult | null>();
     const patches: Array<Record<string, unknown>> = [];
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          return modelPatch.promise;
-        },
-      ),
-      refresh: async () => {},
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        return modelPatch.promise;
+      },
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     const thinkingPatch = switchChatThinkingLevel(host, "ultra");
@@ -8276,45 +8075,78 @@ describe("chat model controls", () => {
 
   it("keeps the newest speed selection when an older patch fails late", async () => {
     const pendingPatches: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
-    // Minimal host: the factory's mock gateway rebuilds session rows on every
-    // refresh, which would mask the optimistic fastMode value under test.
-    const host = {
-      client: {},
-      connected: true,
+    const operations: Promise<boolean>[] = [];
+    let canonical: GatewaySessionRow = {
+      key: "main",
+      agentId: "main",
+      sessionId: "main",
+      kind: "direct",
+      updatedAt: 1,
+      fastMode: false,
+      effectiveFastMode: false,
+    };
+    const host = makeChatHost({
       sessionKey: "main",
-      chatModelCatalog: [],
-      chatThinkingLevel: null,
-      sessionsResult: createSessionsResultFromRows([{ key: "main", kind: "direct", updatedAt: 1 }]),
-      sessions: {
-        patch: async (
-          _key: string,
-          _patch: Record<string, unknown>,
-          options?: SessionPatchOptions,
-        ) => {
-          if (options?.waitFor) {
-            await options.waitFor;
+      hello: {
+        ...sessionMutationGatewayHello(),
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      },
+      sessionsResult: createSessionsResultFromRows([canonical]),
+      requestHandlers: {
+        "sessions.list": () => createSessionsResultFromRows([canonical]),
+        "sessions.patch": (params: Record<string, unknown>) => {
+          const fastMode = params.fastMode;
+          if (typeof fastMode !== "boolean") {
+            throw new Error("Expected the speed race to send a boolean fastMode");
           }
-          return new Promise((resolve, reject) => {
+          return new Promise<SessionPatchResult>((resolve, reject) => {
             pendingPatches.push({
-              resolve: () =>
+              resolve: () => {
+                canonical = {
+                  ...canonical,
+                  fastMode,
+                  effectiveFastMode: fastMode,
+                  updatedAt: (canonical.updatedAt ?? 0) + 1,
+                };
                 resolve({
                   ok: true,
                   path: "",
                   key: "main",
-                  entry: { sessionId: "main" },
-                }),
+                  entry: { sessionId: "main", fastMode, updatedAt: canonical.updatedAt ?? 1 },
+                });
+              },
               reject,
             });
           });
         },
-        refresh: async () => {},
-        patchRowLocal: () => {},
       },
-    } as unknown as Parameters<typeof switchChatFastMode>[0];
+    });
+    const projectSessions = (state: typeof host.sessions.state) => {
+      host.sessionsResult = state.result;
+      host.sessionsResultAgentId = state.agentId;
+    };
+    projectSessions(host.sessions.state);
+    const stop = host.sessions.subscribe(projectSessions);
+    onTestFinished(async () => {
+      stop();
+      host.sessions.dispose();
+      for (const patch of pendingPatches) {
+        patch.resolve();
+      }
+      await Promise.allSettled(operations);
+    });
 
     const first = switchChatFastMode(host, "on");
+    operations.push(first);
     await waitForFast(() => expect(pendingPatches).toHaveLength(1));
     const second = switchChatFastMode(host, "off");
+    operations.push(second);
 
     pendingPatches[0]?.reject(new Error("boom"));
     await expect(first).resolves.toBe(false);
@@ -8858,7 +8690,6 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-confirm-popover")).not.toBeNull();
 
     resetThreadPresentation("pane-a");
-
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
     expect(document.querySelector(".chat-confirm-popover")).toBeNull();
     expect(onRewindMessage).not.toHaveBeenCalled();

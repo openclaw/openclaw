@@ -186,6 +186,10 @@ export async function runWriteConfigHealth(
       if (error instanceof ConfigWritePostCommitError) {
         // Preserve terminal publication failure before a diagnostic can replace it. No later contribution may replay this committed candidate.
         ctx.configWriteError = error;
+        if (error.publication === "partial") {
+          // The saved baseline is historical; a partial write invalidates its active revision.
+          delete ctx.configResult.confirmedConfigSource;
+        }
         throw error;
       }
       recordUpdateDoctorConfigWriteRefusal({

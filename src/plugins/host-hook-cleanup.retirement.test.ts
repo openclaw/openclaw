@@ -117,11 +117,13 @@ it.each(["registry", "cache"] as const)(
       });
       const callback = instance.wrap(() => "live");
       instance.lifecycle.onDispose(instanceCleanup);
-      registry.runtimeLifecycles.push({
-        pluginId: record.id,
-        source: record.source,
-        lifecycle: { id: "fixture", cleanup: hostCleanup },
-      });
+      for (const id of ["fixture", "sibling"]) {
+        registry.runtimeLifecycles.push({
+          pluginId: record.id,
+          source: record.source,
+          lifecycle: { id, cleanup: hostCleanup },
+        });
+      }
       const cache = createPluginCache();
       getPluginLoaderCacheState(cache).set("fixture", registry);
       const close = () =>
@@ -129,10 +131,11 @@ it.each(["registry", "cache"] as const)(
       const result = await close();
       expect(result.failures).toEqual([
         { pluginId: record.id, hookId: "runtime:fixture", error: hostFailure },
+        { pluginId: record.id, hookId: "runtime:sibling", error: hostFailure },
         { pluginId: record.id, hookId: "instance", error: disposeFailure },
       ]);
       expect(await close()).toEqual(result);
-      expect(hostCleanup).toHaveBeenCalledOnce();
+      expect(hostCleanup).toHaveBeenCalledTimes(2);
       expect(instanceCleanup).toHaveBeenCalledOnce();
       expect(callback).toThrow("reloaded or disabled");
       const replacement = new PluginInstance(record.id);

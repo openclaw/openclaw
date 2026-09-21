@@ -46,6 +46,43 @@ function createContext(root: string) {
 }
 
 describe("config snapshot plugin metadata", () => {
+  it("preserves source paths across core-only and prepared plugin reads with a Windows home", async () => {
+    const root = tempDirs.make("openclaw-config-windows-paths-");
+    const context = createContext(root);
+    const windowsHome = "C:\\Users\\fixture";
+    const resolve = path.resolve;
+    const resolveWindows = path.win32.resolve;
+    vi.spyOn(path, "resolve").mockImplementation((...segments) =>
+      segments.some((segment) => segment.startsWith(windowsHome))
+        ? resolveWindows(...segments)
+        : resolve(...segments),
+    );
+    context.pathResolution = { env: {}, homedir: () => windowsHome };
+    const plugins = {
+      enabled: false,
+      entries: { wiki: { config: { store: { path: "~/.openclaw/wiki" } } } },
+    };
+    fs.writeFileSync(context.configPath, JSON.stringify({ plugins }));
+    context.options.pluginValidation = "core-only";
+    const core = await readConfigFileSnapshotFromContext(context);
+    context.options.pluginValidation = "full";
+    const { snapshot: full } = await readConfigFileSnapshotWithPluginMetadataFromContext(context, {
+      prepareValidation: "runtime",
+    });
+
+    expect(core.valid).toBe(true);
+    expect(full.valid).toBe(true);
+    expect(core.sourceConfig).toEqual(full.sourceConfig);
+    for (const snapshot of [core, full]) {
+      expect(snapshot.authoredConfig?.plugins).toEqual(plugins);
+      expect(snapshot.sourceConfig.plugins).toEqual(plugins);
+      expect(snapshot.sourceConfigBeforeMigrations?.plugins).toEqual(plugins);
+      expect(snapshot.runtimeConfig.plugins?.entries?.wiki?.config).toEqual({
+        store: { path: "C:\\Users\\fixture\\.openclaw\\wiki" },
+      });
+    }
+  });
+
   it("leaves an absent config without authored provenance or a new file", async () => {
     const root = tempDirs.make("openclaw-config-absent-authored-");
     const context = createContext(root);

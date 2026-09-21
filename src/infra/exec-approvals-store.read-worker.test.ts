@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   withDisposableOpenClawStateReads,
@@ -14,6 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { commitExecAuthorizationLocked } from "./exec-approvals-authorization.js";
 import { loadMcpToolGrants } from "./exec-approvals-mcp.js";
 import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
@@ -34,6 +36,7 @@ vi.mock("../logging/subsystem.js", () => ({
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     testing.reset();
@@ -82,6 +85,102 @@ function watchNativeSql() {
     ),
   ];
 }
+
+it("commits unchanged authorization without main-thread SQLite and keeps its captured policy owner", async () => {
+  const { root, env } = fixture();
+  seed(env);
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const calls = watchNativeSql();
+  const authorized = commitExecAuthorizationLocked({
+    agentId: "main",
+    matches: [],
+    command: "echo synthetic",
+    authorization: {
+      source: "current-policy",
+      security: "allowlist",
+      ask: "on-miss",
+      allowlistSatisfied: true,
+    },
+  });
+  const foreign = fixture();
+  vi.stubEnv("OPENCLAW_STATE_DIR", foreign.root);
+  const assertCurrent = await authorized;
+  expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+  vi.restoreAllMocks();
+  expect(assertCurrent).not.toThrow();
+  writeExecApprovalsConfigRow({
+    db: openOpenClawStateDatabase({ env }).db,
+    file: { version: 1, defaults: { security: "deny" } },
+  });
+  expect(assertCurrent).toThrow("Exec approval changed before execution");
+  expect(fs.existsSync(foreign.databasePath)).toBe(false);
+});
+
+it("settles batched usage commits in order while isolating refused authorizations", async () => {
+  const { root, env } = fixture();
+  const source = seed(env);
+  const entry = { id: "fixture-echo", pattern: "/usr/bin/echo" };
+  writeExecApprovalsConfigRow({
+    db: source.db,
+    file: { version: 1, agents: { main: { allowlist: [entry] } } },
+  });
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const input = {
+    agentId: "main",
+    matches: [entry],
+    command: "echo first",
+    authorization: {
+      source: "current-policy" as const,
+      security: "allowlist" as const,
+      ask: "on-miss" as const,
+      allowlistSatisfied: true,
+    },
+  };
+  const calls = watchNativeSql();
+  const outcomes = await Promise.allSettled([
+    commitExecAuthorizationLocked(input),
+    commitExecAuthorizationLocked({ ...input, matches: [{ pattern: "/missing" }] }),
+    commitExecAuthorizationLocked({ ...input, command: "echo last" }),
+  ]);
+  expect(outcomes.map((result) => result.status)).toEqual(["fulfilled", "rejected", "fulfilled"]);
+  expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+  vi.restoreAllMocks();
+  const stored = await loadExecApprovalsReadOnlyAsync({ env });
+  expect(stored.agents?.main?.allowlist).toEqual([
+    expect.objectContaining({
+      ...entry,
+      lastUsedCommand: "echo last",
+      lastUsedAt: expect.any(Number),
+    }),
+  ]);
+  for (const result of outcomes) {
+    if (result.status === "fulfilled") {
+      expect(result.value).not.toThrow();
+    }
+  }
+});
+
+it("drains an accepted authorization when maintenance closes before batch dispatch", async () => {
+  const { root, env } = fixture();
+  seed(env);
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const maintenance = createOpenClawDatabaseMaintenanceScope();
+  let pending: Promise<() => void> | undefined;
+  maintenance.run(() => {
+    pending = commitExecAuthorizationLocked({
+      agentId: "main",
+      matches: [],
+      command: "echo synthetic",
+      authorization: {
+        source: "current-policy",
+        security: "allowlist",
+        ask: "on-miss",
+        allowlistSatisfied: true,
+      },
+    });
+  });
+  await Promise.all([expect(pending).resolves.toBeTypeOf("function"), maintenance.close()]);
+});
 
 it.each(["cached", "fresh"] as const)(
   "loads exact-agent policy grants from a %s source without caller SQLite",

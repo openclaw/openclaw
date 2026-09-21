@@ -12,10 +12,10 @@ import { coerceChatContentText } from "../../shared/chat-content.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import {
   assistantTraceTextFilter,
+  legacyBracketToolCallTextFilter,
+  minimaxToolCallTextFilter,
   plainToolCallTextFilter,
-  stripLegacyBracketToolCallBlocks,
-  stripMinimaxToolCallXml,
-  stripToolCallXmlTags,
+  toolCallXmlTextFilter,
 } from "../../shared/text/assistant-visible-text.js";
 import {
   findCodeRegions,
@@ -255,17 +255,14 @@ export function userFacingTextFilters(
       ],
     },
     { transform: stripInboundMetadata, activationTokens: INBOUND_METADATA_MARKERS },
-    { transform: stripMinimaxToolCallXml, activationTokens: ["<"] },
-    {
-      transform: (text) => stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true }),
-      activationTokens: ["<"],
-    },
+    minimaxToolCallTextFilter,
+    toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }),
     {
       transform: stripInternalPlaceholderLines,
       activationTokens: [EXEC_NO_OUTPUT_PLACEHOLDER, "[tool calls omitted]"],
     },
     ...(errorContext ? [assistantTraceTextFilter] : []),
-    { transform: stripLegacyBracketToolCallBlocks, activationTokens: ["["] },
+    legacyBracketToolCallTextFilter,
     plainToolCallTextFilter,
     leadingEmptyLinesTextFilter,
     duplicateParagraphTextFilter,

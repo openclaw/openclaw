@@ -85,7 +85,8 @@ async function captureProof(page: Page, name: string, compareBefore = false) {
       .agent-chat__input { background: var(--chat-composer-surface) !important;
         backdrop-filter: blur(12px) saturate(1.6) !important;
         -webkit-backdrop-filter: blur(12px) saturate(1.6) !important; }
-      .agent-chat__composer-combobox > :is(textarea, input)::placeholder {
+      .agent-chat__composer-combobox > :is(textarea, input)::placeholder,
+      .agent-chat__composer-placeholder {
         color: var(--chat-composer-tertiary) !important; }
     `,
     });

@@ -156,6 +156,19 @@ async function stagingFixture(mac: MacScriptFixture) {
   await write(path.join(root, "operator-sentinel"), "ambient home must remain untouched");
   await write(path.join(tmp, "other-task/sentinel"), "unrelated scratch must survive");
   await cp("scripts/stage-mac-node-worker.sh", path.join(scripts, "stage-mac-node-worker.sh"));
+  await write(path.join(scripts, "tsx.mjs"), "");
+  await write(
+    path.join(scripts, "prune-mac-node-worker.ts"),
+    `
+const fs = require('node:fs');
+const path = require('node:path');
+const runtime = process.argv[2];
+fs.rmSync(path.join(runtime, 'lib/node_modules/openclaw/dist/control-ui'), {
+  force: true,
+  recursive: true,
+});
+`,
+  );
   await cp(materializer, path.join(scripts, path.basename(materializer)));
   await write(path.join(scripts, "lib/mac-native-inventory.py"), readFileSync(inventory));
   await write(path.join(root, "dist/build-info.json"), '{"buildId":"unchanged-build"}');

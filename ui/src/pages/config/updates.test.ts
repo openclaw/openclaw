@@ -618,52 +618,6 @@ describe("renderUpdates", () => {
     expect(row("Status").querySelector("button")).toBeNull();
   });
 
-  it("renders bounded dev commit details only when supplied", () => {
-    render(
-      renderUpdates(
-        createProps({
-          update: {
-            updateSchedule: {
-              channel: "dev",
-              autoEnabled: false,
-              install: { kind: "git", git: { status: "behind", commitsBehind: 2 } },
-              target: {
-                kind: "git",
-                upstreamRef: "origin/main",
-                upstreamSha: "b".repeat(40),
-                commitsBehind: 2,
-              },
-            },
-            updateAvailable: {
-              currentVersion: "2026.8.1",
-              latestVersion: "2026.8.1",
-              channel: "dev",
-              currentSha: "a".repeat(40),
-              upstreamRef: "origin/main",
-              upstreamSha: "b".repeat(40),
-              commitsBehind: 2,
-              commits: [
-                { sha: "b123456", subject: "Add held update campaigns" },
-                { sha: "a987654", subject: "Show dev commit details" },
-              ],
-            },
-          },
-        }),
-      ),
-      container,
-    );
-
-    expect(row("Commits").querySelectorAll("[role='listitem']")).toHaveLength(2);
-    expect(row("Commits").textContent).toContain("b123456");
-    expect(row("Commits").textContent).toContain("Show dev commit details");
-    expect(row("Status").textContent).toContain("Update available 2 commits behind");
-    expect(row("Status").textContent).not.toContain("Up to date");
-    expect(row("Status").querySelector(".settings-status__dot")).toBeNull();
-
-    render(renderUpdates(createProps()), container);
-    expect(container.querySelector(".updates-commit-list")).toBeNull();
-  });
-
   it("shows truthful Git build, install, and commit ages", () => {
     const installedAtMs = Date.parse("2026-08-08T12:00:00Z");
     const commitAtMs = Date.parse("2026-08-08T10:00:00Z");

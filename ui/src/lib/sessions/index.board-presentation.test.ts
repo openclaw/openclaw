@@ -198,12 +198,16 @@ describe("session capability dashboard default acknowledgements", () => {
       },
     );
     expect(h.request.mock.calls.filter(([method]) => method === "sessions.patch")).toHaveLength(1);
-    h.sessions.reconcileChanged({
-      ...initial,
-      sessionKey: key,
-      reason: "patch",
-      updatedAt: 30,
-      boardPresentation: "split",
+    h.emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        ...initial,
+        sessionKey: key,
+        reason: "patch",
+        updatedAt: 30,
+        boardPresentation: "split",
+      },
     });
     h.patchReply.resolve(acknowledgement("expanded"));
     await operation;

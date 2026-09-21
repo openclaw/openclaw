@@ -52,7 +52,7 @@ export function registerExecutionTimeoutTests() {
 
       expect(execution?.result.status, JSON.stringify(execution?.result)).toBe("ok");
       expect(execution?.mutationStarted).toBe(true);
-      expect(mocks.prepareMutableUpdate).toHaveBeenCalledTimes(kind === "package" ? 2 : 3);
+      expect(mocks.prepareMutableUpdate).toHaveBeenCalledTimes(2);
       expect(mocks.prepareMutableUpdate.mock.calls.at(-1)?.[1]).toBe(
         timeoutMs === undefined ? undefined : 180_000,
       );

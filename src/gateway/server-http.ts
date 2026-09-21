@@ -26,6 +26,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
+import { CONTROL_UI_IMAGE_HTTP_ROUTES } from "./control-ui-image-http-routes.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
 import { createControlUiPublicSessionRoute } from "./control-ui-public-session.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
@@ -67,13 +68,13 @@ import {
 import {
   getCachedPluginGatewayAuthBypassPaths,
   shouldEnforceDefaultPluginGatewayAuth,
-  type PluginGatewayDispatchContext,
   type ResolvePluginNodeCapabilityRoute,
 } from "./server-http-plugin-auth.js";
 import { handleGatewayProbeRequest } from "./server-http-probes.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { runWithGatewayHttpWorkAdmission } from "./server/http-work-admission.js";
+import type { PluginHttpRequestHandler } from "./server/plugins-http.js";
 import {
   resolvePluginRoutePathContext,
   type PluginRoutePathContext,
@@ -94,13 +95,6 @@ import {
   type WorkerBootstrapArtifactTransferHttpCallback,
 } from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 
-type PluginHttpRequestHandler = (
-  req: IncomingMessage,
-  res: ServerResponse,
-  pathContext?: PluginRoutePathContext,
-  dispatchContext?: PluginGatewayDispatchContext,
-) => Promise<boolean>;
-
 type WatchNodeHttpRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 type McpOAuthCallbackHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
@@ -115,13 +109,6 @@ const getManagedMediaAttachmentsModule = createLazyRuntimeModule(
   () => import("./managed-image-attachments.js"),
 );
 const getMcpAppStandaloneModule = createLazyRuntimeModule(() => import("./mcp-app-standalone.js"));
-const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
-const getWorkspaceIconHttpModule = createLazyRuntimeModule(
-  () => import("./workspace-icon-http.js"),
-);
-const getChannelAvatarHttpModule = createLazyRuntimeModule(
-  () => import("./channel-avatar-http.js"),
-);
 const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
 const getOpenAiHttpModule = createLazyRuntimeModule(() => import("./openai-http.js"));
 const getOpenResponsesHttpModule = createLazyRuntimeModule(() => import("./openresponses-http.js"));
@@ -346,10 +333,17 @@ export function createGatewayHttpServer(opts: {
       const resolvedAuthValue = getResolvedAuth();
       const routeAuth = {
         auth: resolvedAuthValue,
+        cfg: configSnapshot,
+        getRuntimeConfig: loadGatewayConfig,
+        getResolvedAuth,
         trustedProxies,
         allowRealIpFallback,
         rateLimiter,
       };
+      const operatorAuth = () => ({
+        ...routeAuth,
+        resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
+      });
       const controlUiRouteOptions = {
         basePath: controlUiBasePath,
         config: configSnapshot,
@@ -495,16 +489,13 @@ export function createGatewayHttpServer(opts: {
         (await getEmbeddingsHttpModule()).handleOpenAiEmbeddingsHttpRequest(req, res, routeAuth),
       );
       addAdmittedStage(scopedRequestPath === "/tools/invoke", async () =>
-        (await getToolsInvokeHttpModule()).handleToolsInvokeHttpRequest(req, res, routeAuth),
+        (await getToolsInvokeHttpModule()).handleToolsInvokeHttpRequest(req, res, operatorAuth()),
       );
       addAdmittedStage(/^\/sessions\/[^/]+\/kill$/.test(scopedRequestPath), async () =>
         (await getSessionKillHttpModule()).handleSessionKillHttpRequest(req, res, routeAuth),
       );
       addAdmittedStage(/^\/sessions\/[^/]+\/history$/.test(scopedRequestPath), async () =>
-        (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
-          ...routeAuth,
-          getResolvedAuth,
-        }),
+        (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, routeAuth),
       );
       addAdmittedStage(scopedRequestPath.startsWith("/__openclaw__/board/"), async () =>
         (await getBoardHttpModule()).handleBoardHttpRequest(req, res, {
@@ -534,18 +525,16 @@ export function createGatewayHttpServer(opts: {
       );
       addAdmittedStage(openResponsesEnabled && scopedRequestPath === "/v1/responses", async () =>
         (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
-          ...routeAuth,
+          ...operatorAuth(),
           config: openResponsesConfig,
-          resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
         }),
       );
       addAdmittedStage(
         openAiChatCompletionsEnabled && scopedRequestPath === "/v1/chat/completions",
         async () =>
           (await getOpenAiHttpModule()).handleOpenAiHttpRequest(req, res, {
-            ...routeAuth,
+            ...operatorAuth(),
             config: openAiChatCompletionsConfig,
-            resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
           }),
       );
       const approvalDocument = isControlUiApprovalDocumentPath({
@@ -653,7 +642,6 @@ export function createGatewayHttpServer(opts: {
               req,
               res,
               ...routeAuth,
-              getResolvedAuth,
               requestPath: scopedRequestPath,
               resolveOperatorScopes: resolvePluginRouteRuntimeOperatorScopes,
             });
@@ -665,13 +653,18 @@ export function createGatewayHttpServer(opts: {
             pluginRequestOperatorScopes = authResult.operatorScopes;
             return false;
           },
-          () =>
-            handlePluginRequest(req, res, pluginPathContext, {
+          () => {
+            if (pluginGatewayRequestAuth?.hasCurrentClientAuthority?.() === false) {
+              sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
+              return true;
+            }
+            return handlePluginRequest(req, res, pluginPathContext, {
               gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
               gatewayRequestAuth: pluginGatewayRequestAuth,
               gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
               gatewayRequestClientIp: requestClientIp,
-            }),
+            });
+          },
         );
       }
 
@@ -688,20 +681,7 @@ export function createGatewayHttpServer(opts: {
             { ...routeAuth, basePath: controlUiRouteBasePath },
           ),
       );
-      for (const [routes, loadHandler] of [
-        [
-          ["pluginIcon", "pluginActivityIcon", "catalogIcon", "linkFavicon"],
-          async () => (await getPluginIconHttpModule()).handlePluginIconHttpRequest,
-        ],
-        [
-          ["workspaceIcon"],
-          async () => (await getWorkspaceIconHttpModule()).handleWorkspaceIconHttpRequest,
-        ],
-        [
-          ["channelAvatar"],
-          async () => (await getChannelAvatarHttpModule()).handleChannelAvatarHttpRequest,
-        ],
-      ] as const) {
+      for (const [routes, loadHandler] of CONTROL_UI_IMAGE_HTTP_ROUTES) {
         addRequestStage(
           controlUiEnabled &&
             routes.some(

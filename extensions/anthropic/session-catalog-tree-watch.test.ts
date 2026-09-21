@@ -8,6 +8,7 @@ import {
   createDirtyDirectoryWatch,
   type DirtyDirectoryWatch,
 } from "./session-catalog-tree-watch.js";
+import { createClaudeCatalogWatchDriver } from "./session-catalog-watch.test-support.js";
 
 const armed = (watch: DirtyDirectoryWatch) =>
   vi.waitFor(() => expect(watch.takeDirty()).toBeInstanceOf(Set), { timeout: 2_000, interval: 25 });
@@ -26,6 +27,25 @@ describe("Claude project directory watch", () => {
     vi.restoreAllMocks();
     await promises.rm(root, { recursive: true, force: true });
   });
+
+  it.each([1000.1, 65530.12])(
+    "arms at the deadline with a fractional clock starting at %s",
+    (start) => {
+      const driver = createClaudeCatalogWatchDriver(root);
+      const clock = vi.spyOn(performance, "now").mockReturnValue(start);
+      watch = createDirtyDirectoryWatch(path.join(root, "projects"));
+      watch.observeChildDirectories(["changed"]);
+      clock.mockReturnValue(start + 249);
+      expect(watch.takeDirty()).toBe("all");
+      expect(watch.takeDirty()).toBe("all");
+      clock.mockReturnValue(start + 250);
+      expect(watch.takeDirty()).toBe("all");
+      expect(watch.takeDirty()).toEqual(new Set());
+      driver.change("projects/changed/session.jsonl");
+      expect(watch.takeDirty()).toEqual(new Set(["changed"]));
+      expect(watch.takeDirty()).toEqual(new Set());
+    },
+  );
 
   it("reports dirty children for transcript writes and new project directories", async () => {
     if (process.platform === "darwin") {
@@ -83,6 +103,24 @@ describe("Claude project directory watch", () => {
       timeout: 2_000,
       interval: 25,
     });
+  });
+
+  it("arms controlled event delivery independently of a fractional host clock", async () => {
+    const projects = path.join(root, "projects");
+    await promises.mkdir(path.join(projects, "existing"), { recursive: true });
+    vi.spyOn(performance, "now").mockReturnValue(1000.1);
+    const driver = createClaudeCatalogWatchDriver(root);
+    watch = createDirtyDirectoryWatch(projects);
+    watch.observeChildDirectories(["existing"]);
+
+    expect(watch.takeDirty()).toBe("all");
+    driver.arm();
+    expect(watch.takeDirty()).toBe("all");
+    expect(watch.takeDirty()).toEqual(new Set());
+
+    driver.change("projects/existing/session.jsonl");
+    expect(watch.takeDirty()).toEqual(new Set(["existing"]));
+    expect(watch.takeDirty()).toEqual(new Set());
   });
 
   it("keeps Linux child coverage after file renames and skipped missing directories", () => {

@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { ChatRunRegistration, ChatRunState } from "./server-chat-state.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -135,6 +136,7 @@ export function createDirectChatContext(
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
     getRuntimeConfig,
+    trackExecution: trackAsyncWork,
     readChatMetadata: vi.fn(async () => {
       throw new Error("prepared chat metadata is unavailable in direct handler tests");
     }),

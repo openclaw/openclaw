@@ -2,8 +2,17 @@
 
 import { appendFile } from "node:fs/promises";
 import { reviewDependencyChanges } from "./dependency-guard.mjs";
-import { assertGuardUnchanged, findMaintainerApproval, readGuardReview } from "./guard-review.mjs";
-import { publishGuardStatus } from "./guard-shared.mjs";
+import {
+  SupersededReviewError,
+  assertGuardUnchanged,
+  findMaintainerApproval,
+  readGuardReview,
+} from "./guard-review.mjs";
+import {
+  GitHubRateLimitError,
+  publishGuardStatus,
+  withGitHubRateLimitRecovery,
+} from "./guard-shared.mjs";
 import { securityReviewRollout } from "./security-review-rollout.mjs";
 import { reviewSecuritySensitiveChanges } from "./security-sensitive-guard.mjs";
 
@@ -120,6 +129,12 @@ async function main() {
             allowed = false;
           }
         } catch (error) {
+          if (
+            error instanceof GitHubRateLimitError ||
+            (error instanceof SupersededReviewError && errors.length === 0)
+          ) {
+            throw error;
+          }
           errors.push(error instanceof Error ? error.message : String(error));
         }
       }
@@ -187,6 +202,9 @@ async function main() {
       "CI and applicable security review requirements passed",
     );
   } catch (error) {
+    if (error instanceof GitHubRateLimitError || error instanceof SupersededReviewError) {
+      throw error;
+    }
     await publishGuardStatus(
       review,
       "failure",
@@ -197,8 +215,12 @@ async function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch(
+  withGitHubRateLimitRecovery(main).catch(
     /** @param {unknown} error */ (error) => {
+      if (error instanceof SupersededReviewError) {
+        console.log(error.message);
+        return;
+      }
       console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     },

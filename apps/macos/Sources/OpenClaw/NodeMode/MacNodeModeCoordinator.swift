@@ -116,6 +116,13 @@ final class MacNodeModeCoordinator: NSObject {
     private var pendingEndpoint: GatewayConnection.EndpointSnapshot?
     private var activeNodeHostWorkerInput: MacNodeHostWorkerRetryPolicy.Input?
     private var lastNodeHostWorkerStartFailure: (reason: String, diagnostic: String?)?
+    private(set) var desktopSharingEnabled: Bool? {
+        didSet {
+            guard self.desktopSharingEnabled != oldValue else { return }
+            self.notificationCenter.post(name: .openclawDeviceSettingsChanged, object: nil)
+        }
+    }
+
     private var lastObservedPaused: Bool
     private var lastObservedComputerControlEnabled: Bool
     private var lastObservedComputerControlProvider: ComputerControlProvider
@@ -412,6 +419,7 @@ final class MacNodeModeCoordinator: NSObject {
         // old process cannot revoke or consume retry budget from its successor.
         switch mode {
         case .workerRestart, .terminalStop:
+            self.desktopSharingEnabled = nil
             self.nodeHostWorkerConfigurationGeneration &+= 1
             self.resetNodeHostWorkerRetryState()
         case .ordinaryDisconnect, .reconnectRefresh:
@@ -582,6 +590,7 @@ final class MacNodeModeCoordinator: NSObject {
     {
         let config = endpoint.config
         let provider = ComputerControlProvider.current()
+        let workerConfigurationGeneration = self.nodeHostWorkerConfigurationGeneration
         let (workerManifest, workerUnavailable) =
             try await self.resolveWorkerManifestForConnection(provider: provider)
         let nativeCaps = self.currentCaps(
@@ -638,20 +647,25 @@ final class MacNodeModeCoordinator: NSObject {
         // here cannot block the node lifecycle callback or its successor cleanup.
         let fallbackMainSessionKey = await GatewayConnection.shared.refreshMainSessionKey()
         let currentEndpoint = try await GatewayEndpointStore.shared.requireEndpoint()
-        guard Self.endpointAttemptCanConnect(
-            capturedGeneration: endpointGeneration,
-            currentGeneration: self.endpointAttemptGeneration,
-            isCancelled: Task.isCancelled,
-            isPaused: AppStateStore.shared.isPaused,
-            capturedEndpoint: endpoint,
-            currentEndpoint: currentEndpoint),
-            Self.routeAuthorityAllowsInvoke(
-                capturedRouteAuthorityGeneration: routeAuthorityGeneration,
-                currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
-                completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
-                isPaused: AppStateStore.shared.isPaused)
+        guard workerConfigurationGeneration == self.nodeHostWorkerConfigurationGeneration,
+              Self.endpointAttemptCanConnect(
+                  capturedGeneration: endpointGeneration,
+                  currentGeneration: self.endpointAttemptGeneration,
+                  isCancelled: Task.isCancelled,
+                  isPaused: AppStateStore.shared.isPaused,
+                  capturedEndpoint: endpoint,
+                  currentEndpoint: currentEndpoint),
+              Self.routeAuthorityAllowsInvoke(
+                  capturedRouteAuthorityGeneration: routeAuthorityGeneration,
+                  currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
+                  completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
+                  isPaused: AppStateStore.shared.isPaused)
         else { return nil }
 
+        if let workerManifest {
+            // The private worker declares configured intent before RFB, pairing, or Gateway policy checks.
+            self.desktopSharingEnabled = workerManifest.commands.contains("desktop.stream")
+        }
         return ConnectionAttempt(
             endpointGeneration: endpointGeneration,
             routeAuthorityGeneration: routeAuthorityGeneration,
@@ -1014,7 +1028,8 @@ extension MacNodeModeCoordinator {
         }
         let launch: MacNodeHostWorkerLaunch
         do {
-            launch = try await CommandResolver.nodeHostWorkerLaunch()
+            launch = try await CommandResolver.nodeHostWorkerLaunch(
+                desktopSharingEnabled: AppDefaults.standard.object(forKey: desktopSharingEnabledKey) as? Bool)
         } catch let error as RuntimeResolutionError {
             throw MacNodeHostWorker.WorkerError.unavailable(reason: RuntimeLocator.describeFailure(error))
         }
@@ -1065,6 +1080,7 @@ extension MacNodeModeCoordinator {
 
     private func handleNodeHostWorkerFailure(configurationGeneration: UInt64) {
         guard configurationGeneration == self.nodeHostWorkerConfigurationGeneration else { return }
+        self.desktopSharingEnabled = nil
         guard let input = self.activeNodeHostWorkerInput else {
             self.logger.error("node-host worker exited without an active startup input")
             self.enqueueRouteInvalidation(mode: .ordinaryDisconnect)

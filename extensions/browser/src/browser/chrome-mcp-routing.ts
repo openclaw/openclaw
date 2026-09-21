@@ -44,7 +44,7 @@ export function getChromeMcpRoutingState(session: ChromeMcpSession): ChromeMcpRo
     withOperationLock: createAsyncLock(),
     targetIdByPageId: new Map(),
     nextTargetHandleId: 1,
-    snapshotRefById: new Map(),
+    snapshotsByTarget: new Map(),
     nextSnapshotRefId: 1,
   };
   return session.routing;
@@ -127,11 +127,7 @@ export function clearChromeMcpSnapshotRefsForTarget(
   routing: ChromeMcpRoutingState,
   targetId: string,
 ): void {
-  for (const [refId, ref] of routing.snapshotRefById) {
-    if (ref.targetId === targetId) {
-      routing.snapshotRefById.delete(refId);
-    }
-  }
+  routing.snapshotsByTarget.delete(targetId);
 }
 
 function updateChromeMcpTargetMappings(
@@ -146,14 +142,55 @@ function updateChromeMcpTargetMappings(
   routing.targetIdByPageId = targetIdByPageId;
 }
 
-export function wrapChromeMcpSnapshotRefs(
+/** UID-only MCP actions cannot distinguish collisions between renderer documents. */
+function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
+  const documents = new Map<string, { document: ChromeMcpSnapshotNode; documentUid?: string }>();
+  const pending = [{ node: root, document: root, documentUid: normalizeOptionalString(root.id) }];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current) {
+      break;
+    }
+    const role = current.node.role?.trim().toLowerCase();
+    const document = role === "rootwebarea" ? current.node : current.document;
+    const documentUid =
+      role === "rootwebarea" ? normalizeOptionalString(current.node.id) : current.documentUid;
+    const uid = normalizeOptionalString(current.node.id);
+    if (uid) {
+      const previous = documents.get(uid);
+      if (previous && previous.document !== document) {
+        throw new Error(
+          "Chrome MCP returned ambiguous element IDs across documents. " +
+            "The snapshot and its refs were discarded. " +
+            "Use a managed browser profile for this page; ref-free screenshots remain available.",
+        );
+      }
+      documents.set(uid, { document, documentUid });
+    }
+    for (const child of current.node.children ?? []) {
+      pending.push({
+        node: child,
+        document: role === "iframe" ? current.node : document,
+        documentUid: role === "iframe" ? undefined : documentUid,
+      });
+    }
+  }
+  return documents;
+}
+
+export function registerChromeMcpSnapshot(
   session: ChromeMcpSession,
   targetId: string,
   root: ChromeMcpSnapshotNode,
-): ChromeMcpSnapshotNode {
+): { root: ChromeMcpSnapshotNode; documentUid: string } {
+  const documentUid = normalizeOptionalString(root.id);
+  if (!documentUid || root.role?.trim().toLowerCase() !== "rootwebarea") {
+    throw new Error("Chrome MCP snapshot did not contain a top-level document uid");
+  }
+  const documents = validateChromeMcpSnapshotRefs(root);
   const routing = getChromeMcpRoutingState(session);
-  clearChromeMcpSnapshotRefsForTarget(routing, targetId);
   const wrappedByUid = new Map<string, string>();
+  const refs = new Map<string, { uid: string; documentUid?: string }>();
 
   const wrapNode = (node: ChromeMcpSnapshotNode): ChromeMcpSnapshotNode => {
     const rawUid = normalizeOptionalString(node.id);
@@ -164,18 +201,19 @@ export function wrapChromeMcpSnapshotRefs(
         id = `${CHROME_MCP_SNAPSHOT_REF_PREFIX}${routing.sessionNonce}:${routing.nextSnapshotRefId}`;
         routing.nextSnapshotRefId += 1;
         wrappedByUid.set(rawUid, id);
-        routing.snapshotRefById.set(id, { targetId, uid: rawUid });
+        refs.set(id, {
+          uid: rawUid,
+          documentUid: documents.get(rawUid)?.documentUid,
+        });
       }
     }
     return {
       ...node,
       ...(id ? { id } : {}),
-      ...(node.children ? { children: [] } : {}),
     };
   };
 
-  // Ref rewriting is the first traversal of external MCP output. Keep it
-  // iterative so the renderer can own depth truncation and report that fact.
+  // Keep ref rewriting iterative; the renderer owns depth truncation.
   let wrappedRoot: ChromeMcpSnapshotNode | undefined;
   const stack: Array<{
     source: ChromeMcpSnapshotNode;
@@ -209,19 +247,22 @@ export function wrapChromeMcpSnapshotRefs(
   if (!wrappedRoot) {
     throw new Error("Chrome MCP snapshot did not contain a root node");
   }
-  return wrappedRoot;
+  routing.snapshotsByTarget.set(targetId, { documentUid, refs });
+  return { root: wrappedRoot, documentUid };
 }
 
 export function resolveChromeMcpSnapshotRef(
   session: ChromeMcpSession,
   targetId: string,
   refId: string,
-): string {
-  const resolved = getChromeMcpRoutingState(session).snapshotRefById.get(refId);
-  if (!resolved || resolved.targetId !== targetId) {
+) {
+  const resolved = getChromeMcpRoutingState(session)
+    .snapshotsByTarget.get(targetId)
+    ?.refs.get(refId);
+  if (!resolved) {
     throw new Error(`Unknown ref "${refId}". Run a new snapshot and use a ref from that snapshot.`);
   }
-  return resolved.uid;
+  return resolved;
 }
 
 export async function callTool(
@@ -308,7 +349,7 @@ export async function callTargetTool(
   });
 }
 
-type ChromeMcpPinnedTarget = {
+export type ChromeMcpPinnedTarget = {
   lease: ChromeMcpSessionLease;
   profileOptions: NormalizedChromeMcpProfileOptions;
   pageId: number;

@@ -7,9 +7,6 @@ import type {
 
 export { WorkerTaskError } from "./worker-task-pool-core.js";
 export type { WorkerTaskRequestContext, WorkerTaskResponse } from "./worker-task-pool.types.js";
-export type { WorkerTaskControl } from "./worker-task-native-sections.js";
-export { serveWorkerTasks } from "./worker-task-server.js";
-export type { WorkerTaskChannel } from "./worker-task-server.js";
 
 /** Existing SDK surface; task custody remains an internal capability. */
 export class WorkerTaskPool<Input, Output> {

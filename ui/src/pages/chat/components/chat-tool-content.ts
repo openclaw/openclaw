@@ -17,84 +17,15 @@ import {
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
 import { formatToolDetail, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import {
+  isLegacyToolOutputUnavailable,
+  TOOL_OUTPUT_PREVIEW_CHARS,
+  toolOutputSourceNote,
+} from "../../../lib/chat/tool-output.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffBlock } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
-
-function formatToolOutputForSidebar(text: string): string {
-  if (isMarkdownBlockArtText(text)) {
-    return "```\n" + text + "\n```";
-  }
-
-  const trimmed = text.trim();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    try {
-      JSON.parse(trimmed);
-      // Keep the source literal: reserialization can change numbers, escapes, and duplicate keys.
-      return "```json\n" + trimmed + "\n```";
-    } catch {
-      return text;
-    }
-  }
-  return text;
-}
-
-function formatPayloadForSidebar(
-  text: string | undefined,
-  language: "json" | "text" = "text",
-): string {
-  if (!text?.trim()) {
-    return "";
-  }
-  if (language === "json") {
-    return `\`\`\`json
-${text}
-\`\`\``;
-  }
-  const formatted = formatToolOutputForSidebar(text);
-  if (formatted.includes("```")) {
-    return formatted;
-  }
-  return `\`\`\`text
-${text}
-\`\`\``;
-}
-
-function buildToolCardSidebarContent(card: ToolCard): string {
-  const display = resolveToolDisplay({ name: card.name, args: card.args });
-  const detail = formatToolDetail(display);
-  const isError = isToolCardError(card);
-  const outcome = resolveToolCardOutcome(card, false);
-  const sections = [`## ${display.label}`, `**${t("chat.toolCards.tool")}:** \`${display.name}\``];
-
-  if (detail) {
-    sections.push(`**${t("chat.toolCards.summary")}:** ${detail}`);
-  }
-
-  if (card.inputText?.trim()) {
-    const inputIsJson = typeof card.args === "object" && card.args !== null;
-    sections.push(
-      `### ${t("chat.toolCards.toolInput")}\n${formatPayloadForSidebar(card.inputText, inputIsJson ? "json" : "text")}`,
-    );
-  }
-
-  if (card.outputText?.trim()) {
-    sections.push(
-      `### ${t(isError ? "chat.toolCards.toolError" : "chat.toolCards.toolOutput")}\n${formatToolOutputForSidebar(card.outputText)}`,
-    );
-  } else {
-    sections.push(
-      isError
-        ? `### ${t("chat.toolCards.toolError")}\n*${t("chat.toolCards.noOutputFailed")}*`
-        : outcome === "succeeded"
-          ? `### ${t("chat.toolCards.toolOutput")}\n*${t("chat.toolCards.noOutputSucceeded")}*`
-          : `### ${t("chat.toolCards.toolOutput")}\n*${t("chat.toolCards.noResult")}*`,
-    );
-  }
-
-  return sections.join("\n\n");
-}
 
 function handleRawDetailsToggle(event: Event) {
   // SAFETY: This handler is attached only to the raw-details button below.
@@ -107,14 +38,6 @@ function handleRawDetailsToggle(event: Event) {
   const expanded = button.getAttribute("aria-expanded") === "true";
   button.setAttribute("aria-expanded", String(!expanded));
   body.hidden = expanded;
-}
-
-function buildSidebarContent(value: string, options?: { rawText?: string | null }): SidebarContent {
-  return {
-    kind: "markdown",
-    content: value,
-    ...(options?.rawText ? { rawText: options.rawText } : {}),
-  };
 }
 
 function buildPreviewSidebarContent(
@@ -317,7 +240,7 @@ function renderTerminalBlock(command: string, output: string | undefined) {
         ><code>${renderHighlightedCommand(command)}</code>
       </div>
       ${
-        output?.trim()
+        output !== undefined
           ? html`<pre class="chat-tool-term__out"><code>${output}</code></pre>`
           : nothing
       }
@@ -406,16 +329,55 @@ export type ToolRenderOptions = {
 };
 
 export function renderExpandedToolCardContent(
-  card: ToolCard,
-  { messageKey, onOpenSidebar, runActive, onOpenWorkspaceFile }: ToolRenderOptions,
+  originalCard: ToolCard,
+  {
+    messageKey,
+    sessionKey,
+    agentId,
+    onOpenSidebar,
+    runActive,
+    onOpenWorkspaceFile,
+  }: ToolRenderOptions,
 ) {
+  const outputDetails: SidebarContent = {
+    kind: "tool-output",
+    card: originalCard,
+    sessionKey,
+    agentId,
+  };
+  const unavailable = isLegacyToolOutputUnavailable(originalCard);
+  const outputNote = toolOutputSourceNote(originalCard);
+  const outputIsLong = (originalCard.outputText?.length ?? 0) > TOOL_OUTPUT_PREVIEW_CHARS;
+  const card =
+    outputIsLong && onOpenSidebar && !unavailable
+      ? {
+          ...originalCard,
+          outputText: truncateUtf16Safe(originalCard.outputText!, TOOL_OUTPUT_PREVIEW_CHARS),
+        }
+      : originalCard;
+  const outputFooter = html`
+    ${outputNote ? html`<p class="muted">${outputNote}</p>` : nothing}
+    ${
+      unavailable
+        ? html`<p role="status">${t("chat.toolCards.fullOutputUnavailable")}</p>`
+        : (outputIsLong || card.outputTruncated) && onOpenSidebar
+          ? html`<button
+              class="btn btn--sm"
+              type="button"
+              @click=${() => onOpenSidebar(outputDetails)}
+            >
+              ${t("chat.toolCards.showFullOutput")}
+            </button>`
+          : nothing
+    }
+  `;
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   // File/search rows already carry their target; the "with …" connector only
   // reads well for generic tools ("with query …"), not "with from sessions.ts".
   const summarizedKind = view.kind === "read" || view.kind === "search" || view.kind === "fetch";
   const detail = summarizedKind ? display.detail : formatToolDetail(display);
-  const hasOutput = Boolean(card.outputText?.trim());
+  const hasOutput = card.outputText !== undefined;
   const hasInput = Boolean(card.inputText?.trim());
   const isError = isToolCardError(card);
   const outcome = resolveToolCardOutcome(card, runActive);
@@ -425,11 +387,7 @@ export function renderExpandedToolCardContent(
     card.preview?.kind === "canvas"
       ? buildPreviewSidebarContent(card.preview, card.outputText)
       : null;
-  const sidebarActionContent =
-    previewSidebarContent ??
-    buildSidebarContent(buildToolCardSidebarContent(card), {
-      rawText: card.outputText ?? null,
-    });
+  const sidebarActionContent = previewSidebarContent ?? outputDetails;
   const sidebarAction = canOpenSidebar
     ? html`
         <openclaw-tooltip content=${t("chat.toolCards.openDetails")}>
@@ -468,7 +426,7 @@ export function renderExpandedToolCardContent(
             : renderTerminalBlock(view.command!, card.outputText)
         }
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
-        ${renderToolOutcome(outcome, card.exitCode)}
+        ${outputFooter} ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
   }
@@ -492,7 +450,7 @@ export function renderExpandedToolCardContent(
             ? renderToolCardModes(card, messageKey, view.diff, outcome, isError, file)
             : renderDiffBlock(view.diff, outcome, undefined, file)
         }
-        ${renderToolOutcome(outcome, card.exitCode)}
+        ${outputFooter} ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
   }
@@ -548,7 +506,7 @@ export function renderExpandedToolCardContent(
               })
             : nothing
       }
-      ${renderToolOutcome(outcome, card.exitCode)}
+      ${outputFooter} ${renderToolOutcome(outcome, card.exitCode)}
     </div>
   `;
 }

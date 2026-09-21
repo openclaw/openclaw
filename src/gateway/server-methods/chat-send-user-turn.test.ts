@@ -4,9 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
-  type GatewayClientInfo,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { pruneProcessedHistoryImages } from "../../agents/embedded-agent-runner/run/history-image-prune.js";
 import { hydratePromptMediaMessages } from "../../agents/embedded-agent-runner/run/images.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
@@ -19,87 +19,26 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listSessionParticipantsReadOnly,
+  loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
-import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import {
-  buildPersistedUserTurnMessage,
-  type UserTurnInput,
-} from "../../sessions/user-turn-transcript.js";
+  isSessionPersonalBootstrapTurn,
+  prepareChannelParticipantObservation,
+} from "../../sessions/session-participant-input.js";
+import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
 import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
-
-function createUserTurnInputController(text = "raw message") {
-  const baseInput: UserTurnInput = {
-    text,
-    timestamp: 1,
-    idempotencyKey: "run-1:user",
-  };
-  let inputPromise = Promise.resolve(baseInput);
-  return {
-    controller: {
-      baseInput,
-      setInputPromise: (input: Promise<UserTurnInput>) => {
-        inputPromise = input;
-      },
-    },
-    readInput: () => inputPromise,
-  };
-}
-
-function createClientInfo(overrides: Partial<GatewayClientInfo> = {}): GatewayClientInfo {
-  return {
-    id: GATEWAY_CLIENT_IDS.CLI,
-    version: "test",
-    platform: "test",
-    mode: GATEWAY_CLIENT_MODES.CLI,
-    ...overrides,
-  };
-}
-
-function createAttachments(
-  overrides: Partial<{
-    explicitOriginTargetsPlugin: boolean;
-    mediaPathOffloadPaths: string[];
-    mediaPathOffloadTypes: string[];
-    mediaPathOffloadWorkspaceDir: string | undefined;
-    imageOrder: Array<"inline" | "offloaded">;
-    parsedImages: Array<{
-      type: "image";
-      data: string;
-      mimeType: string;
-      sourceIndex: number;
-    }>;
-    offloadedRefs: Array<{
-      mediaRef: string;
-      id: string;
-      path: string;
-      sourceIndex: number;
-      kind: "image" | "audio" | "video" | "document" | "sticker" | "unknown";
-      mimeType: string;
-      label: string;
-      sizeBytes: number;
-    }>;
-    parsedMessage: string;
-  }> = {},
-) {
-  return {
-    explicitOriginTargetsPlugin: false,
-    imageOrder: [],
-    mediaPathOffloadPaths: [],
-    mediaPathOffloadTypes: [],
-    mediaPathOffloadWorkspaceDir: undefined,
-    offloadedRefs: [],
-    parsedImages: [],
-    parsedMessage: "hello",
-    prepareAttachmentsMs: undefined,
-    ...overrides,
-  };
-}
+import {
+  createUserTurnInputController,
+  createClientInfo,
+  createAttachments,
+} from "./chat-send-user-turn.test-support.js";
 
 describe("prepareChatSendUserTurn", () => {
   it.each([
@@ -163,6 +102,7 @@ describe("prepareChatSendUserTurn", () => {
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const profile = ensureProfileForEmail("accepted@example.test", { env: state.env });
+        const creator = ensureProfileForEmail("session-creator@example.test", { env: state.env });
         const { controller } = createUserTurnInputController();
         const clientInfo = createClientInfo(
           kind === "profileless-ui"
@@ -206,12 +146,42 @@ describe("prepareChatSendUserTurn", () => {
           userTurn: controller,
         });
         const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:retargeted" };
-        await upsertSessionEntryCore(scope, { sessionId: "retargeted", updatedAt: 2 });
+        await upsertSessionEntryCore(scope, {
+          sessionId: "retargeted",
+          updatedAt: 2,
+          createdActor: { type: "human", source: "profile", id: creator.id },
+        });
         const target = {
           agentId: "main",
           sessionKey: scope.sessionKey,
           storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
         };
+        // Ingress decides turn eligibility; the persisted destination selects its personal file.
+        const workspaceDir = state.statePath("bootstrap-workspace");
+        const creatorDir = path.join(workspaceDir, "users", creator.id);
+        const senderDir = path.join(workspaceDir, "users", profile.id);
+        await fs.mkdir(creatorDir, { recursive: true });
+        await fs.mkdir(senderDir, { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
+        await fs.writeFile(path.join(creatorDir, "USER.md"), "Session creator preferences");
+        await fs.writeFile(path.join(senderDir, "USER.md"), "Current sender preferences");
+        // Neither authenticated participants nor profile-looking sender labels select an overlay.
+        prepared.ctx.SenderId = profile.id;
+        prepared.ctx.SenderName = profile.id;
+        const entry = loadSessionEntryReadOnly(scope);
+        const bootstrap = await resolveBootstrapContextForRun({
+          workspaceDir,
+          sessionKey: scope.sessionKey,
+          bootstrapUserProfileId: isSessionPersonalBootstrapTurn({ ...prepared.ctx })
+            ? sessionPersonalProfileId(entry)
+            : undefined,
+        });
+        const contents = bootstrap.contextFiles.map((file) => file.content).join("\n");
+        expect(contents).toContain("Shared preferences");
+        expect(contents).not.toContain("Current sender preferences");
+        expect(contents.includes("Session creator preferences")).toBe(
+          kind === "profile" || kind === "profileless",
+        );
         prepareChannelParticipantObservation(prepared.ctx);
         recordAcceptedSessionParticipantInput({ ...prepared.ctx }, target);
         recordAcceptedSessionParticipantInput(prepared.ctx, target);

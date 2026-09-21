@@ -3,8 +3,14 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import {
+  appearanceKey,
+  foregroundKey,
+  foregroundDraft,
+  scenario,
+  openFromForeground,
+  expectForegroundUnchanged,
+} from "./command-palette.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -20,133 +26,6 @@ const suite = createControlUiE2eSuite({
   name: "command palette background creation",
   browserLaunchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] },
 });
-const foregroundKey = "agent:main:dashboard:palette-foreground";
-const appearanceKey = "agent:main:dashboard:palette-appearance";
-const foregroundDraft = "Keep this unsent foreground draft exactly as it is.";
-const caret = 10;
-const workspace = "/workspace/palette-fixture";
-
-function scenario(methodResponses: Record<string, unknown> = {}): ControlUiMockGatewayScenario {
-  return {
-    sessionKey: foregroundKey,
-    workspace,
-    workspaceGit: true,
-    operatorScopes: ["operator.read", "operator.write"],
-    featureMethods: [
-      "agent.wait",
-      "chat.metadata",
-      "chat.startup",
-      "sessions.create",
-      "sessions.dispatch",
-      "sessions.search",
-    ],
-    sessions: [
-      createControlUiSessionRow(foregroundKey, "Foreground planning", Date.now() - 60_000),
-      createControlUiSessionRow(appearanceKey, "Appearance audit", Date.now() - 120_000),
-    ],
-    historyMessages: [
-      { role: "assistant", content: [{ type: "text", text: "The foreground task stays here." }] },
-    ],
-    methodResponses: {
-      "sessions.list": {
-        cases: [
-          {
-            match: { search: "appearance" },
-            response: {
-              ts: 1,
-              path: "",
-              defaults: {},
-              count: 1,
-              sessions: [
-                createControlUiSessionRow(appearanceKey, "Appearance audit", Date.now() - 60_000),
-              ],
-            },
-          },
-        ],
-      },
-      "agents.list": {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [
-          {
-            id: "main",
-            name: "Main",
-            workspace,
-            workspaceGit: true,
-            model: { primary: "openai/gpt-5.5" },
-          },
-          {
-            id: "reviewer",
-            name: "Reviewer",
-            workspace,
-            workspaceGit: true,
-            model: { primary: "openai/gpt-5.5" },
-          },
-        ],
-      },
-      "agent.identity.get": {
-        cases: [
-          { match: { agentId: "main" }, response: { agentId: "main", name: "Main" } },
-          { match: { agentId: "reviewer" }, response: { agentId: "reviewer", name: "Reviewer" } },
-        ],
-      },
-      "environments.list": {
-        environments: [
-          {
-            id: "node:palette-runner",
-            type: "node",
-            label: "Palette runner",
-            status: "available",
-            sessionHost: true,
-            workerSlots: { total: 2, available: 1 },
-          },
-        ],
-        profiles: [],
-      },
-      "worktrees.branches": {
-        branches: [{ kind: "local", name: "main" }],
-        defaultBranch: "main",
-        repositoryStatus: "git",
-      },
-      ...methodResponses,
-    },
-  };
-}
-
-async function openFromForeground(page: Page) {
-  await page.goto(controlUiSessionUrl(suite.server.baseUrl, foregroundKey));
-  const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
-  await composer.fill(foregroundDraft);
-  await composer.evaluate((element: HTMLTextAreaElement, offset) => {
-    element.focus();
-    element.setSelectionRange(offset, offset);
-  }, caret);
-  const url = page.url();
-  await page.keyboard.press("ControlOrMeta+K");
-  const palette = page.locator("openclaw-command-palette");
-  const input = palette.locator(".cmd-palette__input");
-  await input.waitFor({ state: "visible" });
-  await expect
-    .poll(() => input.evaluate((element) => document.activeElement === element))
-    .toBe(true);
-  return { composer, url, palette, input };
-}
-
-async function expectForegroundUnchanged(page: Page, composer: Locator, url: string) {
-  expect(page.url()).toBe(url);
-  expect(await composer.inputValue()).toBe(foregroundDraft);
-  await expect
-    .poll(() =>
-      composer.evaluate((element: HTMLTextAreaElement) => ({
-        focused: document.activeElement === element,
-        start: element.selectionStart,
-        end: element.selectionEnd,
-      })),
-    )
-    .toEqual({ focused: true, start: caret, end: caret });
-}
-
 async function changePicker(
   picker: Locator,
   eventType: "wa-after-show" | "wa-after-hide",
@@ -204,7 +83,10 @@ suite.define(() => {
         ...scenario(),
         deferredMethods: ["environments.list"],
       });
-      const { composer, url, palette, input } = await openFromForeground(page);
+      const { composer, url, palette, input } = await openFromForeground(
+        page,
+        suite.server.baseUrl,
+      );
       await gateway.waitForRequest("environments.list");
       const capture = captureAfter(page, "palette-manual-scroll");
       const prompt = [
@@ -276,10 +158,17 @@ suite.define(() => {
             page,
             scenario({ "models.list": { models: [], refreshFailed: true } }),
           );
-          const { palette, input, composer, url } = await openFromForeground(page);
+          const { palette, input, composer, url } = await openFromForeground(
+            page,
+            suite.server.baseUrl,
+          );
           await input.fill("appearance");
           await palette.getByRole("option", { name: /^Appearance audit/ }).waitFor();
-          await palette.getByRole("status").filter({ hasText: "Models unavailable" }).waitFor();
+          await palette
+            .locator(".cmd-palette__search")
+            .getByRole("status")
+            .filter({ hasText: "Models unavailable" })
+            .waitFor();
           const search = palette.locator(".cmd-palette__search");
           const original = (await palette.locator(".cmd-palette").boundingBox())!;
           const inputTop = (await input.boundingBox())!.y;
@@ -346,7 +235,7 @@ suite.define(() => {
           expect(await palette.getByRole("group", { name: "Filter search results" }).count()).toBe(
             0,
           );
-          expect(await palette.getByRole("status").count()).toBe(0);
+          expect(await palette.locator(".cmd-palette__search").getByRole("status").count()).toBe(0);
           expect(await palette.getByRole("option").count()).toBe(0);
           expect(await input.getAttribute("aria-controls")).toBeNull();
           expect(await input.getAttribute("aria-activedescendant")).toBeNull();
@@ -418,7 +307,10 @@ suite.define(() => {
             featureMethods: [...(base.featureMethods ?? []), "users.prefs.get", "users.prefs.set"],
             presenceUsers: [{ self: true, id: "palette-user", name: "Example User" }],
           });
-          const { composer, url, palette, input } = await openFromForeground(page);
+          const { composer, url, palette, input } = await openFromForeground(
+            page,
+            suite.server.baseUrl,
+          );
           const capture = captureAfter(page, "palette-remember-" + mode);
           const prompt = "Keep this prompt and its caret while changing preferences.";
           await input.fill(prompt);
@@ -531,8 +423,8 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
           await composer.fill(foregroundDraft);
           const url = page.url();
-          await module.request;
           await page.keyboard.press("ControlOrMeta+K");
+          await module.request;
           const input = page.locator(".cmd-palette__input");
           await input.fill("Start exactly this cold task");
           await input.press("ControlOrMeta+Enter");
@@ -572,7 +464,7 @@ suite.define(() => {
   it("keeps settings and session results as launcher actions instead of sending the query", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, scenario());
-      const { palette, input } = await openFromForeground(page);
+      const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
       const capture = captureAfter(page, "palette-mixed-results");
       await input.fill("appearance");
       const results = palette.locator(".cmd-palette__results");
@@ -631,7 +523,10 @@ suite.define(() => {
               "sessions.send": { runId: "palette-device-run", status: "started" },
             }),
           );
-          const { composer, url, palette, input } = await openFromForeground(page);
+          const { composer, url, palette, input } = await openFromForeground(
+            page,
+            suite.server.baseUrl,
+          );
           const capture = captureAfter(page, "palette-create-" + destination);
           await capture("empty-launcher");
           const singleLineHeight = (await input.boundingBox())!.height;
@@ -795,7 +690,10 @@ suite.define(() => {
             },
           }),
         );
-        const { composer, url, palette, input } = await openFromForeground(page);
+        const { composer, url, palette, input } = await openFromForeground(
+          page,
+          suite.server.baseUrl,
+        );
         const prompt =
           "Keep this accepted session recoverable.\nDo not send the same request twice.";
         await input.fill(prompt);
@@ -850,7 +748,10 @@ suite.define(() => {
           "sessions.create": { key: "agent:main:dashboard:palette-retried", runStarted: true },
         }),
       );
-      const { composer, url, palette, input } = await openFromForeground(page);
+      const { composer, url, palette, input } = await openFromForeground(
+        page,
+        suite.server.baseUrl,
+      );
       const capture = captureAfter(page, "palette-create-retry");
       const prompt = "Preserve this task when creation is denied.\nRetry only after I ask.";
       await input.fill(prompt);

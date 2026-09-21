@@ -551,6 +551,66 @@ describe("conversation-owned temporary environments", () => {
     expect(next.attachment.generation).toBe(created.attachment.generation + 1);
   });
 
+  it("reports bounded current cleanup failures without losing the original failure or lease", async () => {
+    const originalFailure = "worker bootstrap could not finish";
+    const firstCleanupFailure = "initial provider cleanup is unavailable";
+    vi.mocked(support.testState.bootstrapWorker).mockRejectedValue(new Error(originalFailure));
+    const destroy = vi.fn().mockRejectedValue(new Error(firstCleanupFailure));
+    const warn = vi.fn<(message: string) => void>();
+    const service = support.createService(support.createProvider({ destroy }), {
+      logger: { warn },
+    });
+
+    await expect(service.createSessionAttachment(request, authorize)).rejects.toThrow(
+      originalFailure,
+    );
+    await expect(
+      service.destroySessionAttachment({ sessionId: identity.sessionId }, authorize),
+    ).rejects.toThrow(firstCleanupFailure);
+    const environmentId = service.getSessionAttachmentStatus(identity.sessionId)!.environment
+      .environmentId;
+    const pending = support.testState.store.get(environmentId)!;
+    expect(pending).toMatchObject({
+      state: "destroying",
+      leaseId: "lease-1",
+      teardownTerminalState: "failed",
+      lastError: originalFailure,
+    });
+    expect(warn).not.toHaveBeenCalled();
+    const secret = `synthetic-cleanup-auth-${"x".repeat(48)}`;
+    const currentDiagnosis = "provider stop timed out while confirming release";
+    destroy.mockRejectedValue(
+      new Error(
+        `Current cleanup failed: Authorization: Bearer ${secret}\n${"provider progress ".repeat(200)}\n${currentDiagnosis}`,
+      ),
+    );
+    await service.reconcileSessionAttachments();
+
+    expect(warn).toHaveBeenCalledOnce();
+    const warning = warn.mock.calls[0]![0];
+    const prefix = `Conversation environment cleanup will retry (${environmentId}): `;
+    expect.soft(warning).toContain(prefix);
+    expect.soft(warning).toContain("Current cleanup failed:");
+    expect.soft(warning).toContain(currentDiagnosis);
+    expect(warning).not.toContain(secret);
+    expect(warning).not.toContain(originalFailure);
+    expect(warning.length).toBeLessThanOrEqual(prefix.length + 1_024);
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "destroying",
+      leaseId: pending.leaseId,
+      lastError: originalFailure,
+    });
+
+    destroy.mockResolvedValue(undefined);
+    await service.reconcileSessionAttachments();
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      lastError: originalFailure,
+    });
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
   it("retains a failed cleanup owner and forbids replacement until provider destruction is confirmed", async () => {
     const destroy = vi
       .fn()

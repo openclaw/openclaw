@@ -174,6 +174,8 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
 
     `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
 
+    Blob mutations use the shared SQLite worker and keep quota checks and changes in one transaction. `lookup` and `entries` use the retained read-only worker path. Missing stores stay absent. Ordinary unselected reads observe independently committed data; an unrelated cached native cursor can retain an older view. An explicitly selected snapshot keeps its private source through completion. Await all methods before publishing dependent artifacts or removing their storage. Shared reader admission is bounded: process inventories sequentially or with bounded concurrency, and join every started operation before reporting a batch failure or completing shutdown. Worker errors preserve `PluginBlobStoreError` classification, operation, path, and causal errors. Byte copying, metadata serialization, and complete result materialization still use caller memory; this is not a streaming BLOB API.
+
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
     Plugin-state leases were removed in 2026.8.1. Use short SQLite transactions for atomic database work and plugin-scoped keyed stores (`openKeyedStore` or `openSyncKeyedStore`) for bounded durable state.
@@ -212,6 +214,40 @@ const store = api.runtime.state.openKeyedStore<MyRecord>({
 await store.register("key-1", { value: "hello" });
 const value = await store.lookup("key-1");
 ```
+
+For writes on behalf of a current tool invocation or other revocable action,
+require `store.withCurrent` before starting effects. Bind the host-provided
+assertion together with any action-specific permission check:
+
+```typescript
+if (!store.withCurrent) {
+  throw new Error("Update OpenClaw to authorize this state mutation.");
+}
+const actionStore = store.withCurrent({
+  assertCurrent: () => {
+    context.assertInvocationCurrent();
+    assertActionAllowed();
+  },
+});
+await actionStore.register("key-1", { value: "hello" });
+```
+
+The returned `PluginStateKeyedStore<T, 2>` is an immutable binding to the same
+namespace, settings, and plugin lifetime. It exposes the data-only operations;
+it has no `update`, `deleteIf`, or rebinding method. The assertion stays on the
+host and is checked after reads and at both transaction and final commit
+admission for writes, including bounded stores. Create a separate view for each
+action; do not keep one caller's authority on a shared service. The legacy
+`PluginStateKeyedStore<T>` keeps this capability optional for older hosts and
+adapters. An action requiring it must refuse when it is absent.
+
+`observe` and a comparison conflict return observations without committing the
+requested mutation; they also require current authority when returning that data.
+
+A refusal before the commit grant rolls back the mutation. Once commit is
+authorized, later revocation does not turn the settled write into a refusal.
+Recheck authority before the next external effect, and preserve the recorded
+result; never retry a committed or unknown write to compensate for revocation.
 
 The async store's `update` updater and `deleteIf` predicate are deprecated
 compatibility methods. They still run synchronously on the main thread inside
@@ -282,6 +318,13 @@ Discord and Slack use scalar conditional deletion when relinquishing a presence
 cooldown. On older hosts without that optional capability, they leave it to expire
 instead of risking deletion of a newer reservation.
 
+FaceTime persists pending dial snapshots in invocation order and uses worker
+comparisons to clear only the matching dial. Helper dispatch waits for durable
+intent, and shutdown joins accepted persistence. Its supported 2026.9.4 hosts
+without comparisons retain atomic `deleteIf` cleanup; a failed worker operation
+never selects that compatibility path. The namespace, stored records, and
+retention remain unchanged, so this cutover requires no data migration.
+
 This deprecation adds editor annotations, documentation, and compatibility
 inventory metadata. It adds no runtime warning and changes no trust eligibility:
 the runtime openers remain limited to bundled plugins and trusted official
@@ -305,9 +348,34 @@ Asynchronous AgentSession message, model, compaction, and tree operations use
 this admission for their transcript writes. Embedded prompt preparation, replay
 repair, and tool-result cleanup await their writes before publishing dependent
 results or disposing their resources. Model-selection hooks run after write
-admission releases. Synchronous SessionManager and extension APIs, including
-`setThinkingLevel`, retain their existing synchronous contracts and still need
-an appropriate caller-owned write boundary.
+admission releases. SessionManager `appendModelChange` and
+`appendThinkingLevelChange` return promises for their committed entry IDs;
+AgentSession and extension `setThinkingLevel` return `Promise<void>`. Await these
+operations before using the resulting model or thinking state. Other synchronous
+SessionManager operations still need an appropriate caller-owned write boundary.
+
+`SessionManager.open`, `openBounded`, and `setSessionTarget` capture `storePath`
+as an absolute lexical locator before reading the transcript or invoking
+`onTruncated`. Relative locators resolve against the process working directory
+at entry; `getSessionTarget()` returns that captured locator. Later working
+directory changes leave the manager bound to its original store. Existing
+`sessions.json` and custom-store routing and symlink spelling are preserved.
+
+File-backed model and thinking transcript writes execute through the canonical
+agent database worker. Queued extension actions retain their original runtime
+and session authority through transaction and commit admission. Session opening,
+final model-context validation, and incognito transcript persistence still use
+their native owners; an asynchronous method does not imply that every storage
+operation in the enclosing session flow runs off-thread.
+
+Committed metadata updates the bound session's model or thinking state alongside
+transcript-view adoption, before asynchronous cleanup. Settings setters retain
+their existing persistence queue. If view reconstruction, local publication, or
+a dependent thinking change fails after the append commits, the error preserves
+the committed entry and prevents model fallback from replaying it. A failed view
+reconstruction makes the existing manager refuse further transcript access;
+discard it and reopen through the session owner after resolving the read failure.
+Retrying the append would duplicate a write that already committed.
 
 The signature is `withOpenClawAgentDatabaseWrite(options, operation, expectedDatabase?)`.
 `options` uses the existing agent database options, including the required

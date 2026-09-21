@@ -6,7 +6,10 @@ import { withContendedConfigMutation } from "../../test/helpers/config-mutation-
 import { createDeferred } from "../../test/helpers/promise.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { listConfiguredMcpServers, mcpConfigInternal } from "../config/mcp-config.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
@@ -46,19 +49,22 @@ function seedOAuthState(name: string) {
   return { operator, requester };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  closeOpenClawStateDatabaseForTest();
 });
 
 async function withMcpConfigHome(run: () => Promise<void>): Promise<void> {
   await withTempHome(
     async () => {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       try {
         await run();
       } finally {
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
       }
     },
@@ -138,12 +144,16 @@ describe("configured MCP OAuth cleanup", () => {
       const fresh = await readConfigFileSnapshot();
       expect(fresh.valid).toBe(true);
       expect(fresh.sourceConfig.messages?.responsePrefix).toBe("after-lock");
-      expect(readMcpOAuthStore(operator.storeKey).tokens?.access_token).toBe(expected.operator);
-      expect(readMcpOAuthStore(requester.storeKey).tokens?.access_token).toBe(expected.requester);
-      expect(readMcpOAuthPendingAuthorization("operator-state")).toBe(
+      expect((await readMcpOAuthStore(operator.storeKey)).tokens?.access_token).toBe(
+        expected.operator,
+      );
+      expect((await readMcpOAuthStore(requester.storeKey)).tokens?.access_token).toBe(
+        expected.requester,
+      );
+      expect(await readMcpOAuthPendingAuthorization("operator-state")).toBe(
         expected.operator ? operator.storeKey : undefined,
       );
-      expect(readMcpOAuthPendingAuthorization("requester-state")).toBe(
+      expect(await readMcpOAuthPendingAuthorization("requester-state")).toBe(
         expected.requester ? requester.storeKey : undefined,
       );
     });

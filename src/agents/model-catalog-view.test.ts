@@ -387,6 +387,48 @@ describe("prepared native catalog readiness", () => {
     expect(loadModelCatalog).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "matching native observation", variants: [nativeEntry], available: true },
+    { name: "cold catalog", variants: [], available: undefined },
+    {
+      name: "another model",
+      variants: [{ ...nativeEntry, id: "other-model" }],
+      available: undefined,
+    },
+    {
+      name: "another runtime",
+      variants: [{ ...nativeEntry, nativeRuntime: "other-native" }],
+      available: undefined,
+    },
+  ])("evaluates configured rows using $name", ({ variants, available }) => {
+    const logical = row("custom", "native-model");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          models: { "custom/native-model": { agentRuntime: { id: "native-test" } } },
+        },
+      },
+    };
+    const registry = nativeRegistry(() => undefined);
+    delete registry.agentHarnesses[0]!.harness.readModelCatalogReadiness;
+    registry.agentHarnesses[0]!.harness.loadModelCatalog = () => {
+      throw new Error("Projection must not discover native models");
+    };
+    const view = prepareModelCatalogView({
+      ...facts(cfg),
+      snapshot: { entries: [logical], routeVariants: variants },
+      pluginRegistry: registry,
+    });
+    const decision = view.evaluateNative(logical, {
+      ...host,
+      unavailableReason: "missing-auth",
+    });
+    expect(decision.availability).toBe(available);
+    expect(decision.runtimeAuth).toEqual({ id: "native-test", source: "native" });
+    expect(decision.unavailableReason).toBeUndefined();
+    expect(decision.availabilityAuthoritative).toBe(true);
+  });
+
   it("observes revoked login and generation without retaining prior readiness", () => {
     let ready = true;
     let current = true;

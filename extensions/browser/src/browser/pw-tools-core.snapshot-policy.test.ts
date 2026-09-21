@@ -60,7 +60,8 @@ describe("browser snapshot navigation policy", () => {
   it.each([
     {
       name: "snapshotting AI content",
-      run: snapshots.snapshotAiViaPlaywright,
+      run: (options: Parameters<typeof snapshots.snapshotRoleViaPlaywright>[0]) =>
+        snapshots.snapshotRoleViaPlaywright({ ...options, refsMode: "aria" }),
       prepare: () => {
         const ariaSnapshot = vi.fn(async () => 'button "Save"');
         return { page: createSnapshotPage({ ariaSnapshot }), capture: ariaSnapshot };

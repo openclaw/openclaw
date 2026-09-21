@@ -1,13 +1,18 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { OpenClawStateExternalOwnershipError } from "../state/openclaw-state-ownership.js";
+import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
+import { NodeWorkerLaunchKernel } from "./node-worker-launch-store.kernel.js";
 import { recordNodeWorkerLineageSettled } from "./node-worker-lineage-completion.js";
 import { requireNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import { projectNodeWorkerSupervisorReceipt } from "./node-worker-supervisor-contract.js";
@@ -16,17 +21,20 @@ import { writeNodeWorkerFixture } from "./node-worker-supervisor.test-support.js
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const NOW_MS = 10 * DAY_MS;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
-
-function fixture() {
+async function fixture() {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("node-worker-launch-store-") };
-  const store = new NodeWorkerLaunchStore({ env });
-  store.get("schema-probe");
-  return { database: openOpenClawStateDatabase({ env }).db, env, store };
+  const journal = new NodeWorkerJournalWorker({ env });
+  const store = new NodeWorkerLaunchStore(journal);
+  await store.get("schema-probe");
+  return { database: openOpenClawStateDatabase({ env }).db, env, journal, store };
 }
 
 function insertLaunch(params: {
@@ -88,18 +96,19 @@ function launchIds(database: ReturnType<typeof openOpenClawStateDatabase>["db"])
 }
 
 describe("node worker launch store pruning", () => {
-  it("lazily repairs released journals without rewriting old receipts or advancing the schema", () => {
-    const { database, env, store } = fixture();
+  it("lazily repairs released journals without rewriting old receipts or advancing the schema", async () => {
+    const { database, env, store } = await fixture();
     insertLaunch({ database, launchId: "released-worker", state: "running" });
-    const releasedReceipt = store.get("released-worker");
+    const releasedReceipt = await store.get("released-worker");
     const versionBefore = database.prepare("PRAGMA user_version").get();
     expect(hasTerminalExpiryIndex(database)).toBe(true);
     database.exec("DROP INDEX idx_node_worker_launches_terminal_completed");
     expect(hasTerminalExpiryIndex(database)).toBe(false);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    const reopenedStore = new NodeWorkerLaunchStore({ env });
-    expect(reopenedStore.get("released-worker")).toEqual(releasedReceipt);
+    const reopenedStore = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
+    expect(await reopenedStore.get("released-worker")).toEqual(releasedReceipt);
     const reopened = openOpenClawStateDatabase({ env }).db;
 
     expect(hasTerminalExpiryIndex(reopened)).toBe(true);
@@ -112,8 +121,8 @@ describe("node worker launch store pruning", () => {
     const launchSql = reopened
       .prepare("SELECT sql FROM sqlite_schema WHERE name = ?")
       .get("node_worker_launches")?.sql;
-    const { planHash, supervisor } = claimLaunch(reopenedStore, "current-worker");
-    reopenedStore.markRunning({
+    const { planHash, supervisor } = await claimLaunch(reopenedStore, "current-worker");
+    await reopenedStore.markRunning({
       launchId: "current-worker",
       planHash,
       supervisor,
@@ -121,21 +130,21 @@ describe("node worker launch store pruning", () => {
       cleanupMode: "process-group",
       nowMs: NOW_MS,
     });
-    expect(reopenedStore.get("released-worker")).toEqual(releasedReceipt);
+    expect(await reopenedStore.get("released-worker")).toEqual(releasedReceipt);
     expect(
       reopened.prepare("SELECT sql FROM sqlite_schema WHERE name = ?").get("node_worker_launches")
         ?.sql,
     ).toBe(launchSql);
     expect(reopened.prepare("PRAGMA user_version").get()).toEqual(versionBefore);
     insertLaunch({ database: reopened, launchId: "older-writer", state: "running" });
-    expect(reopenedStore.get("older-writer")).toMatchObject({
+    expect(await reopenedStore.get("older-writer")).toMatchObject({
       workerCleanupMode: null,
       workerLineageSettled: false,
     });
   });
 
-  it("uses the terminal expiry index for the ordered pruning query", () => {
-    const { database } = fixture();
+  it("uses the terminal expiry index for the ordered pruning query", async () => {
+    const { database } = await fixture();
     const plan = database
       .prepare(
         `EXPLAIN QUERY PLAN
@@ -153,8 +162,8 @@ describe("node worker launch store pruning", () => {
     );
   });
 
-  it("prunes only the oldest expired terminal receipts in bounded batches", () => {
-    const { database, store } = fixture();
+  it("prunes only the oldest expired terminal receipts in bounded batches", async () => {
+    const { database, store } = await fixture();
     insertLaunch({ database, launchId: "old-completed", state: "completed", completedAtMs: 1 });
     insertLaunch({ database, launchId: "old-failed", state: "failed", completedAtMs: 2 });
     insertLaunch({ database, launchId: "old-cancelled", state: "cancelled", completedAtMs: 3 });
@@ -172,7 +181,7 @@ describe("node worker launch store pruning", () => {
       containerId: "a".repeat(64),
       engineTarget: "b".repeat(64),
     } as const;
-    store.markRunning({
+    await store.markRunning({
       launchId: "running",
       planHash: "a".repeat(64),
       supervisor,
@@ -194,7 +203,7 @@ describe("node worker launch store pruning", () => {
           .all() as Array<{ launch_id: string }>
       ).map((row) => row.launch_id);
 
-    expect(store.pruneExpiredTerminal({ nowMs: NOW_MS, limit: 2 })).toBe(2);
+    expect(await store.pruneExpiredTerminal({ nowMs: NOW_MS, limit: 2 })).toBe(2);
     expect(launchIds(database)).toEqual([
       "old-cancelled",
       "pending",
@@ -203,15 +212,17 @@ describe("node worker launch store pruning", () => {
     ]);
     expect(containerLaunchIds()).toEqual(["old-cancelled", "recent-completed", "running"]);
 
-    expect(store.pruneExpiredTerminal({ nowMs: NOW_MS, limit: 2 })).toBe(1);
+    expect(await store.pruneExpiredTerminal({ nowMs: NOW_MS, limit: 2 })).toBe(1);
     expect(launchIds(database)).toEqual(["pending", "recent-completed", "running"]);
     expect(containerLaunchIds()).toEqual(["recent-completed", "running"]);
   });
 
   it("prunes expired terminal receipts after restart reconciliation", async () => {
     const workerFixture = writeNodeWorkerFixture(tempDirs.make("node-worker-launch-restart-"));
-    const store = new NodeWorkerLaunchStore({ env: workerFixture.env });
-    store.get("schema-probe");
+    const store = new NodeWorkerLaunchStore(
+      new NodeWorkerJournalWorker({ env: workerFixture.env }),
+    );
+    await store.get("schema-probe");
     const database = openOpenClawStateDatabase({ env: workerFixture.env }).db;
     insertLaunch({
       database,
@@ -226,12 +237,12 @@ describe("node worker launch store pruning", () => {
 
     await supervisor.initialize();
 
-    expect(store.get("expired-after-restart")).toBeUndefined();
+    expect(await store.get("expired-after-restart")).toBeUndefined();
     await supervisor.close();
   });
 
-  it("keeps the exact replay fence while a new claim prunes unrelated receipts", () => {
-    const { database, store } = fixture();
+  it("keeps the exact replay fence while a new claim prunes unrelated receipts", async () => {
+    const { database, store } = await fixture();
     const planHash = "b".repeat(64);
     insertLaunch({
       database,
@@ -244,7 +255,7 @@ describe("node worker launch store pruning", () => {
     const supervisor = requireNodeWorkerProcessIdentity(process.pid);
 
     expect(
-      store.claim(
+      await store.claim(
         {
           launchId: "replayed-launch",
           planHash,
@@ -264,10 +275,10 @@ describe("node worker launch store pruning", () => {
   });
 });
 
-function claimLaunch(store: NodeWorkerLaunchStore, launchId: string) {
+async function claimLaunch(store: NodeWorkerLaunchStore, launchId: string) {
   const supervisor = requireNodeWorkerProcessIdentity(process.pid);
   const planHash = "a".repeat(64);
-  const result = store.claim(
+  const result = await store.claim(
     {
       launchId,
       planHash,
@@ -289,14 +300,14 @@ function claimLaunch(store: NodeWorkerLaunchStore, launchId: string) {
 describe("node worker terminal ownership", () => {
   it.each(["finish", "cancel"] as const)(
     "keeps the physical reservation when %s comes from a stale process owner",
-    (operation) => {
-      const { database, store } = fixture();
+    async (operation) => {
+      const { database, env, store } = await fixture();
       insertLaunch({ database, launchId: "owned-launch", state: "running" });
-      const running = store.get("owned-launch")!;
-      const finish = (ownership: Pick<typeof running, "supervisor" | "worker">) =>
+      const running = (await store.get("owned-launch"))!;
+      const finish = async (ownership: Pick<typeof running, "supervisor" | "worker">) =>
         operation === "cancel"
-          ? store.finishCancelled({ expected: running, ...ownership })
-          : store.finish({
+          ? await store.finishCancelled({ expected: running, ...ownership })
+          : await store.finish({
               launchId: running.launchId,
               planHash: running.planHash,
               ...ownership,
@@ -310,20 +321,52 @@ describe("node worker terminal ownership", () => {
             ...running[field]!,
             [identityField]: running[field]![identityField] + 1,
           };
-          expect(finish({ ...running, [field]: stale })).toEqual(running);
+          expect(await finish({ ...running, [field]: stale })).toEqual(running);
         }
       }
-      expect(finish({ ...running, worker: null })).toEqual(running);
-      expect(store.get(running.launchId)).toEqual(running);
-      expect(store.nonterminalCount()).toBe(1);
-      expect(finish(running)?.state).toBe(operation === "cancel" ? "cancelled" : "failed");
-      expect(store.nonterminalCount()).toBe(0);
+      expect(await finish({ ...running, worker: null })).toEqual(running);
+      expect(await store.get(running.launchId)).toEqual(running);
+      expect(await store.nonterminalCount()).toBe(1);
+      const kernel = new NodeWorkerLaunchKernel({
+        database: openOpenClawStateDatabase({ env }),
+        env,
+      });
+      const admission = vi
+        .spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission")
+        .mockImplementation(() => {});
+      const reads = trackSqliteStatementExecutions(database, ["launch"], (sql) =>
+        sql.startsWith("select ") && sql.includes('from "node_worker_launches"') ? "launch" : null,
+      );
+      let terminal: ReturnType<NodeWorkerLaunchKernel["finishCancelled"]>;
+      try {
+        terminal =
+          operation === "cancel"
+            ? kernel.finishCancelled({ expected: running, ...running })
+            : kernel.finish({
+                launchId: running.launchId,
+                planHash: running.planHash,
+                supervisor: running.supervisor,
+                worker: running.worker,
+                state: "failed",
+                errorText: "worker failed",
+              });
+        expect.soft(reads.counts.launch).toBeLessThanOrEqual(1);
+        expect.soft(reads.rowCounts.launch).toBe(1);
+      } finally {
+        reads.restore();
+        admission.mockRestore();
+      }
+      expect(terminal?.state).toBe(operation === "cancel" ? "cancelled" : "failed");
+      expect(await store.get(running.launchId)).toEqual(terminal);
+      expect(await store.nonterminalCount()).toBe(0);
     },
   );
 });
 
 describe("node worker launch store container identity", () => {
-  function hasContainerIdentityTable(database: ReturnType<typeof fixture>["database"]): boolean {
+  function hasContainerIdentityTable(
+    database: Awaited<ReturnType<typeof fixture>>["database"],
+  ): boolean {
     return Boolean(
       database
         .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -331,12 +374,12 @@ describe("node worker launch store container identity", () => {
     );
   }
 
-  it("keeps the container companion table absent for existing bare-worker journals", () => {
-    const { database, env, store } = fixture();
+  it("keeps the container companion table absent for existing bare-worker journals", async () => {
+    const { database, env, store } = await fixture();
     expect(hasContainerIdentityTable(database)).toBe(false);
-    const { planHash, supervisor } = claimLaunch(store, "bare-launch");
+    const { planHash, supervisor } = await claimLaunch(store, "bare-launch");
 
-    const receipt = store.markRunning({
+    const receipt = await store.markRunning({
       launchId: "bare-launch",
       planHash,
       supervisor,
@@ -347,25 +390,28 @@ describe("node worker launch store container identity", () => {
 
     expect(hasContainerIdentityTable(database)).toBe(false);
     expect(Object.hasOwn(receipt, "container")).toBe(false);
-    expect(store.get("bare-launch")).toEqual(receipt);
+    expect(await store.get("bare-launch")).toEqual(receipt);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    expect(new NodeWorkerLaunchStore({ env }).get("bare-launch")).toEqual(receipt);
+    expect(
+      await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get("bare-launch"),
+    ).toEqual(receipt);
     expect(hasContainerIdentityTable(openOpenClawStateDatabase({ env }).db)).toBe(false);
   });
 
-  it("lazily persists container identity across reopen without advancing the schema", () => {
-    const { database, env, store } = fixture();
+  it("lazily persists container identity across reopen without advancing the schema", async () => {
+    const { database, env, store } = await fixture();
     expect(hasContainerIdentityTable(database)).toBe(false);
     const initialSchemaVersion = database.prepare("PRAGMA user_version").get();
-    const { planHash, supervisor } = claimLaunch(store, "container-launch");
+    const { planHash, supervisor } = await claimLaunch(store, "container-launch");
     const container = {
       engine: "docker",
       containerId: "a".repeat(64),
       engineTarget: "b".repeat(64),
     } as const;
 
-    const receipt = store.markRunning({
+    const receipt = await store.markRunning({
       launchId: "container-launch",
       planHash,
       supervisor,
@@ -378,9 +424,28 @@ describe("node worker launch store container identity", () => {
     expect(receipt.container).toEqual(container);
     expect(hasContainerIdentityTable(database)).toBe(true);
     expect(database.prepare("PRAGMA user_version").get()).toEqual(initialSchemaVersion);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    expect(new NodeWorkerLaunchStore({ env }).get("container-launch")).toEqual(receipt);
+    const reopened = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
+    expect(await reopened.get("container-launch")).toEqual(receipt);
+    const completed = await reopened.finish({
+      launchId: receipt.launchId,
+      planHash: receipt.planHash,
+      supervisor: receipt.supervisor,
+      worker: receipt.worker,
+      state: "completed",
+      resultJson: "{}",
+      nowMs: NOW_MS + 1,
+    });
+    expect(completed).toEqual({
+      ...receipt,
+      state: "completed",
+      resultJson: "{}",
+      completedAtMs: NOW_MS + 1,
+      updatedAtMs: NOW_MS + 1,
+    });
+    expect(await reopened.get("container-launch")).toEqual(completed);
   });
 
   it.each([
@@ -427,10 +492,10 @@ describe("node worker launch store container identity", () => {
         extra: true,
       }),
     ],
-  ])("fails closed when a persisted container identity has %s", (_reason, malformed) => {
-    const { database, store } = fixture();
-    const { planHash, supervisor } = claimLaunch(store, "corrupt-container-launch");
-    store.markRunning({
+  ])("fails closed when a persisted container identity has %s", async (_reason, malformed) => {
+    const { database, store } = await fixture();
+    const { planHash, supervisor } = await claimLaunch(store, "corrupt-container-launch");
+    await store.markRunning({
       launchId: "corrupt-container-launch",
       planHash,
       supervisor,
@@ -443,19 +508,19 @@ describe("node worker launch store container identity", () => {
       .prepare("UPDATE node_worker_launch_containers SET container_json = ? WHERE launch_id = ?")
       .run(malformed, "corrupt-container-launch");
 
-    expect(() => store.listNonterminal()).toThrow(
+    await expect(store.listNonterminal()).rejects.toThrow(
       /node worker container (identity|id|engine target)/u,
     );
   });
 });
 
 describe("node worker cleanup journal", () => {
-  function runningAnchor() {
-    const { database, env, store } = fixture();
+  async function runningAnchor() {
+    const { database, env, store } = await fixture();
     const launchId = "anchor-launch";
-    const { planHash, supervisor } = claimLaunch(store, launchId);
-    const binding = store.cleanupBinding({ launchId, planHash, supervisor });
-    const receipt = store.markRunning({
+    const { planHash, supervisor } = await claimLaunch(store, launchId);
+    const binding = await store.cleanupBinding({ launchId, planHash, supervisor });
+    const receipt = await store.markRunning({
       launchId,
       planHash,
       supervisor,
@@ -466,8 +531,8 @@ describe("node worker cleanup journal", () => {
     return { database, env, store, binding, receipt };
   }
 
-  it("does not broaden a cleanup binding when ambient external mode changes", () => {
-    const { database, env, binding } = runningAnchor();
+  it("does not broaden a cleanup binding when ambient external mode changes", async () => {
+    const { database, env, binding } = await runningAnchor();
     claimOpenClawStateOwnership("node-recovery-test", {
       env: { ...env, OPENCLAW_SUPERVISOR_MODE: "external" },
     });
@@ -486,8 +551,9 @@ describe("node worker cleanup journal", () => {
     }
   });
 
-  it("does not recreate a removed journal when an anchor reports completion", () => {
-    const { binding } = runningAnchor();
+  it("does not recreate a removed journal when an anchor reports completion", async () => {
+    const { binding } = await runningAnchor();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     fs.unlinkSync(binding.databasePath);
     let failure: unknown;
@@ -502,21 +568,37 @@ describe("node worker cleanup journal", () => {
     expect(failure).toMatchObject({ code: "ENOENT" });
   });
 
-  it("persists positive lineage completion on the exact database without releasing its slot or changing the wire receipt", () => {
-    const { env, store, binding, receipt } = runningAnchor();
+  it("persists positive lineage completion on the exact database without releasing its slot or changing the wire receipt", async () => {
+    const { env, store, binding, receipt } = await runningAnchor();
     expect(binding.databasePath).toBe(openOpenClawStateDatabase({ env }).path);
     expect(receipt.workerCleanupMode).toBe("owned-anchor");
     expect(receipt.workerLineageSettled).toBe(false);
     expect(recordNodeWorkerLineageSettled(binding)).toBe(true);
     expect(recordNodeWorkerLineageSettled(binding)).toBe(true);
-    expect(store.nonterminalCount()).toBe(1);
+    expect(await store.nonterminalCount()).toBe(1);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    const settled = new NodeWorkerLaunchStore({ env }).get(binding.launchId);
+    const reopened = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
+    const settled = await reopened.get(binding.launchId);
     expect(settled).toEqual({ ...receipt, workerLineageSettled: true });
     expect(projectNodeWorkerSupervisorReceipt(settled!)).toEqual(
       projectNodeWorkerSupervisorReceipt(receipt),
     );
+    const cancelled = await reopened.finishCancelled({
+      expected: receipt,
+      supervisor: receipt.supervisor,
+      worker: receipt.worker,
+      nowMs: NOW_MS + 1,
+    });
+    expect(cancelled).toEqual({
+      ...settled,
+      state: "cancelled",
+      errorText: "node worker launch cancelled",
+      completedAtMs: NOW_MS + 1,
+      updatedAtMs: NOW_MS + 1,
+    });
+    expect(await reopened.get(binding.launchId)).toEqual(cancelled);
   });
 
   it.each([
@@ -530,48 +612,48 @@ describe("node worker cleanup journal", () => {
     ["changed worker PID", "node_worker_launches", "worker_pid = ?", 2_147_483_646],
     ["reused worker PID", "node_worker_launches", "worker_start_time = worker_start_time + ?", 1],
     ["legacy mode", "node_worker_launch_cleanup", "cleanup_mode = ?", "process-group"],
-  ] as const)("refuses lineage completion with %s", (_reason, table, assignment, value) => {
-    const { database, store, binding } = runningAnchor();
+  ] as const)("refuses lineage completion with %s", async (_reason, table, assignment, value) => {
+    const { database, store, binding } = await runningAnchor();
     database
       .prepare(`UPDATE ${table} SET ${assignment} WHERE launch_id = ?`)
       .run(value, binding.launchId);
     expect(recordNodeWorkerLineageSettled(binding)).toBe(false);
-    expect(store.get(binding.launchId)?.workerLineageSettled).toBe(false);
-    expect(store.nonterminalCount()).toBe(1);
+    expect((await store.get(binding.launchId))?.workerLineageSettled).toBe(false);
+    expect(await store.nonterminalCount()).toBe(1);
   });
 
-  it("keeps missing cleanup ownership unknown and prunes facts only with their launch", () => {
-    const { database, store, binding, receipt } = runningAnchor();
+  it("keeps missing cleanup ownership unknown and prunes facts only with their launch", async () => {
+    const { database, store, binding, receipt } = await runningAnchor();
     insertLaunch({ database, launchId: "released-running", state: "running" });
-    const legacy = store.get("released-running")!;
-    expect(recordNodeWorkerLineageSettled(store.cleanupBinding(legacy))).toBe(false);
+    const legacy = (await store.get("released-running"))!;
+    expect(recordNodeWorkerLineageSettled(await store.cleanupBinding(legacy))).toBe(false);
     expect(recordNodeWorkerLineageSettled(binding)).toBe(true);
-    store.finish({
+    await store.finish({
       ...binding,
       worker: receipt.worker,
       state: "interrupted",
       errorText: "worker stopped",
       nowMs: NOW_MS,
     });
-    expect(store.pruneExpiredTerminal({ nowMs: NOW_MS + DAY_MS - 1 })).toBe(0);
-    expect(store.get(binding.launchId)?.workerLineageSettled).toBe(true);
-    expect(store.pruneExpiredTerminal({ nowMs: NOW_MS + DAY_MS })).toBe(1);
+    expect(await store.pruneExpiredTerminal({ nowMs: NOW_MS + DAY_MS - 1 })).toBe(0);
+    expect((await store.get(binding.launchId))?.workerLineageSettled).toBe(true);
+    expect(await store.pruneExpiredTerminal({ nowMs: NOW_MS + DAY_MS })).toBe(1);
     expect(
       database.prepare("SELECT count(*) AS count FROM node_worker_launch_cleanup").get(),
     ).toEqual({ count: 0 });
-    expect(store.nonterminalCount()).toBe(1);
+    expect(await store.nonterminalCount()).toBe(1);
   });
 
-  it("refuses a completion write after the launch has become terminal", () => {
-    const { store, binding, receipt } = runningAnchor();
-    store.finish({
+  it("refuses a completion write after the launch has become terminal", async () => {
+    const { store, binding, receipt } = await runningAnchor();
+    await store.finish({
       ...binding,
       worker: receipt.worker,
       state: "interrupted",
       errorText: "worker stopped",
     });
     expect(recordNodeWorkerLineageSettled(binding)).toBe(false);
-    expect(store.get(binding.launchId)?.workerLineageSettled).toBe(false);
-    expect(() => store.cleanupBinding(binding)).toThrow("no longer owns its launch");
+    expect((await store.get(binding.launchId))?.workerLineageSettled).toBe(false);
+    await expect(store.cleanupBinding(binding)).rejects.toThrow("no longer owns its launch");
   });
 });

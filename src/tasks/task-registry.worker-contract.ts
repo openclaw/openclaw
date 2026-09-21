@@ -1,5 +1,13 @@
+import type {
+  ExecutionOwnerBinding,
+  ExecutionOwnerBindingResult,
+} from "../audit/execution-owner-binding.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { TaskFlowView } from "../plugins/runtime/task-domain-types.js";
+import type {
+  TaskFlowMaintenanceInput,
+  TaskFlowMaintenanceOutcome,
+} from "./task-flow-maintenance-policy.js";
 import type {
   ManagedTaskInFlowInput,
   ManagedTaskInFlowReceipt,
@@ -43,6 +51,14 @@ type TaskFlowReadQuery = {
 
 export type TaskRegistryWorkerOperations = TaskInitialWorkerOperations &
   TaskAgentEventWorkerOperations & {
+    "tasks.bindExecution": {
+      input: { taskId: string; binding: ExecutionOwnerBinding };
+      output: ExecutionOwnerBindingResult;
+    };
+    "flows.bindExecution": {
+      input: { flowId: string; binding: ExecutionOwnerBinding };
+      output: ExecutionOwnerBindingResult;
+    };
     "tasks.restore": { input: undefined; output: TaskRegistryRestoreResult };
     "flows.syncMirroredTask": {
       input: { taskId: string; expectedParentFlowId?: string };
@@ -59,7 +75,7 @@ export type TaskRegistryWorkerOperations = TaskInitialWorkerOperations &
     };
     "flows.runTask": { input: ManagedTaskInFlowInput; output: ManagedTaskInFlowReceipt };
     "tasks.mutationSnapshot": {
-      input: TaskRegistryMutationScope | undefined;
+      input: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[] | undefined;
       output: TaskRegistryStoreSnapshot;
     };
     "flows.createManaged": {
@@ -76,6 +92,7 @@ export type TaskRegistryWorkerOperations = TaskInitialWorkerOperations &
         | { applied: false; reason: "persist_failed"; current?: TaskFlowRecord };
     };
     "flows.current": { input: { flowId: string }; output: TaskFlowRecord | undefined };
+    "flows.maintain": { input: TaskFlowMaintenanceInput; output: TaskFlowMaintenanceOutcome };
     "tasks.get": { input: { taskId: string }; output: TaskRecord | undefined };
     "tasks.findByRunId": { input: { runId: string }; output: TaskRecord | undefined };
     "tasks.list": { input: { ownerKey: string }; output: TaskRecord[] };
@@ -105,6 +122,9 @@ export function isTaskRegistryWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<TaskRegistryWorkerOperations> {
   switch (command.type) {
+    case "tasks.acknowledgeStateChange":
+    case "tasks.bindExecution":
+    case "flows.bindExecution":
     case "tasks.observeAgentEvent":
     case "tasks.createRecord":
     case "tasks.finalizeActive":
@@ -123,6 +143,7 @@ export function isTaskRegistryWorkerCommand(command: {
     case "flows.createManaged":
     case "flows.updateManaged":
     case "flows.current":
+    case "flows.maintain":
     case "tasks.get":
     case "tasks.findByRunId":
     case "tasks.list":

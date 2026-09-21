@@ -55,6 +55,46 @@ afterEach(async () => {
 });
 
 describe("node desktop stream command", () => {
+  it("refuses streaming when the node-local setting is disabled", async () => {
+    await expect(
+      invokeNodeDesktopStream({
+        paramsJSON: JSON.stringify({
+          ticket: TICKET,
+          attachPath: `/node-desktop/attach?ticket=${TICKET}`,
+        }),
+        gatewayUrl: "ws://127.0.0.1:1",
+        config: { enabled: false },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("desktop host streaming is disabled on this node");
+  });
+
+  it("explains how to enable the local desktop server when no RFB listener exists", async () => {
+    const server = net.createServer();
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected local test address");
+    }
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+
+    await expect(
+      invokeNodeDesktopStream({
+        paramsJSON: JSON.stringify({
+          ticket: TICKET,
+          attachPath: `/node-desktop/attach?ticket=${TICKET}`,
+        }),
+        gatewayUrl: "ws://127.0.0.1:1",
+        config: { enabled: true, port: address.port },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow(/Screen Sharing.*authenticated loopback VNC server/);
+  });
+
   it.each([
     ["caller-selected host", { host: "192.0.2.10" }],
     ["relative password path", { passwordFilePath: "vnc.password" }],

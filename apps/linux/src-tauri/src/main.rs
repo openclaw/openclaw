@@ -1,6 +1,8 @@
 mod cli;
 #[cfg(target_os = "linux")]
 mod desktop_bridge;
+mod desktop_node;
+mod desktop_node_process;
 mod discovery;
 mod gateway;
 mod gateway_device_identity;
@@ -20,6 +22,7 @@ mod keep_awake_platform;
 mod native_browser;
 mod native_browser_bridge;
 mod native_browser_platform;
+mod native_device_settings;
 mod notify;
 mod pending_approvals;
 mod quickchat;
@@ -49,7 +52,6 @@ use tauri::{
     WebviewWindowBuilder,
 };
 use tauri_plugin_deep_link::DeepLinkExt;
-use tauri_plugin_global_shortcut::{Code, Modifiers};
 use tauri_plugin_opener::OpenerExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
@@ -103,8 +105,8 @@ pub(crate) fn native_auth_initialization_script(
 fn remote_ws_config(
     request: &RemoteGatewayRequest,
     gateway_url: &Url,
-) -> gateway_ws::GatewayWsConfig {
-    gateway_ws::GatewayWsConfig::new(
+) -> Result<gateway_ws::GatewayWsConfig, String> {
+    Ok(gateway_ws::GatewayWsConfig::new(
         gateway_url.to_string(),
         request.token.clone(),
         request.password.clone(),
@@ -115,6 +117,10 @@ fn remote_ws_config(
         },
         gateway_ws::GatewayOwnership::Remote,
     )
+    .with_node_identity_scope(remote_gateway::desktop_node_identity_scope(
+        request,
+        gateway_url,
+    )?))
 }
 
 fn open_external_browser(app: &AppHandle, url: &Url) {
@@ -1064,13 +1070,20 @@ impl DesktopState {
                                 state.inner.remote_tunnels.take();
                         }
                         app.state::<gateway_ws::GatewayClient>()
-                            .configure(&app, remote_ws_config(&request, &gateway_url));
+                            .configure(&app, remote_ws_config(&request, &gateway_url)?);
                         // The submitting view will be destroyed. Its IPC reply
                         // cannot own completion or prove Gateway health.
                         let snapshot = GatewaySnapshot::remote_opening();
+                        let returning_from_settings = navigation.settings_return.is_some();
                         navigation.select_remote();
                         navigation.remote_snapshot = Some(snapshot.clone());
-                        state.navigate_authenticated_remote(&app, target, script, navigation)?;
+                        state.navigate_authenticated_remote(
+                            &app,
+                            target,
+                            script,
+                            navigation,
+                            returning_from_settings,
+                        )?;
                         Ok(snapshot)
                     })
                 })
@@ -1093,6 +1106,7 @@ impl DesktopState {
         dashboard: Url,
         script: String,
         navigation: &mut NavigationState,
+        returning_from_settings: bool,
     ) -> Result<(), String> {
         if !app
             .state::<gateway_windows::GatewayWindows>()
@@ -1103,10 +1117,11 @@ impl DesktopState {
                 gateway_ws::GatewayOwnership::Remote,
             )?
         {
-            if main_window(app)
-                .ok()
-                .and_then(|view| view.url().ok())
-                .is_some_and(|url| self.main_window_has_connection_settings_url(&url))
+            if returning_from_settings
+                && main_window(app)
+                    .ok()
+                    .and_then(|view| view.url().ok())
+                    .is_some_and(|url| self.main_window_has_connection_settings_url(&url))
             {
                 gateway_windows::restore_selected_main(app)?;
             }
@@ -1529,6 +1544,9 @@ impl DesktopState {
 
     // Only the successful claim owner calls this, after releasing any route guard.
     pub(crate) fn finish_quit(&self, app: &AppHandle, code: i32) {
+        if let Some(node) = app.try_state::<desktop_node::DesktopNode>() {
+            node.stop();
+        }
         if let Some(power) = app.try_state::<keep_awake::KeepAwake>() {
             power.stop();
         }
@@ -1539,6 +1557,9 @@ impl DesktopState {
         let state = self.clone();
         let app = app.clone();
         thread::spawn(move || {
+            if let Some(node) = app.try_state::<desktop_node::DesktopNode>() {
+                node.wait_stopped();
+            }
             if let Some(power) = app.try_state::<keep_awake::KeepAwake>() {
                 power.wait_stopped();
             }
@@ -3155,14 +3176,10 @@ fn main() {
         builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        if quickchat_shortcut_state.matches_shortcut(shortcut) {
-                            quickchat::toggle_quickchat(app);
-                        } else if shortcut
-                            .matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyO)
-                        {
-                            tray::show_window(app);
-                        }
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed
+                        && quickchat_shortcut_state.matches_shortcut(shortcut)
+                    {
+                        quickchat::toggle_quickchat(app);
                     }
                 })
                 .build(),
@@ -3194,7 +3211,7 @@ fn main() {
         app.manage(gateway_windows::GatewayWindows::new(Arc::clone(&profiles)));
         app.manage(native_browser::NativeBrowserState::default());
         app.manage(native_browser_bridge::NativeBrowserBridgeState::default());
-        let window_config = app
+        let mut window_config = app
             .config()
             .app
             .windows
@@ -3202,6 +3219,18 @@ fn main() {
             .find(|window| window.label == "main")
             .cloned()
             .expect("tauri.conf.json must define the main window");
+        // Setup and recovery always use embedded assets. WKWebView has no current
+        // URL until its first navigation commits, so share the target before building.
+        let local_url = Url::parse(
+            match (cfg!(target_os = "windows"), window_config.use_https_scheme) {
+                (true, true) => "https://tauri.localhost/",
+                (true, false) => "http://tauri.localhost/",
+                (false, _) => "tauri://localhost/",
+            },
+        )?;
+        window_config.url = WebviewUrl::CustomProtocol(local_url.clone());
+        let state = DesktopState::new(local_url);
+        app.manage(state.clone());
         let browser_app = app.handle().clone();
         let window = WebviewWindowBuilder::from_config(app.handle(), &window_config)?
             .initialization_script(window_chrome::initialization_script(None, true))
@@ -3228,9 +3257,11 @@ fn main() {
         if let Some(view) = app.get_webview("main") {
             window_chrome_macos::install_webview(&view)?;
         }
-        let state = DesktopState::new(window.url()?);
-        app.manage(state.clone());
         app.manage(gateway_ws::GatewayClient::new());
+        app.manage(desktop_node::DesktopNode::start(
+            app.handle().clone(),
+            Arc::clone(&profiles),
+        )?);
         #[cfg(target_os = "linux")]
         app.manage(gateway_sleep_logind::SleepBridge::start(
             app.handle().clone(),
@@ -3316,6 +3347,7 @@ fn main() {
         install_cli,
         gateway_action,
         native_browser_bridge::native_browser_request,
+        native_device_settings::native_device_settings_request,
         gateway_windows::gateway_request,
         gateway_windows::gateway_profile_request,
         quickchat::quickchat_activate,

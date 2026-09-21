@@ -48,7 +48,7 @@ struct BundledNodeWorkerTests {
         printf '%s\\n' '{"type":"ready","version":"2026.8.1","manifest":{"caps":["system"],"commands":["\(
             command)"],"pathEnv":"/usr/bin:/bin"}}'
         while IFS= read -r line; do :; done
-        """.write(to: dist.appendingPathComponent("entry.js"), atomically: true, encoding: .utf8)
+        """.write(to: dist.appendingPathComponent("mac-node-worker.js"), atomically: true, encoding: .utf8)
         return dist
     }
 

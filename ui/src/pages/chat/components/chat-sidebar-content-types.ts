@@ -1,4 +1,5 @@
 import type { TemplateResult } from "lit";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
@@ -14,6 +15,7 @@ type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
   messageId: string;
+  maxChars?: number;
 };
 
 export type SidebarFullMessageLoader = (
@@ -135,13 +137,23 @@ type FileSidebarContent = {
   edit?: FileSidebarEdit;
 };
 
+export type ToolOutputSidebarContent = {
+  kind: "tool-output";
+  card: ToolCard;
+  sessionKey?: string;
+  agentId?: string;
+};
+
 export type SidebarContent =
+  | ToolOutputSidebarContent
   | MarkdownSidebarContent
   | CanvasSidebarContent
   | ImageSidebarContent
   | AttachmentSidebarContent
   | FileSidebarContent
   | SessionDiffSidebarContent;
+
+export type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "tool-output" }>;
 
 export type SidebarSelection = (
   | SidebarContent

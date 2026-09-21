@@ -4,6 +4,7 @@
  * The public facade lives here; codec, storage, persistence, and branching
  * behavior are split into focused internal modules.
  */
+import path from "node:path";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import {
   appendTranscriptMessageSync,
@@ -11,15 +12,16 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
 import { prepareTranscriptRewriteSync } from "../../config/sessions/session-accessor.sqlite-branch-rewrite.js";
+import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import {
   readSessionTranscriptContextMessages,
   readSessionTranscriptModelContext,
+  type SessionModelContextLimits,
   validateSessionTranscriptContextAdmission,
   validateSessionTranscriptContextAnchor,
   validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -189,14 +191,15 @@ export class SessionManager extends SessionManagerBranching {
         ...(cwdOverride !== undefined ? { cwd: cwdOverride } : {}),
       });
     }
-    const snapshot = loadTranscriptReadSnapshotSync(target);
+    const capturedTarget = { ...target, storePath: path.resolve(target.storePath) };
+    const snapshot = loadTranscriptReadSnapshotSync(capturedTarget);
     const entries = snapshot.events as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
     return new SessionManager(
       cwdOverride ?? header?.cwd ?? process.cwd(),
-      target,
+      capturedTarget,
       entries,
       undefined,
       snapshot.version.updatedAt,
@@ -210,7 +213,8 @@ export class SessionManager extends SessionManagerBranching {
     options: SessionManagerBoundedContextLimits & { cwd?: string; onTruncated?: () => void },
   ): SessionManager {
     const { cwd, onTruncated, ...limits } = options;
-    const context = readSessionTranscriptBoundedActiveContextCore(target, limits);
+    const capturedTarget = { ...target, storePath: path.resolve(target.storePath) };
+    const context = readSessionTranscriptBoundedActiveContextCore(capturedTarget, limits);
     if (context.truncated) {
       onTruncated?.();
     }
@@ -219,7 +223,7 @@ export class SessionManager extends SessionManagerBranching {
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), target, entries, {
+    return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), capturedTarget, entries, {
       ...context,
       limits,
     });
@@ -245,7 +249,7 @@ export class SessionManager extends SessionManagerBranching {
       cwd?: string;
       admission?: UserTurnTranscriptAdmissionReceipt;
       through?: TranscriptEntryAnchor;
-      limits?: SessionManagerBoundedContextLimits;
+      limits?: SessionModelContextLimits;
     } = {},
   ): SessionManager {
     const context = withSessionContextAdmission(target, options.admission, () =>
@@ -262,7 +266,7 @@ export class SessionManager extends SessionManagerBranching {
       admission?: UserTurnTranscriptAdmissionReceipt;
       signal?: AbortSignal;
       through?: TranscriptEntryAnchor;
-      limits?: SessionManagerBoundedContextLimits;
+      limits?: SessionModelContextLimits;
     } = {},
   ): Promise<SessionManager> {
     const readTarget = { ...target };

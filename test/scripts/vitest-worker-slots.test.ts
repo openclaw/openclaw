@@ -70,12 +70,13 @@ console.log(JSON.stringify(observed));
 }
 
 it.each([
-  { label: "local", ci: "", preload: false, reusesReleasedSlot: true },
-  { label: "CI", ci: "1", preload: false, reusesReleasedSlot: false },
-  { label: "custom loader", ci: "", preload: true, reusesReleasedSlot: false },
+  { label: "local", ci: "", cache: "", preload: false, reusesReleasedSlot: true },
+  { label: "CI", ci: "1", cache: "", preload: false, reusesReleasedSlot: false },
+  { label: "cached CI", ci: "1", cache: "1", preload: false, reusesReleasedSlot: true },
+  { label: "custom loader", ci: "1", cache: "1", preload: true, reusesReleasedSlot: false },
 ])(
   "preserves occupied generations and applies $label reservation lifetime",
-  async ({ ci, preload, reusesReleasedSlot }) => {
+  async ({ ci, cache, preload, reusesReleasedSlot }) => {
     const f = fixture();
     const result = await runNodeScript(
       f.probe,
@@ -83,6 +84,7 @@ it.each([
         ...process.env,
         CI: ci,
         GITHUB_ACTIONS: "",
+        OPENCLAW_VITEST_WORKER_CACHE: cache,
         NODE_OPTIONS: preload ? `"--im\\port" "${pathToFileURL(f.preload).href}"` : "",
         NODE_PATH: "",
       },

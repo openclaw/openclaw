@@ -83,5 +83,5 @@ export type TranscriptRenderSnapshot<T> = {
   header: TranscriptHeader | null;
   messageRows: ReadonlyMap<string, string>;
   renderKeyRows: ReadonlyMap<string, string>;
-  entryKeys: ReadonlyMap<string, string>;
+  entryKeys: ChatMessageEntryAnimations["projectedKeys"];
 };

@@ -5,6 +5,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gat
 import { CommandLane } from "../../process/lanes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import { captureCronRunAdmissionTracker } from "../mutation-completion.js";
 import {
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
@@ -36,8 +37,9 @@ import {
   supersedeActivatedCronRun,
 } from "./run-admission.js";
 import { cronRunReceiptPersistHooks, resolveCronRunReceiptTerminalStatus } from "./run-receipts.js";
-import { recomputeUnownedCronSchedules } from "./run-recovery.js";
+import { publishCronRuntimeRows } from "./runtime-publication.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import type {
   CronRunMode,
   CronServiceState,
@@ -45,7 +47,7 @@ import type {
   DeferredCronNotifications,
 } from "./state.js";
 import { emit, isImmediateCronRunMode } from "./state.js";
-import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import {
   createCronOwnerExecutionIdentityAdmission,
   tryFinishCronTaskRunWithoutHistory,
@@ -200,7 +202,7 @@ async function finishPreparedManualRun(
     }
     let notifySetupTimeout = coreResult.isolatedAgentSetupTimeout !== undefined;
     await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      await ensureLoaded(state, { forceReload: true });
       const job = state.store?.jobs.find((entry) => entry.id === jobId);
       if (prepared.activeJobMarker?.jobRemoved === true || !job) {
         notifySetupTimeout = false;
@@ -302,12 +304,10 @@ async function finishPreparedManualRun(
           );
         }
         publishCronRuntimeRows(state);
-        const maintenance = recomputeUnownedCronSchedules(state, {
+        await recomputeUnownedCronSchedules(state, {
           recomputeExpired: true,
           ...(isImmediateCronRunMode(mode) ? { preserveExpiredPacedNextRunJobId: jobId } : {}),
         });
-        runPostPersistCronNotifications(state, maintenance.notifications);
-        applyCronRuntimeRowsToState(state, maintenance.jobs);
       } catch (error) {
         if (error instanceof CronRunReceiptRevisionError) {
           // A retired reservation cannot clear a successor's same-millisecond marker.
@@ -416,6 +416,7 @@ async function executePreparedManualRun(
   state: CronServiceState,
   prepared: Extract<PreparedManualRun, { ran: true }>,
   mode?: CronRunMode,
+  onActivationSettled?: () => void,
 ) {
   const admission = await runWithCronAdmission(
     state,
@@ -437,6 +438,10 @@ async function executePreparedManualRun(
           );
         }
         throw error;
+      } finally {
+        // Activation owns the last caller-authorized write. The scheduled run
+        // owns execution afterward, so do not join its payload to the caller.
+        onActivationSettled?.();
       }
       if (!activeRun.ran) {
         return activeRun;
@@ -473,8 +478,20 @@ export async function enqueueRun(
   const acceptance = createDeferredCore<
     { ok: true; enqueued: true; runId: string } | Exclude<PreparedManualRun, { ran: true }>
   >();
+  const trackCallerWork = captureCronRunAdmissionTracker();
+  const activationSettled = createDeferredCore();
   let accepted = false;
   const acceptQueue = () => {
+    if (!accepted && trackCallerWork) {
+      // Retain the existing caller resources after the durable reservation and
+      // before acknowledging it. Genuine aborts and all commit guards stay live.
+      void trackCallerWork(() => activationSettled.promise).catch((error: unknown) => {
+        state.deps.log.error(
+          { jobId: id, runId, err: String(error) },
+          "cron: queued manual admission tracking failed",
+        );
+      });
+    }
     accepted = true;
     acceptance.resolve({ ok: true, enqueued: true, runId });
   };
@@ -504,6 +521,7 @@ export async function enqueueRun(
               state,
               { ...prepared, owningCronLaneTaskMarker },
               mode,
+              activationSettled.resolve,
             );
             if (result.ok && "ran" in result && !result.ran) {
               if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
@@ -557,6 +575,7 @@ export async function enqueueRun(
       }
     }, "cron:manual-run");
   } catch (error) {
+    activationSettled.resolve();
     releaseCallerAuthority?.();
     throw error;
   }
@@ -595,7 +614,12 @@ export async function enqueueRun(
         "cron: queued manual run background execution failed",
       );
     })
-    .finally(() => releaseCallerAuthority?.());
+    .finally(() => {
+      // Covers queue clearing, stopped admission, preparation failure, and any
+      // path that never entered the activation callback.
+      activationSettled.resolve();
+      releaseCallerAuthority?.();
+    });
   return await acceptance.promise;
 }
 

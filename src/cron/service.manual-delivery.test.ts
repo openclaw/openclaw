@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -48,6 +49,7 @@ describe("manual cron delivery occurrence", () => {
           };
           await state.writeConfig(cfg);
           const events: CronEvent[] = [];
+          const finished = createDeferred();
           const cron = new CronService({
             storePath: state.path("cron", "jobs.json"),
             cronEnabled: false,
@@ -56,7 +58,12 @@ describe("manual cron delivery occurrence", () => {
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
             requestHeartbeat: vi.fn(),
-            onEvent: (event) => events.push(event),
+            onEvent: (event) => {
+              events.push(event);
+              if (event.action === "finished") {
+                finished.resolve();
+              }
+            },
             runIsolatedAgentJob: async ({ job, abortSignal }) => {
               const text = "Fresh result from this invocation.";
               const sessionKey = `agent:main:cron:${job.id}`;
@@ -121,9 +128,7 @@ describe("manual cron delivery occurrence", () => {
                 ok: true,
                 enqueued: true,
               });
-              await vi.waitFor(() => {
-                expect(events.some((event) => event.action === "finished")).toBe(true);
-              });
+              await finished.promise;
               await cron.status();
             } else {
               await expect(cron.run(job.id, mode)).resolves.toMatchObject({ ok: true, ran: true });

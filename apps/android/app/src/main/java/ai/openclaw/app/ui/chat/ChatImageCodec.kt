@@ -44,7 +44,7 @@ internal fun loadPickedMediaOrDocumentAttachment(
   val mimeType = normalizeSharedAttachmentMimeType(resolver.getType(uri))
   if (!isStageableSharedAttachmentMimeType(mimeType)) throw IllegalStateException("unsupported attachment")
   val kind = sharedAttachmentKindForMimeType(mimeType)
-  if (kind == null || kind == SharedAttachmentKind.Image) throw IllegalStateException("unsupported attachment")
+  if (kind == null) throw IllegalStateException("unsupported attachment")
   return loadSharedAttachment(resolver, SharedAttachment(uri = uri, kind = kind, mimeType = requireNotNull(mimeType)))
 }
 

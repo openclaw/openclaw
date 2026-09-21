@@ -8,6 +8,7 @@ import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suit
 import { controlUiSessionUrl } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
 import { createQaGatewayChild } from "./gateway-child.ts";
+import { redactQaGatewayDebugText } from "./gateway-log-redaction.ts";
 import { hasToolDefinition } from "./providers/mock-openai/mock-openai-directives.ts";
 import { buildAssistantEvents } from "./providers/mock-openai/mock-openai-events.ts";
 import {
@@ -25,7 +26,7 @@ const suite = createControlUiE2eSuite({
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 type AutomationAction = "list" | "get" | "update" | "run" | "remove";
 const actions = ["list", "get", "update", "run", "remove"] as const;
-const automationName = "Telegram-created reminder";
+const automationName = "Telegram-created reminder _literal_";
 const updatedReminderMessage = "Complete the reminder updated from Control UI.";
 const scheduledReply = "Scheduled reminder completed.";
 
@@ -73,7 +74,9 @@ async function startAutomationProvider() {
           ? toolAvailable
             ? buildToolCallEventsWithArgs("automations", args)
             : buildAssistantEvents(`${marker}: Automation tools are unavailable for this caller.`)
-          : buildAssistantEvents(marker && args ? `${marker}: ${output}` : scheduledReply);
+          : buildAssistantEvents(
+              marker && args ? `${marker}:\n\n\`\`\`json\n${output}\n\`\`\`` : scheduledReply,
+            );
       if (body.stream === true) {
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
@@ -292,6 +295,7 @@ suite.define(() => {
           label: "Manage Telegram reminder",
         });
         const adminResults: Record<string, string> = {};
+        let observedCronRuns: string | undefined;
         await suite.withPage(
           {
             locale: "en-US",
@@ -349,15 +353,18 @@ suite.define(() => {
                   .poll(
                     async () => {
                       const runs = await gateway.call("cron.runs", { id: jobId });
-                      return (
-                        isRecord(runs) &&
-                        Array.isArray(runs.entries) &&
-                        runs.entries.some((entry) => isRecord(entry) && entry.status === "ok")
-                      );
+                      observedCronRuns = redactQaGatewayDebugText(JSON.stringify(runs));
+                      return {
+                        succeeded:
+                          isRecord(runs) &&
+                          Array.isArray(runs.entries) &&
+                          runs.entries.some((entry) => isRecord(entry) && entry.status === "ok"),
+                        runs: observedCronRuns,
+                      };
                     },
                     { timeout: 60_000 },
                   )
-                  .toBe(true);
+                  .toMatchObject({ succeeded: true });
               } else {
                 expect(result).toMatchObject({ removed: true });
               }
@@ -383,6 +390,7 @@ suite.define(() => {
               provider: "deterministic local Responses API",
               creator: "Telegram conversation",
               admin: adminResults,
+              cronRuns: observedCronRuns,
               configuredTelegramOwner: ownerResults,
               nonOwnerTelegramConversation: {
                 automationsAvailable: provider.toolAvailability.get(nonOwnerMarker),

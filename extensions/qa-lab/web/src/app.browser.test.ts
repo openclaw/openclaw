@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Bootstrap, EvidenceEnvelope, RunnerSelection } from "./ui-types.js";
+import type { Bootstrap, EvidenceEnvelope, OutcomesEnvelope, RunnerSelection } from "./ui-types.js";
 
 const httpMock = vi.hoisted(() => {
   class QaLabHttpError extends Error {
@@ -161,6 +161,54 @@ async function mountRunner(
   return root;
 }
 
+async function mountRunningControlUi(controlUiUrl: string | null) {
+  const selection: RunnerSelection = {
+    alternateModel: "mock-openai/gpt-5.6-luna-alt",
+    channel: null,
+    channelDriver: "qa-channel",
+    evidenceMode: "full",
+    fastMode: false,
+    primaryModel: "mock-openai/gpt-5.6-luna",
+    profile: "all",
+    providerMode: "mock-openai",
+    runtimePair: null,
+    runtimePairLane: null,
+    scenarioIds: ["dm-chat-baseline"],
+  };
+  const root = await mountRunner(selection);
+  const getJson = httpMock.getJson.getMockImplementation()!;
+  const bootstrap = createBootstrap(selection);
+  bootstrap.runner.status = "running";
+  bootstrap.runner.startedAt = "2026-09-19T00:00:00.000Z";
+  const outcomes: OutcomesEnvelope = {
+    run: {
+      kind: "suite",
+      status: "running",
+      startedAt: bootstrap.runner.startedAt,
+      scenarios: [{ id: "dm-chat-baseline", name: "DM baseline", status: "pending" }],
+      counts: { total: 1, pending: 1, running: 0, passed: 0, failed: 0, skipped: 0 },
+    },
+  };
+  const setControlUiUrl = (value: string | null) => {
+    bootstrap.controlUiUrl = value;
+    bootstrap.controlUiEmbeddedUrl = value;
+  };
+  setControlUiUrl(controlUiUrl);
+  httpMock.getJson.mockImplementation(async (url: string) => {
+    if (url === "/api/bootstrap") {
+      return structuredClone(bootstrap);
+    }
+    if (url === "/api/outcomes") {
+      return structuredClone(outcomes);
+    }
+    return getJson(url);
+  });
+  // The server publishes running/pending before the Gateway link, then waits for transport.
+  // Consume that fingerprint first so it cannot hide a later link-only update.
+  await vi.advanceTimersByTimeAsync(1_000);
+  return { root, setControlUiUrl };
+}
+
 function selectValue(root: HTMLElement, selector: string, value: string) {
   const select = root.querySelector<HTMLSelectElement>(selector);
   if (!select) {
@@ -209,6 +257,72 @@ afterEach(() => {
 });
 
 describe("QA Lab runner browser interactions", () => {
+  it.each([
+    { action: "attaches", before: null, after: "http://127.0.0.1:43124/control-ui/" },
+    {
+      action: "changes",
+      before: "http://127.0.0.1:43124/control-ui/",
+      after: "http://127.0.0.1:43124/control-ui/?panel=chat",
+    },
+    { action: "removes", before: "http://127.0.0.1:43124/control-ui/", after: null },
+  ])("$action the Control UI link when only its bootstrap URLs change", async (testCase) => {
+    const { root, setControlUiUrl } = await mountRunningControlUi(testCase.before);
+    const header = root.querySelector(".header")!;
+    const readHref = () => root.querySelector(".header-link")?.getAttribute("href") ?? null;
+    expect(readHref()).toBe(testCase.before);
+
+    setControlUiUrl(testCase.after);
+    expect(readHref()).toBe(testCase.before);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(readHref()).toBe(testCase.after);
+    expect(header.isConnected).toBe(false);
+  });
+
+  it.each([null, "http://127.0.0.1:43124/control-ui/"])(
+    "keeps the same header for an unchanged poll with Control UI URL %s",
+    async (controlUiUrl) => {
+      const { root } = await mountRunningControlUi(controlUiUrl);
+      const header = root.querySelector(".header");
+      const link = root.querySelector(".header-link");
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(root.querySelector(".header")).toBe(header);
+      expect(root.querySelector(".header-link")).toBe(link);
+    },
+  );
+
+  it("defers link updates while a select is focused, then renders the latest URL", async () => {
+    const { root, setControlUiUrl } = await mountRunningControlUi(null);
+    const header = root.querySelector(".header");
+    const select = root.querySelector<HTMLSelectElement>("#conversation-kind")!;
+    expect(select.isConnected).toBe(true);
+    expect(select.disabled).toBe(false);
+    select.focus();
+    expect(document.activeElement).toBe(select);
+
+    for (const url of [
+      "http://127.0.0.1:43124/control-ui/",
+      "http://127.0.0.1:43124/control-ui/?panel=chat",
+    ]) {
+      setControlUiUrl(url);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(root.querySelector(".header")).toBe(header);
+      expect(root.querySelector(".header-link")).toBeNull();
+      expect(document.activeElement).toBe(select);
+    }
+
+    select.blur();
+    expect(document.activeElement).not.toBe(select);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(root.querySelector(".header-link")?.getAttribute("href")).toBe(
+      "http://127.0.0.1:43124/control-ui/?panel=chat",
+    );
+    expect(select.isConnected).toBe(false);
+  });
+
   it("selects duplicate evidence labels independently before and after filtering", async () => {
     const originalUrl = window.location.href;
     window.history.replaceState(null, "", "/evidence?path=fixture/qa-evidence.json");

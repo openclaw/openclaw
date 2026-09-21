@@ -51,7 +51,7 @@ import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-ad
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
@@ -73,7 +73,11 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import {
+  prepareInternalGetReplyOptions,
+  withExtractedFileImages,
+  type InternalGetReplyOptions,
+} from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   hasInboundAudio,
@@ -258,19 +262,6 @@ function collectStagedAttachmentPaths(ctx: MsgContext): ReadonlyMap<number, stri
   );
 }
 
-function withExtractedFileImages(
-  opts: InternalGetReplyOptions | undefined,
-  extractedFileImages: ExtractedFileImage[] | undefined,
-): InternalGetReplyOptions | undefined {
-  if (!extractedFileImages || extractedFileImages.length === 0) {
-    return opts;
-  }
-  return {
-    ...opts,
-    extractedFileImages: [...(opts?.extractedFileImages ?? []), ...extractedFileImages],
-  };
-}
-
 async function applyLinkUnderstandingIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -297,9 +288,10 @@ async function applyLinkUnderstandingIfNeeded(params: {
 
 export async function getReplyFromConfig(
   ctx: MsgContext,
-  opts?: GetReplyOptions,
+  options?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const opts = prepareInternalGetReplyOptions(options);
   const isFastTestEnv = isFastTestRuntimeEnv();
   const preparedReplyDispatchRuntime = configOverride
     ? undefined

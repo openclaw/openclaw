@@ -20,6 +20,7 @@ export * from "./schema/computer.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/skill-library.js";
 export * from "./schema/plugin-credentials.js";
+export * from "./schema/web-search.js";
 export * from "./schema/plugin-skills.js";
 export * from "./schema/ui-command.js";
 export * from "./schema/themes.js";

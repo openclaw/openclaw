@@ -28,6 +28,7 @@ import {
   getSessionKysely,
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
+import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 
 function sessionKeySegmentStartsWith(sessionKey: string, prefix: string): boolean {
   const firstSeparator = sessionKey.indexOf(":");
@@ -193,10 +194,11 @@ function planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
   return deletePlans;
 }
 
-/** A negative selection avoids writable admission; the planner still owns every deletion decision. */
+/** A negative selection skips planning; the planner still owns every deletion decision. */
 function hasSessionLifecycleArtifactCleanupCandidates(
   database: Pick<OpenClawAgentDatabase, "db">,
   params: Parameters<typeof planSessionLifecycleArtifactCleanup>[1],
+  inspectOrphanTranscripts: boolean,
 ): boolean {
   const db = getSessionKysely(database.db);
   for (const row of iterateSqliteQuerySync(
@@ -225,6 +227,10 @@ function hasSessionLifecycleArtifactCleanupCandidates(
     ) {
       continue;
     }
+    if (!inspectOrphanTranscripts) {
+      // Warm orphan scans retain the planner's native reads, errors, and diagnostics.
+      return true;
+    }
     if (
       sqliteTranscriptStateIsReclaimable({
         database,
@@ -249,12 +255,13 @@ export async function prepareSessionLifecycleArtifactCleanup(
   databaseOptions: OpenClawAgentDatabaseOptions,
   params: Parameters<typeof planSessionLifecycleArtifactCleanup>[1],
 ): Promise<LifecycleArtifactCleanupPlan> {
-  if (!getOpenClawAgentDatabaseIfOpen(databaseOptions)) {
+  const cachedDatabase = getOpenClawAgentDatabaseIfOpen(databaseOptions);
+  if (!cachedDatabase) {
     try {
       const candidates = withOpenClawAgentDatabaseReadOnly(
         (database) =>
           runSqliteDeferredTransactionSync(database.db, () =>
-            hasSessionLifecycleArtifactCleanupCandidates(database, params),
+            hasSessionLifecycleArtifactCleanupCandidates(database, params, true),
           ),
         databaseOptions,
       );
@@ -267,7 +274,22 @@ export async function prepareSessionLifecycleArtifactCleanup(
   }
   return withSqliteSessionDatabase(
     databaseOptions,
-    (database) => planSessionLifecycleArtifactCleanup(database, params),
+    (database) => {
+      if (cachedDatabase) {
+        try {
+          const candidates = runSqliteDeferredTransactionSync(database.db, () => {
+            assertCanonicalSqliteSessionKeysCurrent(database);
+            return hasSessionLifecycleArtifactCleanupCandidates(database, params, false);
+          });
+          if (!candidates) {
+            return { entries: [], deletePlans: [] };
+          }
+        } catch {
+          // Uncertain admitted sources retain the planner's validation and diagnosis.
+        }
+      }
+      return planSessionLifecycleArtifactCleanup(database, params);
+    },
     undefined,
     params.diagnostics,
   );

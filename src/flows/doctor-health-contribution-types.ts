@@ -26,7 +26,7 @@ type DoctorConfigResult = {
   pluginInstallConfigImport?: ShippedPluginInstallConfigImport;
   path?: string;
   shouldWriteConfig?: boolean;
-  /** Planning revision, advanced by committed writes; null fences later writes without a receipt. */
+  /** Active planning revision, advanced on success and cleared after partial publication. */
   confirmedConfigSource?: { path: string; hash: string | null };
   /** Repair panels held back until the atomic config write commits. */
   pendingChangePanels?: readonly string[];
@@ -101,6 +101,8 @@ export type DoctorHealthCheckContext = HealthCheckContext & {
   readonly lintConfigSnapshot?: Pick<ConfigFileSnapshot, "exists" | "issues" | "warnings">;
   readonly runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   readonly agentDatabaseRefusals?: readonly AgentDatabaseAdmissionRefusal[];
+  /** The isolated lint worker retains its private state until these disposers settle. */
+  readonly deferInspectionDisposal?: (dispose: () => Promise<void>) => void;
 };
 
 export type DoctorHealthContribution = FlowContribution & {

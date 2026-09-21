@@ -33,6 +33,12 @@ import {
   createJitiAliasContentCacheKey,
   normalizePluginLoaderAliasMapForJiti,
 } from "./sdk-alias-normalization.js";
+import {
+  WORKSPACE_PACKAGE_ALIAS_ENTRIES,
+  WORKSPACE_PACKAGE_EXPORT_DIRS,
+  WORKSPACE_PACKAGE_ALIAS_NAMES,
+  ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS,
+} from "./sdk-alias-workspace.js";
 
 type PluginSdkAliasCandidateKind = "dist" | "src";
 export type PluginSdkResolutionPreference = "auto" | "dist" | "src";
@@ -499,105 +505,6 @@ const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
 const BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN = /^(?:api|runtime-api|test-api|.+-api)$/u;
 const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
   /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
-// Jiti-loaded plugin code runs outside the Vitest/tsgo resolver, so every
-// workspace package import reachable from plugin SDK barrels needs an explicit
-// source/dist alias here to keep source checkouts and packaged builds aligned.
-// Packaged installs omit workspace manifests; preserve the exact curated subpaths
-// instead of expanding aliases from package exports.
-const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
-  ["gateway-client", ["", "readiness", "timeouts", "websocket-data"]],
-  [
-    "gateway-protocol",
-    [
-      "",
-      "client-info",
-      "connect-error-details",
-      "frame-guards",
-      "gateway-error-details",
-      "restart-unavailable",
-      "schema",
-      "startup-unavailable",
-      "version",
-    ],
-  ],
-  [
-    "markdown-core",
-    [
-      "",
-      "code-spans",
-      "fences",
-      "frontmatter",
-      "ir",
-      "render",
-      "render-aware-chunking",
-      "tables",
-      "types",
-    ],
-  ],
-  ["media-generation-core", ["", "capability-model-ref", "catalog", "model-ref", "normalization"]],
-  ["retry", [""]],
-  [
-    "terminal-core",
-    [
-      "",
-      "ansi",
-      "decorative-emoji",
-      "health-style",
-      "links",
-      "note",
-      "osc-progress",
-      "palette",
-      "progress-line",
-      "prompt-select-styled",
-      "prompt-select-styled-params",
-      "prompt-style",
-      "restore",
-      "safe-text",
-      "stream-writer",
-      "table",
-      "terminal-link",
-      "theme",
-    ],
-  ],
-  ["net-policy", ["", "ip", "ipv4", "redact-sensitive-url", "url-protocol", "url-userinfo"]],
-  [
-    "model-catalog-core",
-    [
-      "",
-      "configured-model-refs",
-      "model-catalog-refs",
-      "model-catalog-normalize",
-      "model-catalog-pricing",
-      "model-catalog-types",
-      "provider-id",
-      "provider-model-id-normalization",
-      "provider-model-id-normalize",
-    ],
-  ],
-] as const;
-
-const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] =
-  WORKSPACE_PACKAGE_ALIAS_SUBPATHS.flatMap(([packageDir, subpaths]) =>
-    subpaths.map((subpath): WorkspacePackageAliasEntry => ({
-      packageName: `@openclaw/${packageDir}`,
-      packageDir,
-      subpath,
-      srcFile: `${subpath || "index"}.ts`,
-      distFile: `${subpath || "index"}.mjs`,
-    })),
-  );
-const WORKSPACE_PACKAGE_EXPORT_DIRS = ["media-core", "normalization-core", "acp-core", "llm-core"];
-const WORKSPACE_PACKAGE_ALIAS_NAMES = new Set([
-  ...WORKSPACE_PACKAGE_ALIAS_SUBPATHS.map(([name]) => `@openclaw/${name}`),
-  ...WORKSPACE_PACKAGE_EXPORT_DIRS.map((name) => `@openclaw/${name}`),
-]);
-const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
-  "acp-core",
-  "media-core",
-  "normalization-core",
-  "retry",
-  "terminal-core",
-]);
 
 function normalizePackageExportSubpath(exportKey: string): string | null {
   if (exportKey === ".") {
@@ -1281,6 +1188,17 @@ export function preparePluginLoaderAliases(
       : [],
     getAliasMap,
     getSourceTransformAliasMap,
+    mayResolveSourceSdk: () =>
+      withPluginCache(cache, () =>
+        aliasMap
+          ? Object.entries(aliasMap).some(
+              ([specifier, target]) =>
+                isPluginSdkAliasSpecifier(specifier) && isPluginSourceModulePath(target),
+            )
+          : Boolean(
+              packageRoot && pluginCacheExistsSync(path.join(packageRoot, "src", "plugin-sdk")),
+            ),
+      ),
     hasSourceSdkAliases: () =>
       withPluginCache(
         cache,

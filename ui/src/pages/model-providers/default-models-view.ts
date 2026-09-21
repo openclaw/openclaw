@@ -162,26 +162,31 @@ function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
 }
 
 // Discovery progress does not change the saved selection or disable known models.
-function renderCatalogProgress(props: DefaultModelsViewProps): TemplateResult | typeof nothing {
-  if (props.catalogDiscovering) {
-    return html`
-      <div class="model-providers__catalog-progress" role="status" aria-live="polite">
-        <span class="btn__spinner" aria-hidden="true"></span>
-        <span>${t("modelProviders.defaults.discoveringMore")}</span>
-      </div>
-    `;
-  }
-  if (props.catalogDiscoveryError) {
-    return html`
-      <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
-        <span>${t("modelProviders.defaults.discoverFailed")}</span>
-        <button class="btn btn--sm" type="button" @click=${props.onCatalogRetry}>
-          ${t("modelProviders.defaults.retryDiscover")}
-        </button>
-      </div>
-    `;
-  }
-  return nothing;
+function renderCatalogProgress(props: DefaultModelsViewProps): TemplateResult {
+  return html`
+    ${
+      props.catalogDiscovering
+        ? html`
+            <div class="model-providers__catalog-progress" role="status" aria-live="polite">
+              <span class="btn__spinner" aria-hidden="true"></span>
+              <span>${t("modelProviders.defaults.discoveringMore")}</span>
+            </div>
+          `
+        : nothing
+    }
+    ${
+      props.catalogDiscoveryError
+        ? html`
+            <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
+              <span>${t("modelProviders.defaults.discoverFailed")}</span>
+              <button class="btn btn--sm" type="button" @click=${props.onCatalogRetry}>
+                ${t("modelProviders.defaults.retryDiscover")}
+              </button>
+            </div>
+          `
+        : nothing
+    }
+  `;
 }
 
 export function renderDefaultModels(props: DefaultModelsViewProps) {

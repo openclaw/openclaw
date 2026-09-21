@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { StateDatabaseCoordinatorContentionError } from "../../infra/state-database-coordinator.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
@@ -26,11 +27,11 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { createUpdateProgress } from "./progress.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { failUpdateCommandRun } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
   completeUpdateCommandRun,
   createUpdateRunProgress,
-  failUpdateCommandRun,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
@@ -767,5 +768,36 @@ it.each([false, true])(
       await expect(operation).resolves.toBe(42);
     }
     expect([process.listeners("SIGINT"), process.listeners("SIGTERM")]).toEqual(before);
+  },
+);
+
+it.each(["in_progress", "completed"] as const)(
+  "identifies a progress ledger failure at preflight worktree (%s)",
+  (status) => {
+    const cause = new StateDatabaseCoordinatorContentionError("state-lifecycle");
+    const record = vi.spyOn(updateRunLedger, "recordUpdateRunStep").mockImplementation(() => {
+      throw cause;
+    });
+    const display = { onStepStart: vi.fn(), onStepComplete: vi.fn() };
+    const progress = createUpdateRunProgress({ runId: "synthetic-run", env: {} }, display);
+    const step = { name: "preflight worktree", command: "git worktree add", index: 1, total: 3 };
+    try {
+      const invoke = () =>
+        status === "in_progress"
+          ? progress.onStepStart?.(step)
+          : progress.onStepComplete?.({ ...step, durationMs: 1, exitCode: 0 });
+      expect(invoke).toThrow(
+        `Could not record update step "preflight worktree" (${status}): another OpenClaw process owns state-lifecycle`,
+      );
+      try {
+        invoke();
+      } catch (error) {
+        expect(error).toHaveProperty("cause", cause);
+      }
+      expect(display.onStepStart).not.toHaveBeenCalled();
+      expect(display.onStepComplete).not.toHaveBeenCalled();
+    } finally {
+      record.mockRestore();
+    }
   },
 );

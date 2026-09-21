@@ -376,6 +376,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
     sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract", "session-key-normalization"),
     sourcePackageAlias("session-url-contract", "share-build"),
     sourcePackageAlias("session-url-contract", "public-share"),
     sourcePackageAlias("session-url-contract"),
@@ -446,7 +447,7 @@ export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
   };
 }
 
-function controlUiBuildOutputPlugin(buildId: string, buildOutDir: string): Plugin {
+function controlUiBuildOutputPlugin(buildId: string): Plugin {
   let publicAssets: ControlUiAssetManifestEntry[] = [];
   let cacheId: string | undefined;
   return {
@@ -479,7 +480,40 @@ function controlUiBuildOutputPlugin(buildId: string, buildOutDir: string): Plugi
           : marked;
       },
     },
-    writeBundle() {
+    writeBundle({ dir: buildOutDir }, bundle) {
+      if (!buildOutDir) {
+        this.error("Control UI build requires an output directory");
+      }
+      const logger = this.environment.logger;
+      let completed = 0;
+      let sidecars = 0;
+      let lastProgressAt = performance.now();
+      logger.info("Control UI precompression: starting");
+      for (const output of Object.values(bundle)) {
+        // Vite's post-build import analysis rewrites lazy preload markers in a
+        // later generateBundle hook. Read from disk here so sidecars always
+        // encode the exact final bytes that the identity response serves.
+        const source = fs.readFileSync(path.join(buildOutDir, output.fileName));
+        const variants = createControlUiPrecompressedAssetVariants(output.fileName, source);
+        if (variants.length === 0) {
+          continue;
+        }
+        for (const variant of variants) {
+          fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
+        }
+        // Only completed writes renew activity; a blocked compression/write must
+        // remain silent so the caller's existing watchdog can still terminate it.
+        completed++;
+        sidecars += variants.length;
+        const now = performance.now();
+        if (now - lastProgressAt >= 10_000) {
+          logger.info(
+            `Control UI precompression: ${completed} assets (${sidecars} sidecars) written`,
+          );
+          lastProgressAt = now;
+        }
+      }
+      logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
       const swPath = path.join(buildOutDir, "sw.js");
       const publicSwPath = path.join(here, "public/sw.js");
       const source = fs.readFileSync(publicSwPath, "utf8");
@@ -512,45 +546,16 @@ function controlUiBuildOutputPlugin(buildId: string, buildOutDir: string): Plugi
           fs.writeFileSync(filePath, `${JSON.stringify(manifest, null, 2)}\n`);
         }
       }
-    },
-  };
-}
-
-function controlUiPrecompressedAssetsPlugin(buildOutDir: string): Plugin {
-  return {
-    name: "control-ui-precompressed-assets",
-    apply: "build",
-    writeBundle(_options, bundle) {
-      const logger = this.environment.logger;
-      let completed = 0;
-      let sidecars = 0;
-      let lastProgressAt = performance.now();
-      logger.info("Control UI precompression: starting");
-      for (const output of Object.values(bundle)) {
-        // Vite's post-build import analysis rewrites lazy preload markers in a
-        // later generateBundle hook. Read from disk here so sidecars always
-        // encode the exact final bytes that the identity response serves.
-        const source = fs.readFileSync(path.join(buildOutDir, output.fileName));
-        const variants = createControlUiPrecompressedAssetVariants(output.fileName, source);
-        if (variants.length === 0) {
-          continue;
-        }
-        for (const variant of variants) {
-          fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
-        }
-        // Only completed writes renew activity; a blocked compression/write must
-        // remain silent so the caller's existing watchdog can still terminate it.
-        completed++;
-        sidecars += variants.length;
-        const now = performance.now();
-        if (now - lastProgressAt >= 10_000) {
-          logger.info(
-            `Control UI precompression: ${completed} assets (${sidecars} sidecars) written`,
-          );
-          lastProgressAt = now;
-        }
-      }
-      logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
+      const assets = collectControlUiAssetManifestEntries(buildOutDir);
+      const manifest = {
+        version: CONTROL_UI_ASSET_MANIFEST_VERSION,
+        generation: hashControlUiAssetManifestEntries(assets),
+        assets,
+      };
+      fs.writeFileSync(
+        path.join(buildOutDir, CONTROL_UI_ASSET_MANIFEST_FILENAME),
+        `${JSON.stringify(manifest)}\n`,
+      );
     },
   };
 }
@@ -588,27 +593,6 @@ function collectControlUiAssetManifestEntries(
   return entries;
 }
 
-function controlUiAssetManifestPlugin(buildOutDir: string): Plugin {
-  return {
-    name: "control-ui-asset-manifest",
-    apply: "build",
-    // Rolldown runs writeBundle hooks sequentially; this plugin follows precompression.
-    // closeBundle can run again without an error after a failed build, masking its diagnostic.
-    writeBundle() {
-      const assets = collectControlUiAssetManifestEntries(buildOutDir);
-      const manifest = {
-        version: CONTROL_UI_ASSET_MANIFEST_VERSION,
-        generation: hashControlUiAssetManifestEntries(assets),
-        assets,
-      };
-      fs.writeFileSync(
-        path.join(buildOutDir, CONTROL_UI_ASSET_MANIFEST_FILENAME),
-        `${JSON.stringify(manifest)}\n`,
-      );
-    },
-  };
-}
-
 export default function controlUiViteConfig(
   options: { outDir?: string; command?: "serve" | "build" } = {},
 ): UserConfig {
@@ -621,7 +605,6 @@ export default function controlUiViteConfig(
     options.command === "serve"
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
       : undefined;
-  const buildOutDir = options.outDir ?? outDir;
   return {
     base,
     define: {
@@ -653,9 +636,11 @@ export default function controlUiViteConfig(
       ],
     },
     build: {
-      outDir: buildOutDir,
+      outDir: options.outDir ?? outDir,
       emptyOutDir: true,
-      sourcemap: true,
+      // Release packages omit maps; keep generating them without advertising dead URLs.
+      // Source builds retain automatic debugger discovery.
+      sourcemap: buildInfo.release ? "hidden" : true,
       modulePreload: {
         polyfill: true,
         resolveDependencies: resolveControlUiModulePreloadDependencies,
@@ -682,9 +667,7 @@ export default function controlUiViteConfig(
       controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
-      controlUiPrecompressedAssetsPlugin(buildOutDir),
-      controlUiBuildOutputPlugin(buildInfo.buildId, buildOutDir),
-      controlUiAssetManifestPlugin(buildOutDir),
+      controlUiBuildOutputPlugin(buildInfo.buildId),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

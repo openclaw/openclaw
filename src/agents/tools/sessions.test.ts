@@ -1,8 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-// Sessions tool tests cover list/send helpers, announce-target resolution,
-// and assistant-visible text sanitization.
+// Sessions tool tests cover list/send helpers and announce-target resolution.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
@@ -19,11 +18,8 @@ import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
-import { extractStoredAssistantText } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
-const inProcessGatewayRequestMock = vi.fn((opts: unknown) => callGatewayMock(opts));
 const inProcessCreationMock = vi.fn(
   async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
 );
@@ -51,11 +47,14 @@ vi.mock("../../gateway/call.js", async (importOriginal) => {
   };
 });
 vi.mock("./in-process-gateway.js", () => ({
-  callAgentToolGatewayRequest: (opts: unknown) => inProcessGatewayRequestMock(opts),
+  callAgentToolGatewayRequest: (opts: unknown) => callGatewayMock(opts),
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),
   hasInProcessGatewayToolContext: () => inProcessGatewayContextAvailable,
+  getInProcessGatewayToolContext: () => undefined,
+  hasGatewayToolRoutingContext: () => false,
   runWithGatewayToolCleanupContext: <T>(run: () => T): T => run(),
+  runWithGatewayToolContinuationContext: async <T>(run: () => Promise<T>): Promise<T> => run(),
 }));
 vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
@@ -408,37 +407,9 @@ async function executeFireAndForgetA2AFrom(
   return flowParams;
 }
 
-describe("extractStoredAssistantText sanitization", () => {
-  it("strips minimax tool call XML and downgraded markers", () => {
-    // Session recall should not replay provider/tool markup as assistant text.
-    const input =
-      'Hello <invoke name="tool">payload</invoke></minimax:tool_call> ' +
-      "[Tool Call: foo (ID: 1)] world";
-    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
-    expect(result).toBe("Hello  world");
-    expect(result).not.toContain("invoke");
-    expect(result).not.toContain("Tool Call");
-  });
-
-  it("strips tool_result XML via the shared assistant-visible sanitizer", () => {
-    const input = 'Prefix\n<tool_result>{"output":"hidden"}</tool_result>\nSuffix';
-    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
-    expect(result).toBe("Prefix\n\nSuffix");
-    expect(result).not.toContain("tool_result");
-  });
-
-  it("strips thinking tags", () => {
-    const input = "Before <think>secret</think> after";
-    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
-    expect(result).toBe("Before  after");
-  });
-});
-
 beforeEach(() => {
   recordParticipantMock.mockClear();
   facadeRuntimeMock.sessionKeyResolvers.clear();
-  inProcessGatewayRequestMock.mockReset();
-  inProcessGatewayRequestMock.mockImplementation((opts: unknown) => callGatewayMock(opts));
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
@@ -641,67 +612,6 @@ it("authorizes an arbitrary bare key against its persisted fixed-store owner", a
   expect(callGatewayMock.mock.calls).not.toContainEqual([
     expect.objectContaining({ method: "agent" }),
   ]);
-});
-
-describe("extractStoredAssistantText", () => {
-  it("sanitizes blocks without injecting newlines", () => {
-    const message = {
-      role: "assistant",
-      content: [
-        { type: "text", text: "Hi " },
-        { type: "text", text: "<think>secret</think>there" },
-      ],
-    };
-    expect(extractStoredAssistantText(message)).toBe("Hi there");
-  });
-
-  it("rewrites error-ish assistant text only when the transcript marks it as an error", () => {
-    const message = {
-      role: "assistant",
-      stopReason: "error",
-      errorMessage: "500 Internal Server Error",
-      content: [{ type: "text", text: "500 Internal Server Error" }],
-    };
-    expect(extractStoredAssistantText(message)).toBe("HTTP 500: Internal Server Error");
-  });
-
-  it("keeps normal status text that mentions billing", () => {
-    const message = textAssistant(
-      "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
-    );
-    expect(extractStoredAssistantText(message)).toBe(
-      "Firebase downgraded us to the free Spark plan. Check whether billing should be re-enabled.",
-    );
-  });
-
-  it("preserves successful turns with stale background errorMessage", () => {
-    const message = {
-      role: "assistant",
-      stopReason: "end_turn",
-      errorMessage: "insufficient credits for embedding model",
-      content: [{ type: "text", text: "Handle payment required errors in your API." }],
-    };
-    expect(extractStoredAssistantText(message)).toBe("Handle payment required errors in your API.");
-  });
-
-  it("prefers final_answer text when phased assistant history is present", () => {
-    const message = {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "internal reasoning",
-          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-        },
-        {
-          type: "text",
-          text: "Done.",
-          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
-        },
-      ],
-    };
-    expect(extractStoredAssistantText(message)).toBe("Done.");
-  });
 });
 
 describe("resolveAnnounceTarget", () => {

@@ -17,12 +17,6 @@ import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type {
-  SessionCompactionCheckpoint as ProtocolSessionCompactionCheckpoint,
-  SessionsCompactionBranchResult as ProtocolSessionsCompactionBranchResult,
-  SessionsCompactionListResult as ProtocolSessionsCompactionListResult,
-  SessionsCompactionRestoreResult as ProtocolSessionsCompactionRestoreResult,
-} from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import type {
   GatewaySessionRow as GatewayWireSessionRow,
@@ -225,11 +219,6 @@ export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: SessionWorkspaceArtifactEntry[];
 };
 
-export type SessionCompactionCheckpoint = Omit<
-  ProtocolSessionCompactionCheckpoint,
-  "tokensVersion"
->;
-
 export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
   Pick<SessionRow, "archivedBy" | "updatedAt"> & {
     /** Transient UI-owned Swarm note overlays, not persisted session fields. */
@@ -245,27 +234,6 @@ export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "upda
   };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
-
-export type SessionsCompactionListResult = Omit<
-  ProtocolSessionsCompactionListResult,
-  "checkpoints"
-> & {
-  checkpoints: SessionCompactionCheckpoint[];
-};
-
-type SessionCompactionMutationResult<T> = Omit<T, "checkpoint" | "entry"> & {
-  checkpoint: SessionCompactionCheckpoint;
-  entry: {
-    sessionId: string;
-    updatedAt: number;
-  } & Record<string, unknown>;
-};
-
-export type SessionsCompactionBranchResult =
-  SessionCompactionMutationResult<ProtocolSessionsCompactionBranchResult>;
-
-export type SessionsCompactionRestoreResult =
-  SessionCompactionMutationResult<ProtocolSessionsCompactionRestoreResult>;
 
 export type SessionsRewindResult =
   import("../../../packages/gateway-protocol/src/index.js").SessionsRewindResult;

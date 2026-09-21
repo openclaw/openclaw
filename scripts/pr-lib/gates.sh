@@ -8,7 +8,7 @@ run_hosted_prepare_gates() {
   local recent_sha=""
   local remote_record="${4:-}" remote_head remote_head_ref remote_is_cross_repository
   if [ -z "$remote_record" ]; then
-    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository") || return 1
+    remote_record=$(read_pr_observation "$pr") || return 1
   fi
   remote_head=$(pr_view_string_field "$remote_record" "headRefOid" "$pr" "Re-run prepare-init.") || return 1
   remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
@@ -30,13 +30,14 @@ run_hosted_prepare_gates() {
   fi
 
   local repo
-  repo=$(pr_gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+  repo=$(printf '%s\n' "$remote_record" | jq -er '.baseRepository.nameWithOwner | select(type == "string" and length > 0)') || return 1
   local scripts_dir="${script_parent_dir:-}"
   if [ -z "$scripts_dir" ]; then
     scripts_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   fi
+  # A directory argv[1] keeps the imported module's standalone entrypoint inactive.
   local args=(
-    "$scripts_dir/verify-pr-hosted-gates.mjs"
+    "$scripts_dir"
     --repo "$repo"
     --sha "$current_head"
     --pr "$pr"
@@ -49,7 +50,13 @@ run_hosted_prepare_gates() {
   if [ "$changelog_only" = "true" ]; then
     args+=(--changelog-only)
   fi
-  if run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"; then
+  if printf '%s\n' "$remote_record" | run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" \
+    node --input-type=module -e '
+      import { readFileSync } from "node:fs";
+      import { pathToFileURL } from "node:url";
+      const { main } = await import(pathToFileURL(process.argv[1] + "/verify-pr-hosted-gates.mts").href);
+      main(process.argv.slice(2), JSON.parse(readFileSync(0, "utf8")));
+    ' "${args[@]}"; then
     local reused_head
     reused_head=$(jq -er '.reusedFromSha // "" | strings' .local/gates-hosted-checks.json) || return 1
     if [ -n "$reused_head" ]; then
@@ -143,14 +150,11 @@ resolve_pr_gates_remote_mode() {
     "")
       printf 'local\n'
       ;;
-    testbox)
-      printf 'testbox\n'
-      ;;
-    crabbox-aws)
-      printf 'crabbox-aws\n'
+    testbox|crabbox-aws|github)
+      printf '%s\n' "$OPENCLAW_PR_GATES_REMOTE"
       ;;
     *)
-      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: testbox, crabbox-aws)." >&2
+      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: testbox, crabbox-aws, github)." >&2
       return 1
       ;;
   esac
@@ -329,20 +333,24 @@ write_gates_env_stamp() {
   local remote_run_url="${11}"
 
   # Security: shell-escape values to prevent command injection when sourced.
-  printf '%s=%q\n' \
-    PR_NUMBER "$pr" \
-    DOCS_ONLY "$docs_only" \
-    CHANGELOG_REQUIRED "$changelog_required" \
-    GATES_MODE "$gates_mode" \
-    LAST_VERIFIED_HEAD_SHA "$last_verified_head" \
-    FULL_GATES_HEAD_SHA "$full_gates_head" \
-    HOSTED_GATES_TARGET_HEAD_SHA "$hosted_gates_head" \
-    REMOTE_GATES_PROVIDER "$remote_provider" \
-    REMOTE_GATES_RUN_ID "$remote_run_id" \
-    REMOTE_GATES_LEASE_ID "$remote_lease_id" \
-    REMOTE_GATES_RUN_URL "$remote_run_url" \
-    GATES_PASSED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    > .local/gates.env
+  {
+    printf '%s=%q\n' \
+      PR_NUMBER "$pr" \
+      DOCS_ONLY "$docs_only" \
+      CHANGELOG_REQUIRED "$changelog_required" \
+      GATES_MODE "$gates_mode" \
+      HOSTED_GATES_TARGET_HEAD_SHA "$hosted_gates_head"
+    if [ "$gates_mode" != github_pending ]; then
+      printf '%s=%q\n' \
+        LAST_VERIFIED_HEAD_SHA "$last_verified_head" \
+        FULL_GATES_HEAD_SHA "$full_gates_head" \
+        REMOTE_GATES_PROVIDER "$remote_provider" \
+        REMOTE_GATES_RUN_ID "$remote_run_id" \
+        REMOTE_GATES_LEASE_ID "$remote_lease_id" \
+        REMOTE_GATES_RUN_URL "$remote_run_url" \
+        GATES_PASSED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    fi
+  } > .local/gates.env
 }
 
 derive_prepare_gate_change_plan() {
@@ -369,8 +377,9 @@ derive_prepare_gate_change_plan() {
 
 prepare_gates() {
   local pr="$1"
+  local remote_record="${2:-}"
   local gates_remote_mode
-  gates_remote_mode=$(resolve_pr_gates_remote_mode)
+  gates_remote_mode=$(resolve_pr_gates_remote_mode) || return 1
   if [ "$gates_remote_mode" != "local" ] && [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
     echo "OPENCLAW_PR_GATES_REMOTE=$gates_remote_mode conflicts with OPENCLAW_TESTBOX=1; hosted PR gates already own remote proof."
     exit 2
@@ -416,9 +425,9 @@ prepare_gates() {
     exit 1
   fi
 
-  local remote_record="" changelog_mode
+  local changelog_mode
   if [ "$has_changelog_update" = "true" ]; then
-    remote_record=$(read_pr_view_json "$pr" "headRefName,headRefOid,isCrossRepository,title,baseRefName") || return 1
+    [ -n "$remote_record" ] || remote_record=$(read_pr_observation "$pr") || return 1
     if ! changelog_mode=$(root_changelog_update_allowed_for_pr "$remote_record"); then
       echo "CHANGELOG.md is release-owned, along with CHANGELOG/<version>.md and matching records; normal PRs should put release-note context in the PR body or commit message."
       echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged release's artifacts and necessary index update, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."
@@ -444,7 +453,7 @@ prepare_gates() {
   local remote_gates_run_id=""
   local remote_gates_lease_id=""
   local remote_gates_run_url=""
-  if [ -s .local/gates.env ]; then
+  if [ "$gates_remote_mode" != github ] && [ -s .local/gates.env ]; then
     # shellcheck disable=SC1091
     source .local/gates.env
     previous_last_verified_head="${LAST_VERIFIED_HEAD_SHA:-}"
@@ -468,7 +477,11 @@ prepare_gates() {
     fi
   fi
 
-  if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+  if [ "$gates_remote_mode" = github ]; then
+    gates_mode=github_pending
+    hosted_gates_head="$current_head"
+    echo "Required GitHub gates deferred for $current_head; no successful gate proof recorded."
+  elif [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
     gates_mode="hosted_exact_or_recent_parent"
     remote_gates_provider=""
     remote_gates_run_id=""

@@ -11,9 +11,10 @@ export function createPluginsVitestConfig(env?: Record<string, string | undefine
       "src/plugins/loader.test.ts",
       ...databaseWorkerCoreTestFiles,
     ],
-    fileParallelism: false,
-    isolate: false,
+    isolate: true,
     name: "plugins",
+    // Runtime ingress uses the application main-thread SQLite worker broker.
+    pool: "forks",
     passWithNoTests: true,
   });
 }

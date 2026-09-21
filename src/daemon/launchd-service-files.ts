@@ -9,6 +9,7 @@ import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   buildLaunchAgentPlist,
+  normalizeLaunchdPlistXml,
   quoteLaunchAgentEnvironmentValue,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
@@ -16,6 +17,7 @@ import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
+import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import {
   publishServiceFile,
   readServiceFileState,
@@ -470,7 +472,7 @@ export async function writeLaunchAgentPlist(
   });
 
   const serviceDescription = resolveGatewayServiceDescription({ env, description });
-  const plist = buildLaunchAgentPlist({
+  let plist = buildLaunchAgentPlist({
     label,
     comment: serviceDescription,
     programArguments: prepared.programArguments,
@@ -481,6 +483,14 @@ export async function writeLaunchAgentPlist(
     stderrPath: stdoutPath,
     environment: prepared.inlineEnvironment,
   });
+  if (definitionTransaction.preservePolicy?.length) {
+    plist = preserveServicePolicyXml(
+      plist,
+      await normalizeLaunchdPlistXml(await fs.readFile(plistPath)),
+      definitionTransaction.preservePolicy,
+      "plist",
+    );
+  }
   await publishLaunchAgentPlist({ label, plistPath, contents: plist, definitionTransaction });
   return { plistPath, stdoutPath };
 }

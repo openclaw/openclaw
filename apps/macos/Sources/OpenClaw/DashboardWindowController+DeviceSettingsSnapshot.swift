@@ -63,6 +63,8 @@ extension DashboardWindowController {
             capabilities: .init(
                 canvasEnabled: state.canvasEnabled,
                 cameraEnabled: defaults.bool(forKey: cameraEnabledKey),
+                desktopSharingEnabled: defaults.object(forKey: desktopSharingEnabledKey) as? Bool ??
+                    MacNodeModeCoordinator.shared.desktopSharingEnabled,
                 computerControlEnabled: isComputerControlEnabled(),
                 computerControlProvider: ComputerControlProvider.current().rawValue,
                 cuaDriverBundled: CuaDriverArtifact.bundledExecutableURL != nil,

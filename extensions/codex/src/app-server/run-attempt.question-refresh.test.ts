@@ -78,7 +78,6 @@ describe("runCodexAppServerAttempt question refresh", () => {
         return threadStartResult();
       }
       if (method === "turn/start") {
-        turnStarted.resolve();
         return turnStartResult();
       }
       if (method === "turn/interrupt") {
@@ -156,14 +155,19 @@ describe("runCodexAppServerAttempt question refresh", () => {
       }
     }
     params.onBlockReply = vi.fn();
-    const onRunProgress = vi.fn();
+    const onRunProgress = vi.fn<NonNullable<typeof params.onRunProgress>>((event) => {
+      // Host progress fires after the active turn's input bridge is installed.
+      if (event.reason === "turn:start") {
+        turnStarted.resolve();
+      }
+    });
     params.onRunProgress = onRunProgress;
     const closeHost = refresh
       ? await bindProductionHarnessHostCapabilitiesForTest(params)
       : undefined;
     const run = runCodexAppServerAttempt(params);
     await turnStarted.promise;
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
+    expect(handleRequest).toBeTypeOf("function");
 
     const response = handleRequest?.({
       id: "request-input-1",

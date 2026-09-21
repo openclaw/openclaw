@@ -114,7 +114,7 @@ admission rejects an oversized reply rather than substituting a successful
 truncation marker. Declarations have
 independent size, depth, and traversal bounds; use `describe()` for the original
 schema when those bounds require an unknown type. Reading declarations does not
-execute tools or automatically enable typechecking of cells.
+execute tools or typecheck cells; they guide the agent's JavaScript composition.
 
 The contract rules are strict:
 
@@ -144,7 +144,7 @@ globals, `catalog.all()`, and the trusted quick index. TypeScript-style declarat
 files are available through the read-only `API` virtual file surface, so agents
 can inspect MCP signatures without adding MCP schemas to the prompt:
 
-```typescript
+```javascript
 const files = await API.list("mcp");
 const githubApi = await API.read("mcp/github.d.ts");
 

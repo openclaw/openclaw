@@ -15,6 +15,35 @@ export const cliRecoveryEntrypoints = {
     sourceWorkerName: "../agents/cli-session",
     distWorkerPath: "agents/cli-session.js",
   },
+  doctorLintSupervisor: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../commands/doctor-lint-process",
+    distWorkerPath: "commands/doctor-lint-process.js",
+  },
+  signalExitBarrier: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "signal-exit-barrier",
+    distWorkerPath: "cli/signal-exit-barrier.js",
+  },
+  outputDrain: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../process/output-drain",
+    distWorkerPath: "process/output-drain.js",
+  },
+} as const;
+
+// Report producers remain hookable inside the prepared CLI graph.
+export const doctorOutputEntrypoints = {
+  maintenance: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "program/register.maintenance",
+    distWorkerPath: "legacy-finalizer/src/cli/program/register.maintenance.js",
+  },
+  oneShotExit: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "one-shot-exit",
+    distWorkerPath: "legacy-finalizer/src/cli/one-shot-exit.js",
+  },
 } as const;
 
 // Failure reporting and exit finalization must share their compiled error classes.
@@ -52,6 +81,11 @@ export const updateFinalizationOutputEntrypoint = {
 
 // Direct-stop children use the invocation's prepared graph before readiness starts.
 export const gatewayDirectStopEntrypoints = {
+  startupOrphanFixture: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../gateway/startup-orphan-process.test-support",
+    distWorkerPath: "gateway/startup-orphan-process.test-support.js",
+  },
   forcedCronFixture: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "gateway-cli/run-loop.forced-cron.test-support",
@@ -106,6 +140,46 @@ export const gatewayDirectStopEntrypoints = {
 
 // Extra update roots share the native fixture generation.
 export const updateExecutorEntrypoints = {
+  sealedRegistry: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/sealed-runtime-registry",
+    distWorkerPath: "infra/sealed-runtime-registry.js",
+  },
+  ledger: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/update-run-ledger",
+    distWorkerPath: "infra/update-run-ledger.js",
+  },
+  handoff: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/update-managed-service-handoff",
+    distWorkerPath: "infra/update-managed-service-handoff.js",
+  },
+  sentinel: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/update-control-plane-sentinel",
+    distWorkerPath: "infra/update-control-plane-sentinel.js",
+  },
+  packageSteps: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/package-update-steps",
+    distWorkerPath: "infra/package-update-steps.js",
+  },
+  packageFixture: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/package-update-steps.test-support",
+    distWorkerPath: "infra/package-update-steps.test-support.js",
+  },
+  inventory: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/lib/package-dist-inventory",
+    distWorkerPath: "scripts/lib/package-dist-inventory.js",
+  },
+  exec: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../process/exec",
+    distWorkerPath: "process/exec.js",
+  },
   lease: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/update-managed-service-handoff-lease",

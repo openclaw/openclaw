@@ -152,6 +152,7 @@ describe("Codex ordinary MCP elicitation adapter", () => {
           gateway.calls.filter((entry) => entry.method === "question.waitAnswer"),
         ).toHaveLength(1),
       );
+      await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
       expect(settled).not.toHaveBeenCalled();
       const prompt = vi.mocked(params.onBlockReply!).mock.calls[0]?.[0];
       expect(prompt?.text).toContain(requestParams.message);

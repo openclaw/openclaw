@@ -1,4 +1,3 @@
-// Browser tests cover browser cli debug plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createBrowserProgram,
@@ -41,7 +40,7 @@ describe("browser debug command timeouts", () => {
 
       expect(gatewayMock).toHaveBeenLastCalledWith(
         "browser.request",
-        expect.objectContaining({ timeout }),
+        expect.objectContaining({ timeout: String(Number(timeout) + 10_000) }),
         expect.objectContaining({ path, timeoutMs: Number(timeout) }),
         expect.objectContaining({ scopes: ["operator.admin"] }),
       );

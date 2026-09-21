@@ -16,7 +16,6 @@ import {
   ensureOperatorApprovalResolutionRefs,
   repairLegacyTaskAgentAttribution,
   repairLegacyTaskDeliveryStatuses,
-  repairLegacyTaskIdentifiers,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
   repairLegacySubagentSuspensionReasons,
@@ -27,6 +26,7 @@ import {
   tableHasColumn,
   tableHasColumns,
 } from "./openclaw-state-db-schema-helpers.js";
+import { repairLegacyTaskIdentifiers } from "./openclaw-state-db-task-identifiers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
@@ -373,13 +373,13 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
     repairLegacyTaskAgentAttribution(db);
   }
   if (repairHistoricalRows) {
-    repairLegacyTaskIdentifiers(db);
     repairLegacyTaskDeliveryStatuses(db);
   }
   ensureColumns(db, columns.taskRunDetails);
   if (repairHistoricalRows) {
     repairLegacySubagentSuspensionReasons(db);
     repairLegacySubagentExecutionPayloads(db);
+    repairLegacyTaskIdentifiers(db);
     repairLegacySubagentTaskBindings(db);
     repairLegacySubagentRetainedResults(db);
   }

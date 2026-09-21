@@ -23,6 +23,8 @@ import {
 } from "./code-mode-worker-types.js";
 
 export type CodeModeWorkerInlineHost = {
+  /** Metadata can be read synchronously, including immediately before a guest error. */
+  onNetworkContent?: () => void;
   /** Append boundary output once. Continue with the remaining shared call budget;
    * checkpoint only when genuinely parking the VM (including an internal wait). Host tools keep
    * their cell-owner signal, not the shorter-lived worker-task signal. */
@@ -158,6 +160,9 @@ export async function runCodeModeWorker(
               ) {
                 throw new Error("invalid code mode worker admission budget");
               }
+              if (value.networkContentObserved === true) {
+                inlineHost.onNetworkContent?.();
+              }
               const { onConsumed, ...input } = await inlineHost.onBoundary(
                 // SAFETY: The private worker owns this boundary, never a guest routing identity.
                 value as CodeModeWorkerBoundary,
@@ -180,6 +185,9 @@ export async function runCodeModeWorker(
             : [],
       },
     );
+    if (isRecord(message) && message.networkContentObserved === true) {
+      inlineHost?.onNetworkContent?.();
+    }
     return isRecord(message)
       ? normalizeCodeModeTimeoutResult(message as CodeModeWorkerResult)
       : failedCodeModeWorkerResult("invalid code mode worker response", "internal_error");

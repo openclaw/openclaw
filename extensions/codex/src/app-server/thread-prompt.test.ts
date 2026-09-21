@@ -248,8 +248,11 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       expect(instructions).toContain(
         `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
       );
-      expect(instructions).toContain("including when it is already installed");
-      expect(instructions).toContain("desktop app does not establish");
+      expect(instructions).toContain("Tools/skills first");
+      expect(instructions).toContain(
+        "For explicit plugin/skill search/install or missing capability, use ClawHub",
+      );
+      expect(instructions).toContain("Skip routine tasks, tool errors, permissions");
     },
   );
 

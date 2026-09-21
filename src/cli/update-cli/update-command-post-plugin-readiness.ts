@@ -80,7 +80,7 @@ export async function applyPostPluginUpdateReadiness(params: {
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
   const startedAt = Date.now();
   const doctorLint: UpdateStepResult = {
-    name: "post-plugin doctor lint",
+    name: "post-plugin-doctor-lint",
     command: args.slice(1).join(" "),
     cwd: params.root,
     durationMs: 0,

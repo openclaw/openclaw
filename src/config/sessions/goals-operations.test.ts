@@ -265,7 +265,7 @@ describe("typed Goal operation persistence", () => {
         .db.prepare("UPDATE session_goal_operations SET result_json = ? WHERE operation_id = ?")
         .run(corrupt, "start-1");
       const eventsBefore = await loadTranscriptEvents(scope());
-      await expect(admit()).rejects.toThrow("Stored Goal operation receipt is invalid");
+      await expect(admit()).rejects.toMatchObject({ code: "receipt-invalid" });
       expect(loadSessionEntry(scope())?.goal).toBeUndefined();
       expect(await loadTranscriptEvents(scope())).toEqual(eventsBefore);
     },

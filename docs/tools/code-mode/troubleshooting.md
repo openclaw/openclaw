@@ -20,8 +20,8 @@ type CodeModeErrorCode =
   | "internal_error";
 ```
 
-`invalid_input` covers bad `exec`/`wait` arguments, disabled languages,
-rejected module access, TypeScript transform failures, unknown/expired/
+`invalid_input` covers bad `exec`/`wait` arguments, including retired `language`
+and `typecheck` fields, rejected module access, JavaScript syntax errors, unknown/expired/
 wrong-scope `runId` values, and too many suspended runs. `runtime_unavailable`
 covers a QuickJS worker that fails to start or exits non-zero.
 `aborted` means the caller cancelled an active `exec` or `wait`; OpenClaw
@@ -31,6 +31,13 @@ exceeded.
 `output_limit_exceeded` is reserved for a result that cannot be serialized into
 the bounded projection; ordinary oversized successful results are truncated and
 remain successful.
+
+JavaScript syntax errors are rejected during source preparation, before any
+nested tool dispatch. The bounded diagnostic includes a one-based source line
+and column. Correct the source and submit a new `exec`; OpenClaw does not repair
+or replay it automatically. This no-dispatch outcome does not enable
+`restartSafe` or change the result's `replaySafe` flag. Exceptions thrown by valid
+guest code, including `SyntaxError`, remain runtime failures.
 
 Errors returned to the guest are plain data; host `Error` instances, stack
 objects, prototypes, and host functions do not cross into QuickJS.
@@ -83,15 +90,10 @@ tool inputs beyond existing OpenClaw trajectory policy.
 ## Debugging
 
 JavaScript failure frames labeled `openclaw-code-mode:user.js` use line numbers
-from the submitted code, excluding internal wrappers and headless setup. For
-TypeScript, compiler diagnostics and source-mapped runtime frames labeled
-`openclaw-code-mode:user.ts` refer to the submitted TypeScript, including after
-`wait`. Source maps account for erased declarations and UTF-8 guest columns.
-An unmapped runtime frame retains the explicit `openclaw-code-mode:generated.js`
-label rather than pretending to identify original source. Internal wrapper and controller frames are
+from the submitted JavaScript, excluding internal wrappers and headless setup,
+including after `wait`. Internal wrapper and controller frames are
 omitted from new cells' failures; error messages still share the existing output
-budget. Resumed older snapshots without location metadata retain their previous
-stack format.
+budget. Code Mode does not accept TypeScript source or produce compiler diagnostics.
 
 Use targeted model transport logging when code mode behaves differently from
 a normal tool run:

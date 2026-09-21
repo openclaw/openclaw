@@ -6,6 +6,7 @@ import type { ConfigMutationResult } from "../config/mutate.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
+import { writeDoctorGatewayConfig } from "./doctor-health-contribution-runners.gateway.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -181,7 +182,7 @@ describe("Doctor retired auth profile cleanup", () => {
   });
 
   it.each(["complete", "partial"] as const)(
-    "keeps the last usable receipt terminal after %s publication fails",
+    "invalidates only a partial-publication receipt and fences later %s writes",
     async (publication) => {
       const ctx = createContext();
       expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
@@ -203,9 +204,20 @@ describe("Doctor retired auth profile cleanup", () => {
 
       await expect(runWriteConfigHealth(ctx)).rejects.toBe(error);
       expect(ctx.configWriteError).toBe(error);
-      expect(ctx.configResult.confirmedConfigSource).toStrictEqual(receipt);
+      expect(ctx.configResult.confirmedConfigSource).toStrictEqual(
+        publication === "partial" ? undefined : receipt,
+      );
       expect(ctx.cfgForPersistence).toStrictEqual(baseline);
       await expect(runWriteConfigHealth(ctx)).rejects.toBe(error);
+      await expect(writeDoctorGatewayConfig(ctx, { gateway: { mode: "local" } })).rejects.toBe(
+        error,
+      );
+      if (publication === "partial") {
+        // A copied caller may omit the local latch, but cannot reuse the active receipt.
+        const copied = { ...ctx, configWriteError: undefined };
+        expect(await runWriteConfigHealth(copied)).toBe(false);
+        expect(copied.configWriteRefusal).toBe("config-conflict");
+      }
       expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
       expect(mocks.replaceConfigFile).toHaveBeenLastCalledWith(
         expect.objectContaining({ baseHash: receipt?.hash }),

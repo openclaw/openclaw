@@ -172,6 +172,7 @@ export function resolveGatewaySessionStoreLookupCandidates(params: {
 }
 
 type GatewaySessionStoreLookupParams = {
+  env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   key: string;
   agentId?: string;
@@ -263,6 +264,8 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
     params.cfg,
     legacyAgentId,
     params.targetDiscoveryCache,
+    false,
+    params.env,
   );
   const reads = existing
     .filter((target) => target.agentId === legacyAgentId)
@@ -353,7 +356,7 @@ function prepareGatewaySessionStoreTarget(
     agentId: params.agentId,
   });
   if (isIncognitoSessionKey(canonicalKey)) {
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId });
+    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: params.env });
     const read: GatewaySessionStoreRead = {
       storePath,
       agentId,
@@ -415,6 +418,7 @@ export function resolveGatewaySessionStoreTargetWithStore(
     deletedMain ?? prepareGatewaySessionStoreTarget(normalized).resolve(),
     params.includeStoreChildEntries,
     params.cfg,
+    params.env,
   );
 }
 
@@ -459,6 +463,7 @@ export function createGatewaySessionEntryReader(params: {
 
 /** Resolve one synchronous set of logical metadata targets using exact grouped reads. */
 export function resolveGatewaySessionStoreTargetsReadOnly(params: {
+  env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];
   projection?: SessionEntryListScope["projection"];
@@ -473,6 +478,7 @@ export function resolveGatewaySessionStoreTargetsReadOnly(params: {
 
 /** Read exact groups now, retaining logical errors for the caller's ordered visitor. */
 export function prepareGatewaySessionStoreTargetsReadOnly(params: {
+  env?: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];
   projection: SessionEntryListScope["projection"];
@@ -504,6 +510,7 @@ function readGatewaySessionStoreTargets(
       ...target,
       key: normalizeOptionalString(target.key) ?? "",
       cfg: params.cfg,
+      env: params.env,
       clone: false,
       readOnly: true,
       exactRead: true,
@@ -530,6 +537,7 @@ function includeDirectChildEntries(
   target: GatewaySessionStoreTargetWithStore,
   include: boolean | undefined,
   cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
 ): GatewaySessionStoreTargetWithStore {
   if (!include) {
     return target;
@@ -540,6 +548,7 @@ function includeDirectChildEntries(
     for (const parentKey of parentKeys) {
       for (const { sessionKey, entry } of listSessionChildEntriesReadOnly({
         agentId: target.agentId,
+        env,
         clone: false,
         projection: "list",
         sessionKey: parentKey,
@@ -558,6 +567,7 @@ function includeDirectChildEntries(
     const targets = [...childKeys].filter((key) => !target.store[key]).map((key) => ({ key }));
     for (const child of resolveGatewaySessionStoreTargetsReadOnly({
       cfg,
+      env,
       targets,
       projection: "list",
     })) {

@@ -78,6 +78,8 @@ export function resolveManagedImageResource(
     ) {
       return resource;
     }
+    // A render or explicit retry can beat the queued refresh after its deadline.
+    clearChatMediaResourceRefresh(resource);
     resource.retryAttempted = true;
   }
   resource.value = undefined;

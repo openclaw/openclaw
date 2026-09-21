@@ -1,10 +1,10 @@
 import { sha256Hex } from "./crypto-digest.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
-import type { UsageCostTranscriptFile } from "./session-cost-usage-collection.js";
 import {
   isUsageCostRollupFresh,
   type UsageCostFreshnessCheckpoint,
 } from "./session-cost-usage-rollup-codec.js";
+import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 /** The refresh worker retains only the latest target's digests and copied freshness fields. */
 export class UsageCostRefreshCheckpoints {

@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -18,6 +19,7 @@ import {
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
   type ChatModelCatalogState,
+  renderChatModelCatalogRefresh,
   renderChatModelCatalogState,
 } from "./chat-model-catalog-state.ts";
 import {
@@ -338,6 +340,11 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 updateModelSearch(event.currentTarget as HTMLInputElement)}
                               @keydown=${handleModelSearchKeydown}
                             />
+                            ${
+                              params.modelOptions.length > 0
+                                ? renderChatModelCatalogRefresh(params.modelCatalogState)
+                                : nothing
+                            }
                           </div>
                         `
                       : nothing
@@ -371,6 +378,10 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 const authLabel = showAuth
                                   ? [auth.label, auth.detail].filter(Boolean).join(" · ")
                                   : undefined;
+                                const route = resolveModelRuntimeRoute(provider);
+                                const routeDetail = route
+                                  ? t(`chat.modelControls.routes.${route}.detail`)
+                                  : undefined;
                                 return html`
                                   <section
                                     class="chat-controls__provider-model-group"
@@ -382,7 +393,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                     <div
                                       class="chat-controls__provider-heading"
                                       data-chat-model-provider=${provider}
-                                      title=${authLabel ?? nothing}
+                                      title=${[routeDetail, authLabel].filter(Boolean).join(" · ") || nothing}
                                     >
                                       <button
                                         class="chat-controls__provider-toggle"
@@ -393,6 +404,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                         aria-label=${`${t("chat.modelControls.providerModels", {
                                           provider: providerDisplayLabel(provider),
                                         })} (${options.length})`}
+                                        aria-description=${routeDetail ?? nothing}
                                         ?disabled=${params.disabled}
                                         @click=${toggleModelProviderGroup}
                                       >

@@ -5,6 +5,8 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { t } from "../../i18n/index.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import {
@@ -39,6 +41,8 @@ export class SystemsController {
   loading = false;
   error: string | null = null;
   sampledAtMs: number | null = null;
+  desktopSetupError: string | null = null;
+  private desktopSetupRequest: symbol | undefined;
   private readonly telemetry = new Map<string, readonly SystemsTelemetrySample[]>();
   private readonly listeners = new Set<() => void>();
   private readonly lifecycle;
@@ -70,6 +74,77 @@ export class SystemsController {
     return this.current
       ? this.rows.find((row) => row.environment.id === this.selectedId)
       : undefined;
+  }
+
+  get hostDesktopEnabled(): boolean {
+    const config = resolveEditableSnapshotConfig(this.context.runtimeConfig.state.configSnapshot);
+    const desktop = config?.desktop;
+    return isRecord(desktop) && isRecord(desktop.host) && desktop.host.enabled === true;
+  }
+
+  get desktopSetupBusy(): boolean {
+    return this.desktopSetupRequest !== undefined;
+  }
+
+  private resetDesktopSetup(): void {
+    this.desktopSetupRequest = undefined;
+    this.desktopSetupError = null;
+  }
+
+  get canEnableHostDesktop(): boolean {
+    const setup = this.selected?.environment.desktopSetup;
+    return (
+      this.presented &&
+      this.connected &&
+      this.selectedId === "gateway" &&
+      (setup?.state === "ready" || setup?.state === "managed") &&
+      !this.hostDesktopEnabled &&
+      this.context.runtimeConfig.canPatch === true
+    );
+  }
+
+  async enableHostDesktop(): Promise<void> {
+    const scope = this.lifecycle.capture();
+    const runtimeConfig = this.context.runtimeConfig;
+    if (!scope || !this.canEnableHostDesktop || this.desktopSetupBusy) {
+      return;
+    }
+    const request = Symbol("desktop-setup");
+    const isCurrent = () =>
+      this.desktopSetupRequest === request &&
+      this.presented &&
+      this.current &&
+      this.lifecycle.isCurrent(scope) &&
+      this.context.runtimeConfig === runtimeConfig;
+    this.desktopSetupRequest = request;
+    this.desktopSetupError = null;
+    this.notify();
+    try {
+      await runtimeConfig.ensureLoaded();
+      if (!isCurrent() || !this.canEnableHostDesktop) {
+        return;
+      }
+      const patched = await runtimeConfig.patch({
+        raw: { desktop: { host: { enabled: true } } },
+        note: "systems: enable host desktop",
+        canDispatch: () => isCurrent() && this.canEnableHostDesktop,
+      });
+      if (isCurrent() && !patched) {
+        this.desktopSetupError = runtimeConfig.state.lastError ?? t("systems.desktopSetupFailed");
+      }
+      if (isCurrent() && patched) {
+        await this.refresh();
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.desktopSetupError = formatUiError(error);
+      }
+    } finally {
+      if (isCurrent()) {
+        this.desktopSetupRequest = undefined;
+        this.notify();
+      }
+    }
   }
 
   telemetryHistory(id: string): readonly SystemsTelemetrySample[] {
@@ -139,6 +214,9 @@ export class SystemsController {
     }
     this.telemetryRequest?.abort();
     this.telemetryRequest = undefined;
+    if (id !== this.selectedId) {
+      this.resetDesktopSetup();
+    }
     this.selectedId = id;
     this.notify();
   }
@@ -180,6 +258,7 @@ export class SystemsController {
       }
       this.subscriptions = [];
       this.cancelRefresh();
+      this.resetDesktopSetup();
       return;
     }
     this.subscriptions = [
@@ -189,6 +268,7 @@ export class SystemsController {
           this.clear();
         } else if (changed) {
           this.cancelRefresh();
+          this.resetDesktopSetup();
           this.telemetry.clear();
           if (snapshot.phase === "connected") {
             void this.refresh();
@@ -200,7 +280,8 @@ export class SystemsController {
         if (
           event.event === "presence" ||
           event.event === "node.pair.resolved" ||
-          event.event === "node.runnerInventory.changed"
+          event.event === "node.runnerInventory.changed" ||
+          event.event === "config.changed"
         ) {
           void this.refresh();
         } else if (
@@ -216,6 +297,7 @@ export class SystemsController {
         this.projectRows();
         this.notify();
       }),
+      this.context.runtimeConfig.subscribe(() => this.notify()),
     ];
     if (this.lifecycle.transition(this.context.gateway.snapshot)) {
       this.telemetry.clear();
@@ -245,6 +327,7 @@ export class SystemsController {
     this.error = null;
     this.sampledAtMs = null;
     this.telemetry.clear();
+    this.resetDesktopSetup();
     this.query = "";
   }
 

@@ -13,6 +13,7 @@ import {
   createInMemoryTaskFlowRegistryStore,
   createInMemoryTaskRegistryStore,
 } from "../test-utils/task-registry-store.js";
+import type { DetachedTaskTerminalState } from "./detached-task-runtime-contract.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
 import { getTaskFlowById, prepareTaskFlowRegistryRead } from "./task-flow-registry.js";
 import { applyFlowPatch } from "./task-flow-registry.records.js";
@@ -26,7 +27,6 @@ import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.j
 import { deleteTaskRecordById } from "./task-registry-query.js";
 import { markTaskRunningByRunId } from "./task-registry-record-api.js";
 import { ensureTaskRegistryReadyAsync, taskFlowSyncOwner } from "./task-registry-state.js";
-import { runTaskRecordTransitionOperation } from "./task-registry-transition.operation.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { bindTaskRunOwner, getTaskRunOwner } from "./task-run-owner.js";
@@ -99,31 +99,17 @@ async function fixture(
         | TaskInitialWorkerOperations[Key]["output"]
         | Promise<TaskInitialWorkerOperations[Key]["output"]>;
     } = {
+      "tasks.acknowledgeStateChange": (input) =>
+        originalCreate(
+          context,
+          { type: "tasks.acknowledgeStateChange", input },
+          assertCurrent,
+          onGranted,
+        ),
       "tasks.createRecord": (input) =>
         originalCreate(context, { type: "tasks.createRecord", input }, assertCurrent, onGranted),
       "tasks.settleUnstarted": (input) =>
-        runTaskRecordTransitionOperation(
-          {
-            kind: "state",
-            taskId: input.taskId,
-            now: input.now,
-            expectedTask: input.expectedTask,
-            params: { ...input.terminal, runId: input.expectedTask.runId },
-          },
-          {
-            readCurrent: () => store.loadSnapshot().tasks.get(input.taskId),
-            // The fixture uses CLI records; no ACP or subagent backing is involved.
-            hasAuthoritativeBacking: (task) => task.runtime === "cli",
-            write: (write) => write(),
-            assertCurrent,
-            upsertTask: (task) => {
-              store.upsertTaskWithDeliveryState({ task });
-              return true;
-            },
-            deferCommit: (publish) => publish(),
-            onCommitted() {},
-          },
-        ),
+        originalCreate(context, { type: "tasks.settleUnstarted", input }, assertCurrent, onGranted),
       "flows.finalizeTaskCancellation": (input) => {
         beforeFinalize(input);
         const task = store.loadSnapshot().tasks.get(input.taskId) ?? null;
@@ -198,7 +184,7 @@ async function drainRetry(delayMs = 1_000) {
   await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { interval: 0 });
 }
 
-it("settles an active task after its lifecycle start normalizes the creation timestamp", async () => {
+it("preserves task identity when terminal timestamps precede its normalized lifecycle start", async () => {
   const f = await fixture();
   const created = await f.create();
   if (!created) {
@@ -211,8 +197,28 @@ it("settles an active task after its lifecycle start normalizes the creation tim
     startedAt,
   });
   expect(f.store.loadSnapshot().tasks.get(created.task.taskId)?.createdAt).toBe(startedAt);
-  await created.finalizeActive({ status: "succeeded", endedAt: Date.now() }, () => true);
-  expect(f.store.loadSnapshot().tasks.get(created.task.taskId)?.status).toBe("succeeded");
+  const terminal = {
+    status: "succeeded",
+    endedAt: startedAt - 1_000,
+    terminalSummary: "Completed the selected task",
+    childSessionKey: "agent:other:unselected",
+    detail: { unexpected: "terminal input" },
+  } satisfies DetachedTaskTerminalState;
+  await created.finalizeActive(terminal, () => true);
+  const completed = f.store.loadSnapshot().tasks.get(created.task.taskId);
+  expect(completed).toMatchObject({
+    status: "succeeded",
+    terminalSummary: terminal.terminalSummary,
+    createdAt: terminal.endedAt,
+    startedAt,
+    endedAt: startedAt,
+    ownerKey: created.task.ownerKey,
+    runtime: created.task.runtime,
+    runId: created.task.runId,
+    scopeKind: created.task.scopeKind,
+  });
+  expect(completed?.childSessionKey).toBe(created.task.childSessionKey);
+  expect(completed?.detail).toEqual(created.task.detail);
 });
 
 it.each(["metadata", "removal", "replacement", "adoption", "prior adoption"] as const)(

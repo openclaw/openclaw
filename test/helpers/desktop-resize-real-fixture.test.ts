@@ -305,15 +305,29 @@ describe("desktop endpoint packet attribution", () => {
   );
 
   it("joins its listener and rejects late or concurrent observations", async () => {
-    const owner = await openEndpointTap();
-    const probe = owner.tap.expectPacket(key);
-    expect(() => owner.tap.expectPacket(key)).toThrow("busy");
-    const rejection = expect(probe.result).rejects.toThrow("aborted");
-    owner.abort.abort();
-    await rejection;
-    await owner.tap.close();
-    expect(() => owner.tap.expectPacket(key)).toThrow();
-    const socket = net.connect({ host: "127.0.0.1", port: owner.tap.port });
-    await expect(once(socket, "connect")).rejects.toMatchObject({ code: "ECONNREFUSED" });
+    const createServer = vi.spyOn(net, "createServer");
+    try {
+      const owner = await openEndpointTap();
+      const created = createServer.mock.results.at(-1);
+      if (created?.type !== "return") {
+        throw new Error("Desktop endpoint tap did not create its native listener");
+      }
+      const server = created.value;
+      expect(server.address()).toMatchObject({ port: owner.tap.port });
+      const closed = vi.fn();
+      server.on("close", closed);
+      const probe = owner.tap.expectPacket(key);
+      expect(() => owner.tap.expectPacket(key)).toThrow("busy");
+      const rejection = expect(probe.result).rejects.toThrow("aborted");
+      owner.abort.abort();
+      await rejection;
+      await owner.tap.close();
+      expect(closed).toHaveBeenCalledOnce();
+      expect(server.listening).toBe(false);
+      expect(server.address()).toBeNull();
+      expect(() => owner.tap.expectPacket(key)).toThrow();
+    } finally {
+      createServer.mockRestore();
+    }
   });
 });

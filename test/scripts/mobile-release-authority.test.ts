@@ -2575,6 +2575,7 @@ describe("mobile release authority", () => {
       const root = makeTempDir([], "openclaw-android-emulator-post-deadline-");
       const bin = path.join(root, "bin");
       const diagnosticDir = path.join(root, "diagnostic");
+      const clockPath = path.join(root, "observation-clock.txt");
       const deadlineSeconds = options.deadlineSeconds ?? 12;
       const functions = options.functions ?? observationFunctions;
       const preObservationDelaySeconds = options.preObservationDelaySeconds ?? 0;
@@ -2588,6 +2589,18 @@ describe("mobile release authority", () => {
           "-c",
           [
             "set -euo pipefail",
+            // Observation waits use a clock; the timeout and cleanup probes below use real time.
+            "unset SECONDS",
+            "SECONDS=0",
+            "sleep() {",
+            '  if [[ -n "${probe_pid:-}" ]]; then',
+            // Join the short-lived adb fixture without racing its output or exit status.
+            '    wait "$probe_pid" 2>/dev/null || :',
+            "  else",
+            "    SECONDS=$((SECONDS + $1))",
+            "  fi",
+            "}",
+            `trap 'printf "%s\\n" "$SECONDS" >"$OBSERVATION_CLOCK_FILE"' EXIT`,
             "sample_owned_qemu() { :; }",
             functions,
             "readiness_failure_latched=0",
@@ -2603,6 +2616,7 @@ describe("mobile release authority", () => {
           ...process.env,
           DIAGNOSTIC_DIR: diagnosticDir,
           INITIAL_SERIAL: options.initialSerial ?? "",
+          OBSERVATION_CLOCK_FILE: clockPath,
           PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
         },
         timeoutMs: 20_000,
@@ -2617,6 +2631,7 @@ describe("mobile release authority", () => {
       const snapshotsRoot = path.join(diagnosticDir, "cold-boot-snapshots");
       return {
         durationMs: Date.now() - startedAt,
+        elapsedSeconds: Number(fs.readFileSync(clockPath, "utf8").trim()),
         observations: fs.readFileSync(
           path.join(diagnosticDir, "post-deadline-observations.log"),
           "utf8",
@@ -2723,6 +2738,7 @@ fi
     const failedBootProbeNearCeiling = failedBootProbeResult.value;
     const boundedSnapshots = boundedSnapshotsResult.value;
     expect(failedBootProbeNearCeiling.result.status).toBe(1);
+    expect(failedBootProbeNearCeiling.elapsedSeconds).toBe(12);
     expect(failedBootProbeNearCeiling.observations).toContain("boot_status=7");
     expect(failedBootProbeNearCeiling.snapshots).toEqual(["first-online", "near-ceiling"]);
 
@@ -2765,6 +2781,7 @@ fi
       { deadlineSeconds: 2 },
     );
     expect(capped.result.status).toBe(1);
+    expect(capped.elapsedSeconds).toBe(2);
     expect(capped.result.stderr).toContain("::error::latched readiness failure");
     expect(capped.observations).toContain("observation_cap_seconds=900");
     expect(capped.observations).toContain("observation_stop=observation-cap-reached");
@@ -2779,10 +2796,12 @@ fi
       { deadlineSeconds: 3, preObservationDelaySeconds: 2 },
     );
     expect(absoluteCap.result.status).toBe(1);
+    expect(absoluteCap.elapsedSeconds).toBe(3);
     expect(absoluteCap.durationMs).toBeLessThan(5_000);
     expect(absoluteCap.observations).toContain("observation_stop=observation-cap-reached");
 
     expect(boundedSnapshots.result.status).toBe(1);
+    expect(boundedSnapshots.elapsedSeconds).toBe(12);
     expect(boundedSnapshots.observations).toContain("observation_stop=observation-cap-reached");
     expect(boundedSnapshots.snapshots).toEqual(["first-online", "near-ceiling"]);
     for (const snapshot of boundedSnapshots.snapshots) {
@@ -3287,7 +3306,7 @@ fi
         file: ".github/workflows/ios-beta-release.yml",
         name: "iOS Beta Release",
         platform: "ios",
-        releaseRunner: "macos-26",
+        releaseRunner: "xcode-27",
         signingCheckoutName: "Checkout encrypted iOS signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before iOS signing checkout",
@@ -4496,7 +4515,7 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
       };
     };
     const releaseSteps = workflow.jobs.release.steps;
-    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 26");
+    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 27");
     const rustIndex = releaseSteps.findIndex(
       (step) => step.name === "Install Watch Rust toolchain",
     );

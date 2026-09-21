@@ -50,7 +50,10 @@ import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   getRequiredSharedGatewaySessionGeneration,
 } from "../../server-shared-auth-generation.js";
+import { GatewayClientRegistry } from "../client-registry.js";
+import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
+import { createOperatorWsClient } from "./authenticated-request-dispatch.test-support.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
@@ -213,6 +216,7 @@ function cleanupGatewayHarnesses() {
 
 beforeEach(() => {
   harnessCleanupPromise = undefined;
+  loadConfigMock.mockReset();
 });
 afterEach(cleanupGatewayHarnesses);
 
@@ -232,15 +236,6 @@ async function withGatewayTestState(
 
 function waitForFast(assertion: () => void | Promise<void>) {
   return vi.waitFor(assertion, { interval: 1 });
-}
-
-function createLogger() {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
 }
 
 function createHealthSummary(): HealthSummary {
@@ -281,23 +276,6 @@ async function createTestAgentRuntimeIdentityLease() {
   };
 }
 
-type ConnectedTestClient = {
-  invalidated: boolean;
-  invalidatedReason?: string;
-  connect: {
-    client: {
-      id: string;
-      version: string;
-      platform: string;
-      mode: string;
-    };
-    role: "operator";
-    scopes: string[];
-  };
-  connId: string;
-  usesSharedGatewayAuth: false;
-};
-
 type CloseGatewayConnection = (code?: number, reason?: string) => void;
 type SetCloseCause = (cause: string, meta?: Record<string, unknown>) => void;
 
@@ -305,22 +283,15 @@ function createConnectedTestClient(params: {
   connId: string;
   invalidated?: boolean;
   invalidatedReason?: string;
-}): ConnectedTestClient {
+}) {
   return {
+    ...createOperatorWsClient({
+      connId: params.connId,
+      clientInfo: { id: "openclaw-control-ui", mode: "ui" },
+      scopes: [],
+    }),
     invalidated: params.invalidated ?? false,
     ...(params.invalidatedReason ? { invalidatedReason: params.invalidatedReason } : {}),
-    connect: {
-      client: {
-        id: "openclaw-control-ui",
-        version: "dev",
-        platform: "test",
-        mode: "ui",
-      },
-      role: "operator",
-      scopes: [],
-    },
-    connId: params.connId,
-    usesSharedGatewayAuth: false,
   };
 }
 
@@ -447,6 +418,7 @@ function attachGatewayHarness(options: {
     return true;
   });
   attachGatewayWsMessageHandler({
+    clients: new GatewayClientRegistry(),
     socket,
     prepareAuthenticatedReceive: () => ({ ok: true, value: handoffAuthenticatedReceive }),
     connectionWork,
@@ -619,7 +591,7 @@ function connectTrustedProxyUser(
   clientOverrides: Record<string, unknown> = {},
   scopes: string[] = [],
 ) {
-  loadConfigMock.mockImplementationOnce(() => ({
+  loadConfigMock.mockImplementation(() => ({
     gateway: {
       auth: {
         mode: "trusted-proxy",
@@ -766,7 +738,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     "limits owner attribution to shared-secret %s access when roles are configured",
     async (authMethod) => {
       await withOpenClawTestState({ label: "gateway-owner-role-gate" }, async () => {
-        loadConfigMock.mockImplementationOnce(() => ({
+        loadConfigMock.mockImplementation(() => ({
           gateway: {
             auth: { mode: "none" },
             roles: {
@@ -1767,7 +1739,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       const syncCompletion = createGatewayHarnessGate<{ profileId: string; updatedAt: number }>();
       const sync = vi.fn(async () => await syncCompletion.promise);
       createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
-      loadConfigMock.mockImplementationOnce(() => ({
+      loadConfigMock.mockImplementation(() => ({
         gateway: {
           auth: {
             mode: "none",
@@ -1859,7 +1831,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
               throw error;
             }),
           );
-          loadConfigMock.mockImplementationOnce(() => ({
+          loadConfigMock.mockImplementation(() => ({
             gateway: {
               auth: {
                 mode: "none",
@@ -2169,76 +2141,96 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(ensureProfileForEmailMock).not.toHaveBeenCalled();
   });
 
-  it("rejects a shared-auth handshake when credentials rotate before session attachment", async () => {
-    const oldAuth = {
-      mode: "token" as const,
-      token: "gateway-token-old",
-      allowTailscale: false,
-    };
-    const oldGeneration = resolveSharedGatewaySessionGeneration(oldAuth, []);
-    const newGeneration = resolveSharedGatewaySessionGeneration(
-      { ...oldAuth, token: "gateway-token-new" },
-      [],
-    );
-    expect(oldGeneration).toBeTypeOf("string");
-    expect(newGeneration).toBeTypeOf("string");
-    const generationState = { current: oldGeneration, required: null };
-    const preparationStarted = createDeferred();
-    const releasePreparation = createGatewayHarnessGate();
-    prepareGatewayNodeConnectMock.mockImplementationOnce(async () => {
-      preparationStarted.resolve();
-      await releasePreparation.promise;
-      return true;
-    });
-    const close = createCloseMock();
-    const setCloseCause = createSetCloseCauseMock();
-    const harness = attachGatewayHarness({
-      connId: "conn-token-rotated-during-connect",
-      connectNonce: "nonce-token-rotated-during-connect",
-      resolvedAuth: oldAuth,
-      getRequiredSharedGatewaySessionGeneration: () =>
-        getRequiredSharedGatewaySessionGeneration(generationState),
-      close,
-      setCloseCause,
-    });
+  it.each(["credentials", "Tailscale policy"])(
+    "rejects a handshake when %s changes before session attachment",
+    async (changed) => {
+      const previousLoadConfig = loadConfigMock.getMockImplementation();
+      const config = loadConfigMock();
+      let allowTailscale = false;
+      loadConfigMock.mockImplementation(() => ({
+        ...config,
+        gateway: { ...config.gateway, auth: { ...config.gateway.auth, allowTailscale } },
+      }));
+      onTestFinished(() => {
+        if (previousLoadConfig) {
+          loadConfigMock.mockImplementation(previousLoadConfig);
+        }
+      });
+      const oldAuth = {
+        mode: "token" as const,
+        token: "gateway-token-old",
+        allowTailscale: false,
+      };
+      const oldGeneration = resolveSharedGatewaySessionGeneration(oldAuth, []);
+      const newGeneration = resolveSharedGatewaySessionGeneration(
+        { ...oldAuth, token: "gateway-token-new" },
+        [],
+      );
+      expect(oldGeneration).toBeTypeOf("string");
+      expect(newGeneration).toBeTypeOf("string");
+      const generationState = { current: oldGeneration, required: null };
+      const preparationStarted = createDeferred();
+      const releasePreparation = createGatewayHarnessGate();
+      prepareGatewayNodeConnectMock.mockImplementationOnce(async () => {
+        preparationStarted.resolve();
+        await releasePreparation.promise;
+        return true;
+      });
+      const completed = createDeferred();
+      const close = createCloseMock().mockImplementation(() => completed.resolve());
+      const setCloseCause = createSetCloseCauseMock();
+      const harness = attachGatewayHarness({
+        connId: "conn-token-rotated-during-connect",
+        connectNonce: "nonce-token-rotated-during-connect",
+        resolvedAuth: oldAuth,
+        getRequiredSharedGatewaySessionGeneration: () =>
+          getRequiredSharedGatewaySessionGeneration(generationState),
+        close,
+        setCloseCause,
+        handoffAuthenticatedReceive: () => completed.resolve(),
+      });
 
-    harness.sendConnect("connect-token-rotated-during-connect", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "gateway-client",
-        version: "dev",
-        platform: "test",
-        mode: "backend",
-      },
-      role: "operator",
-      caps: [],
-      auth: { token: oldAuth.token },
-    });
-    await preparationStarted.promise;
-    enforceSharedGatewaySessionGenerationForConfigWrite({
-      state: generationState,
-      nextConfig: {
-        gateway: {
-          auth: { mode: "token", token: "gateway-token-new" },
-          reload: { mode: "off" },
+      harness.sendConnect("connect-token-rotated-during-connect", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
         },
-      },
-      resolveRuntimeSnapshotGeneration: () => newGeneration,
-      clients: [],
-    });
-    releasePreparation.resolve();
+        role: "operator",
+        caps: [],
+        auth: { token: oldAuth.token },
+      });
+      await preparationStarted.promise;
+      if (changed === "credentials") {
+        enforceSharedGatewaySessionGenerationForConfigWrite({
+          state: generationState,
+          nextConfig: {
+            gateway: {
+              auth: { mode: "token", token: "gateway-token-new" },
+              reload: { mode: "off" },
+            },
+          },
+          resolveRuntimeSnapshotGeneration: () => newGeneration,
+          clients: [],
+        });
+      } else {
+        allowTailscale = true;
+      }
+      releasePreparation.resolve();
 
-    await waitForFast(() => {
+      await completed.promise;
       expect(close).toHaveBeenCalledWith(4001, "gateway auth changed");
-    });
-    expect(setCloseCause).toHaveBeenCalledWith("gateway-auth-rotated", {
-      authGenerationStale: true,
-    });
-    expect(harness.client).toBeNull();
-    expect(harness.socketSend).not.toHaveBeenCalled();
-    expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
-  });
+      expect(setCloseCause).toHaveBeenCalledWith("gateway-auth-rotated", {
+        authGenerationStale: true,
+      });
+      expect(harness.client).toBeNull();
+      expect(harness.socketSend).not.toHaveBeenCalled();
+      expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+    },
+  );
 
   it.each(["allowedOrigins", "dangerouslyAllowHostHeaderOriginFallback"] as const)(
     "rejects a pending handshake after %s stops allowing its browser origin",

@@ -4,6 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
+  createTauriDeviceSettingsSnapshot,
 } from "../test-helpers/native-device-settings.ts";
 import {
   createNativeDeviceSettingsCapability,
@@ -78,6 +79,63 @@ describe("native device settings wire contract", () => {
     const snapshot = createIosNativeDeviceSettingsSnapshot();
     installBridge(snapshot);
     expect(capability?.snapshot).toEqual(snapshot);
+  });
+
+  it.each(["linux", "windows", "macos"] as const)(
+    "accepts the %s companion's desktop setting without location access",
+    (platform) => {
+      const snapshot = createTauriDeviceSettingsSnapshot(platform);
+      installBridge(snapshot);
+      expect(capability?.snapshot).toEqual(snapshot);
+      const listener = vi.fn();
+      capability?.subscribe(listener);
+      const failed = {
+        ...snapshot,
+        revision: 2,
+        desktopSharing: {
+          state: "error",
+          detail: "Install the OpenClaw CLI to share this desktop.",
+        },
+      };
+      publish(failed);
+      expect(capability?.snapshot).toEqual(failed);
+      expect(listener).toHaveBeenCalledWith(failed);
+    },
+  );
+
+  it("keeps a newer native event when an earlier edit reply settles", async () => {
+    const initial = createTauriDeviceSettingsSnapshot("linux");
+    const post = installBridge(initial);
+    const delayed = createDeferred<unknown>();
+    post.mockReturnValueOnce(delayed.promise);
+    const listener = vi.fn();
+    const settled = vi.fn();
+    capability!.subscribe(listener);
+    capability!.set("capabilities.desktopSharingEnabled", false, settled);
+    const stopped = {
+      ...initial,
+      revision: 3,
+      capabilities: { desktopSharingEnabled: false },
+      desktopSharing: { state: "off" },
+    };
+    publish(stopped);
+    delayed.resolve({
+      ...stopped,
+      revision: 2,
+      desktopSharing: { state: "starting" },
+    });
+    await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+    expect(capability!.snapshot?.desktopSharing?.state).toBe("off");
+    expect(capability!.snapshot?.revision).toBe(3);
+    expect(listener.mock.calls.every(([snapshot]) => snapshot.desktopSharing.state === "off")).toBe(
+      true,
+    );
+    listener.mockClear();
+    publish(initial);
+    publish({ ...initial, revision: undefined });
+    publish(stopped);
+    expect(listener).not.toHaveBeenCalled();
+    expect(capability!.snapshot).toEqual(stopped);
   });
 
   it("accepts absent optional families and voice fields", () => {
@@ -172,6 +230,9 @@ describe("native device settings wire contract", () => {
 
   it.each([
     ["contract", { contract: 2 }],
+    ["negative revision", { revision: -1 }],
+    ["fractional revision", { revision: 1.5 }],
+    ["non-numeric revision", { revision: "2" }],
     ["device", { device: { platform: "macos" } }],
     ["app", { app: { ...createNativeDeviceSettingsSnapshot().app, showDockIcon: "yes" } }],
     ["absent family encoded as null", { app: null }],
@@ -180,6 +241,7 @@ describe("native device settings wire contract", () => {
     ["native experience", { app: { nativeExperienceEnabled: "true" } }],
     ["iOS capability", { capabilities: { healthSummaryEnabled: "true" } }],
     ["unattended desktop toggle", { capabilities: { unattendedDesktopEnabled: "true" } }],
+    ["desktop sharing toggle", { capabilities: { desktopSharingEnabled: "true" } }],
     ...[null, {}, { state: "available" }, { state: true }].map(
       (desktopAvailability) => ["desktop availability", { desktopAvailability }] as const,
     ),

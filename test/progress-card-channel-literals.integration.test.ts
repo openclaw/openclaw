@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createDiscordDraftPreviewController,
-  RequestClient,
-} from "../extensions/discord/test-api.js";
+import { loadDiscordDraftPreview, RequestClient } from "../extensions/discord/test-api.js";
 import {
   renderTelegramProgressDraftPreview,
   telegramHtmlToPlainTextFallback,
@@ -13,6 +10,8 @@ import { createOpenClawTools } from "../src/agents/openclaw-tools.js";
 import type { InProcessGatewayCaller } from "../src/agents/tools/in-process-gateway.js";
 import { createChannelProgressDraftCompositor } from "../src/channels/progress-draft-compositor.js";
 import { normalizeAgentPlanSteps } from "../src/channels/streaming.js";
+
+const { createDiscordDraftPreviewController } = await loadDiscordDraftPreview();
 
 const gatewayCall = vi.hoisted(() => vi.fn<InProcessGatewayCaller>());
 vi.mock("../src/agents/tools/in-process-gateway.js", async (importOriginal) => ({
@@ -181,7 +180,7 @@ describe("registered progress cards at the final channel renderer", () => {
         },
       });
       try {
-        await runRegisteredCard(markdown, progress.pushPlanProgress);
+        await runRegisteredCard(markdown, progress.pushPlanProgress.bind(progress));
         expect(previews).toHaveLength(1);
         const preview = previews[0];
         if (richMessages) {

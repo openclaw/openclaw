@@ -2,10 +2,12 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
+import { combineChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import {
+  resolveReplyOperatorAuthorityKey,
   resolveReplyScreenToolTarget,
   resolveReplyThemeProfileId,
 } from "../reply-tool-authority.js";
@@ -63,6 +65,7 @@ function resolveTurnAdoptionLifecycleDeliveryKey(
 function resolveFollowupAuthorizationKey(run: FollowupRun): string {
   const execution = run.run;
   return JSON.stringify([
+    resolveReplyOperatorAuthorityKey(run.operatorAuthority),
     execution.senderId ?? "",
     JSON.stringify(execution.channelContext ?? null),
     stableStringify(execution.conversationToolPolicy ?? null),
@@ -174,4 +177,145 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
   // still need the message id so collect groups cannot cross independent roots.
   // A routed thread already owns that boundary and remains collectable across turns.
   return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
+}
+
+type FollowupRuntimeMetadata = Pick<
+  FollowupRun,
+  | "operatorAuthority"
+  | "personalBootstrapEligible"
+  | "currentInboundEventKind"
+  | "currentInboundAudio"
+  | "currentInboundContext"
+  | "explicitSkillSelections"
+  | "channelAdmissionEvidence"
+  | "toolsAllow"
+  | "disableTools"
+  | "abortSignal"
+  | "queueAbortSignal"
+  | "deliveryCorrelations"
+  | "turnAdoptionLifecycle"
+  | "replyOperationRunStates"
+  | "queuedFollowupReplyDisposition"
+>;
+
+function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
+  return (
+    item.currentInboundEventKind === "room_event" ||
+    item.currentInboundAudio === true ||
+    Boolean(item.currentInboundContext)
+  );
+}
+
+function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
+  const contexts = items.flatMap((item, index) =>
+    item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
+  );
+  if (contexts.length === 0) {
+    return undefined;
+  }
+  if (contexts.length === 1) {
+    return contexts[0]?.context;
+  }
+  const renderField = (field: "text" | "resumableText") => {
+    const blocks = contexts.flatMap(({ context, index }) => {
+      const value = context[field];
+      return value ? [`Queued #${index + 1} context:\n${value}`] : [];
+    });
+    return blocks.length > 0 ? blocks.join("\n\n") : undefined;
+  };
+  const text = renderField("text");
+  if (!text) {
+    return undefined;
+  }
+  const resumableText = renderField("resumableText");
+  const injectedGoalContexts = [
+    ...new Set(contexts.flatMap(({ context }) => context.injectedGoalContexts ?? [])),
+  ];
+  return {
+    text,
+    ...(resumableText ? { resumableText } : {}),
+    fragments: contexts.flatMap(
+      ({ context }) =>
+        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
+    ),
+    promptJoiner: "\n\n",
+    ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
+  };
+}
+
+export function collectRuntimeMetadata(
+  items: FollowupRun[],
+  abortSignal?: AbortSignal,
+): FollowupRuntimeMetadata {
+  const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
+  // Delivery-key equality proves every source has the same turn authority.
+  // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
+  const authoritySource = items.at(-1);
+  const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
+  const explicitSkillSelections = [
+    ...new Map(
+      items
+        .flatMap((item) => item.explicitSkillSelections ?? [])
+        .map((selection) => [selection.path, selection] as const),
+    ).values(),
+  ];
+  return {
+    operatorAuthority: authoritySource?.operatorAuthority,
+    ...(items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
+      ? { personalBootstrapEligible: true }
+      : {}),
+    currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
+    currentInboundAudio: currentTurnSource?.currentInboundAudio,
+    currentInboundContext: collectCurrentInboundContext(items),
+    explicitSkillSelections:
+      explicitSkillSelections.length > 0 ? explicitSkillSelections : undefined,
+    channelAdmissionEvidence: combineChannelAdmissionEvidence(
+      items.map((item) => item.channelAdmissionEvidence),
+    ),
+    toolsAllow: authoritySource?.toolsAllow,
+    disableTools: authoritySource?.disableTools,
+    abortSignal,
+    queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
+    deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
+    turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
+    replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
+    queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
+  };
+}
+
+export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
+  return {
+    prompt: source.prompt,
+    operatorAuthority: source.operatorAuthority,
+    personalBootstrapEligible: source.personalBootstrapEligible,
+    queueAbortSignal: source.queueAbortSignal,
+    transcriptPrompt: source.transcriptPrompt,
+    userTurnTranscriptRecorder: source.userTurnTranscriptRecorder,
+    explicitSkillSelections: source.explicitSkillSelections,
+    toolsAllow: source.toolsAllow,
+    disableTools: source.disableTools,
+    images: source.images,
+    imageOrder: source.imageOrder,
+    media: source.media,
+    channelAdmissionEvidence: source.channelAdmissionEvidence,
+    messageId: source.messageId,
+    summaryLine: source.summaryLine,
+    enqueuedAt: source.enqueuedAt,
+    originatingChannel: source.originatingChannel,
+    originatingTo: source.originatingTo,
+    originatingAccountId: source.originatingAccountId,
+    originatingThreadId: source.originatingThreadId,
+    originatingChatId: source.originatingChatId,
+    originatingReplyToId: source.originatingReplyToId,
+    originatingReplyToMode: source.originatingReplyToMode,
+    originatingChatType: source.originatingChatType,
+    abortSignal: source.abortSignal,
+    turnAdoptionLifecycle: source.turnAdoptionLifecycle,
+    replyOperationRunStates: source.replyOperationRunStates,
+    queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,
+    ...(source.currentInboundEventKind === "room_event"
+      ? { currentInboundEventKind: "room_event" }
+      : {}),
+    run: source.run,
+  };
 }

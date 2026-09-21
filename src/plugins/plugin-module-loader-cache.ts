@@ -212,6 +212,11 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
     ? {
         cacheKey: createPluginLoaderModuleCacheKey({ tryNative, aliasMap: explicit }),
         getAliasMap: () => explicit,
+        mayResolveSourceSdk: () =>
+          Object.entries(explicit).some(
+            ([specifier, target]) =>
+              isPluginSdkAliasSpecifier(specifier) && isPluginSourceModulePath(target),
+          ),
         hasSourceSdkAliases: undefined,
         getSourceTransformAliasMap: () => explicit,
         resolveAlias: (specifier: string) => explicit[specifier],
@@ -232,6 +237,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
   return {
     loaderFilename,
     getAliasMap: aliases.getAliasMap,
+    mayResolveSourceSdk: aliases.mayResolveSourceSdk,
     hasSourceSdkAliases: aliases.hasSourceSdkAliases,
     resolveAlias: aliases.resolveAlias,
     tryNative,
@@ -288,7 +294,11 @@ function createPluginModuleLoader(
     return found;
   };
   const requiresSourceSdkTransform = (target: string) =>
-    !process.versions.bun && referencesSourceSdk(target) && hasSourceSdkAliases();
+    !process.versions.bun &&
+    // Absence is enough to skip parsing; positive classification must stay demand-driven.
+    params.mayResolveSourceSdk() &&
+    referencesSourceSdk(target) &&
+    hasSourceSdkAliases();
   let loadWithSourceTransform: PluginModuleLoader | undefined;
   const getLoadWithSourceTransform = () => {
     if (loadWithSourceTransform) {

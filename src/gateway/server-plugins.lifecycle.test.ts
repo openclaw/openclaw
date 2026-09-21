@@ -13,6 +13,7 @@ import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   CHANNEL_BINDING_IDS,
   clearInstanceBindingProbeCoordinators,
@@ -33,7 +34,6 @@ import {
 } from "./server-plugins.lifecycle.test-support.js";
 import {
   connectWebchatClient,
-  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
   startTestGatewayServer,
@@ -182,7 +182,8 @@ describe("gateway plugin instance bindings", () => {
     async () => {
       const { coordinator } = await prepareInstanceBindingTest();
 
-      const first = await startTestGatewayServer(await getGatewayTestPort(), {
+      const firstClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const first = await startTestGatewayServer(firstClaim, {
         auth: { mode: "none" },
         controlUiEnabled: false,
         sidecarStartup: "start",
@@ -193,7 +194,7 @@ describe("gateway plugin instance bindings", () => {
       expect(sharedMetadata).toBeDefined();
 
       await expect(
-        startTestGatewayServer(await getGatewayTestPort(), {
+        startTestGatewayServer(await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] }), {
           bind: "loopback",
           host: "0.0.0.0",
           auth: { mode: "none" },
@@ -212,7 +213,8 @@ describe("gateway plugin instance bindings", () => {
         "first",
       );
 
-      const second = await startTestGatewayServer(await getGatewayTestPort(), {
+      const secondClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const second = await startTestGatewayServer(secondClaim, {
         auth: { mode: "none" },
         controlUiEnabled: false,
         sidecarStartup: "start",
@@ -283,7 +285,8 @@ describe("gateway plugin instance bindings", () => {
 
       // Each activation registers its own plugin instances without changing shared config.
       coordinator.channelIds = firstIds;
-      const first = await startTestGatewayServer(await getGatewayTestPort(), {
+      const firstClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const first = await startTestGatewayServer(firstClaim, {
         auth: { mode: "none" },
         controlUiEnabled: false,
         sidecarStartup: "start",
@@ -303,7 +306,8 @@ describe("gateway plugin instance bindings", () => {
       expect(firstProbes[0]).toEqual(firstProbes[1]);
 
       coordinator.channelIds = secondIds;
-      const second = await startTestGatewayServer(await getGatewayTestPort(), {
+      const secondClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const second = await startTestGatewayServer(secondClaim, {
         auth: { mode: "none" },
         controlUiEnabled: false,
         sidecarStartup: "start",
@@ -417,10 +421,9 @@ describe("gateway plugin instance bindings", () => {
     { timeout: 600_000 },
     async () => {
       const { coordinator } = await prepareInstanceBindingTest();
-      const firstPort = await getGatewayTestPort();
       const firstStarted = createDeferred();
       const secondStarted = createDeferred();
-      const startupSignals = new Map([[firstPort, firstStarted]]);
+      const startupSignals = new Map<number, typeof firstStarted>();
       const lifecycleEvents: Array<
         Parameters<NonNullable<InstanceBindingProbeCoordinator["onLifecycleEvent"]>>[0]
       > = [];
@@ -451,7 +454,9 @@ describe("gateway plugin instance bindings", () => {
         });
       let firstStarting: ReturnType<typeof startTestGatewayServer> | undefined;
       try {
-        firstStarting = startTestGatewayServer(firstPort, {
+        const firstPortClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        startupSignals.set(firstPortClaim.port, firstStarted);
+        firstStarting = startTestGatewayServer(firstPortClaim, {
           auth: { mode: "none" },
           controlUiEnabled: false,
           sidecarStartup: "start",
@@ -468,9 +473,9 @@ describe("gateway plugin instance bindings", () => {
         const firstRegistrationCount = coordinator.runtimes.length;
         expect(firstRegistrationCount).toBeGreaterThan(0);
 
-        const secondPort = await getGatewayTestPort();
-        startupSignals.set(secondPort, secondStarted);
-        const second = await startTestGatewayServer(secondPort, {
+        const secondPortClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        startupSignals.set(secondPortClaim.port, secondStarted);
+        const second = await startTestGatewayServer(secondPortClaim, {
           auth: { mode: "none" },
           controlUiEnabled: false,
           sidecarStartup: "start",
@@ -500,8 +505,8 @@ describe("gateway plugin instance bindings", () => {
         await expect(requestInstanceBindingProbe(firstRuntime)).resolves.toEqual(firstProbe);
         await expect(requestInstanceBindingProbe(secondRuntime)).resolves.toEqual(secondProbe);
         expect(lifecycleEvents).toEqual([
-          { registryId: secondProbe.registryId, port: secondPort, kind: "start" },
-          { registryId: firstProbe.registryId, port: firstPort, kind: "start" },
+          { registryId: secondProbe.registryId, port: secondPortClaim.port, kind: "start" },
+          { registryId: firstProbe.registryId, port: firstPortClaim.port, kind: "start" },
         ]);
 
         // A publishes last; closing B must dispatch B's hooks while A remains the default.
@@ -511,9 +516,9 @@ describe("gateway plugin instance bindings", () => {
         ]);
         started.splice(started.indexOf(second), 1);
         expect(lifecycleEvents).toEqual([
-          { registryId: secondProbe.registryId, port: secondPort, kind: "start" },
-          { registryId: firstProbe.registryId, port: firstPort, kind: "start" },
-          { registryId: secondProbe.registryId, port: secondPort, kind: "stop" },
+          { registryId: secondProbe.registryId, port: secondPortClaim.port, kind: "start" },
+          { registryId: firstProbe.registryId, port: firstPortClaim.port, kind: "start" },
+          { registryId: secondProbe.registryId, port: secondPortClaim.port, kind: "stop" },
         ]);
         await expect(requestInstanceBindingProbe(secondRuntime)).rejects.toThrow(
           'Plugin "instance-binding-probe" runtime is no longer active.',
@@ -522,10 +527,10 @@ describe("gateway plugin instance bindings", () => {
         await first.close({ reason: "close remaining concurrent Gateway" });
         started.splice(started.indexOf(first), 1);
         expect(lifecycleEvents).toEqual([
-          { registryId: secondProbe.registryId, port: secondPort, kind: "start" },
-          { registryId: firstProbe.registryId, port: firstPort, kind: "start" },
-          { registryId: secondProbe.registryId, port: secondPort, kind: "stop" },
-          { registryId: firstProbe.registryId, port: firstPort, kind: "stop" },
+          { registryId: secondProbe.registryId, port: secondPortClaim.port, kind: "start" },
+          { registryId: firstProbe.registryId, port: firstPortClaim.port, kind: "start" },
+          { registryId: secondProbe.registryId, port: secondPortClaim.port, kind: "stop" },
+          { registryId: firstProbe.registryId, port: firstPortClaim.port, kind: "stop" },
         ]);
       } finally {
         releaseAttachment.resolve();
@@ -564,7 +569,8 @@ describe("gateway plugin instance bindings", () => {
           };
         });
       try {
-        const server = await startTestGatewayServer(await getGatewayTestPort(), {
+        const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        const server = await startTestGatewayServer(claim, {
           auth: { mode: "none" },
           controlUiEnabled: false,
           sidecarStartup: "defer",
@@ -593,9 +599,9 @@ describe("gateway plugin instance bindings", () => {
     async () => {
       const { coordinator, bundledRoot } = await prepareInstanceBindingTest();
 
-      const port = await getGatewayTestPort();
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
-      const server = await startTestGatewayServer(port, {
+      const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const server = await startTestGatewayServer(claim, {
         auth: { mode: "none" },
         controlUiEnabled: false,
         hotReloadRecovery,
@@ -622,7 +628,7 @@ describe("gateway plugin instance bindings", () => {
       );
       const initialProbe = await requestInstanceBindingProbe(initialRuntime);
 
-      const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+      const socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
       sockets.push(socket);
       const reload = await patchInstanceBindingTestConfig(socket);
       expect(reload.ok, reload.error?.message).toBe(true);
@@ -661,7 +667,7 @@ describe("gateway plugin instance bindings", () => {
       sockets.splice(sockets.indexOf(socket), 1);
       await server.close({ reason: "plugin metadata restart" });
       started.splice(started.indexOf(server), 1);
-      const restarted = await startTestGatewayServer(port, {
+      const restarted = await startTestGatewayServer(claim.port, {
         auth: { mode: "none" },
         controlUiEnabled: false,
         sidecarStartup: "start",
@@ -703,9 +709,9 @@ describe("gateway plugin instance bindings", () => {
       channelEnv = captureEnv(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"]);
       delete process.env.OPENCLAW_SKIP_CHANNELS;
       delete process.env.OPENCLAW_SKIP_PROVIDERS;
-      const port = await getGatewayTestPort();
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
-      const server = await startTestGatewayServer(port, {
+      const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const server = await startTestGatewayServer(claim, {
         auth: { mode: "none" },
         controlUiEnabled: false,
         hotReloadRecovery,
@@ -734,7 +740,7 @@ describe("gateway plugin instance bindings", () => {
       const registrationsBeforeReload = coordinator.runtimes.length;
       let reloadEventIndex = proof.events.length;
       proof.events.push({ event: "reload-request" });
-      const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+      const socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
       sockets.push(socket);
       const reload = await patchInstanceBindingTestConfig(socket);
       expect(reload.ok, reload.error?.message).toBe(true);
@@ -912,8 +918,8 @@ describe("gateway plugin instance bindings", () => {
         markGatewayRestartHandled();
         return { status: "emitted" as const };
       });
-      const port = await getGatewayTestPort();
-      const server = await startTestGatewayServer(port, {
+      const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const server = await startTestGatewayServer(claim, {
         auth: { mode: "none" },
         controlUiEnabled: false,
         hotReloadRecovery,
@@ -948,7 +954,7 @@ describe("gateway plugin instance bindings", () => {
       );
       const initialProbe = await requestInstanceBindingProbe(initialRuntime);
 
-      const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+      const socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
       sockets.push(socket);
       const currentConfig = await rpcReq(socket, "config.get", {});
       expect(currentConfig.ok).toBe(true);

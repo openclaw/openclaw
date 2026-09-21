@@ -253,9 +253,6 @@ describe("Sessions page typing ownership", () => {
         if (method === "sessions.patch") {
           return patch.promise;
         }
-        if (method === "sessions.compaction.list") {
-          return { checkpoints: [] };
-        }
         expect(method).toBe("sessions.list");
         if (params?.includeUnknown !== false) {
           mutationRefreshes += 1;

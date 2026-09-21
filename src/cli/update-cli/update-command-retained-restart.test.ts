@@ -134,7 +134,8 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
           "-e",
           `
       const fs=require("node:fs");
-      fs.writeFileSync(${JSON.stringify(effect)},String(process.pid));
+      fs.writeFileSync(${JSON.stringify(effect + ".tmp")},String(process.pid));
+      fs.renameSync(${JSON.stringify(effect + ".tmp")},${JSON.stringify(effect)});
       const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(proceed)})){clearInterval(timer);process.stdout.write("drained");}},10);
     `,
         ]);

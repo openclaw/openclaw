@@ -93,6 +93,78 @@ describe("cron view run history", () => {
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: [] });
   });
 
+  it.each(["overview", "job"] as const)(
+    "shows whole-run completion beside execution status in %s history",
+    (scope) => {
+      const onRunsFiltersChange = vi.fn();
+      const cases = [
+        {
+          status: "ok",
+          completionStatus: "failed",
+          deliveryStatus: "not-delivered",
+          expected: "OK · Error",
+        },
+        {
+          status: "ok",
+          completionStatus: "unknown",
+          deliveryStatus: "unknown",
+          expected: "OK · Unknown",
+        },
+        {
+          status: "ok",
+          completionStatus: "succeeded",
+          deliveryStatus: "delivered",
+          expected: "OK",
+        },
+        { status: "ok", expected: "OK" },
+        { status: "error", completionStatus: "failed", expected: "Error" },
+        { status: "skipped", completionStatus: "failed", expected: "Skipped" },
+        {
+          status: "ok",
+          completionStatus: "succeeded",
+          deliveryStatus: "not-delivered",
+          deliveryError: "Synthetic best-effort delivery failure.",
+          expected: "OK",
+        },
+        {
+          status: "ok",
+          completionStatus: "succeeded",
+          deliveryStatus: "not-delivered",
+          deliverySuppressionReason: "silent",
+          expected: "OK",
+        },
+      ] as const;
+      const container = renderView({
+        listTab: "activity",
+        editingJob: scope === "job" ? createCronViewJob("job-1", { state: {} }) : null,
+        detailTab: "history",
+        onRunsFiltersChange,
+        runs: cases.map(({ expected: _expected, ...entry }, index) => ({
+          ts: index + 1,
+          jobId: "job-1",
+          action: "finished",
+          ...entry,
+        })),
+      });
+
+      const titles = Array.from(container.querySelectorAll(".cron-run-entry__title"), (title) =>
+        title.textContent?.replace(/\s+/g, " ").trim(),
+      );
+      expect(titles).toEqual(cases.toReversed().map(({ expected }) => `job-1 · ${expected}`));
+
+      const okOption = container.querySelector<HTMLElement>(
+        '[data-filter="status"] wa-dropdown-item[value="option:ok"]',
+      );
+      expect(okOption).not.toBeNull();
+      okOption
+        ?.closest("wa-dropdown")
+        ?.dispatchEvent(
+          new CustomEvent("wa-select", { detail: { item: okOption }, bubbles: true }),
+        );
+      expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] });
+    },
+  );
+
   it("formats run token counts and durations in the rendered entry", () => {
     const container = renderView({
       listTab: "activity",
@@ -219,7 +291,37 @@ describe("cron view run history", () => {
     expect(body.textContent).toContain("boom");
   });
 
-  it("distinguishes an unfiltered empty state from filtered no-matches", () => {
+  it("shows empty guidance only for settled history and offers recovery after failure", () => {
+    for (const runsState of ["idle", "pending", "failed"] as const) {
+      for (const runsQuery of ["", "fail"]) {
+        const onRefresh = vi.fn();
+        const container = renderView({ listTab: "activity", runsState, runsQuery, onRefresh });
+        expect(container.textContent).not.toContain("No runs yet");
+        expect(container.textContent).not.toContain("No matching runs.");
+        expect(container.querySelector('[data-test-id="cron-runs-loading"]') !== null).toBe(
+          runsState === "pending",
+        );
+        expect(container.querySelector(".cron-runs")?.getAttribute("aria-busy")).toBe(
+          String(runsState === "pending"),
+        );
+        const retry = Array.from(container.querySelectorAll("button")).find(
+          (button) => button.textContent?.trim() === "Retry",
+        );
+        expect(retry !== undefined).toBe(runsState === "failed");
+        retry?.click();
+        expect(onRefresh).toHaveBeenCalledTimes(runsState === "failed" ? 1 : 0);
+      }
+    }
+    const retained = renderView({
+      listTab: "activity",
+      runsState: "failed",
+      error: "History unavailable",
+      runs: [{ ts: 1, jobId: "job-1", action: "finished", summary: "Previously accepted run" }],
+    });
+    expect(retained.querySelector(".cron-run-entry")?.textContent).toContain(
+      "Previously accepted run",
+    );
+    expect(retained.textContent).toContain("History unavailable");
     const empty = renderView({ listTab: "activity" });
     expect(empty.querySelector(".cron-empty-state")?.textContent).toContain("No runs yet");
 

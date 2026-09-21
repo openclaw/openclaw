@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -78,31 +78,54 @@ const childCapture = `
   fs.writeSync(1, artifact.boundaryRoot + "\\n" + capturedFile + "\\n");
 `;
 
-function abandonCapture(stateDir: string, source: string) {
-  const output = execFileSync(
-    process.execPath,
-    ["--import", loader, "--input-type=module", "-e", `${childCapture}\nprocess.exit(0);`, source],
-    {
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        TMPDIR: stateDir,
-        TMP: stateDir,
-        TEMP: stateDir,
-      },
-      encoding: "utf8",
-      timeout: 15_000,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  const [boundaryRoot, capturedFile] = output.trim().split("\n");
-  if (!boundaryRoot || !capturedFile) {
-    throw new Error(`Capture child did not return its artifact paths: ${output}`);
-  }
-  const captured = capturePaths(stateDir, boundaryRoot, capturedFile);
+async function abandonCapture(stateDir: string, source: string) {
+  const captured = await startCliCapture(stateDir, source, false);
+  await captured.stop();
   expect(fs.readFileSync(captured.capturedFile, "utf8")).toBe(capturedSource);
   return captured;
 }
+
+it.each(["natural", "failure", "explicit", "signal"])(
+  "reclaims process-owned captures on %s exit",
+  (mode) => {
+    const stateDir = temp.make("plugin-capture-exit-");
+    const source = createSource();
+    const signalModule = new URL("../cli/signal-exit-barrier.ts", import.meta.url).href;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        loader,
+        "--input-type=module",
+        "-e",
+        `${childCapture}
+      import { installCliSignalExitHandlers } from ${JSON.stringify(signalModule)};
+      const mode = process.argv[2];
+      if (mode === "failure") throw new Error("fixture command failed");
+      if (mode === "explicit") process.exit(2);
+      if (mode === "signal") {
+        installCliSignalExitHandlers();
+        process.emit("SIGTERM");
+      }`,
+        source,
+        mode,
+      ],
+      {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        encoding: "utf8",
+        timeout: 15_000,
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(
+      mode === "natural" ? 0 : mode === "failure" ? 1 : mode === "explicit" ? 2 : 143,
+    );
+    const [directory] = result.stdout.trim().split("\n");
+    expect(directory).toContain(path.join(stateDir, "tmp", "plugin-captures"));
+    expect(fs.existsSync(directory!)).toBe(false);
+    expect(fs.readdirSync(path.join(stateDir, "tmp", "plugin-captures"))).toEqual([]);
+  },
+);
 
 async function startCliCapture(stateDir: string, source: string, worker: boolean) {
   const child = spawn(
@@ -179,8 +202,8 @@ it("metadata boot reclaims old abandoned artifacts and preserves recent and lega
   const active = capturePluginGenerationArtifact(source);
   // Finish standalone acquisition before a Gateway joins the same process later.
   await sweepPluginSourceCaptureDirectories(stateDir);
-  const old = abandonCapture(stateDir, source);
-  const recent = abandonCapture(stateDir, source);
+  const old = await abandonCapture(stateDir, source);
+  const recent = await abandonCapture(stateDir, source);
   age(old.instanceRoot);
   const legacy = path.join(temp.make("plugin-capture-legacy-"), "openclaw-plugin-build-legacy");
   fs.mkdirSync(legacy);
@@ -238,7 +261,7 @@ it.each(["payload", "instance"])(
   "retries an abandoned instance after a partial %s removal failure is resolved",
   async (stage) => {
     const stateDir = temp.make("plugin-capture-partial-removal-");
-    const orphan = abandonCapture(stateDir, createSource());
+    const orphan = await abandonCapture(stateDir, createSource());
     age(orphan.instanceRoot);
     const captures = path.dirname(orphan.boundaryRoot);
     const remove = fsPromises.rm.bind(fsPromises);
@@ -269,7 +292,7 @@ it.each(["payload", "instance"])(
 
 it("retries reclamation when a long-lived metadata owner's hourly scan reaches the grace period", async () => {
   const stateDir = temp.make("plugin-capture-periodic-");
-  const orphan = abandonCapture(stateDir, createSource());
+  const orphan = await abandonCapture(stateDir, createSource());
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   const metadata = retainGatewayPluginMetadata();

@@ -413,26 +413,40 @@ describe("numerical contract", () => {
 });
 
 describe("fault settlement and generation health", () => {
-  it("joins a deadline-aborted callback and records no success", async () => {
-    let settled = false;
-    const host = registered(async (_batch, { signal }) => {
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-      });
-      settled = true;
-      return answer;
-    });
-    expect(await host.run({ ...options(), timeoutMs: 10 })).toEqual({
-      status: "unavailable",
-      reason: "deadline",
-    });
-    expect(settled).toBe(true);
-    expect(host.registry.decisionProviders[0]!.host.inspect(config)).toMatchObject({
-      activeRequests: 0,
-      successCount: 0,
-      reasons: { deadline: 1 },
-    });
-  });
+  it.each([
+    { timeoutMs: 10, deadlineMs: 10 },
+    { timeoutMs: 20_000, deadlineMs: 20_000 },
+    { timeoutMs: 60_000, deadlineMs: 30_000 },
+  ])(
+    "joins a deadline-aborted callback after $deadlineMs ms for a $timeoutMs ms request",
+    async ({ timeoutMs, deadlineMs }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      try {
+        let settled = false;
+        const host = registered(async (_batch, { signal }) => {
+          await new Promise<void>((resolve) => {
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          settled = true;
+          return answer;
+        });
+        const pending = host.run({ ...options(), timeoutMs });
+        await vi.advanceTimersByTimeAsync(deadlineMs - 1);
+        expect(settled).toBe(false);
+        expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await pending).toEqual({ status: "unavailable", reason: "deadline" });
+        expect(settled).toBe(true);
+        expect(host.registry.decisionProviders[0]!.host.inspect(config)).toMatchObject({
+          activeRequests: 0,
+          successCount: 0,
+          reasons: { deadline: 1 },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
   it("keeps auth failures across model selection changes until provider configuration changes", async () => {
     const callback = vi
       .fn<DecisionProviderV1["evaluate"]>()
@@ -501,6 +515,34 @@ describe("fault settlement and generation health", () => {
 });
 
 describe("immutable finite JSON boundaries", () => {
+  it.each(["input", "output"] as const)(
+    "rejects inherited array serialization at the %s boundary",
+    async (boundary) => {
+      const serialize = vi.fn(() => []);
+      const prototype = { toJSON: serialize };
+      Object.setPrototypeOf(prototype, Array.prototype);
+      // JSON escaping takes this beyond the one-MiB limit.
+      const state = ["\u0000".repeat(200_000)];
+      const returned = structuredClone(answer);
+      if (boundary === "input") {
+        Object.setPrototypeOf(state, prototype);
+      } else {
+        Object.setPrototypeOf(returned.result.answers.rank.probabilities, prototype);
+      }
+      const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => returned);
+      const host = registered(call);
+      if (boundary === "input") {
+        await expect(
+          evaluateDecisionInRegistry({ ...batch, state }, options(), host.registry, config),
+        ).rejects.toThrow("Invalid decision contract");
+        expect(call).not.toHaveBeenCalled();
+      } else {
+        expect(await host.run()).toEqual({ status: "unavailable", reason: "invalid-response" });
+      }
+      expect(serialize).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects hidden input evidence before the provider receives an incomplete clone", async () => {
     const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     const host = registered(call);

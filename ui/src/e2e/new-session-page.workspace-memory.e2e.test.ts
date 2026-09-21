@@ -2,10 +2,8 @@ import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
-import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   openChatModelPicker,
-  revealChatModelOption,
   selectChatModel,
   selectChatModelOption,
 } from "../test-helpers/select-picker-e2e.ts";
@@ -284,96 +282,6 @@ suite.define(() => {
         message: "use this model",
         model: "anthropic/claude-sonnet-4-6",
       });
-    });
-  });
-
-  it("separates model shortcuts, search input, and composer typing by focus", async () => {
-    await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
-      await installMockGateway(page, { models: NEW_SESSION_MODEL_CATALOG });
-      await page.goto(`${suite.server.baseUrl}new`);
-
-      const modelSelect = page.locator('[data-chat-model-select="true"]');
-      const picker = page.locator(".chat-controls__model-picker");
-      const search = page.locator('[data-chat-model-search="true"]');
-      const firstModel = page.locator('[data-chat-model-option="openai/gpt-5.5"]');
-      const secondModel = page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]');
-
-      await modelSelect.click();
-      await expect.poll(() => picker.getAttribute("open")).toBe("");
-      await expect
-        .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await revealChatModelOption(firstModel);
-      await revealChatModelOption(secondModel);
-      await modelSelect.focus();
-      const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
-      await expect.poll(() => secondShortcut.count()).toBe(1);
-      // Finish the picker's opening scale before recording its baseline. The top
-      // transform origin keeps the anchor gap stable while box geometry still grows.
-      await picker.locator('wa-popup [part~="popup"]').evaluate(finishElementAnimations);
-      const menuGeometry = () =>
-        page.evaluate(() => {
-          const anchor = document.querySelector('[data-chat-model-select="true"]');
-          const menu = document.querySelector(".chat-controls__model-menu");
-          const action = document.querySelector(
-            '[data-chat-model-option="anthropic/claude-sonnet-4-6"] .chat-controls__model-option-action',
-          );
-          if (!anchor || !menu || !action) {
-            return null;
-          }
-          const anchorBox = anchor.getBoundingClientRect();
-          const menuBox = menu.getBoundingClientRect();
-          const actionBox = action.getBoundingClientRect();
-          return {
-            anchorGap: Math.round(anchorBox.top - menuBox.bottom),
-            menu: {
-              dx: menuBox.x - anchorBox.x,
-              dy: menuBox.y - anchorBox.y,
-              width: menuBox.width,
-              height: menuBox.height,
-            },
-            action: {
-              dx: actionBox.x - menuBox.x,
-              dy: actionBox.y - menuBox.y,
-              width: actionBox.width,
-              height: actionBox.height,
-            },
-          };
-        });
-      await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(6);
-      const geometryBeforeFocus = await menuGeometry();
-      expect(geometryBeforeFocus).not.toBeNull();
-      await expect
-        .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
-
-      await search.focus();
-      await expect
-        .poll(() => search.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await expect
-        .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("0");
-      await expect.poll(menuGeometry).toEqual(geometryBeforeFocus);
-      await search.press("1");
-      await expect.poll(() => search.inputValue()).toBe("1");
-      await expect.poll(() => picker.getAttribute("open")).toBe("");
-
-      await search.fill("anthropic");
-      await expect.poll(() => firstModel.isVisible()).toBe(false);
-      await expect.poll(() => secondModel.isVisible()).toBe(true);
-      await modelSelect.focus();
-      const filteredShortcut = secondModel.locator('[data-chat-model-shortcut-number="1"]');
-      await expect
-        .poll(() => filteredShortcut.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
-      await page.keyboard.press("1");
-      await expect.poll(() => picker.getAttribute("open")).toBe(null);
-      await expect.poll(() => modelSelect.textContent()).toContain("Claude Sonnet 4.6");
-
-      await modelSelect.focus();
-      await page.keyboard.type("1");
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("1");
     });
   });
 

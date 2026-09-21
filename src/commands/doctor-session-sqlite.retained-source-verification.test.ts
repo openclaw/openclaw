@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "../config/io.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import {
   loadExactSessionEntry,
   upsertSessionEntryCore,
@@ -32,6 +33,175 @@ import { doctorCommand } from "./doctor.js";
 afterEach(() => vi.restoreAllMocks());
 
 describe("retained session source verification", () => {
+  it.each([false, true, "all"] as const)(
+    "rebuilds a missing receipt index and protects only changed sources (changed: %s)",
+    async (changed) => {
+      await withOpenClawTestState({ label: "deferred-missing-index" }, async (state) => {
+        const { cfg, storePath, scope } = seedDeferredPluginSessionSource(
+          state,
+          "default",
+          "brave",
+        );
+        const run = () =>
+          runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+        expect((await run()).totals.importedEntries).toBe(2);
+        const transcript = path.join(path.dirname(storePath), "legacy-kept.jsonl");
+        const transcriptBytes = fs.readFileSync(transcript);
+        const deletedTranscript = path.join(path.dirname(storePath), "legacy-deleted.jsonl");
+        const deletedBytes = fs.readFileSync(deletedTranscript);
+        fs.renameSync(storePath, `${storePath}.preserved`);
+        fs.copyFileSync(transcript, `${transcript}.copy`);
+        fs.renameSync(`${transcript}.copy`, transcript);
+        if (changed) {
+          fs.appendFileSync(transcript, "\n");
+        }
+        if (changed === "all") {
+          fs.appendFileSync(deletedTranscript, "\n");
+        }
+        const result = await run();
+        expect(result.totals.importedEntries).toBe(0);
+        expect(result.totals.validatedEntries).toBe(changed === "all" ? 0 : changed ? 1 : 2);
+        const issues = result.targets.flatMap((target) => target.issues);
+        expect(issues).toContainEqual(
+          expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
+        );
+        const conflicts = issues.filter((issue) => issue.code === "historical_transcript_deferred");
+        expect(conflicts).toHaveLength(changed === "all" ? 2 : changed ? 1 : 0);
+        for (const sourcePath of changed === "all"
+          ? [transcript, deletedTranscript]
+          : changed
+            ? [transcript]
+            : []) {
+          expect(conflicts).toContainEqual(
+            expect.objectContaining({ message: expect.stringContaining(sourcePath) }),
+          );
+        }
+        const receipt = withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) =>
+            db
+              .prepare(
+                "SELECT report_json FROM migration_sources WHERE migration_kind = 'deferred-plugin-session-import'",
+              )
+              .get(),
+          { env: state.env },
+        );
+        const sources = JSON.parse(String(receipt?.report_json)).sources;
+        expect(sources.map((source: { path: string }) => source.path)).not.toContain(storePath);
+        expect(sources.map((source: { path: string }) => source.path)).toContain(transcript);
+        expect(fs.existsSync(storePath)).toBe(false);
+        expect(
+          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.sessionId,
+        ).toBe("legacy-kept");
+        expect((await run()).totals.importedEntries).toBe(0);
+        await deleteSessionEntryLifecycle({
+          ...scope,
+          target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
+          archiveTranscript: false,
+          deleteTranscriptWithoutArchive: true,
+        });
+        recordDeferredPluginMigrations({
+          env: state.env,
+          pending: [],
+          resolvedPluginIds: ["brave"],
+        });
+        const settled = await run();
+        expect(settled.totals.importedEntries).toBe(0);
+        expect(
+          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" }),
+        ).toBeUndefined();
+        expect(fs.existsSync(transcript)).toBe(Boolean(changed));
+        expect(fs.existsSync(deletedTranscript)).toBe(changed === "all");
+        if (changed) {
+          fs.writeFileSync(transcript, transcriptBytes);
+          if (changed === "all") {
+            fs.writeFileSync(deletedTranscript, deletedBytes);
+          }
+          const repaired = await run();
+          expect(repaired.totals.importedEntries).toBe(0);
+          expect(repaired.targets.flatMap((target) => target.issues)).not.toContainEqual(
+            expect.objectContaining({ code: "historical_transcript_deferred" }),
+          );
+          expect(fs.existsSync(transcript)).toBe(false);
+          expect(fs.existsSync(deletedTranscript)).toBe(false);
+        }
+        const inspected = await runDoctorSessionSqlite({
+          cfg,
+          env: state.env,
+          mode: "inspect",
+          store: storePath,
+        });
+        expect(inspected.targets.flatMap((target) => target.issues)).not.toContainEqual(
+          expect.objectContaining({ code: "plugin_migration_source_retained" }),
+        );
+      });
+    },
+  );
+
+  it("preserves and names a changed index archive while verifying the other receipt sources", async () => {
+    await withOpenClawTestState({ label: "deferred-changed-index-archive" }, async (state) => {
+      const { cfg, storePath, scope } = seedDeferredPluginSessionSource(state, "default");
+      const run = () =>
+        runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+      await run();
+      const target = {
+        agentId: "main",
+        storePath,
+        sqlitePath: resolveSqliteTargetFromSessionStorePath(storePath, scope).path,
+      };
+      const recorded = readDeferredPluginSessionImport({
+        cfg,
+        env: state.env,
+        target,
+        sqlitePath: target.sqlitePath,
+      })!;
+      const index = recorded.sources.find((source) => source.path === storePath)!;
+      const migration = migrationRun.createSessionSqliteMigrationRun(state.env, [target]);
+      const archivePath = path.join(
+        path.dirname(path.dirname(storePath)),
+        "session-sqlite-import-archive",
+        "index.json",
+      );
+      const move: migrationRun.SessionSqliteMigrationMove = {
+        kind: "legacy-store",
+        sourcePath: storePath,
+        archivePath,
+        artifact: {
+          identity: index.identity,
+          classification: "protected",
+          reason: "incomplete-index-import",
+          dependencies: [],
+          disposal: { state: "retained" },
+        },
+      };
+      migrationRun.recordPlannedMigrationMoves(migration, target, [move]);
+      fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+      fs.renameSync(storePath, archivePath);
+      migrationRun.recordCompletedMigrationMoves(migration, target, [move]);
+      fs.appendFileSync(archivePath, "\n");
+      const bytes = fs.readFileSync(archivePath);
+      const result = await run();
+      expect(result.totals.importedEntries).toBe(0);
+      expect(result.totals.validatedEntries).toBe(2);
+      expect(result.targets.flatMap((reportTarget) => reportTarget.issues)).toContainEqual(
+        expect.objectContaining({
+          code: "historical_transcript_deferred",
+          message: expect.stringContaining(archivePath),
+        }),
+      );
+      expect(fs.readFileSync(archivePath)).toEqual(bytes);
+      const receipt = withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) =>
+          db
+            .prepare(
+              "SELECT report_json FROM migration_sources WHERE migration_kind = 'deferred-plugin-session-import'",
+            )
+            .get(),
+        { env: state.env },
+      );
+      expect(JSON.parse(String(receipt?.report_json)).sources).toContainEqual(index);
+    });
+  });
+
   it.each([false, true])(
     "preserves an empty-index receipt for an existing database (unindexed history: %s)",
     async (history) => {
@@ -137,14 +307,18 @@ describe("retained session source verification", () => {
           });
           expect(
             unexpected.targets.flatMap((target) => target.issues).map((issue) => issue.code),
-          ).toEqual(["plugin_migration_source_retained", "active_sqlite_transcript_jsonl"]);
-          expect(fs.readFileSync(uncaptured, "utf8")).toBe(bytes);
+          ).toEqual(["plugin_migration_source_retained"]);
+          expect(fs.existsSync(uncaptured)).toBe(false);
+          expect(unexpected.targets[0]?.archivedTranscriptFiles).toHaveLength(1);
+          expect(fs.readFileSync(unexpected.targets[0]!.archivedTranscriptFiles[0]!, "utf8")).toBe(
+            bytes,
+          );
         }
       });
     },
   );
 
-  it.each(["none", "archived", "live"] as const)(
+  it.each(["none", "archived", "live", "missing-index"] as const)(
     "settles plugin work after index-free canonical session repair (remaining history: %s)",
     async (history) => {
       await withOpenClawTestState(
@@ -194,8 +368,15 @@ describe("retained session source verification", () => {
             expect(fs.existsSync(target.storePath)).toBe(false);
             for (const move of target.completedMoves) {
               originals.set(move.archivePath, fs.readFileSync(move.archivePath));
-              if (history === "live" && move.kind === "transcript") {
+              if (
+                (history === "live" || history === "missing-index") &&
+                move.kind === "transcript"
+              ) {
                 fs.copyFileSync(move.archivePath, move.sourcePath);
+              }
+              if (history === "missing-index" && move.kind === "legacy-store") {
+                fs.unlinkSync(move.archivePath);
+                originals.delete(move.archivePath);
               }
             }
             if (history === "archived") {
@@ -207,6 +388,14 @@ describe("retained session source verification", () => {
                 move.kind = "unreferenced-jsonl";
                 move.artifact!.classification = "protected";
                 move.artifact!.reason = "unreferenced-history";
+              }
+            }
+            if (history === "missing-index") {
+              for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+                if (move.kind === "legacy-store") {
+                  move.artifact!.classification = "protected";
+                  move.artifact!.reason = "incomplete-index-import";
+                }
               }
             }
           }
@@ -312,6 +501,16 @@ describe("retained session source verification", () => {
           }
           for (const [file, bytes] of originals) {
             expect(fs.readFileSync(file)).toEqual(bytes);
+          }
+          if (history === "missing-index") {
+            for (const target of manifest.targets) {
+              expect(fs.existsSync(target.storePath)).toBe(false);
+              for (const move of target.completedMoves) {
+                if (move.kind === "transcript") {
+                  expect(fs.readFileSync(move.sourcePath)).toEqual(originals.get(move.archivePath));
+                }
+              }
+            }
           }
         },
       );

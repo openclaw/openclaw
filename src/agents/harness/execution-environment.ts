@@ -2,6 +2,7 @@ import type { AgentRuntimeRestrictionErrorDetails } from "../../../packages/gate
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionEntry } from "../../config/sessions/session-accessor.sqlite-exact-read.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
@@ -38,7 +39,7 @@ type ExecutionRestriction = {
 };
 
 /** Selection and invocation share this decision; a native working directory is not containment. */
-export function resolveAgentHarnessExecutionRestriction(
+function resolveAgentHarnessExecutionRestriction(
   harness: Pick<AgentHarness, "id" | "label" | "executionEnvironment">,
   facts: ExecutionEnvironmentFacts,
 ): ExecutionRestriction | undefined {
@@ -104,6 +105,64 @@ export function resolveAgentHarnessExecutionRestriction(
     };
   }
   return undefined;
+}
+
+/** Classifies stored or prospective session policy without selecting runtime availability. */
+export function resolveAgentHarnessSessionExecutionRestriction(params: {
+  harness: AgentHarness;
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  entry: Pick<
+    SessionEntry,
+    | "sandbox"
+    | "sandboxMode"
+    | "createdActor"
+    | "permissionMode"
+    | "execHost"
+    | "nativeRuntimeConsent"
+  > & { sessionId?: string };
+  provider: string;
+  modelId: string;
+}): ExecutionRestriction | undefined {
+  const { cfg, agentId, sessionKey, entry, harness } = params;
+  if (harness.executionEnvironment !== "host-only") {
+    return undefined;
+  }
+  const sandbox = resolveSandboxRuntimeStatus({
+    cfg,
+    agentId,
+    sessionKey,
+    preparedSessionEntry: entry,
+  });
+  const exec = resolveExecConfigState({ cfg, agentId, sessionKey, sessionEntry: entry });
+  const nativeRuntimeConsent =
+    entry.permissionMode === "full" && entry.sandboxMode === "off"
+      ? entry.nativeRuntimeConsent
+      : undefined;
+  return resolveAgentHarnessExecutionRestriction(harness, {
+    sandboxed: sandbox.sandboxed || exec.host === "sandbox",
+    sandboxRequired: sandbox.sandboxRequired || exec.host === "sandbox",
+    workspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId }),
+    permissionMode: entry.permissionMode,
+    nativeRuntimeConsent,
+    remoteExecution: exec.host === "node",
+    toolPolicyRestricted:
+      nativeRuntimeConsent !== harness.id &&
+      harness.conversationToolPolicySupport !== "exact" &&
+      resolveAgentHarnessNativeToolPolicyRestricted(
+        {
+          config: cfg,
+          agentId,
+          sessionKey,
+          sessionId: entry.sessionId,
+          preparedSessionEntry: entry,
+          provider: params.provider,
+          modelId: params.modelId,
+        },
+        harness,
+      ),
+  });
 }
 
 type ExecutionEnvironmentParams = Pick<
@@ -208,7 +267,6 @@ const PLUGIN_HARNESS_RUNTIME_DENY_ALL_PROMPT =
 type PluginHarnessToolPolicyContext = Pick<
   EmbeddedRunAttemptParams,
   | "config"
-  | "sessionId"
   | "sessionKey"
   | "sandboxSessionKey"
   | "sandboxAgentId"
@@ -237,6 +295,7 @@ type PluginHarnessToolPolicyContext = Pick<
   | "disableTools"
   | "swarmCollector"
 > & {
+  sessionId?: string;
   preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
 };
 

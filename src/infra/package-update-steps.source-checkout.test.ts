@@ -96,28 +96,24 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
-  it("refuses a prepared checkout when the manager cannot identify its installed root", async () => {
+  it("refuses a prepared checkout before install when its native owner is unknown", async () => {
     const postVerifyStep = vi.fn();
+    const runStep = vi.fn();
     const result = await runGlobalPackageUpdateSteps({
       installTarget: { manager: "pnpm", command: "pnpm", globalRoot: null, packageRoot: null },
       installSpec: "/prepared-checkout",
       packageName: "openclaw",
       expectedGitCheckout: { root: "/prepared-checkout", sha: SOURCE_SHA },
       runCommand: async () => ({ code: 0, stdout: "", stderr: "" }),
-      runStep: async ({ name, argv }) => ({
-        name,
-        command: argv.join(" "),
-        cwd: "/",
-        durationMs: 0,
-        exitCode: 0,
-      }),
+      runStep,
       timeoutMs: 1000,
       postVerifyStep,
     });
     expect(result.failedStep).toMatchObject({
-      name: "global install verify",
-      stderrTail: "could not identify the installed package root",
+      name: "package-stage",
+      stderrTail: "Cannot resolve the native package manager's staging owner.",
     });
+    expect(runStep).not.toHaveBeenCalled();
     expect(postVerifyStep).not.toHaveBeenCalled();
   });
 
@@ -185,6 +181,9 @@ describe("runGlobalPackageUpdateSteps", () => {
               ? path.join(prefix, "global", "5", "node_modules")
               : path.join(prefix, ".bun", "install", "global", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
+        const projectRoot =
+          manager === "pnpm" ? path.dirname(path.dirname(globalRoot)) : path.dirname(globalRoot);
+        const binDir = path.join(prefix, "bin");
         const checkoutRoot = path.join(base, "checkout");
         const linkedRoot =
           caseName === "wrong checkout" ? path.join(base, "other-checkout") : checkoutRoot;
@@ -222,10 +221,29 @@ describe("runGlobalPackageUpdateSteps", () => {
           packageName: "openclaw",
           packageRoot,
           installCwd: checkoutRoot,
-          runCommand: createRootRunner(globalRoot),
-          runStep: async ({ name, argv, cwd }) => {
-            expect(name).toBe("global update");
-            let targetRoot = packageRoot;
+          env:
+            manager === "bun"
+              ? { BUN_INSTALL_GLOBAL_DIR: projectRoot, BUN_INSTALL_BIN: binDir }
+              : undefined,
+          runCommand: async (argv) => {
+            const stagedProject = argv
+              .find((arg) => arg.startsWith("--config.global-dir="))
+              ?.slice("--config.global-dir=".length);
+            const stagedBin = argv
+              .find((arg) => arg.startsWith("--config.global-bin-dir="))
+              ?.slice("--config.global-bin-dir=".length);
+            return {
+              code: 0,
+              stderr: "",
+              stdout:
+                argv.includes("root") && stagedProject
+                  ? path.join(stagedProject, path.relative(projectRoot, globalRoot))
+                  : (stagedBin ?? binDir),
+            };
+          },
+          runStep: async ({ name, argv, cwd, env }) => {
+            expect(name).toBe("package-install");
+            let targetRoot: string;
             if (manager === "npm") {
               const stagePrefix = argv[argv.indexOf("--prefix") + 1];
               if (!stagePrefix) {
@@ -240,8 +258,28 @@ describe("runGlobalPackageUpdateSteps", () => {
                 path.join(stageLayout.binDir, "openclaw"),
               );
             } else {
-              await fs.rm(packageRoot, { recursive: true });
+              if (!cwd || cwd === projectRoot) {
+                throw new Error("missing private native stage");
+              }
+              targetRoot = path.join(cwd, path.relative(projectRoot, packageRoot));
+              const stagedBin =
+                manager === "bun"
+                  ? env?.BUN_INSTALL_BIN
+                  : argv
+                      .find((arg) => arg.startsWith("--config.global-bin-dir="))
+                      ?.slice("--config.global-bin-dir=".length);
+              if (!stagedBin) {
+                throw new Error("missing staged native bin");
+              }
+              await fs.rm(targetRoot, { recursive: true });
+              await fs.symlink(
+                path.relative(stagedBin, path.join(targetRoot, "openclaw.mjs")),
+                path.join(stagedBin, "openclaw"),
+              );
             }
+            await expect(
+              fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+            ).resolves.toContain('"version":"1.0.0"');
             await fs.mkdir(path.dirname(targetRoot), { recursive: true });
             await fs.symlink(
               process.platform === "win32"
@@ -261,31 +299,41 @@ describe("runGlobalPackageUpdateSteps", () => {
           timeoutMs: 1000,
           postVerifyStep,
         });
-        if (error) {
+        if (manager === "bun" && process.platform === "win32") {
+          expect(result.failedStep).toMatchObject({ name: "package-stage", exitCode: 1 });
+          expect(result.failedStep?.stderrTail).toContain(
+            "Bun Windows binary launchers cannot be relocated",
+          );
+          expect(postVerifyStep).not.toHaveBeenCalled();
+          await expect(
+            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+          ).resolves.toContain('"version":"1.0.0"');
+        } else if (error) {
           expect(result.failedStep).toMatchObject({
-            name: "global install verify",
+            name: "package-verify",
             stderrTail: expect.stringContaining(error),
           });
           expect(postVerifyStep).not.toHaveBeenCalled();
-          if (manager === "npm") {
-            expect(result.afterVersion).toBe("1.0.0");
-            expect(result.steps.some((step) => step.name === "global install swap")).toBe(false);
-            await expect(
-              fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-            ).resolves.toContain('"version":"1.0.0"');
-          }
+          expect(result.afterVersion).toBe("1.0.0");
+          expect(result.steps.some((step) => step.name === "package-swap")).toBe(false);
+          await expect(
+            fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+          ).resolves.toContain('"version":"1.0.0"');
         } else {
           expect(result.failedStep).toBeNull();
           expect(result.activePackageRoot).toBe(packageRoot);
           expect(result.afterVersion).toBe(SOURCE_VERSION);
           expect(postVerifyStep).toHaveBeenCalledWith(packageRoot);
           await expect(fs.realpath(packageRoot)).resolves.toBe(checkoutRoot);
+          expect(result.steps.map((step) => step.name)).toEqual([
+            "package-install",
+            "package-swap",
+            "candidate doctor",
+          ]);
+          await expect(fs.realpath(path.join(binDir, "openclaw"))).resolves.toBe(
+            path.join(checkoutRoot, "openclaw.mjs"),
+          );
           if (manager === "npm") {
-            expect(result.steps.map((step) => step.name)).toEqual([
-              "global update",
-              "global install swap",
-              "candidate doctor",
-            ]);
             await expect(fs.readlink(path.join(prefix, "bin", "openclaw"))).resolves.toBe(
               "../lib/node_modules/openclaw/openclaw.mjs",
             );

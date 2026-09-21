@@ -230,6 +230,8 @@ export const UpdateRunResultSchema = closedObject({
   ok: Type.Boolean(),
   result: Type.Unknown(),
   ackDelivered: Type.Optional(Type.Boolean()),
+  ackQueued: Type.Optional(Type.Boolean()),
+  acknowledgement: Type.Optional(Type.String()),
   code: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   handoff: Type.Optional(Type.Unknown()),

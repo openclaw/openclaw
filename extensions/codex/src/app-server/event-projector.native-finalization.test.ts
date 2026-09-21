@@ -543,7 +543,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     });
   });
 
-  it("caps oversized native command output before transcript, trajectory, and progress projection", async () => {
+  it("preserves oversized native transcripts while bounding trajectory and progress projection", async () => {
     const trajectoryRecorder = {
       filePath: "trajectory.jsonl",
       recordEvent: vi.fn(),
@@ -603,8 +603,7 @@ describe("CodexAppServerEventProjector native tool finalization", () => {
     );
     expect(toolResultContent).toEqual([{ type: "text", text: expect.any(String) }]);
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
-    expect(toolResultContentItem.text).toHaveLength(10_000);
-    expect(toolResultContentItem.text).toContain("OpenClaw truncated Codex native tool output");
+    expect(toolResultContentItem.text).toBe(largeOutput);
   });
 
   it("delivers completed assistant text when a native tool call finishes without a matching result", async () => {

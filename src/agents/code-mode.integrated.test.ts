@@ -60,93 +60,79 @@ describe("integrated public Code Mode", () => {
   });
 
   it.each([
-    {
-      label: "bad field",
-      code: "const x = await contract({count: 1}); return x.missing;",
-      unknown: false,
-    },
-    { label: "bad args", code: 'await contract({count: "bad"});', unknown: false },
-    {
-      label: "unknown output",
-      code: "const x = await contract({count: 1}); return x.count;",
-      unknown: true,
-    },
-  ])("preflight refuses $label before all effects", async ({ code, unknown }) => {
-    const target = pluginToolWithExecute("contract", "Contract", async () =>
-      jsonResult({ count: 1 }),
+    { language: "javascript" },
+    { language: "typescript" },
+    { typecheck: false },
+    { typecheck: true },
+  ])("rejects retired compiler options before effects: %j", async (retired) => {
+    const target = pluginToolWithExecute("effect", "Effect", async () => jsonResult("done"));
+    const { ctx, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({ ...ctx, tools: [...tools, target] });
+
+    await expect(
+      tools[0]!.execute("retired-options", { code: "await effect();", ...retired }),
+    ).rejects.toThrow(
+      "Code Mode accepts JavaScript only. Remove language and typecheck; use API.read(...) for tool types.",
     );
-    target.parameters = Type.Object({ count: Type.Number() }, { additionalProperties: false });
-    if (!unknown) {
-      target.outputSchema = Type.Object({ count: Type.Number() }, { additionalProperties: false });
-    }
-    const { ctx, config, tools } = createCodeModeHarness();
-    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
-    const result = resultDetails(
-      await tools[0]!.execute("preflight", {
-        code: "await contract({count: 1});\n" + code,
-        language: "typescript",
-        typecheck: true,
-      }),
-    );
-    expect(result, JSON.stringify(result)).toMatchObject({
-      status: "failed",
-      code: "invalid_input",
-      bridgeDispatchStarted: false,
-      failurePhase: "input",
-    });
-    expect(result.error).toContain("openclaw-code-mode:user.ts:2:");
     expect(target.execute).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])("allows valid typed composition (preflight=%s)", async (typecheck) => {
-    const target = pluginToolWithExecute("contract", "Contract", async () =>
-      jsonResult({ count: 7 }),
-    );
-    target.parameters = Type.Object({ count: Type.Number() }, { additionalProperties: false });
-    target.outputSchema = Type.Object({ count: Type.Number() }, { additionalProperties: false });
-    const { ctx, config, tools } = createCodeModeHarness();
-    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
-    const result = resultDetails(
-      await tools[0]!.execute("preflight", {
-        code: "const x = await contract({count: 1}); console.log(x.count); return x.count;",
-        language: "typescript",
-        typecheck,
-      }),
-    );
-    expect(result, JSON.stringify(result)).toMatchObject({ status: "completed", value: 7 });
-    expect(target.execute).toHaveBeenCalledOnce();
-  });
-
-  it("returns bounded compiler diagnostics together before any effects", async () => {
+  it.each([
+    "const value: number = 1; return value;",
+    "interface Value { count: number } return 1;",
+    "return { count: 1 } satisfies { count: number };",
+  ])("rejects TypeScript syntax before any effects: %s", async (code) => {
     const target = pluginToolWithExecute("effect", "Effect", async () => jsonResult("done"));
-    const { ctx, config, tools } = createCodeModeHarness();
-    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
+    const { ctx, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({ ...ctx, tools: [...tools, target] });
+
     const result = resultDetails(
-      await tools[0]!.execute("preflight-errors", {
-        code: [
-          "await effect();",
-          "missing_" + "é".repeat(4096) + ";",
-          ...Array.from({ length: 6 }, (_, index) => `missing_${index};`),
-        ].join("\n"),
-        language: "typescript",
-        typecheck: true,
-      }),
+      await tools[0]!.execute("typescript-source", { code: "await effect();\n" + code }),
     );
     expect(result).toMatchObject({
       status: "failed",
-      code: "invalid_input",
       bridgeDispatchStarted: false,
-      failurePhase: "input",
+      error: expect.stringContaining("SyntaxError"),
     });
-    const error = String(result.error);
-    expect(error).toContain("openclaw-code-mode:user.ts:2:1:");
-    expect(error).toContain("[diagnostic truncated]");
-    expect(error).toContain("openclaw-code-mode:user.ts:6:1: Cannot find name 'missing_3'");
-    expect(error).not.toContain("missing_4");
-    expect(error).toContain("2 additional errors omitted");
-    expect(Buffer.byteLength(error, "utf8")).toBeLessThan(6 * 1024);
-    expect(error).not.toContain("�");
+    expect(result.error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
     expect(target.execute).not.toHaveBeenCalled();
+  });
+
+  it("composes JavaScript from API declarations and rejects invalid arguments at dispatch", async () => {
+    const target = pluginToolWithExecute("contract", "Contract", async (_id, input) =>
+      jsonResult({ count: (input as { count: number }).count + 6 }),
+    );
+    target.parameters = Type.Object({ count: Type.Number() }, { additionalProperties: false });
+    target.outputSchema = Type.Object({ count: Type.Number() }, { additionalProperties: false });
+    const { ctx, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({ ...ctx, tools: [...tools, target] });
+    const declared = resultDetails(
+      await tools[0]!.execute("read-contract", {
+        code: 'return await API.read("tools/contract.d.ts");',
+      }),
+    );
+    expect(declared).toMatchObject({
+      status: "completed",
+      value: { content: expect.stringContaining("count: number") },
+    });
+    expect(target.execute).not.toHaveBeenCalled();
+
+    const result = resultDetails(
+      await tools[0]!.execute("compose", {
+        code: `
+          const first = await contract({count: 1});
+          const second = await contract({count: first.count});
+          try { await contract({count: "bad"}); }
+          catch (error) { return { count: second.count, code: error.code }; }
+          throw new Error("invalid input was accepted");
+        `,
+      }),
+    );
+    expect(result, JSON.stringify(result)).toMatchObject({
+      status: "completed",
+      value: { count: 13, code: "input_contract" },
+    });
+    expect(target.execute).toHaveBeenCalledTimes(2);
   });
 
   it.each([false, true])(

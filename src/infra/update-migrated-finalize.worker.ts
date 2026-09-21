@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { finishUpdateRun } from "../cli/daemon-cli.js";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import {
@@ -46,6 +45,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
   // Validation imports this whole candidate graph before activation. The helper
   // also needs the stable recovery barrel's writer after an actual schema bump.
   if (process.argv[2] === "--check") {
+    const { finishUpdateRun } = await import("../cli/daemon-cli.js");
     routeLogsToStderr();
     if (typeof finishUpdateRun !== "function") {
       throw new Error("Update recovery writer is unavailable.");
@@ -55,6 +55,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
         executorDelegation: "pid-start-v1",
         retainedOwnerBinding: true,
         doctorConfigWrites: "pid-start-v1",
+        gatewayRestartCompletion: true,
         state: OPENCLAW_STATE_SCHEMA_VERSION,
         agent: OPENCLAW_AGENT_SCHEMA_VERSION,
       }),
@@ -167,13 +168,25 @@ async function finalizeMigratedUpdate(): Promise<void> {
     },
   );
   const terminal = publishedRecord ?? getUpdateRun(finalized.run.runId, { env: finalized.run.env });
-  if (!terminal || terminal.runId !== finalized.run.runId || terminal.status === "running") {
+  const gatewayRestartPending =
+    finalized.run.completionOwner === "gateway-restart" &&
+    finalized.run.gatewayRestartRequired === true &&
+    finalized.result.status === "ok" &&
+    terminal?.status === "running" &&
+    terminal.phase === "restarting";
+  if (
+    !terminal ||
+    terminal.runId !== finalized.run.runId ||
+    (terminal.status === "running" && !gatewayRestartPending)
+  ) {
     throw new Error("Update finalization left the update run nonterminal.");
   }
   const response: MigratedUpdateFinalizationResult = {
     result: finalized.result,
     exitCode: finalized.exitCode,
-    terminalRunId: terminal.runId,
+    ...(gatewayRestartPending
+      ? { restartRunId: terminal.runId }
+      : { terminalRunId: terminal.runId }),
     executorDelegation: "pid-start-v1",
     automaticTriage: finalized.automaticTriage,
   };

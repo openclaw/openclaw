@@ -10,15 +10,18 @@ import type { TaskRegistryControlRuntime } from "./task-registry-control.types.j
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
 import { clearTaskFlowSyncRetries } from "./task-registry-flow-sync.js";
 import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
-import { prepareTaskRegistryRead, prepareTaskRegistryReadOwner } from "./task-registry-read.js";
+import {
+  createTaskRegistryReadPreparation,
+  prepareTaskRegistryRead,
+  prepareTaskRegistryReadOwner,
+} from "./task-registry-read.js";
 import {
   cloneTaskRecord,
   listTasksFromIndex,
   cloneTaskRecordForObserver,
-  normalizeTaskRecord,
+  normalizeTaskTimestamps,
   compareTasksNewestFirst,
   pickPreferredRunIdTask,
-  snapshotTaskRecords,
   selectTaskRecordsForOwnerTree,
 } from "./task-registry-records.js";
 import {
@@ -56,11 +59,22 @@ import {
   resetTaskRegistryRuntimeForTests,
 } from "./task-registry.store.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
-import { resolveTaskSessionAgentId } from "./task-session-identity.js";
+import { resolveTaskSessionAgentId, taskMatchesRelatedSession } from "./task-session-identity.js";
 
-export function listTaskRecordsUnsorted(): TaskRecord[] {
+type TaskSessionActivity = Pick<
+  TaskRecord,
+  "taskKind" | "status" | "requesterSessionKey" | "ownerKey"
+>;
+
+/** Cleanup reads session activity without copying retained task payloads. */
+export function listTaskSessionActivity(): TaskSessionActivity[] {
   ensureTaskRegistryReady();
-  return snapshotTaskRecords(tasks);
+  return Array.from(tasks.values(), (task) => ({
+    taskKind: task.taskKind,
+    status: task.status,
+    requesterSessionKey: task.requesterSessionKey,
+    ownerKey: task.ownerKey,
+  }));
 }
 
 /** Coarse tree candidates; callers still enforce agent identity and current control authority. */
@@ -69,32 +83,6 @@ export function listTaskRecordsForOwnerTree(rootOwnerKeys: ReadonlySet<string>):
   return selectTaskRecordsForOwnerTree(tasks, taskIdsByOwnerKey, rootOwnerKeys).map((task) =>
     cloneTaskRecord(task),
   );
-}
-
-function taskMatchesRelatedSession(
-  task: TaskRecord,
-  sessionKey: string | undefined,
-  sessionAgentId?: string,
-  cfg?: OpenClawConfig,
-): boolean {
-  if (!sessionKey) {
-    return true;
-  }
-  return [
-    { key: task.requesterSessionKey, agentId: task.requesterAgentId },
-    { key: task.childSessionKey, agentId: task.agentId },
-    // ownerKey belongs to the requester. task.agentId is the executor/child
-    // candidate and must never adopt a colliding bare requester session.
-    { key: task.ownerKey, agentId: task.requesterAgentId },
-  ].some((candidate) => {
-    if (normalizeOptionalString(candidate.key) !== sessionKey) {
-      return false;
-    }
-    if (!sessionAgentId) {
-      return true;
-    }
-    return resolveTaskSessionAgentId(candidate.key, candidate.agentId, cfg) === sessionAgentId;
-  });
 }
 
 function taskMatchesAgent(
@@ -177,6 +165,7 @@ const TASK_PAGE_MAX_ATTEMPTS = 3;
 const TASK_PAGE_YIELD_INTERVAL_MS = 12;
 
 export async function listTaskRecordPage(params: {
+  prepareRead?: ReturnType<typeof createTaskRegistryReadPreparation>;
   offset: number;
   limit: number;
   expectedRevision?: number;
@@ -195,7 +184,8 @@ export async function listTaskRecordPage(params: {
     "cursor_stale" | "registry_changed"
   >
 > {
-  let read = await prepareTaskRegistryRead();
+  const prepareRead = params.prepareRead ?? createTaskRegistryReadPreparation();
+  let read = await prepareRead();
   if (!read) {
     return err("registry_changed");
   }
@@ -211,7 +201,7 @@ export async function listTaskRecordPage(params: {
   for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
     if (attempt > 0) {
       const preparationStartedAt = performance.now();
-      read = await prepareTaskRegistryRead();
+      read = await prepareRead();
       if (!read) {
         return err("registry_changed");
       }
@@ -398,18 +388,6 @@ export function findTaskByRunId(runId: string): TaskRecord | undefined {
   return task ? cloneTaskRecord(task) : undefined;
 }
 
-export function listTasksForAgentId(agentId: string): TaskRecord[] {
-  ensureTaskRegistryReady();
-  const lookup = agentId.trim();
-  if (!lookup) {
-    return [];
-  }
-  return [...tasks.values()]
-    .filter((task) => task.agentId?.trim() === lookup)
-    .map((task) => cloneTaskRecord(task))
-    .toSorted(compareTasksNewestFirst);
-}
-
 export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   ensureTaskRegistryReady();
   const key = normalizeOptionalString(ownerKey);
@@ -432,7 +410,7 @@ export async function listFreshTasksForOwnerKey(ownerKey: string): Promise<TaskR
       const records = await store.listTasksForOwnerKey(owner.context, key, owner.assertCurrent);
       owner.assertCurrent();
       for (const task of records) {
-        merged.set(task.taskId, cloneTaskRecord(normalizeTaskRecord(task)));
+        merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
       }
       return [...merged.values()]
         .map((task, insertionIndex) => Object.assign({}, task, { insertionIndex }))

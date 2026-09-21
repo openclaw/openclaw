@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createConfigIO } from "./io.js";
 import { replaceConfigFile } from "./mutate.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
@@ -9,6 +11,18 @@ import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
 describe("paired source through the public config writer", () => {
+  const roots = createSuiteTempRootTracker({ prefix: "config-paired-coordinator-" });
+  beforeAll(async () => {
+    await roots.setup();
+    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      await roots.make("coordinator"),
+    );
+  });
+  afterAll(async () => {
+    vi.mocked(tmpDirOwner.resolvePreferredOpenClawTmpDir).mockRestore();
+    await roots.cleanup();
+  });
+
   it.each([false, true])(
     "retains authored identity after read-time environment drift (include=%s)",
     async (include) => {

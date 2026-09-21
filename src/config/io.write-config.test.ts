@@ -45,6 +45,8 @@ import {
   type ConfigWriteOptions,
 } from "./io.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
+import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
+import { defaultedDemoPluginRegistry } from "./io.write-config.test-support.js";
 import { registerConfigWritePreflightTests } from "./io.write-preflight.test-support.js";
 import { replaceConfigFile, transformConfigFile, transformConfigFileWithRetry } from "./mutate.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
@@ -73,6 +75,16 @@ const mockPrepareConfigFileWrite = vi.hoisted(() =>
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: mockLoadPluginManifestRegistry,
 }));
+
+vi.mock("../plugins/discovery.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/discovery.js")>();
+  const discovery = { candidates: [], diagnostics: [] };
+  return {
+    ...actual,
+    // The registry above owns this suite's synthetic plugin inventory.
+    discoverOpenClawPlugins: () => discovery,
+  };
+});
 
 vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/plugin-registry.js")>();
@@ -117,34 +129,11 @@ function createConfigIO(options: ConfigIoOptions = {}) {
 
 describe("config io write", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-io-" });
+  const workers = createConfigIoWorkerFixture();
   const silentLogger = {
     warn: () => {},
     error: () => {},
   };
-  const defaultedDemoPluginRegistry = {
-    diagnostics: [],
-    plugins: [
-      {
-        id: "demo",
-        origin: "bundled",
-        enabledByDefault: true,
-        channels: [],
-        providers: [],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
-        rootDir: "/tmp/openclaw-test-demo",
-        source: "/tmp/openclaw-test-demo/index.ts",
-        manifestPath: "/tmp/openclaw-test-demo/openclaw.plugin.json",
-        configSchema: {
-          type: "object",
-          properties: { mode: { type: "string", default: "auto" } },
-          additionalProperties: true,
-        },
-      },
-    ],
-  } satisfies PluginManifestRegistry;
-
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = await suiteRootTracker.make("case");
     return withEnvAsync(
@@ -162,6 +151,7 @@ describe("config io write", () => {
     vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
       await suiteRootTracker.make("coordinator"),
     );
+    await workers.setup(await suiteRootTracker.make("workers"));
 
     // Default: return an empty plugin list so existing tests that don't need
     // plugin-owned channel schemas keep working unchanged.
@@ -181,7 +171,7 @@ describe("config io write", () => {
   });
 
   afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
+    await workers.close();
     closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
     vi.mocked(tmpDirOwner.resolvePreferredOpenClawTmpDir).mockRestore();

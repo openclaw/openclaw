@@ -1,5 +1,6 @@
 import { asPositiveFiniteNumber as normalizePairingQrExpiresAtMs } from "@openclaw/normalization-core/number-coercion";
 import {
+  normalizeOptionalString,
   readNonBlankString,
   readNonBlankString as normalizeTtsSupplementSpokenText,
 } from "@openclaw/normalization-core/string-coerce";
@@ -7,6 +8,7 @@ import {
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ReplyPayload, ReplyPayloadTtsSupplement } from "../shared/reply-payload.types.js";
@@ -19,6 +21,33 @@ export type {
 } from "../shared/reply-payload.types.js";
 
 export type ReplyMediaFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+
+/** Adds the BTW question banner for channels that only accept plain text bodies. */
+export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
+  const text = normalizeOptionalString(payload.text);
+  if (!text) {
+    return payload.text;
+  }
+  const question = normalizeOptionalString(payload.btw?.question);
+  if (!question) {
+    return payload.text;
+  }
+  const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
+  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
+}
+
+/** True when a payload has visible or playable content for delivery. */
+export function isRenderablePayload(payload: ReplyPayload): boolean {
+  return hasReplyPayloadContent(payload, {
+    extraContent:
+      payload.audioAsVoice || payload.location != null || hasReplyPayloadSpeechContent(payload),
+  });
+}
+
+/** True when a payload should stay internal as reasoning-only output. */
+export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
+  return payload.isReasoning === true;
+}
 
 /** Producer-owned outcome for one attachment that could not be delivered. */
 export type ReplyMediaFailure = {
@@ -425,7 +454,7 @@ export function isReplyPayloadStatusNotice(
   return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
 }
 
-/** Returns whether a payload carries a terminal answer or command result, not a supplemental lane. */
+/** Classifies terminal vs. supplemental reply lanes, not content, sendability, or authority. */
 export const isReplyPayloadTerminalContent = (payload: ReplyPayload): boolean => {
   const supplement = getReplyPayloadTtsSupplement(payload);
   return (

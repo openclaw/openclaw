@@ -8,7 +8,6 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
-  releaseExitedOpenClawAgentDatabaseWorkerLease,
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
 } from "./openclaw-agent-db-lease.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
@@ -17,6 +16,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import { executeAgentDatabaseCleanupCommand } from "./openclaw-agent-execution-cleanup.worker.js";
 import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -135,7 +135,11 @@ it.each(["forced cleanup", "stale admission"])(
     child.kill("SIGKILL");
     await exited;
     if (recovery === "forced cleanup") {
-      releaseExitedOpenClawAgentDatabaseWorkerLease(receipt);
+      executeAgentDatabaseCleanupCommand(
+        { type: "agentDatabases.releaseExitedLease", input: receipt },
+        state,
+        owner.env,
+      );
       expect(owner.record()).toBeUndefined();
       closeOpenClawAgentDatabaseByPath(owner.database.path);
       expect(owner.record()).toBeUndefined();

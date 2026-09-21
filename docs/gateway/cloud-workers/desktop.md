@@ -13,6 +13,10 @@ The agent can attach a temporary environment to the current conversation, run
 the application there, and open its view in the chat side panel. The agent's
 primary workspace and session placement stay unchanged.
 
+Attached environments install and verify the worker bundle for remote app
+commands, but skip prewarming the agent runtime because the agent stays on the
+current execution host. OpenClaw worker turns still prewarm their agent runtime.
+
 For open-and-show requests, the agent passes `presentation: "desktop"` or
 `presentation: "portal"` when creating the attachment. The side panel opens
 before allocation and shows machine startup progress. A web preview waits for
@@ -58,6 +62,12 @@ for the backup, retention, and re-upgrade contract.
 ## Desktop (interactive)
 
 Cloud Worker Desktop lets an administrator watch or control a capable worker from the Control UI without exposing its cloud node as an ordinary paired node. Enable the **Cloud Worker Desktop** lab, then set `settings.desktop: true` on a Crabbox profile. Linux, macOS, and native Windows use their own desktop setup, including when selected as a per-session OS override. Crabbox does not provide a desktop for Windows (WSL2); select native Windows for its desktop viewer. Desktop capability is fixed at warm time: changing the setting affects newly provisioned workers, while an existing non-desktop lease must be stopped and reprovisioned.
+
+The lab switch applies without restarting the Gateway. Connected Control UI
+pages update desktop availability automatically. Disabling it closes worker
+desktop observations; the workers and their applications keep running.
+Re-enabling it restores access to workers that already have desktop capability.
+Changing the lab does not provision or replace workers.
 
 The bundled Crabbox plugin supports direct AWS and Azure profiles. Coordinator-backed AWS, Azure, and Hetzner profiles are supported when the selected coordinator advertises Desktop and Browser capability. OpenClaw keeps worker execution node-only: `openclaw worker`, workspace transfer, desktop observation, and app launch all use the authenticated outbound node connection. It does not restore SSH execution, a reverse tunnel, or rsync. Direct Hetzner rejects OpenClaw's fixed lease ID, so desktop profiles fail before allocation unless Hetzner uses a capable managed coordinator.
 

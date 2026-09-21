@@ -231,6 +231,26 @@ function logSlowTransactionHold(params: {
   });
 }
 
+/** The lifecycle lock precedes BEGIN, so transaction hold diagnostics cannot see this wait. */
+export function logSlowSqliteCoordinatorWait(
+  elapsedMs: number,
+  options: Pick<SqliteTransactionOptions, "databaseLabel" | "operationLabel">,
+): void {
+  if (!isMainThread || elapsedMs <= 100) {
+    return;
+  }
+  transactionLogger(undefined).warn("slow SQLite coordinator lock wait", {
+    async: false,
+    database: options.databaseLabel,
+    elapsedMs,
+    isMainThread,
+    operation: options.operationLabel,
+    pid: process.pid,
+    threadId,
+    thresholdMs: 100,
+  });
+}
+
 function logSlowTransactionStep(params: {
   beginAdmission?: SqliteBeginAdmissionDiagnostics;
   elapsedMs: number;

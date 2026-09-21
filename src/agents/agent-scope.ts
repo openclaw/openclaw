@@ -23,7 +23,6 @@ import {
   normalizeAgentId,
   normalizeAgentIdStrict,
   parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import {
@@ -304,8 +303,6 @@ export function clearAutoFallbackPrimaryProbeSelection(
   delete entry.fallbackNotice;
   entry.updatedAt = now;
 }
-
-export { resolveAgentIdFromSessionKey };
 
 type SessionAgentResolutionParams = {
   sessionKey?: string;

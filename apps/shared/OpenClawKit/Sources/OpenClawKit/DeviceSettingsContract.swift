@@ -22,6 +22,7 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case healthSummaryEnabled = "capabilities.healthSummaryEnabled"
     case canvasEnabled = "capabilities.canvasEnabled"
     case cameraEnabled = "capabilities.cameraEnabled"
+    case desktopSharingEnabled = "capabilities.desktopSharingEnabled"
     case computerControlEnabled = "capabilities.computerControlEnabled"
     case computerControlProvider = "capabilities.computerControlProvider"
     case peekabooBridgeEnabled = "capabilities.peekabooBridgeEnabled"
@@ -311,6 +312,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
     public struct Capabilities: Encodable, Sendable {
         public let canvasEnabled: Bool?
         public let cameraEnabled: Bool?
+        public let desktopSharingEnabled: Bool?
         public let computerControlEnabled: Bool?
         public let computerControlProvider: String?
         public let cuaDriverBundled: Bool?
@@ -324,6 +326,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         public init(
             canvasEnabled: Bool? = nil,
             cameraEnabled: Bool? = nil,
+            desktopSharingEnabled: Bool? = nil,
             computerControlEnabled: Bool? = nil,
             computerControlProvider: String? = nil,
             cuaDriverBundled: Bool? = nil,
@@ -336,6 +339,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         {
             self.canvasEnabled = canvasEnabled
             self.cameraEnabled = cameraEnabled
+            self.desktopSharingEnabled = desktopSharingEnabled
             self.computerControlEnabled = computerControlEnabled
             self.computerControlProvider = computerControlProvider
             self.cuaDriverBundled = cuaDriverBundled

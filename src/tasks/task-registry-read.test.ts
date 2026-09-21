@@ -31,7 +31,10 @@ import {
   listTaskRecordPage,
   listFreshTasksForOwnerKey,
 } from "./task-registry-query.js";
-import { prepareTaskRegistryRead } from "./task-registry-read.js";
+import {
+  createTaskRegistryReadPreparation,
+  prepareTaskRegistryRead,
+} from "./task-registry-read.js";
 import {
   createReadTask,
   requestTasks,
@@ -452,20 +455,15 @@ describe("task registry read preparation", () => {
       let held = false;
       vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
         const result = await snapshot(...args);
-        if (!held && args[1]?.runId === selected.runId) {
+        if (!held && args[1] && "taskId" in args[1] && args[1].runId === selected.runId) {
           held = true;
           committed.resolve();
           await release.promise;
         }
         return result;
       });
-      const reader = await import("./task-registry-read.js");
-      const prepare = reader.prepareTaskRegistryRead;
-      // Preparatory yields must not consume the scan's publication barrier.
-      vi.spyOn(reader, "prepareTaskRegistryRead").mockImplementationOnce(async () => {
-        await timers.setImmediate();
-        return prepare();
-      });
+      const prepareRead = createTaskRegistryReadPreparation();
+      let firstPreparation = true;
       const immediate = timers.setImmediate;
       let workMs = 0;
       vi.spyOn(performance, "now").mockImplementation(() => workMs);
@@ -480,6 +478,14 @@ describe("task registry read preparation", () => {
       };
       try {
         page = listTaskRecordPage({
+          prepareRead: async () => {
+            // Preparatory yields must not consume the scan's publication barrier.
+            if (firstPreparation) {
+              firstPreparation = false;
+              await timers.setImmediate();
+            }
+            return prepareRead();
+          },
           offset: 0,
           limit: 1,
           prepareFilter: (batch) => {

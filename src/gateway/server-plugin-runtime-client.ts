@@ -5,12 +5,18 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
+import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
+import {
+  bindInProcessSubagentResume,
+  readInProcessSubagentResume,
+} from "./in-process-subagent-resume.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
@@ -19,6 +25,10 @@ import type {
   GatewayRequestOptions,
   TrustedAgentToolCaller,
 } from "./server-methods/types.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
+
+type RuntimeClient = NonNullable<GatewayRequestOptions["client"]> &
+  Pick<GatewayWsClient, "preparedRecipientProfileId">;
 
 export function createSyntheticPluginRuntimeClient(params?: {
   authenticatedUserProfile?: NonNullable<
@@ -28,6 +38,8 @@ export function createSyntheticPluginRuntimeClient(params?: {
   agentToolCaller?: TrustedAgentToolCaller;
   agentRunTracking?: GatewayAgentRunTaskOwner;
   operatorRoleActor?: GatewayOperatorRoleActor;
+  operatorRunAuthority?: AdmittedRunOperatorAuthority;
+  operatorAccessAuthority?: PluginGatewayAccessAuthority;
   cronRunContinuation?: boolean;
   internalDeliveryMediaUrls?: string[];
   runtimeContextFragments?: RuntimeContextFragment[];
@@ -64,6 +76,12 @@ export function createSyntheticPluginRuntimeClient(params?: {
     internal: {
       syntheticClient: true,
       ...(params?.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
+      ...(params?.operatorRunAuthority
+        ? { operatorRunAuthority: params.operatorRunAuthority }
+        : {}),
+      ...(params?.operatorAccessAuthority
+        ? { operatorAccessAuthority: params.operatorAccessAuthority }
+        : {}),
       ...(params?.sessionCreation ? { sessionCreation: params.sessionCreation } : {}),
       ...(params?.agentToolCaller ? { agentToolCaller: params.agentToolCaller } : {}),
       allowModelOverride: params?.allowModelOverride === true,
@@ -100,18 +118,43 @@ export function createSyntheticPluginRuntimeClient(params?: {
 }
 
 export function mergePluginRuntimeClientInternal(
-  client: GatewayRequestOptions["client"] | undefined,
-  internal: NonNullable<GatewayRequestOptions["client"]>["internal"],
-): GatewayRequestOptions["client"] {
-  if (!client || !internal) {
+  client: RuntimeClient,
+  internal: RuntimeClient["internal"],
+  scopes?: string[],
+): RuntimeClient;
+export function mergePluginRuntimeClientInternal(
+  client: RuntimeClient | null | undefined,
+  internal: RuntimeClient["internal"],
+  scopes?: string[],
+): RuntimeClient | null;
+export function mergePluginRuntimeClientInternal(
+  client: RuntimeClient | null | undefined,
+  internal: RuntimeClient["internal"],
+  scopes?: string[],
+): RuntimeClient | null {
+  if (!client || (!internal && !scopes)) {
     return client ?? null;
   }
   return {
     ...client,
-    internal: {
-      ...client.internal,
-      ...internal,
+    ...(scopes ? { connect: { ...client.connect, scopes } } : {}),
+    // Profile publication replaces this prepared projection on the transport owner.
+    get preparedSessionProfile() {
+      return client.preparedSessionProfile;
     },
+    set preparedSessionProfile(profile) {
+      client.preparedSessionProfile = profile;
+    },
+    get preparedRecipientProfileId() {
+      return client.preparedRecipientProfileId;
+    },
+    set preparedRecipientProfileId(profileId) {
+      client.preparedRecipientProfileId = profileId;
+    },
+    internal: bindInProcessSubagentResume(
+      { ...client.internal, ...internal },
+      readInProcessSubagentResume(client.internal),
+    ),
   };
 }
 

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import {
@@ -8,6 +9,7 @@ import {
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
+import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
@@ -48,12 +50,21 @@ type ErrorIdentity =
         | "newer-schema"
         | "coordinator"
         | "range-error"
-        | "skill-upload-request";
+        | "syntax-error"
+        | "type-error"
+        | "skill-upload-request"
+        | "mcp-oauth-corruption";
     }
   | { type: "coordinator-contention"; family: CoordinatorFamily }
   | { type: "ownership-metadata"; databasePath: string }
   | { type: "external-ownership"; databasePath: string; managerId: string }
   | { type: "state-lease"; leaseCode: OpenClawStateLeaseErrorCode }
+  | {
+      type: "plugin-blob";
+      blobCode: PluginBlobStoreError["code"];
+      operation: PluginBlobStoreError["operation"];
+      path?: string;
+    }
   | { type: "maintenance"; kind: MaintenanceKind }
   | { type: "state-migration"; kind: StateMigrationKind; pathname: string }
   | { type: "agent-media-migration"; pathname: string; schemaVersion: number };
@@ -78,6 +89,14 @@ export type OpenClawStateWorkerErrorPayload = {
 type ErrorGraphOptions = { includeOrdinary?: boolean };
 
 function identifyError(error: Error): ErrorIdentity {
+  if (error instanceof PluginBlobStoreError) {
+    return {
+      type: "plugin-blob",
+      blobCode: error.code,
+      operation: error.operation,
+      ...(error.path === undefined ? {} : { path: error.path }),
+    };
+  }
   if (error instanceof WorkspaceAliasRepointedError) {
     return {
       type: "workspace-alias-repointed",
@@ -85,6 +104,9 @@ function identifyError(error: Error): ErrorIdentity {
       storedWorkspacePath: error.storedWorkspacePath,
       currentWorkspacePath: error.currentWorkspacePath,
     };
+  }
+  if (error instanceof McpOAuthStoreCorruptionError) {
+    return { type: "mcp-oauth-corruption" };
   }
   if (error instanceof SkillUploadRequestError) {
     return { type: "skill-upload-request" };
@@ -129,6 +151,12 @@ function identifyError(error: Error): ErrorIdentity {
   }
   if (error instanceof RangeError) {
     return { type: "range-error" };
+  }
+  if (error instanceof SyntaxError) {
+    return { type: "syntax-error" };
+  }
+  if (error instanceof TypeError) {
+    return { type: "type-error" };
   }
   return { type: error instanceof AggregateError ? "aggregate" : "error" };
 }
@@ -213,6 +241,29 @@ function isMaintenanceKind(kind: unknown): kind is MaintenanceKind {
   );
 }
 
+function isBlobCode(value: unknown): value is PluginBlobStoreError["code"] {
+  return (
+    value === "PLUGIN_BLOB_OPEN_FAILED" ||
+    value === "PLUGIN_BLOB_WRITE_FAILED" ||
+    value === "PLUGIN_BLOB_READ_FAILED" ||
+    value === "PLUGIN_BLOB_CORRUPT" ||
+    value === "PLUGIN_BLOB_LIMIT_EXCEEDED" ||
+    value === "PLUGIN_BLOB_INVALID_INPUT"
+  );
+}
+
+function isBlobOperation(value: unknown): value is PluginBlobStoreError["operation"] {
+  return (
+    value === "open" ||
+    value === "register" ||
+    value === "lookup" ||
+    value === "delete" ||
+    value === "entries" ||
+    value === "clear" ||
+    value === "sweep"
+  );
+}
+
 function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined {
   switch (node.type) {
     case "workspace-alias-repointed":
@@ -232,7 +283,10 @@ function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined
     case "newer-schema":
     case "coordinator":
     case "range-error":
+    case "syntax-error":
+    case "type-error":
     case "skill-upload-request":
+    case "mcp-oauth-corruption":
       return { type: node.type };
     case "coordinator-contention":
       return node.family === "gateway-lifecycle" ||
@@ -247,6 +301,18 @@ function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined
     case "external-ownership":
       return typeof node.databasePath === "string" && typeof node.managerId === "string"
         ? { type: node.type, databasePath: node.databasePath, managerId: node.managerId }
+        : undefined;
+    case "plugin-blob":
+      return isBlobCode(node.blobCode) &&
+        node.code === node.blobCode &&
+        isBlobOperation(node.operation) &&
+        (node.path === undefined || typeof node.path === "string")
+        ? {
+            type: node.type,
+            blobCode: node.blobCode,
+            operation: node.operation,
+            ...(typeof node.path === "string" ? { path: node.path } : {}),
+          }
         : undefined;
     case "state-lease":
       return isOpenClawStateLeaseErrorCode(node.leaseCode) && node.code === node.leaseCode
@@ -356,8 +422,14 @@ function createError(node: ErrorNode): Error {
       return new Error(node.message);
     case "range-error":
       return new RangeError(node.message);
+    case "syntax-error":
+      return new SyntaxError(node.message);
+    case "type-error":
+      return new TypeError(node.message);
     case "skill-upload-request":
       return new SkillUploadRequestError(node.message);
+    case "mcp-oauth-corruption":
+      return new McpOAuthStoreCorruptionError("", "");
     case "aggregate":
       return new AggregateError([], node.message);
     case "coordinator":
@@ -372,6 +444,12 @@ function createError(node: ErrorNode): Error {
       return new OpenClawStateExternalOwnershipError(node.databasePath, node.managerId);
     case "newer-schema":
       return new SqliteSchemaVersionError(node.message);
+    case "plugin-blob":
+      return new PluginBlobStoreError(node.message, {
+        code: node.blobCode,
+        operation: node.operation,
+        ...(node.path === undefined ? {} : { path: node.path }),
+      });
     case "state-lease":
       return new OpenClawStateLeaseError(node.message, { code: node.leaseCode });
     case "maintenance":

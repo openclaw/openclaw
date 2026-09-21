@@ -256,6 +256,37 @@ export function readOpenClawStateReadOnlyLocation<T>(
   return result;
 }
 
+/** Keep streamed rows on one private reader while callers yield or close the shared writer. */
+export async function* iterateOpenClawStateDatabaseReadOnly<Row, Result>(
+  source: OpenClawStateDatabase,
+  operation: (database: OpenClawStateReadOnlyDatabase) => Generator<Row, Result>,
+  env: NodeJS.ProcessEnv = process.env,
+): AsyncGenerator<Row, Result> {
+  const pathname = source.db.location();
+  if (!pathname) {
+    throw new Error("Streaming shared-state reads require a filesystem-backed database.");
+  }
+  openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
+  const opened = openOpenClawStateReadOnlyLocation(pathname, pathname);
+  try {
+    // sqlite-allow-raw -- Keep composite streamed reads in one native read-only snapshot.
+    opened.database.db.exec("BEGIN");
+    return yield* operation(opened.database);
+  } catch (error) {
+    openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(source, error);
+    throw error;
+  } finally {
+    try {
+      // Bun can retain statements after close; end the snapshot before releasing handle custody.
+      if (opened.database.db.isTransaction) {
+        opened.database.db.exec("ROLLBACK"); // sqlite-allow-raw -- End this owner's read-only snapshot.
+      }
+    } finally {
+      opened.close();
+    }
+  }
+}
+
 export function openOpenClawStateReadOnlyLocation(
   pathname: string,
   source: string | PreparedSqliteReadOnlyLocation,

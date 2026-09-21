@@ -1,8 +1,9 @@
+import { CONTROL_UI_OPERATOR_ROLE } from "../api/gateway.ts";
 // "Forget this browser" stored device-credential reset, split out of
 // gateway-store.ts to keep that module inside the TS LOC ratchet. Token-only
 // and gateway-scoped: the browser device identity and other gateways' stored
 // tokens survive.
-import { CONTROL_UI_OPERATOR_ROLE } from "../api/gateway.ts";
+import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
@@ -53,6 +54,7 @@ export function createDeviceCredentialMethods(
       // rewrites that entry — without this explicit clear a reload would
       // restore the old sign-in the operator just confirmed forgetting.
       persistSessionToken(gatewayUrl, "");
+      retireStoredGoalOperations(gatewayUrl);
       // A stopped gateway stays on the login gate; the cleared credential
       // simply won't be offered on the next explicit connect.
       if (!host.isStopped()) {

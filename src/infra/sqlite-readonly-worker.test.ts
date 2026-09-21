@@ -4,34 +4,22 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { mockNodeBuiltinModule } from "../plugin-sdk/test-helpers/node-builtin-mocks.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
+  captureSqliteReadOnlyWorkerLaunch,
+  createScopedSqliteReadOnlyWorker,
   resolveAggregateSqliteInspectionTimeoutMs,
   resolveSqliteInspectionBudget,
   runSqliteReadOnlyWorker,
   runSqliteReadOnlyWorkerSync,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
-import {
-  prepareSqliteReadOnlyLocation,
-  prepareSqliteReadOnlyLocationSync,
-} from "./sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import { acquireStateDatabaseHandleExclusion } from "./state-database-coordinator.js";
 
 const logs = vi.hoisted(() => ({ debug: vi.fn() }));
-const { getCompileCacheDir } = vi.hoisted(() => ({
-  getCompileCacheDir: vi.fn<() => string | undefined>(),
-}));
-// Enabling Node's cache is irreversible in this Vitest process. Only substitute
-// its active-directory observation; the real child still populates the cache.
-vi.mock("node:module", async (importOriginal) =>
-  mockNodeBuiltinModule(() => importOriginal<typeof import("node:module")>(), {
-    getCompileCacheDir,
-  }),
-);
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
   return {
@@ -66,9 +54,7 @@ beforeEach(() => {
   vi.mocked(spawn).mockClear();
   vi.mocked(spawnSync).mockClear();
   logs.debug.mockClear();
-  getCompileCacheDir.mockReset();
 });
-afterEach(() => vi.unstubAllEnvs());
 
 it("keeps execFile resettable while preserving promisified stdout and stderr", async () => {
   const { promisify } = await import("node:util");
@@ -95,79 +81,7 @@ function createDatabase(paddingBytes: number | null): string {
   return source;
 }
 
-describe.each(["sync", "async", "scoped"] as const)("SQLite child compile cache (%s)", (mode) => {
-  it.each([
-    { label: "active programmatic cache", active: true, cache: undefined, disable: undefined },
-    { label: "explicit cache", active: true, cache: "explicit", disable: undefined },
-    { label: "empty explicit cache", active: true, cache: "", disable: undefined },
-    { label: "disabled cache", active: true, cache: undefined, disable: "1" },
-    { label: "empty disable policy", active: true, cache: undefined, disable: "" },
-    { label: "unavailable cache", active: false, cache: undefined, disable: undefined },
-  ] as const)("preserves $label through the real worker", async ({ active, cache, disable }) => {
-    const root = tempDirs.make("openclaw-sqlite-child-cache-");
-    const activeDirectory = path.join(root, "active");
-    const explicitDirectory = path.join(root, "explicit");
-    fs.mkdirSync(activeDirectory);
-    fs.mkdirSync(explicitDirectory);
-    const inheritedCache = cache === "explicit" ? explicitDirectory : cache;
-    vi.stubEnv("NODE_COMPILE_CACHE", inheritedCache);
-    vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", disable);
-    const stagingRoot = path.join(root, "staging");
-    fs.mkdirSync(stagingRoot);
-    vi.stubEnv("XDG_CACHE_HOME", stagingRoot);
-    getCompileCacheDir.mockReturnValue(active ? activeDirectory : undefined);
-    const source = createDatabase(0);
-    const before = fs.readFileSync(source);
-
-    const prepared =
-      mode === "sync"
-        ? prepareSqliteReadOnlyLocationSync(source)
-        : mode === "scoped"
-          ? await withSqliteReadOnlyWorkerScope(() =>
-              prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true }),
-            )
-          : await prepareSqliteReadOnlyLocation(source);
-    try {
-      if (mode === "sync") {
-        expect(fs.readFileSync(prepared.location)).toEqual(before);
-      }
-      const { openNodeSqliteDatabase } = await import("./node-sqlite.js");
-      const snapshot = openNodeSqliteDatabase(prepared.location, {
-        readOnly: true,
-      });
-      try {
-        expect(snapshot.prepare("SELECT data FROM padding").all()).toEqual([
-          { data: new Uint8Array(0) },
-        ]);
-        expect(
-          snapshot.prepare("SELECT sql FROM sqlite_schema WHERE name = 'padding'").get(),
-        ).toEqual({ sql: "CREATE TABLE padding (data BLOB)" });
-        expect(snapshot.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
-        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
-          integrity_check: "ok",
-        });
-      } finally {
-        snapshot.close();
-      }
-    } finally {
-      expect(await prepared.cleanupAsync()).toBe(true);
-    }
-    expect(fs.existsSync(prepared.location)).toBe(false);
-    expect(fs.readFileSync(source)).toEqual(before);
-    expect(fs.readdirSync(path.join(root, "staging", "openclaw"))).toEqual([]);
-    expect(process.env.NODE_COMPILE_CACHE).toBe(inheritedCache);
-    expect(process.env.NODE_DISABLE_COMPILE_CACHE).toBe(disable);
-    const hasCacheFiles = (directory: string) =>
-      fs
-        .readdirSync(directory, { recursive: true, withFileTypes: true })
-        .some((entry) => entry.isFile());
-    expect(hasCacheFiles(activeDirectory)).toBe(
-      active && cache === undefined && disable === undefined,
-    );
-    expect(hasCacheFiles(explicitDirectory)).toBe(cache === "explicit");
-  });
-});
-async function readRawSnapshotVersion(source: string) {
+async function readSnapshotVersion(source: string) {
   const stagingRoot = tempDirs.make("openclaw-scoped-snapshot-");
   const location = await runSqliteReadOnlyWorker(source, { mode: "sync", stagingRoot });
   const snapshot = new (requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
@@ -180,9 +94,9 @@ async function readRawSnapshotVersion(source: string) {
 
 describe("scoped SQLite read-only children", () => {
   it.each(["callback", "throw"])(
-    "joins an IPC send %s failure before admitting another request",
+    "joins a staging IPC send %s failure before admitting another request",
     async (failureMode) => {
-      const source = createDatabase(0);
+      const stagingRoot = tempDirs.make("openclaw-staging-send-failure-");
       const actual =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const failure = new Error("fixture IPC channel closed");
@@ -200,11 +114,24 @@ describe("scoped SQLite read-only children", () => {
         });
         return child;
       });
-      await withSqliteReadOnlyWorkerScope(async () => {
-        await expect(readRawSnapshotVersion(source)).rejects.toBe(failure);
+      const failed = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
+      try {
+        await expect(failed.run(stagingRoot, { mode: "staging-create" })).rejects.toBe(failure);
         expect(vi.mocked(spawn).mock.results[0]?.value.signalCode).toBe("SIGKILL");
-        expect(await readRawSnapshotVersion(source)).toBe(0);
-      });
+      } finally {
+        await failed.close();
+      }
+      const replacement = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
+      try {
+        const directory = await replacement.run(stagingRoot, { mode: "staging-create" });
+        if (typeof directory !== "string") {
+          throw new Error("Expected a staging directory");
+        }
+        expect(fs.existsSync(directory)).toBe(true);
+        await replacement.run(directory, { mode: "staging-retire" });
+      } finally {
+        await replacement.close();
+      }
       expect(spawn).toHaveBeenCalledTimes(2);
     },
   );
@@ -219,7 +146,7 @@ describe("scoped SQLite read-only children", () => {
         for (const [index, mode] of (["sync", "async", "sync"] as const).entries()) {
           writer.exec(`PRAGMA user_version = ${index + 1}`);
           if (mode === "sync") {
-            expect(await readRawSnapshotVersion(source)).toBe(index + 1);
+            expect(await readSnapshotVersion(source)).toBe(index + 1);
           } else {
             const prepared = await prepareSqliteReadOnlyLocation(source);
             try {
@@ -267,9 +194,9 @@ describe("scoped SQLite read-only children", () => {
   it("keeps concurrent source inspections in separate processes", async () => {
     const source = createDatabase(0);
     await withSqliteReadOnlyWorkerScope(async () => {
-      expect(
-        await Promise.all([readRawSnapshotVersion(source), readRawSnapshotVersion(source)]),
-      ).toEqual([0, 0]);
+      expect(await Promise.all([readSnapshotVersion(source), readSnapshotVersion(source)])).toEqual(
+        [0, 0],
+      );
     });
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(execFile).toHaveBeenCalledTimes(1);
@@ -281,11 +208,11 @@ describe("scoped SQLite read-only children", () => {
   it("replaces the child when its launch environment changes", async () => {
     const source = createDatabase(0);
     await withSqliteReadOnlyWorkerScope(async () => {
-      await readRawSnapshotVersion(source);
+      await readSnapshotVersion(source);
       await withEnvAsync(
         { XDG_CACHE_HOME: tempDirs.make("openclaw-scoped-environment-") },
         async () => {
-          expect(await readRawSnapshotVersion(source)).toBe(0);
+          expect(await readSnapshotVersion(source)).toBe(0);
           expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBe(0);
         },
       );
@@ -296,17 +223,17 @@ describe("scoped SQLite read-only children", () => {
   it("releases admission between requests and reacquires it against the current exclusion", async () => {
     const source = createDatabase(0);
     await withSqliteReadOnlyWorkerScope(async () => {
-      await readRawSnapshotVersion(source);
+      await readSnapshotVersion(source);
       const exclusion = acquireStateDatabaseHandleExclusion({
         databasePath: source,
         busyTimeoutMs: 0,
       });
       try {
-        await expect(readRawSnapshotVersion(source)).rejects.toThrow("state-handles");
+        await expect(readSnapshotVersion(source)).rejects.toThrow("state-handles");
       } finally {
         exclusion.release();
       }
-      expect(await readRawSnapshotVersion(source)).toBe(0);
+      expect(await readSnapshotVersion(source)).toBe(0);
     });
     expect(spawn).toHaveBeenCalledTimes(2);
   });
@@ -402,23 +329,7 @@ it("includes WAL, SHM, and rollback-journal sidecars in inspection size", () => 
   expect(vi.mocked(spawnSync).mock.calls[0]?.[1]).toContain("sync");
 });
 
-it("selects bounded online fallback for opted-in synchronous snapshots", () => {
-  const source = createDatabase(0);
-  const stagingRoot = tempDirs.make("openclaw-snapshot-fallback-staging-");
-  vi.mocked(spawnSync).mockReturnValueOnce({
-    pid: 1,
-    output: [null, '{"ok":true,"location":"private.sqlite"}', ""],
-    stdout: '{"ok":true,"location":"private.sqlite"}',
-    stderr: "",
-    status: 0,
-    signal: null,
-  });
-
-  expect(runSqliteReadOnlyWorkerSync(source, stagingRoot, "sync-fallback")).toBe("private.sqlite");
-  expect(vi.mocked(spawnSync).mock.calls[0]?.[1]).toContain("sync-fallback");
-});
-
-it("uses online backup instead of raw WAL copying for synchronous fallback", () => {
+it("uses online backup instead of raw WAL copying for live inspection", async () => {
   const source = createDatabase(0);
   const writer = new (requireNodeSqlite().DatabaseSync)(source);
   const stagingRoot = tempDirs.make("openclaw-snapshot-fallback-live-");
@@ -426,7 +337,7 @@ it("uses online backup instead of raw WAL copying for synchronous fallback", () 
     writer.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE live(value TEXT); INSERT INTO live VALUES ('committed');",
     );
-    const location = runSqliteReadOnlyWorkerSync(source, stagingRoot, "sync-fallback");
+    const location = await runSqliteReadOnlyWorker(source, { mode: "async", stagingRoot });
     const snapshot = new (requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
     try {
       expect(snapshot.prepare("SELECT value FROM live").get()).toEqual({ value: "committed" });

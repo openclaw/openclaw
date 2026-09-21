@@ -5,7 +5,8 @@ import { strokeIcon } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
 import { scrollState } from "../../../components/scroll-state.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ChatGoalAction } from "../../../lib/chat/chat-types.ts";
+import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
+import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -14,6 +15,8 @@ import {
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
 import type { ChatComposerState } from "./chat-composer-types.ts";
+
+registerChatGoalsEnglish();
 
 const goalElapsedTimers = new Map<HTMLElement, ReturnType<typeof setInterval>>();
 const goalIcon = strokeIcon(svg` <path d="M12 13V2l8 4-8 4" />
@@ -218,4 +221,40 @@ export function clearGoalElapsedTimers(): void {
     clearInterval(timer);
   }
   goalElapsedTimers.clear();
+}
+
+export function renderChatGoalRecovery(
+  recovery: ChatGoalRecovery | undefined,
+  connected: boolean,
+): TemplateResult | typeof nothing {
+  if (!recovery) {
+    return nothing;
+  }
+  return html`
+    <div class="chat-composer-neighbor-card chat-composer-neighbor-card--warn" role="status">
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
+        >${icons.alertTriangle}</span
+      >
+      <div class="chat-composer-neighbor-card__copy">
+        <strong>${t(recovery.pending ? "chat.goals.checking" : "chat.goals.recoveryTitle")}</strong>
+        <span
+          >${t(
+            recovery.retired === "expired"
+              ? "chat.goals.recoveryExpired"
+              : recovery.retired === "invalid"
+                ? "chat.goals.recoveryInvalid"
+                : "chat.goals.recoveryHint",
+          )}</span
+        >
+      </div>
+      <button
+        class="btn btn--sm"
+        type="button"
+        ?disabled=${!connected || recovery.pending}
+        @click=${recovery.onCheck}
+      >
+        ${t(recovery.retired ? "chat.goals.refreshCurrent" : "chat.goals.checkOutcome")}
+      </button>
+    </div>
+  `;
 }

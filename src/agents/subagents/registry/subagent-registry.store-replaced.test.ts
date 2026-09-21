@@ -175,12 +175,12 @@ it.each([false, true])(
   },
 );
 
-it.each(["same", "replaced", "restore", "failed", "delivered"] as const)(
+it.each(["same", "replaced", "restore", "unknown", "failed", "delivered"] as const)(
   "keeps automatic child notification disposition through store publication: %s",
   async (change) => {
     const input = change === "failed" ? failedRecords("failed", { status: "error" }) : records();
-    input.subagent.requesterStorePath = "original-store";
-    input.subagent.controllerStorePath = "original-store";
+    input.subagent.requesterStorePath = change === "unknown" ? undefined : "original-store";
+    input.subagent.controllerStorePath = change === "unknown" ? undefined : "original-store";
     input.subagent.cleanupCompletedAt = undefined;
     input.subagent.delivery = {
       status: change === "delivered" ? "delivered" : "pending",
@@ -211,11 +211,15 @@ it.each(["same", "replaced", "restore", "failed", "delivered"] as const)(
       activateSubagentRegistry(() => context);
     } else {
       publishSystemEventStoreResolver(() =>
-        change === "same" ? "original-store" : "replacement-store",
+        change === "same" || change === "unknown" ? "original-store" : "replacement-store",
       );
     }
     publishSystemEventStoreResolver(() => "original-store");
     const persisted = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
+    if (change === "unknown") {
+      expect(persisted?.requesterStorePath).toBeUndefined();
+      expect(persisted?.controllerStorePath).toBeUndefined();
+    }
     expect(persisted?.completion?.resultText).toBe("canonical result");
     const task = getTaskById(input.task.taskId);
     expect({

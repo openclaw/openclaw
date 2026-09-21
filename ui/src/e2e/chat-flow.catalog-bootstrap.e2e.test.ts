@@ -137,9 +137,10 @@ suite.define(() => {
         await revealChatModelOption(currentRow);
         await expect.poll(() => currentRow.isVisible()).toBe(true);
         expect(await picker.textContent()).toContain("Pinned session account");
-        expect(await picker.locator("[data-chat-model-catalog-state]").textContent()).toContain(
-          "fixture",
+        expect(await picker.locator("[data-chat-model-refresh]").textContent()).toContain(
+          "Refreshing models for Fixture…",
         );
+        expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
         expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
         expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
         await gateway.resolveDeferred("models.list", { models: [older] });

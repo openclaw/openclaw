@@ -38,13 +38,10 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
         const trigger =
           surface === "sidebar"
-            ? page.getByRole("button", {
-                name: "Open session menu: Keyboard appearance",
-                exact: true,
-              })
+            ? page.locator(`[data-session-key="${key}"] .sidebar-recent-session__link`)
             : page.locator(".chat-header-session-menu__trigger");
         await trigger.focus();
-        await page.keyboard.press("Enter");
+        await page.keyboard.press(surface === "sidebar" ? "Shift+F10" : "Enter");
         if (surface === "compact") {
           await expect
             .poll(() =>

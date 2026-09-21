@@ -338,7 +338,9 @@ export function authorizeResolvedSessionMutation(params: {
 export function authorizeSessionAgentRun(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
-  target: SessionSharingTarget;
+  target: Pick<SessionSharingTarget, "agentId" | "canonicalKey"> & {
+    entry?: Pick<SessionEntry, "sandbox">;
+  };
 }): ErrorShape | null {
   const agentError = authorizeGatewaySessionCreation({
     cfg: params.cfg,
@@ -350,7 +352,7 @@ export function authorizeSessionAgentRun(params: {
   }
   if (
     params.cfg.gateway?.roles &&
-    params.target.entry.sandbox !== "required" &&
+    params.target.entry?.sandbox !== "required" &&
     resolveOperatorRolePolicy(params.client, params.cfg)?.sandbox === "required"
   ) {
     return errorShape(

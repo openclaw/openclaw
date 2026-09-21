@@ -51,6 +51,8 @@ only and must not be used for this declaration.
 ### Worker providers
 
 Worker providers must also declare their id in `contracts.workerProviders`.
+
+The optional synchronous `resolveDisplayId(profile)` hook supplies a nonsecret backend display ID for picker presentation. Return 1–64 lowercase ASCII letters, digits, or hyphens, starting with a letter (for example, `aws`). Derive it from locally validated settings; do not run commands, read credentials, or make network calls for branding. The existing profile catalog caches this cosmetic fact with its provider/settings snapshot. Missing, invalid, or throwing metadata is omitted without hiding the profile or its machine choices. `environments.list` projects it as optional `providerDisplayId`, never settings. The routing `providerId`, profile ID, permissions, and allocation behavior remain unchanged. Crabbox uses its validated backend provider, so a profile named `production` can display AWS without guessing from its name.
 Providers may implement `maintain({ profiles, signal, assertCurrent })` for bounded cleanup that must continue with no active leases. The Gateway invokes it for enabled, configured providers from its existing periodic worker sweep, separately from allocation and reconciliation waits. `profiles` contains cloned settings for the provider's current configured profiles. Call `assertCurrent()` immediately before external effects and after awaited work before durable mutations; authority ends when the invocation settles, its configuration or registration changes, or the Gateway stops. Honor `signal` and settle only after owned commands stop. A provider's plugin service must also cancel and drain maintenance during generation replacement. The hook must not allocate running capacity or treat maintenance as user demand; retention and cleanup policy remain provider-owned.
 
 Core persists durable intent before `provision(profile, operationId, options?)`. Providers validate settings and any optional `options.machineClass`, `options.os`, and `options.executionMode` before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease for the same operation id and selected execution mode; a retry cannot silently change modes. If provider-owned setup fails after allocation and cleanup is indeterminate, throw `WorkerProviderError.cleanupIndeterminate(leaseId, provisionError, cleanupError)` so core persists the known lease and reconciles teardown instead of replaying provision. If the provider confirms cleanup completed, throw `WorkerProviderError.cleanupComplete(leaseId, provisionError)`. Core finishes local teardown, including node enrollment retirement, and reports the original error as `provider_failure`. The provisioning intent becomes terminal. Report confirmed cleanup only after the operation’s allocation release or authoritative absence is proven and its lease-cleanup commands have settled. Separately retained checkpoint, image-retirement, and capture-recovery obligations remain provider-owned; this signal does not clear them. Ordinary errors preserve uncertain allocations for replay with the same operation ID. Providers may expose process-stable picker metadata with asynchronous `listMachineOptions(profile)`; omit the hook when the profile has no meaningful machine choice. Machine options contain `id`, `label`, optional `os`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. An option without `os` applies to every advertised operating system. The optional asynchronous `listOperatingSystems(profile)` hook returns provider-owned `{ id, label, default?, disabledReason? }` choices. An optional `disabledReason` keeps an unavailable target visible but unselectable and supplies a repair hint (1–256 characters, without surrounding whitespace). Providers still validate target availability before allocation; picker metadata does not authorize provisioning. Plugin authors can derive the item type from `Awaited<ReturnType<NonNullable<WorkerProvider["listOperatingSystems"]>>>[number]` or declare a local structural type; there is no public `WorkerOperatingSystem` export. Core treats OS ids as opaque strings; plugins own their meaning and validation. `environments.list` exposes up to 64 machine options and up to eight operating systems per profile, omitting the operating-system list when there is only one choice. Session-placement providers declare one or both current `supportedExecutionModes` values in deterministic canonical order: `["worker-turn"]`, `["remote-exec"]`, or `["worker-turn", "remote-exec"]`. Empty lists, duplicate values, unknown modes, and noncanonical order are rejected. `worker-turn` requires a node lease; `remote-exec` accepts either a node lease or an existing SSH lease. Omission advertises no placement modes while preserving direct environment lifecycle calls. Direct environment creation without a session supplies no execution mode, so providers retain their intentional default setup; the bundled Crabbox provider defaults to `worker-turn`. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound. `resolveDestroyTimeoutMs(profile)` declares the equivalent budget for teardown, including snapshot capture or other provider-owned work before confirmed release. Core uses that budget for both requested teardown and bootstrap-failure cleanup; an explicit service timeout override takes precedence. Budgets must be positive safe integers within the platform timer limit.
@@ -127,7 +129,9 @@ IDs are rejected. Registration and optional `isReady()` must be local, synchrono
 and network-free. Import types from `openclaw/plugin-sdk/decisions`.
 
 Consumers call `api.runtime.decisions.evaluate(batch, { agentId?, purpose, rubricVersion,
-timeoutMs, signal })`. State and rubric entries are finite JSON. Choices preserve
+timeoutMs, signal })`. State and rubric entries are finite JSON. Use plain objects
+and arrays; custom prototypes, serialization hooks, and getters are rejected on
+both request and response boundaries. Choices preserve
 all offered labels and probabilities; the chosen label is the provider's decision
 and need not equal the largest rounded probability. Consumers choose whether to
 use that label or an explicit distribution policy. Ordered scores are fractional
@@ -151,9 +155,10 @@ sent to the selected provider may incur its normal usage charges. Plugin disable
 wins; installing a tool or credential alone does not select a provider. Vendor adapters
 own transport and model-specific translation; no vendor is a core dependency.
 
-The [ONNX plugin](/plugins/onnx) supplies local classifiers; the bundled
-[TypeSafe AI plugin](/plugins/typesafe) supplies a Jev adapter. Both require
-explicit setup and role selection.
+The [ONNX plugin](/plugins/onnx) supplies local classifiers; the
+[TypeSafe AI plugin](/plugins/typesafe) supplies hosted Jev and local System One
+adapters, including Kev. Both plugins require
+separate installation, explicit setup, and role selection.
 
 ### Calling from a third-party plugin
 
@@ -213,8 +218,8 @@ credential-refresh lifecycle; each plugin does not create its own provider clien
 No credential is returned to the consumer. Provider setup and refresh use the
 same prepared-secret path whether the caller is built-in or third-party.
 
-The host admits at most four requests, with no queue and a five-second maximum.
-Consumers choose their own bounded deadlines and fallback policy.
+The host admits at most four requests, with no queue and a 30-second maximum.
+Consumers can request shorter deadlines and choose their own fallback policy.
 Three unhealthy responses open a ten-second circuit; recovery admits one trial.
 Retry-After is bounded to one minute. Auth errors latch until the prepared-secret
 or configuration generation changes. There are no host retries or health probes.

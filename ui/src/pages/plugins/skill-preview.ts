@@ -119,19 +119,13 @@ export function renderPluginSkillPreview(controller: PluginPreviewController) {
       ));
   return html`<openclaw-file-preview-modal
     .label=${state.request.skillName}
-    .listLabel=${t("pluginsPage.detailTabs.skills")}
     .files=${files}
     .directories=${state.result?.directories ?? []}
     .activePath=${state.activePath}
-    .showSearch=${false}
-    .showCopy=${false}
-    .folderTree=${true}
-    .renderMarkdown=${true}
+    layout="document"
     .loading=${state.loading}
     .error=${state.error ?? ""}
     .notice=${incomplete ? t("filePreview.bundle.incomplete") : ""}
-    .emptyTitle=${state.loading ? t("common.loading") : t("filePreview.emptyTitle")}
-    .emptySubtitle=${state.loading ? "" : t("filePreview.emptySubtitle")}
     @file-preview-select=${(event: CustomEvent<string>) => controller.select(event.detail)}
     @file-preview-retry=${() => controller.retry()}
     @file-preview-close=${() => controller.close()}
@@ -143,6 +137,10 @@ export function renderPluginSkillsSection(
   onOpen: (name: string) => void,
 ) {
   return html`<div class="plugin-skills-section">
-    ${renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), [...skills], icons.book, onOpen)}
+    ${renderPluginCapabilitySection(
+      t("pluginsPage.detailTabs.skills"),
+      skills.map((skill) => ({ ...skill, onOpen: () => onOpen(skill.name) })),
+      icons.bookOpenText,
+    )}
   </div>`;
 }

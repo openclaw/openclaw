@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
@@ -90,7 +90,8 @@ vi.mock("./update-command-git.js", async (importOriginal) => ({
   updateGitInstall: mocks.runGitUpdate,
 }));
 
-vi.mock("./update-command-handoff.js", () => ({
+vi.mock("./update-command-handoff.js", async (original) => ({
+  ...(await original<typeof import("./update-command-handoff.js")>()),
   formatUpdateAncestryBlockMessage: (message: string) => message,
   handoffUpdateFromGateway: vi.fn(),
 }));

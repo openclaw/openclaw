@@ -39,25 +39,27 @@ impl std::error::Error for CliError {}
 
 impl OpenClawCli {
     pub fn discover() -> Result<Self, CliError> {
+        let cli = Self::locate()?;
+        match cli.verify() {
+            Ok(()) => Ok(cli),
+            Err(_) if cli.executable == PathBuf::from("openclaw") => Err(CliError::Missing),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Resolve the executable for an owner that supplies cancellable process supervision.
+    pub(crate) fn locate() -> Result<Self, CliError> {
         let home = openclaw_home()?;
         if let Some(override_path) = env::var_os("OPENCLAW_DESKTOP_CLI") {
-            let cli = Self::new(PathBuf::from(override_path), home);
-            cli.verify()?;
-            return Ok(cli);
+            return Ok(Self::new(PathBuf::from(override_path), home));
         }
 
         let managed = home.join("bin/openclaw");
         if managed.is_file() {
-            let cli = Self::new(managed, home);
-            cli.verify()?;
-            return Ok(cli);
+            return Ok(Self::new(managed, home));
         }
 
-        let cli = Self::new(PathBuf::from("openclaw"), home);
-        match cli.verify() {
-            Ok(()) => Ok(cli),
-            Err(_) => Err(CliError::Missing),
-        }
+        Ok(Self::new(PathBuf::from("openclaw"), home))
     }
 
     fn new(executable: PathBuf, openclaw_home: PathBuf) -> Self {

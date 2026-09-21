@@ -135,7 +135,13 @@ afterEach(() => {
 });
 
 async function fixture(
-  edit?: "Nice" | "ExecStartPre" | "foreign-unit" | "foreign-root" | "old-installation",
+  edit?:
+    | "Nice"
+    | "ExecStartPre"
+    | "foreign-unit"
+    | "foreign-root"
+    | "old-installation"
+    | "native-policy",
   layout: "direct" | "user-prefix shim" = "direct",
 ) {
   const home = await fs.realpath(dirs.make("candidate-service-repair-"));
@@ -237,7 +243,16 @@ async function fixture(
       ? path.join(home, "foreign-unit", "gateway.service")
       : resolveSystemdUnitPath(process.env);
   await fs.mkdir(path.dirname(native.source), { recursive: true, mode: 0o700 });
+  if (edit === "native-policy") {
+    plan.environment.OPENCLAW_SERVICE_VERSION = "2026.7.1-2";
+  }
   let original = buildSystemdUnit(plan).replace("KillMode=mixed\n", "");
+  if (edit === "native-policy") {
+    original = original
+      .replace("TimeoutStartSec=30", "TimeoutStartSec=45")
+      .replace("TimeoutStopSec=330", "TimeoutStopSec=600")
+      .replace("StartLimitIntervalSec=300", "StartLimitIntervalSec=60");
+  }
   if (edit === "Nice" || edit === "ExecStartPre") {
     original = original.replace(
       "[Service]",
@@ -400,7 +415,11 @@ it.skipIf(process.platform === "win32")(
     expect(response().error).toContain("unknown or foreign installation");
     expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
     expect(await fs.readdir(path.dirname(f.source))).toEqual(before);
-    expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
+    expect(
+      native.systemctl.mock.calls.some(
+        ([, args]) => args[0] === "daemon-reload" || args[0] === "restart",
+      ),
+    ).toBe(false);
   },
 );
 
@@ -494,6 +513,46 @@ it.skipIf(process.platform === "win32")(
         detail: expect.stringContaining("previous definition was restored"),
       }),
     );
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "preserves custom timeouts while recording a successful native-policy repair",
+  async () => {
+    const f = await fixture("native-policy");
+    expect(f.original).toContain("StartLimitIntervalSec=60");
+    await runDaemonInstall({ force: true, json: true });
+    const result = response();
+    expect(result.ok, result.error).toBe(true);
+    expect(result.error).toBeUndefined();
+    const changed = await fs.readFile(f.source, "utf8");
+    expect(changed).toMatch(/^TimeoutStartSec=45$/mu);
+    expect(changed).toMatch(/^TimeoutStopSec=600$/mu);
+    expect(changed).toMatch(/^StartLimitIntervalSec=300$/mu);
+    expect(changed).toMatch(/^KillMode=mixed$/mu);
+    expect(await expectDefinitionBackups(f)).toEqual(result.definitionBackup);
+    const steps = getUpdateRun(f.runId)?.steps;
+    for (const key of ["Service.TimeoutStartSec", "Service.TimeoutStopSec"]) {
+      const warning = result.warnings?.find(
+        (message) => message.includes(key) && message.includes("not changed"),
+      );
+      expect(warning).toEqual(expect.any(String));
+      expect(steps).toContainEqual(
+        expect.objectContaining({
+          step: expect.stringContaining("warning:managed-service-reconciliation"),
+          detail: warning,
+        }),
+      );
+    }
+    expect(steps).toContainEqual(
+      expect.objectContaining({
+        step: expect.stringContaining("warning:managed-service-reconciliation"),
+        detail: expect.stringMatching(
+          /Reconciled Gateway service definition:.*Unit\.StartLimitIntervalSec/u,
+        ),
+      }),
+    );
+    expect(native.systemctl.mock.calls.filter(([, args]) => args[0] === "restart")).toHaveLength(1);
   },
 );
 

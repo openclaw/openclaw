@@ -6,7 +6,11 @@ import {
   assertOpenClawStateDatabaseOwner,
   resolveDatabasePath,
 } from "../state/openclaw-state-db-maintenance.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  isArtifactPreservingStateRead,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import {
   registerOpenClawStateDatabaseLifecycleListener,
   type OpenClawStateDatabaseOptions,
@@ -36,6 +40,10 @@ type ClawInstallSchemaVersionSnapshot =
       ownershipUnknown: boolean;
     }
   | { kind: "uninitialized" };
+
+type ClawInstallSchemaVersionReadOptions = OpenClawStateDatabaseOptions & {
+  artifactPreservingReadOnly?: boolean;
+};
 
 // Refresh on every runtime config snapshot because another process may mutate Claw provenance.
 const snapshotsByPath = new Map<string, ClawInstallSchemaVersionSnapshot>();
@@ -217,7 +225,7 @@ export function readCachedClawInstallSchemaVersions(
 }
 
 export function initializeCachedClawInstallSchemaVersions(
-  options: OpenClawStateDatabaseOptions = {},
+  options: ClawInstallSchemaVersionReadOptions = {},
 ): void {
   if (readHandedOffFacts(options)) {
     notifySnapshotListeners();
@@ -226,13 +234,14 @@ export function initializeCachedClawInstallSchemaVersions(
   const path = resolveSnapshotPath(options);
   const previous = snapshotsByPath.get(path);
   try {
-    const snapshot = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-      ({ db, path: pathname }) => {
-        assertOpenClawStateDatabaseOwner(db, { pathname });
-        return readSchemaVersions(db);
-      },
-      options,
-    );
+    const read =
+      options.artifactPreservingReadOnly === false
+        ? withExistingOpenClawStateDatabaseReadOnly
+        : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
+    const snapshot = read(({ db, path: pathname }) => {
+      assertOpenClawStateDatabaseOwner(db, { pathname });
+      return readSchemaVersions(db);
+    }, options);
     snapshotsByPath.set(path, resolveSchemaVersionSnapshot(snapshot, previous));
   } catch (error) {
     snapshotsByPath.set(path, {
@@ -264,7 +273,7 @@ function resolveSchemaVersionSnapshot(
 }
 
 export async function prepareClawInstallSchemaVersions(
-  options: OpenClawStateDatabaseOptions = {},
+  options: ClawInstallSchemaVersionReadOptions = {},
 ): Promise<{ path: string; publish: () => void }> {
   const path = resolveSnapshotPath(options);
   const previous = snapshotsByPath.get(path);
@@ -278,7 +287,10 @@ export async function prepareClawInstallSchemaVersions(
       (scope) =>
         scope.execute({
           type: "claws.install-schema-versions",
-          input: undefined,
+          input: {
+            artifactPreservingReadOnly:
+              options.artifactPreservingReadOnly !== false || isArtifactPreservingStateRead(),
+          },
         }),
       { existingOnly: true },
     );

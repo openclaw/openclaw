@@ -816,21 +816,32 @@ syncBuiltinESMExports();
     },
   );
 
-  it("keeps foreground shutdown attached to the runtime process", async () => {
-    const f = await fixture(`
+  it.each(["signal", "parent-stdin"])(
+    "keeps %s shutdown attached to the runtime process",
+    async (mode) => {
+      const f = await fixture(`
 const keepAlive = setInterval(() => {}, 1000);
 process.once('SIGTERM', () => { report('stopped'); clearInterval(keepAlive); });
 await ready();
 report({ pid: process.pid });
 `);
-    const launched = run(f.base, f.stateDir);
-    await expect.poll(() => launched.output(), { timeout: 10_000 }).toContain("pid");
-    const { pid } = JSON.parse(launched.output().trim());
-    launched.child.kill("SIGTERM");
-    const result = await launched.done;
-    expect(result.stdout).toContain('"stopped"');
-    expect(() => process.kill(pid, 0)).toThrow();
-  });
+      const launched = run(f.base, f.stateDir, [
+        "node",
+        "run",
+        ...(mode === "parent-stdin" ? ["--parent-stdin"] : []),
+      ]);
+      await expect.poll(() => launched.output(), { timeout: 10_000 }).toContain("pid");
+      const { pid } = JSON.parse(launched.output().trim());
+      if (mode === "parent-stdin") {
+        launched.child.stdin.end();
+      } else {
+        launched.child.kill("SIGTERM");
+      }
+      const result = await launched.done;
+      expect(result.stdout).toContain('"stopped"');
+      expect(() => process.kill(pid, 0)).toThrow();
+    },
+  );
 
   it("serializes competing parents until the candidate reconnects", async () => {
     const f = await fixture(requestUpdate);

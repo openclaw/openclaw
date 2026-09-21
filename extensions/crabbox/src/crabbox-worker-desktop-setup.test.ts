@@ -160,8 +160,9 @@ printf 'kill:%s\\n' "$1" >>"$FIXTURE_ROOT/events"
 : >"$FIXTURE_ROOT/renderers"`,
     nohup: `echo launch >>"$FIXTURE_ROOT/events"
 exec "$@"`,
+    // A disabled renderer cannot become ready; only live launches need time to settle.
     sleep: `echo settle >>"$FIXTURE_ROOT/events"
-/bin/sleep "$@"`,
+if [ "$FIXTURE_LAUNCH" = true ]; then /bin/sleep "$@"; fi`,
     "xfconf-query": `if [ "$3" = "-l" ]; then
   echo /backdrop/screen0/monitor0/workspace0/last-image
 else

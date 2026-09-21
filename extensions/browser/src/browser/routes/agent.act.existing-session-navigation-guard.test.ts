@@ -58,7 +58,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
     ) =>
       await task({
         evaluate: async (fn) =>
-          fn.includes("globalThis.location.href")
+          fn.includes("return boundDocument")
             ? "https://example.com"
             : { kind: "result", ready: true },
       }),
@@ -194,7 +194,7 @@ describe("existing-session interaction navigation guard", () => {
       ) =>
         await task({
           evaluate: async (fn) =>
-            fn.includes("globalThis.location.href")
+            fn.includes("return boundDocument")
               ? "https://example.com"
               : { kind: "result", ready: true },
         }),
@@ -275,7 +275,7 @@ describe("existing-session interaction navigation guard", () => {
     chromeMcpMocks.withChromeMcpDocument.mockImplementation(async (_params, task) =>
       task({
         evaluate: async (fn) =>
-          fn.includes("globalThis.location.href")
+          fn.includes("return boundDocument")
             ? "https://example.com"
             : { kind: "result", ready: Date.now() >= readyAt },
       }),
@@ -693,7 +693,7 @@ describe("existing-session interaction navigation guard", () => {
       let urlReads = 0;
       return await task({
         evaluate: async (fn) => {
-          if (!fn.includes("globalThis.location.href")) {
+          if (!fn.includes("return boundDocument")) {
             return { kind: "result", ready: true };
           }
           urlReads += 1;

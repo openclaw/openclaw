@@ -11,8 +11,10 @@ read_when:
 Code mode is an experimental, opt-in OpenClaw agent-runtime feature. When
 enabled, the model no longer sees every enabled tool schema. Instead, it sees
 `exec`, `wait`, and any direct-only tool whose structured result cannot cross
-the JSON-only guest bridge. The model writes a small JavaScript or TypeScript
+the JSON-only guest bridge. The model writes a small JavaScript
 program that searches, describes, and calls the hidden tool catalog.
+TypeScript-style signatures describe the available tools; executable cells use
+plain JavaScript without type annotations.
 
 <Note>
 OpenClaw Code Mode is off by default. To try it, open **Settings → Agents &
@@ -31,20 +33,20 @@ separate implementations:
   in Codex's in-process V8 Code Mode runtime.
 - OpenClaw Code Mode runs in the generic OpenClaw agent runtime and is
   enabled through global, agent, or model activation settings. Its `exec`
-  tool takes a JSON `{ code, language }` payload, executed in a QuickJS-WASI
+  tool takes a JSON `{ code }` payload, executed in a QuickJS-WASI
   worker.
 
 Both are JavaScript execution surfaces, not shell-command surfaces. Treat them
 as independent, differently-implemented features that happen to expose
 identically-named `exec`/`wait` tools.
 
-In OpenClaw Code Mode, `command` is a JavaScript or TypeScript alias for
+In OpenClaw Code Mode, `command` is a JavaScript alias for
 `code`, not a shell command. For shell or file operations, call the appropriate
 async tool global from guest JavaScript. Recognizable shell
 commands are rejected before guest execution with actionable
 `invalid_input` guidance.
 
-Source validation, TypeScript compilation, and guest execution run in a bounded
+Source validation and guest execution run in a bounded
 pool of worker threads that scales with available CPU cores. Workers stay warm
 between calls. Each cell gets an isolated QuickJS VM. Fast host exchanges retain
 that VM within the same call rather than snapshotting every await. Tool
@@ -65,7 +67,7 @@ job. Open the page that matches your task.
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
   such as `computer` or the native-vision `view_image` loader whose image result
   cannot survive the guest bridge.
-- `exec` evaluates model-generated JavaScript or TypeScript in an isolated
+- `exec` evaluates model-generated JavaScript in an isolated
   QuickJS-WASI worker thread.
 - Every catalog-eligible enabled non-MCP tool (OpenClaw core, plugin, client) is
   hidden as a standalone model tool and exposed inside the guest program as an

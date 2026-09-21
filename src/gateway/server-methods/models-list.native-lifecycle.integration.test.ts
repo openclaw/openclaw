@@ -1,15 +1,31 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
-import { expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 
-it.each([false, true])(
+const coordinatorRoots = createSuiteTempRootTracker({ prefix: "native-catalog-coordinator-" });
+beforeAll(() => coordinatorRoots.setup());
+beforeEach(async () => {
+  // Auth refresh writes config; its handoff lease must not use the operator's coordinator.
+  vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+    await coordinatorRoots.make("coordinator"),
+  );
+});
+afterAll(async () => {
+  vi.mocked(tmpDirOwner.resolvePreferredOpenClawTmpDir).mockRestore();
+  await coordinatorRoots.cleanup();
+});
+
+it.for([false, true])(
   "models.list learns native models after cold Gateway startup (provider credentials: %s)",
-  async (withProviderCredentials) => {
+  { timeout: 120_000 },
+  async (withProviderCredentials, { signal }) => {
     const state = await createOpenClawTestState({
       label: "native-catalog-lifecycle",
       layout: "state-only",
@@ -310,11 +326,20 @@ it.each([false, true])(
         );
         if (!withProviderCredentials) {
           expect(requests).toEqual(["/native/models"]);
-          const unavailable = await client.request<ModelsListResult>("models.list", {
-            agentId: "main",
-            view: "all",
-            refresh: true,
-          });
+          // Gateway refresh can return a pending snapshot before discovery publishes.
+          const refresh = () =>
+            waitForCatalogPublication({
+              signal,
+              start: () =>
+                client.request<ModelsListResult>("models.list", {
+                  agentId: "main",
+                  view: "all",
+                  refresh: true,
+                }),
+              read: list,
+              ready: (result) => !result.pendingProviders?.includes(provider),
+            });
+          const unavailable = await refresh();
           expect(unavailable.refreshFailed).toBe(true);
           expect
             .soft(unavailable.models)
@@ -324,7 +349,7 @@ it.each([false, true])(
           );
           console.log("NATIVE_FIRST_PROVIDER_FAILURE", JSON.stringify({ requests, unavailable }));
           failedProviderCatalog = false;
-          await client.request("models.list", { agentId: "main", view: "all", refresh: true });
+          await refresh();
           expect((await list()).models).toContainEqual(
             expect.objectContaining({ provider, id: "provider-account" }),
           );
@@ -657,7 +682,6 @@ it.each([false, true])(
       await state.cleanup();
     }
   },
-  120_000,
 );
 
 it("models.list full refresh discovers an enabled provider without configured credentials", async ({

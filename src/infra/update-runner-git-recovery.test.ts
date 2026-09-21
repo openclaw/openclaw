@@ -63,7 +63,12 @@ it.each([
         : (
             await updateGitCheckout({
               gitRoot: root,
-              opts: { channel: "extended-stable" },
+              opts: {
+                channel: "extended-stable",
+                inspectGitTarget: async () => {},
+                validateCandidate: async () => {},
+                runGitDoctor: async () => null,
+              },
               runCommand: mutation,
               defaultCommandEnv: undefined,
               timeoutMs: budgetMs,

@@ -614,6 +614,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const cards = buildModelProviderCards({
       ...data,
       models: catalog?.models ?? null,
+      providerOutcomes: catalog ? (catalog.providerOutcomes ?? []) : data.providerOutcomes,
+      pendingProviders: catalog?.pendingProviders,
       providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
       configProviderIds: config.providerIds,
       configApiKeyProviderIds: config.apiKeyProviderIds,
@@ -664,7 +666,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       fastModeOverridden: defaults.fastModeOverridden,
       catalogDiscovering:
         this.catalogDiscovery.discovering || Boolean(catalog?.pendingProviders?.length),
-      catalogDiscoveryError: this.catalogDiscovery.error ?? data.catalogError,
+      catalogDiscoveryError: this.catalogDiscovery.discovering
+        ? null
+        : (this.catalogDiscovery.error ?? data.catalogError),
       configBusy: modelProviderConfigBusy(this.context),
       quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
@@ -688,7 +692,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       addProviderOpen: this.addProviderOpen,
       addProviderId: this.addProviderId,
       addProviderKey: this.addProviderKey,
-      installedAgents: this.installedAgents.render(),
+      installedAgents: this.installedAgents.render(cards, () => this.catalogDiscovery.retry()),
       onRefresh: () =>
         void (rosterError
           ? this.context.agents.refreshList()

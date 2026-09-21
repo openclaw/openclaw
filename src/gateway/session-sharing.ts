@@ -27,6 +27,7 @@ import type {
 } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import {
+  isAgentRunStartMethod,
   isRequiredSessionTargetMethod,
   isSessionProfileDependentMethod,
 } from "./session-method-policy.js";
@@ -102,21 +103,6 @@ function expectedSessionMutationTargetError(
     : null;
 }
 
-const AGENT_RUN_START_METHODS = new Set([
-  "agent",
-  "chat.send",
-  "message.action",
-  "send",
-  "sessions.dispatch",
-  "sessions.send",
-  "sessions.steer",
-  "talk.client.create",
-  "talk.client.toolCall",
-  "talk.session.create",
-  "tools.invoke",
-  "wake",
-]);
-
 // Documented contract (docs/gateway/protocol.md): these methods authorize by session
 // visibility inside their handler, not by mutation participation. The pipeline still
 // applies incognito checks and the operator role cap: a view/suggest-capped caller
@@ -153,16 +139,11 @@ export function resolveSessionMutationAuthorization(params: {
   expectedTarget?: ExpectedSessionMutationTarget;
   sessionRowRead?: SessionRowReadView;
 }): { authorization?: SessionMutationAuthorization; error: ErrorShape | null } {
-  const authorizesAgentRun =
-    AGENT_RUN_START_METHODS.has(params.method) ||
-    (params.method === "sessions.goal.update" &&
-      typeof params.requestParams === "object" &&
-      params.requestParams !== null &&
-      "action" in params.requestParams &&
-      params.requestParams.action === "resume");
+  const authorizesAgentRun = isAgentRunStartMethod(params.method, params.requestParams);
   // Progress belongs to the current conversation, not merely its stable session ID.
   // Capture this boundary for admins too so delayed writes cannot revive a reset card.
-  const bindsProgressLifecycle = params.method === "progressCard.put";
+  const bindsProgressLifecycle =
+    params.method === "progressCard.put" || params.method === "progressCard.refresh";
   const adminBypass = isGatewayAdmin(params.client) && !authorizesAgentRun;
   if (adminBypass && !bindsProgressLifecycle && !params.expectedTarget) {
     return { error: null };

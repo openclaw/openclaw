@@ -6,7 +6,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 import { refreshChromeMcpCleanupProcess } from "./chrome-mcp-process.js";
 import { getChromeMcpPid, getChromeMcpSessionOwner } from "./chrome-mcp-session.js";
@@ -38,11 +38,18 @@ import {
   withChromeMcpDocument,
 } from "./chrome-mcp.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
+import {
+  createFakeSession,
+  createPageSession,
+  FAKE_REF,
+  FAKE_TARGET_1,
+  FAKE_TARGET_2,
+  installChromeMcpSessionTestHooks,
+  snapshotWithControls,
+  type SessionPage,
+  type ToolCall,
+} from "./chrome-mcp.test-support.js";
 
-type ToolCall = {
-  name: string;
-  arguments?: Record<string, unknown>;
-};
 type ToolCallMock = {
   mock: {
     calls: Array<[ToolCall, unknown?, { signal?: AbortSignal; timeout?: number }?]>;
@@ -76,164 +83,13 @@ type ChromeMcpSessionFactory = Exclude<
   null
 >;
 type ChromeMcpSession = Awaited<ReturnType<ChromeMcpSessionFactory>>;
-const FAKE_TARGET_1 = "chrome-mcp:000000000001:1";
-const FAKE_TARGET_2 = "chrome-mcp:000000000001:2";
-const FAKE_TARGET_3 = "chrome-mcp:000000000001:3";
-const FAKE_REF = "mcp-ref:000000000001:1";
 
 function processSnapshot(pid: number, ppid: number, identity = `start-${pid}`) {
   return { pid, ppid, identity };
 }
 
-function createFakeSession(screenshotError?: string): ChromeMcpSession {
-  let currentUrl =
-    "https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
-  let createdPageOpen = false;
-  const readUrlArg = (value: unknown, fallback: string) =>
-    typeof value === "string" && value.trim() ? value : fallback;
-  const callTool = vi.fn(async ({ name, arguments: args }: ToolCall) => {
-    if (name === "list_pages") {
-      const pageLines = [
-        "## Pages",
-        `1: ${currentUrl} [selected]`,
-        "2: https://github.com/openclaw/openclaw/pull/45318",
-      ];
-      if (createdPageOpen) {
-        pageLines.push(`3: ${currentUrl}`);
-      }
-      return {
-        content: [
-          {
-            type: "text",
-            text: pageLines.join("\n"),
-          },
-        ],
-      };
-    }
-    if (name === "new_page") {
-      currentUrl = readUrlArg(args?.url, "about:blank");
-      createdPageOpen = true;
-      return {
-        content: [
-          {
-            type: "text",
-            text: [
-              "## Pages",
-              "1: https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
-              "2: https://github.com/openclaw/openclaw/pull/45318",
-              `3: ${currentUrl} [selected]`,
-            ].join("\n"),
-          },
-        ],
-      };
-    }
-    if (name === "navigate_page") {
-      currentUrl = readUrlArg(args?.url, currentUrl);
-      return { content: [{ type: "text", text: "navigated" }] };
-    }
-    if (name === "evaluate_script") {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "```json\n123\n```",
-          },
-        ],
-      };
-    }
-    if (name === "take_screenshot") {
-      const filePath = typeof args?.filePath === "string" ? args.filePath : undefined;
-      const format = args?.format === "jpeg" ? "jpeg" : "png";
-      if (!filePath) {
-        throw new Error("missing filePath");
-      }
-      await fs.writeFile(`${filePath}.${format}`, Buffer.from(`screenshot:${format}`));
-      if (screenshotError) {
-        throw new Error(screenshotError);
-      }
-      return { content: [{ type: "text", text: `Saved screenshot to ${filePath}.${format}.` }] };
-    }
-    throw new Error(`unexpected tool ${name}`);
-  });
-
-  const client = {
-    callTool,
-    listTools: vi.fn().mockResolvedValue({ tools: [{ name: "list_pages" }] }),
-    close: vi.fn().mockResolvedValue(undefined),
-    connect: vi.fn().mockResolvedValue(undefined),
-  };
-  return {
-    client,
-    transport: {
-      pid: 123,
-    },
-    closeTransport: () => client.close(),
-    ready: Promise.resolve(),
-    // Legacy cases exercise unrelated call plumbing. Seed one real-shaped
-    // process-scoped routing generation so they stay terse.
-    routing: {
-      sessionNonce: "000000000001",
-      withOperationLock: async <T>(operation: () => Promise<T>) => await operation(),
-      targetIdByPageId: new Map([
-        [1, FAKE_TARGET_1],
-        [2, FAKE_TARGET_2],
-        [3, FAKE_TARGET_3],
-      ]),
-      nextTargetHandleId: 4,
-      snapshotRefById: new Map([[FAKE_REF, { targetId: FAKE_TARGET_1, uid: "btn-1" }]]),
-      nextSnapshotRefId: 2,
-    },
-  } as unknown as ChromeMcpSession;
-}
-
-type SessionPage = { id: number; url: string; selected?: boolean };
-
-function createPageSession(params: {
-  pages: SessionPage[];
-  pid: number;
-  onTool?: (call: ToolCall) => unknown;
-}): ChromeMcpSession {
-  const callTool = vi.fn(async (call: ToolCall) => {
-    const custom = await params.onTool?.(call);
-    if (custom !== undefined) {
-      return custom;
-    }
-    if (call.name === "list_pages") {
-      return {
-        structuredContent: {
-          pages: params.pages.map(({ id, url, selected }) => ({ id, url, selected })),
-        },
-      };
-    }
-    if (call.name === "evaluate_script") {
-      return { content: [{ type: "text", text: "```json\nnull\n```" }] };
-    }
-    throw new Error(`unexpected tool ${call.name}`);
-  });
-  const client = {
-    callTool,
-    listTools: vi.fn(),
-    close: vi.fn().mockResolvedValue(undefined),
-    connect: vi.fn(),
-  };
-  return {
-    client,
-    transport: { pid: params.pid },
-    closeTransport: () => client.close(),
-    ready: Promise.resolve(),
-  } as unknown as ChromeMcpSession;
-}
-
 describe("chrome MCP page parsing", () => {
-  beforeEach(async () => {
-    await resetChromeMcpSessionsForTest();
-    vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-  });
+  installChromeMcpSessionTestHooks();
 
   const credentialEndpointUrl = new URL("https://browser.example/?token=fixture-token");
   credentialEndpointUrl.username = "fixture-user";
@@ -624,7 +480,7 @@ describe("chrome MCP page parsing", () => {
         if (call.name === "take_snapshot") {
           return {
             structuredContent: {
-              snapshot: { id: "uid-b", role: "button", name: "Run B" },
+              snapshot: snapshotWithControls({ id: "uid-b", role: "button", name: "Run B" }),
             },
           };
         }
@@ -654,7 +510,7 @@ describe("chrome MCP page parsing", () => {
       clickChromeMcpElement({
         profileName: "chrome-live",
         targetId: oldTarget,
-        uid: snapshot.id ?? "",
+        uid: snapshot.children?.[0]?.id ?? "",
       }),
     ).rejects.toThrow(/tab not found/i);
     expect(clickCalls).toBe(0);
@@ -977,7 +833,7 @@ describe("chrome MCP page parsing", () => {
             structuredContent: {
               snapshot: {
                 id: "root",
-                role: "document",
+                role: "RootWebArea",
                 children: [{ id: "1_2", role: "button", name: "Run" }],
               },
             },
@@ -1043,6 +899,7 @@ describe("chrome MCP page parsing", () => {
         children: [root],
       };
     }
+    root.role = "RootWebArea";
     const session = createPageSession({
       pid: 141,
       pages: [{ id: 1, url: "https://a.example" }],
@@ -1075,7 +932,7 @@ describe("chrome MCP page parsing", () => {
             structuredContent: {
               snapshot: {
                 id: "root",
-                role: "document",
+                role: "RootWebArea",
                 children: [
                   { id: "uid-a", role: "textbox", name: "A" },
                   { id: "uid-b", role: "textbox", name: "B" },
@@ -1171,7 +1028,7 @@ describe("chrome MCP page parsing", () => {
           if (call.name === "take_snapshot") {
             return {
               structuredContent: {
-                snapshot: { id: "1_2", role: "button", name: "Run" },
+                snapshot: snapshotWithControls({ id: "1_2", role: "button", name: "Run" }),
               },
             };
           }
@@ -1195,7 +1052,7 @@ describe("chrome MCP page parsing", () => {
       clickChromeMcpElement({
         profileName: "chrome-live",
         targetId: freshTargetId,
-        uid: snapshot.id ?? "",
+        uid: snapshot.children?.[0]?.id ?? "",
       }),
     ).rejects.toThrow(/Run a new snapshot/);
     expect(factoryCalls).toBe(2);
@@ -1214,7 +1071,7 @@ describe("chrome MCP page parsing", () => {
           if (call.name === "take_snapshot") {
             return {
               structuredContent: {
-                snapshot: { id: "1_2", role: "button", name: "Run" },
+                snapshot: snapshotWithControls({ id: "1_2", role: "button", name: "Run" }),
               },
             };
           }
@@ -1236,7 +1093,7 @@ describe("chrome MCP page parsing", () => {
       clickChromeMcpElement({
         profileName: "chrome-live",
         targetId,
-        uid: snapshot.id ?? "",
+        uid: snapshot.children?.[0]?.id ?? "",
       }),
     ).rejects.toThrow(/connection reset after dispatch/);
     expect(clickCalls).toBe(1);
@@ -1865,7 +1722,7 @@ describe("chrome MCP page parsing", () => {
         if (call.name === "take_snapshot") {
           return {
             structuredContent: {
-              snapshot: { id: "uid-a", role: "button", name: "Run A" },
+              snapshot: snapshotWithControls({ id: "uid-a", role: "button", name: "Run A" }),
             },
           };
         }
@@ -1894,7 +1751,7 @@ describe("chrome MCP page parsing", () => {
     await clickChromeMcpElement({
       profileName: "chrome-live",
       targetId: originalTarget,
-      uid: snapshot.id ?? "",
+      uid: snapshot.children?.[0]?.id ?? "",
     });
 
     expect(clickedUid).toBe("uid-a");

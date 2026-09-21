@@ -150,6 +150,7 @@ function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
   return {
     params,
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: params.workspaceDir,
     modelId: params.model,
     normalizedModel: params.model,

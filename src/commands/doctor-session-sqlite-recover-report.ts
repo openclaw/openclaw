@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import { hasDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
@@ -22,6 +23,10 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import {
+  readActiveSqliteTranscriptFiles,
+  summarizeDoctorSessionSqliteReport,
+} from "./doctor-session-sqlite-diagnostics.js";
+import {
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
@@ -36,9 +41,7 @@ import {
 } from "./doctor-session-sqlite-readers.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
-  createDoctorSessionSqliteTotals,
   createDoctorSessionSqliteTargetReport,
-  sumDoctorSessionSqliteTargets,
   type DoctorSessionSqliteOptions,
   type DoctorSessionSqliteReport,
   type DoctorSessionSqliteTargetReport,
@@ -66,8 +69,30 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       { env: params.env },
       (maintenance) => recoverCorruptSqliteTargets(params.targets, params.env, maintenance),
     );
-    if (recoveredCorruptTargets.length > 0) {
-      return summarizeRecoverReport(recoveredCorruptTargets);
+    const retainedReports: DoctorSessionSqliteTargetReport[] = [...recoveredCorruptTargets];
+    for (const target of trustedTargets) {
+      if (recoveredCorruptTargets.some((report) => report.sqlitePath === target.sqlitePath)) {
+        continue;
+      }
+      try {
+        if (
+          hasDeferredPluginSessionImport({
+            target,
+            sqlitePath: target.sqlitePath,
+            env: params.env,
+          }) ||
+          readActiveSqliteTranscriptFiles(target).length > 0
+        ) {
+          retainedReports.push(await params.validateTarget(target));
+        }
+      } catch (error) {
+        retainedReports.push(
+          createRecoverInspectionFailureTargetReport(target, target.sqlitePath, error),
+        );
+      }
+    }
+    if (retainedReports.length > 0) {
+      return summarizeRecoverReport(retainedReports);
     }
     return summarizeRecoverReport([
       createSyntheticRecoverTargetReport(
@@ -100,11 +125,15 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       message: `${conflict.sourcePath}: ${conflict.reason}`,
     })),
   );
+  const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
   const failureReports = writeSessionSqliteMigrationFailureReports(failedRun.manifestPath, {
-    reason: "doctor recover restored and validated a failed session SQLite migration run",
+    reason:
+      report.totals.issues > 0
+        ? "doctor recover completed with remaining issues"
+        : "doctor recover completed validation of a failed session SQLite migration run",
+    recoveryTargets: report.targets,
     trustedTargets,
   });
-  const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
   report.migrationRun = {
     failureReportJsonPath: failureReports.jsonPath,
     failureReportMarkdownPath: failureReports.markdownPath,
@@ -340,16 +369,8 @@ function createEmptyRecoverTargetReport(
 function summarizeRecoverReport(
   targets: DoctorSessionSqliteTargetReport[],
 ): DoctorSessionSqliteReport {
-  const sum = (value: (target: DoctorSessionSqliteTargetReport) => number) =>
-    sumDoctorSessionSqliteTargets(targets, value);
-  return {
-    mode: "recover",
-    targets,
-    totals: createDoctorSessionSqliteTotals(targets, {
-      legacyEntries: sum((target) => target.legacyEntries),
-      unreferencedJsonlFiles: sum((target) => target.unreferencedJsonlFiles.length),
-      validatedEntries: sum((target) => target.validatedEntries),
-      validatedTranscriptEvents: sum((target) => target.validatedTranscriptEvents),
-    }),
-  };
+  const report = summarizeDoctorSessionSqliteReport("recover", targets);
+  delete report.totals.archivedLegacyStoreFiles;
+  delete report.totals.reclaimedBytes;
+  return report;
 }

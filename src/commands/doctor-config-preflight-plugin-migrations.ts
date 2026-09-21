@@ -122,7 +122,7 @@ export function createDoctorPluginMigrationPreparation(params: {
     return [...previousById.values()];
   };
   const reportPending = (plugin: DeferredPluginMigration) => {
-    const warning = formatDeferredPluginMigration(plugin);
+    const warning = formatDeferredPluginMigration(plugin, params.env());
     const previous = reported.get(plugin.pluginId);
     if (previous?.warnings[0] === warning) {
       return;
@@ -297,7 +297,9 @@ export function createDoctorPluginMigrationPreparation(params: {
           unavailableIds.has(plugin.pluginId)
             ? plugin
             : Object.assign(plugin, {
-                reason: "The plugin has not reported completion of its retained state migration.",
+                reason:
+                  "The installed plugin has not reported completion of its retained state migration. If Doctor cannot complete it, report this to the plugin maintainer.",
+                command: "openclaw doctor --fix",
               }),
         );
       if (resolvedPluginIds.length === 0 && pending.length === 0) {

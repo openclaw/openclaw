@@ -34,9 +34,9 @@ import {
 } from "../../sessions/input-provenance.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import { retainGatewayDeviceRevocation } from "../device-revocation.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
+import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../session-subagent-resume.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
@@ -268,7 +268,7 @@ export async function prepareAgentRunDispatch(
     cwd: params.sessionEntry?.spawnedCwd,
   });
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
-  let releaseCallerAuthority: (() => void) | undefined;
+  let capturedOperator: ReturnType<typeof retainGatewayOperatorRun> | undefined;
   let registeredFollowupTask: RegisteredGatewayAgentTask | undefined;
   const cleanupPreaccept = async (admissionReleased = false, failure?: string) => {
     const lease = preparedModelRuntimeLease;
@@ -295,7 +295,7 @@ export async function prepareAgentRunDispatch(
       try {
         await lease?.[Symbol.asyncDispose]();
       } finally {
-        releaseCallerAuthority?.();
+        capturedOperator?.release();
         activeRunAbort.cleanup();
         if (!admissionReleased) {
           activeGatewayWorkAdmission.release();
@@ -504,6 +504,7 @@ export async function prepareAgentRunDispatch(
       getAbortStopReason: () => activeRunAbort.entry?.abortStopReason ?? "rpc",
       deferTimeoutCompletion: activeRunAbort.deferTimeoutCompletion,
       privateCompletion: params.privateCompletion,
+      settleWakeReplay: params.settleWakeReplay,
       request: params.request,
       cfg: params.cfg,
       cfgForAgent: params.cfgForAgent,
@@ -578,7 +579,7 @@ export async function prepareAgentRunDispatch(
               followup: taskTrackingMode,
               runId: params.runId,
               sessionKey,
-              task: annotateInterSessionPromptText(userTurn.message, params.inputProvenance),
+              task: annotateInterSessionPromptText(userTurn.message, userTurn.inputProvenance),
               requesterOrigin: normalizeDeliveryContext({
                 channel: params.delivery.originMessageChannel
                   ? params.delivery.resolvedChannel
@@ -613,7 +614,7 @@ export async function prepareAgentRunDispatch(
   }
   try {
     // The transport request ends at acceptance; execution retains this exact caller.
-    releaseCallerAuthority = retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
+    capturedOperator = retainGatewayOperatorRun({ ...params, entry: activeRunAbort.entry });
   } catch (error) {
     const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
     return rejectPreaccept(errorShapeFromError(ErrorCodes.INVALID_REQUEST, failure));
@@ -650,7 +651,12 @@ export async function prepareAgentRunDispatch(
     // may reject its execution after this synchronous ownership transfer.
     assertInputAdmissionCurrent = undefined;
     params.io.emitAcceptance([true, accepted, undefined], { runId: params.runId });
-    recordAgentRunUserTurnParticipant(params, userTurn, lifecycleStorePath);
+    capturedOperator.armCancellation();
+    recordAgentRunUserTurnParticipant(
+      { ...params, inputProvenance: userTurn.inputProvenance },
+      userTurn,
+      lifecycleStorePath,
+    );
     const cronCreatorAuthority = resolveGatewayCronCreatorAuthorityAdmission({
       runId: params.runId,
       resolvedSessionKey: params.resolvedSessionKey,
@@ -659,7 +665,7 @@ export async function prepareAgentRunDispatch(
       client: params.client,
       request: params.request,
       isCurrent: params.hasCurrentClientAuthority,
-      inputProvenance: params.inputProvenance,
+      inputProvenance: userTurn.inputProvenance,
       hasRestoredCronContinuation: params.restoredCronContinuation !== undefined,
       isOneShotModelRun: params.isOneShotModelRun,
       isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
@@ -668,7 +674,8 @@ export async function prepareAgentRunDispatch(
       activeGatewayWorkAdmission,
       activeRunAbort,
       ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),
-      ...(releaseCallerAuthority ? { releaseCallerAuthority } : {}),
+      releaseCallerAuthority: capturedOperator.release,
+      ...(capturedOperator.authority ? { operatorAuthority: capturedOperator.authority } : {}),
       operationalRunInstance,
       effectiveProviderOverride,
       effectiveModelOverride,

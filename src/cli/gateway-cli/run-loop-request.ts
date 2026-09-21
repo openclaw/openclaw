@@ -5,10 +5,13 @@ import type { createGatewayHostLifecycle } from "./host-lifecycle.js";
 export type GatewayRunSignalAction = "stop" | "restart" | "external-restart";
 
 export type GatewayRunSignalRequest = {
+  acceptedAtMs: number;
   action: GatewayRunSignalAction;
   signal: GatewayShutdownTrigger;
   restartReason?: string;
   restartIntent?: GatewayRestartIntent;
+  /** Cancellation removes the helper registry before this shutdown settles. */
+  foregroundUpdate?: boolean;
   hostedStop?: ReturnType<typeof createGatewayHostLifecycle>;
 };
 
@@ -23,3 +26,35 @@ export const sameManagedUpdateOwner = (
   Boolean(
     left && right && left.handoffId === right.handoffId && left.installRoot === right.installRoot,
   );
+
+export function resolveGatewayRunSignalRequestUpgrade(
+  current: GatewayRunSignalRequest | null,
+  incoming: GatewayRunSignalRequest,
+): GatewayRunSignalRequest | undefined {
+  const { action, signal, restartReason, restartIntent } = incoming;
+  if (
+    action === "restart" &&
+    isUpdateProcessRestartReason(restartReason) &&
+    current?.action === "restart" &&
+    (!isUpdateProcessRestartReason(current.restartReason) ||
+      (restartIntent?.successorOwner &&
+        !sameManagedUpdateOwner(
+          restartIntent.successorOwner,
+          current.restartIntent?.successorOwner,
+        )))
+  ) {
+    return {
+      ...current,
+      signal,
+      restartReason,
+      foregroundUpdate: incoming.foregroundUpdate,
+      restartIntent: {
+        ...current.restartIntent,
+        ...restartIntent,
+        force: true,
+        reason: restartReason,
+      },
+    };
+  }
+  return undefined;
+}

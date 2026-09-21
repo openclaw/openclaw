@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -15,6 +16,7 @@ import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { loadPreparedInboundPluginRegistry } from "./prepared-model-runtime.inbound-registry.js";
 import {
@@ -95,6 +97,50 @@ async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "
 }
 
 describe("prepared registry construction borrows", () => {
+  it("retires a prepared registry after its borrowing request scope has closed", async () => {
+    const caller = new AsyncWorkScope();
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "late-catalog-lease", status: "loaded" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const entered = createDeferred();
+    const finish = createDeferred();
+    const cleaned = vi.fn();
+    instance.lifecycle.onDispose(async () => {
+      entered.resolve();
+      await finish.promise;
+      cleaned();
+    });
+    const borrower = await caller.track(() => {
+      const release = retainPreparedPluginRegistry(registry);
+      expect(release).toBeDefined();
+      return { release: release!, run: AsyncLocalStorage.snapshot() };
+    });
+    await caller.drain();
+    let retired = false;
+    const closing = borrower
+      .run(async () => {
+        await borrower.release();
+      })
+      .then(() => {
+        retired = true;
+      });
+    void closing.catch(() => {});
+    try {
+      await Promise.race([entered.promise, closing]);
+      expect(retired).toBe(false);
+      finish.resolve();
+      await closing;
+      expect(cleaned).toHaveBeenCalledOnce();
+      expect(retired).toBe(true);
+      await expect(caller.track(() => undefined)).rejects.toThrow("Async work scope is closed");
+      expect(() => instance.run(() => "retired")).toThrow("reloaded or disabled");
+    } finally {
+      finish.resolve();
+      await closing.catch(() => {});
+    }
+  });
+
   it("reacquires a refused source and rejects admission after construction closes", async () => {
     const { registry, borrower, instance } = await acquireConfiguredRegistryBorrower();
     const construction = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);

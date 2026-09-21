@@ -2,6 +2,7 @@ import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -19,6 +20,7 @@ async function withTempHome(run: () => Promise<void>): Promise<void> {
     try {
       await run();
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
     }
   });
@@ -36,7 +38,7 @@ describe("MCP OAuth pending authorization store", () => {
 
       // Public callback lookups are read-only: an unknown state must not
       // create the lazy table or any shared state.
-      expect(readMcpOAuthPendingAuthorization("unknown-state")).toBeUndefined();
+      expect(await readMcpOAuthPendingAuthorization("unknown-state")).toBeUndefined();
       expect(
         database
           .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -53,17 +55,17 @@ describe("MCP OAuth pending authorization store", () => {
       expect(database.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
-      expect(readMcpOAuthPendingAuthorization("first-state")).toBe(store.storeKey);
+      expect(await readMcpOAuthPendingAuthorization("first-state")).toBe(store.storeKey);
 
       writeMcpOAuthPendingAuthorization(store.storeKey, "second-state");
-      expect(readMcpOAuthPendingAuthorization("first-state")).toBeUndefined();
-      expect(readMcpOAuthPendingAuthorization("second-state")).toBe(store.storeKey);
+      expect(await readMcpOAuthPendingAuthorization("first-state")).toBeUndefined();
+      expect(await readMcpOAuthPendingAuthorization("second-state")).toBe(store.storeKey);
       expect(consumeOAuthState(store.storeKey, "other-state")).toBe(false);
       expect(consumeOAuthState(store.storeKey, "second-state")).toBe(true);
       expect(consumeOAuthState(store.storeKey, "second-state")).toBe(false);
 
       clearMcpOAuthStore(store.storeKey);
-      expect(readMcpOAuthPendingAuthorization("second-state")).toBeUndefined();
+      expect(await readMcpOAuthPendingAuthorization("second-state")).toBeUndefined();
     });
   });
 
@@ -93,12 +95,12 @@ describe("MCP OAuth pending authorization store", () => {
         database.exec("ROLLBACK");
         throw error;
       }
-      expect(readMcpOAuthPendingAuthorization("absent-state")).toBeUndefined();
+      expect(await readMcpOAuthPendingAuthorization("absent-state")).toBeUndefined();
 
       // A copied sign-in link dies after the pending-state TTL, even unclaimed.
       insertPending.run("expired-state", "expired-store", Date.now() - 11 * 60 * 1000);
       insertPending.run("fresh-foreign-state", "fresh-foreign-store", Date.now());
-      expect(readMcpOAuthPendingAuthorization("expired-state")).toBeUndefined();
+      expect(await readMcpOAuthPendingAuthorization("expired-state")).toBeUndefined();
       expect(consumeOAuthState("expired-store", "expired-state")).toBe(false);
 
       writeMcpOAuthPendingAuthorization("server-r-requester-a", "requester-a-state");
@@ -107,14 +109,16 @@ describe("MCP OAuth pending authorization store", () => {
           .prepare("SELECT state FROM mcp_oauth_pending_authorizations WHERE state = ?")
           .get("expired-state"),
       ).toBeUndefined();
-      expect(readMcpOAuthPendingAuthorization("fresh-foreign-state")).toBe("fresh-foreign-store");
+      expect(await readMcpOAuthPendingAuthorization("fresh-foreign-state")).toBe(
+        "fresh-foreign-store",
+      );
       writeMcpOAuthPendingAuthorization("server-r-requester-b", "requester-b-state");
       writeMcpOAuthPendingAuthorization("other-r-requester", "other-state");
       deleteMcpOAuthPendingAuthorizationsByPrefix("server-r-");
 
-      expect(readMcpOAuthPendingAuthorization("requester-a-state")).toBeUndefined();
-      expect(readMcpOAuthPendingAuthorization("requester-b-state")).toBeUndefined();
-      expect(readMcpOAuthPendingAuthorization("other-state")).toBe("other-r-requester");
+      expect(await readMcpOAuthPendingAuthorization("requester-a-state")).toBeUndefined();
+      expect(await readMcpOAuthPendingAuthorization("requester-b-state")).toBeUndefined();
+      expect(await readMcpOAuthPendingAuthorization("other-state")).toBe("other-r-requester");
     });
   });
 });

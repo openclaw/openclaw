@@ -84,6 +84,7 @@ describe("acpx plugin", () => {
 
     expect(createAcpxRuntimeServiceMock).toHaveBeenCalledWith({
       pluginConfig: api.pluginConfig,
+      getAllowedAgents: expect.any(Function),
       openKeyedStore: expect.any(Function),
     });
     const params = createAcpxRuntimeServiceMock.mock.calls[0]?.[0] as {
@@ -123,7 +124,7 @@ describe("acpx plugin", () => {
   });
 
   it("detects native programs and applies current enable settings without starting the runtime", async () => {
-    for (const command of ["npx", "opencode", "qwen", "pi-acp"]) {
+    for (const command of ["npx", "opencode", "qwen", "pi-acp", "copilot"]) {
       nativePrograms.add(command);
     }
     const getRuntime = vi.fn(() => {
@@ -194,6 +195,13 @@ describe("acpx plugin", () => {
           installation: "missing",
           enabled: true,
         },
+        {
+          id: "copilot",
+          name: "GitHub Copilot",
+          runtimeId: "acp-copilot",
+          installation: "installed",
+          enabled: true,
+        },
       ],
     });
     const opencode = harnesses.get("acp-opencode");
@@ -213,7 +221,13 @@ describe("acpx plugin", () => {
         entries: {
           acpx: {
             config: {
-              nativeAgents: { opencode: false, qwen: false, pi: false, kilocode: false },
+              nativeAgents: {
+                opencode: false,
+                qwen: false,
+                pi: false,
+                kilocode: false,
+                copilot: false,
+              },
               agents: { qwen: { command: "npx qwen" } },
             },
           },
@@ -251,6 +265,13 @@ describe("acpx plugin", () => {
           name: "Kilo Code",
           runtimeId: "acp-kilocode",
           installation: "missing",
+          enabled: false,
+        },
+        {
+          id: "copilot",
+          name: "GitHub Copilot",
+          runtimeId: "acp-copilot",
+          installation: "installed",
           enabled: false,
         },
       ],

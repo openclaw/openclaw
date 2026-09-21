@@ -23,12 +23,16 @@ export function resolveComposerQuestionPanel(
   const gatewayQuestions =
     props.gatewayQuestionPrompts?.filter((prompt) => prompt.status === "pending") ?? [];
   const asyncQuestions = props.asyncQuestions;
+  const asyncQuestionIdentity = (itemId: string) =>
+    JSON.stringify([props.sessionKey, props.currentAgentId, itemId]);
   const requests =
     props.disabledBanner?.kind === "composer-replacement"
       ? []
       : [
           ...gatewayQuestions.map((prompt) => ({
             key: `gateway:${prompt.id}`,
+            asyncIdentity: null,
+            compactOnArrival: false,
             panel: (options: QuestionPanelOptions) =>
               createGatewayQuestionPanelProps(prompt, {
                 ...options,
@@ -44,11 +48,22 @@ export function resolveComposerQuestionPanel(
           ...(asyncQuestions?.submit
             ? asyncQuestions.pending.map((question) => ({
                 key: JSON.stringify([asyncQuestions.scope, question.itemId]),
+                asyncIdentity: asyncQuestionIdentity(question.itemId),
+                compactOnArrival: !state.asyncQuestionIds.has(
+                  asyncQuestionIdentity(question.itemId),
+                ),
                 panel: (options: QuestionPanelOptions) =>
                   createAsyncQuestionPanelProps(question, asyncQuestions, options),
               }))
             : []),
         ];
+  // Arrival belongs to presentation, not whether persistence has initialized a draft.
+  // The identity stays stable across reconnects so editing does not close the card.
+  state.asyncQuestionIds = new Set(
+    asyncQuestions?.pending
+      .map((question) => asyncQuestionIdentity(question.itemId))
+      .filter((identity) => state.asyncQuestionIds.has(identity)),
+  );
   // A newly arrived blocking request takes priority, but navigation can still
   // reach async questions without repeatedly switching back on every render.
   const newGatewayQuestion = gatewayQuestions.find(
@@ -66,11 +81,28 @@ export function resolveComposerQuestionPanel(
   if (index < 0) {
     index = 0;
     state.activeQuestionKey = requests[0]?.key ?? null;
-    state.questionCollapsed = false;
+    const nextRequest = requests[index];
+    // A new optional prompt must not interrupt an in-progress composer draft.
+    // Reconnect/storage scope changes do not change a seen optional disclosure.
+    // A required question still opens when it replaces the active request.
+    // A temporary capability gap has no replacement and keeps the disclosure.
+    if (nextRequest) {
+      state.questionCollapsed =
+        nextRequest.asyncIdentity === null
+          ? false
+          : nextRequest.compactOnArrival
+            ? Boolean(props.draft.trim()) ||
+              (state.composerTextarea !== null && document.activeElement === state.composerTextarea)
+            : state.questionCollapsed;
+    }
   }
   const request = requests[index];
   if (!request) {
     return null;
+  }
+  // A queued question has not arrived in the dock until it becomes active.
+  if (request.asyncIdentity !== null) {
+    state.asyncQuestionIds.add(request.asyncIdentity);
   }
   const selectRequest = (next: number) => {
     state.activeQuestionKey = requests[next]!.key;
@@ -83,6 +115,14 @@ export function resolveComposerQuestionPanel(
       state.questionCollapsed = collapsed;
       state.restoreComposerFocus = collapsed;
       requestUpdate();
+      if (collapsed) {
+        queueMicrotask(() => {
+          if (state.restoreComposerFocus && state.composerTextarea?.isConnected) {
+            state.restoreComposerFocus = false;
+            state.composerTextarea.focus({ preventScroll: true });
+          }
+        });
+      }
     },
     requestPosition:
       requests.length > 1 ? { current: index + 1, total: requests.length } : undefined,

@@ -32,7 +32,11 @@ import {
 import { resolveCdpControlPolicy } from "../browser/cdp-reachability-policy.js";
 import { closeTrackedCdpTarget, redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
-import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
+import {
+  resolveBrowserConfig,
+  resolveProfile,
+  type ResolvedBrowserProfile,
+} from "../browser/config.js";
 import {
   isBrowserHostLocalRoute,
   isPersistentBrowserProfileMutation,
@@ -45,6 +49,7 @@ import {
   getBrowserControlState,
   startBrowserControlServiceFromConfig,
 } from "../control-service.js";
+import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 import { withTimeout } from "../sdk-node-runtime.js";
 import { detectMime } from "../sdk-setup-tools.js";
 
@@ -124,12 +129,12 @@ function normalizeProfileAllowlist(raw?: string[]): string[] {
   return Array.isArray(raw) ? normalizeStringEntries(raw) : [];
 }
 
-function resolveBrowserProxyConfig() {
-  const cfg = loadBrowserConfigForRuntimeRefresh();
+function resolveBrowserProxyConfig(cfg = loadBrowserConfigForRuntimeRefresh()) {
   const proxy = cfg.nodeHost?.browserProxy;
-  const allowProfiles = normalizeProfileAllowlist(proxy?.allowProfiles);
-  const enabled = proxy?.enabled !== false;
-  return { enabled, allowProfiles };
+  if (proxy?.enabled === false) {
+    throw new Error("UNAVAILABLE: node browser proxy disabled");
+  }
+  return { allowProfiles: normalizeProfileAllowlist(proxy?.allowProfiles) };
 }
 
 let browserControlReady: Promise<void> | null = null;
@@ -152,11 +157,11 @@ async function ensureBrowserControlService(): Promise<void> {
     const cfg = loadBrowserConfigForRuntimeRefresh();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     if (!resolved.enabled) {
-      throw new Error("browser control disabled");
+      throw new Error(await describeBrowserControlUnavailable(cfg));
     }
     const started = await startBrowserControlServiceFromConfig();
     if (!started) {
-      throw new Error("browser control disabled");
+      throw new Error(await describeBrowserControlUnavailable(cfg));
     }
     admittedBrowserControlState = started;
   })();
@@ -336,17 +341,20 @@ export async function runBrowserProxyCommand(
   if (!pathValue) {
     throw new Error("INVALID_REQUEST: path required");
   }
-  const proxyConfig = resolveBrowserProxyConfig();
-  if (!proxyConfig.enabled) {
-    throw new Error("UNAVAILABLE: node browser proxy disabled");
+  resolveBrowserProxyConfig();
+  const method = typeof params.method === "string" ? params.method.trim().toUpperCase() : "GET";
+  const path = normalizeBrowserRequestPath(pathValue);
+  if (method !== "GET" && method !== "POST" && method !== "DELETE") {
+    throw new Error("INVALID_REQUEST: method must be GET, POST, or DELETE");
+  }
+  if (path === BROWSER_PROXY_OWNED_TAB_CLOSE_PATH && method !== "POST") {
+    throw new Error("INVALID_REQUEST: owned tab close requires POST");
   }
 
   await ensureBrowserControlService();
   invocationSignal?.throwIfAborted();
   const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
-  const path = normalizeBrowserRequestPath(pathValue);
   let body = params.body;
   const requestedProfile =
     resolveRequestedBrowserProfile({
@@ -366,7 +374,7 @@ export async function runBrowserProxyCommand(
       }
     : { status: "unavailable" };
   const includeRoute = params.errorEnvelope === BROWSER_PROXY_ERROR_ENVELOPE;
-  const allowedProfiles = proxyConfig.allowProfiles;
+  const allowedProfiles = resolveBrowserProxyConfig(cfg).allowProfiles;
   if (isPersistentBrowserProfileMutation(method, path)) {
     throw new Error("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
   }
@@ -376,18 +384,18 @@ export async function runBrowserProxyCommand(
   if (isBrowserHostLocalRoute(method, path)) {
     throw new Error("INVALID_REQUEST: browser.proxy cannot run host-local browser routes");
   }
-  if (allowedProfiles.length > 0) {
-    if (path !== "/profiles") {
-      const profileToCheck = requestedProfile || resolved.defaultProfile;
-      if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: profileToCheck })) {
-        throw new Error("INVALID_REQUEST: browser profile not allowed");
-      }
-    } else if (requestedProfile) {
-      if (!isProfileAllowed({ allowProfiles: allowedProfiles, profile: requestedProfile })) {
-        throw new Error("INVALID_REQUEST: browser profile not allowed");
-      }
+  const assertCurrent = (profile?: ResolvedBrowserProfile) => {
+    invocationSignal?.throwIfAborted();
+    const current = resolveBrowserProxyConfig();
+    const selected = profile?.name || effectiveProfile || requestedProfile;
+    if (
+      (path !== "/profiles" || selected) &&
+      !isProfileAllowed({ allowProfiles: current.allowProfiles, profile: selected })
+    ) {
+      throw new Error("INVALID_REQUEST: browser profile not allowed");
     }
-  }
+  };
+  assertCurrent();
 
   const timeoutMs = resolveBrowserProxyTimeoutMs(params.timeoutMs);
   const deadlineAt = Date.now() + timeoutMs;
@@ -399,14 +407,16 @@ export async function runBrowserProxyCommand(
     }
     query[key] = typeof value === "string" ? value : String(value);
   }
-  if (requestedProfile) {
-    query.profile = requestedProfile;
+  // A default-profile change must not redirect work after its route was selected.
+  if (effectiveProfile || requestedProfile) {
+    query.profile = effectiveProfile || requestedProfile;
   }
 
   if (path === BROWSER_PROXY_OWNED_TAB_CLOSE_PATH) {
     const request = readOwnedTabCloseRequest(body);
     const liveResolved = getBrowserControlState()?.resolved ?? resolved;
     const profile = resolveProfile(liveResolved, effectiveProfile);
+    assertCurrent(profile ?? undefined);
     const result =
       profile?.cdpUrl && effectiveProfile
         ? await closeTrackedCdpTarget({
@@ -418,6 +428,10 @@ export async function runBrowserProxyCommand(
             timeoutMs: liveResolved.remoteCdpTimeoutMs,
             ssrfPolicy: resolveCdpControlPolicy(profile, liveResolved.ssrfPolicy),
             signal: invocationSignal,
+            shouldClose: () => {
+              assertCurrent(profile);
+              return true;
+            },
           })
         : { status: "ownership-mismatch" as const };
     return JSON.stringify({
@@ -457,6 +471,12 @@ export async function runBrowserProxyCommand(
     );
   }
   body = stagedUpload.body;
+  try {
+    assertCurrent();
+  } catch (error) {
+    await discardStagedBrowserProxyUpload(stagedUpload);
+    throw error;
+  }
   const remainingTimeoutMs = deadlineAt - Date.now();
   if (remainingTimeoutMs <= 0) {
     await discardStagedBrowserProxyUpload(stagedUpload);
@@ -476,11 +496,14 @@ export async function runBrowserProxyCommand(
     response = await withTimeout(
       (timeoutSignal) =>
         dispatcher.dispatch({
-          method: method === "DELETE" ? "DELETE" : method === "POST" ? "POST" : "GET",
+          method,
           path,
           query,
           body,
           signal: combineBrowserProxySignals(timeoutSignal, invocationSignal),
+          assertCurrent: async (profile) => {
+            assertCurrent(profile);
+          },
         }),
       remainingTimeoutMs,
       "browser proxy request",
@@ -508,8 +531,6 @@ export async function runBrowserProxyCommand(
   }
   if (response.status >= 400) {
     await discardStagedBrowserProxyUpload(stagedUpload);
-  }
-  if (response.status >= 400) {
     if (params.errorEnvelope === BROWSER_PROXY_ERROR_ENVELOPE) {
       // New callers opt into the closed envelope; older Gateways retain the
       // shipped status-prefixed node error during rolling upgrades.

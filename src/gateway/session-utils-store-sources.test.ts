@@ -3,6 +3,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -59,8 +60,12 @@ it("binds source addresses before asynchronous callers yield", async () => {
     cfg.session = { store: path.join(state.stateDir, "moved", "{agentId}", "sessions.json") };
     env.OPENCLAW_STATE_DIR = state.path("different-state");
 
-    expect(prepared.sources.main).toEqual([currentSource]);
-    expect(() => prepared.assertCurrent()).not.toThrow();
+    for (let refresh = 0; refresh < 2; refresh++) {
+      invalidateRegisteredAgentDatabasesMemo({ path: openOpenClawStateDatabase().path });
+      expect(() => prepared.assertCurrent()).not.toThrow();
+      expect(prepared.sources.main).toEqual([currentSource]);
+      expect(prepared.sources.main?.[0]).toBe(currentSource);
+    }
   });
 });
 
@@ -136,5 +141,76 @@ it("bounds fixed-store discovery per operation and refreshes the next source ros
       realpathNative.mockRestore();
       syncBuiltinESMExports();
     }
+  });
+});
+
+it("keeps deferred discovery unbound until first use and rejects prior registry churn", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const options = {
+      cfg: {},
+      currentSource: { agentId: database.agentId, path: database.path },
+      env: state.env,
+      registryPath: openOpenClawStateDatabase().path,
+      deferSources: true,
+    };
+    const unread = prepareGatewaySessionStoreReadSources(options);
+    const bound = prepareGatewaySessionStoreReadSources(options);
+    expect(bound.sources.main).toEqual([options.currentSource]);
+    invalidateRegisteredAgentDatabasesMemo({ path: options.registryPath });
+    expect(bound.assertCurrent).not.toThrow();
+    expect(unread.assertCurrent).toThrow("Session store changed");
+    expect(() => unread.sources).toThrow("Session store changed");
+  });
+});
+
+it("rejects a retargeted filesystem alias after registry metadata refresh", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const alias = state.path("store-alias");
+    const replacement = state.path("replacement-store");
+    fs.mkdirSync(replacement);
+    fs.copyFileSync(database.path, path.join(replacement, path.basename(database.path)));
+    fs.symlinkSync(
+      path.dirname(database.path),
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const currentSource = {
+      agentId: database.agentId,
+      path: path.join(alias, path.basename(database.path)),
+    };
+    const registryPath = openOpenClawStateDatabase().path;
+    const prepared = prepareGatewaySessionStoreReadSources({
+      cfg: {},
+      currentSource,
+      env: state.env,
+      registryPath,
+    });
+    expect(prepared.sources.main?.[0]).toBe(currentSource);
+    fs.unlinkSync(alias);
+    fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+    invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
+    expect(prepared.assertCurrent).toThrow("Session store changed");
+  });
+});
+
+it("rejects replacement of the existing parent of a missing source", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const parent = state.path("future-store");
+    fs.mkdirSync(parent);
+    const currentSource = { agentId: "main", path: path.join(parent, "sessions.sqlite") };
+    const registryPath = openOpenClawStateDatabase().path;
+    const prepared = prepareGatewaySessionStoreReadSources({
+      cfg: { session: { store: currentSource.path } },
+      currentSource,
+      env: state.env,
+      registryPath,
+    });
+    expect(prepared.sources.main?.[0]).toBe(currentSource);
+    fs.renameSync(parent, `${parent}.previous`);
+    fs.mkdirSync(parent);
+    invalidateRegisteredAgentDatabasesMemo({ path: registryPath });
+    expect(prepared.assertCurrent).toThrow("Session store changed");
   });
 });

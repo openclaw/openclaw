@@ -145,6 +145,7 @@ export async function startAgentRunExecution(params: {
     };
     const assertDispatchCurrent = () => {
       params.assertContextCurrent?.();
+      prepared.operatorAuthority?.assertCurrent();
       abortController.signal.throwIfAborted();
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       if (
@@ -524,6 +525,7 @@ export async function startAgentRunExecution(params: {
                 forceCodeModeTools: params.request.forceCodeModeTools,
                 ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
                 operationalRunInstance: prepared.operationalRunInstance,
+                operatorAuthority: prepared.operatorAuthority,
                 onAdmittedRunContext: (admittedRunContext) => {
                   skillLibraryAuthoring?.bind(admittedRunContext);
                   bindGatewayContextResolver(

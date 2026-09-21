@@ -26,6 +26,111 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 
 describe("backup SQLite ownership", () => {
+  it.each([
+    { includeWorkspace: true, alias: "dot" },
+    { includeWorkspace: false, alias: "dot" },
+    { includeWorkspace: true, alias: "symlink" },
+  ])(
+    "backs up registered state inside its workspace ($alias, includeWorkspace=$includeWorkspace)",
+    async ({ includeWorkspace, alias }) => {
+      await withOpenClawTestState(
+        { layout: "home", prefix: "backup-enclosing-workspace-", scenario: "minimal" },
+        async (state) => {
+          await state.writeConfig({ agents: { defaults: { workspace: state.home } } });
+          const agentPath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+          openOpenClawAgentDatabase({ agentId: "main", path: agentPath, env: state.env });
+          closeOpenClawAgentDatabasesForTest();
+          const aliasPath =
+            alias === "dot"
+              ? `${state.agentDir()}${path.sep}.${path.sep}openclaw-agent.sqlite`
+              : path.join(state.agentDir(), "z-alias.sqlite");
+          if (alias === "symlink") {
+            await fs.symlink(agentPath, aliasPath);
+          }
+          registerOpenClawAgentDatabase({
+            agentId: "main",
+            path: aliasPath,
+            env: state.env,
+          });
+          closeOpenClawStateDatabase();
+          const onSqliteSnapshots = vi.fn();
+          const runtime = createTestRuntime();
+          const archive = await backupCreateCommand(runtime, {
+            output: state.path("backup.tar.gz"),
+            includeWorkspace,
+            verify: true,
+            onSqliteSnapshots,
+          });
+          expect(archive.verified).toBe(true);
+          expect(onSqliteSnapshots).toHaveBeenCalledExactlyOnceWith([
+            expect.objectContaining({
+              role: "global",
+              sourcePath: resolveOpenClawStateSqlitePath(state.env),
+            }),
+            expect.objectContaining({ role: "agent", agentId: "main", sourcePath: agentPath }),
+          ]);
+          await expect(
+            backupRestoreCommand(runtime, {
+              archive: archive.archivePath,
+              target: state.path("restored"),
+            }),
+          ).resolves.toMatchObject({ ok: true });
+          const restoredAgent = path.join(
+            state.path("restored"),
+            buildBackupArchivePath(archive.archiveRoot, aliasPath),
+          );
+          const database = new (requireNodeSqlite().DatabaseSync)(restoredAgent, {
+            readOnly: true,
+          });
+          try {
+            expect(
+              database.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get(),
+            ).toEqual({ agent_id: "main" });
+          } finally {
+            database.close();
+          }
+        },
+      );
+    },
+  );
+
+  it.each(["same path", "agent hardlink", "global hardlink"])(
+    "refuses different registered owners sharing a database (%s)",
+    async (alias) => {
+      await withOpenClawTestState(
+        { layout: "home", prefix: "backup-conflicting-owners-", scenario: "minimal" },
+        async (state) => {
+          await state.writeConfig({ agents: { defaults: { workspace: state.home } } });
+          const agentPath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+          if (alias === "global hardlink") {
+            registerOpenClawAgentDatabase({ agentId: "main", path: agentPath, env: state.env });
+            closeOpenClawStateDatabase();
+            await fs.mkdir(state.agentDir(), { recursive: true });
+            await fs.link(resolveOpenClawStateSqlitePath(state.env), agentPath);
+          } else {
+            openOpenClawAgentDatabase({ agentId: "main", path: agentPath, env: state.env });
+            closeOpenClawAgentDatabasesForTest();
+            const workerPath =
+              alias === "same path"
+                ? agentPath
+                : path.join(state.agentDir("worker"), "openclaw-agent.sqlite");
+            if (alias === "agent hardlink") {
+              await fs.mkdir(path.dirname(workerPath), { recursive: true });
+              await fs.link(agentPath, workerPath);
+            }
+            registerOpenClawAgentDatabase({ agentId: "worker", path: workerPath, env: state.env });
+            closeOpenClawStateDatabase();
+          }
+          const output = state.path("rejected.tar.gz");
+          await expect(
+            backupCreateCommand(createTestRuntime(), { output, verify: true }),
+          ).rejects.toThrow(/SQLite path aliases multiple core database owners/iu);
+          await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "refuses a declared plugin database hidden behind a symlink",
     async () => {

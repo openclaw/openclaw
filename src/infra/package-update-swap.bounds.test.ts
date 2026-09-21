@@ -181,7 +181,7 @@ describe("package verification bounds", () => {
             "baseline package fingerprint incomplete",
           );
           expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
-            expect.objectContaining({ step: "warning:global install swap", status: "completed" }),
+            expect.objectContaining({ step: "warning:package-swap", status: "completed" }),
           );
           expect(await fs.readFile(launcher, "utf8")).toBe("candidate launcher\n");
           if (!transaction) {

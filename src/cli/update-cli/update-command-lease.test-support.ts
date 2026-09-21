@@ -67,6 +67,13 @@ export async function runUpdateLeaseChild(): Promise<void> {
     assert.deepEqual(process.argv.slice(2), ["config", "validate", "--json"]);
     assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, "0");
     await record("validate");
+    process.stdout.write(
+      JSON.stringify(
+        scenario.invalidConfig
+          ? { valid: false, issues: [{ path: "gateway.port", message: "Invalid port" }] }
+          : { valid: true },
+      ),
+    );
     process.exitCode = scenario.invalidConfig ? 1 : 0;
     return;
   }
@@ -149,7 +156,7 @@ export async function runUpdateLeaseChild(): Promise<void> {
       const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
       assert.ok(runId, "Doctor did not inherit its invoking repair run ID");
       const { DatabaseSync } = await import("node:sqlite");
-      const { readUpdateRunRecord } = await import("../../infra/update-run-reader.js");
+      const { readUpdateRunRecord } = await import("../../infra/update-run-read.kernel.js");
       const { resolveOpenClawStateSqlitePath } =
         await import("../../state/openclaw-state-db.paths.js");
       const { inspectUpdateRepairDriverAdmission } =

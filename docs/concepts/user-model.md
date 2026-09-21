@@ -13,6 +13,58 @@ read_when:
 
 OpenClaw loads `USER.md` beside `MEMORY.md` at session start. It has a separate small bootstrap budget, and edits are picked up on later turns in a long-lived session. If the file is absent, startup continues without it.
 
+## Personal USER files on a shared Gateway
+
+Keep workspace-root `USER.md` for shared defaults. To add preferences for one
+signed-in person, create `users/<canonical-profile-id>/USER.md` in the **agent
+workspace**, not the task's Git worktree. Obtain the durable profile ID from the
+Gateway's authenticated profile/People data; do not use a display name, GitHub
+login, email, or a profile ID pasted into a message. This uses existing session
+ownership and creation records; no schema or configuration change is needed.
+
+Each session selects **one personal `USER.md`**: the assigned human owner's file
+first, otherwise the authenticated human creator's file. An agent or system
+assignment does not prevent that creator fallback. For eligible external chat
+turns, OpenClaw loads the shared file first and the selected personal file second.
+The personal file supplements, rather than replaces, the shared file, overriding
+conflicting shared user preferences, not project rules or security policy. The
+workspace-root `USER.md` remains shared regardless of the workspace directory's name.
+
+Files are refreshed on later turns. Reassigning the session changes personal
+context on the next new turn, not the running turn. Another participant can steer
+under the normal permission and queue rules without switching personal context.
+Queued and collected messages from multiple people keep the session's selection;
+the current sender does not select a different file. Profile merges select the
+surviving canonical ID; move the preferences to that directory yourself. OpenClaw
+does not merge files or create a dossier.
+
+Missing files or missing qualifying human identity use shared defaults only. A
+human assignment without a profile ID does not fall back to the creator. Display
+labels, channel sender IDs, unknown-source creator IDs, and agent owners cannot
+select a personal file. Internal events and delegated tasks do not automatically
+inherit a personal profile. Subagent bootstrap still contains only its existing
+allowed project instructions. The shared local owner profile represents all
+connections using that identity, not separate people; use per-person sign-in on
+a team Gateway.
+
+Personal files use the existing guarded reads and memory provenance checks.
+Symlink aliases are not accepted. Each personal file must fit wholly within the
+4,000-character USER budget (or a lower configured per-file/remaining total
+budget); otherwise it is omitted with a warning rather than partially injected.
+Shared files retain their existing limits. Existing harness-specific bootstrap
+suppression still applies: for example, the embedded runner's
+`contextInjection: "never"` and `continuation-skip` settings, and lightweight
+bootstrap modes. Use the default `always` mode to refresh session-selected
+personal instructions on later turns.
+This selection is supported by the local embedded, generic CLI, and native Codex
+bootstrap paths. ACP agents, realtime sessions, and remote worker execution do
+not gain per-person selection from this feature.
+
+This is **prompt selection, not filesystem secrecy**. Workspace tools, trusted
+plugins, shared transcripts, and previously generated responses can expose other
+context. Reassigning the session or changing participants does not erase
+conversation history. Do not store secrets in these files.
+
 ## Gateway profile and GitHub credit
 
 Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified. The Profile header follows your live user identity, including names cleared from another browser, even when several agents are configured. Unidentified connections retain the default-agent preview.
@@ -25,7 +77,9 @@ The Control UI labels this presence **Shared owner** in the People sidebar, acti
 
 On macOS, an owner without a saved avatar uses the Gateway host account's user picture. Uploading an avatar in **Settings → Profile → Identity** overrides that default. The picture stays a local, process-cached default rather than a saved profile upload. Restart the Gateway after changing it in macOS. This applies only to the shared owner profile, not to people signed in with their own identities. Unavailable pictures fall back to initials.
 
-GitHub-backed sign-in is supported through Cloudflare Access and Tailscale Serve. For Cloudflare Access, the Gateway accepts identity enrichment only after successful `trusted-proxy` authentication with the standard Access email header and a required Access assertion header. It calls the Access identity endpoint. It requires the returned email to match the authenticated proxy principal, and the identity provider to be GitHub. It then resolves the canonical GitHub login from the returned numeric account id. For Tailscale Serve, the Gateway resolves the verified GitHub-backed Tailscale login through GitHub. Both paths record the immutable numeric account id plus the current canonical login.
+GitHub-backed sign-in is supported through Cloudflare Access and Tailscale Serve. For Cloudflare Access, the Gateway accepts identity enrichment only after successful `trusted-proxy` authentication with the standard Access email header and a required Access assertion header. It calls the Access identity endpoint and requires the returned email to match the authenticated proxy principal. The account ID comes from the GitHub identity provider, or from an explicitly configured [trusted OIDC claim](/gateway/cloudflare-access#verified-github-credit-through-oidc). It then resolves the canonical GitHub login from that numeric account ID. For Tailscale Serve, the Gateway resolves the verified GitHub-backed Tailscale login through GitHub. Both paths record the immutable numeric account ID plus the current canonical login.
+
+OIDC without a trusted GitHub claim keeps email-only sign-in and any existing linked identity. Trusted OIDC enrichment preserves an existing email profile's role and saved co-author preference; conflicting identities require explicit administrator linking rather than an automatic merge or email reassignment.
 
 For new profiles or an unset display name, OpenClaw prefers the public name from the verified GitHub account. When GitHub has none, it uses the sign-in provider's name. A saved name is upgraded only when it exactly matches the current canonical GitHub login, including case. All other saved names remain unchanged, including custom names and previously adopted full names. This takes effect on the next successful identity sync through sign-in, reconnect, or a Profile refresh that retries the lookup. Existing profiles are not renamed in a background migration.
 

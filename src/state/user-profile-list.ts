@@ -189,6 +189,18 @@ function resolveCatalogProfile(rows: Map<string, ProfileDisplayRow>, id: string)
   const raw = rows.get(id);
   return rows.get(raw?.merged_into ?? id) ?? raw;
 }
+
+/** Gateway readers already retain this catalog with their session projection. */
+export function readResidentUserProfileId(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): string | undefined {
+  const catalog = profileCatalogs.get(profileCatalogPath(options));
+  if (!catalog?.valid) {
+    throw new Error("User profile catalog is not ready");
+  }
+  return resolveCatalogProfile(catalog.rows, profileId)?.id;
+}
 type ProfileCatalog = {
   rows: Map<string, ProfileDisplayRow>;
   identity: DatabasePathIdentity;
@@ -196,7 +208,7 @@ type ProfileCatalog = {
   leases: Set<symbol>;
 };
 const profileCatalogs = new Map<string, ProfileCatalog>();
-type AvatarPublication = {
+type ProfilePublication = {
   identity: DatabasePathIdentity;
   profileId: string;
   witnesses: Map<
@@ -205,7 +217,7 @@ type AvatarPublication = {
   >;
   catalogs: Map<ProfileCatalog, symbol>;
 };
-const avatarPublications = new Set<AvatarPublication>();
+const profilePublications = new Set<ProfilePublication>();
 let stopCatalogEvents: (() => void) | undefined;
 let profileCatalogHandles = new WeakMap<DatabaseSync, Map<string, ProfileDisplayRow>>();
 const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
@@ -238,16 +250,16 @@ function loadProfileCatalog(
       shared?.rows ??
       new Map(tableExists(db, "user_profiles") ? selectProfileDisplayEntries(db) : []);
     Object.assign(catalog, { identity, valid: true });
-    for (const publication of avatarPublications) {
-      retainAvatarPublicationCatalog(publication, catalog, true);
+    for (const publication of profilePublications) {
+      retainProfilePublicationCatalog(publication, catalog, true);
     }
     return true;
   }
   return false;
 }
 
-function retainAvatarPublicationCatalog(
-  publication: AvatarPublication,
+function retainProfilePublicationCatalog(
+  publication: ProfilePublication,
   catalog: ProfileCatalog,
   late: boolean,
 ) {
@@ -255,7 +267,7 @@ function retainAvatarPublicationCatalog(
     return;
   }
   if (!publication.catalogs.has(catalog)) {
-    const lease = Symbol("pending avatar publication");
+    const lease = Symbol("pending profile publication");
     publication.catalogs.set(catalog, lease);
     catalog.leases.add(lease);
   }
@@ -280,20 +292,20 @@ function releaseProfileCatalog(catalog: ProfileCatalog, lease: symbol) {
 }
 
 /** Capture under the worker's write transaction; native commits replace these row objects. */
-export function retainUserProfileAvatarPublication(
+export function retainUserProfilePublication(
   identity: DatabasePathIdentity,
-  before: ProfileDisplayRow,
+  profileId: string,
+  before: ProfileDisplayRow | undefined,
 ) {
-  const profileId = before.id;
-  const publication: AvatarPublication = {
+  const publication: ProfilePublication = {
     identity,
     profileId,
     witnesses: new Map(),
     catalogs: new Map(),
   };
-  avatarPublications.add(publication);
+  profilePublications.add(publication);
   for (const catalog of profileCatalogs.values()) {
-    retainAvatarPublicationCatalog(publication, catalog, false);
+    retainProfilePublicationCatalog(publication, catalog, false);
   }
   return {
     reconcile(this: void, observed: ProfileDisplayRow | undefined) {
@@ -321,7 +333,7 @@ export function retainUserProfileAvatarPublication(
       }
     },
     release(this: void) {
-      avatarPublications.delete(publication);
+      profilePublications.delete(publication);
       for (const [catalog, lease] of publication.catalogs) {
         releaseProfileCatalog(catalog, lease);
       }

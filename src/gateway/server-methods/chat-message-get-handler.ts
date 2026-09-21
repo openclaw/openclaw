@@ -249,9 +249,13 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    respond(true, {
-      ok: true,
-      message: projected,
-    });
+    // maxChars bounds individual text fields, not the serialized message: many
+    // blocks or structured output must not bypass the WebSocket payload limit.
+    respond(
+      true,
+      jsonUtf8Bytes(projected) > MAX_PAYLOAD_BYTES - 1024
+        ? { ok: false, unavailableReason: "oversized" }
+        : { ok: true, message: projected },
+    );
   },
 };

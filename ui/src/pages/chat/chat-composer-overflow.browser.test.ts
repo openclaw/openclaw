@@ -310,6 +310,74 @@ describe("composer overflow presentation", () => {
     expect(getComputedStyle(element).maskImage === "none").toBe(!scrollable);
   }
 
+  it.each([
+    { viewport: 1200, width: 760 },
+    { viewport: 390, width: 342 },
+  ])(
+    "ellipsizes empty focused and blurred composers at $viewport px without clipping drafts",
+    async ({ viewport, width }) => {
+      await page.viewport(viewport, 800);
+      container.style.width = `${width}px`;
+      const props = createComposerProps({
+        assistantName: "A deliberately long assistant name ".repeat(8),
+        onDraftChange: (draft) => {
+          props.draft = draft;
+          draw();
+        },
+      });
+      const draw = () => render(renderChatComposer(props), container);
+      draw();
+      const textarea = container.querySelector<HTMLTextAreaElement>(
+        ".agent-chat__composer-combobox > textarea",
+      )!;
+      const placeholder = container.querySelector<HTMLElement>(
+        ".agent-chat__composer-placeholder",
+      )!;
+      const control = page.elementLocator(textarea);
+      await afterLayout();
+
+      expect(placeholder).not.toBeNull();
+      expect(placeholder.textContent).toBe(textarea.placeholder);
+      expect(placeholder.getAttribute("aria-hidden")).toBe("true");
+      expect(textarea.getAttribute("aria-label")).toBeTruthy();
+      for (const focused of [false, true]) {
+        if (focused) {
+          await control.click();
+        } else {
+          textarea.blur();
+        }
+        await afterLayout();
+        expect(document.activeElement === textarea).toBe(focused);
+        expect(placeholder.checkVisibility()).toBe(true);
+        expect(placeholder.scrollWidth).toBeGreaterThan(placeholder.clientWidth);
+        expect(getComputedStyle(placeholder).textOverflow).toBe("ellipsis");
+        expect(getComputedStyle(placeholder).overflowX).toBe("hidden");
+        expect(getComputedStyle(textarea, "::placeholder").color).toBe("rgba(0, 0, 0, 0)");
+        expect(placeholder.getBoundingClientRect().right).toBeLessThanOrEqual(
+          textarea.getBoundingClientRect().right + 1,
+        );
+      }
+
+      const emptyHeight = textarea.clientHeight;
+      const draft =
+        "A typed line that wraps within the available composer width. ".repeat(8) +
+        "\nA second editable line.";
+      await control.fill(draft);
+      await afterLayout();
+      expect(textarea.value).toBe(draft);
+      expect(props.draft).toBe(draft);
+      expect(placeholder.checkVisibility()).toBe(false);
+      expect(getComputedStyle(textarea).whiteSpace).toBe("pre-wrap");
+      expect(textarea.clientHeight).toBeGreaterThan(emptyHeight);
+
+      await control.fill("");
+      await afterLayout();
+      expect(document.activeElement).toBe(textarea);
+      expect(placeholder.checkVisibility()).toBe(true);
+      expect(textarea.clientHeight).toBe(emptyHeight);
+    },
+  );
+
   it("updates retained attachment edges when files are appended, scrolled, and removed", async () => {
     drawAttachments(1);
     const element = rail();

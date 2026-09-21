@@ -174,6 +174,21 @@ describe("compiled worker content cache", () => {
     "NAPI_RS_FORCE_WASI",
   ])("honors the explicitly selected compiler through %s", (name) => {
     expect(useVitestWorkerCache({ [name]: "override" })).toBe(false);
+    expect(
+      useVitestWorkerCache({ CI: "1", OPENCLAW_VITEST_WORKER_CACHE: "1", [name]: "override" }),
+    ).toBe(false);
+  });
+  it("requires an explicit CI cache opt-in without overriding custom loaders", () => {
+    for (const ciEnv of [{ CI: "1" }, { GITHUB_ACTIONS: "true" }]) {
+      expect(useVitestWorkerCache(ciEnv)).toBe(false);
+      expect(useVitestWorkerCache({ ...ciEnv, OPENCLAW_VITEST_WORKER_CACHE: "0" })).toBe(false);
+      const enabled = { ...ciEnv, OPENCLAW_VITEST_WORKER_CACHE: "1" };
+      expect(useVitestWorkerCache(enabled)).toBe(!process.versions.bun);
+      expect(useVitestWorkerCache({ ...enabled, NODE_OPTIONS: "--import=./loader.mjs" })).toBe(
+        false,
+      );
+      expect(useVitestWorkerCache(enabled, ["--require", "./loader.cjs"])).toBe(false);
+    }
   });
   it("restores identical executable bytes into the same reserved generation path", async () => {
     const f = fixture();

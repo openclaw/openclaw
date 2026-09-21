@@ -437,15 +437,18 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - Navigate through the sidebar's **Pages** menu. Voice input belongs to the Chat
   composer; there is no separate Voice tab.
 - Tap the composer microphone for on-device speech recognition that inserts a
-  transcript into the draft. Long-press the microphone to record a voice-note
-  attachment. The UI reports unavailable recognition, missing permission,
+  transcript into the draft. While listening, a Stop icon replaces the microphone;
+  tap it to finish listening. While starting or transcribing, a Close icon cancels
+  that attempt. Long-press the microphone to open **Voice options**,
+  then choose **Record voice note** to create an attachment. The UI reports
+  unavailable recognition, missing permission,
   busy/network failures, and no-speech outcomes instead of silently dropping
   the attempt. If dictation is unavailable and a Gateway is selected,
   **Record voice note** offers a new recording while keeping the draft. It does
   not recover speech from the failed dictation attempt or send anything
   automatically.
-- Start continuous **Talk** from the Chat waveform. Dictation, voice-note
-  recording, and Talk are mutually exclusive microphone paths.
+- To start continuous **Talk**, long-press the microphone and choose **Start Talk**.
+  Dictation, voice-note recording, and Talk are mutually exclusive microphone paths.
 - Your selected agent stays bound to Talk and the main chat when the same Gateway
   reconnects, including while its agent list refreshes. Removing that agent falls
   back to the Gateway default. Switching Gateways or restarting the app clears

@@ -9,6 +9,29 @@ import {
 } from "../../src/infra/state-database-coordinator.js";
 import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
 
+/** Capture SQL during execution; closing a connection invalidates its statement getters. */
+export function observeSqliteReadSql(prototype: StatementSync): {
+  queries: string[];
+  restore: () => void;
+} {
+  const queries: string[] = [];
+  const observers = (["all", "get", "iterate"] as const).map((method) => {
+    const original = prototype[method];
+    return vi.spyOn(prototype, method).mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver: StatementSync, args) {
+          queries.push(receiver.sourceSQL);
+          return Reflect.apply(target, receiver, args);
+        },
+      }),
+    );
+  });
+  return {
+    queries,
+    restore: () => observers.forEach((observer) => observer.mockRestore()),
+  };
+}
+
 /**
  * Count SQLite query executions per caller-defined bucket. Prepared-statement
  * caching (src/infra/kysely-sync.ts) reuses statements across calls, so

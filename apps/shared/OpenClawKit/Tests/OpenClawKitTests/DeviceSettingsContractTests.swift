@@ -18,14 +18,17 @@ struct DeviceSettingsContractTests {
         let availability = try #require(DeviceSettingsSnapshot.DesktopAvailability.State(rawValue: state))
         let snapshot = DeviceSettingsSnapshot(
             device: .init(appVersion: "1", appBuild: "2"),
-            capabilities: .init(unattendedDesktopEnabled: false),
+            capabilities: .init(
+                desktopSharingEnabled: true, computerControlEnabled: false, unattendedDesktopEnabled: false),
             desktopAvailability: .init(state: availability),
             permissions: .init(entries: [], location: .init(mode: .off, precise: false)),
             voice: .init(supported: false, wakeEnabled: false))
         let encoded = try JSONEncoder().encode(snapshot)
         let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         #expect(actual["desktopAvailability"] as? [String: String] == ["state": state])
-        #expect(actual["capabilities"] as? [String: Bool] == ["unattendedDesktopEnabled": false])
+        #expect(actual["capabilities"] as? [String: Bool] == [
+            "desktopSharingEnabled": true, "computerControlEnabled": false, "unattendedDesktopEnabled": false,
+        ])
     }
 
     @Test func `Chrome extension status and setup accept only their exact action payloads`() {

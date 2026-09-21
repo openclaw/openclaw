@@ -21,6 +21,7 @@ import {
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
 } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestTestCommand } from "../../scripts/lib/vitest-test-runtime.mts";
 import {
   createVitestUnhandledErrorDetector,
   writeVitestUnhandledErrorSummary,
@@ -85,6 +86,47 @@ describe("scripts/run-vitest", () => {
       ]),
     ).toEqual(["--no-maglev", "node_modules/vitest/vitest.mjs"]);
     expect(resolveDirectNodeVitestArgs(["exec", "vitest", "run"])).toBeNull();
+  });
+
+  it.each([undefined, "node", "bun"])(
+    "selects the %s test runtime without changing the compiled bootstrap or test operands",
+    (runtime) => {
+      const operands = [
+        "scripts/lib/vitest-worker-bootstrap.mts",
+        "/compiled/generation",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--testNamePattern",
+        "--no-maglev",
+      ];
+      const flags = ["--no-maglev", "--no-concurrent-sparkplug"];
+      expect(
+        resolveVitestTestCommand([...flags, ...operands], {
+          OPENCLAW_VITEST_RUNTIME: runtime,
+        }),
+      ).toEqual({
+        command: runtime === "bun" ? "bun" : process.execPath,
+        args: runtime === "bun" ? operands : [...flags, ...operands],
+      });
+    },
+  );
+
+  it("rejects an unsupported test runtime before launching a child", () => {
+    expect(() =>
+      spawnWatchedVitestProcess({
+        pnpmArgs: ["exec", "node", "node_modules/vitest/vitest.mjs", "run"],
+        spawnParams: {},
+        env: { OPENCLAW_VITEST_RUNTIME: "deno" },
+      }),
+    ).toThrow("Invalid OPENCLAW_VITEST_RUNTIME: deno; expected node or bun");
+  });
+
+  it("keeps native preparation tools on Node when tests select Bun", () => {
+    const args = ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"];
+    expect(resolveVitestTestCommand(args, { OPENCLAW_VITEST_RUNTIME: "bun" })).toEqual({
+      command: process.execPath,
+      args,
+    });
   });
 
   it("reports an actionable error when Vitest cannot be resolved", () => {
@@ -979,40 +1021,27 @@ registerHooks({resolve(specifier, context, nextResolve) {
     });
   });
 
-  it("disables an inherited Node compile cache for every Vitest child", () => {
-    expect(
-      resolveRunVitestSpawnEnv(
-        {
-          NODE_COMPILE_CACHE: "/tmp/node-compile",
-          NODE_COMPILE_CACHE_PORTABLE: "1",
-          PATH: "/usr/bin",
-        },
-        ["run"],
-      ),
-    ).toEqual({
-      NODE_DISABLE_COMPILE_CACHE: "1",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
-      PATH: "/usr/bin",
-    });
-    expect(
-      resolveRunVitestSpawnEnv({ NODE_COMPILE_CACHE: "/tmp/node-compile", PATH: "/usr/bin" }, [
-        "run",
-        "--coverage=false",
-      ]),
-    ).toMatchObject({ NODE_DISABLE_COMPILE_CACHE: "1" });
-    expect(
-      resolveVitestSpawnParams(
-        {
-          CI: "true",
-          NODE_COMPILE_CACHE: "/tmp/node-compile",
-          NODE_COMPILE_CACHE_PORTABLE: "1",
-          PATH: "/usr/bin",
-        },
-        "linux",
-      ).env,
-    ).toEqual({ CI: "true", NODE_DISABLE_COMPILE_CACHE: "1", PATH: "/usr/bin" });
-  });
+  it.each([undefined, "1"])(
+    "forwards Node compile cache settings with explicit disable=%s",
+    (disabled) => {
+      const env = {
+        CI: "true",
+        NODE_COMPILE_CACHE: "/tmp/node-compile",
+        NODE_COMPILE_CACHE_PORTABLE: "1",
+        ...(disabled ? { NODE_DISABLE_COMPILE_CACHE: disabled } : {}),
+        PATH: "/usr/bin",
+      };
+      for (const argv of [["run"], ["run", "--coverage=false"]]) {
+        expect(resolveRunVitestSpawnEnv(env, argv)).toEqual({
+          ...env,
+          OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
+        });
+      }
+      expect(resolveRunVitestSpawnEnv(env, ["--watch"])).toEqual(env);
+      expect(resolveVitestSpawnParams(env, "linux").env).toEqual(env);
+    },
+  );
 
   describe("native config option ownership", () => {
     const config = "test/vitest/vitest.e2e.config.ts";

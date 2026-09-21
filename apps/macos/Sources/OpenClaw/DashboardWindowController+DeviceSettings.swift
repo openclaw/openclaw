@@ -152,6 +152,9 @@ extension DashboardWindowController {
             if !enabled { CanvasManager.shared.hideAll() }
         case .cameraEnabled:
             defaults.set(enabled, forKey: cameraEnabledKey)
+        case .desktopSharingEnabled:
+            defaults.set(enabled, forKey: desktopSharingEnabledKey)
+            NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
         case .computerControlEnabled:
             defaults.set(enabled, forKey: computerControlEnabledKey)
             state.applyComputerControlHostState()

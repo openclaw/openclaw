@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 364198,
-  "reason": "Peter approved the measured 364198 B startup gzip baseline and 356 KiB cap for #152510 on 2026-09-19: ancestor-session snapshot reuse is 215 B above the previous enforced budget. The existing 512 B growth and 64 B build-variance allowances are unchanged.",
-  "updatedAt": "2026-09-20"
+  "startupJsGzipBytes": 370300,
+  "reason": "Avatar-hat catalog measured 370,196 B locally against main baseline 369,600 B (enforcement 370,176 B); 370,300 B rounds up with Linux headroom, and the unchanged 512 B growth and 64 B build-variance allowances give a 370,876 B enforcement limit, 700 B (0.19 %) above the base limit.",
+  "updatedAt": "2026-09-21"
 }

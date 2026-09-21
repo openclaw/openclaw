@@ -8,7 +8,7 @@ import {
   type SqliteTranscriptStorageRow,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { readMessageIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 export type IncrementalSuffixIdempotencyMutation = {
   suffixIdentityKeys: readonly (readonly [string, string | null])[];

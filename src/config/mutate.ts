@@ -62,7 +62,6 @@ import {
   prepareConfigWriteValues,
   projectConfigWriteSource,
 } from "./io.write-prepare.js";
-import { createConfigWriteAuthorityGuard } from "./io.write-safety.js";
 import { projectIncludeModelPolicyWrite } from "./model-policy-allowlist-migration.js";
 import {
   assertIncludeGraphStillMatchesSnapshot,
@@ -100,6 +99,7 @@ import {
 } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
+import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 import {
   captureConfigWriteLockGuard,
   markActiveConfigMutationPath,
@@ -536,10 +536,10 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
   }
   const { nextConfig, boundaryPath, includePath } = includeWrite;
   const rootGuard = captureConfigWriteLockGuard(params.snapshot.path);
-  const assertOwner = createConfigWriteAuthorityGuard(() => {
-    params.writeOptions?.assertCurrent?.();
-    rootGuard?.();
-  });
+  const assertOwner = createConfigWriteAuthorityGuard(
+    params.writeOptions?.assertCurrent,
+    rootGuard,
+  );
   assertOwner();
 
   const writeEnv = params.io?.env ?? process.env;
@@ -566,10 +566,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
     expectedIncludeTarget,
     async () => {
       const includeGuard = captureConfigWriteLockGuard(expectedIncludeTarget);
-      const assertScopedOwner = createConfigWriteAuthorityGuard(() => {
-        assertOwner();
-        includeGuard?.();
-      });
+      const assertScopedOwner = createConfigWriteAuthorityGuard(assertOwner, includeGuard);
       assertScopedOwner();
       const includeTarget = await resolveExpectedRootBoundIncludeFile({
         configPath: params.snapshot.path,

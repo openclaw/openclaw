@@ -1,5 +1,6 @@
 import type { AuthProfileRowRead, UserModelAuthProfile } from "../agents/auth-profiles/types.js";
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
+import type { McpOAuthReadOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type { SubagentRegistryWrite } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import type { AuditEventListQuery, AuditEventListPage } from "../audit/audit-event-types.js";
@@ -11,9 +12,7 @@ import type {
   ConfigHealthSnapshot,
   ConfigHealthEntryBasis,
 } from "../config/io.health-state.types.js";
-import type { CronStoreWorkerOperations } from "../cron/store/load-worker.types.js";
-import type { CronRunRecoveryWorkerOperations } from "../cron/store/run-recovery.types.js";
-import type { CronStoreSaveWorkerOperations } from "../cron/store/save-worker.types.js";
+import type { CronStateWorkerOperations } from "../cron/store/dispatch.worker.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.types.js";
 import type {
   RepositoryGitHubPublicationPendingQuery,
@@ -23,11 +22,15 @@ import type {
   ManagedImageRecord,
   ManagedImageRecordEntry,
 } from "../gateway/managed-image-record-store.types.js";
+import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
+import type { DevicePairingWorkerOperations } from "../infra/device-pairing-worker-contract.js";
+import type { ExecAuthorizationWorkerOperations } from "../infra/exec-approvals-contracts.js";
+import type { CurrentConversationBindingWorkerOperations } from "../infra/outbound/current-conversation-bindings.worker-contract.js";
 import type { PreparedPromotionClaim } from "../infra/promotions-feed.kernel.js";
-import type { ApnsRegistration } from "../infra/push-apns-store.types.js";
+import type { ApnsRegistrationWorkerOperations } from "../infra/push-apns-store.worker-contract.js";
 import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
 import type { SessionDeliveryWorkerOperations } from "../infra/session-delivery-queue.worker-contract.js";
 import type { PreparedSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
@@ -36,6 +39,8 @@ import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contrac
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import type { TelemetryWorkerOperations } from "../infra/telemetry-worker-contract.js";
 import type { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
+import type { NodeWorkerJournalWorkerOperations } from "../node-host/node-worker-journal.worker-contract.js";
+import type { PluginBlobWorkerOperations } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
 import type { PluginBindingApprovalEntry } from "../plugins/conversation-binding-state.types.js";
 import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
@@ -52,10 +57,14 @@ import type {
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import type { commitSkillUploadInDatabase } from "../skills/lifecycle/upload-store-commit.js";
+import type * as curator from "../skills/workshop/curator.kernel.js";
 import type { listStoredSkillProposalEventsInDatabase } from "../skills/workshop/store-sqlite-event.js";
 import type { SkillProposalEvent, SkillProposalRecord } from "../skills/workshop/types.js";
 import type { TaskRegistryWorkerOperations } from "../tasks/task-registry.worker-contract.js";
-import type { TranscriptReadOperations } from "../transcripts/store-worker-contract.js";
+import type {
+  TranscriptReadOperations,
+  TranscriptWriteOperations,
+} from "../transcripts/store-worker-contract.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
 import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.contract.js";
@@ -68,22 +77,29 @@ import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
+export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
+  CurrentConversationBindingWorkerOperations &
+  WebPushWorkerOperations &
+  ApnsRegistrationWorkerOperations &
+  DevicePairingWorkerOperations &
+  ExecAuthorizationWorkerOperations &
+  OperatorApprovalWorkerOperations &
   AuditWriterOperations &
   NativeHookRelayStoreWorkerOperations &
   TelemetryWorkerOperations &
   HostedCatalogSnapshotWorkerOperations &
   PluginStateWorkerOperations &
+  PluginBlobWorkerOperations &
   UserPreferenceWorkerOperations &
   OnboardingRecommendationWriteOperations &
   UserProfileWorkerOperations &
-  CronStoreWorkerOperations &
-  CronRunRecoveryWorkerOperations &
-  CronStoreSaveWorkerOperations &
+  CronStateWorkerOperations &
   FleetRegistryWriteOperations &
   SessionDeliveryWorkerOperations &
   DeliveryQueueWorkerOperations &
   TranscriptReadOperations &
+  TranscriptWriteOperations &
+  NodeWorkerJournalWorkerOperations &
   TaskRegistryWorkerOperations & {
     "githubRepository.personalPending": {
       input: RepositoryGitHubPublicationPendingQuery;
@@ -136,8 +152,6 @@ export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
       output: ReturnType<typeof deviceAuth.clearOriginDeviceTokenInDatabase>;
     };
 
-    "apns.registration.read": { input: string; output: ApnsRegistration | null };
-    "apns.registrations.read": { input: readonly string[]; output: Map<string, ApnsRegistration> };
     "authProfiles.read": { input: { artifactPreserving: boolean }; output: AuthProfileRowRead };
     "authProfiles.sharedOwnership": { input: { artifactPreserving: boolean }; output: unknown };
     "authProfiles.personal": {
@@ -183,6 +197,11 @@ export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
       input: { project: ProjectRegistryIdentity; lease: OpenClawStateLeaseIdentity };
       output: ProjectRegistryRecord | undefined;
     };
+    "skills.curator.read": {
+      input: { skillFiles: readonly string[] };
+      output: ReturnType<typeof curator.readSkillCuratorStateInDatabase>;
+    };
+    "skills.usage.record": { input: curator.PreparedSkillUsage; output: void };
     "workshop.events.list": {
       input: Parameters<typeof listStoredSkillProposalEventsInDatabase>[1];
       output: ReturnType<typeof listStoredSkillProposalEventsInDatabase>;
@@ -213,11 +232,11 @@ export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
       output: { value_json: string } | undefined;
     };
     "plugins.deferredMigrations.read": {
-      input: undefined;
+      input: { artifactPreservingReadOnly: boolean };
       output: readonly DeferredPluginMigration[];
     };
     "claws.install-schema-versions": {
-      input: undefined;
+      input: { artifactPreservingReadOnly: boolean };
       output: ClawInstallSchemaVersionRow[] | undefined;
     };
     "config.health.read": { input: { artifactPreserving: boolean }; output: ConfigHealthSnapshot };

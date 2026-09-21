@@ -3,6 +3,10 @@ import { existsSync } from "node:fs";
 import type { Writable } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import type {
+  RealtimeVoiceAudioChunkMetadata,
+  RealtimeVoicePlaybackItem,
+} from "openclaw/plugin-sdk/realtime-voice";
 
 type PumpProcess = {
   pid?: number;
@@ -48,13 +52,13 @@ type FaceTimeAudioPump = {
   suppressionReady(): Promise<void>;
   routeReady(): Promise<void>;
   processOutputSuppressed(): boolean;
-  writeOutputAudio(audio: Buffer): void;
+  writeOutputAudio(audio: Buffer, metadata?: RealtimeVoiceAudioChunkMetadata): void;
+  getPlaybackState(): RealtimeVoicePlaybackItem[];
   finishOutputAudio(): void;
   clearOutputAudio(): void;
   playedAudioFrames(): number;
   queuedAudioFrames(): number;
   suspendMedia(): Promise<void>;
-  failClosed(): Promise<void>;
   stop(): Promise<void>;
 };
 
@@ -71,8 +75,10 @@ class PlaybackClock {
   private playedFramesBeforeSegment = 0;
   private playbackStartsAtMs = 0;
   private playbackUntilMs = 0;
+  private retiredFrames = 0;
+  private items: Array<{ itemId?: string; frames: number }> = [];
 
-  append(frames: number, nowMs = Date.now()): void {
+  append(frames: number, itemId?: string, nowMs = Date.now()): void {
     if (nowMs >= this.playbackUntilMs) {
       this.playedFramesBeforeSegment = this.generatedFrames;
       this.playbackStartsAtMs = nowMs + OUTPUT_LATENCY_BUDGET_MS;
@@ -80,6 +86,33 @@ class PlaybackClock {
     }
     this.generatedFrames += frames;
     this.playbackUntilMs += (frames / FACETIME_AUDIO_SAMPLE_RATE_HZ) * 1000;
+    const previous = this.items.at(-1);
+    if (previous && previous.itemId === itemId) {
+      previous.frames += frames;
+    } else {
+      this.items.push({ itemId, frames });
+    }
+  }
+
+  playbackState(): RealtimeVoicePlaybackItem[] {
+    let remaining = Math.max(0, this.playedFrames() - this.retiredFrames);
+    const playedByItem = new Map<string, number>();
+    for (const item of this.items) {
+      const consumed = Math.min(remaining, item.frames);
+      remaining -= consumed;
+      if (item.itemId) {
+        playedByItem.set(item.itemId, (playedByItem.get(item.itemId) ?? 0) + consumed);
+      }
+    }
+    return Array.from(playedByItem, ([itemId, frames]) => ({
+      itemId,
+      audioEndMs: Math.floor((frames * 1000) / FACETIME_AUDIO_SAMPLE_RATE_HZ),
+    }));
+  }
+
+  retireItems(): void {
+    this.items = [];
+    this.retiredFrames = this.generatedFrames;
   }
 
   playedFrames(nowMs = Date.now()): number {
@@ -104,6 +137,7 @@ class PlaybackClock {
     this.playedFramesBeforeSegment = 0;
     this.playbackStartsAtMs = 0;
     this.playbackUntilMs = 0;
+    this.retireItems();
   }
 }
 
@@ -325,6 +359,7 @@ export function startFaceTimeAudioPump(params: {
     settleCaptureReady(new Error("FaceTime native audio bridge stopped before readiness"));
     settleRouteReady(new Error("FaceTime input route stopped before verification"));
     cancelDrainTimer();
+    playbackClock.reset();
     try {
       captureProcess.stdin?.write(CAPTURE_CLOSE_SAFE_FRAME);
       captureProcess.stdin?.end();
@@ -338,46 +373,6 @@ export function startFaceTimeAudioPump(params: {
       wakeProcess ? terminateProcess(wakeProcess) : Promise.resolve(),
     ]);
   };
-  const failClosed = async () => {
-    if (stopped) {
-      return;
-    }
-    mediaSuspended = true;
-    stopped = true;
-    cancelDrainTimer();
-    playbackClock.reset();
-    try {
-      // No close-safe frame: EOF is the native watchdog's fail-closed signal.
-      captureProcess.stdin?.end();
-    } catch {
-      // The process may already be handling EOF.
-    }
-    let exited = false;
-    const exitedPromise = new Promise<void>((resolve) => {
-      captureProcess.on("exit", () => {
-        exited = true;
-        resolve();
-      });
-    });
-    // Stop queued model speech before waiting for the carrier watchdog. The
-    // native capture process retains hardware suppression during that wait.
-    const outputStopped = terminateProcess(outputProcess, "SIGKILL");
-    const wakeStopped = wakeProcess ? terminateProcess(wakeProcess) : Promise.resolve();
-    await Promise.race([
-      exitedPromise,
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 1_500);
-        timer.unref?.();
-      }),
-    ]);
-    await Promise.all([
-      exited ? Promise.resolve() : terminateProcess(captureProcess),
-      outputStopped,
-      wakeStopped,
-    ]);
-    captureSuppressionActive = false;
-  };
-
   const wakeProcess = existsSync(CAFFEINATE_COMMAND)
     ? spawnFn(
         CAFFEINATE_COMMAND,
@@ -436,7 +431,7 @@ export function startFaceTimeAudioPump(params: {
       await routeReadyPromise;
     },
     processOutputSuppressed: () => captureSuppressionActive,
-    writeOutputAudio(audio) {
+    writeOutputAudio(audio, metadata) {
       if (stopped || mediaSuspended || audio.byteLength === 0) {
         return;
       }
@@ -452,13 +447,17 @@ export function startFaceTimeAudioPump(params: {
       try {
         cancelDrainTimer();
         outputProcess.stdin.write(audio);
-        playbackClock.append(audio.byteLength / 2);
+        playbackClock.append(audio.byteLength / 2, metadata?.itemId);
       } catch (error) {
         reportFailure(error instanceof Error ? error : new Error(formatErrorMessage(error)), false);
       }
     },
     finishOutputAudio() {
-      if (stopped || mediaSuspended || playbackClock.queuedFrames() <= 0) {
+      if (stopped || mediaSuspended) {
+        return;
+      }
+      if (playbackClock.queuedFrames() <= 0) {
+        playbackClock.retireItems();
         return;
       }
       cancelDrainTimer();
@@ -474,6 +473,7 @@ export function startFaceTimeAudioPump(params: {
           return;
         }
         drainTimer = undefined;
+        playbackClock.retireItems();
         params.onPlaybackDrained?.({
           generation,
           playedFrames: Math.floor(playbackClock.playedFrames()),
@@ -481,6 +481,7 @@ export function startFaceTimeAudioPump(params: {
       };
       notifyWhenDrained();
     },
+    getPlaybackState: () => playbackClock.playbackState(),
     clearOutputAudio: clearPlayback,
     playedAudioFrames: () => Math.floor(playbackClock.playedFrames()),
     queuedAudioFrames: () => Math.ceil(playbackClock.queuedFrames()),
@@ -492,7 +493,6 @@ export function startFaceTimeAudioPump(params: {
         await terminateProcess(outputProcess, "SIGKILL");
       }
     },
-    failClosed,
     stop,
   };
 }

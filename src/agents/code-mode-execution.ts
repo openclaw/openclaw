@@ -9,7 +9,6 @@ import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
-import { createPreflightDeclarations } from "./code-mode-preflight-declarations.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
@@ -17,7 +16,6 @@ import {
   createCodeModeApiFilesForRun,
   toToolSearchConfig,
   type CodeModeConfig,
-  type CodeModeLanguage,
   type CodeModeSettlementMode,
   type CodeModeWorkerResult,
   type PendingBridgeRequest,
@@ -46,7 +44,6 @@ import {
 import { runCodeModeWorker, type CodeModeWorkerInlineHost } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
-import { resolveCatalog } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
@@ -60,8 +57,6 @@ export async function runCodeModeExec(params: {
   resultBudget?: ToolResultBudget;
   code: string;
   assistantTurnId?: string;
-  language?: CodeModeLanguage;
-  typecheck?: boolean;
   restartSafe: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
@@ -117,16 +112,6 @@ export async function runCodeModeExec(params: {
     releaseReservation ??= reserveActiveRunSlot();
   });
   try {
-    const preflightDeclarations = params.typecheck
-      ? await createPreflightDeclarations(
-          runtime,
-          catalogProjection,
-          apiFiles,
-          namespaceRuntime,
-          config.memoryLimitBytes,
-          resolveCatalog(params.ctx),
-        )
-      : undefined;
     const remainingMs = budget.deadlineMs - performance.now();
     if (remainingMs <= 0) {
       throw new Error("interrupted");
@@ -136,8 +121,6 @@ export async function runCodeModeExec(params: {
         kind: "exec",
         retainFinalValue: !params.restartSafe,
         source: params.code,
-        preflightDeclarations,
-        language: params.language,
         config: { ...config, timeoutMs: remainingMs },
         catalog: catalogProjection.guestBindings,
         apiFiles,
@@ -323,6 +306,7 @@ function createInlineHost(
 ): CodeModeWorkerInlineHost {
   return {
     onInputConsumed,
+    onNetworkContent: () => params.runtime.observeNetworkContent(params.parentToolCallId),
     onBoundary: async (boundary, context) => {
       params.output.append(boundary.output);
       cancelPendingBridgeStatesById(pending, boundary.canceledRequestIds);

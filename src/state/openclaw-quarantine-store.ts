@@ -17,6 +17,7 @@ import {
   serializeSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";
@@ -90,17 +91,9 @@ export function readOpenClawAgentIntegrityVerification(
   };
   if (consume) {
     // Failure cannot admit a writer while leaving an old clean receipt reusable.
-    return withQuarantineWriter(env, (database) => {
-      database.exec("BEGIN IMMEDIATE;");
-      try {
-        const record = read(database);
-        database.exec("COMMIT;");
-        return record;
-      } catch (error) {
-        database.exec("ROLLBACK;");
-        throw error;
-      }
-    });
+    return withQuarantineWriter(env, (database) =>
+      runSqliteImmediateTransactionSync(database, () => read(database)),
+    );
   }
   const storePath = resolveQuarantineStorePath(env);
   if (!existsSync(storePath)) {
@@ -184,16 +177,11 @@ export function clearOpenClawAgentIntegrityVerification(
   pathname: string,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  withQuarantineWriter(env, (database) => {
-    database.exec("BEGIN IMMEDIATE;");
-    try {
-      deleteAgentIntegrityVerification(database, pathname);
-      database.exec("COMMIT;");
-    } catch (error) {
-      database.exec("ROLLBACK;");
-      throw error;
-    }
-  });
+  withQuarantineWriter(env, (database) =>
+    runSqliteImmediateTransactionSync(database, () =>
+      deleteAgentIntegrityVerification(database, pathname),
+    ),
+  );
 }
 
 function deleteAgentIntegrityVerification(database: DatabaseSync, pathname: string): void {
@@ -357,7 +345,10 @@ function withQuarantineWriter<T>(env: NodeJS.ProcessEnv, operation: (db: Databas
     completed = true;
     return result;
   } finally {
-    database.close();
+    // Failed rollback retires the handle; a second close would mask the write error.
+    if (database.isOpen) {
+      database.close();
+    }
     if (completed || !existed) {
       applyPrivateModeSync(storePath, OPENCLAW_QUARANTINE_FILE_MODE);
     }
@@ -495,9 +486,8 @@ export function recordOpenClawDatabaseQuarantine(options: {
     ? serializeSqliteFileGeneration(options.generation)
     : null;
   try {
-    return withQuarantineWriter(options.env ?? process.env, (database) => {
-      database.exec("BEGIN IMMEDIATE;");
-      try {
+    return withQuarantineWriter(options.env ?? process.env, (database) =>
+      runSqliteImmediateTransactionSync(database, () => {
         database
           .prepare(
             `
@@ -523,13 +513,9 @@ export function recordOpenClawDatabaseQuarantine(options: {
         if (options.kind === "agent") {
           deleteAgentIntegrityVerification(database, options.path);
         }
-        database.exec("COMMIT;");
         return true;
-      } catch (error) {
-        database.exec("ROLLBACK;");
-        throw error;
-      }
-    });
+      }),
+    );
   } catch {
     return false;
   }
@@ -545,20 +531,15 @@ export function clearOpenClawDatabaseQuarantine(
     return true;
   }
   try {
-    return withQuarantineWriter(env, (database) => {
-      database.exec("BEGIN IMMEDIATE;");
-      try {
+    return withQuarantineWriter(env, (database) =>
+      runSqliteImmediateTransactionSync(database, () => {
         database
           .prepare("DELETE FROM quarantined_databases WHERE path = ?")
           .run(path.resolve(pathname));
         deleteAgentIntegrityVerification(database, pathname);
-        database.exec("COMMIT;");
         return true;
-      } catch (error) {
-        database.exec("ROLLBACK;");
-        throw error;
-      }
-    });
+      }),
+    );
   } catch {
     return false;
   }

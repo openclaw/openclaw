@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Restart-path proof against the real registry sweeper and SQLite session store.
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -444,6 +445,21 @@ describe("subagent orphan recovery — faithful restart path", () => {
       endedAt: expect.any(Number),
     });
     expect(persistedSession?.abortedLastRun).toBeUndefined();
+    expect(
+      (
+        await loadTranscriptEvents({
+          agentId: "main",
+          storePath,
+          sessionKey: childSessionKey,
+          sessionId: "sess-stale-aborted",
+        })
+      ).filter((event) => isRecord(event) && event.customType === "run-failed-before-reply"),
+    ).toMatchObject([
+      {
+        display: true,
+        details: { runId, error: expect.stringContaining("Gateway restart") },
+      },
+    ]);
   });
 
   it.each([60_000, 3 * TWO_HOURS_MS])(

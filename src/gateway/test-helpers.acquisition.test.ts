@@ -28,6 +28,7 @@ afterEach(() => {
   vi.doUnmock("ws");
   vi.doUnmock("../../packages/gateway-client/src/websocket.js");
   vi.doUnmock("./server.js");
+  vi.doUnmock("../agents/prepared-model-runtime.test-support.js");
   vi.doUnmock("../test-utils/ports.js");
   vi.doUnmock("../infra/device-pairing.js");
   vi.resetModules();
@@ -259,7 +260,10 @@ function mockPeerGateway(peer: AcquisitionPeer, close = peer.close) {
   });
   vi.doMock("./server.js", () => ({
     startGatewayServer: start,
-    resetPreparedModelCatalogForTest: vi.fn(),
+  }));
+  vi.doMock("../agents/prepared-model-runtime.test-support.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../agents/prepared-model-runtime.test-support.js")>()),
+    resetPreparedGatewayModelCatalogForTest: vi.fn(),
   }));
   vi.doMock("../test-utils/ports.js", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../test-utils/ports.js")>()),

@@ -431,7 +431,11 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
       requireArray(toolResult.content, "native patch result")[0],
       "result",
     );
-    expect(output.text).toBe(testCase.output);
+    expect(output.text).toBe(
+      "codeMode" in testCase
+        ? JSON.stringify((rawOutput.params as { item: { output: unknown } }).item.output, null, 2)
+        : testCase.output,
+    );
   });
 
   it("does not double-count a successful code-mode patch and its canonical FileChange", async () => {
@@ -488,13 +492,16 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
     });
     expect(patchCalls).toHaveLength(1);
     expect(patchCalls[0]).toMatchObject({ id: nativeCallId, name: "apply_patch" });
-    expect(
-      result.messagesSnapshot.some(
-        (message) =>
-          message.role === "toolResult" &&
-          (message as { toolCallId?: string }).toolCallId === outerCallId,
-      ),
-    ).toBe(false);
+    expect(result.messagesSnapshot).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: outerCallId,
+        toolName: "exec",
+        __openclaw: expect.objectContaining({
+          toolOutput: { source: "provider-response", modelInput: "unverified" },
+        }),
+      }),
+    );
   });
 
   it("does not classify an unrecognized raw patch failure as a success", async () => {
@@ -586,7 +593,8 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
       result.messagesSnapshot.some(
         (message) =>
           message.role === "toolResult" &&
-          (message as { toolCallId?: string }).toolCallId === callId,
+          message.toolCallId === callId &&
+          message.toolName === "apply_patch",
       ),
     ).toBe(false);
   });
@@ -637,7 +645,8 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
       result.messagesSnapshot.some(
         (message) =>
           message.role === "toolResult" &&
-          (message as { toolCallId?: string }).toolCallId === callId,
+          message.toolCallId === callId &&
+          message.toolName === "apply_patch",
       ),
     ).toBe(false);
   });

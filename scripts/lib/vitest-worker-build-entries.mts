@@ -1,9 +1,11 @@
 import { codexCatalogPageWorkerEntrypoint } from "../../extensions/codex/catalog-page-worker-entrypoint.ts";
+import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryPublicationFaultEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts";
 import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts";
 import { teamReportsSqliteBackendEntrypoint } from "../../extensions/team-reports/src/sqlite-backend-entrypoint.test-support.ts";
 import { workboardSqliteBackendEntrypoint } from "../../extensions/workboard/src/sqlite-backend-entrypoint.test-support.ts";
+import { authProfileScopeCwdEntrypoint } from "../../src/agents/auth-profiles/store-scope-cwd-runtime.test-support.ts";
 import {
   codeModeDescriptionRetentionEntrypoint,
   codeModeRetentionEntrypoint,
@@ -33,6 +35,7 @@ import {
 } from "../../src/plugins/loader-sdk-bridge-artifacts.test-support.ts";
 import { pluginRuntimeRetentionEntrypoint } from "../../src/plugins/runtime-retention-entrypoint.test-support.ts";
 import { persistenceRuntimeEntrypoint } from "../../src/skills/library/persistence-runtime.test-support.ts";
+import { gitBackupCommandRuntimeEntrypoint } from "../../src/snapshot/git-backup-command-runtime.test-support.ts";
 import { agentDatabaseModuleIdentityEntrypoints } from "../../src/state/openclaw-agent-db-module-identity-runtime.test-support.ts";
 import { agentWorkerStoreFixtureEntrypoint } from "../../src/state/openclaw-agent-worker-store.runtime.test-support.ts";
 import { databaseVerifyHostRuntimeEntrypoint } from "../../src/state/openclaw-database-verify-runtime.test-support.ts";
@@ -51,7 +54,11 @@ import { nativeSchtasksIntegrationEnabled } from "./vitest-worker-declarations.m
 // These fixture hooks require physical module boundaries and complete namespaces.
 export const legacyFinalizerBuildSources = [
   "src/cli/update-finalization-output.test-support.ts",
+  "src/cli/program/register.maintenance.ts",
+  "src/cli/one-shot-exit.ts",
   "src/commands/doctor.ts",
+  "src/commands/doctor-lint.ts",
+  "src/commands/doctor-post-upgrade.ts",
   "src/config/config.ts",
   "src/config/paths.ts",
   "src/plugins/installed-plugin-index-records.ts",
@@ -70,13 +77,13 @@ export const legacyFinalizerBuildSources = [
   "src/infra/update-migrated-finalize.worker.ts",
   "src/infra/runtime-process-entrypoints.ts",
   "src/cli/update-cli/update-command-service-plan.ts",
-  "src/cli/update-cli/update-command-repair-service.ts",
   "src/infra/tmp-openclaw-dir.ts",
   "src/cli/update-cli/update-command-convergence.ts",
   "src/cli/update-cli/update-command-restart-context.ts",
   "src/daemon/gateway-entrypoint.ts",
   "src/cli/update-cli/update-command-verification.ts",
   "src/cli/update-cli/shared.ts",
+  "src/cli/update-cli/update-command-service-command.ts",
 ];
 
 // Test-only roots share the invocation generation without changing package entries.
@@ -85,11 +92,13 @@ export const vitestWorkerBuildEntries = {
     "src/commands/doctor/shared/legacy-config-binding-repair.runtime.ts",
   ...createRuntimeProcessBuildEntries([
     ...runtimeProcessBuildEntrypoints,
+    ...Object.values(discordAudioTestEntrypoints),
     codexCatalogPageWorkerEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
     ...Object.values(triageTestRuntimeEntrypoints),
     ...Object.values(triageMaintenanceRuntimeEntrypoints),
+    authProfileScopeCwdEntrypoint,
     codeModeRetentionEntrypoint,
     codeModeDescriptionRetentionEntrypoint,
     ...cliCompactionBackendEntrypoints,
@@ -118,6 +127,7 @@ export const vitestWorkerBuildEntries = {
     nodeHostConfigRuntimeEntrypoint,
     channelIngressGatewayRestartEntrypoint,
     persistenceRuntimeEntrypoint,
+    gitBackupCommandRuntimeEntrypoint,
     qaGatewayCleanupRuntimeEntrypoint,
     logbookSqliteBackendEntrypoint,
     teamReportsSqliteBackendEntrypoint,

@@ -312,6 +312,13 @@ raw callback string. Actor and source-message checks remain channel-owned.
       including Markdown-image extraction. Both operations use
       `projectOutboundPayloadPlanForDelivery(plan)` for their delivery projection.
 
+      A `final` delivery can carry a supplemental notice before the answer.
+      Use `isReplyPayloadTerminalContent(payload)` from
+      `openclaw/plugin-sdk/reply-payload` when deciding whether to complete a task.
+      It excludes reasoning, commentary, and supplemental status or TTS payloads,
+      while retaining terminal errors and host-marked command results.
+      It classifies the reply lane; it does not check content, sendability, or authority.
+
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime
       metadata. Persisted transcript delivery facts cannot replace that metadata.
@@ -495,12 +502,16 @@ raw callback string. Actor and source-message checks remain channel-owned.
     </Note>
 
     Routes registered with `auth: "gateway"` use the Gateway's credential
-    checks. Before a handler performs a mutation or starts other side effects,
+    checks. Before a handler discloses protected data, performs a mutation, or starts other side effects,
     finish reading and validating its body and waiting for queued work, then call
     `await getPluginRuntimeGatewayRequestScope()?.revalidate?.()` from
     `openclaw/plugin-sdk/plugin-runtime`. The request-scoped capability rechecks
-    an admitted device credential and its original scopes through the Gateway
-    auth owner. It writes the standard HTTP 401 error and throws if the grant
+    an admitted device credential or signed Control UI cookie and its original
+    scopes through the Gateway auth owner. Cookie checks include expiry, the
+    current authentication generation, and the current profile role ceiling.
+    An effective role-policy change invalidates an in-flight cookie request, so
+    previously prepared data is not disclosed under outdated permissions.
+    It writes the standard HTTP 401 error and throws if the grant expired,
     was revoked, rotated, or narrowed. Let the rejection stop the handler; an
     error handler must not replace an already-ended response. The capability
     expires with the HTTP response and is absent for other authentication paths.

@@ -20,6 +20,7 @@ import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
+  createTauriDeviceSettingsSnapshot,
 } from "./test-helpers/native-device-settings.ts";
 
 const settingsGroups = visibleSettingsNavigationGroups(true);
@@ -86,6 +87,20 @@ describe("sidebar entries", () => {
       labelKey: "nav.settingsGroupDevice",
       routes: ["device", "device-permissions"],
     });
+    for (const platform of ["linux", "windows"] as const) {
+      const desktopCapability = {
+        ...capability,
+        snapshot: createTauriDeviceSettingsSnapshot(platform),
+      };
+      expect(visibleSettingsNavigationGroups(canAdmin, desktopCapability)[1]).toEqual({
+        labelKey: "nav.settingsGroupThisComputer",
+        routes: ["device"],
+      });
+      expect(search("Desktop sharing", desktopCapability)).toContainEqual(
+        expect.objectContaining({ routeId: "device" }),
+      );
+      expect(search("Precise location", desktopCapability)).toEqual([]);
+    }
     expect(
       visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: null })[1]?.labelKey,
     ).toBe("nav.settingsGroupThisDevice");

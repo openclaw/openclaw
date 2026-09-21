@@ -10,6 +10,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
+  type GatewayEventFrame,
   type GatewayHelloOk,
 } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
@@ -25,20 +26,23 @@ import {
 const targetedSessionReconciliationCases = [
   {
     description: "targeted session changes",
-    reconcile: (sessions: SessionCapability) => {
-      expect(
-        sessions.reconcileChanged(
-          {
-            sessionKey: "agent:main:main",
-            key: "agent:main:main",
-            kind: "direct",
-            updatedAt: 2,
-            hasActiveRun: false,
-            status: "done",
-          },
-          { resultAgentId: "main" },
-        ).applied,
-      ).toBe(true);
+    reconcile: (sessions: SessionCapability, emitEvent: (event: GatewayEventFrame) => void) => {
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          sessionKey: "agent:main:main",
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          status: "done",
+        },
+      });
+      expect(sessions.state.result?.sessions[0]).toMatchObject({
+        hasActiveRun: false,
+        status: "done",
+      });
     },
   },
   {
@@ -697,7 +701,7 @@ describe("session connection hydration", () => {
         }
         throw new Error(`Unexpected request: ${method}`);
       });
-      const { sessions, connect } = createSubscriptionHydrationHarness(
+      const { sessions, connect, emitEvent } = createSubscriptionHydrationHarness(
         request as unknown as GatewayBrowserClient["request"],
       );
 
@@ -707,7 +711,7 @@ describe("session connection hydration", () => {
         const observerError = "broad session observer unavailable";
         expect(sessions.state.error).toBe(observerError);
 
-        reconcile(sessions);
+        reconcile(sessions, emitEvent);
         expect(sessions.state.error).toBe(observerError);
 
         await vi.advanceTimersByTimeAsync(100);
@@ -749,7 +753,7 @@ describe("session connection hydration", () => {
         }
         throw new Error(`Unexpected request: ${method}`);
       });
-      const { sessions, connect } = createSubscriptionHydrationHarness(
+      const { sessions, connect, emitEvent } = createSubscriptionHydrationHarness(
         request as unknown as GatewayBrowserClient["request"],
       );
 
@@ -760,7 +764,7 @@ describe("session connection hydration", () => {
         const operationError = "newer session list failure";
         expect(sessions.state.error).toBe(operationError);
 
-        reconcile(sessions);
+        reconcile(sessions, emitEvent);
         expect(sessions.state.error).toBe(operationError);
 
         await vi.advanceTimersByTimeAsync(100);

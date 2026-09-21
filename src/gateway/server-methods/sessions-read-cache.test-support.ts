@@ -4,8 +4,9 @@ import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
-  upsertSessionEntryCore,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import {
@@ -56,14 +57,30 @@ export function initializeSessionReadContext(context: GatewayRequestContext) {
       context,
       placementFactsReader: placements
         ? {
-            getProjectionFacts(sessionId) {
+            async readProjection(sessionIds) {
+              const records = placements.getMany(sessionIds);
+              const environments = new Map();
+              for (const placement of records.values()) {
+                const environmentId = placement.environmentId;
+                const environment = environmentId
+                  ? context.workerEnvironmentService?.get(environmentId)
+                  : undefined;
+                if (environmentId && environment) {
+                  environments.set(environmentId, {
+                    ...environment,
+                    environmentId,
+                    profileSnapshot: { settings: {} },
+                    nodeDeviceId: environment.nodeDeviceId ?? null,
+                    attachedSessionIds: [...(environment.attachedSessionIds ?? [])],
+                  });
+                }
+              }
               return {
-                placement: placements.getMany([sessionId]).get(sessionId),
-                move: placements.getPlacementMoves?.([sessionId]).get(sessionId),
-                workspaceResultReconciling:
-                  placements
-                    .getWorkspaceResultReconcilingSessionIds?.([sessionId])
-                    .has(sessionId) ?? false,
+                placements: records,
+                moves: placements.getPlacementMoves?.(sessionIds) ?? new Map(),
+                workspaceResultReconcilingSessionIds:
+                  placements.getWorkspaceResultReconcilingSessionIds?.(sessionIds) ?? new Set(),
+                environments,
               };
             },
           }
@@ -152,15 +169,15 @@ export async function seedSessions(): Promise<OpenClawConfig> {
     ["main", "archived", 200, "viewer@example.com", { archivedAt: 200 }],
     ["work", "active", 100, "viewer@example.com", {}],
   ] as const) {
-    await upsertSessionEntryCore(
+    replaceSessionEntrySync(
       { agentId, sessionKey: `agent:${agentId}:${name}` },
-      {
+      mergeSessionEntry(undefined, {
         sessionId: `${agentId}-${name}`,
         updatedAt,
         createdActor: { type: "human", source: "profile", id: owner },
         visibility: "shared",
         ...overrides,
-      },
+      }),
     );
   }
   return config;

@@ -1,6 +1,7 @@
 // Proves plugin HTTP and upgrade handlers participate in Gateway suspension admission.
+import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
-import type { Duplex } from "node:stream";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayActiveWorkInspectors } from "../../infra/gateway-active-work.js";
 import {
@@ -82,21 +83,9 @@ function prepareWithRootOnly(requestId: string) {
 }
 
 function createMockUpgradeSocket() {
-  const socket = {
-    chunks: [] as string[],
-    destroyed: false,
-    write(chunk: string) {
-      socket.chunks.push(chunk);
-    },
-    end(chunk: string, callback?: () => void) {
-      socket.write(chunk);
-      callback?.();
-      return socket;
-    },
-    destroy() {
-      socket.destroyed = true;
-    },
-  } as unknown as Duplex & { chunks: string[]; destroyed: boolean };
+  const chunks: string[] = [];
+  const socket = Object.assign(new PassThrough(), { chunks });
+  socket.on("data", (chunk: Buffer) => chunks.push(chunk.toString()));
   return socket;
 }
 
@@ -359,10 +348,12 @@ describe("plugin upgrade suspension admission", () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
     const socket = createMockUpgradeSocket();
+    const closed = once(socket, "close");
 
     await expect(
       handler({ url: ROUTE_PATH } as IncomingMessage, socket, Buffer.alloc(0)),
     ).resolves.toBe(true);
+    await closed;
 
     expect(upgrade).not.toHaveBeenCalled();
     expect(socket.destroyed).toBe(true);

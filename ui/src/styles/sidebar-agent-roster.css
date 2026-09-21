@@ -5,7 +5,7 @@ openclaw-sidebar-agent-roster {
 
 .sidebar-workspace-header__main {
   gap: 4px;
-  padding-inline-end: 0;
+  padding-inline: 0;
 }
 .sidebar-workspace-header .sidebar-agent-card__name-text {
   padding-inline-end: 0;
@@ -296,6 +296,19 @@ openclaw-sidebar-agent-roster {
 .sidebar-recent-session--team .sidebar-recent-session__name {
   font-weight: 450;
 }
+.shell--mobile-nav .sidebar-recent-session.sidebar-recent-session--team {
+  grid-template-columns: 20px minmax(0, 1fr) 44px;
+  min-height: 44px;
+
+  > .sidebar-recent-session__aside {
+    grid-column: 3;
+  }
+
+  > .sidebar-recent-session__link {
+    padding-right: 0;
+  }
+}
+
 @media (hover: none), (pointer: coarse) {
   .sidebar-recent-session.sidebar-recent-session--team {
     grid-template-columns: 20px minmax(0, 1fr) 92px;

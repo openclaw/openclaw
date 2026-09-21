@@ -9,13 +9,19 @@ type CommandPaletteInputProps = {
   value: string;
   placeholder: string;
   onInputRef: (element: Element | undefined) => void;
-  onValueChange: (value: string) => void;
+  onValueChange: (value: string, event: InputEvent) => void;
+  onBeforeInput?: (event: InputEvent) => void;
+  onSelectionChange?: (event: Event) => void;
+  onCompositionStart?: () => void;
+  onCompositionEnd?: () => void;
   actions?: TemplateResult | typeof nothing;
+  onPaste?: (event: ClipboardEvent) => void;
   disabled?: boolean;
   readOnly?: boolean;
   controls?: string;
   activeDescendant?: string;
   describedBy?: string;
+  expanded?: boolean;
 };
 
 function updatePaletteInputOverflow(textarea: HTMLTextAreaElement) {
@@ -140,15 +146,27 @@ export function renderCommandPaletteInput(props: CommandPaletteInputProps) {
           aria-controls=${props.controls ?? nothing}
           aria-activedescendant=${props.activeDescendant ?? nothing}
           aria-describedby=${props.describedBy ?? nothing}
+          aria-expanded=${props.expanded === undefined ? nothing : String(props.expanded)}
           placeholder=${props.placeholder}
           .value=${props.value}
           ?disabled=${props.disabled}
           ?readonly=${props.readOnly}
           @scroll=${handlePaletteInputScroll}
+          @paste=${props.onPaste ?? nothing}
+          @beforeinput=${props.onBeforeInput ?? nothing}
+          @select=${props.onSelectionChange ?? nothing}
+          @pointerup=${props.onSelectionChange ?? nothing}
+          @keyup=${(event: KeyboardEvent) => {
+            if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
+              props.onSelectionChange?.(event);
+            }
+          }}
+          @compositionstart=${props.onCompositionStart ?? nothing}
+          @compositionend=${props.onCompositionEnd ?? nothing}
           ${ref(props.onInputRef)}
-          @input=${(event: Event) => {
+          @input=${(event: InputEvent) => {
             if (event.currentTarget instanceof HTMLTextAreaElement) {
-              props.onValueChange(event.currentTarget.value);
+              props.onValueChange(event.currentTarget.value, event);
               updatePaletteInputLayout(event.currentTarget, true);
             }
           }}

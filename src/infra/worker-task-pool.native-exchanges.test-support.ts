@@ -11,7 +11,8 @@ import {
   cancelWorkerNativeSections,
   createWorkerNativeSectionState,
 } from "./worker-task-native-sections.js";
-import { serveWorkerTasks, WorkerTaskPool } from "./worker-task-pool.js";
+import { WorkerTaskPool } from "./worker-task-pool.js";
+import { serveWorkerTasks } from "./worker-task-server.js";
 
 type Input =
   | {

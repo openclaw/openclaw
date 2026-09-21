@@ -7,7 +7,6 @@ import {
   UPDATE_RUN_ID_ENV,
   readControlPlaneUpdateSentinelMeta,
 } from "../../infra/update-control-plane-sentinel.js";
-import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { createManagedHandoffProcessIdentityReader } from "../../infra/update-managed-service-handoff-process.js";
@@ -27,7 +26,7 @@ import {
 } from "../../infra/update-requester-authority.js";
 import { recordPostCoreUpdateEvidence } from "../../infra/update-run-interruption.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
@@ -62,7 +61,7 @@ import {
   writePostCorePluginUpdateResultFile,
   writePostCoreUpdateFailureFile,
 } from "./update-command-post-core.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 
 type ResumePostCoreUpdateParams = {
@@ -97,6 +96,11 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     );
     const record =
       runId && !params.opts.run && !parentOwnsCompletion ? getUpdateRun(runId, { env }) : undefined;
+    if (runId && !params.opts.run && !parentOwnsCompletion && !record) {
+      throw new UpdateCommandRecoveryPendingError(
+        "Post-core update run is unavailable; resume cannot verify its owner.",
+      );
+    }
     let completed: Awaited<ReturnType<typeof resumePostCoreUpdateInternal>>;
     if (runId && record && isUnfencedUpdateDriver(record.before.version)) {
       if (!parent) {
@@ -296,7 +300,7 @@ async function resumePostCoreUpdateInternal(
           process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV],
         );
         assertCurrent?.();
-        const { pluginUpdate } = await convergePostCoreUpdatePlugins({
+        let { pluginUpdate } = await convergePostCoreUpdatePlugins({
           ...params,
           channel,
           requestedChannel,
@@ -305,9 +309,28 @@ async function resumePostCoreUpdateInternal(
           updateStartedAtMs: process.env[POST_CORE_UPDATE_STARTED_AT_ENV]?.trim()
             ? updateStartedAtMs
             : undefined,
-          parentOwnsCompletion,
           assertCurrent,
         });
+        // Shipped parents can stop the child as soon as its result appears.
+        // Their completion stays here, after the producer releases its lease.
+        if (!parentOwnsCompletion) {
+          const completed = await completePostCorePluginUpdate({
+            root: params.root,
+            opts: params.opts,
+            pluginUpdate,
+            freshDoctorRequired: pluginUpdate.changed,
+            assertCurrent,
+            yes: params.opts.yes === true,
+            json: params.opts.json === true,
+            timeoutMs: params.timeoutMs,
+          });
+          pluginUpdate = completed.pluginUpdate;
+        }
+        // Only the target process may restamp an unchanged downgrade config.
+        const finalSnapshot = await readConfigFileSnapshot({ observe: false });
+        assertCurrent?.();
+        await persistValidatedDowngradeConfig(finalSnapshot, assertCurrent);
+        assertCurrent?.();
         return pluginUpdate;
       }),
     };
@@ -394,7 +417,7 @@ async function resumePostCoreUpdateInternal(
   return { pluginUpdate, result };
 }
 
-/** Candidate code owns this phase whether reached by CLI resume or migrated finalization. */
+/** Shared plugin producer; entry points retain runtime preparation and completion ownership. */
 export async function convergePostCoreUpdatePlugins(params: {
   root: string;
   channel: UpdateChannel;
@@ -405,13 +428,14 @@ export async function convergePostCoreUpdatePlugins(params: {
   parentPluginInstallRecords?: Record<string, PluginInstallRecord>;
   /** Only an explicitly forwarded update start makes an empty index authoritative. */
   updateStartedAtMs?: number;
-  /** Modern parents finalize after consuming the result; legacy children finalize before publication. */
-  parentOwnsCompletion?: boolean;
   assertCurrent?: () => void;
-}) {
+}): Promise<{
+  pluginUpdate: PostCorePluginUpdateResult;
+  configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+}> {
   const { assertCurrent } = params;
   assertCurrent?.();
-  const producedPluginUpdate = await withPluginLifecycleLease({ assertCurrent }, async () => {
+  return await withPluginLifecycleLease({ assertCurrent }, async () => {
     // Entry points complete runtime artifacts and any legacy pre-convergence
     // Doctor before capturing config. This phase consumes that committed generation.
     const preparedConfig = await preparePostCorePluginConfig({
@@ -423,7 +447,9 @@ export async function convergePostCoreUpdatePlugins(params: {
     });
     // The updated doctor may have repaired or removed plugin installs before this process resumed.
     const currentPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-    const persistedPluginIndex = await readPersistedInstalledPluginIndex();
+    const persistedPluginIndex = params.parentPluginInstallRecords
+      ? await readPersistedInstalledPluginIndex()
+      : null;
     assertCurrent?.();
     const currentIndexIsAuthoritative =
       Object.keys(currentPluginInstallRecords).length > 0 ||
@@ -434,9 +460,9 @@ export async function convergePostCoreUpdatePlugins(params: {
       );
     const pluginInstallRecords = currentIndexIsAuthoritative
       ? currentPluginInstallRecords
-      : params.parentPluginInstallRecords;
+      : (params.parentPluginInstallRecords ?? currentPluginInstallRecords);
 
-    return await updatePluginsAfterCoreUpdate({
+    const pluginUpdate = await updatePluginsAfterCoreUpdate({
       root: params.root,
       channel: params.channel,
       ...preparedConfig,
@@ -447,32 +473,7 @@ export async function convergePostCoreUpdatePlugins(params: {
       pluginInstallRecords,
       assertCurrent,
     });
+    assertCurrent?.();
+    return { pluginUpdate, configSnapshot: preparedConfig.configSnapshot };
   });
-  assertCurrent?.();
-  // Release plugin ownership before Doctor reacquires it. Legacy parents may
-  // stop this child as soon as its result appears, so their completion stays here.
-  const pluginUpdate =
-    params.parentOwnsCompletion === false ||
-    (!producedPluginUpdate.changed && hasDeferredUpdateModelRetirement())
-      ? (
-          await completePostCorePluginUpdate({
-            root: params.root,
-            opts: params.opts,
-            pluginUpdate: producedPluginUpdate,
-            freshDoctorRequired: producedPluginUpdate.changed,
-            assertCurrent,
-            yes: params.opts.yes === true,
-            json: params.opts.json === true,
-            timeoutMs: params.timeoutMs,
-          })
-        ).pluginUpdate
-      : producedPluginUpdate;
-  assertCurrent?.();
-  // Only the target process may restamp an unchanged downgrade config. Plugin
-  // migrations that still invalidate it will write through the target Doctor later.
-  const finalSnapshot = await readConfigFileSnapshot({ observe: false });
-  assertCurrent?.();
-  await persistValidatedDowngradeConfig(finalSnapshot, assertCurrent);
-  assertCurrent?.();
-  return { pluginUpdate, configSnapshot: finalSnapshot };
 }

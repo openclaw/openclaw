@@ -322,3 +322,26 @@ it("captures lazy platform modules and their runtime dependencies without loadin
       .toSorted(),
   );
 });
+
+it("keeps native update authority free of eager recovery reporting and handoff staging", () => {
+  const closure = collectRuntimeImportClosure(process.cwd(), [
+    "src/cli/update-cli/update-command-executor.ts",
+    "src/cli/update-cli/update-command-retained-service.ts",
+    "src/cli/daemon-cli/update-executor.ts",
+    "src/daemon/exec-file.ts",
+  ]);
+  const deferredOwners = new Set([
+    "src/cli/update-cli/update-command-recovery.ts",
+    "src/cli/update-cli/update-command-result.ts",
+    "src/infra/update-managed-service-handoff.ts",
+  ]);
+  expect(closure.filter((file) => deferredOwners.has(file))).toEqual([]);
+});
+
+it("keeps migrated finalization free of eager CLI registration", () => {
+  const closure = collectRuntimeImportClosure(process.cwd(), [
+    "src/infra/update-migrated-finalize.worker.ts",
+  ]);
+  const validationOnly = new Set(["src/cli/daemon-cli.ts", "src/cli/daemon-cli/register.ts"]);
+  expect(closure.filter((file) => validationOnly.has(file))).toEqual([]);
+});

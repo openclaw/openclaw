@@ -75,7 +75,7 @@ import {
 import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
-import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { captureCliRunStartTime, type PreparedCliRunContext } from "./cli-runner/types.js";
 import { isIntermediateAssistantTranscriptMessage } from "./embedded-agent-runner/message-visibility.js";
 import { FailoverError } from "./failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
@@ -203,7 +203,7 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
       executionMode: params?.executionMode,
       allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
     },
-    started: Date.now(),
+    ...captureCliRunStartTime(),
     workspaceDir: "/tmp",
     backendResolved: {
       id: provider,
@@ -2016,7 +2016,7 @@ describe("runCliAgent reliability", () => {
     });
     const expiredBudgetContext = {
       ...context,
-      started: Date.now() - context.params.timeoutMs - 1,
+      startedMonotonicMs: performance.now() - context.params.timeoutMs - 1,
     };
 
     await expect(
@@ -2050,7 +2050,7 @@ describe("runCliAgent reliability", () => {
     });
     const expiredBudgetContext = {
       ...context,
-      started: Date.now() - context.params.timeoutMs - 1,
+      startedMonotonicMs: performance.now() - context.params.timeoutMs - 1,
     };
 
     await expect(

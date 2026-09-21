@@ -2,7 +2,7 @@
 import "./update-command-execution.test-support.js";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
+import http, { Agent, createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -18,7 +18,7 @@ import {
   updateRunStepsFromResultStep,
   updateRunWarningMessages,
 } from "../../infra/update-run-step.js";
-import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner-types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
@@ -39,7 +39,7 @@ describe("mutable update validation", () => {
       const message =
         "Readiness probe http://127.0.0.1:18789/readyz failed: HTTP 502. Check the configured proxy.";
       const step: UpdateStepResult = {
-        name: "candidate gateway canary",
+        name: "candidate-gateway-startup",
         command: "gateway run",
         cwd: "/candidate",
         durationMs: 1,
@@ -57,8 +57,8 @@ describe("mutable update validation", () => {
           logTail: [message],
         };
       });
-      const repair = await import("./update-command-repair.js");
-      const runRepair = vi.spyOn(repair, "runUpdateCommandRepair");
+      const repair = await import("../../infra/update-repair-agent.js");
+      const runRepair = vi.spyOn(repair, "runUpdateRepairLoop");
       const accepted = vi.fn();
       const runStagedUpdate = async ({
         validateCandidate,
@@ -158,6 +158,9 @@ describe("mutable update validation", () => {
         let readyObservedAtMs: number | undefined;
         let stoppedAtMs: number | undefined;
         let replaceExecutor: (() => void) | undefined;
+        // Keep the real loopback probe off Node's ambient proxy-aware global agent.
+        const globalAgent = http.globalAgent;
+        const agent = new Agent();
         const server = createServer((request, response) => {
           const ready = elapsedMs >= readyAtMs;
           if (request.url === "/readyz" && ready) {
@@ -173,6 +176,7 @@ describe("mutable update validation", () => {
           throw new Error("Missing synthetic Gateway listener");
         }
         try {
+          http.globalAgent = agent;
           await fs.mkdir(path.join(serviceRoot, "dist"));
           await fs.writeFile(
             path.join(serviceRoot, "package.json"),
@@ -273,7 +277,7 @@ describe("mutable update validation", () => {
             logTail: [],
             steps: [
               {
-                name: "Checking Gateway startup",
+                name: "candidate-gateway-startup",
                 command: "gateway run",
                 cwd: root,
                 durationMs: 70_000,
@@ -375,6 +379,8 @@ describe("mutable update validation", () => {
             }
           }
         } finally {
+          http.globalAgent = globalAgent;
+          agent.destroy();
           server.closeAllConnections();
           const closed = once(server, "close");
           server.close();
@@ -398,7 +404,7 @@ describe("mutable update validation", () => {
       logTail: [fact.message],
       steps: [
         {
-          name: "candidate doctor",
+          name: "candidate-doctor",
           command: "openclaw doctor",
           cwd: "/candidate",
           durationMs: 1,
@@ -407,12 +413,6 @@ describe("mutable update validation", () => {
           failureFacts: [fact],
         },
       ],
-    });
-    const repair = await import("./update-command-repair.js");
-    vi.spyOn(repair, "runUpdateCommandRepair").mockResolvedValue({
-      status: "unavailable",
-      attempts: [],
-      finalValidation: { ok: false, score: 0, summary: fact.message },
     });
     mocks.runGitUpdate.mockImplementation(
       async (params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0]) => {

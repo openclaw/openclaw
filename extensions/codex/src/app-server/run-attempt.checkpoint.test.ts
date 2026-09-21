@@ -8,6 +8,7 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
+import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
   attachSqliteSessionTarget,
   readTranscriptMessagesByIdentity,
@@ -17,6 +18,101 @@ import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt", () => {
+  it("checkpoints the complete native response, not the earlier execution preview", async () => {
+    const params = createParams(
+      path.join(tempDir, "output.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "output-sessions.json"),
+      "output-session",
+    );
+    // Prepare the history reader before the attempt budget starts.
+    await readCodexMirroredSessionHistoryMessages(params);
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify(
+      rawItemCompleted({
+        type: "function_call",
+        call_id: "long-command",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "transcript", max_output_tokens: 24_000 }),
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", {
+        type: "commandExecution",
+        id: "long-command",
+        command: "transcript",
+        status: "completed",
+        aggregatedOutput: "RAW STDOUT",
+        exitCode: 0,
+      }),
+    );
+    await vi.waitFor(async () => {
+      expect(
+        (await readTranscriptMessagesByIdentity(params)).map((message) => message.role),
+      ).toEqual(["user", "assistant"]);
+    });
+    const output = " \r\n" + "transcript 😀\n".repeat(12_000) + "END OF RESPONSE\r\n ";
+    await harness.notify(
+      rawItemCompleted({ type: "function_call_output", call_id: "long-command", output }),
+    );
+    const checkpoint = await readTranscriptMessagesByIdentity(params);
+    expect(checkpoint[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "long-command",
+      content: [{ type: "text", text: output }],
+      __openclaw: { toolOutput: { source: "provider-response", modelInput: "unverified" } },
+    });
+    await harness.notify(
+      rawItemCompleted({
+        type: "custom_tool_call",
+        call_id: "outer-exec",
+        name: "exec",
+        input: "text(await tools.exec_command({cmd: 'transcript'}))",
+      }),
+    );
+    await harness.notify(
+      itemNotification("item/completed", {
+        type: "commandExecution",
+        id: "nested-command",
+        command: "transcript",
+        status: "completed",
+        aggregatedOutput: "nested stdout",
+        exitCode: 0,
+      }),
+    );
+    // Nested native execution has no model-response ID of its own. It must
+    // checkpoint without waiting for the outer Code Mode response.
+    expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "nested-command",
+        __openclaw: expect.objectContaining({
+          toolOutput: { source: "execution", modelInput: "unverified" },
+        }),
+      }),
+    );
+    await harness.notify(
+      rawItemCompleted({ type: "custom_tool_call_output", call_id: "outer-exec", output }),
+    );
+    expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "outer-exec",
+        content: [{ type: "text", text: output }],
+      }),
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    // A fresh canonical SQLite read must retain the enriched checkpoint. The
+    // terminal mirror's idempotency hit must not resurrect the earlier stdout.
+    expect((await readTranscriptMessagesByIdentity(params))[2]).toEqual(checkpoint[2]);
+  });
+
   it.each([true, false])(
     "checkpoints raw patch output and network provenance with commentary persistence %s",
     async (persistCommentary) => {

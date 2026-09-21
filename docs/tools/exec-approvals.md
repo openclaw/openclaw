@@ -404,7 +404,10 @@ EOF
 
 - `openclaw exec-policy` does not synchronize node approvals.
 - `openclaw exec-policy set --host node` is rejected.
-- Node exec approvals are fetched from the node at runtime, so node-targeted updates must use `openclaw approvals --node ...`.
+- Node exec approvals are fetched from the node at runtime. Inspect them with
+  `openclaw approvals get --node <id|name|ip>` and replace them with
+  `openclaw approvals set --node <id|name|ip> --file <path>` (or `--stdin`); see the
+  [Approvals CLI](/cli/approvals).
 
 </Note>
 

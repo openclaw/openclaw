@@ -4,7 +4,7 @@ import type { UpdateStepResult } from "./update-runner-types.js";
 
 function failedVerification(root: string, code: string, message: string): UpdateStepResult {
   return {
-    name: "post-install verification",
+    name: "post-install-verify",
     command: "verify installed package",
     cwd: root,
     durationMs: 0,
@@ -14,7 +14,7 @@ function failedVerification(root: string, code: string, message: string): Update
   };
 }
 
-export function missingPackageVerificationStep(root: string): UpdateStepResult {
+function missingPackageVerificationStep(root: string): UpdateStepResult {
   return failedVerification(
     root,
     "verification-result-missing",

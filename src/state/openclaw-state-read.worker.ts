@@ -1,5 +1,13 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { SKILL_LIBRARY_MAX_SELECTIONS } from "../../packages/gateway-protocol/src/schema/skill-library.js";
+import {
+  countMcpOAuthPrincipalsInDatabase,
+  listMcpOAuthStoreKeysInDatabase,
+  readMcpOAuthPendingInDatabase,
+  readMcpOAuthStoreIfPresentInDatabase,
+  readMcpOAuthStatusesInDatabase,
+} from "../agents/mcp-oauth-store.kernel.js";
 import {
   readSandboxBrowserRegistryInDatabase,
   readSandboxRegistryEntryInDatabase,
@@ -9,12 +17,29 @@ import {
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
+import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
 import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
+import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
+import { readWorkerSessionPlacementProjectionInDatabase } from "../gateway/worker-environments/placement-read-projection.js";
+import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
+import { hasWorkerEnvironmentSessionAttachment } from "../gateway/worker-environments/session-attachment-store.js";
+import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
+import { readUpdateRunRecord, readUpdateRuns } from "../infra/update-run-read.kernel.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
+import {
+  pluginBlobLookupInDatabase,
+  pluginBlobEntriesInDatabase,
+} from "../plugin-state/plugin-blob-store.sqlite.js";
+import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
+import {
+  selectSkillLibraryRevisionMetadataBatch,
+  selectSkillLibraryRevisionManifestsBatch,
+} from "../skills/library/selection-read.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
@@ -24,11 +49,13 @@ import {
   readOpenClawStateReadOnlyLocation,
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+import { readUserProfileIdForEmail } from "./user-profile-identity.read.js";
 import { selectProfileDisplayEntries } from "./user-profiles-internal.js";
 
 function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
@@ -51,11 +78,59 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     isRecord(coordinatorRuntime) &&
     typeof coordinatorRuntime.directory === "string" &&
     typeof coordinatorRuntime.keepAlive === "boolean" &&
-    (input.command.type === "admit" ||
+    ((input.command.type === "mcpOAuth.statuses" &&
+      Array.isArray(input.command.input) &&
+      input.command.input.every((key) => typeof key === "string")) ||
+      ((input.command.type === "mcpOAuth.readOnly" ||
+        input.command.type === "mcpOAuth.keys" ||
+        input.command.type === "mcpOAuth.pending" ||
+        input.command.type === "mcpOAuth.countPrincipals") &&
+        typeof input.command.input === "string") ||
+      isPluginBlobReadCommand(input.command) ||
+      (input.command.type === "conversationBindings.inspect" &&
+        isRecord(input.command.conversation) &&
+        typeof input.command.conversation.channel === "string" &&
+        typeof input.command.conversation.accountId === "string" &&
+        typeof input.command.conversation.conversationId === "string" &&
+        (input.command.conversation.parentConversationId === undefined ||
+          typeof input.command.conversation.parentConversationId === "string")) ||
+      (input.command.type === "cron.observeRunRecovery" &&
+        typeof input.command.storeKey === "string" &&
+        Array.isArray(input.command.proposals) &&
+        input.command.proposals.every(
+          (proposal: unknown) =>
+            isRecord(proposal) &&
+            typeof proposal.jobId === "string" &&
+            (proposal.queuedAtMs === undefined || typeof proposal.queuedAtMs === "number") &&
+            (proposal.runningAtMs === undefined || typeof proposal.runningAtMs === "number"),
+        )) ||
+      (input.command.type === "devicePairing.list" && typeof input.command.nowMs === "number") ||
+      (input.command.type === "devicePairing.lookup" &&
+        typeof input.command.deviceId === "string") ||
+      (input.command.type === "devicePairing.pending" &&
+        typeof input.command.requestId === "string" &&
+        typeof input.command.nowMs === "number") ||
+      (input.command.type === "devicePairing.bootstrapContext" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.token === "string" &&
+        typeof input.command.input.deviceId === "string" &&
+        typeof input.command.input.publicKey === "string" &&
+        typeof input.command.input.nowMs === "number") ||
+      input.command.type === "admit" ||
       input.command.type === "exec-approvals.read" ||
+      ((input.command.type === "skills.library.descriptions" ||
+        input.command.type === "skills.library.manifests") &&
+        Array.isArray(input.command.input) &&
+        input.command.input.length <= SKILL_LIBRARY_MAX_SELECTIONS &&
+        input.command.input.every(
+          (pin) =>
+            isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
+        )) ||
       input.command.type === "agentDatabaseRegistry.read" ||
-      (input.command.type === "userProfiles.avatar.reconcile" &&
+      (input.command.type === "userProfiles.reconcile" &&
         typeof input.command.profileId === "string") ||
+      (input.command.type === "userProfiles.email.resolve" &&
+        typeof input.command.email === "string") ||
       (input.command.type === "audit.run.inspect" &&
         isRecord(input.command.input) &&
         typeof input.command.input.now === "number" &&
@@ -63,7 +138,21 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
           typeof input.command.input.executionId === "string")) ||
       (input.command.type === "workspace.snapshot" &&
         typeof input.command.workspaceDir === "string") ||
+      (input.command.type === "workerEnvironments.hasSessionAttachment" &&
+        typeof input.command.environmentId === "string") ||
+      (input.command.type === "updateRuns.get" && typeof input.command.runId === "string") ||
+      (input.command.type === "updateRuns.list" &&
+        isRecord(input.command.input) &&
+        (input.command.input.limit === undefined ||
+          typeof input.command.input.limit === "number") &&
+        (input.command.input.active === undefined ||
+          typeof input.command.input.active === "boolean") &&
+        (input.command.input.reason === undefined ||
+          typeof input.command.input.reason === "string") &&
+        (input.command.input.includeRunId === undefined ||
+          typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
+      (input.command.type === "operatorApprovals.history" && isRecord(input.command.input)) ||
       input.command.type === "nodeHost.config" ||
       (input.command.type === "onboardingRecommendations.read" &&
         typeof input.command.configKey === "string") ||
@@ -74,7 +163,12 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
       (input.command.type === "sandboxRegistry.runtimeIds" &&
         typeof input.command.backendId === "string" &&
         typeof input.command.scopeKey === "string") ||
-      (input.command.type === "fleet.get" && typeof input.command.tenantId === "string"))
+      (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
+      input.command.type === "workerPlacements.changeSnapshot" ||
+      (input.command.type === "workers.placementProjection" &&
+        Array.isArray(input.command.sessionIds) &&
+        input.command.sessionIds.every((id) => typeof id === "string") &&
+        Array.isArray(input.command.conflictBindings)))
   );
 }
 
@@ -131,12 +225,149 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "mcpOAuth.statuses") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: readMcpOAuthStatusesInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "mcpOAuth.readOnly") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: readMcpOAuthStoreIfPresentInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "mcpOAuth.keys") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: listMcpOAuthStoreKeysInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "mcpOAuth.pending") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: readMcpOAuthPendingInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "mcpOAuth.countPrincipals") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: countMcpOAuthPrincipalsInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "conversationBindings.inspect") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    record: inspectCurrentConversationBindingRecordInDatabase(
+                      db,
+                      command.conversation,
+                    ),
+                  };
+                }
+                if (command.type === "cron.observeRunRecovery") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    observation: observeCronRunRecoveryInDatabase(db, command),
+                  };
+                }
+                if (
+                  command.type === "devicePairing.list" ||
+                  command.type === "devicePairing.lookup" ||
+                  command.type === "devicePairing.pending" ||
+                  command.type === "devicePairing.bootstrapContext"
+                ) {
+                  return executeDevicePairingRead(db, input.databasePath, command);
+                }
+                if (command.type === "pluginBlob.lookup") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: pluginBlobLookupInDatabase(db, {
+                      ...command.input,
+                      env: input.context.environment,
+                      path: input.databasePath,
+                    }),
+                  };
+                }
+                if (command.type === "pluginBlob.entries") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: pluginBlobEntriesInDatabase(db, {
+                      ...command.input,
+                      env: input.context.environment,
+                      path: input.databasePath,
+                    }),
+                  };
+                }
+                if (command.type === "updateRuns.get") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    run: tableExists(db, "update_runs")
+                      ? readUpdateRunRecord(db, command.runId)
+                      : undefined,
+                  };
+                }
+                if (command.type === "updateRuns.list") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    runs: readUpdateRuns(db, command.input),
+                  };
+                }
                 if (command.type === "exec-approvals.read") {
                   return {
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
                     row: readExecApprovalsConfigRow(db),
+                  };
+                }
+                if (command.type === "skills.library.descriptions") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: tableExists(db, "skill_library_entries")
+                      ? selectSkillLibraryRevisionMetadataBatch(db, command.input)
+                      : undefined,
+                  };
+                }
+                if (command.type === "skills.library.manifests") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: tableExists(db, "skill_library_entries")
+                      ? selectSkillLibraryRevisionManifestsBatch(db, command.input)
+                      : undefined,
+                  };
+                }
+                if (command.type === "operatorApprovals.history") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    history: listTerminalOperatorApprovalsInDatabase(command.input, db),
                   };
                 }
                 if (command.type === "onboardingRecommendations.read") {
@@ -189,7 +420,15 @@ serveOwnedWorkerTasks(
                     }),
                   };
                 }
-                if (command.type === "userProfiles.avatar.reconcile") {
+                if (command.type === "workerEnvironments.hasSessionAttachment") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    attached: hasWorkerEnvironmentSessionAttachment(db, command.environmentId),
+                  };
+                }
+                if (command.type === "userProfiles.reconcile") {
                   return {
                     ok: true,
                     type: command.type,
@@ -197,6 +436,16 @@ serveOwnedWorkerTasks(
                     profile: runSqliteDeferredTransactionSync(
                       db,
                       () => selectProfileDisplayEntries(db, [command.profileId])[0]?.[1],
+                    ),
+                  };
+                }
+                if (command.type === "userProfiles.email.resolve") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    profileId: runSqliteDeferredTransactionSync(db, () =>
+                      readUserProfileIdForEmail(db, command.email),
                     ),
                   };
                 }
@@ -230,6 +479,26 @@ serveOwnedWorkerTasks(
                     type: command.type,
                     sourceAdmitted,
                     entries: readSandboxBrowserRegistryInDatabase(db),
+                  };
+                }
+                if (command.type === "workerPlacements.changeSnapshot") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    placements: readWorkerPlacementChangeSnapshotInDatabase(db),
+                  };
+                }
+                if (command.type === "workers.placementProjection") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    result: readWorkerSessionPlacementProjectionInDatabase(
+                      db,
+                      command.sessionIds,
+                      command.conflictBindings,
+                    ),
                   };
                 }
                 return command.type === "fleet.list"

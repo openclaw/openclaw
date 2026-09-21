@@ -57,36 +57,6 @@ describe("renderModelSetup", () => {
     },
   );
 
-  it("focuses the selected provider when the shared dropdown opens", () => {
-    const container = mount(
-      props({
-        manualProviderId: "gemini-api-key",
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            manualProviders: [
-              ...detected.manualProviders,
-              { id: "zai", groupLabel: "Z.AI", label: "API key" },
-            ],
-          },
-        },
-      }),
-    );
-    const picker = container.querySelector(".model-setup-provider-select")!;
-    picker.dispatchEvent(new CustomEvent("wa-after-show"));
-
-    const options = Array.from(
-      picker.querySelectorAll<HTMLElement & { active: boolean }>("[data-manual-provider]"),
-    );
-    expect(
-      options.find((option) => option.dataset.manualProvider === "gemini-api-key")?.active,
-    ).toBe(true);
-    expect(options.find((option) => option.dataset.manualProvider === "openai")?.active).toBe(
-      false,
-    );
-  });
-
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
     const onStartPrepare = vi.fn();
     const container = mount(props({ onStartPrepare }));

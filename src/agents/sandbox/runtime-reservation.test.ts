@@ -44,6 +44,22 @@ function advancePruneTime() {
   vi.spyOn(Date, "now").mockReturnValue(pruneTimeMs);
 }
 
+function withImmediatePrune(cfg: OpenClawConfig): OpenClawConfig {
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        sandbox: {
+          ...cfg.agents?.defaults?.sandbox,
+          prune: { idleHours: 1, maxAgeDays: 0 },
+        },
+      },
+    },
+  };
+}
+
 beforeEach(() => {
   const stateDir = tempDirs.make("sandbox-reservation-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -269,7 +285,7 @@ describe("durable sandbox runtime generations", () => {
   it.each(["recreate", "prune"] as const)(
     "fences a legacy %s snapshot after concurrent adoption",
     async (operation) => {
-      const cfg = await seedLegacyRuntime();
+      await seedLegacyRuntime();
       const snapshot = await readRegistry();
       const started = createDeferred();
       const finish = createDeferred();
@@ -290,7 +306,7 @@ describe("durable sandbox runtime generations", () => {
       const removing =
         operation === "recreate"
           ? removeSandboxContainer("legacy-runtime")
-          : maybePruneSandboxes({ ...cfg, prune: { idleHours: 1, maxAgeDays: 0 } });
+          : maybePruneSandboxes(withImmediatePrune(config));
       const creating = expect(resolve()).rejects.toThrow("removed or is being removed");
       await started.promise;
       try {
@@ -419,8 +435,7 @@ describe("durable sandbox runtime generations", () => {
       let removing: Promise<void>;
       if (operation === "prune") {
         advancePruneTime();
-        const cfg = resolveSandboxConfigForAgent(config, "test");
-        removing = maybePruneSandboxes({ ...cfg, prune: { idleHours: 1, maxAgeDays: 0 } });
+        removing = maybePruneSandboxes(withImmediatePrune(config));
       } else {
         removing = removeSandboxContainer(id);
       }

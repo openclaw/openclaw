@@ -573,6 +573,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
           },
         },
       });
+      await initializeSessionReadContext(context);
       const pending = sessionReadHandlers["sessions.preview"]?.({
         params: { keys: keys.slice(0, 2) },
         client: identifiedClient(callerId),

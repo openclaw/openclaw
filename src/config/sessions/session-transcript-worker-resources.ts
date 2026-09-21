@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -11,6 +11,7 @@ import {
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
   registerOpenClawAgentDatabaseAsyncResource,
@@ -27,39 +28,57 @@ import {
 } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetInventoryRequest,
+  SessionStoreTargetReadRequest,
+  SessionStoreTargetReadResult,
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
 import type {
   SessionEntryListWorkerInput,
+  SessionExactEntriesWorkerInput,
+  SessionStoreTargetWorkerInput,
   SessionTargetInventoryWorkerInput,
   SessionIdentityEvidenceWorkerInput,
   SessionMembersWorkerInput,
+  SessionPreviewWorkerInput,
+  SessionTitleFieldsWorkerInput,
   SessionRowPresenceWorkerInput,
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerReply,
   SessionUsageCacheWorkerInput,
+  SessionTranscriptSearchWorkerInput,
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 export const historyPages = new WorkerTaskPool<
   | SessionTranscriptHistoryWorkerInput
+  | SessionPreviewWorkerInput
+  | SessionTitleFieldsWorkerInput
   | SessionRowPresenceWorkerInput
   | SessionMembersWorkerInput
   | SessionEntryListWorkerInput
+  | SessionExactEntriesWorkerInput
+  | SessionStoreTargetWorkerInput
   | SessionTargetInventoryWorkerInput
   | SessionIdentityEvidenceWorkerInput
-  | SessionUsageCacheWorkerInput,
+  | SessionUsageCacheWorkerInput
+  | SessionTranscriptSearchWorkerInput,
   SessionTranscriptWorkerReply<
     | "history-page"
+    | "session-preview"
+    | "session-title-fields"
     | "session-row-presence"
     | "session-members"
     | "session-entry-list"
+    | "session-exact-entries"
+    | "session-store-target"
     | "session-target-inventory"
     | "session-identity-evidence"
     | "usage-cache"
+    | "transcript-search"
   >
 >({
   workerUrl,
+  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
   maxWorkers: 1,
   idleTimeoutMs: 0,
   prepareWorker: () => {
@@ -71,6 +90,7 @@ export const historyPages = new WorkerTaskPool<
 function createUsageCostPool(kind: "read" | "refresh") {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
     workerUrl,
+    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
     maxWorkers: 1,
     // Foreground reads must remain available while refresh awaits a host writer.
     sharedCompute: kind === "refresh",
@@ -117,7 +137,6 @@ export type HistoryDatabaseResource = {
 };
 
 const historyDatabases = new Map<string, HistoryDatabaseResource>();
-const runInHistoryOwnerContext = AsyncLocalStorage.snapshot();
 const historySetTimeout = setTimeout;
 export const historyClearTimeout = clearTimeout;
 let historyGeneration = 0;
@@ -142,6 +161,18 @@ export const costRefreshLane: SessionCostWorkerLane = {
   retiredSequence: 0,
   pending: 0,
 };
+
+channel("openclaw.memory.critical").subscribe(() => {
+  for (const lane of [historyLane, costReadLane, costRefreshLane]) {
+    if (lane.pending > 0 || lane.rotation || lane.nativeSequence <= lane.retiredSequence) {
+      continue;
+    }
+    historyClearTimeout(lane.idleTimer);
+    void runInDetachedAsyncContext(() => rotateDatabaseWorkers(lane)).catch((error: unknown) => {
+      process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
+    });
+  }
+});
 
 export function pruneHistoryDatabases(): void {
   for (const [key, resource] of historyDatabases) {
@@ -192,7 +223,7 @@ export function armDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane)
   if (lane.nativeSequence <= lane.retiredSequence || lane.pending > 0) {
     return;
   }
-  lane.idleTimer = runInHistoryOwnerContext(() =>
+  lane.idleTimer = runInDetachedAsyncContext(() =>
     historySetTimeout(() => {
       void rotateDatabaseWorkers(lane).catch((error: unknown) => {
         process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
@@ -278,6 +309,9 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   candidates: readonly SessionStoreReadCandidate[],
   operation: (scope: {
     assertCurrent: () => void;
+    readStoreTarget: (
+      request: SessionStoreTargetReadRequest,
+    ) => Promise<SessionStoreTargetReadResult>;
     readTargetInventory: (
       request: SessionStoreTargetInventoryRequest,
     ) => Promise<SessionStoreTargetInventoryResult>;
@@ -342,6 +376,43 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       assertCurrent();
       const value = await operation({
         assertCurrent,
+        readStoreTarget: async (request) => {
+          const reply = await historyPages.run(
+            () => {
+              assertCurrent();
+              dispatched = true;
+              historyLane.nativeSequence++;
+              return { kind: "session-store-target", request };
+            },
+            { inputBytes: JSON.stringify(request).length * 2, timeoutMs: 60_000 },
+          );
+          const result = unwrapSessionTranscriptWorkerReply<
+            | "history-page"
+            | "session-preview"
+            | "session-title-fields"
+            | "session-row-presence"
+            | "session-members"
+            | "session-entry-list"
+            | "session-exact-entries"
+            | "session-store-target"
+            | "session-target-inventory"
+            | "session-identity-evidence"
+            | "usage-cache"
+            | "transcript-search"
+          >(reply);
+          if (
+            typeof result === "boolean" ||
+            Array.isArray(result) ||
+            (result.kind !== "session-store-target" &&
+              result.kind !== "session-target-registry-required")
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of store target",
+            );
+          }
+          assertCurrent();
+          return result;
+        },
         readTargetInventory: async (request) => {
           const reply = await historyPages.run(
             () => {
@@ -357,12 +428,17 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           );
           const result = unwrapSessionTranscriptWorkerReply<
             | "history-page"
+            | "session-preview"
+            | "session-title-fields"
             | "session-row-presence"
             | "session-members"
             | "session-entry-list"
+            | "session-exact-entries"
+            | "session-store-target"
             | "session-target-inventory"
             | "session-identity-evidence"
             | "usage-cache"
+            | "transcript-search"
           >(reply);
           if (
             typeof result === "boolean" ||

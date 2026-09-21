@@ -58,11 +58,14 @@ export function buildRoleTree(
     if (!nodeId) {
       continue;
     }
+    const role = axValue(raw.role) || "unknown";
+    const name = axValue(raw.name);
+    const normalizedRole = role.toLowerCase();
     byId.set(nodeId, tree.length);
     tree.push({
       raw,
-      role: axValue(raw.role) || "unknown",
-      name: axValue(raw.name),
+      role,
+      name,
       value: axValue(raw.value),
       backendDOMNodeId:
         typeof raw.backendDOMNodeId === "number" && raw.backendDOMNodeId > 0
@@ -74,32 +77,38 @@ export function buildRoleTree(
         ? {
             transparent:
               raw.ignored === true ||
-              ["none", "presentation", "fragment"].includes(axValue(raw.role).toLowerCase()) ||
-              (axValue(raw.role).toLowerCase() === "generic" && !axValue(raw.name)),
+              ["none", "presentation", "fragment"].includes(normalizedRole) ||
+              (normalizedRole === "generic" && !name),
           }
         : {}),
     });
   }
 
-  for (let index = 0; index < tree.length; index += 1) {
-    for (const childId of tree[index]?.raw.childIds ?? []) {
+  for (const [index, node] of tree.entries()) {
+    for (const childId of node.raw.childIds ?? []) {
       const childIndex = byId.get(childId);
       if (childIndex === undefined) {
         continue;
       }
-      tree[index]?.children.push(childIndex);
+      node.children.push(childIndex);
       expectDefined(tree[childIndex], "CDP child node index").parent = index;
     }
   }
 
-  const rootIndex = tree.findIndex((node) => node.backendDOMNodeId === rootBackendNodeId);
-  if (rootBackendNodeId !== undefined && rootIndex < 0) {
-    throw new Error("Snapshot root is no longer present in the accessibility tree; retry.");
+  const roots: number[] = [];
+  if (rootBackendNodeId !== undefined) {
+    const rootIndex = tree.findIndex((node) => node.backendDOMNodeId === rootBackendNodeId);
+    if (rootIndex < 0) {
+      throw new Error("Snapshot root is no longer present in the accessibility tree; retry.");
+    }
+    roots.push(rootIndex);
+  } else {
+    for (const [index, node] of tree.entries()) {
+      if (node.parent === undefined) {
+        roots.push(index);
+      }
+    }
   }
-  const roots =
-    rootBackendNodeId !== undefined
-      ? [rootIndex]
-      : tree.map((_node, index) => index).filter((index) => tree[index]?.parent === undefined);
   const stack = roots.map((index) => ({ index, depth: 0 }));
   while (stack.length) {
     const current = stack.pop();

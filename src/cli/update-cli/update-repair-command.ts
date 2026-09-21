@@ -33,6 +33,7 @@ import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
+import { formatCliCommand } from "../command-format.js";
 import {
   confirmGatewayReachable,
   resolveGatewayRestartProbeContext,
@@ -239,7 +240,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     currentHistory.incomplete
   ) {
     throw new Error(
-      "Update repair needs post-core maintenance. Stop the Gateway service through its owner before retrying; repair will not stop or restart it.",
+      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop", env)} first.`,
     );
   }
   const reconciled = activeRuns.length

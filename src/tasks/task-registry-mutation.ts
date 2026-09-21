@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import {
   getTaskFlowById,
   updateFlowRecordByIdExpectedRevision,
@@ -33,7 +32,7 @@ import {
   updateRunIdIndex,
   recordTaskRegistryProjectionWrite,
 } from "./task-registry.process-state.js";
-import { tryPersistTaskDeliveryStateUpsert, tryPersistTaskUpsert } from "./task-registry.store.js";
+import { tryPersistTaskUpsert } from "./task-registry.store.js";
 import {
   isTerminalTaskStatus,
   type TaskDeliveryState,
@@ -162,36 +161,6 @@ export function publishTaskRecordUpdate(
     previous: cloneTaskRecordForObserver(current),
   }));
   return { task: cloneTaskRecord(next), isCurrent: () => tasks.get(taskId) === published };
-}
-
-export function upsertTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
-  return withTaskRegistryMutation(
-    () => {
-      const current = taskDeliveryStates.get(state.taskId);
-      const next: TaskDeliveryState = {
-        taskId: state.taskId,
-        ...(state.requesterOrigin
-          ? { requesterOrigin: normalizeDeliveryContext(state.requesterOrigin) }
-          : {}),
-        ...(state.lastNotifiedEventAt != null
-          ? { lastNotifiedEventAt: state.lastNotifiedEventAt }
-          : {}),
-      };
-      if (!next.requesterOrigin && typeof next.lastNotifiedEventAt !== "number" && !current) {
-        return cloneTaskDeliveryState({ taskId: state.taskId });
-      }
-      if (!tryPersistTaskDeliveryStateUpsert(next)) {
-        return current
-          ? cloneTaskDeliveryState(current)
-          : cloneTaskDeliveryState({ taskId: state.taskId });
-      }
-      taskDeliveryStates.set(state.taskId, next);
-      recordTaskRegistryProjectionWrite("delivery", state.taskId);
-      bumpTaskRegistryRevision();
-      return cloneTaskDeliveryState(next);
-    },
-    () => cloneTaskDeliveryState(taskDeliveryStates.get(state.taskId) ?? { taskId: state.taskId }),
-  );
 }
 
 export function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {

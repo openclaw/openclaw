@@ -1,13 +1,15 @@
 import { html, nothing, type ReactiveControllerHost, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogEntry } from "../../api/types.ts";
+import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
+import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
 import {
   loadModelCatalog,
   modelCatalogRefreshError,
+  peekModelCatalog,
   subscribeModelCatalogChanges,
 } from "../../lib/model-catalog-store.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
@@ -26,6 +28,7 @@ export class NativeModelSetup {
   private nativeModels: ModelCatalogEntry[] = [];
   private nativeModel = "";
   private nativeModelError: string | null = null;
+  private nativeCatalogError: string | null = null;
   saving = false;
   private generation = 0;
   private nativeModelsAbort: AbortController | null = null;
@@ -46,6 +49,7 @@ export class NativeModelSetup {
     this.nativeModels = [];
     this.nativeModel = "";
     this.nativeModelError = null;
+    this.nativeCatalogError = null;
     this.saving = false;
     this.nativeModelsAbort?.abort();
     this.nativeModelsAbort = null;
@@ -117,6 +121,17 @@ export class NativeModelSetup {
     }
   }
 
+  private applyNativeCatalog(catalog: ModelCatalogResult): void {
+    this.nativeModels = catalog.models.filter(
+      (model) => model.agentRuntime && model.agentRuntime.id !== "openclaw",
+    );
+    this.nativeModelsStatus = catalog.pendingProviders?.length ? "loading" : "ready";
+    this.nativeCatalogError = modelCatalogRefreshError(catalog);
+    if (!this.nativeModels.some((model) => `${model.provider}/${model.id}` === this.nativeModel)) {
+      this.nativeModel = "";
+    }
+  }
+
   private async loadNativeModels(refresh = true): Promise<void> {
     const connection = this.options.getConnection();
     const context = this.options.getContext();
@@ -128,6 +143,10 @@ export class NativeModelSetup {
       view: "all" as const,
       agentId: connection?.agentId ?? undefined,
     };
+    const cached = peekModelCatalog(client, scope, { allowStale: true });
+    if (cached) {
+      this.applyNativeCatalog(cached);
+    }
     this.nativeModelsUnsubscribe ??= subscribeModelCatalogChanges(
       context.gateway,
       () => void this.loadNativeModels(false),
@@ -136,7 +155,9 @@ export class NativeModelSetup {
     this.nativeModelsAbort?.abort();
     const controller = new AbortController();
     this.nativeModelsAbort = controller;
-    this.nativeModelError = null;
+    if (refresh) {
+      this.nativeCatalogError = null;
+    }
     this.nativeModelsStatus = "loading";
     this.host.requestUpdate();
     try {
@@ -148,20 +169,11 @@ export class NativeModelSetup {
       if (this.options.getConnection() !== connection || controller.signal.aborted) {
         return;
       }
-      this.nativeModels = catalog.models.filter(
-        (model) => model.agentRuntime && model.agentRuntime.id !== "openclaw",
-      );
-      this.nativeModelsStatus = catalog.pendingProviders?.length ? "loading" : "ready";
-      this.nativeModelError = modelCatalogRefreshError(catalog);
-      if (
-        !this.nativeModels.some((model) => `${model.provider}/${model.id}` === this.nativeModel)
-      ) {
-        this.nativeModel = "";
-      }
+      this.applyNativeCatalog(catalog);
     } catch (error) {
       if (this.options.getConnection() === connection && !controller.signal.aborted) {
         this.nativeModelsStatus = "ready";
-        this.nativeModelError = formatModelSetupError(error);
+        this.nativeCatalogError = formatModelSetupError(error);
       }
     } finally {
       if (this.nativeModelsAbort === controller) {
@@ -176,7 +188,7 @@ export class NativeModelSetup {
     const selected = models.find((model) => `${model.provider}/${model.id}` === this.nativeModel);
     return renderNativeModelSetupSection(html`
       ${this.nativeModelsStatus === "loading" ? html`<p role="status">${t("modelSetup.nativeModels.loading")}</p>` : nothing}
-      ${this.nativeModelsStatus === "ready" && models.length === 0 && !this.nativeModelError ? html`<p role="status">${t("modelSetup.nativeModels.empty")}</p>` : nothing}
+      ${this.nativeModelsStatus === "ready" && models.length === 0 && !this.nativeCatalogError ? html`<p role="status">${t("modelSetup.nativeModels.empty")}</p>` : nothing}
       ${renderModelPicker({
         label: t("modelSetup.nativeModels.choose"),
         value: this.nativeModel,
@@ -187,7 +199,12 @@ export class NativeModelSetup {
           detail:
             model.available === true
               ? providerDisplayLabel(model.provider)
-              : t("modelSetup.nativeModels.signIn"),
+              : (chatModelUnavailableMessage(model.unavailableReason) ??
+                (this.nativeModelsStatus === "loading" && model.available === undefined
+                  ? t("modelSetup.nativeModels.loading")
+                  : model.available === false
+                    ? t("chat.modelControls.modelsUnavailable")
+                    : t("modelSetup.nativeModels.unconfirmed"))),
           disabled: model.available !== true,
         })),
         disabled: this.options.blocked() || this.saving,
@@ -195,7 +212,11 @@ export class NativeModelSetup {
           this.nativeModel = value;
           this.host.requestUpdate();
         },
-        onOpen: () => void this.loadNativeModels(),
+        onOpen: () => {
+          if (!this.nativeModelsAbort) {
+            void this.loadNativeModels(this.nativeModelsStatus === "idle");
+          }
+        },
       })}
       <button
         class="btn primary"
@@ -205,6 +226,23 @@ export class NativeModelSetup {
         ${t(this.saving ? "modelSetup.nativeModels.saving" : "modelSetup.nativeModels.use")}
       </button>
       ${this.nativeModelError ? html`<div class="callout danger" role="alert">${this.nativeModelError}</div>` : nothing}
+      ${
+        this.nativeCatalogError
+          ? html`
+              <div class="callout danger" role="alert">
+                ${this.nativeCatalogError}
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  ?disabled=${this.options.blocked() || this.saving || this.nativeModelsAbort !== null}
+                  @click=${() => void this.loadNativeModels(true)}
+                >
+                  ${t("common.retry")}
+                </button>
+              </div>
+            `
+          : nothing
+      }
     `);
   }
 }

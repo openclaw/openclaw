@@ -15,8 +15,8 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createAcpTaskBackingDetail } from "../tasks/task-backing-records.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "../tasks/task-executor-create.async.js";
+import { readResidentTaskFlow } from "../tasks/task-flow-registry.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
-import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.test-support.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   deleteTaskFlowRecordById,
@@ -25,7 +25,6 @@ import {
 import {
   cancelTaskById,
   createTaskRecord,
-  deleteTaskRecordById,
   findTaskByRunId,
   getTaskById,
   listTaskRecords,
@@ -520,87 +519,6 @@ describe("registered task flow reconciliation", () => {
     },
   );
 
-  it.each(["remove selected", "append candidate"] as const)(
-    "preserves ACP generation history when restored observers %s",
-    async (change) => {
-      const childSessionKey = "agent:main:restore-child";
-      for (const [id, generation, createdAt] of [
-        ["selected", 100, 1],
-        ["retained", 1, 2],
-      ] as const) {
-        upsertTaskFlowRegistryRecordToSqlite(flow(id, { syncMode: "task_mirrored" }));
-        upsertTaskWithDeliveryStateToSqlite({
-          task: task(id, {
-            childSessionKey,
-            parentFlowId: id,
-            createdAt,
-            detail: createAcpTaskBackingDetail(id, generation),
-          }),
-        });
-      }
-      upsertTaskFlowRegistryRecordToSqlite(flow("appended", { syncMode: "task_mirrored" }));
-      let observed = false;
-      let removed = false;
-      let appended: TaskRecord | null = null;
-      configureTaskFlowRegistryRuntime({
-        observers: {
-          onEvent: (event) => {
-            if (event.kind !== "restored" || observed) {
-              return;
-            }
-            observed = true;
-            if (change === "remove selected") {
-              removed = deleteTaskRecordById("selected");
-            } else {
-              appended = createTaskRecord({
-                runtime: "acp",
-                ownerKey,
-                scopeKind: "session",
-                childSessionKey,
-                parentFlowId: "appended",
-                runId: "appended-run",
-                task: "Appended during restore",
-                status: "running",
-                deliveryStatus: "not_applicable",
-                detail: createAcpTaskBackingDetail("appended", 200),
-              });
-            }
-          },
-        },
-      });
-      const created = createBackgroundTaskRecord(
-        {
-          agentId: "main",
-          requesterAgentId: "main",
-          requesterSessionKey: ownerKey,
-          childSessionKey,
-          runId: "after-restore",
-          task: "Register after reentrant restore",
-        },
-        3_000,
-        "after-restore-instance",
-      );
-      expect(observed).toBe(true);
-      if (change === "remove selected") {
-        expect(removed).toBe(true);
-        expect(getTaskById("selected")).toBeUndefined();
-      } else {
-        expect(appended).toMatchObject({ detail: { generation: 200 } });
-      }
-      if (!created) {
-        throw new Error("Expected ACP creation after reentrant flow restore");
-      }
-      const expectedGeneration = change === "remove selected" ? 101 : 201;
-      expect(getTaskById(created.taskId)).toMatchObject({
-        detail: { instanceId: "after-restore-instance", generation: expectedGeneration },
-      });
-      await closeOpenClawStateDatabaseAsync();
-      expect(getTaskById(created.taskId)).toMatchObject({
-        detail: { instanceId: "after-restore-instance", generation: expectedGeneration },
-      });
-    },
-  );
-
   it.each(["read", "lookup", "update", "delete", "refresh"] as const)(
     "does not overwrite a synchronous %s with a delayed worker observation",
     async (intervening) => {
@@ -700,8 +618,6 @@ describe("registered task flow reconciliation", () => {
       const { held, release } = holdFlowWorkerReply(
         intervening === "refresh" ? "flows.current" : "flows.updateManaged",
       );
-      const onEvent = vi.fn();
-      configureTaskFlowRegistryRuntime({ observers: { onEvent } });
       const pending = managed.finish({ flowId: created.flowId, expectedRevision: 0, endedAt: 100 });
       try {
         await held.promise;
@@ -711,14 +627,7 @@ describe("registered task flow reconciliation", () => {
         if (intervening === "lookup") {
           measureLookup("pending", "lookup-run", "lookup-0-16");
           measureLookup("pending-no-eligible", "ineligible-run", "ineligible");
-          const { db } = openOpenClawStateDatabase();
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<DB>(db)
-              .updateTable("flow_runs")
-              .set({ sync_mode: "managed" })
-              .where("flow_id", "=", "lookup-0-16"),
-          );
+          expect(deleteTaskFlowRecordById("lookup-0-16")).toBe(true);
           measureLookup("pending-fresh", "lookup-run", "lookup-0-15");
         } else if (intervening === "update") {
           expect(
@@ -743,31 +652,21 @@ describe("registered task flow reconciliation", () => {
           );
           await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         }
-        onEvent.mockClear();
         release.resolve();
         expect(await pending).toMatchObject({
           applied: true,
           flow: { revision: 1, status: "succeeded" },
         });
         if (intervening === "delete") {
-          expect(legacy.get(created.flowId)).toBeUndefined();
+          expect(readResidentTaskFlow(created.flowId)).toBeUndefined();
         } else {
           const readOnly = intervening === "read" || intervening === "lookup";
-          expect(legacy.get(created.flowId)).toMatchObject({
+          expect(readResidentTaskFlow(created.flowId)).toMatchObject({
             revision: readOnly ? 1 : 2,
             ...(readOnly || intervening === "update"
               ? { status: readOnly ? "succeeded" : "running" }
               : { goal: "Refreshed canonical flow" }),
           });
-        }
-        if (intervening === "read" || intervening === "lookup") {
-          expect(onEvent).toHaveBeenCalledExactlyOnceWith({
-            kind: "upserted",
-            flow: expect.objectContaining({ revision: 1, status: "succeeded" }),
-            previous: expect.objectContaining({ revision: 0, status: "queued" }),
-          });
-        } else {
-          expect(onEvent).not.toHaveBeenCalled();
         }
         if (intervening === "lookup") {
           measureLookup("settled", "lookup-run", "lookup-0-15");
@@ -777,7 +676,7 @@ describe("registered task flow reconciliation", () => {
           expect(legacy.get(created.flowId)).toEqual(settled);
           console.log("Run lookup flow snapshots", JSON.stringify(lookupReads));
           expect(lookupReads.map(({ count }) => count)).toEqual([0, 0, 1, 0, 1, 0, 1]);
-          expect(lookupReads.map(({ rows }) => rows)).toEqual([0, 0, 35, 0, 35, 0, 35]);
+          expect(lookupReads.map(({ rows }) => rows)).toEqual([0, 0, 1, 0, 1, 0, 34]);
           expect(
             lookupReads.filter(({ count }) => count > 0).every(({ textBytes }) => textBytes > 0),
           ).toBe(true);

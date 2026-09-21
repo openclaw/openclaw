@@ -441,18 +441,3 @@ export async function probeLaunchAgentState(
   }
   return { state: "stopped", runtime };
 }
-
-export async function waitForLaunchAgentStopped(
-  serviceTarget: string,
-): Promise<LaunchAgentProbeResult> {
-  let lastProbe: LaunchAgentProbeResult = { state: "unknown" };
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const probe = await probeLaunchAgentState(serviceTarget);
-    lastProbe = probe;
-    if (probe.state === "stopped" || probe.state === "not-loaded") {
-      return probe;
-    }
-    await sleep(100);
-  }
-  return lastProbe;
-}

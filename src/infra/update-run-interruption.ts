@@ -13,7 +13,7 @@ import {
   readActiveUpdateRun,
   readLatestUpdateRun,
   readUpdateRunRecord,
-} from "./update-run-reader.js";
+} from "./update-run-read.kernel.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
 import { hasStoredUpdateRecovery } from "./update-run-recovery-store.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";

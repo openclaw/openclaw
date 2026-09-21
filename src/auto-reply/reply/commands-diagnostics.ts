@@ -15,7 +15,7 @@ import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../..
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import type { ReplyPayload } from "../types.js";
 import { formatCommandExecResult, formatCommandExecText } from "./command-exec-result.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";

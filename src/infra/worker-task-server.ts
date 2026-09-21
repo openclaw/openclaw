@@ -1,5 +1,6 @@
 import { parentPort, type MessagePort, type Transferable } from "node:worker_threads";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import {
   createWorkerTaskControl,
   observeWorkerTaskCancellation,
@@ -68,6 +69,7 @@ export function serveOwnedWorkerTasks<Output>(
       key?: string;
       resourcePort?: MessagePort;
     }) => {
+      cancelWorkerIdleGc();
       if (message.closeResource && message.resourcePort) {
         const receipt = message.resourcePort;
         const precedingExecution = execution;
@@ -89,7 +91,12 @@ export function serveOwnedWorkerTasks<Output>(
               [],
             );
           })
-          .finally(() => receipt.close());
+          .finally(() => {
+            receipt.close();
+            if (!active) {
+              scheduleWorkerIdleGc();
+            }
+          });
         return;
       }
       if (message.responseId !== undefined) {
@@ -212,7 +219,8 @@ export function serveOwnedWorkerTasks<Output>(
             taskId: task.taskId,
             error: error instanceof Error ? error.message : String(error),
           });
-        });
+        })
+        .finally(scheduleWorkerIdleGc);
     },
   );
 }

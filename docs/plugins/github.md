@@ -33,7 +33,11 @@ To intentionally keep it off and silence that notice, set
 The plugin is enabled by default. Connect to the Gateway, then click a public
 GitHub issue, pull request, or commit link in chat. The reader opens beside the
 conversation with a GitHub icon and an **Open on GitHub** link. Hover or focus
-an issue or pull request link to see its preview.
+an issue or pull request link to see its preview. Login, OAuth, profile,
+repository, and other general GitHub pages remain ordinary links: neither
+native item previews nor the generic page-preview fallback fetches them.
+A PR or issue URL inside a login redirect query does not make the login link
+previewable.
 
 Each reader tab has its own Back and Forward history. Opening the same URL
 selects its existing tab. Links inside the reader navigate the current tab;
@@ -43,7 +47,18 @@ responsive layout; on a phone it can sit below chat or expand with the panel.
 
 The reader includes descriptions, discussion comments, published inline PR
 review comments with file and diff context, commit comments, and expandable
-file diffs. HTML comments in descriptions and replies stay hidden, matching
+file diffs. The header separates the item state, author, change counts, and PR
+branches. **Overview**, **Checks**, **Files**, and **Discussion** shortcuts jump
+to the relevant section without leaving the reader.
+
+Pull requests show check runs and commit statuses for the exact head commit.
+Expand the checks summary to inspect individual results and open their source
+logs. Failed checks expand by default. Pending, failed, passed, skipped, empty,
+and unavailable results remain distinct; a partial response never implies that
+all checks passed. These results describe CI, not approval or merge readiness.
+Use **Refresh** to fetch the current PR and its checks again.
+
+HTML comments in descriptions and replies stay hidden, matching
 GitHub; literal comment examples inside code remain visible.
 Markdown images and standalone HTML image attachments can display inline. The
 GitHub plugin fetches public user attachments anonymously through the Gateway,
@@ -79,11 +94,16 @@ hovercard, and GitHub links open externally.
 
 - The reader is public-only and read-only. Use **Open on GitHub** for private
   repositories, posting comments, or merging pull requests.
-- Detail requests do not use ambient GitHub credentials. Preview metadata preserves
-  the selected agent’s managed GitHub identity or the existing service/environment
-  fallback when no managed identity is selected. Identity changes abort stale requests.
+- Previews and reader documents use the selected agent’s managed GitHub identity,
+  or the configured Control UI GitHub token and Gateway environment fallback when
+  no managed identity is selected. Without credentials they use GitHub’s shared
+  anonymous IP quota. Authenticated documents remain public-only: the reader checks
+  repository visibility and identity before returning fresh or cached content.
+  Identity changes abort stale requests. Attachment images remain anonymous.
 - Each comment collection is limited to 20 entries; PR discussion and inline
   review comments have separate limits. Up to 30 changed files are shown.
+- PR checks use at most one page each of check runs and commit statuses and show
+  up to 100 results. Incomplete or unavailable checks retain a link to GitHub.
 - Long text and patches are bounded. Incomplete content is labeled rather than
   presented as a complete conversation or diff.
 - **Refresh** requests the current item again. Rate limits, deleted items, and

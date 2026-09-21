@@ -383,7 +383,8 @@ export async function removeSandboxRegistryRuntime(
       !current ||
       (current.runtimeState !== "removing" && current.runtimeState !== "removing-pending") ||
       current.backendId !== removing.backendId ||
-      current.sessionKey !== removing.sessionKey
+      current.sessionKey !== removing.sessionKey ||
+      (options.shouldRemove && !options.shouldRemove(current))
     ) {
       return;
     }

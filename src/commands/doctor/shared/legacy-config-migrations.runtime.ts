@@ -2,6 +2,7 @@
 import type { LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS } from "./legacy-config-migrations.runtime.agents.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_CLI_BACKENDS } from "./legacy-config-migrations.runtime.cli-backends.js";
+import { LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE } from "./legacy-config-migrations.runtime.code-mode.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON } from "./legacy-config-migrations.runtime.cron.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_DIAGNOSTICS } from "./legacy-config-migrations.runtime.diagnostics.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_ENTRIES } from "./legacy-config-migrations.runtime.entries.js";
@@ -22,6 +23,7 @@ import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_CLI_BACKENDS,
+  LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_CRON,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_DIAGNOSTICS,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY,

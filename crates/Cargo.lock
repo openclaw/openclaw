@@ -482,6 +482,7 @@ dependencies = [
  "subtle",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite",
  "url",
 ]

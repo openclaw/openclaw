@@ -131,7 +131,7 @@ it.each(["guidance", "staging"])(
         expect(nextAction).not.toContain("Initial dependency resolution failed");
         expect(result).toMatchObject({
           reason: "global-install-permission-denied",
-          failedStep: { name: "global update (omit optional)", failureFacts: permissionFacts },
+          failedStep: { name: "package-install-omit-optional", failureFacts: permissionFacts },
           recovery: { serviceRestartSafe: true, version: "1.0.0" },
         });
       }

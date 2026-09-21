@@ -381,6 +381,27 @@ describe("handleGatewayExtensionUpgrade", () => {
     expect(getBrowserControlStateMock).not.toHaveBeenCalled();
   });
 
+  it.each(["policy", "key"] as const)(
+    "rejects a legacy handshake when its %s changes during relay startup",
+    async (change) => {
+      getBrowserControlStateMock.mockReturnValue(stateWithExtensionProfile());
+      primeProfile();
+      ensureExtensionRelayForProfileMock.mockImplementationOnce(async () => {
+        if (change === "policy") {
+          configState.allowLegacyAuth = false;
+        } else {
+          readExtensionRelayTokenMock.mockReturnValue(ROTATED_TOKEN);
+        }
+        return { bridge: { id: "retired-auth" } };
+      });
+      const { socket, writes, isDestroyed } = fakeSocket();
+      await handleGatewayExtensionUpgrade(relayReq("/browser/extension"), socket, Buffer.alloc(0));
+      expect(writes.join("")).toContain("503");
+      expect(isDestroyed()).toBe(true);
+      expect(attachExtensionWebSocketMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("attaches the socket to the bridge on a valid token", async () => {
     getBrowserControlStateMock.mockReturnValue(stateWithExtensionProfile());
     primeProfile();

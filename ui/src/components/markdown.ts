@@ -14,9 +14,11 @@ import {
   prepareMarkdownHumanMentions,
   restoreMarkdownHumanMentions,
 } from "./markdown-human-mentions.ts";
+import type { MarkdownJson } from "./markdown-json.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { stripProgressCardRawContentBlocks } from "./markdown-raw-content.ts";
 import {
+  MARKDOWN_PARSE_LIMIT,
   normalizeMarkdownRenderOptions,
   type MarkdownRenderEnv,
   type MarkdownRenderOptions,
@@ -104,7 +106,6 @@ const progressSanitizeOptions = {
 
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
-const MARKDOWN_PARSE_LIMIT = 40_000;
 // Covers several message-heavy sessions during rapid switching. Only inputs
 // up to 50k characters enter this 500-entry LRU, keeping memory bounded.
 const MARKDOWN_CACHE_LIMIT = 500;
@@ -579,6 +580,20 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
     rendered = toPlainTextElement(input, renderOptions);
   }
   return DOMPurify.sanitize(rendered, activeSanitizeOptions);
+}
+
+// Bare JSON bypasses Markdown normalization, which can alter literal Unicode separators.
+// Both inputs still use the same code-block renderer and sanitizer boundary.
+export function toSanitizedJsonHtml(json: MarkdownJson, options: MarkdownRenderOptions): string {
+  installHooks();
+  return DOMPurify.sanitize(
+    // HTML parsing normalizes literal CRs; character references survive both
+    // sanitizer parsing and the final unsafeHTML commit without changing Raw.
+    renderMarkdownCodeBlock(json.text, "json", normalizeMarkdownRenderOptions(options), {
+      json,
+    }).replaceAll("\r", "&#13;"),
+    sanitizeOptions,
+  ).replaceAll("\r", "&#13;");
 }
 
 export function toSanitizedMarkdownHtml(

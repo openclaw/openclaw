@@ -6,11 +6,7 @@ import {
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveExecConfigState } from "../../agents/exec-defaults.js";
-import {
-  resolveAgentHarnessExecutionRestriction,
-  resolveAgentHarnessNativeToolPolicyRestricted,
-} from "../../agents/harness/execution-environment.js";
+import { resolveAgentHarnessSessionExecutionRestriction } from "../../agents/harness/execution-environment.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
@@ -19,11 +15,9 @@ import {
   resolveAllowedModelRef,
   type ModelRef,
 } from "../../agents/model-selection.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
-import { resolveEffectiveToolFsWorkspaceOnly } from "../../agents/tool-fs-policy.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "../../auto-reply/reply/queue.js";
@@ -170,54 +164,19 @@ export function resolveSessionPatchModelSelection(params: {
 
 /** Model selection and send admission expose the same per-chat recovery contract. */
 export function resolveSessionNativeRuntimeRestriction(params: {
+  operation: "selection" | "send";
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-  entry: SessionEntry;
+  entry: Parameters<typeof resolveAgentHarnessSessionExecutionRestriction>[0]["entry"];
   persistedEntry: SessionEntry | undefined;
   harness: AgentHarness;
   provider: string;
   modelId: string;
   callerCanConsent: boolean;
 }): ErrorShape | undefined {
-  const { cfg, agentId, sessionKey, entry, harness } = params;
-  if (harness.executionEnvironment !== "host-only") {
-    return undefined;
-  }
-  const sandbox = resolveSandboxRuntimeStatus({
-    cfg,
-    agentId,
-    sessionKey,
-    preparedSessionEntry: entry,
-  });
-  const exec = resolveExecConfigState({ cfg, agentId, sessionKey, sessionEntry: entry });
-  const nativeRuntimeConsent =
-    entry.permissionMode === "full" && entry.sandboxMode === "off"
-      ? entry.nativeRuntimeConsent
-      : undefined;
-  const restriction = resolveAgentHarnessExecutionRestriction(harness, {
-    sandboxed: sandbox.sandboxed || exec.host === "sandbox",
-    sandboxRequired: sandbox.sandboxRequired || exec.host === "sandbox",
-    workspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId }),
-    permissionMode: entry.permissionMode,
-    nativeRuntimeConsent,
-    remoteExecution: exec.host === "node",
-    toolPolicyRestricted:
-      nativeRuntimeConsent !== harness.id &&
-      harness.conversationToolPolicySupport !== "exact" &&
-      resolveAgentHarnessNativeToolPolicyRestricted(
-        {
-          config: cfg,
-          agentId,
-          sessionKey,
-          sessionId: entry.sessionId,
-          preparedSessionEntry: entry,
-          provider: params.provider,
-          modelId: params.modelId,
-        },
-        harness,
-      ),
-  });
+  const { harness } = params;
+  const restriction = resolveAgentHarnessSessionExecutionRestriction(params);
   if (!restriction) {
     return undefined;
   }
@@ -225,7 +184,7 @@ export function resolveSessionNativeRuntimeRestriction(params: {
     restriction.reason !== "sandbox-required" && restriction.reason !== "remote-execution";
   // Creation has no persisted chat to authorize; its first send owns optional recovery.
   const persisted = params.persistedEntry;
-  if (!persisted && optional) {
+  if (params.operation === "selection" && !persisted && optional) {
     return undefined;
   }
   const canRecover = params.callerCanConsent && optional && persisted;
@@ -310,6 +269,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     if (harness) {
       validateEnvironment = () =>
         resolveSessionNativeRuntimeRestriction({
+          operation: "selection",
           cfg: params.cfg,
           agentId: params.agentId,
           sessionKey: params.placement?.sessionKey ?? params.patch.key,

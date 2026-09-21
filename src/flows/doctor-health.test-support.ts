@@ -9,12 +9,24 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
+export const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDoctorResult"]> =
+  {
+    status: "advisory",
+    advisory: {
+      kind: "package-post-install-doctor",
+      message: "recoverable plugin repair",
+      reason: "deferred-configured-plugin-repair",
+      details: ["plugin repair deferred"],
+    },
+  };
+
 const mocks = vi.hoisted(() => ({
   outro: vi.fn(),
   config: vi.fn<() => OpenClawConfig>(),
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
   service: vi.fn(),
+  resident: vi.fn<() => { pid: number } | undefined>(),
   probePortUsage: vi.fn<(typeof import("../infra/ports-probe.js"))["probePortUsage"]>(),
   inspectGatewayRestart:
     vi.fn<(typeof import("../cli/daemon-cli/restart-health.js"))["inspectGatewayRestart"]>(),
@@ -31,6 +43,7 @@ const mocks = vi.hoisted(() => ({
 
 const runtimeDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  mocks.resident.mockReset();
   mocks.runtimeTmpDir.mockReturnValue(runtimeDirs.make("openclaw-doctor-runtime-"));
   mocks.inspectGatewayRestart.mockReset().mockImplementation(async (params) => ({
     runtime: await params.service.readRuntime(params.env ?? process.env),
@@ -56,6 +69,23 @@ beforeEach(() => {
       waitOutcome: mocks.restartedHealthy ? "healthy" : "timeout",
     };
   });
+});
+
+vi.mock("../gateway/call.js", async (original) => {
+  const { gatewayMaintenanceResponse } = await import("../gateway/health-response.test-support.js");
+  return {
+    ...(await original<typeof import("../gateway/call.js")>()),
+    callGatewayCli: gatewayMaintenanceResponse(() => mocks.resident()),
+  };
+});
+
+vi.mock("../daemon/systemd-exec.js", async (original) => {
+  const { gatewayMaintenanceSystemdShow } =
+    await import("../gateway/health-response.test-support.js");
+  return {
+    ...(await original<typeof import("../daemon/systemd-exec.js")>()),
+    execSystemctlUser: gatewayMaintenanceSystemdShow,
+  };
 });
 
 // The synthetic manager's leases and locks belong to its private fixture root.
@@ -232,7 +262,6 @@ export function seedMaintenanceStartupFailure(openDatabase: () => OpenClawStateD
 
 export function registerDoctorConfigReceiptTests(
   runDoctorHealthFlow: typeof import("./doctor-health.js").runDoctorHealthFlow,
-  postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDoctorResult"]>,
 ) {
   it.each(["unchanged", "ok", "error", "advisory", "interleaved"] as const)(
     "reports the consumed input and last committed Doctor config hash before exiting (%s)",

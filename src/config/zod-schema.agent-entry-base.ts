@@ -2,7 +2,7 @@ import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalo
 import { z } from "zod";
 import { AgentModelSchema, DecisionModelSchema } from "./zod-schema.agent-model.js";
 
-const AgentRuntimePolicySchema = z
+export const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
   })

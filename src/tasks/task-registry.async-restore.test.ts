@@ -8,7 +8,6 @@ import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -19,6 +18,7 @@ import {
 import {
   createInMemoryTaskRegistryStore,
   createInMemoryTaskFlowRegistryStore,
+  reconcileTaskFlowRestoreForTests,
 } from "../test-utils/task-registry-store.js";
 import { ensureTaskRuntimeStateReady } from "./runtime-internal.js";
 import { createAcpTaskBackingDetail } from "./task-backing-records.js";
@@ -27,16 +27,19 @@ import {
   reloadTaskFlowRegistryFromStoreAsync,
   runTaskFlowRegistryWorkerMutation,
   getTaskFlowById,
+  readResidentTaskFlow,
   setFlowWaiting,
 } from "./task-flow-registry.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "./task-flow-registry.store.sqlite.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
-import { getTaskDeliveryState, upsertTaskDeliveryState } from "./task-registry-mutation.js";
+import { commitTaskDeliveryFixture } from "./task-registry-delivery.test-support.js";
+import { getTaskDeliveryState } from "./task-registry-mutation.js";
 import type { TaskRegistryRestoreResult } from "./task-registry-restore.worker.js";
 import {
   ensureTaskRegistryReadyAsync,
   reloadTaskRegistryFromStoreAsync,
+  tasks,
   tasksWithPendingDelivery,
 } from "./task-registry-state.js";
 import {
@@ -155,7 +158,7 @@ function identityRestoreFixture(kind: "task" | "flow", options?: { sameIdentity?
         async withSnapshotAsync(context, consume) {
           loads.push(selected(context));
           await beforeSnapshot(context);
-          return consume(taskRestoreResult(stores.task(context).loadSnapshot()));
+          return consume(taskRestoreResult(stores.task(context).loadSnapshot()), async () => {});
         },
       },
       observers: {
@@ -177,13 +180,6 @@ function identityRestoreFixture(kind: "task" | "flow", options?: { sameIdentity?
           return consume(stores.flow(context).loadSnapshot());
         },
       },
-      observers: {
-        onEvent: (event) => {
-          if (event.kind === "restored") {
-            observed.push(getTaskFlowById(flow.flowId)?.goal ?? "missing");
-          }
-        },
-      },
     });
   }
   return {
@@ -202,53 +198,42 @@ function identityRestoreFixture(kind: "task" | "flow", options?: { sameIdentity?
       kind === "task" ? reloadTaskRegistryFromStoreAsync : reloadTaskFlowRegistryFromStoreAsync,
     read: () =>
       kind === "task" ? getTaskById(task.taskId)?.task : getTaskFlowById(flow.flowId)?.goal,
+    readResident: () =>
+      kind === "task" ? tasks.get(task.taskId)?.task : readResidentTaskFlow(flow.flowId)?.goal,
   };
 }
 
 describe("asynchronous registry restoration", () => {
-  it("repairs again when an enclosing transaction rolls back the first restore", () => {
-    upsertTaskWithDeliveryStateToSqlite({ task });
-    const { db } = openOpenClawStateDatabase();
-    db.prepare("UPDATE task_runs SET run_id = ? WHERE task_id = ?").run(
-      ` ${task.runId} `,
-      task.taskId,
-    );
-    const read = () =>
-      db.prepare("SELECT run_id FROM task_runs WHERE task_id = ?").get(task.taskId);
-    expect(() =>
-      runOpenClawStateWriteTransaction(() => {
-        expect(getTaskById(task.taskId)?.runId).toBe(task.runId);
-        expect(read()).toEqual({ run_id: task.runId });
-        throw new Error("synthetic outer rollback");
-      }),
-    ).toThrow("synthetic outer rollback");
-    expect(read()).toEqual({ run_id: ` ${task.runId} ` });
-    expect(getTaskById(task.taskId)?.runId).toBe(task.runId);
-    expect(read()).toEqual({ run_id: task.runId });
-  });
-
   it.each(["native", "worker"] as const)(
-    "repairs legacy task identifiers before %s hydration, including after database close",
+    "leaves legacy task identifiers to Doctor during %s hydration, including after database close",
     async (mode) => {
-      const childSessionKey = "agent:main:legacy-child";
-      upsertTaskWithDeliveryStateToSqlite({ task: { ...task, childSessionKey } });
+      const runId = ` \t${task.runId}\n`;
+      const childSessionKey = "\u00a0agent:main:legacy-child\u00a0";
+      upsertTaskWithDeliveryStateToSqlite({
+        task,
+        deliveryState: { taskId: task.taskId, lastNotifiedEventAt: 12 },
+      });
+      const { db } = openOpenClawStateDatabase();
+      db.prepare("UPDATE task_runs SET run_id = ?, child_session_key = ? WHERE task_id = ?").run(
+        runId,
+        childSessionKey,
+        task.taskId,
+      );
+      const readRows = () => {
+        const { db: current } = openOpenClawStateDatabase();
+        return {
+          tasks: current.prepare("SELECT * FROM task_runs ORDER BY task_id").all(),
+          delivery: current.prepare("SELECT * FROM task_delivery_state ORDER BY task_id").all(),
+        };
+      };
+      const before = readRows();
       for (let generation = 0; generation < 2; generation += 1) {
-        const { db } = openOpenClawStateDatabase();
-        db.prepare("UPDATE task_runs SET run_id = ?, child_session_key = ? WHERE task_id = ?").run(
-          ` ${task.runId} `,
-          ` ${childSessionKey} `,
-          task.taskId,
-        );
         await closeOpenClawStateDatabaseAsync();
         if (mode === "worker") {
           await ensureTaskRegistryReadyAsync(captureOpenClawStateWorkerContext());
         }
-        expect(getTaskById(task.taskId)).toMatchObject({ runId: task.runId, childSessionKey });
-        expect(
-          openOpenClawStateDatabase()
-            .db.prepare("SELECT task_id FROM task_runs WHERE run_id = ? AND child_session_key = ?")
-            .all(task.runId!, childSessionKey),
-        ).toEqual([{ task_id: task.taskId }]);
+        expect(getTaskById(task.taskId)).toMatchObject({ runId, childSessionKey });
+        expect(readRows()).toEqual(before);
       }
     },
   );
@@ -288,51 +273,37 @@ describe("asynchronous registry restoration", () => {
     }
   });
 
-  it.each(["before restore", "from restore observer"] as const)(
-    "refreshes a flow write pending %s after synchronous snapshot installation",
-    async (when) => {
-      const store = createInMemoryTaskFlowRegistryStore({ flows: new Map([[flow.flowId, flow]]) });
-      const loadSnapshot = vi.fn(() => store.loadSnapshot());
-      const release = createDeferred();
-      const context = captureOpenClawStateWorkerContext();
-      let pending: Promise<void> | undefined;
-      const start = () => {
-        pending = runTaskFlowRegistryWorkerMutation(
-          { flowId: flow.flowId, admission: context.admission },
-          async () => {
-            store.upsertFlow({ ...flow, revision: 1, currentStep: "pending mutation" });
-            await release.promise;
-          },
-          () => store.readFlowAsync(context, flow.flowId),
-        );
-      };
-      configureTaskFlowRegistryRuntime({
-        store: { ...store, loadSnapshot },
-        observers: {
-          onEvent(event) {
-            if (when === "from restore observer" && event.kind === "restored") {
-              start();
-            }
-          },
-        },
+  it("refreshes a pending flow write after synchronous snapshot installation", async () => {
+    const store = createInMemoryTaskFlowRegistryStore({ flows: new Map([[flow.flowId, flow]]) });
+    const loadSnapshot = vi.fn(store.loadSnapshot);
+    const release = createDeferred();
+    const context = captureOpenClawStateWorkerContext();
+    configureTaskFlowRegistryRuntime({
+      store: { ...store, loadSnapshot },
+    });
+    const pending = runTaskFlowRegistryWorkerMutation(
+      { flowId: flow.flowId, admission: context.admission },
+      async () => {
+        store.upsertFlow({ ...flow, revision: 1, currentStep: "pending mutation" });
+        await release.promise;
+      },
+      () => store.readFlowAsync(context, flow.flowId),
+    );
+    try {
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        revision: 1,
+        currentStep: "pending mutation",
       });
-      try {
-        if (when === "before restore") {
-          start();
-        }
-        expect(getTaskFlowById(flow.flowId)).toMatchObject({
-          revision: 1,
-          currentStep: "pending mutation",
-        });
-        expect(loadSnapshot).toHaveBeenCalledTimes(2);
-      } finally {
-        release.resolve();
-        await pending;
-      }
-      expect(getTaskFlowById(flow.flowId)?.revision).toBe(1);
       expect(loadSnapshot).toHaveBeenCalledTimes(2);
-    },
-  );
+      expect(loadSnapshot).toHaveBeenNthCalledWith(1);
+      expect(loadSnapshot).toHaveBeenNthCalledWith(2, [flow.flowId]);
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    expect(getTaskFlowById(flow.flowId)?.revision).toBe(1);
+    expect(loadSnapshot).toHaveBeenCalledTimes(2);
+  });
 
   it("restores complete task and flow state before observers without parent SQLite through close", async () => {
     upsertTaskFlowRegistryRecordToSqlite({ ...flow, flowId: "flow-a", stateJson: { cursor: 3 } });
@@ -436,17 +407,20 @@ describe("asynchronous registry restoration", () => {
         ...store,
         async withSnapshotAsync(_context, consume) {
           loads += 1;
-          return consume({
-            ...taskRestoreResult(store.loadSnapshot()),
-            flowSyncs: [
-              {
-                taskId: task.taskId,
-                flowId: flow.flowId,
-                kind: "result",
-                result: { ok: true, flow },
-              },
-            ],
-          });
+          return consume(
+            {
+              ...taskRestoreResult(store.loadSnapshot()),
+              flowSyncs: [
+                {
+                  taskId: task.taskId,
+                  flowId: flow.flowId,
+                  kind: "result",
+                  result: { ok: true, flow },
+                },
+              ],
+            },
+            () => reconcileTaskFlowRestoreForTests(context, [flow.flowId]),
+          );
         },
       },
       observers: { onEvent: (event) => observed.push(event.kind) },
@@ -509,17 +483,20 @@ describe("asynchronous registry restoration", () => {
           loads += 1;
           started.resolve();
           await release.promise;
-          return consume({
-            ...taskRestoreResult(store.loadSnapshot()),
-            flowSyncs: [
-              {
-                taskId: task.taskId,
-                flowId: flow.flowId,
-                kind: "result",
-                result: { ok: true, flow: { ...flow, revision: 1 } },
-              },
-            ],
-          });
+          return consume(
+            {
+              ...taskRestoreResult(store.loadSnapshot()),
+              flowSyncs: [
+                {
+                  taskId: task.taskId,
+                  flowId: flow.flowId,
+                  kind: "result",
+                  result: { ok: true, flow: { ...flow, revision: 1 } },
+                },
+              ],
+            },
+            () => reconcileTaskFlowRestoreForTests(context, [flow.flowId]),
+          );
         },
       },
       observers: {
@@ -579,7 +556,7 @@ describe("asynchronous registry restoration", () => {
             if (outcome === "failure") {
               throw failure;
             }
-            return consume(taskRestoreResult(snapshot));
+            return consume(taskRestoreResult(snapshot), async () => {});
           },
         },
       });
@@ -636,19 +613,22 @@ describe("asynchronous registry restoration", () => {
               started.resolve();
               await release.promise;
             }
-            return consume({
-              ...taskRestoreResult(store.loadSnapshot()),
-              flowSyncs: settled
-                ? [
-                    {
-                      taskId: task.taskId,
-                      flowId: flow.flowId,
-                      kind: "result",
-                      result: { ok: true, flow: committedFlow },
-                    },
-                  ]
-                : [],
-            });
+            return consume(
+              {
+                ...taskRestoreResult(store.loadSnapshot()),
+                flowSyncs: settled
+                  ? [
+                      {
+                        taskId: task.taskId,
+                        flowId: flow.flowId,
+                        kind: "result",
+                        result: { ok: true, flow: committedFlow },
+                      },
+                    ]
+                  : [],
+              },
+              () => reconcileTaskFlowRestoreForTests(context, settled ? [flow.flowId] : []),
+            );
           },
         },
         observers: {
@@ -693,14 +673,14 @@ describe("asynchronous registry restoration", () => {
             started.resolve();
             await release.promise;
           }
-          return consume(taskRestoreResult(snapshot));
+          return consume(taskRestoreResult(snapshot), async () => {});
         },
       },
     });
     const pending = ensureTaskRegistryReadyAsync(captureOpenClawStateWorkerContext());
     await started.promise;
     try {
-      upsertTaskDeliveryState({ taskId: task.taskId, lastNotifiedEventAt: 30 });
+      commitTaskDeliveryFixture({ taskId: task.taskId, lastNotifiedEventAt: 30 });
     } finally {
       release.resolve();
     }
@@ -722,7 +702,7 @@ describe("asynchronous registry restoration", () => {
           if (fail) {
             throw new Error("synthetic storage failure");
           }
-          return consume(taskRestoreResult(store.loadSnapshot()));
+          return consume(taskRestoreResult(store.loadSnapshot()), async () => {});
         },
       },
     });
@@ -768,9 +748,8 @@ describe("asynchronous registry restoration", () => {
     },
   );
 
-  it("publishes a fully ready flow owner before an observer reenters its synchronous update", async () => {
+  it("installs a ready flow owner before the caller resumes its synchronous update", async () => {
     const store = createInMemoryTaskFlowRegistryStore({ flows: new Map([[flow.flowId, flow]]) });
-    const events: string[] = [];
     configureTaskFlowRegistryRuntime({
       store: {
         ...store,
@@ -778,18 +757,16 @@ describe("asynchronous registry restoration", () => {
           throw new Error("unexpected synchronous restore");
         },
       },
-      observers: {
-        onEvent(event) {
-          events.push(event.kind);
-          if (event.kind === "restored") {
-            setFlowWaiting({ flowId: flow.flowId, expectedRevision: 0, currentStep: "observer" });
-          }
-        },
-      },
     });
     await ensureTaskFlowRegistryReadyAsync(captureOpenClawStateWorkerContext());
-    expect(events).toEqual(["restored", "upserted"]);
-    expect(getTaskFlowById(flow.flowId)).toMatchObject({ revision: 1, currentStep: "observer" });
+    expect(readResidentTaskFlow(flow.flowId)).toMatchObject({ revision: 0, goal: flow.goal });
+    expect(
+      setFlowWaiting({ flowId: flow.flowId, expectedRevision: 0, currentStep: "resumed" }),
+    ).toMatchObject({ applied: true });
+    expect(readResidentTaskFlow(flow.flowId)).toMatchObject({
+      revision: 1,
+      currentStep: "resumed",
+    });
   });
   describe.each(["task", "flow"] as const)("%s database identity", (kind) => {
     it.each(["async", "sync"] as const)(
@@ -805,7 +782,10 @@ describe("asynchronous registry restoration", () => {
 
         if (readMode === "async") {
           await fixture.ensure(fixture.second);
-          expect(fixture.observed).toEqual(["first", "second"]);
+          expect(fixture.readResident()).toBe("second");
+          if (kind === "task") {
+            expect(fixture.observed).toEqual(["first", "second"]);
+          }
         }
         expect(fixture.read()).toBe("second");
         expect(tasksWithPendingDelivery.has(task.taskId)).toBe(true);
@@ -828,6 +808,7 @@ describe("asynchronous registry restoration", () => {
       expect(() => fixture.read()).toThrow("fixture restore unavailable");
       expect(fixture.loads).toEqual(["first"]);
       await fixture.reload(fixture.second);
+      expect(fixture.readResident()).toBe("second");
       expect(fixture.read()).toBe("second");
     });
 
@@ -846,14 +827,22 @@ describe("asynchronous registry restoration", () => {
       fixture.select(fixture.second);
       const second = fixture.reload(fixture.second);
       try {
-        await vi.waitFor(() => expect(fixture.observed).toEqual(["second"]));
+        await vi.waitFor(() => {
+          expect(fixture.readResident()).toBe("second");
+          if (kind === "task") {
+            expect(fixture.observed).toEqual(["second"]);
+          }
+        });
         expect(fixture.read()).toBe("second");
       } finally {
         release.resolve();
         await Promise.all([first, second]);
       }
       expect(fixture.loads).toEqual(["first", "second"]);
-      expect(fixture.observed).toEqual(["second"]);
+      if (kind === "task") {
+        expect(fixture.observed).toEqual(["second"]);
+      }
+      expect(fixture.readResident()).toBe("second");
       expect(fixture.read()).toBe("second");
     });
 
@@ -863,9 +852,13 @@ describe("asynchronous registry restoration", () => {
       fixture.select(fixture.second);
       await fixture.ensure(fixture.second);
       expect(fixture.loads).toEqual(["first", "second"]);
+      expect(fixture.readResident()).toBe("second");
       expect(fixture.read()).toBe("second");
       await fixture.reload(fixture.first);
-      expect(fixture.observed).toEqual(["first", "second"]);
+      if (kind === "task") {
+        expect(fixture.observed).toEqual(["first", "second"]);
+      }
+      expect(fixture.readResident()).toBe("second");
       expect(fixture.read()).toBe("second");
       fixture.select(fixture.first);
       expect(fixture.read()).toBe("first");

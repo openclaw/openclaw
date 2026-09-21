@@ -10,7 +10,6 @@ import { isDeepStrictEqual } from "node:util";
 import {
   AcpxRuntime as BaseAcpxRuntime,
   decodeAcpxRuntimeHandleState,
-  isRequestedModelUnsupportedError,
   type AcpAgentRegistry,
   type AcpRuntimeDoctorReport,
   type AcpRuntimeEvent,
@@ -19,9 +18,7 @@ import {
   type AcpProcessStarted,
   type AcpRuntimeStatus,
   type AcpRuntimeTurnResult,
-  type SessionAgentOptions,
 } from "acpx/runtime";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -41,6 +38,11 @@ import {
   type AcpxAgentCommand,
 } from "./command-line.js";
 import {
+  ensureSessionWithModelRef,
+  withAcpxSessionOptions,
+  withOpenClawModelRef,
+} from "./model-ref.js";
+import {
   ACPX_PROBE_LEASE_SESSION_KEY,
   hashAcpxProcessCommand,
   readAcpxProcessLeaseIdentity,
@@ -53,6 +55,7 @@ import {
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 import { AcpxGenerationRegistry } from "./runtime-generations.js";
+import { AcpxRuntimeProbe } from "./runtime-probe.js";
 import { prepareAcpxProcessCleanup } from "./runtime-process-cleanup.js";
 import type { CompleteAcpRuntime, CompleteAcpRuntimeTurn } from "./runtime-proxy.js";
 import {
@@ -79,6 +82,7 @@ import {
 
 type BaseAcpxRuntimeTestOptions = ConstructorParameters<typeof BaseAcpxRuntime>[1];
 type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
+  getProbeAgent?: () => string | undefined;
   openclawLegacyBareSessionKeys?: ReadonlySet<string>;
   openclawWrapperRoot?: string;
   openclawGatewayInstanceId?: string;
@@ -99,7 +103,6 @@ type OpenClawRuntimeEnsureInput = Parameters<AcpRuntime["ensureSession"]>[0] & {
 type OpenClawRuntimeHandle = Awaited<ReturnType<AcpRuntime["ensureSession"]>> & {
   bridgeSession?: BridgeSession | null;
 };
-type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
 type AcpxMcpServers = Extract<NonNullable<AcpRuntimeOptions["mcpServers"]>, unknown[]>;
 type AcpxMcpServer = AcpxMcpServers[number];
 
@@ -316,40 +319,6 @@ function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string |
   return raw.slice(prefix[0].length).trim() || undefined;
 }
 
-function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegateEnsureInput {
-  const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
-  const model = input.model?.trim() || existingOptions?.model;
-  const sessionOptions = model ? { ...existingOptions, model } : existingOptions;
-  const { modelExplicit: _modelExplicit, thinkingExplicit: _thinkingExplicit, ...rest } = input;
-  return {
-    ...rest,
-    ...(sessionOptions ? { sessionOptions } : {}),
-  } as AcpxDelegateEnsureInput;
-}
-
-function isAcpModelCapabilityMissingError(error: unknown): boolean {
-  return isRequestedModelUnsupportedError(error) && error.reason === "missing-capability";
-}
-
-// Only inherited defaults may be dropped when a harness has no model control;
-// explicit selections and invalid model ids must remain visible failures.
-async function ensureDelegateSessionWithModelFallback(
-  delegate: BaseAcpxRuntime,
-  input: OpenClawRuntimeEnsureInput,
-): Promise<OpenClawRuntimeHandle> {
-  try {
-    return await delegate.ensureSession(withAcpxSessionOptions(input));
-  } catch (error) {
-    if (input.modelExplicit || !input.model || !isAcpModelCapabilityMissingError(error)) {
-      throw error;
-    }
-    return {
-      ...(await delegate.ensureSession(withAcpxSessionOptions({ ...input, model: undefined }))),
-      appliedModel: { kind: "dropped" },
-    };
-  }
-}
-
 function appendCodexAcpConfigOverrides(
   command: AcpxAgentCommand,
   override: CodexAcpModelOverride,
@@ -425,9 +394,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private readonly delegate: BaseAcpxRuntime;
   private readonly generationRegistry: AcpxGenerationRegistry;
   private readonly sessionScope = new AsyncLocalStorage<BridgeSession | null>();
-  private readonly probeQueue = new KeyedAsyncQueue();
-  private readonly probeAgent: string;
-  private readonly probeCommand: AcpxAgentCommand | undefined;
+  private readonly probe: AcpxRuntimeProbe;
   private readonly pluginToolsMcpBridgeEnabled: boolean;
   private readonly openclawToolsMcpBridgeEnabled: boolean;
   private readonly managedToolsMcpBridgeEnabled: boolean;
@@ -466,10 +433,11 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       },
       list: () => this.agentRegistry.list(),
     };
-    const createDelegate = () =>
+    const createDelegate = (probeAgent = options.probeAgent) =>
       new BaseAcpxRuntime(
         {
           ...options,
+          probeAgent,
           sessionStore: this.sessionStore,
           agentRegistry: this.scopedAgentRegistry,
           sessionPermissions: (context) => {
@@ -534,10 +502,19 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       this.delegate,
       createDelegate,
     );
-    this.probeAgent = normalizeAgentName(options.probeAgent) ?? "codex";
-    this.probeCommand = resolveAgentCommand({
-      agentName: this.probeAgent,
-      agentRegistry: this.agentRegistry,
+    this.probe = new AcpxRuntimeProbe({
+      getAgent: () =>
+        normalizeAgentName(options.getProbeAgent?.() ?? options.probeAgent) ?? "codex",
+      createRuntime: createDelegate,
+      assertRunning: () => this.generationRegistry.assertRunning(),
+      runWithLease: (agent, run) =>
+        this.runWithLaunchLease({
+          agent,
+          sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
+          command: resolveAgentCommand({ agentName: agent, agentRegistry: this.agentRegistry }),
+          finalizeCompletedProbe: true,
+          run,
+        }),
     });
   }
 
@@ -900,35 +877,21 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   }
 
   async shutdown(): Promise<void> {
-    await this.generationRegistry.shutdown();
+    const [sessions] = await Promise.allSettled([
+      this.generationRegistry.shutdown(),
+      this.probe.shutdown(),
+    ]);
+    if (sessions.status === "rejected") {
+      throw sessions.reason;
+    }
   }
 
   isHealthy(): boolean {
-    return this.delegate.isHealthy();
-  }
-
-  async probeAvailability(): Promise<void> {
-    await this.probeQueue.enqueue(this.probeAgent, () =>
-      this.runWithLaunchLease({
-        agent: this.probeAgent,
-        sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
-        command: this.probeCommand,
-        finalizeCompletedProbe: true,
-        run: () => this.delegate.probeAvailability(),
-      }),
-    );
+    return this.probe.isHealthy();
   }
 
   async doctor(): Promise<AcpRuntimeDoctorReport> {
-    return await this.probeQueue.enqueue(this.probeAgent, () =>
-      this.runWithLaunchLease({
-        agent: this.probeAgent,
-        sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
-        command: this.probeCommand,
-        finalizeCompletedProbe: true,
-        run: () => this.delegate.doctor(),
-      }),
-    );
+    return await this.probe.doctor();
   }
 
   async ensureSession(input: OpenClawRuntimeEnsureInput): Promise<OpenClawRuntimeHandle> {
@@ -1037,7 +1000,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           run: () =>
             codexModelOverride
               ? delegate.ensureSession(withAcpxSessionOptions(ensureInput))
-              : ensureDelegateSessionWithModelFallback(delegate, ensureInput),
+              : ensureSessionWithModelRef((request) => {
+                  this.generationRegistry.assertCurrentGeneration(generation);
+                  return delegate.ensureSession(request);
+                }, ensureInput),
         }),
     });
     return {
@@ -1260,6 +1226,12 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       return await delegate.setConfigOption({
         ...input,
         value: normalizeClaudeAcpModelOverride(input.value) ?? input.value,
+      });
+    }
+    if (key === "model") {
+      return await withOpenClawModelRef(input.value, (value) => {
+        this.generationRegistry.assertCurrentGeneration(snapshot.generation);
+        return delegate.setConfigOption({ ...input, value });
       });
     }
     return await delegate.setConfigOption(input);

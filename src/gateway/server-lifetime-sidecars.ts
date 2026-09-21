@@ -9,9 +9,10 @@ import {
   broadcastChatMetadataChanged,
   type createGatewayChatMetadataLifecycle,
 } from "./server-chat-metadata-lifecycle.js";
+import { attachSessionChangeEventLifetime } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 
 type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>;
 const SECRET_STORE_EXPIRY_INTERVAL_MS = 60_000;
@@ -122,9 +123,11 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
       startGitHubPublicationMaintenance(params.reconcileGitHubPublications, params.logWarning),
     );
   }
-  params.publishSidecars({
-    stop: async () => {
-      await params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
-    },
-  });
+  attachSessionChangeEventLifetime(params.gatewayRequestContext, () =>
+    params.publishSidecars({
+      stop: async () => {
+        await params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
+      },
+    }),
+  );
 }

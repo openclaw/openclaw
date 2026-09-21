@@ -1,4 +1,5 @@
 // Reconciles stale or lost task registry records during maintenance passes.
+import { isDeepStrictEqual } from "node:util";
 import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
 import { resolveAcpSessionTarget } from "../acp/control-plane/manager.utils.js";
 import { listAcpSessionEntries, readAcpSessionEntry } from "../acp/runtime/session-meta.js";
@@ -10,10 +11,9 @@ import {
 import { hasSubagentTaskOwner } from "../agents/subagents/registry/subagent-registry-read.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
-import type { SessionEntry } from "../config/sessions.js";
 import {
-  listSessionEntriesReadOnly,
-  type SessionEntrySummary,
+  readSessionBackingFacts,
+  readSessionBackingFactsInWorker,
 } from "../config/sessions/session-accessor.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
 import { resolveCronTaskRecordTimestamp } from "../cron/task-run-detail.js";
@@ -21,12 +21,8 @@ import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sweepExpiredPluginStateEntries } from "../plugin-state/plugin-state-store.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  deriveSessionChatTypeFromKey,
-  type SessionKeyChatType,
-} from "../sessions/session-chat-type-shared.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -69,6 +65,15 @@ import {
   applyTaskRegistryMaintenanceRetention,
   shouldStampCleanupAfter,
 } from "./task-registry-maintenance-retention.js";
+import { createTaskMaintenanceScheduler } from "./task-registry-maintenance-scheduler.js";
+import {
+  createBackingSessionLookupContext,
+  findTaskSessionEntry,
+  prepareBackingSessionFacts,
+  observeBackingSessionFacts,
+  resolveSessionChatType,
+  type BackingSessionLookupContext,
+} from "./task-registry-maintenance-session-facts.js";
 import {
   getTaskRegistryMaintenanceSnapshot,
   getTaskRegistryMaintenanceTask,
@@ -103,16 +108,21 @@ const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const HARNESS_OWNED_SUBAGENT_RECONCILE_GRACE_MS = 30 * 60_000;
 const TASK_STALE_RUNNING_MS = 30 * 60_000;
-const TASK_SWEEP_INTERVAL_MS = 60_000;
-
-let sweeper: NodeJS.Timeout | null = null;
-let deferredSweep: NodeJS.Timeout | null = null;
-let sweepInProgress = false;
+const maintenanceScheduler = createTaskMaintenanceScheduler(
+  async () => {
+    // Flow retention reads linked task activity, so reconcile the task owner first.
+    // Reversing this order can preserve phantom active work for another sweep.
+    await sweepTaskRegistry();
+    await runTaskFlowRegistryMaintenance();
+  },
+  (error) => log.warn("Task registry maintenance failed", { error }),
+);
 let configuredRuntimeAuthoritative = false;
 
 type TaskRegistryMaintenanceRuntime = TaskRegistryMaintenanceReader &
   TaskRegistryAcpMaintenanceRuntime & {
-    listSessionEntries: typeof listSessionEntriesReadOnly;
+    readSessionBackingFacts: typeof readSessionBackingFacts;
+    readSessionBackingFactsInWorker: typeof readSessionBackingFactsInWorker;
     resolveStorePath: typeof resolveSessionStorePathCore;
     deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
     isCronJobActive: typeof isCronJobActive;
@@ -141,7 +151,8 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   listSessionBindingsBySession: (sessionKey) =>
     getSessionBindingService().listBySession(sessionKey),
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
-  listSessionEntries: listSessionEntriesReadOnly,
+  readSessionBackingFacts,
+  readSessionBackingFactsInWorker,
   resolveStorePath: resolveSessionStorePathCore,
   deriveSessionChatTypeFromKey,
   isCronJobActive,
@@ -218,90 +229,22 @@ type CronRecoveryContext = {
   taskRowsByTaskId?: ReadonlyMap<string, TaskRecord>;
 };
 
-type SessionEntryLookup = {
-  entriesByKey: Map<string, SessionEntry>;
-};
-
-type BackingSessionLookupContext = {
-  sessionEntriesByPath: Map<string, SessionEntryLookup>;
-  sessionChatTypesByKey: Map<string, SessionKeyChatType>;
-};
-
 function createCronRecoveryContext(): CronRecoveryContext {
-  return {
-    taskRowsByJobId: new Map<string, TaskRecord[]>(),
-  };
+  return { taskRowsByJobId: new Map<string, TaskRecord[]>() };
 }
 
-function createBackingSessionLookupContext(): BackingSessionLookupContext {
-  return {
-    sessionEntriesByPath: new Map<string, SessionEntryLookup>(),
-    sessionChatTypesByKey: new Map<string, SessionKeyChatType>(),
-  };
-}
-
-function buildSessionEntryLookup(entries: SessionEntrySummary[]): SessionEntryLookup {
-  return {
-    entriesByKey: new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
-  };
-}
-
-// Reconciliation needs existence and recovery metadata, never saved prompt snapshots.
-function getSessionEntryLookup(
-  storePath: string,
-  context?: BackingSessionLookupContext,
-): SessionEntryLookup {
-  const cached = context?.sessionEntriesByPath.get(storePath);
-  if (cached) {
-    return cached;
+async function prepareBackingSessionFactsForTasks(
+  tasks: readonly TaskRecord[],
+  context: BackingSessionLookupContext,
+  now: number,
+): Promise<void> {
+  for (const task of tasks) {
+    if (task.runtime !== "subagent" && task.runtime !== "cli") {
+      continue;
+    }
+    shouldMarkLost(task, now, context);
   }
-  const lookup = buildSessionEntryLookup(
-    taskRegistryMaintenanceRuntime.listSessionEntries({
-      storePath,
-      projection: "list",
-      clone: false,
-    }),
-  );
-  context?.sessionEntriesByPath.set(storePath, lookup);
-  return lookup;
-}
-
-function findSessionEntryByKey(
-  lookup: SessionEntryLookup,
-  sessionKey: string,
-): SessionEntry | undefined {
-  return lookup.entriesByKey.get(sessionKey);
-}
-
-function resolveSessionChatType(
-  sessionKey: string,
-  context?: BackingSessionLookupContext,
-): SessionKeyChatType {
-  const derive =
-    taskRegistryMaintenanceRuntime.deriveSessionChatTypeFromKey ?? deriveSessionChatTypeFromKey;
-  if (!context) {
-    return derive(sessionKey);
-  }
-  const cached = context.sessionChatTypesByKey.get(sessionKey);
-  if (cached) {
-    return cached;
-  }
-  const chatType = derive(sessionKey);
-  context.sessionChatTypesByKey.set(sessionKey, chatType);
-  return chatType;
-}
-
-function findTaskSessionEntry(
-  task: TaskRecord,
-  context?: BackingSessionLookupContext,
-): SessionEntry | undefined {
-  const childSessionKey = task.childSessionKey?.trim();
-  if (!childSessionKey) {
-    return undefined;
-  }
-  const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
-  const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
-  return findSessionEntryByKey(getSessionEntryLookup(storePath, context), childSessionKey);
+  await prepareBackingSessionFacts(context);
 }
 
 function isActiveTask(task: TaskRecord): boolean {
@@ -404,7 +347,7 @@ function hasCliRunIdentity(task: TaskRecord): boolean {
   return [task.sourceId, task.runId].some((candidate) => Boolean(candidate?.trim()));
 }
 
-function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
+function hasBackingSession(task: TaskRecord, context: BackingSessionLookupContext): boolean {
   const hasProcessLocalLiveness =
     task.runtime === "cron" || task.runtime === "cli" || task.runtime === "acp";
   // Only the Gateway owns these process-local liveness registries. A standalone
@@ -462,6 +405,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
       return true;
     }
     const entry = findTaskSessionEntry(task, context);
+    if (entry === undefined) {
+      return true;
+    }
     if (task.runtime === "subagent" && isSubagentRecoveryWedgedEntry(entry)) {
       return false;
     }
@@ -490,13 +436,13 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
         return true;
       }
     }
-    return Boolean(entry);
+    return entry !== null;
   }
 
   return true;
 }
 
-function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
+function resolveTaskLostError(task: TaskRecord, context: BackingSessionLookupContext): string {
   if (isContextEngineTurnMaintenanceTask(task)) {
     return "owning process exited";
   }
@@ -518,7 +464,7 @@ function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupCo
 function shouldMarkLost(
   task: TaskRecord,
   now: number,
-  context?: BackingSessionLookupContext,
+  context: BackingSessionLookupContext,
 ): boolean {
   if (!isActiveTask(task)) {
     return false;
@@ -538,12 +484,10 @@ function hasTaskLostDecisionInputChanged(before: TaskRecord, after: TaskRecord):
     before.runId !== after.runId ||
     before.createdAt !== after.createdAt ||
     before.startedAt !== after.startedAt ||
-    before.lastEventAt !== after.lastEventAt
+    before.lastEventAt !== after.lastEventAt ||
+    before.ownerKey !== after.ownerKey ||
+    !isDeepStrictEqual(before.detail, after.detail)
   );
-}
-
-function hasDetachedTaskRecoveryHook(): boolean {
-  return Boolean(getDetachedTaskLifecycleRuntime().tryRecoverTaskBeforeMarkLost);
 }
 
 function taskReferenceAt(task: TaskRecord): number {
@@ -553,7 +497,7 @@ function taskReferenceAt(task: TaskRecord): number {
 function markTaskLost(
   task: TaskRecord,
   now: number,
-  context?: BackingSessionLookupContext,
+  context: BackingSessionLookupContext,
 ): TaskRecord {
   const lostAt = task.endedAt ?? now;
   const cleanupAfter = resolveEffectiveTaskCleanupAfter({
@@ -616,7 +560,7 @@ function projectTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery):
 function projectTaskLost(
   task: TaskRecord,
   now: number,
-  context?: BackingSessionLookupContext,
+  context: BackingSessionLookupContext,
 ): TaskRecord {
   const projected: TaskRecord = {
     ...task,
@@ -656,13 +600,13 @@ function reconcileTaskRecordForOperatorInspection(
   return reconcileTaskRecordForOperatorInspectionWithContexts(
     task,
     context,
-    createBackingSessionLookupContext(),
+    createBackingSessionLookupContext(taskRegistryMaintenanceRuntime),
   );
 }
 
 function reconcileTaskRecordsForOperatorInspection(tasks: TaskRecord[]): TaskRecord[] {
   const cronRecoveryContext = createCronRecoveryContext();
-  const backingSessionContext = createBackingSessionLookupContext();
+  const backingSessionContext = createBackingSessionLookupContext(taskRegistryMaintenanceRuntime);
   return tasks.map((task) =>
     reconcileTaskRecordForOperatorInspectionWithContexts(
       task,
@@ -718,23 +662,30 @@ export async function getInspectableTaskStatusSummaryReadOnly(): Promise<TaskSta
         return { state: "ready" as const, ...createEmptyTaskStatusSummary() };
       }
       const cron = { ...createCronRecoveryContext(), taskRowsByTaskId: snapshot.cronRecoveryRows };
-      const backing = createBackingSessionLookupContext();
-      for (const [index, task] of snapshot.candidates.entries()) {
-        if (index > 0 && index % TASK_MAINTENANCE_BATCH_SIZE === 0) {
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          context.admission.assertCurrent();
+      const backing = createBackingSessionLookupContext(taskRegistryMaintenanceRuntime, true);
+      const stopObserving = observeBackingSessionFacts(backing);
+      try {
+        await prepareBackingSessionFactsForTasks(snapshot.candidates, backing, now);
+        context.admission.assertCurrent();
+        for (const [index, task] of snapshot.candidates.entries()) {
+          if (index > 0 && index % TASK_MAINTENANCE_BATCH_SIZE === 0) {
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+            context.admission.assertCurrent();
+          }
+          const projected = reconcileTaskRecordForOperatorInspectionWithContexts(
+            task,
+            cron,
+            backing,
+            now,
+          );
+          addTaskStatusSummaryRecord(snapshot.summary, projected, now);
         }
-        const projected = reconcileTaskRecordForOperatorInspectionWithContexts(
-          task,
-          cron,
-          backing,
-          now,
-        );
-        addTaskStatusSummaryRecord(snapshot.summary, projected, now);
+        return { state: snapshot.state, ...snapshot.summary };
+      } finally {
+        stopObserving();
       }
-      return { state: snapshot.state, ...snapshot.summary };
     })();
     pendingStatusInspections.set(key, pending);
     const clear = () => {
@@ -826,7 +777,7 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   let cleanupStamped = 0;
   let pruned = 0;
   const cronRecoveryContext = createCronRecoveryContext();
-  const backingSessionContext = createBackingSessionLookupContext();
+  const backingSessionContext = createBackingSessionLookupContext(taskRegistryMaintenanceRuntime);
   const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
   const cronHistoryOverflowTaskIds = collectCronHistoryOverflowTaskIds(tasks);
   for (const task of tasks) {
@@ -899,7 +850,7 @@ export function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenance
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const now = Date.now();
   const cronRecoveryContext = createCronRecoveryContext();
-  const backingSessionContext = createBackingSessionLookupContext();
+  const backingSessionContext = createBackingSessionLookupContext(taskRegistryMaintenanceRuntime);
   const staleRunningTasks: TaskRegistryMaintenanceTaskDiagnostic[] = [];
   for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
     if (task.status !== "running") {
@@ -928,25 +879,6 @@ export function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenance
   return { staleRunningTasks };
 }
 
-function startScheduledSweep() {
-  if (sweepInProgress) {
-    return;
-  }
-  sweepInProgress = true;
-  const clearSweepInProgress = () => {
-    sweepInProgress = false;
-  };
-  void runWithGatewayIndependentRootWorkAdmission(async () => {
-    // Flow retention reads linked task activity, so reconcile the task owner first.
-    // Reversing this order can preserve phantom active work for another sweep.
-    await sweepTaskRegistry();
-    await runTaskFlowRegistryMaintenance();
-  }, "tasks:maintenance").then(clearSweepInProgress, (error: unknown) => {
-    clearSweepInProgress();
-    log.warn("Task registry maintenance failed", { error });
-  });
-}
-
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {
   // Load cleanup code before selecting tasks and checking live session ownership.
   let closeAcpSession: CloseAcpSession | undefined;
@@ -960,120 +892,148 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   let cleanupStamped = 0;
   let pruned = 0;
   const cronRecoveryContext = createCronRecoveryContext();
-  const backingSessionContext = createBackingSessionLookupContext();
-  const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
-  const { read, deferred } = await visitTaskRegistryMaintenanceTasks(
+  const backingSessionContext = createBackingSessionLookupContext(
     taskRegistryMaintenanceRuntime,
-    async (current, now, cronHistoryOverflowTaskIds, assertOwnerCurrent) => {
-      if (resolveDurableCronTaskRecovery(current, cronRecoveryContext)) {
-        const next = withTaskRegistryMutation(
-          () => {
-            const fresh = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
-            if (!fresh) {
-              return undefined;
-            }
-            const recovery = resolveDurableCronTaskRecovery(fresh, createCronRecoveryContext());
-            return recovery ? markTaskRecovered(fresh, recovery) : undefined;
-          },
-          () => undefined,
-        );
-        if (next && next.status !== current.status) {
-          recovered += 1;
-        }
-        return;
-      }
-      if (shouldMarkLost(current, now, backingSessionContext)) {
-        const recovery = await tryRecoverTaskBeforeMarkLost({
-          taskId: current.taskId,
-          runtime: current.runtime,
-          task: current,
-          now,
-        });
-        assertOwnerCurrent();
-        withTaskRegistryMutation(
-          () => {
-            const freshAfterHook = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
-            if (!freshAfterHook) {
-              return;
-            }
-            const cronRecovery = resolveDurableCronTaskRecovery(
-              freshAfterHook,
-              createCronRecoveryContext(),
-            );
-            if (cronRecovery) {
-              const next = markTaskRecovered(freshAfterHook, cronRecovery);
-              if (next.status !== freshAfterHook.status) {
-                recovered += 1;
-              }
-              return;
-            }
-            // Recovery yields to runtime owners. Recheck persisted backing while
-            // retaining writer custody through the decision and lost-task update.
-            const lostContext =
-              recoveryHookRegistered || hasTaskLostDecisionInputChanged(current, freshAfterHook)
-                ? createBackingSessionLookupContext()
-                : backingSessionContext;
-            if (!shouldMarkLost(freshAfterHook, now, lostContext)) {
-              return;
-            }
-            if (recovery.recovered) {
-              recovered += 1;
-              return;
-            }
-            const next = markTaskLost(freshAfterHook, now, lostContext);
-            if (next.status === "lost") {
-              reconciled += 1;
-            }
-          },
-          () => undefined,
-        );
-        return;
-      }
-      if (current.runtime === "acp") {
-        await cleanupTerminalAcpSession(
-          taskRegistryMaintenanceRuntime,
-          current,
-          closeAcpSession,
-          assertOwnerCurrent,
-        );
-        assertOwnerCurrent();
-      }
-      if (
-        shouldPruneTerminalTask(current, now, cronHistoryOverflowTaskIds) ||
-        shouldStampCleanupAfter(current)
-      ) {
-        const result = applyTaskRegistryMaintenanceRetention(
-          current.taskId,
-          now,
-          cronHistoryOverflowTaskIds,
-          taskRegistryMaintenanceRuntime,
-        );
-        if (result === "pruned") {
-          pruned += 1;
-        } else if (result === "stamped") {
-          cleanupStamped += 1;
-        }
-      }
-    },
+    true,
   );
-  if (deferred > 0) {
-    log.debug("Deferred task maintenance for unsettled mutations", { count: deferred });
-  }
-  await cleanupOrphanedParentOwnedAcpSessions(
-    taskRegistryMaintenanceRuntime,
-    closeAcpSession,
-    read.assertOwnerCurrent,
+  const recoveryHookRegistered = Boolean(
+    getDetachedTaskLifecycleRuntime().tryRecoverTaskBeforeMarkLost,
   );
-  read.assertOwnerCurrent();
+  const stopObservingBacking = observeBackingSessionFacts(backingSessionContext);
   try {
-    // Task-registry readiness has already opened the shared state database.
-    // Sweep plugin TTL rows even when no plugin namespace was opened this process,
-    // so expired state from removed accounts is reclaimed after restart.
-    sweepExpiredPluginStateEntries();
-  } catch (error) {
-    log.warn("Failed to sweep expired plugin state entries", { error });
+    const { read, deferred } = await visitTaskRegistryMaintenanceTasks(
+      taskRegistryMaintenanceRuntime,
+      async (current, now, cronHistoryOverflowTaskIds, assertOwnerCurrent) => {
+        if (resolveDurableCronTaskRecovery(current, cronRecoveryContext)) {
+          const next = withTaskRegistryMutation(
+            () => {
+              const fresh = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
+              if (!fresh) {
+                return undefined;
+              }
+              const recovery = resolveDurableCronTaskRecovery(fresh, createCronRecoveryContext());
+              return recovery ? markTaskRecovered(fresh, recovery) : undefined;
+            },
+            () => undefined,
+          );
+          if (next && next.status !== current.status) {
+            recovered += 1;
+          }
+          return;
+        }
+        if (shouldMarkLost(current, now, backingSessionContext)) {
+          const recovery = await tryRecoverTaskBeforeMarkLost({
+            taskId: current.taskId,
+            runtime: current.runtime,
+            task: current,
+            now,
+          });
+          assertOwnerCurrent();
+          const afterRecovery = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
+          if (!afterRecovery) {
+            return;
+          }
+          const lostContext =
+            recoveryHookRegistered || hasTaskLostDecisionInputChanged(current, afterRecovery)
+              ? createBackingSessionLookupContext(taskRegistryMaintenanceRuntime, true)
+              : backingSessionContext;
+          lostContext.sessionChatTypesByKey = backingSessionContext.sessionChatTypesByKey;
+          const stopObservingLost = observeBackingSessionFacts(lostContext);
+          try {
+            if (lostContext !== backingSessionContext) {
+              await prepareBackingSessionFactsForTasks([afterRecovery], lostContext, now);
+            }
+            assertOwnerCurrent();
+            withTaskRegistryMutation(
+              () => {
+                const freshAfterHook = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
+                if (!freshAfterHook) {
+                  return;
+                }
+                const cronRecovery = resolveDurableCronTaskRecovery(
+                  freshAfterHook,
+                  createCronRecoveryContext(),
+                );
+                if (cronRecovery) {
+                  const next = markTaskRecovered(freshAfterHook, cronRecovery);
+                  if (next.status !== freshAfterHook.status) {
+                    recovered += 1;
+                  }
+                  return;
+                }
+                // Recovery yields to runtime owners. Recheck persisted backing while
+                // retaining writer custody through the decision and lost-task update.
+                if (
+                  hasTaskLostDecisionInputChanged(afterRecovery, freshAfterHook) ||
+                  !shouldMarkLost(freshAfterHook, now, lostContext)
+                ) {
+                  return;
+                }
+                if (recovery.recovered) {
+                  recovered += 1;
+                  return;
+                }
+                const next = markTaskLost(freshAfterHook, now, lostContext);
+                if (next.status === "lost") {
+                  reconciled += 1;
+                }
+              },
+              () => undefined,
+            );
+          } finally {
+            stopObservingLost();
+          }
+          return;
+        }
+        if (current.runtime === "acp") {
+          await cleanupTerminalAcpSession(
+            taskRegistryMaintenanceRuntime,
+            current,
+            closeAcpSession,
+            assertOwnerCurrent,
+          );
+          assertOwnerCurrent();
+        }
+        if (
+          shouldPruneTerminalTask(current, now, cronHistoryOverflowTaskIds) ||
+          shouldStampCleanupAfter(current)
+        ) {
+          const result = applyTaskRegistryMaintenanceRetention(
+            current.taskId,
+            now,
+            cronHistoryOverflowTaskIds,
+            taskRegistryMaintenanceRuntime,
+          );
+          if (result === "pruned") {
+            pruned += 1;
+          } else if (result === "stamped") {
+            cleanupStamped += 1;
+          }
+        }
+      },
+      (tasks, now) => prepareBackingSessionFactsForTasks(tasks, backingSessionContext, now),
+    );
+    if (deferred > 0) {
+      log.debug("Deferred task maintenance for unsettled mutations", { count: deferred });
+    }
+    await cleanupOrphanedParentOwnedAcpSessions(
+      taskRegistryMaintenanceRuntime,
+      closeAcpSession,
+      read.assertOwnerCurrent,
+    );
+    try {
+      // Task-registry readiness has already opened the shared state database.
+      // Sweep plugin TTL rows even when no plugin namespace was opened this process,
+      // so expired state from removed accounts is reclaimed after restart.
+      await sweepExpiredPluginStateEntries({ assertActive: read.assertOwnerCurrent });
+    } catch (error) {
+      log.warn("Failed to sweep expired plugin state entries", { error });
+    }
+    read.assertOwnerCurrent();
+    return { reconciled, recovered, cleanupStamped, pruned };
+  } finally {
+    stopObservingBacking();
   }
-  return { reconciled, recovered, cleanupStamped, pruned };
 }
 
 export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummary> {
@@ -1082,28 +1042,11 @@ export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummar
 
 export function startTaskRegistryMaintenance() {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
-  deferredSweep = setTimeout(() => {
-    deferredSweep = null;
-    startScheduledSweep();
-  }, 5_000);
-  deferredSweep.unref?.();
-  if (sweeper) {
-    return;
-  }
-  sweeper = setInterval(startScheduledSweep, TASK_SWEEP_INTERVAL_MS);
-  sweeper.unref?.();
+  maintenanceScheduler.start();
 }
 
-export function stopTaskRegistryMaintenance() {
-  if (deferredSweep) {
-    clearTimeout(deferredSweep);
-    deferredSweep = null;
-  }
-  if (sweeper) {
-    clearInterval(sweeper);
-    sweeper = null;
-  }
-  sweepInProgress = false;
+export async function stopTaskRegistryMaintenance(): Promise<void> {
+  await maintenanceScheduler.stop();
 }
 
 export function setTaskRegistryMaintenanceRuntimeForTests(

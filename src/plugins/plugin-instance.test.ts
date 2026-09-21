@@ -13,7 +13,10 @@ import type {
 } from "./host-hooks.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { registerMemoryCapability } from "./memory-state.js";
-import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
+import {
+  PluginInstanceDrainTimeoutError,
+  PluginInstanceUnavailableError,
+} from "./plugin-instance-error.js";
 import { runPluginCleanup } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -28,6 +31,44 @@ import type { OpenClawPluginApi } from "./types.js";
 
 describe("managed plugin instances", () => {
   afterEach(() => vi.useRealTimers());
+
+  it.each(["call", "cleanup", "consumer", "host prelude"] as const)(
+    "forces logical retirement at the existing deadline while a %s never settles",
+    async (kind) => {
+      vi.useFakeTimers();
+      const instance = new PluginInstance("hung");
+      const never = new Promise<void>(() => {});
+      const releaseModules = vi.fn(async () => {});
+      instance.onModuleDispose(releaseModules);
+      if (kind === "call") {
+        void instance.run(() => never);
+      } else if (kind === "cleanup") {
+        instance.lifecycle.onDispose(() => never);
+      } else if (kind === "consumer") {
+        instance.retainConsumer();
+      }
+      let result: Awaited<ReturnType<PluginInstance["dispose"]>> | undefined;
+      void instance.dispose(kind === "host prelude" ? () => never : undefined).then((value) => {
+        result = value;
+      });
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result).toMatchObject({
+        errors: [
+          {
+            forcedRetirement: {
+              activeCallCount: kind === "consumer" ? 0 : 1,
+              retainedConsumerCount: kind === "consumer" ? 1 : 0,
+            },
+          },
+        ],
+      });
+      expect(instance.lifecycle.signal.aborted).toBe(true);
+      expect(() => instance.run(() => "late")).toThrow("reloaded or disabled");
+      expect(releaseModules).not.toHaveBeenCalled();
+    },
+  );
 
   it("drains admitted calls and rejects new calls", async () => {
     const instance = new PluginInstance("clock");
@@ -709,7 +750,7 @@ describe("managed plugin instances", () => {
     if (!(drainTimeout instanceof PluginInstanceDrainTimeoutError)) {
       throw new Error("Expected the disposal's original-call drain diagnostic");
     }
-    expect(drainTimeout.message).toBe("Plugin stuck still has active calls after 5000ms");
+    expect(drainTimeout.forcedRetirement).toEqual({ activeCallCount: 2, retainedConsumerCount: 0 });
     await expect(drainTimeout.settled).resolves.toBeUndefined();
     expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(cleaned).toHaveBeenCalledOnce();
@@ -746,12 +787,17 @@ describe("managed plugin instances", () => {
         if (!(drainTimeout instanceof PluginInstanceDrainTimeoutError)) {
           throw new Error("Expected the disposal's original-call drain diagnostic");
         }
-        expect(drainTimeout.message).toBe("Plugin late-call still has active calls after 5000ms");
+        expect(drainTimeout.forcedRetirement).toEqual({
+          activeCallCount: 1,
+          retainedConsumerCount: 0,
+        });
         expect(result.errors).toEqual([drainTimeout, cleanupFailure]);
         expect(cleanup).toHaveBeenCalledOnce();
         let settled = false;
-        const settlement = drainTimeout.settled.then(() => {
+        const settlement = drainTimeout.settled.catch((error: unknown) => {
           settled = true;
+          expect(error).toBeInstanceOf(AggregateError);
+          expect((error as AggregateError).errors).toEqual([cleanupFailure]);
         });
         await Promise.resolve();
         // Disposal revoked and cleared ordinary admission; neither action means
@@ -765,7 +811,9 @@ describe("managed plugin instances", () => {
           pending.reject(callFailure);
         }
         expect(await callOutcome).toEqual(
-          completion === "resolve" ? { value: "finished" } : { error: callFailure },
+          completion === "resolve"
+            ? { error: new PluginInstanceUnavailableError("late-call") }
+            : { error: callFailure },
         );
         await settlement;
         expect(settled).toBe(true);
@@ -777,6 +825,22 @@ describe("managed plugin instances", () => {
       }
     },
   );
+
+  it("refuses an earlier result whose final release crosses the retirement deadline", async () => {
+    vi.useFakeTimers();
+    const instance = new PluginInstance("slow-removal");
+    const result = createDeferredCore<string>();
+    const removal = createDeferredCore();
+    instance.onModuleDispose(() => removal.promise);
+    const call = instance.run(() => result.promise);
+    const rejected = expect(call).rejects.toThrow("reloaded or disabled");
+    const retirement = instance.dispose();
+    result.resolve("finished before timeout");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await rejected;
+    expect((await retirement).errors).toMatchObject([{ forcedRetirement: { activeCallCount: 1 } }]);
+    removal.resolve();
+  });
 
   it("keeps a host prelude guard exceptional while attempting explicit cleanup", async () => {
     const instance = new PluginInstance("guarded-cleanup");

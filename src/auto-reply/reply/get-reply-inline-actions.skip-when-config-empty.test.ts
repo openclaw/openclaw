@@ -8,7 +8,6 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
-import type { TemplateContext } from "../templating.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { buildCommandContext } from "./commands-context.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
@@ -16,6 +15,15 @@ import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
+import {
+  createHandleInlineActionsInput,
+  createInlineToolDispatchFixture,
+  createOpenClawToolsMock,
+  createTypingController,
+  mockCallArgs,
+  runTestInlineActions,
+  type HandleInlineActionsInput,
+} from "./get-reply-inline-actions.test-support.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
 import { stripInlineStatus } from "./reply-inline.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -23,27 +31,15 @@ import type { TypingController } from "./typing.js";
 
 const {
   buildStatusReplyMock,
-  createOpenClawToolsMock,
   getChannelPluginMock,
   handleCommandsMock,
   prepareSkillCommandsForWorkspaceMock,
 } = vi.hoisted(() => ({
   buildStatusReplyMock: vi.fn(),
-  createOpenClawToolsMock: vi.fn(),
   getChannelPluginMock: vi.fn(),
   handleCommandsMock: vi.fn(),
   prepareSkillCommandsForWorkspaceMock: vi.fn(),
 }));
-
-type HandleInlineActionsInput = Parameters<
-  typeof import("./get-reply-inline-actions.js").handleInlineActions
->[0];
-
-const skillToolDispatchDependencies: NonNullable<
-  HandleInlineActionsInput["skillToolDispatchDependencies"]
-> = {
-  createOpenClawTools: createOpenClawToolsMock,
-};
 
 vi.mock("./commands.runtime.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
@@ -76,17 +72,6 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
       : undefined,
 }));
 
-const createTypingController = (): TypingController => ({
-  onReplyStart: async () => {},
-  startTypingLoop: async () => {},
-  startTypingOnText: async () => {},
-  refreshTypingTtl: () => {},
-  isActive: () => false,
-  markRunComplete: () => {},
-  markDispatchIdle: () => {},
-  cleanup: vi.fn(),
-});
-
 async function writeSessionStore(
   storeTemplate: string,
   agentId: string,
@@ -96,69 +81,6 @@ async function writeSessionStore(
   for (const [sessionKey, entry] of Object.entries(entries)) {
     await replaceSessionEntry({ agentId, sessionKey, storePath }, entry as SessionEntry);
   }
-}
-
-const createHandleInlineActionsInput = (params: {
-  ctx: ReturnType<typeof buildTestCtx>;
-  typing: TypingController;
-  cleanedBody: string;
-  command?: Partial<HandleInlineActionsInput["command"]>;
-  overrides?: Partial<Omit<HandleInlineActionsInput, "ctx" | "sessionCtx" | "typing" | "command">>;
-}): HandleInlineActionsInput => {
-  const baseCommand: HandleInlineActionsInput["command"] = {
-    surface: "whatsapp",
-    channel: "whatsapp",
-    channelId: "whatsapp",
-    ownerList: [],
-    senderIsOwner: false,
-    isAuthorizedSender: false,
-    senderId: undefined,
-    abortKey: "whatsapp:+999",
-    rawBodyNormalized: params.cleanedBody,
-    commandBodyNormalized: params.cleanedBody,
-    from: "whatsapp:+999",
-    to: "whatsapp:+999",
-  };
-  return {
-    ctx: params.ctx,
-    sessionCtx: params.ctx as unknown as TemplateContext,
-    cfg: {},
-    agentId: "main",
-    sessionKey: "s:main",
-    workspaceDir: "/tmp",
-    isGroup: false,
-    typing: params.typing,
-    allowTextCommands: false,
-    inlineStatusRequested: false,
-    command: {
-      ...baseCommand,
-      ...params.command,
-    },
-    directives: clearInlineDirectives(params.cleanedBody),
-    cleanedBody: params.cleanedBody,
-    elevatedEnabled: false,
-    elevatedAllowed: false,
-    elevatedFailures: [],
-    defaultActivation: () => "always",
-    resolveModelLevels: async () => ({
-      resolvedThinkLevel: undefined,
-      resolvedReasoningLevel: "off",
-    }),
-    resolvedVerboseLevel: undefined,
-    resolvedElevatedLevel: "off",
-    resolveDefaultThinkingLevel: async () => "off",
-    provider: "openai",
-    model: "gpt-4o-mini",
-    contextTokens: 0,
-    abortedLastRun: false,
-    sessionScope: "per-sender",
-    skillToolDispatchDependencies,
-    ...params.overrides,
-  };
-};
-
-function runTestInlineActions(params: Parameters<typeof createHandleInlineActionsInput>[0]) {
-  return handleInlineActions(createHandleInlineActionsInput(params));
 }
 
 async function expectInlineActionSkipped(params: {
@@ -207,44 +129,6 @@ function mockObjectArg(mock: ReturnType<typeof vi.fn>, label: string, callIndex 
     throw new Error(`expected ${label} mock call ${callIndex}`);
   }
   return requireRecord(call[argIndex], `${label} argument ${argIndex}`);
-}
-
-function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex = 0): unknown[] {
-  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
-  if (!call) {
-    throw new Error(`expected ${label} mock call ${callIndex}`);
-  }
-  return call;
-}
-
-function createInlineToolDispatchFixture<T>(params: {
-  body: string;
-  toolName: string;
-  execute: () => Promise<T>;
-  skill: Pick<SkillCommandSpec, "name" | "skillName" | "description" | "skillSource">;
-  sourceFilePath: string;
-  nativeChannelId?: string;
-}) {
-  const typing = createTypingController();
-  const toolExecute = vi.fn(params.execute);
-  createOpenClawToolsMock.mockReturnValue([{ name: params.toolName, execute: toolExecute }]);
-  const ctx = buildTestCtx({
-    Body: params.body,
-    CommandBody: params.body,
-    ...(params.nativeChannelId === undefined ? {} : { NativeChannelId: params.nativeChannelId }),
-  });
-  const skillCommands: SkillCommandSpec[] = [
-    {
-      ...params.skill,
-      dispatch: {
-        kind: "tool",
-        toolName: params.toolName,
-        argMode: "raw",
-      },
-      sourceFilePath: params.sourceFilePath,
-    },
-  ];
-  return { typing, toolExecute, ctx, skillCommands };
 }
 
 function mockToolDispatchedSkillCommand() {

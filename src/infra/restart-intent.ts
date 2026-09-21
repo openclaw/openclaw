@@ -31,19 +31,14 @@ import {
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { GatewayRestartPreparationError } from "./restart-intent-error.js";
 import { spawnPsSync } from "./spawn-ps.js";
+import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import { tryAcquireGatewayLifecycleCleanupCoordinator } from "./state-database-coordinator.js";
 
 const GATEWAY_RESTART_INTENT_KEY = "gateway-restart";
 const GATEWAY_RESTART_INTENT_TTL_MS = 60_000;
-const schemaStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-  "CREATE TABLE IF NOT EXISTS gateway_restart_intent (",
-);
-const schemaEndMarker = ") STRICT;";
-const schemaEnd = OPENCLAW_STATE_SCHEMA_SQL.indexOf(schemaEndMarker, schemaStart);
-if (schemaStart < 0 || schemaEnd < 0) {
-  throw new Error("Gateway restart intent schema markers are missing");
-}
-const schema = OPENCLAW_STATE_SCHEMA_SQL.slice(schemaStart, schemaEnd + schemaEndMarker.length);
+const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "gateway_restart_intent", {
+  errorMessage: "Gateway restart intent schema markers are missing",
+});
 
 const restartLog = createSubsystemLogger("restart");
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
@@ -61,6 +56,8 @@ export type GatewayRestartIntent = {
   reason?: string;
   force?: boolean;
   waitMs?: number;
+  // Only the in-process deferral owner can attest that the drain budget was spent.
+  drainBudgetExhausted?: true;
   // Process-local only: persisted restart requests cannot delegate successor ownership.
   successorOwner?: {
     kind: "managed-update-handoff";
@@ -356,31 +353,21 @@ function writeGatewayRestartIntentForTargetSync(
         }
         const createdAt = Date.now();
         const stateDb = getNodeSqliteKysely<GatewayRestartIntentDatabase>(db);
+        const row = {
+          kind: "gateway-restart",
+          pid: targetPid,
+          created_at: createdAt,
+          reason: reason ?? null,
+          force: opts.intent?.force ? 1 : null,
+          wait_ms: waitMs,
+          updated_at_ms: createdAt,
+        };
         executeSqliteQuerySync(
           db,
           stateDb
             .insertInto("gateway_restart_intent")
-            .values({
-              intent_key: GATEWAY_RESTART_INTENT_KEY,
-              kind: "gateway-restart",
-              pid: targetPid,
-              created_at: createdAt,
-              reason: reason ?? null,
-              force: opts.intent?.force ? 1 : null,
-              wait_ms: waitMs,
-              updated_at_ms: createdAt,
-            })
-            .onConflict((conflict) =>
-              conflict.column("intent_key").doUpdateSet({
-                kind: (eb) => eb.ref("excluded.kind"),
-                pid: (eb) => eb.ref("excluded.pid"),
-                created_at: (eb) => eb.ref("excluded.created_at"),
-                reason: (eb) => eb.ref("excluded.reason"),
-                force: (eb) => eb.ref("excluded.force"),
-                wait_ms: (eb) => eb.ref("excluded.wait_ms"),
-                updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
-              }),
-            ),
+            .values({ intent_key: GATEWAY_RESTART_INTENT_KEY, ...row })
+            .onConflict((conflict) => conflict.column("intent_key").doUpdateSet(row)),
         );
         return true;
       },

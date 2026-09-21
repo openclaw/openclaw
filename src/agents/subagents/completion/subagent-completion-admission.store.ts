@@ -52,12 +52,12 @@ import {
 } from "../registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { publishSubagentRunsAfterAtomicStore } from "../registry/subagent-registry-state.js";
+import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import {
   deleteSubagentRunRowInDatabase,
   upsertSubagentRunRowInDatabase,
 } from "../registry/subagent-registry.store.kernel.js";
 import {
-  bindSubagentRunRecord,
   loadSubagentRunsForChildSessionFromSqlite,
   readSubagentRun,
 } from "../registry/subagent-registry.store.sqlite.js";

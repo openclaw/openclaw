@@ -135,6 +135,7 @@ export function createVitestWorkerRun(
   }
   return {
     descriptor: { directory } satisfies VitestWorkerDescriptor,
+    prepare,
     borrow<T>(
       child: ChildProcess,
       completion: Promise<T>,

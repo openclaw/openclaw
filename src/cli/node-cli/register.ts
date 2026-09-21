@@ -7,7 +7,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { formatInvalidPortOption } from "../error-format.js";
 import { formatHelpExamples } from "../help-format.js";
-import { addNodeCommandOptions } from "./command-options.js";
+import { addNodeCommandOptions, createNodeWorkerCommand } from "./command-options.js";
 import { resolveNodeGatewayOptions, resolveNodePairGatewayOptions } from "./gateway-options.js";
 import { runNodeIdentityShow } from "./identity.js";
 
@@ -26,13 +26,13 @@ export function registerNodeCli(program: Command) {
       ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.openclaw.ai/cli/node")}\n`,
   );
 
-  node
-    .command("worker", { hidden: true })
-    .description("Run the private macOS app node-host worker")
-    .action(async () => {
+  node.addCommand(
+    createNodeWorkerCommand().action(async (opts: { desktopSharing?: boolean }) => {
       const { runNodeHostWorker } = await import("../../node-host/worker.js");
-      await runNodeHostWorker();
-    });
+      await runNodeHostWorker({ desktopSharingEnabled: opts.desktopSharing });
+    }),
+    { hidden: true },
+  );
 
   addNodeCommandOptions(node.command("run").description("Run the headless node host (foreground)"))
     .option(
@@ -55,6 +55,10 @@ export function registerNodeCli(program: Command) {
     .option("--display-name <name>", "Override node display name")
     .option("--session-host", "Host worker sessions for this foreground process")
     .addOption(new Option("--ephemeral").hideHelp())
+    .addOption(new Option("--desktop-sharing").hideHelp())
+    .addOption(new Option("--no-desktop-sharing").hideHelp())
+    .addOption(new Option("--auth-from-env").hideHelp())
+    .addOption(new Option("--parent-stdin").hideHelp())
     .option("--share-installed-apps", "Share installed macOS applications with the Gateway")
     .option("--no-share-installed-apps", "Disable installed application sharing")
     .action(async (opts, command: Command) => {
@@ -98,6 +102,9 @@ export function registerNodeCli(program: Command) {
         nodeId: opts.nodeId,
         displayName: opts.displayName,
         installedAppsSharing: opts.shareInstalledApps,
+        desktopSharingEnabled: opts.desktopSharing,
+        gatewayAuthFromEnv: opts.authFromEnv,
+        parentStdin: opts.parentStdin,
         commands: opts.commands ?? inheritOptionFromParent<string[]>(command, "commands"),
         allCommands: opts.allCommands ?? inheritOptionFromParent<boolean>(command, "allCommands"),
       });

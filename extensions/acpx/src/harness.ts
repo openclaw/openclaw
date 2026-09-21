@@ -48,6 +48,24 @@ const NATIVE_TOOL_REQUIREMENTS = {
     "message",
     "image_generate",
   ],
+  copilot: [
+    ...LOCAL_TOOL_REQUIREMENTS,
+    "apply_patch",
+    "process",
+    "browser",
+    "web_fetch",
+    "web_search",
+    "sessions_spawn",
+    "sessions_send",
+    "sessions_list",
+    "sessions_search",
+    "sessions_history",
+    "subagents",
+    "memory_search",
+    "memory_get",
+    "view_image",
+    "ask_user",
+  ],
 } as const;
 
 export function createAcpAgentHarness(params: {

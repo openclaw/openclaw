@@ -533,42 +533,22 @@ function reconcileSessionRows(
   options: ReconcileOptions,
   occurredAt: number,
 ) {
-  if (!options.outcome) {
+  if (!options.outcome && !options.yielded) {
     return;
   }
   const keys = sessionKeysFor(host, options);
-  if (keys.size === 0) {
+  if (options.outcome && keys.size === 0) {
     return;
   }
-  const status =
-    options.sessionStatus ?? (options.outcome === "done" ? ("done" as const) : ("killed" as const));
+  const status = options.outcome
+    ? (options.sessionStatus ?? (options.outcome === "done" ? "done" : "killed"))
+    : "running";
   const terminal: SessionRunTerminal = {
     sessionKeys: [...keys],
     agentId: options.agentId,
     runId: options.runId ?? host.chatRunId ?? null,
     status,
-    errorMessage: options.errorMessage,
-    endedAt: occurredAt,
-  };
-  if (host.sessionsResult) {
-    host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
-  }
-  host.sessions?.reconcileRunTerminal?.(terminal);
-}
-
-function reconcileYieldedSessionRows(
-  host: RunLifecycleHost,
-  options: ReconcileOptions,
-  occurredAt: number,
-) {
-  if (!options.yielded) {
-    return;
-  }
-  const terminal: SessionRunTerminal = {
-    sessionKeys: [...sessionKeysFor(host, options)],
-    agentId: options.agentId,
-    runId: options.runId ?? host.chatRunId ?? null,
-    status: "running",
+    ...(options.outcome ? { errorMessage: options.errorMessage } : {}),
     endedAt: occurredAt,
   };
   if (host.sessionsResult) {
@@ -629,7 +609,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
       scheduleRunStatusClear(host, status);
     }
   } else if (options.yielded) {
-    reconcileYieldedSessionRows(host, sessionOptions, occurredAt);
+    reconcileSessionRows(host, sessionOptions, occurredAt);
     host.lastLocalTerminalReconcile = null;
     clearChatRunStatus(host);
   } else if (options.clearRunStatus) {

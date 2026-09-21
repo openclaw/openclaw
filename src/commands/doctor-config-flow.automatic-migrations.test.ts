@@ -113,7 +113,7 @@ it("preserves sandbox override bytes and effective permissions during Doctor rep
   });
 });
 
-it("normalizes retired metadata for an unmarked npm updater without repair flags", async () => {
+it("normalizes retired metadata and Code Mode languages for an unmarked npm updater without repair flags", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
     await withEnvAsync(
       {
@@ -127,6 +127,7 @@ it("normalizes retired metadata for an unmarked npm updater without repair flags
         const configPath = await writeOpenClawConfig(home, {
           meta: { lastTouchedVersion: "2026.3.31", lastTouchedAt: "2026-03-31T00:00:00.000Z" },
           gateway: { mode: "local", port: 19092 },
+          tools: { codeMode: { enabled: true, languages: ["typescript"], timeoutMs: 2500 } },
           plugins: { enabled: false },
         });
         const original = await fs.readFile(configPath, "utf8");
@@ -140,6 +141,7 @@ it("normalizes retired metadata for an unmarked npm updater without repair flags
         expect(saved.valid).toBe(true);
         expect(saved.sourceConfig).not.toHaveProperty("meta.lastTouchedAt");
         expect(saved.sourceConfig.gateway).toEqual({ mode: "local", port: 19092 });
+        expect(saved.sourceConfig.tools?.codeMode).toEqual({ enabled: true, timeoutMs: 2500 });
         expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
       },
     );

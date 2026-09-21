@@ -27,7 +27,10 @@ type BodyScenario = {
   previewQueue?: boolean;
   previewError?: boolean;
   restPreview?: boolean;
+  squashTitle?: string;
+  squashMessage?: string;
   authorReadError?: boolean;
+  authorReadFault?: "empty" | "malformed" | "wrong-head" | "multiple";
   prAuthor?: string;
   sourceReadError?: boolean;
   configuredTrailer?: boolean;
@@ -40,6 +43,7 @@ type BodyScenario = {
 function prepareBody(scenario: BodyScenario) {
   const root = tempDirs.make("openclaw-merge-attribution-");
   const sourceRepo = join(root, "source");
+  const authorTrace = join(root, "author-requests");
   const trailerMarker = join(root, "trailer-command-called");
   const body = join(root, "body");
   const override = join(root, "operator body.md");
@@ -132,10 +136,17 @@ function prepareBody(scenario: BodyScenario) {
             }
           : undefined,
       );
-      githubCommits[git(["rev-parse", "HEAD"])] = {
-        name: author?.name ?? "Maintainer",
-        email: author?.email ?? "maintainer@example.com",
-        user: githubAuthor === undefined ? { login: "fixture-human", type: "User" } : githubAuthor,
+      const sha = git(["rev-parse", "HEAD"]);
+      githubCommits[sha] = {
+        sha,
+        commit: {
+          author: {
+            name: author?.name ?? "Maintainer",
+            email: author?.email ?? "maintainer@example.com",
+          },
+        },
+        author:
+          githubAuthor === undefined ? { login: "fixture-human", type: "User" } : githubAuthor,
       };
     }
     if (scenario.refreshMergeAuthor) {
@@ -185,24 +196,54 @@ function prepareBody(scenario: BodyScenario) {
   // Match the native worktree: Git setup may change cwd when the temp root
   // itself is inside another repository, so the body belongs in sourceRepo.
   mkdirSync(join(sourceRepo, ".local"));
+  writeFileSync(authorTrace, "");
+  writeFileSync(
+    join(root, "gh"),
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const { execFileSync } = require("node:child_process");
+const args = process.argv.slice(2);
+if (args[0] !== "api" || args[1] !== "--hostname" || args[2] !== "fixture.github.invalid") {
+  throw new Error("Expected the bound attribution repository host");
+}
+const endpoint = new URL(args[3], "https://fixture.github.invalid/");
+if (endpoint.pathname !== "/repos/fixture/repo/commits") throw new Error("Unexpected API endpoint");
+fs.appendFileSync(process.env.BODY_AUTHOR_TRACE, JSON.stringify(args) + "\\n");
+if (process.env.BODY_AUTHOR_READ_ERROR === "true") process.exit(1);
+const sha = endpoint.searchParams.get("sha");
+const limit = Number(endpoint.searchParams.get("per_page"));
+const commits = JSON.parse(process.env.BODY_COMMITS);
+const git = (args) => execFileSync("git", ["-C", process.env.BODY_SOURCE_REPO, ...args], { encoding: "utf8" }).trim();
+let page = git(["rev-list", "--max-count=" + limit, sha]).split("\\n").map((oid) => commits[oid] ?? {
+  sha: oid, commit: { author: { name: "Unselected Author", email: "unselected@example.com" } },
+  author: { login: "unselected", type: "User" },
+});
+switch (process.env.BODY_AUTHOR_FAULT) {
+  case "empty": page = []; break;
+  case "malformed": page = null; break;
+  case "wrong-head": page[0].sha = "${"b".repeat(40)}"; break;
+  case "multiple": page.push(...page); break;
+}
+console.log(JSON.stringify(page));
+`,
+    { mode: 0o755 },
+  );
   const shell = `
 set -euo pipefail
 source "$BODY_MERGE_SCRIPT"
 PREP_HEAD_SHA="$BODY_HEAD"
 LOCAL_PREP_HEAD_SHA="$BODY_LOCAL_HEAD"
+MERGE_REPO_NAME=fixture/repo
+MERGE_REPO_HOST=fixture.github.invalid
 pr_git() {
   if [ "$BODY_READ_ERROR" = true ] && [[ " $* " = *" log "* ]]; then return 1; fi
   command git -C "$BODY_SOURCE_REPO" "$@"
 }
 PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main)
-pr_gh_plain() { [ "$BODY_PREVIEW_ERROR" = false ] || return 1; printf '%s\\n' "$BODY_PREVIEW"; }
-pr_gh() {
-  if [ "$1" = api ]; then
-    [ "$BODY_AUTHOR_READ_ERROR" = false ] || return 1
-    printf '%s\\n' "$BODY_COMMITS" | jq -ce --arg sha "\${2##*/}" '.[$sha]'
-  else
-    printf 'fixture/repo\\n'
-  fi
+merge_read() {
+  [ "$*" = "preview 123" ] || return 99
+  [ "$BODY_PREVIEW_ERROR" = false ] || return 1
+  printf '%s\\n' "$BODY_PREVIEW"
 }
 mktemp() { [ "$BODY_WRITE_ERROR" = false ] || return 1; command mktemp "$@"; }
 snapshot=""
@@ -215,6 +256,7 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
     encoding: "utf8",
     env: {
       ...process.env,
+      PATH: `${root}:${process.env.PATH}`,
       ...(scenario.configuredTrailer
         ? {
             GIT_CONFIG_COUNT: "2",
@@ -243,19 +285,26 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
       BODY_WRITE_ERROR: String(scenario.bodyWriteError ?? false),
       BODY_PREVIEW_ERROR: String(scenario.previewError ?? false),
       BODY_AUTHOR_READ_ERROR: String(scenario.authorReadError ?? false),
+      BODY_AUTHOR_FAULT: scenario.authorReadFault ?? "",
+      BODY_AUTHOR_TRACE: authorTrace,
       BODY_COMMITS: JSON.stringify(githubCommits),
       BODY_PREVIEW: JSON.stringify({
-        ...(scenario.restPreview ? { transport: "rest" } : {}),
-        data: {
-          repository: {
-            pullRequest: {
-              author: { login: scenario.prAuthor ?? "maintainer", __typename: "User" },
-              headRefOid: scenario.previewHead ?? publishedHead,
-              isMergeQueueEnabled: scenario.previewQueue ?? false,
-              viewerMergeBodyText:
-                scenario.previewBody === undefined
-                  ? "Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n\n"
-                  : scenario.previewBody,
+        transport: scenario.restPreview ? "rest" : "graphql",
+        payload: {
+          data: {
+            repository: {
+              squashMergeCommitTitle: scenario.squashTitle ?? "PR_TITLE",
+              squashMergeCommitMessage: scenario.squashMessage ?? "PR_BODY",
+              pullRequest: {
+                author: { login: scenario.prAuthor ?? "maintainer", __typename: "User" },
+                headRefOid: scenario.previewHead ?? publishedHead,
+                isMergeQueueEnabled: scenario.previewQueue ?? false,
+                viewerMergeHeadlineText: "Fixture merge headline",
+                viewerMergeBodyText:
+                  scenario.previewBody === undefined
+                    ? "Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n\n"
+                    : scenario.previewBody,
+              },
             },
           },
         },
@@ -266,10 +315,100 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
     ...result,
     mergeBody: existsSync(body) ? readFileSync(body, "utf8") : null,
     trailerCommandCalled: existsSync(trailerMarker),
+    authorRequests: readFileSync(authorTrace, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as string[]),
   };
 }
 
 describePosix("native squash attribution", () => {
+  it.each([
+    {
+      title: "COMMIT_OR_PR_TITLE",
+      message: "COMMIT_MESSAGES",
+      count: 1,
+      localFixup: true,
+      expected: "First description\n\n- Detail",
+    },
+    {
+      title: "COMMIT_OR_PR_TITLE",
+      message: "COMMIT_MESSAGES",
+      count: 2,
+      refresh: true,
+      expected:
+        "* First title\n\nFirst description\n\n- Detail\n\n* Second title\n\nSecond description\n\n* Merge refreshed main\n\nRefresh description",
+    },
+    {
+      title: "PR_TITLE",
+      message: "COMMIT_MESSAGES",
+      count: 1,
+      expected: "* First title\n\nFirst description\n\n- Detail",
+    },
+    { title: "PR_TITLE", message: "BLANK", count: 1, expected: "" },
+    { title: "PR_TITLE", message: "PR_BODY", count: 1, expected: "PR description" },
+    {
+      title: "COMMIT_OR_PR_TITLE",
+      message: "COMMIT_MESSAGES",
+      count: 2,
+      override: "Reviewed bytes\n",
+      expected: "Reviewed bytes",
+    },
+  ])(
+    "preserves REST squash defaults $title/$message for $count source commits with refresh=$refresh and override=$override",
+    ({ title, message, count, refresh, localFixup, override, expected }) => {
+      const result = prepareBody({
+        restPreview: true,
+        squashTitle: title,
+        squashMessage: message,
+        previewBody: "PR description",
+        sourceCommits: [
+          { message: "First title\n\nFirst description\n\n- Detail" },
+          { message: "Second title\n\nSecond description", empty: true },
+        ].slice(0, count),
+        refreshMergeAuthor: refresh ? { name: "Refresh", email: "refresh@example.com" } : undefined,
+        refreshMergeMessage: "Merge refreshed main\n\nRefresh description",
+        localFixup: localFixup
+          ? {
+              message: "Unpublished description",
+              author: { name: "Local", email: "local@example.com" },
+            }
+          : undefined,
+        overrideBody: override,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.mergeBody).toBe(
+        `${expected}${expected ? "\n\n" : ""}Co-authored-by: Maintainer <maintainer@example.com>\n`,
+      );
+    },
+  );
+
+  it("batches published author reads while preserving human credit in source order", () => {
+    const result = prepareBody({
+      restPreview: true,
+      previewBody: "Reviewed repair",
+      sourceCommits: [
+        { message: "First repair", author: { name: "First", email: "first@example.com" } },
+        {
+          message: "Automated repair",
+          author: { name: "Automation", email: "automation@example.com" },
+          githubAuthor: { login: "automation", type: "Bot" },
+        },
+        { message: "Second repair", author: { name: "Second", email: "second@example.com" } },
+        {
+          message: "Unlinked repair",
+          author: { name: "Unlinked", email: "unlinked@example.com" },
+          githubAuthor: null,
+        },
+      ],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.mergeBody).toBe(
+      "Reviewed repair\n\nCo-authored-by: First <first@example.com>\nCo-authored-by: Second <second@example.com>\n",
+    );
+    expect(result.authorRequests).toHaveLength(1);
+  });
+
   it.each([
     {
       name: "linked human",
@@ -1143,7 +1282,13 @@ describePosix("native squash attribution", () => {
     { previewQueue: true },
     { sourceReadError: true },
     { authorReadError: true },
+    { authorReadFault: "empty" },
+    { authorReadFault: "malformed" },
+    { authorReadFault: "wrong-head" },
+    { authorReadFault: "multiple" },
     { bodyWriteError: true },
+    { restPreview: true, squashTitle: "UNKNOWN" },
+    { restPreview: true, squashMessage: "UNKNOWN" },
   ])("refuses before merge when attribution evidence is unavailable: %j", (failure) => {
     for (const overrideBody of [undefined, "Explicit corrected prose"]) {
       const result = prepareBody({

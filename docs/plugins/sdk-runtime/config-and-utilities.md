@@ -89,6 +89,11 @@ session reservation or temporary output, await `withCommandProcessScope` from th
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
 
+For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
+the same subpath. It reuses the current Node executable and resolves a real Node
+binary when the host runs under Bun, skipping Bun's `node` shim. An unavailable
+Node runtime returns `undefined`; the caller reports the missing requirement.
+
 Interactive process adapters can use `spawnTerminalPty` from the same subpath.
 It owns platform-specific terminal creation, including the Node helper on Bun.
 Pass the caller's construction signal and current-authority check through its

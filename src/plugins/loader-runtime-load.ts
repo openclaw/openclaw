@@ -13,7 +13,12 @@ import {
 } from "./loader-runtime-core.js";
 import { createPluginRuntimeRegistryResolver } from "./loader-runtime-registry.js";
 import type { PluginLoadOptions } from "./loader-types.js";
-import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  createPluginCache,
+  releasePluginCacheInstance,
+  retirePluginCache,
+  withPluginCache,
+} from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createProviderAuthAvailability } from "./provider-auth-availability-core.js";
 import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
@@ -127,7 +132,7 @@ async function acquireRegistryResources(
         .map((instance) => instance.dispose()),
     );
     for (const instance of instances) {
-      cache.instances.delete(instance);
+      releasePluginCacheInstance(instance, cache);
     }
     try {
       await retirePluginCache(cache);

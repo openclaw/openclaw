@@ -269,6 +269,9 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       if (runtime === "auto" || runtime === "openclaw") {
         return host;
       }
+      const observedNative =
+        entry.nativeRuntime === runtime ||
+        routes.variantsOf(entry)?.some((variant) => variant.nativeRuntime === runtime) === true;
       const provider = normalizeProviderId(entry.provider);
       const sameProvider =
         !params.profileProvider || normalizeProviderId(params.profileProvider) === provider;
@@ -280,8 +283,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       if (
         (sameProvider && params.preferredProfileId) ||
         (sameProvider && params.pinnedProfileId) ||
-        (host.selectedAuthMode &&
-          (host.evidence !== "runtime" || entry.nativeRuntime !== runtime)) ||
+        (host.selectedAuthMode && (host.evidence !== "runtime" || !observedNative)) ||
         configured?.api ||
         configured?.baseUrl ||
         configured?.apiKey ||
@@ -316,7 +318,11 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       const harness = registry?.agentHarnesses.find(
         (registration) => registration.harness.id === runtime,
       )?.harness;
-      if (!harness?.readModelCatalogReadiness && entry.nativeRuntime !== runtime) {
+      if (
+        !harness?.readModelCatalogReadiness &&
+        !observedNative &&
+        !(harness?.authBootstrap === "harness" && harness.loadModelCatalog)
+      ) {
         return host;
       }
       let ready: boolean;
@@ -358,8 +364,11 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
         ready = false;
         authMode = undefined;
       }
+      // A native catalog owner without an observation is unknown, not missing host API auth.
+      const availability =
+        ready && !harness?.readModelCatalogReadiness && !observedNative ? undefined : ready;
       return {
-        availability: ready,
+        availability,
         availabilityAuthoritative: true,
         routeResolution: null,
         ...(host.requestedRuntimeId ? { requestedRuntimeId: host.requestedRuntimeId } : {}),

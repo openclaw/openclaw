@@ -13,6 +13,7 @@ import * as packageIntegrity from "../../infra/package-update-integrity.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
 import * as commandProcess from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
@@ -257,6 +258,9 @@ beforeEach(async () => {
     { sessionId: "before", updatedAt: 1 },
   );
   await closeOpenClawAgentDatabasesAsync();
+  // This threaded fixture has no installed plugins or shared-state broker.
+  // Prepare its unchanged install inventory through the real metadata owner.
+  expect(loadInstalledPluginIndexInstallRecordsSync({ env: state.env })).toEqual({});
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -264,9 +268,10 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-it.each([
+it.for([
   "healthy",
   "same-version",
+  "same-build-finalize",
   "package-root-missing",
   "windows-autostart",
   "windows-autostart-health-failed",
@@ -278,252 +283,293 @@ it.each([
   "authority-lost",
   "no-restart",
   "readiness-failed",
-] as const)("keeps B facts and current data through split-root failure: %s", async (scenario) => {
-  mocks.windows = scenario.startsWith("windows-autostart");
-  const run = {
-    runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
-    env: state.env,
-  };
-  const opts: UpdateCommandOptions = { json: true, run };
-  if (scenario === "agent-support-older") {
-    const packagePath = path.join(rootA, "package.json");
-    const metadata = JSON.parse(await fs.readFile(packagePath, "utf8"));
-    metadata.openclaw.schemaVersions.agent = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
-    await fs.writeFile(packagePath, JSON.stringify(metadata));
-  }
-  const configSnapshot = await readConfigFileSnapshot();
-  let newerAgentBytes: Buffer | undefined;
-  let newerSharedBytes: Buffer | undefined;
-  let candidatePackageBytes: Buffer | undefined;
-  const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
-  mocks.package.mockImplementation(async (params) => {
-    await params.beforeActivate();
-    await fs.writeFile(
-      path.join(rootB, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: scenario === "same-version" ? "2026.9.4" : "2026.9.5",
-        type: "module",
-        openclaw: { schemaVersions: schemas },
-      }),
-    );
-    candidatePackageBytes = await fs.readFile(path.join(rootB, "package.json"));
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: "agent:main:after", env: state.env },
-      { sessionId: "newer", updatedAt: 2 },
-    );
-    await closeOpenClawAgentDatabasesAsync();
-    newerAgentBytes = await fs.readFile(
-      resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-    );
-    if (scenario === "schema-newer") {
-      const db = new DatabaseSync(resolveOpenClawStateSqlitePath(state.env));
-      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-      db.close();
-      newerSharedBytes = await fs.readFile(resolveOpenClawStateSqlitePath(state.env));
-    }
-    if (scenario === "definition-changed") {
-      serviceState.command!.programArguments.push("--port", "19998");
-    }
-    if (scenario === "node-changed") {
-      serviceState.command!.programArguments[0] = "/different/node";
-    }
-    if (scenario === "package-changed") {
-      await fs.appendFile(path.join(rootA, "dist", "index.js"), "// replaced\n");
-    }
-    if (scenario === "package-root-missing") {
-      await fs.rename(rootB, `${rootB}-displaced`);
-    }
-    if (scenario === "authority-lost") {
-      const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-      db.prepare(
-        "UPDATE managed_update_handoffs SET owner = 'replacement' WHERE install_root = ?",
-      ).run(rootB);
-      db.close();
-    }
-    return {
-      status: "error",
-      mode: "npm",
-      root: rootB,
-      reason: "named-plugin-failure",
-      before: { version: "2026.9.4", buildId: "build-B" },
-      after: {
-        version: scenario === "same-version" ? "2026.9.4" : "2026.9.5",
-        buildId: "candidate-B",
-      },
-      recovery: {
-        serviceRestartSafe: false,
-        reason: "deps-install-failed",
-        packageRollbackVerified: false,
-      },
-      steps: [],
-      durationMs: 1,
-    };
-  });
-  if (scenario === "readiness-failed" || scenario === "windows-autostart-health-failed") {
-    mocks.health.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
-      // Keep the admission observation healthy; fail only the post-stop recovery.
-      healthy: !stopped,
-      runtime: { status: stopped ? "stopped" : "running" },
-      gatewayVersion: expectedVersion,
-      gatewayBuildId: expectedBuildId,
-      staleGatewayPids: [],
-      portUsage: { status: "free", port: 18789, listeners: [], hints: [] },
-    }));
-  }
-  let execution: Awaited<ReturnType<typeof executeMutableUpdate>> | undefined;
-  let final: unknown;
-  const work = withUpdateCommandExecutor(run.runId, async (executor) => {
-    const fence = await executor.enter(rootB, { serviceRoot: rootA });
-    const admitted = { ...run, executorFence: fence };
-    opts.run = admitted;
-    execution = await executeMutableUpdate({
-      root: rootB,
-      // Package transport is modeled; A must not use this separately selected B runner.
-      packageUpdateNodeRunner: state.path("selected-B-node"),
-      installKind: "package",
-      updateInstallKind: "package",
-      switchToGit: false,
-      timeoutMs: 30000,
-      updateStepTimeoutMs: 30000,
-      startedAt: Date.now(),
-      progress: {},
-      stop: () => {},
-      channel: "stable",
-      tag: "2026.9.5",
-      opts,
-      shouldRestart: scenario !== "no-restart",
-      packageInstallSpec: "openclaw@2026.9.5",
-      packageTargetVersion: "2026.9.5",
-      managedServiceRootRedirect: null,
-      managedServiceRoot: rootA,
-      recoveryState: { triageTarget: { env: state.env } },
-      prepareMutableUpdate: async () => {
-        fence.assertCurrent();
-      },
-    });
-    if (scenario === "authority-lost") {
-      fence.assertCurrent();
-      return;
-    }
-    expect(execution?.previousVerified).toBe(false);
-    expect(execution?.previousSchemaVersions).toEqual(schemas);
-    expect(execution?.result.before).toEqual({ version: "2026.9.4", buildId: "build-B" });
-    if (!execution) {
-      throw new Error("missing execution");
-    }
-    final = await finishUpdate({
-      ...execution,
-      root: rootB,
-      packageUpdateNodeRunner: state.path("selected-B-node"),
-      installKindChanged: false,
-      configSnapshot,
-      requestedChannel: null,
-      storedChannel: "stable",
-      channel: "stable",
-      downgradeRisk: false,
-      shouldRestart: scenario !== "no-restart",
-      opts,
-      ownedManagedUpdateEnv: state.env,
-      controlPlaneUpdateSentinelMeta: null,
-      preUpdatePluginInstallRecords: {},
-      startedAt: Date.now(),
-      updateStepTimeoutMs: 30000,
-    }).catch((error: unknown) => error);
-    if (scenario === "schema-newer") {
-      expect(final).toMatchObject({
-        name: "UpdateCommandPendingRecoveryFailure",
-        exitCode: 1,
-        cause: { kind: "newer-schema" },
-        automaticTriage: undefined,
-        result: {
-          root: rootB,
-          status: "error",
-          reason: "named-plugin-failure",
-          recovery: { serviceRestartSafe: false },
-        },
+] as const)(
+  "keeps B facts and current data through split-root failure: %s",
+  async (scenario, { onTestFailed }) => {
+    mocks.windows = scenario.startsWith("windows-autostart");
+    const sameBuild = scenario === "same-build-finalize";
+    const originalVersion = sameBuild ? "2026.9.4" : "2026.9.3";
+    const originalBuild = sameBuild ? "build-B" : "build-A";
+    if (sameBuild) {
+      await fs.copyFile(path.join(rootB, "package.json"), path.join(rootA, "package.json"));
+      await fs.copyFile(
+        path.join(rootB, "dist", "build-info.json"),
+        path.join(rootA, "dist", "build-info.json"),
+      );
+      const observeOriginal = async () => ({
+        healthy: true,
+        runtime: { status: "running", pid: 4242 },
+        gatewayBootId: "original-service-boot",
+        gatewayVersion: originalVersion,
+        gatewayBuildId: originalBuild,
+        expectedVersion: originalVersion,
+        staleGatewayPids: [],
+        portUsage: { status: "busy", port: 18789, listeners: [], hints: [] },
       });
-      return;
+      mocks.health.mockImplementation(observeOriginal);
+      mocks.inspect.mockImplementation(observeOriginal);
     }
-    expect(final).toMatchObject({
-      result: {
+    const run = {
+      runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
+      env: state.env,
+    };
+    const opts: UpdateCommandOptions = { json: true, run };
+    if (scenario === "agent-support-older") {
+      const packagePath = path.join(rootA, "package.json");
+      const metadata = JSON.parse(await fs.readFile(packagePath, "utf8"));
+      metadata.openclaw.schemaVersions.agent = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
+      await fs.writeFile(packagePath, JSON.stringify(metadata));
+    }
+    const configSnapshot = await readConfigFileSnapshot({ observe: false });
+    let newerAgentBytes: Buffer | undefined;
+    let newerSharedBytes: Buffer | undefined;
+    let candidatePackageBytes: Buffer | undefined;
+    const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
+    mocks.package.mockImplementation(async (params) => {
+      await params.beforeActivate();
+      await fs.writeFile(
+        path.join(rootB, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version: scenario === "same-version" || sameBuild ? "2026.9.4" : "2026.9.5",
+          type: "module",
+          openclaw: { schemaVersions: schemas },
+        }),
+      );
+      candidatePackageBytes = await fs.readFile(path.join(rootB, "package.json"));
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:after", env: state.env },
+        { sessionId: "newer", updatedAt: 2 },
+      );
+      await closeOpenClawAgentDatabasesAsync();
+      newerAgentBytes = await fs.readFile(
+        resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+      );
+      if (scenario === "schema-newer") {
+        const db = new DatabaseSync(resolveOpenClawStateSqlitePath(state.env));
+        db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+        db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        db.close();
+        newerSharedBytes = await fs.readFile(resolveOpenClawStateSqlitePath(state.env));
+      }
+      if (scenario === "definition-changed") {
+        serviceState.command!.programArguments.push("--port", "19998");
+      }
+      if (scenario === "node-changed") {
+        serviceState.command!.programArguments[0] = "/different/node";
+      }
+      if (scenario === "package-changed") {
+        await fs.appendFile(path.join(rootA, "dist", "index.js"), "// replaced\n");
+      }
+      if (scenario === "package-root-missing") {
+        await fs.rename(rootB, `${rootB}-displaced`);
+      }
+      if (scenario === "authority-lost") {
+        const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
+        db.prepare(
+          "UPDATE managed_update_handoffs SET owner = 'replacement' WHERE install_root = ?",
+        ).run(rootB);
+        db.close();
+      }
+      return {
         status: "error",
+        mode: "npm",
         root: rootB,
         reason: "named-plugin-failure",
-        before: { version: "2026.9.4" },
-        after: { buildId: "candidate-B" },
+        before: { version: "2026.9.4", buildId: "build-B" },
+        after: {
+          version: scenario === "same-version" || sameBuild ? "2026.9.4" : "2026.9.5",
+          buildId: sameBuild ? "build-B" : "candidate-B",
+        },
         recovery: {
           serviceRestartSafe: false,
-          reason: "deps-install-failed",
+          reason: sameBuild ? "runtime-verification-failed" : "deps-install-failed",
           packageRollbackVerified: false,
         },
-      },
+        steps: [],
+        durationMs: 1,
+      };
     });
-  });
-  if (scenario === "authority-lost") {
-    await expect(work).rejects.toThrow();
-  } else {
-    await work;
-  }
-  const healthy = ["healthy", "same-version", "package-root-missing", "windows-autostart"].includes(
-    scenario,
-  );
-  expect(mocks.restart).not.toHaveBeenCalled();
-  expect(mocks.nativeRestart).toHaveBeenCalledTimes(
-    healthy || scenario === "readiness-failed" || scenario === "windows-autostart-health-failed"
-      ? 1
-      : 0,
-  );
-  if (scenario !== "authority-lost" && scenario !== "no-restart") {
-    expect(execution?.originalManagedServiceRuntime).toMatchObject({
-      root: rootA,
-      version: "2026.9.3",
-      verified: true,
+    if (scenario === "readiness-failed" || scenario === "windows-autostart-health-failed") {
+      mocks.health.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
+        // Keep the admission observation healthy; fail only the post-stop recovery.
+        healthy: !stopped,
+        runtime: { status: stopped ? "stopped" : "running" },
+        gatewayVersion: expectedVersion,
+        gatewayBuildId: expectedBuildId,
+        staleGatewayPids: [],
+        portUsage: { status: "free", port: 18789, listeners: [], hints: [] },
+      }));
+    }
+    let execution: Awaited<ReturnType<typeof executeMutableUpdate>> | undefined;
+    onTestFailed(() => {
+      if (execution?.failure) {
+        console.error(execution.failure.detail);
+      }
     });
-  }
-  if (healthy) {
-    expect(mocks.health).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedVersion: "2026.9.3", expectedBuildId: "build-A" }),
+    let final: unknown;
+    const work = withUpdateCommandExecutor(run.runId, async (executor) => {
+      const fence = await executor.enter(rootB, { serviceRoot: rootA });
+      const admitted = { ...run, executorFence: fence };
+      opts.run = admitted;
+      execution = await executeMutableUpdate({
+        root: rootB,
+        // Package transport is modeled; A must not use this separately selected B runner.
+        packageUpdateNodeRunner: state.path("selected-B-node"),
+        installKind: "package",
+        updateInstallKind: "package",
+        switchToGit: false,
+        timeoutMs: 30000,
+        updateStepTimeoutMs: 30000,
+        startedAt: Date.now(),
+        progress: {},
+        stop: () => {},
+        channel: "stable",
+        tag: "2026.9.5",
+        opts,
+        shouldRestart: scenario !== "no-restart",
+        packageInstallSpec: "openclaw@2026.9.5",
+        packageTargetVersion: "2026.9.5",
+        managedServiceRootRedirect: null,
+        managedServiceRoot: rootA,
+        recoveryState: { triageTarget: { env: state.env } },
+        prepareMutableUpdate: async () => {
+          fence.assertCurrent();
+        },
+      });
+      if (scenario === "authority-lost") {
+        fence.assertCurrent();
+        return;
+      }
+      expect(execution?.previousVerified, execution?.failure?.detail).toBe(false);
+      expect(execution?.previousSchemaVersions, execution?.failure?.detail).toEqual(schemas);
+      expect(execution?.result.before, execution?.failure?.detail).toEqual({
+        version: "2026.9.4",
+        buildId: "build-B",
+      });
+      if (!execution) {
+        throw new Error("missing execution");
+      }
+      final = await finishUpdate({
+        ...execution,
+        root: rootB,
+        packageUpdateNodeRunner: state.path("selected-B-node"),
+        installKindChanged: false,
+        configSnapshot,
+        requestedChannel: null,
+        storedChannel: "stable",
+        channel: "stable",
+        downgradeRisk: false,
+        shouldRestart: scenario !== "no-restart",
+        opts,
+        ownedManagedUpdateEnv: state.env,
+        controlPlaneUpdateSentinelMeta: null,
+        preUpdatePluginInstallRecords: {},
+        startedAt: Date.now(),
+        updateStepTimeoutMs: 30000,
+      }).catch((error: unknown) => error);
+      if (scenario === "schema-newer") {
+        expect(final).toMatchObject({
+          name: "UpdateCommandPendingRecoveryFailure",
+          exitCode: 1,
+          cause: { kind: "newer-schema" },
+          automaticTriage: undefined,
+          result: {
+            root: rootB,
+            status: "error",
+            reason: "named-plugin-failure",
+            recovery: { serviceRestartSafe: false },
+          },
+        });
+        return;
+      }
+      expect(final).toMatchObject({
+        result: {
+          status: "error",
+          root: rootB,
+          reason: "named-plugin-failure",
+          before: { version: "2026.9.4" },
+          after: { buildId: sameBuild ? "build-B" : "candidate-B" },
+          recovery: {
+            serviceRestartSafe: false,
+            reason: sameBuild ? "runtime-verification-failed" : "deps-install-failed",
+            packageRollbackVerified: false,
+          },
+        },
+      });
+    });
+    if (scenario === "authority-lost") {
+      await expect(work).rejects.toThrow();
+    } else {
+      await work;
+    }
+    const healthy =
+      sameBuild ||
+      ["healthy", "same-version", "package-root-missing", "windows-autostart"].includes(scenario);
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.nativeRestart).toHaveBeenCalledTimes(
+      healthy || scenario === "readiness-failed" || scenario === "windows-autostart-health-failed"
+        ? 1
+        : 0,
     );
-  }
-  if (scenario === "schema-newer") {
+    if (scenario !== "authority-lost" && scenario !== "no-restart") {
+      expect(execution?.originalManagedServiceRuntime).toMatchObject({
+        root: rootA,
+        version: originalVersion,
+        verified: true,
+      });
+    }
+    if (healthy) {
+      expect(mocks.health).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expectedVersion: originalVersion,
+          expectedBuildId: originalBuild,
+        }),
+      );
+    }
+    if (scenario === "schema-newer") {
+      expect(
+        await fs.readFile(resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env })),
+      ).toEqual(newerAgentBytes);
+    } else {
+      expect(
+        loadSessionEntryReadOnly({
+          agentId: "main",
+          sessionKey: "agent:main:after",
+          env: state.env,
+        }),
+      ).toMatchObject({ sessionId: "newer" });
+    }
+    if (mocks.windows) {
+      expect(mocks.suspend).toHaveBeenCalledTimes(scenario === "windows-autostart" ? 1 : 2);
+      expect(mocks.resume).toHaveBeenCalledTimes(1);
+    }
     expect(
-      await fs.readFile(resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env })),
-    ).toEqual(newerAgentBytes);
-  } else {
-    expect(
-      loadSessionEntryReadOnly({
-        agentId: "main",
-        sessionKey: "agent:main:after",
-        env: state.env,
-      }),
-    ).toMatchObject({ sessionId: "newer" });
-  }
-  if (mocks.windows) {
-    expect(mocks.suspend).toHaveBeenCalledTimes(scenario === "windows-autostart" ? 1 : 2);
-    expect(mocks.resume).toHaveBeenCalledTimes(1);
-  }
-  expect(
-    await fs.readFile(
-      path.join(scenario === "package-root-missing" ? `${rootB}-displaced` : rootB, "package.json"),
-    ),
-  ).toEqual(candidatePackageBytes);
-  expect(await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!)).toEqual(configBefore);
-  expect(execution).not.toHaveProperty("updateRecoveryBackup");
-  if (scenario === "schema-newer") {
-    // Do not reopen the newer schema using this runtime to make an assertion.
-    expect(await fs.readFile(resolveOpenClawStateSqlitePath(state.env))).toEqual(newerSharedBytes);
-  } else {
-    expect(
-      loadSessionEntryReadOnly({
-        agentId: "main",
-        sessionKey: "agent:main:before",
-        env: state.env,
-      }),
-    ).toMatchObject({ sessionId: "before" });
-  }
-});
+      await fs.readFile(
+        path.join(
+          scenario === "package-root-missing" ? `${rootB}-displaced` : rootB,
+          "package.json",
+        ),
+      ),
+    ).toEqual(candidatePackageBytes);
+    expect(await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!)).toEqual(configBefore);
+    expect(execution).not.toHaveProperty("updateRecoveryBackup");
+    if (scenario === "schema-newer") {
+      // Do not reopen the newer schema using this runtime to make an assertion.
+      expect(await fs.readFile(resolveOpenClawStateSqlitePath(state.env))).toEqual(
+        newerSharedBytes,
+      );
+    } else {
+      expect(
+        loadSessionEntryReadOnly({
+          agentId: "main",
+          sessionKey: "agent:main:before",
+          env: state.env,
+        }),
+      ).toMatchObject({ sessionId: "before" });
+    }
+  },
+);
 
 it("refuses B ledger admission independently from compatible service A state", async () => {
   const parentDir = state.path("parent-state");
@@ -557,7 +603,7 @@ it("refuses B ledger admission independently from compatible service A state", a
       previousRoot: rootB,
       previousSchemaVersions: schemas,
       originalManagedServiceRuntime: original,
-      configSnapshot: await readConfigFileSnapshot(),
+      configSnapshot: await readConfigFileSnapshot({ observe: false }),
       opts,
       preManagedServiceStop: before,
       allowGatewayRestart: false,
@@ -591,7 +637,7 @@ it.each([
     env: state.env,
   };
   const opts: UpdateCommandOptions = { json: true, run };
-  const configSnapshot = await readConfigFileSnapshot();
+  const configSnapshot = await readConfigFileSnapshot({ observe: false });
   const packageBefore = await fs.readFile(path.join(rootB, "package.json"));
   const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
   let activated = false;
@@ -689,9 +735,9 @@ it.each([
         fence.assertCurrent();
       },
     });
-    expect(execution).not.toBeNull();
+    expect(execution, execution?.failure?.detail).not.toBeNull();
     if (scenario === "certified-doctor-failure" || scenario === "fingerprint-timeout") {
-      expect(activated).toBe(true);
+      expect(activated, execution?.failure?.detail).toBe(true);
       expect(stopped).toBe(true);
       expect(execution!.originalManagedServiceRuntime).toMatchObject({
         root: rootA,
@@ -732,14 +778,14 @@ it.each([
       );
       expect(mocks.running).toBe(true);
     } else if (scenario === "no-restart") {
-      expect(activated).toBe(true);
+      expect(activated, execution?.failure?.detail).toBe(true);
       expect(stopped).toBe(false);
     } else {
       expect(activated).toBe(false);
       expect(stopped).toBe(false);
       expect(execution!.result.status).toBe("error");
       if (scenario !== "authority-revoked") {
-        expect(execution!.result.reason).toBe(
+        expect(execution!.result.reason, execution!.failure?.detail).toBe(
           scenario === "missing-env" ? "managed-service-preflight" : "original-service-unverified",
         );
       }
@@ -824,7 +870,7 @@ it.each([false, true])(
         previousRoot: rootB,
         previousSchemaVersions: schemas,
         originalManagedServiceRuntime: original,
-        configSnapshot: await readConfigFileSnapshot(),
+        configSnapshot: await readConfigFileSnapshot({ observe: false }),
         opts,
         preManagedServiceStop: before,
         allowGatewayRestart: mutated,

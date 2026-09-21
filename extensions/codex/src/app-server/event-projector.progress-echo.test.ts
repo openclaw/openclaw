@@ -361,7 +361,9 @@ describe("CodexAppServerEventProjector tool progress echo filtering", () => {
     expect(result.assistantTexts).toEqual([]);
     expect(result.lastAssistant).toBeUndefined();
     expect(result.currentAttemptAssistant).toBeUndefined();
-    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("tail-should-not-appear");
+    expect(
+      JSON.stringify(result.messagesSnapshot.filter((message) => message.role === "toolResult")),
+    ).toContain("tail-should-not-appear");
   });
 
   it("keeps final answers that only start with a streamed tool-output prefix", async () => {

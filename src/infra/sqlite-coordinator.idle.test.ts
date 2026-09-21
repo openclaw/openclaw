@@ -9,9 +9,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
+  closeIdleSqliteCoordinators,
   tryAcquireExclusiveSqliteCoordinator,
   tryAcquireSharedSqliteCoordinator,
 } from "./sqlite-coordinator.js";
+import { captureCoordinatorDatabase } from "./sqlite-coordinator.test-support.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "./sqlite-handle-lifecycle.js";
 import {
   acquireStateDatabaseCoordinator,
@@ -167,6 +169,119 @@ describe("idle SQLite coordinator connections", () => {
     vi.advanceTimersByTime(30 * 60_000);
     expect(database.isOpen).toBe(false);
   });
+
+  it.each(["coordinator", "qa-runtime"] as const)(
+    "disposes only idle connections inside a removed runtime root through %s",
+    async (entryPoint) => {
+      const qaCloser =
+        entryPoint === "qa-runtime"
+          ? (await import("../plugin-sdk/qa-runtime.js")).closeQaRuntimeStores
+          : undefined;
+      const dispose = async (root: string) => {
+        if (qaCloser) {
+          await qaCloser(root);
+        } else {
+          closeIdleSqliteCoordinators(root);
+        }
+      };
+      const { directory } = fixture();
+      const root = path.join(directory, "owned");
+      fs.mkdirSync(root);
+      const idlePath = path.join(root, "idle.sqlite");
+      const heldPath = path.join(root, "held.sqlite");
+      const otherPath = path.join(directory, "owned-other.sqlite");
+      for (const location of [idlePath, heldPath, otherPath]) {
+        fs.writeFileSync(location, "");
+      }
+      const acquire = (location: string) =>
+        captureCoordinatorDatabase(() =>
+          tryAcquireSharedSqliteCoordinator(location, { keepAlive: true }),
+        );
+      const idle = acquire(idlePath);
+      const held = acquire(heldPath);
+      const other = acquire(otherPath);
+      idle.result?.release();
+      other.result?.release();
+      try {
+        await dispose(root);
+        expect(idle.database.isOpen).toBe(false);
+        fs.unlinkSync(idlePath);
+        expect(held.database.isOpen).toBe(true);
+        expect(held.database.isTransaction).toBe(true);
+        expect(other.database.isOpen).toBe(true);
+        const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+        const reused = tryAcquireSharedSqliteCoordinator(otherPath, { keepAlive: true });
+        try {
+          expect(reused).not.toBeNull();
+          expect(open).not.toHaveBeenCalled();
+        } finally {
+          reused?.release();
+          open.mockRestore();
+        }
+        held.result?.release();
+        await dispose(root);
+        fs.rmSync(root, { recursive: true });
+        expect(other.database.isOpen).toBe(true);
+      } finally {
+        held.result?.release({ keepAlive: false });
+        closeIdleSqliteCoordinators(directory);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retains only unfinished scoped cleanup after close failures (physically closed: %s)",
+    (physicallyClosed) => {
+      const { directory, location } = fixture();
+      const secondPath = path.join(directory, "second.sqlite");
+      fs.writeFileSync(secondPath, "");
+      const owners = [location, secondPath].map((pathname) => {
+        const owner = captureCoordinatorDatabase(() =>
+          tryAcquireExclusiveSqliteCoordinator(pathname, { keepAlive: true }),
+        );
+        owner.result?.release();
+        return owner;
+      });
+      const failures: Error[] = [];
+      const closes = owners.map(({ database }, index) => {
+        const failure = new Error(`native close ${index} failed`);
+        failures.push(failure);
+        const close = database.close.bind(database);
+        return vi.spyOn(database, "close").mockImplementationOnce(() => {
+          if (physicallyClosed) {
+            close();
+          }
+          throw failure;
+        });
+      });
+      try {
+        expect(() => closeIdleSqliteCoordinators(directory)).toThrow(
+          expect.objectContaining({ errors: failures, cause: failures[0] }),
+        );
+        for (const { database } of owners) {
+          expect(database.isOpen).toBe(!physicallyClosed);
+        }
+        closeIdleSqliteCoordinators(path.join(directory, "unrelated"));
+        for (const close of closes) {
+          expect(close).toHaveBeenCalledTimes(1);
+        }
+        for (const { database } of owners) {
+          expect(database.isOpen).toBe(!physicallyClosed);
+        }
+        // The next explicit disposal recovers retained custody without a timer or a new open.
+        closeIdleSqliteCoordinators(directory);
+        for (const close of closes) {
+          expect(close).toHaveBeenCalledTimes(physicallyClosed ? 1 : 2);
+        }
+        fs.rmSync(directory, { recursive: true });
+      } finally {
+        for (const close of closes) {
+          close.mockRestore();
+        }
+        closeIdleSqliteCoordinators(directory);
+      }
+    },
+  );
 
   it("ends the released lease's custody when its connection enters the idle pool", () => {
     const { location } = fixture();

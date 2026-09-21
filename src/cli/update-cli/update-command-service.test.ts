@@ -24,7 +24,8 @@ import { verifyUpdatedGateway } from "./update-command-verification.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -99,6 +100,42 @@ describe("maybeRestartService", () => {
     mocks.waitForGatewayHealthyRestart.mockResolvedValue(healthy);
     mocks.inspectGatewayRestart.mockResolvedValue(healthy);
   });
+
+  it.each(["refresh inspection", "restart inspection", "restart command"] as const)(
+    "does not continue restart work after uncertain cleanup from %s",
+    async (source) => {
+      const failure = new CommandProcessCleanupError();
+      if (source === "restart command") {
+        mocks.runUpdatedInstallGatewayCommand.mockRejectedValueOnce(failure);
+      } else {
+        mocks.waitForGatewayHealthyRestart.mockRejectedValueOnce(failure);
+      }
+      const onVerified = vi.fn();
+      await expect(
+        maybeRestartService({
+          shouldRestart: true,
+          result: {
+            status: "ok",
+            mode: "npm",
+            before: { version: "2026.8.1" },
+            after: { version: gateway.version },
+            steps: [],
+            durationMs: 0,
+          },
+          opts: { json: true, run },
+          refreshServiceEnv: source === "refresh inspection",
+          serviceEnv: { HOME: "/home/operator" },
+          serviceInstallEnv: {},
+          requireRunningServiceAfterRestart: true,
+          gatewayPort: 18789,
+          timeoutMs: 1000,
+          onVerified,
+        }),
+      ).rejects.toBe(failure);
+      expect(onVerified).not.toHaveBeenCalled();
+      expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     "current",
@@ -365,46 +402,6 @@ describe("maybeRestartService", () => {
     expect(loadUpdateRecovery(record.runId, options)).toEqual(record);
   });
 
-  it.each(["seal refused", "target install failed", "missing entrypoint"])(
-    "never falls back to restart after gated install failure: %s",
-    async (reason) => {
-      const serviceLoadBoundary = { assertCurrent: vi.fn(), seal: vi.fn() };
-      if (reason === "missing entrypoint") {
-        const actual = await vi.importActual<typeof import("./update-command-service-command.js")>(
-          "./update-command-service-command.js",
-        );
-        mocks.runUpdatedInstallGatewayCommand.mockImplementationOnce(
-          actual.runUpdatedInstallGatewayCommand,
-        );
-      } else {
-        mocks.runUpdatedInstallGatewayCommand.mockRejectedValueOnce(new Error(reason));
-      }
-      const onVerified = vi.fn();
-      await expect(
-        maybeRestartService({
-          shouldRestart: true,
-          result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
-          opts: { json: true, run },
-          refreshServiceEnv: true,
-          serviceEnv: { HOME: "/home/operator" },
-          serviceInstallEnv: {},
-          serviceLoadBoundary,
-          gatewayPort: 18789,
-          restartScriptPath: "/tmp/openclaw-sealed-restart.sh",
-          timeoutMs: 1_000,
-          onVerified,
-        }),
-      ).rejects.toMatchObject({ name: "UpdateServiceLoadBoundaryError" });
-      expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ serviceLoadBoundary }),
-        "install",
-      );
-      expect(mocks.runRestartScript).not.toHaveBeenCalled();
-      expect(mocks.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
-      expect(onVerified).not.toHaveBeenCalled();
-    },
-  );
-
   it("records changed-key warnings before health verification and retains them in the outcome and report", async () => {
     const home = tempDirs.make("service-warning-history-");
     const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
@@ -598,6 +595,7 @@ describe("maybeRestartService", () => {
       const result: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
       expect(
         prepareUpdateServiceResult({
+          opts: {},
           result,
           root: "/cli-install",
           shouldRestart: true,

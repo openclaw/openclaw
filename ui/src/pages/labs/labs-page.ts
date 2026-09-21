@@ -139,7 +139,7 @@ class LabsPage extends OpenClawLightDomElement {
       ${feature.description()}
       <a href=${feature.docsUrl} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
         >${t("labsPage.documentation")}</a
-      >${feature.restartHint ? html` <span>${feature.restartHint()}</span>` : nothing}
+      >
       ${defaultDescription}
     `;
     return renderSettingsToggleRow({

@@ -4,6 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { findTaskByRunId } from "../../tasks/task-registry.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import * as agentHandlerHelpers from "../agent-turn/agent-handler-helpers.js";
+import { waitForAcceptedRunDispatch } from "./agent-clock.test-helpers.js";
 import { spyDetachedCreateRunningTaskRun } from "./agent-task-tracking.test-helpers.js";
 import {
   backendGatewayClient,
@@ -20,6 +21,31 @@ const mocks = getAgentTestMocks();
 
 describe("gateway accepted dispatch clock", () => {
   afterEach(describe0AfterEach0);
+  it("fails an accepted request that never dispatches instead of starving the test timeout", async () => {
+    vi.useFakeTimers();
+    const respond = vi.fn();
+    respond(true, { status: "accepted" });
+    let pumps = 0;
+    const pump = vi.spyOn(vi, "runOnlyPendingTimersAsync").mockImplementation(async () => {
+      // Bound the broken implementation too, so the regression fails without hanging CI.
+      if (++pumps === 2_000) {
+        throw new Error("unbounded dispatch loop reached the regression guard");
+      }
+      return vi;
+    });
+    try {
+      await expect(
+        waitForAcceptedRunDispatch({
+          respond,
+          hasDispatched: () => false,
+          initialRespondCallCount: 0,
+        }),
+      ).rejects.toThrow("Accepted agent request did not dispatch or return a terminal response");
+    } finally {
+      pump.mockRestore();
+      vi.useRealTimers();
+    }
+  });
   it("keeps accepted native dispatch alive when preparation settles on the last fixture pump", async () => {
     await withTestDir({ prefix: "openclaw-gateway-native-dispatch-boundary-" }, async (root) => {
       useTestStateDir(root);

@@ -33,87 +33,73 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
 }
 
 describe("createSessionCapability", () => {
-  it.each(["direct", "subscription"] as const)(
-    "shares confirmed archive visibility after %s reconciliation",
-    async (path) => {
-      const key = "agent:main:archive-from-agent";
-      const row = { key, kind: "direct" as const, sessionId: "archive-session", updatedAt: 1 };
-      const request = vi.fn(async () => sessionsResult([row], 1));
-      const { emitEvent, gateway } = createGatewayHarness({
-        request,
-      } as unknown as GatewayBrowserClient);
-      const sessions = createTestSessionCapability(gateway);
-      const reconcile = (archived: boolean, updatedAt: number) => {
-        const payload = { ...row, sessionKey: key, reason: "patch", archived, updatedAt };
-        if (path === "direct") {
-          sessions.reconcileChanged(payload);
-        } else {
-          emitEvent({ type: "event", event: "sessions.changed", payload });
-        }
-      };
-      try {
-        await sessions.refresh({ agentId: "main", force: true });
-        reconcile(true, 2);
-        expect(sessions.archiveVisibility(key)).toBe("archived");
-        await sessions.refresh({ agentId: "main", force: true });
-        expect(sessions.archiveVisibility(key)).toBe("archived");
-        reconcile(false, 3);
-        expect(sessions.archiveVisibility(key)).toBeUndefined();
-      } finally {
-        sessions.dispose();
-      }
-    },
-  );
-
-  it.each(["direct", "subscription"] as const)(
-    "ignores stale archive state after a newer unarchive via %s reconciliation",
-    async (path) => {
-      const key = "agent:main:main";
-      const request = vi.fn(async (method: string) => {
-        if (method !== "sessions.list") {
-          throw new Error(`Unexpected request: ${method}`);
-        }
-        return sessionsResult(
-          [
-            {
-              key,
-              kind: "direct",
-              sessionId: "main-session",
-              updatedAt: 30,
-              archived: false,
-            },
-          ],
-          30,
-        );
-      });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const { emitEvent, gateway } = createGatewayHarness(client);
-      const sessions = createTestSessionCapability(gateway);
+  it("shares confirmed archive visibility after Gateway events", async () => {
+    const key = "agent:main:archive-from-agent";
+    const row = { key, kind: "direct" as const, sessionId: "archive-session", updatedAt: 1 };
+    const request = vi.fn(async () => sessionsResult([row], 1));
+    const { emitEvent, gateway } = createGatewayHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    const sessions = createTestSessionCapability(gateway);
+    const reconcile = (archived: boolean, updatedAt: number) => {
+      const payload = { ...row, sessionKey: key, reason: "patch", archived, updatedAt };
+      emitEvent({ type: "event", event: "sessions.changed", payload });
+    };
+    try {
       await sessions.refresh({ agentId: "main", force: true });
-      const staleArchive = {
-        sessionKey: key,
-        key,
-        kind: "direct" as const,
-        sessionId: "main-session",
-        updatedAt: 20,
-        archived: true,
-        archivedAt: 20,
-        reason: "update",
-      };
-
-      if (path === "direct") {
-        sessions.reconcileChanged(staleArchive);
-      } else {
-        emitEvent({ type: "event", event: "sessions.changed", payload: staleArchive });
-      }
-
-      expect(sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject({
-        archived: false,
-        updatedAt: 30,
-      });
+      reconcile(true, 2);
+      expect(sessions.archiveVisibility(key)).toBe("archived");
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.archiveVisibility(key)).toBe("archived");
+      reconcile(false, 3);
+      expect(sessions.archiveVisibility(key)).toBeUndefined();
+    } finally {
       sessions.dispose();
-    },
-  );
+    }
+  });
+
+  it("ignores stale archive state after a newer unarchive via Gateway events", async () => {
+    const key = "agent:main:main";
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      return sessionsResult(
+        [
+          {
+            key,
+            kind: "direct",
+            sessionId: "main-session",
+            updatedAt: 30,
+            archived: false,
+          },
+        ],
+        30,
+      );
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { emitEvent, gateway } = createGatewayHarness(client);
+    const sessions = createTestSessionCapability(gateway);
+    await sessions.refresh({ agentId: "main", force: true });
+    const staleArchive = {
+      sessionKey: key,
+      key,
+      kind: "direct" as const,
+      sessionId: "main-session",
+      updatedAt: 20,
+      archived: true,
+      archivedAt: 20,
+      reason: "update",
+    };
+
+    emitEvent({ type: "event", event: "sessions.changed", payload: staleArchive });
+
+    expect(sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject({
+      archived: false,
+      updatedAt: 30,
+    });
+    sessions.dispose();
+  });
 
   it("allows an advertised group catalog load to be retried after failure", async () => {
     let groupsCalls = 0;

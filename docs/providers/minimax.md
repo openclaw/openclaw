@@ -31,6 +31,8 @@ Referral link for MiniMax Coding Plan (10% off): [MiniMax Coding Plan](https://p
 
 Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-portal/<model>` for OAuth setups.
 
+MiniMax M3 is a preferred [Code Mode](/tools/code-mode) model on both API-key and OAuth routes. Set `tools.codeMode.enabled` to `"auto"` to use it; Code Mode is off by default.
+
 ## Getting started
 
 <Tabs>
@@ -135,6 +137,7 @@ Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-
                 name: "MiniMax M3",
                 reasoning: true,
                 input: ["text", "image"],
+                compat: { codeMode: "preferred" },
                 cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
                 contextWindow: 1000000,
                 maxTokens: 131072,

@@ -14,6 +14,7 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
+  createTauriDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
 import "./device-page.ts";
 import "./permissions-page.ts";
@@ -104,6 +105,45 @@ afterEach(() => {
 });
 
 describe("native device settings pages", () => {
+  it.each(["linux", "windows"] as const)(
+    "edits %s desktop sharing and displays worker failures without unsupported controls",
+    async (platform) => {
+      const snapshot = createTauriDeviceSettingsSnapshot(platform);
+      const native = createCapability(snapshot);
+      const page = await mount("openclaw-device-page", native.capability);
+      expect(page.textContent).toContain("This computer");
+      expect(row(page, "Desktop sharing").textContent).toContain("authenticated local VNC server");
+      expect(row(page, "Desktop sharing status").textContent).toContain("Running");
+      expect(page.textContent).not.toContain("Computer Control");
+      toggle(page, "Desktop sharing", false);
+      expect(native.capability.set).toHaveBeenCalledExactlyOnceWith(
+        "capabilities.desktopSharingEnabled",
+        false,
+      );
+      native.publish({
+        ...snapshot,
+        capabilities: { desktopSharingEnabled: false },
+        desktopSharing: { state: "off" },
+      });
+      await page.updateComplete;
+      expect(row(page, "Desktop sharing").querySelector<ToggleElement>("wa-switch")!.checked).toBe(
+        false,
+      );
+      native.publish({
+        ...snapshot,
+        desktopSharing: {
+          state: "error",
+          detail: "Install the OpenClaw CLI to share this desktop.",
+        },
+      });
+      await page.updateComplete;
+      expect(row(page, "Desktop sharing status").textContent).toContain("Unavailable");
+      expect(page.textContent).toContain("Install the OpenClaw CLI");
+      const permissions = await mount("openclaw-device-permissions-page", native.capability);
+      expect(permissions.querySelector("wa-switch")).toBeNull();
+      expect(permissions.textContent).not.toContain("Location access");
+    },
+  );
   it("switches the advertised Mac experience and follows the native owner's saved value", async () => {
     const native = createCapability();
     const page = await mount("openclaw-device-page", native.capability);

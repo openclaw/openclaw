@@ -22,10 +22,13 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator as holdCoordinator } from "../test-utils/state-database-contention.js";
-import { createTaskFlowForTask, getTaskFlowById } from "./task-flow-registry.js";
+import { createTaskFlowForTask, readResidentTaskFlow } from "./task-flow-registry.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
+import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
 import { updateTask } from "./task-registry-mutation.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
+import { prepareTaskRegistryRead } from "./task-registry-read.js";
 import { linkTaskToFlowById, markTaskTerminalById } from "./task-registry-record-api.js";
 import {
   tasks,
@@ -42,7 +45,6 @@ import {
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import { createTaskFixture } from "./task-registry.test-support.js";
 import {
-  configureTaskFlowRegistryRuntime,
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
 } from "./task-runtime.test-helpers.js";
@@ -104,6 +106,7 @@ describe("task agent event persistence", () => {
           notifyPolicy: phase === "start" ? "state_changes" : "done_only",
           deliveryStatus: "pending",
         });
+        using deliveries = captureTaskDeliveryWork();
         const failure = new Error("Synthetic enclosing transaction rollback");
         let observerReplaced = false;
         const stop = onTaskRegistryChange(() => {
@@ -147,6 +150,7 @@ describe("task agent event persistence", () => {
           transactionError = error;
         }
         try {
+          await deliveries.settle();
           await joinEvents();
         } finally {
           stop();
@@ -409,8 +413,23 @@ describe("task agent event persistence", () => {
             ? { phase: "end", endedAt: Date.now() }
             : { phase: "start", startedAt: Date.now() },
         });
+        // A registered task read joins these accepted events, including a publication
+        // legitimately replaced after commit. Stale delivery must not poison the read.
+        const readResult = Promise.allSettled([prepareTaskRegistryRead()]);
         await returned.promise;
         await joinEvents();
+        const [read] = await readResult;
+        if (scenario === "cleanup failure") {
+          expect(read).toMatchObject({
+            status: "rejected",
+            reason: expect.objectContaining({ message: "Synthetic delivery cleanup failure" }),
+          });
+        } else {
+          expect(read).toMatchObject({ status: "fulfilled" });
+          if (read.status === "fulfilled") {
+            expect(read.value?.getTaskById(task.taskId)).toEqual(tasks.get(task.taskId));
+          }
+        }
         expect(observerFailure).toBeUndefined();
         expect(nativeRolledBack).toBe(nativeRollback);
         const delivered = peekSystemEvents("agent:main:main");
@@ -446,19 +465,15 @@ describe("task agent event persistence", () => {
         const flow = createTaskFlowForTask({ task });
         expect(flow).not.toBeNull();
         expect(linkTaskToFlowById({ taskId: task.taskId, flowId: flow!.flowId })).not.toBeNull();
-        const flowPublished = createDeferred();
-        configureTaskFlowRegistryRuntime({
-          observers: {
-            onEvent(event) {
-              if (
-                event.kind === "upserted" &&
-                event.flow.flowId === flow!.flowId &&
-                event.flow.status === "succeeded"
-              ) {
-                flowPublished.resolve();
-              }
-            },
-          },
+        const flowReadback = createDeferred();
+        const flowStore = getTaskFlowRegistryStore();
+        const readFlow = flowStore.readFlowAsync.bind(flowStore);
+        vi.spyOn(flowStore, "readFlowAsync").mockImplementation(async (...args) => {
+          const record = await readFlow(...args);
+          if (record?.flowId === flow!.flowId && record.status === "succeeded") {
+            flowReadback.resolve();
+          }
+          return record;
         });
         const store = getTaskRegistryStore();
         const mutate = store.runAgentEventMutationAsync.bind(store);
@@ -520,17 +535,15 @@ describe("task agent event persistence", () => {
             data: { phase: "end", endedAt: Date.now() },
           });
           await warned.promise;
+          await flowReadback.promise;
           await joinEvents();
           expect(writes).toHaveBeenCalledOnce();
           expect(tasks.get(task.taskId)?.status).toBe("succeeded");
           expect(publications).toEqual(
             failureKind === "superseded publication" ? ["succeeded", "succeeded"] : ["succeeded"],
           );
-          await flowPublished.promise;
-          expect(getTaskFlowRegistryStore().loadSnapshot().flows.get(flow!.flowId)?.status).toBe(
-            "succeeded",
-          );
-          expect(getTaskFlowById(flow!.flowId)?.status).toBe("succeeded");
+          expect(readResidentTaskFlow(flow!.flowId)?.status).toBe("succeeded");
+          expect(flowStore.loadSnapshot().flows.get(flow!.flowId)?.status).toBe("succeeded");
           expect(loadTaskRegistryStateFromSqliteReadOnly().tasks.get(task.taskId)).toMatchObject({
             status: "succeeded",
             detail: task.detail,
@@ -932,7 +945,11 @@ describe("task agent event persistence", () => {
         });
         emitTool(task.runId!, "stale");
         await entered.promise;
+        let fence: Promise<PromiseSettledResult<void>[]> | undefined;
         try {
+          fence = Promise.allSettled([
+            captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission),
+          ]);
           if (replacement === "task replacement") {
             const next = { ...task, runId: "replacement-run" };
             store.upsertTaskWithDeliveryState({ task: next });
@@ -942,6 +959,7 @@ describe("task agent event persistence", () => {
           }
         } finally {
           release.resolve();
+          await fence;
         }
         await joinEvents();
         expect(

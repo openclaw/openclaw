@@ -3,13 +3,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
-import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import { prepareDoctorConfigReferenceSource } from "./doctor/shared/config-flow-steps.js";
+
+const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
 
 async function plan(configPath: string): Promise<DoctorHealthFlowContext> {
   const snapshot = await readConfigFileSnapshot();
@@ -60,7 +63,7 @@ describe("Doctor receipt owner with real config files", () => {
   ])(
     "chains commits and refuses raw drift (include=$include, authority=$authority)",
     async ({ include, authority }) => {
-      await withTempHome(async (home) => {
+      await withDoctorConfigPreflightHome(async (home) => {
         const configPath = await writeOpenClawConfig(home, {
           gateway: { mode: "local" },
           agents: {
@@ -131,7 +134,7 @@ describe("Doctor receipt owner with real config files", () => {
     },
   );
   it("creates a missing root, advances its receipt, and refuses an equal-byte active path", async () => {
-    await withTempHome(async (home) => {
+    await withDoctorConfigPreflightHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       const ctx = await plan(configPath);

@@ -30,6 +30,7 @@ import {
   setTaskRegistryDeliveryRuntimeForTests,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { resolveSessionLane } from "./lanes.js";
 
@@ -308,10 +309,7 @@ describe("runContextEngineMaintenance", () => {
         rewrittenEntries: 0,
       };
     });
-    const sessionManager = {
-      appendMessage: vi.fn(),
-      getSessionTarget: () => undefined,
-    } as unknown as Parameters<typeof runContextEngineMaintenance>[0]["sessionManager"];
+    const sessionManager = SessionManager.inMemory();
     rewriteTranscriptEntriesInSessionManagerMock.mockImplementationOnce((_params?: unknown) => {
       events.push("rewrite");
       return {

@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { openOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import { serveWorkerTasks } from "openclaw/plugin-sdk/process-runtime";
+import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
 import { searchChunksByEmbedding, searchKeyword, searchPathKeyword } from "./manager-search.js";
 import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";

@@ -26,7 +26,7 @@
   },
   "activation": {
     "onStartup": true,
-    "onAgentHarnesses": ["acp-opencode", "acp-qwen", "acp-pi", "acp-kilocode"]
+    "onAgentHarnesses": ["acp-opencode", "acp-qwen", "acp-pi", "acp-kilocode", "acp-copilot"]
   },
   "enabledByDefault": true,
   "name": "ACPX Runtime",
@@ -134,7 +134,8 @@
           "opencode": { "type": "boolean" },
           "qwen": { "type": "boolean" },
           "pi": { "type": "boolean" },
-          "kilocode": { "type": "boolean" }
+          "kilocode": { "type": "boolean" },
+          "copilot": { "type": "boolean" }
         }
       },
       "agents": {

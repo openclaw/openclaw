@@ -231,6 +231,13 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     }
   }
 
+  for (const provider of input.pendingProviders ?? []) {
+    const id = canonicalProviderId(provider);
+    if (id) {
+      ensureDraft(drafts, id, providerDisplayLabel(id)).card.checkingModels = true;
+    }
+  }
+
   for (const outcome of input.providerOutcomes ?? []) {
     const id = canonicalProviderId(outcome.provider);
     if (!id) {
@@ -397,6 +404,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||
         Boolean(draft.catalogOutcome) ||
+        draft.card.checkingModels ||
         (draft.card.localCost?.totalTokens ?? 0) > 0,
     )
     .map((draft) => {
@@ -404,11 +412,6 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       return Object.assign(
         {},
         draft.card,
-        {
-          checkingModels: input.pendingProviders?.some(
-            (id) => canonicalProviderId(id) === draft.card.id,
-          ),
-        },
         draft.catalogOutcome ? { catalogStatus: draft.catalogOutcome.status } : {},
         apiKeySupported === undefined ? {} : { apiKeySupported },
       );

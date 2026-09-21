@@ -13,10 +13,12 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginBlobStoreForTests,
+  resetPluginBlobStoreForTests,
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, vi } from "vitest";
 import { setMatrixRuntime } from "./runtime.js";
@@ -25,8 +27,14 @@ const defaultStateDir = fs.realpathSync(
   fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-test-state-")),
 );
 
-afterAll(() => {
+export async function resetMatrixTestStores(): Promise<void> {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginBlobStoreForTests({ closeDatabase: false });
   resetPluginStateStoreForTests();
+}
+
+afterAll(async () => {
+  await resetMatrixTestStores();
   fs.rmSync(defaultStateDir, {
     recursive: true,
     force: true,

@@ -22,8 +22,10 @@ import { readChannelContextAdmissionEvidence } from "../../channels/message-acce
 import { getRuntimeConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
+import { isSessionPersonalBootstrapTurn } from "../../sessions/session-participant-input.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -376,8 +378,15 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   }
   const admittedSessionSettings = opts?.admittedSessionSettings;
   const groupTurn = getGroupThreadTurn();
+  const personalBootstrapEligible = isSessionPersonalBootstrapTurn({
+    ...ctx,
+    InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
+    InputProvenance: inputProvenance,
+  });
   const followupRun = {
     prompt: queuedBody,
+    personalBootstrapEligible,
+    operatorAuthority: opts?.operatorAuthority,
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
@@ -434,6 +443,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       messageProvider,
       mediaNormalizationOwner: opts?.mediaNormalizationOwner,
       clientCaps: ctx.GatewayClientCaps,
+      bootstrapUserProfileId: personalBootstrapEligible
+        ? sessionPersonalProfileId(preparedSessionState.sessionEntry)
+        : undefined,
       gatewayUiCommandTarget: ctx.GatewayUiCommandTarget,
       toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,

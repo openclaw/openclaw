@@ -1,5 +1,4 @@
 // Matrix tests cover the released account-state upgrade through the Doctor CLI.
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { runCliProcessChild } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
 import { installMatrixTestRuntime } from "./src/test-runtime.js";
@@ -113,9 +113,8 @@ if (process.versions.bun) {
 `,
   );
   const entryPath = fileURLToPath(new URL("../../src/entry.ts", import.meta.url));
-  return spawnSync(
-    process.execPath,
-    [
+  return runCliProcessChild({
+    nodeArgs: [
       ...(process.versions.bun ? ["--preload"] : ["--import", "tsx", "--import"]),
       loaderPath,
       entryPath,
@@ -125,31 +124,27 @@ if (process.versions.bun) {
       "--no-workspace-suggestions",
       "--no-color",
     ],
-    {
-      cwd: path.resolve("."),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: params.rootDir,
-        USERPROFILE: params.rootDir,
-        NODE_DISABLE_COMPILE_CACHE: "1",
-        NODE_ENV: undefined,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-        OPENCLAW_HIDE_BANNER: "1",
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_NO_RESPAWN: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_STATE_DIR: params.stateDir,
-        OPENCLAW_TEST_FAST: "1",
-        VITEST: undefined,
-        VITEST_POOL_ID: undefined,
-        VITEST_WORKER_ID: undefined,
-      },
-      maxBuffer: 4 * 1024 * 1024,
-      timeout: 120_000,
+    cwd: path.resolve("."),
+    env: {
+      ...process.env,
+      HOME: params.rootDir,
+      USERPROFILE: params.rootDir,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      NODE_ENV: undefined,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_HIDE_BANNER: "1",
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_NO_RESPAWN: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_STATE_DIR: params.stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      VITEST: undefined,
+      VITEST_POOL_ID: undefined,
+      VITEST_WORKER_ID: undefined,
     },
-  );
+    maxBuffer: 4 * 1024 * 1024,
+  });
 }
 
 describe("Matrix account state Doctor migration", () => {
@@ -218,11 +213,10 @@ describe("Matrix account state Doctor migration", () => {
       stale.close();
     }
 
-    const doctor = runMatrixDoctorFix({ rootDir: stateDir, stateDir });
+    const doctor = await runMatrixDoctorFix({ rootDir: stateDir, stateDir });
     const doctorOutput = `${doctor.stderr}\n${doctor.stdout}`;
-    expect(doctor.error, doctorOutput).toBeUndefined();
     expect(doctor.signal, doctorOutput).toBeNull();
-    expect(doctor.status, doctorOutput).toBe(0);
+    expect(doctor.code, doctorOutput).toBe(0);
     expect(doctor.stderr.match(/^matrix-doctor-fixture:(?:ui|health)$/gm)?.toSorted()).toEqual([
       "matrix-doctor-fixture:health",
       "matrix-doctor-fixture:ui",

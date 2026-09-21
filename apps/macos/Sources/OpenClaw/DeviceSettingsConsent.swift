@@ -7,6 +7,7 @@ enum DeviceSettingsConsent: Equatable {
     case cookieDomains([String])
     case cookieProfile(String)
     case computerControl
+    case desktopSharing
     case unattendedDesktop
     case peekabooBridge
     case camera
@@ -27,6 +28,7 @@ enum DeviceSettingsConsent: Equatable {
         switch (key, value) {
         case (.cookieSyncEnabled, .boolean(true)): .cookieSync
         case (.computerControlEnabled, .boolean(true)): .computerControl
+        case (.desktopSharingEnabled, .boolean(true)): .desktopSharing
         case (.unattendedDesktopEnabled, .boolean(true)): .unattendedDesktop
         case (.peekabooBridgeEnabled, .boolean(true)): .peekabooBridge
         case (.cameraEnabled, .boolean(true)): .camera
@@ -68,6 +70,8 @@ enum DeviceSettingsConsent: Equatable {
             String(localized: "Change the browser cookie sync destination?")
         case .computerControl:
             String(localized: "Allow the Gateway to control this Mac?")
+        case .desktopSharing:
+            String(localized: "Allow desktop sharing from this Mac?")
         case .unattendedDesktop:
             String(localized: "Keep this computer awake?")
         case .peekabooBridge:
@@ -122,6 +126,13 @@ enum DeviceSettingsConsent: Equatable {
                 localized: """
                 The Gateway can capture your screen and interact with apps on this Mac, \
                 including clicking and typing, subject to macOS permissions.
+                """)
+        case .desktopSharing:
+            String(
+                localized: """
+                Your paired Gateway can view and control this Mac through its existing Screen Sharing service. \
+                You may need to approve the updated node capabilities in Devices. \
+                macOS Screen Sharing and agent Computer Control remain separate settings.
                 """)
         case .peekabooBridge:
             String(

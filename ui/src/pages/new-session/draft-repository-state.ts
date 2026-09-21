@@ -79,9 +79,8 @@ export class DraftRepositoryController {
   }
 
   get baseRef(): string {
-    // Discovery supplies defaults; reconnects never rewrite the operator's selection.
-    const repository = this.repositoryValue.kind === "git" ? this.repositoryValue : undefined;
-    return this.baseRefOverride ?? (repository?.defaultBranch || repository?.headBranch || "");
+    // An omitted ref lets the Gateway fetch its default; discovery is only a suggestion.
+    return this.baseRefOverride ?? "";
   }
 
   get remoteRepository(): SessionCreateParams["repository"] {

@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import type {
   WorkerEnvironmentIntentInput,
@@ -91,6 +92,7 @@ export function hasWorkerEnvironmentSessionAttachment(
 }
 
 export function createWorkerEnvironmentSessionAttachmentStore(options: {
+  path: string;
   read: () => DatabaseSync;
   write: <T>(operation: (db: DatabaseSync) => T) => T;
   now: () => number;
@@ -111,6 +113,16 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
     }
   };
   return {
+    async hasSessionAttachment(environmentId: string): Promise<boolean> {
+      const reply = await executeExistingOpenClawStateRead(
+        { path: options.path },
+        { type: "workerEnvironments.hasSessionAttachment", environmentId },
+      );
+      if (!reply?.ok || reply.type !== "workerEnvironments.hasSessionAttachment") {
+        throw new Error("Conversation environment attachment read is unavailable");
+      }
+      return reply.attached;
+    },
     getSessionAttachmentRecord: (sessionId: string) => get(read(), sessionId),
     listSessionAttachmentRecords: () => {
       const db = read();

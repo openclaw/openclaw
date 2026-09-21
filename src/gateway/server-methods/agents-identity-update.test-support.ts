@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
-import { FsSafeError } from "../../infra/fs-safe.js";
-import type { testing } from "./agents.js";
+import { FsSafeError, root } from "../../infra/fs-safe.js";
 
 type IdentityUpdateHarness = {
   mocks: {
@@ -16,14 +15,13 @@ type IdentityUpdateHarness = {
     writeConfigFile: Mock<(nextConfig?: unknown, writeOptions?: unknown) => Promise<void>>;
     fsMkdir: unknown;
   };
-  agentsTesting: Pick<typeof testing, "setDepsForTests">;
   makeCall: (
     method: "agents.update",
     params: Record<string, unknown>,
   ) => { respond: Mock; promise: Promise<void> | void };
   makeRootForTest: (overrides: {
     read: (params: Record<string, unknown>) => Promise<unknown>;
-  }) => NonNullable<Parameters<typeof testing.setDepsForTests>[0]["root"]>;
+  }) => typeof root;
   makeFileStat: () => import("node:fs").Stats;
   createEnoentError: () => Error;
   mockCallArg: (mock: Mock, callIndex?: number, argIndex?: number) => unknown;
@@ -41,7 +39,6 @@ type IdentityUpdateHarness = {
 export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness): void {
   const {
     mocks,
-    agentsTesting,
     makeCall,
     makeRootForTest,
     makeFileStat,
@@ -126,8 +123,8 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
         dir: destination,
         identityPathCreated: false,
       });
-      agentsTesting.setDepsForTests({
-        root: makeRootForTest({
+      vi.mocked(root).mockImplementation(
+        makeRootForTest({
           read: async ({ rootDir, relativePath }) => {
             expect(rootDir).toBe("/workspace/test-agent");
             releaseOld();
@@ -141,7 +138,7 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
             };
           },
         }),
-      });
+      );
       try {
         const { promise } = makeCall("agents.update", { agentId: "test-agent", workspace });
         await expect(promise).rejects.toThrow("Workspace access changed");
@@ -249,8 +246,8 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
         dir: "/resolved/new/workspace",
         identityPathCreated: true,
       });
-      agentsTesting.setDepsForTests({
-        root: makeRootForTest({
+      vi.mocked(root).mockImplementation(
+        makeRootForTest({
           read: async ({ rootDir, relativePath }) => {
             const filePath = `${String(rootDir)}/${String(relativePath)}`;
             if (filePath === "/workspace/test-agent/IDENTITY.md") {
@@ -296,7 +293,7 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
             throw createEnoentError();
           },
         }),
-      });
+      );
 
       const { respond, promise } = makeCall("agents.update", {
         agentId: "test-agent",
@@ -319,8 +316,8 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
         dir: "/resolved/new/workspace",
         identityPathCreated: false,
       });
-      agentsTesting.setDepsForTests({
-        root: makeRootForTest({
+      vi.mocked(root).mockImplementation(
+        makeRootForTest({
           read: async ({ rootDir, relativePath }) => {
             const filePath = `${String(rootDir)}/${String(relativePath)}`;
             if (filePath === "/workspace/test-agent/IDENTITY.md") {
@@ -364,7 +361,7 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
             throw createEnoentError();
           },
         }),
-      });
+      );
 
       const { respond, promise } = makeCall("agents.update", {
         agentId: "test-agent",
@@ -399,13 +396,13 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
     });
 
     it("treats unsafe IDENTITY.md reads as invalid update requests", async () => {
-      agentsTesting.setDepsForTests({
-        root: makeRootForTest({
+      vi.mocked(root).mockImplementation(
+        makeRootForTest({
           read: async () => {
             throw new FsSafeError("invalid-path", "path is not a regular file under root");
           },
         }),
-      });
+      );
 
       const { respond, promise } = makeCall("agents.update", {
         agentId: "test-agent",
@@ -422,7 +419,7 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
       const rootRead = vi.fn(async () => {
         throw new FsSafeError("not-found", "file not found");
       });
-      agentsTesting.setDepsForTests({ root: makeRootForTest({ read: rootRead }) });
+      vi.mocked(root).mockImplementation(makeRootForTest({ read: rootRead }));
 
       const { promise } = makeCall("agents.update", {
         agentId: "test-agent",

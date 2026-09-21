@@ -10,8 +10,16 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
-  # Reviewed ACPX release; remove after 2026-09-27T04:05:14Z.
-  - acpx@0.17.1
+  # Requested CUA update with keyboard delivery fixes; remove after 2026-09-22T22:00:08Z.
+  - "@trycua/cua-driver@0.28.2"
+  - "@trycua/cua-driver-darwin-arm64@0.28.2"
+  - "@trycua/cua-driver-darwin-x64@0.28.2"
+  - "@trycua/cua-driver-linux-arm64-gnu@0.28.2"
+  - "@trycua/cua-driver-linux-x64-gnu@0.28.2"
+  - "@trycua/cua-driver-win32-arm64-msvc@0.28.2"
+  - "@trycua/cua-driver-win32-x64-msvc@0.28.2"
+  # Reviewed ACPX release; remove after 2026-09-27T20:56:00Z.
+  - acpx@0.18.0
   # Published ACPX runtime dependencies; remove after 2026-09-22T12:38:43Z.
   - "@openclaw/fs-safe@0.12.0"
   - "@openclaw/fs-safe-darwin-arm64@0.12.0"
@@ -35,15 +43,15 @@ minimumReleaseAgeExclude:
   - "@openclaw/proxyline@0.3.12"
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe 0.16.0 release and native helpers; remove after 2026-09-27.
-  - "@openclaw/fs-safe@0.16.0"
-  - "@openclaw/fs-safe-darwin-arm64@0.16.0"
-  - "@openclaw/fs-safe-darwin-x64@0.16.0"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.16.0"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.16.0"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.16.0"
-  - "@openclaw/fs-safe-linux-x64-musl@0.16.0"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.16.0"
+  # Reviewed fs-safe 0.18.0 release and native helpers; remove after 2026-09-28T18:01:18Z.
+  - "@openclaw/fs-safe@0.18.0"
+  - "@openclaw/fs-safe-darwin-arm64@0.18.0"
+  - "@openclaw/fs-safe-darwin-x64@0.18.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.18.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.18.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.18.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.18.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.18.0"
   # fs-safe archive dependency; remove after 2026-09-16.
   - "jszip@3.10.2"
   # GHSA-prgh-xp8r-p3m5 / GHSA-v53p-9fqp-m79j security fixes; remove after 2026-09-18.
@@ -51,6 +59,8 @@ minimumReleaseAgeExclude:
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
+# Private inodes keep sibling installs from changing compiler input ctimes.
+packageImportMethod: clone-or-copy
 # GWTs share node_modules; script commands must not reconcile that shared install.
 verifyDepsBeforeRun: false
 blockExoticSubdeps: true
@@ -129,6 +139,7 @@ packageExtensions:
         optional: true
 
 patchedDependencies:
+  "chrome-devtools-mcp@1.8.0": patches/chrome-devtools-mcp@1.8.0.patch
   "@awesome.me/webawesome@3.12.0": patches/@awesome.me__webawesome@3.12.0.patch
   "matrix-js-sdk@42.3.0": patches/matrix-js-sdk@42.3.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch

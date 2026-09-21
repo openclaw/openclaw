@@ -9,6 +9,15 @@ type WorkerLifecycleLease = support.WorkerLifecycleLease;
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
+  it("exposes the catalog display identity without allocating a worker", () => {
+    const provider = support.createProvider({ resolveDisplayId: () => "aws" });
+    const provision = vi.spyOn(provider, "provision");
+    const service = support.createService(provider);
+    expect(service.readProviderDisplayId("development")).toBe("aws");
+    expect(provision).not.toHaveBeenCalled();
+    expect(support.testState.store.list()).toEqual([]);
+  });
+
   it("warms machine catalogs at startup only for nonterminal environment profiles", async () => {
     const { store } = support.testState;
     const active = store.createIntent({

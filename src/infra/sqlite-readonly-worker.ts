@@ -297,9 +297,9 @@ export function runSqliteReadOnlyWorker(
       ? AbortSignal.any([options.signal, scope.controller.signal])
       : scope.controller.signal,
   };
-  // Native backup promises can stall with a persistent IPC handle on Node 26.
-  // Keep async backups one-shot; concurrent raw reads need separate processes
-  // for POSIX lock isolation.
+  // Native backups can stall with persistent IPC on Node 26. Only artifact-
+  // preserving raw sync reads reuse a child; backups and concurrent readers
+  // stay one-shot, preserving POSIX source-lock isolation.
   const useScopedWorker = options.mode === "sync" && !scope.busy;
   if (useScopedWorker) {
     scope.busy = true;
@@ -509,15 +509,11 @@ function runSqliteReadOnlyWorkerOnce(
   });
 }
 
-export function runSqliteReadOnlyWorkerSync(
-  pathname: string,
-  stagingRoot: string,
-  mode: "sync" | "sync-fallback" = "sync",
-): string {
+export function runSqliteReadOnlyWorkerSync(pathname: string, stagingRoot: string): string {
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
   const result = spawnSync(
     process.execPath,
-    sqliteReadOnlyWorkerArgv(pathname, { mode, stagingRoot }),
+    sqliteReadOnlyWorkerArgv(pathname, { mode: "sync", stagingRoot }),
     {
       encoding: "utf8",
       env: resolveNodeCompileCacheEnv(),
@@ -539,6 +535,6 @@ export function runSqliteReadOnlyWorkerSync(
       stderr: result.stderr,
       stdout: result.stdout,
     },
-    mode,
+    "sync",
   );
 }

@@ -51,85 +51,151 @@ describe("controlUi.githubPreview", () => {
     vi.unstubAllEnvs();
   });
 
-  it("uses the selected agent's Settings identity for public metadata", async () => {
-    vi.stubEnv("GH_TOKEN", "");
-    vi.stubEnv("GITHUB_TOKEN", "");
-    const assertSelected = vi.fn();
-    const identity = {
-      token: "selected-agent-github-token",
-      selection: {
-        source: "agent-override" as const,
-        profileId: `ghp_${"a".repeat(32)}`,
-        accountId: 101,
-      },
-      cacheScope: "selected-agent-preview",
-      assertSelected,
-      revalidate: vi.fn().mockResolvedValue(undefined),
-      start: async <T>(start: () => T): Promise<Awaited<T>> => {
-        assertSelected();
-        return await start();
-      },
+  it.each(["controlUi.githubPreview", "controlUi.githubDetail"])(
+    "uses the selected agent's Settings identity for %s",
+    async (method) => {
+      vi.stubEnv("GH_TOKEN", "");
+      vi.stubEnv("GITHUB_TOKEN", "");
+      const assertSelected = vi.fn();
+      const identity = {
+        token: "selected-agent-github-token",
+        selection: {
+          source: "agent-override" as const,
+          profileId: `ghp_${"a".repeat(32)}`,
+          accountId: 101,
+        },
+        cacheScope: "selected-agent-preview",
+        assertSelected,
+        revalidate: vi.fn().mockResolvedValue(undefined),
+        start: async <T>(start: () => T): Promise<Awaited<T>> => {
+          assertSelected();
+          return await start();
+        },
+      };
+      const prepare = vi
+        .spyOn(githubIdentity, "prepareGitHubReadIdentity")
+        .mockResolvedValue(identity);
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+        const authorized =
+          new Headers(init?.headers).get("Authorization") === `Bearer ${identity.token}`;
+        const url = input instanceof Request ? input.url : input.toString();
+        return new Response(
+          JSON.stringify(
+            !authorized
+              ? { message: "Bad credentials" }
+              : url.endsWith("/issues/88120")
+                ? {
+                    created_at: "2026-09-01T08:00:00Z",
+                    updated_at: "2026-09-01T09:00:00Z",
+                    repository_url: "https://api.github.com/repos/openclaw/openclaw",
+                    state: "open",
+                    title: "Use the selected GitHub identity",
+                    body: "Authenticated reader body",
+                    comments: 0,
+                    user: { login: "octocat" },
+                  }
+                : { id: 123, private: false, visibility: "public" },
+          ),
+          { status: authorized ? 200 : 401 },
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const respond = vi.fn<RespondFn>();
+      const cfg = {
+        agents: {
+          entries: {
+            main: {},
+            alternate: { tools: { github: { profileId: `ghp_${"a".repeat(32)}` } } },
+          },
+        },
+        gateway: { controlUi: { github: { token: "old-preview-service-token" } } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const handler = expectDefined(createControlUiHandlers()[method], "GitHub read handler");
+
+      await handler(
+        requestOptions(
+          {
+            kind: "issue",
+            number: 88120,
+            owner: "openclaw",
+            repo: "openclaw",
+            agentId: "alternate",
+          },
+          respond,
+          { context: { getRuntimeConfig: () => cfg } },
+        ),
+      );
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ title: "Use the selected GitHub identity" }),
+        undefined,
+      );
+      expect(prepare).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "alternate", config: cfg }),
+      );
+      expect(
+        fetchMock.mock.calls.every(
+          ([, options]) =>
+            new Headers(options?.headers).get("Authorization") === `Bearer ${identity.token}`,
+        ),
+      ).toBe(true);
+      expect(identity.revalidate).toHaveBeenCalled();
+    },
+  );
+
+  it("loads reader content with the configured service credential when anonymous quota is exhausted", async () => {
+    vi.stubEnv("GH_TOKEN", "different-ambient-token");
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      gateway: { controlUi: { github: { token: "configured-reader-token" } } },
     };
-    const prepare = vi
-      .spyOn(githubIdentity, "prepareGitHubReadIdentity")
-      .mockResolvedValue(identity);
+    setRuntimeConfigSnapshot(cfg);
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
-      const authorized =
-        new Headers(init?.headers).get("Authorization") === `Bearer ${identity.token}`;
+      if (new Headers(init?.headers).get("Authorization") !== "Bearer configured-reader-token") {
+        return new Response(null, { status: 403, headers: { "x-ratelimit-remaining": "0" } });
+      }
       const url = input instanceof Request ? input.url : input.toString();
       return new Response(
         JSON.stringify(
-          !authorized
-            ? { message: "Bad credentials" }
-            : url.endsWith("/issues/88120")
-              ? {
-                  created_at: "2026-09-01T08:00:00Z",
-                  updated_at: "2026-09-01T09:00:00Z",
-                  repository_url: "https://api.github.com/repos/openclaw/openclaw",
-                  state: "open",
-                  title: "Use the selected GitHub identity",
-                  user: { login: "octocat" },
-                }
-              : { private: false },
+          url.includes("/issues/")
+            ? {
+                title: "Authenticated reader",
+                body: "Reader body",
+                state: "open",
+                comments: 0,
+                created_at: "2026-09-20T08:00:00Z",
+                updated_at: "2026-09-20T09:00:00Z",
+                user: { login: "octocat" },
+              }
+            : { id: 124, private: false, visibility: "public" },
         ),
-        { status: authorized ? 200 : 401 },
       );
     });
     vi.stubGlobal("fetch", fetchMock);
     const respond = vi.fn<RespondFn>();
-    const cfg = {
-      agents: {
-        entries: {
-          main: {},
-          alternate: { tools: { github: { profileId: `ghp_${"a".repeat(32)}` } } },
-        },
-      },
-      gateway: { controlUi: { github: { token: "old-preview-service-token" } } },
-    };
-    setRuntimeConfigSnapshot(cfg);
-    const handler = expectDefined(
-      createControlUiHandlers()["controlUi.githubPreview"],
-      "preview handler",
-    );
-
-    await handler(
+    await expectDefined(
+      createControlUiHandlers()["controlUi.githubDetail"],
+      "reader handler",
+    )(
       requestOptions(
-        { kind: "issue", number: 88120, owner: "openclaw", repo: "openclaw", agentId: "alternate" },
+        { kind: "issue", number: 1, owner: "octocat", repo: "reader-auth", agentId: "main" },
         respond,
         { context: { getRuntimeConfig: () => cfg } },
       ),
     );
-
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ title: "Use the selected GitHub identity" }),
+      expect.objectContaining({ body: "Reader body" }),
       undefined,
     );
-    expect(prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "alternate", config: cfg }),
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(identity.revalidate).toHaveBeenCalled();
+    expect(
+      fetchMock.mock.calls.every(
+        ([, options]) =>
+          new Headers(options?.headers).get("Authorization") === "Bearer configured-reader-token",
+      ),
+    ).toBe(true);
   });
 
   it("revalidates configured credential availability before delivering a cached preview", async () => {
@@ -151,7 +217,7 @@ describe("controlUi.githubPreview", () => {
                 repository_url: "https://api.github.com/repos/openclaw/configured-degraded",
                 user: { login: "octocat" },
               }
-            : { private: false },
+            : { private: false, visibility: "public" },
         ),
       );
     });

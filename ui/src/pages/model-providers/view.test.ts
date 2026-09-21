@@ -125,6 +125,20 @@ describe("renderModelProviders", () => {
     await i18n.setLocale("en");
   });
 
+  it("keeps discovery failure recovery visible while another provider is pending", () => {
+    const container = mount(
+      props({ catalogDiscovering: true, catalogDiscoveryError: "A provider failed discovery." }),
+    );
+    expect(
+      container.querySelector('.model-providers__catalog-progress[role="status"]'),
+    ).not.toBeNull();
+    const retry = container.querySelector<HTMLButtonElement>(
+      '.model-providers__catalog-progress[role="alert"] button',
+    );
+    expect(retry).not.toBeNull();
+    expect(retry?.disabled).toBe(false);
+  });
+
   it("hides quick API-key setup when provider capabilities are unavailable", () => {
     const container = mount(
       props({

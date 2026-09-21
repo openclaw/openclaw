@@ -134,7 +134,7 @@ describe("Tool Search input-dependent output contracts", () => {
     expect(execute.mock.calls[0]?.[1]).toEqual({ operation: "remove" });
   });
 
-  it("rejects an incompatible hook result before typed Code Mode can consume it", async () => {
+  it("rejects an incompatible hook result before Code Mode can consume it", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
@@ -157,8 +157,6 @@ describe("Tool Search input-dependent output contracts", () => {
 
     const result = resultDetails(
       await expectDefined(h.tools[0], "Code Mode exec").execute("rewritten-list", {
-        language: "typescript",
-        typecheck: true,
         code: `
           try {
             const list = await records({operation: "list"});

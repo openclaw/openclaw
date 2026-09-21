@@ -214,7 +214,7 @@ function publishDelivery(receipt: TaskAgentEventPublication): void {
     return;
   }
   if (receipt.nextEvent) {
-    void maybeDeliverTaskStateChangeUpdate(receipt.task.taskId, receipt.nextEvent);
+    void maybeDeliverTaskStateChangeUpdate(receipt.task, receipt.nextEvent);
   }
   if (isTerminalTaskStatus(receipt.task.status)) {
     void maybeDeliverTaskTerminalUpdate(receipt.task.taskId);
@@ -327,6 +327,18 @@ function prepareNativeEventConsumption(): { consume: () => void; release: () => 
 
 export const taskAgentEventMutations = {
   prepare: prepareNativeEventConsumption,
+  pendingTaskIds(): readonly string[] {
+    const taskIds: string[] = [];
+    for (const [taskId, entries] of pendingByTask) {
+      for (const entry of entries) {
+        if (entry.phase.kind !== "consumed") {
+          taskIds.push(taskId);
+          break;
+        }
+      }
+    }
+    return taskIds;
+  },
   pending(taskId?: string) {
     const entries = taskId === undefined ? pendingEvents : pendingByTask.get(taskId);
     for (const entry of entries ?? []) {
@@ -376,6 +388,16 @@ async function persist(pending: PendingEvent): Promise<void> {
           scope,
           admission: context.admission,
           readIdentity: "preserved",
+          prepare: async () => {
+            const owner = taskFlowSyncOwner(taskId);
+            // Native consumption owns settlement even when a held snapshot becomes stale.
+            // Join that read, then let the mutation callback await native commit or rollback.
+            while (pending.phase.kind !== "consumed") {
+              if (await owner.prepare(context, store, 1)) {
+                return;
+              }
+            }
+          },
           onPublicationError: (error) => {
             publicationFailure = { error };
           },
@@ -437,7 +459,6 @@ async function persist(pending: PendingEvent): Promise<void> {
           },
         },
         async (beginRecovery) => {
-          await taskFlowSyncOwner(taskId).prepare(context, store, Number.POSITIVE_INFINITY);
           if (pending.phase.kind === "consumed" || pending.phase.kind === "native") {
             return await pending.native.promise;
           }

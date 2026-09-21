@@ -4,6 +4,7 @@ import { hydrateOpenClawStateWorkerError } from "../state/openclaw-state-worker-
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type {
   PreparedSqliteWorkerOpen,
+  SqliteWorkerInputPreparation,
   SqliteWorkerStoreOptions,
 } from "./sqlite-worker-broker.types.js";
 import {
@@ -74,6 +75,13 @@ function resolveSqliteWorkerBroker() {
     () => new SqliteWorkerBroker(),
     (broker) => withCallerErrors(broker.close()),
   );
+}
+
+export type { SqliteWorkerInputPreparation } from "./sqlite-worker-broker.types.js";
+
+/** Charge captured input before actor preparation can yield, then hand it to normal dispatch. */
+export function reserveSqliteWorkerInputPreparation(bytes: number): SqliteWorkerInputPreparation {
+  return resolveSqliteWorkerBroker().reserveInputPreparation(bytes);
 }
 
 /**

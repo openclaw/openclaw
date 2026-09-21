@@ -1,12 +1,17 @@
 import path from "node:path";
 // Extracts provider public artifacts from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "./manifest-registry.js";
+import { getCurrentPluginMetadataSnapshotRuntime } from "./plugin-metadata-snapshot.runtime.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import {
+  listProviderPolicyOwners,
   listTrustedExternalProviderPolicyOwners,
   resolveBundledProviderPolicyOwner,
 } from "./provider-policy-owners.js";
@@ -81,8 +86,31 @@ export function resolveBundledProviderPolicySurface(
 /** Resolves provider policy hooks from bundled or trusted official plugin artifacts. */
 export function resolveProviderPolicySurface(
   providerId: string,
-  options: { manifestRegistry?: ProviderPolicyRegistry } = {},
+  options: { manifestRegistry?: ProviderPolicyRegistry; config?: OpenClawConfig } = {},
 ): ProviderPolicySurface | null {
+  if (options.config?.plugins) {
+    const registry =
+      options.manifestRegistry ??
+      getCurrentPluginMetadataSnapshotRuntime({
+        config: options.config,
+        allowScopedSnapshot: true,
+      })?.manifestRegistry ??
+      loadPluginManifestRegistryCore({ config: options.config });
+    const normalizedConfig = normalizePluginsConfig(options.config.plugins);
+    for (const owner of listProviderPolicyOwners(providerId, registry)) {
+      if (!passesManifestOwnerBasePolicy({ plugin: owner, normalizedConfig })) {
+        continue;
+      }
+      const surface =
+        owner.origin === "bundled"
+          ? resolveDirectBundledProviderPolicySurface(path.basename(owner.rootDir))
+          : resolveProviderPolicySurfaceForOwner(owner);
+      if (surface) {
+        return surface;
+      }
+    }
+    return null;
+  }
   const bundledSurface = resolveBundledProviderPolicySurface(providerId, options);
   if (bundledSurface) {
     return bundledSurface;

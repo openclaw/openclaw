@@ -49,6 +49,7 @@ import {
   createWorkerEnvironmentSessionAttachmentStore,
   hasWorkerEnvironmentSessionAttachment,
 } from "./session-attachment-store.js";
+import { WorkerSessionAlreadyAttachedError } from "./session-attachment.js";
 import {
   canTransitionWorkerEnvironment,
   parseWorkerEnvironmentState,
@@ -70,14 +71,6 @@ export type {
 type WorkerEnvironmentProfileSnapshot = WorkerProfile;
 type WorkerEnvironmentSshEndpoint = WorkerSshEndpoint;
 type Ssh = WorkerEnvironmentSshEndpoint;
-export class WorkerSessionAlreadyAttachedError extends Error {
-  constructor(
-    readonly sessionId: string,
-    readonly environmentId: string,
-  ) {
-    super(`Session ${sessionId} is already attached to worker environment ${environmentId}`);
-  }
-}
 export type WorkerEnvironmentTransitionPatch = {
   leaseId?: string | null;
   nodeDeviceId?: string | null;
@@ -403,7 +396,10 @@ function nextGlobalOwnerEpoch(db: DatabaseSync): number {
     Math.max(latestEnvironment?.owner_epoch ?? 0, latestTranscriptCommit?.run_epoch ?? 0),
   );
 }
-function fromRow(row: Row, fallbackPorts: readonly number[]): WorkerEnvironmentRecord {
+export function decodeWorkerEnvironmentRow(
+  row: Row,
+  fallbackPorts: readonly number[],
+): WorkerEnvironmentRecord {
   const record = {
     environmentId: row.environment_id,
     providerId: row.provider_id,
@@ -477,8 +473,10 @@ function environmentRows(db: DatabaseSync) {
     );
 }
 function recordsFromRows(rows: readonly RowWithFallbackPorts[]): WorkerEnvironmentRecord[] {
-  // SAFETY: SQLite aggregates the numeric port column; endpointFrom validates the decoded ports.
-  return rows.map((row) => fromRow(row, JSON.parse(row.ssh_fallback_ports_json) as number[]));
+  return rows.map((row) =>
+    // SAFETY: SQLite aggregates the numeric port column; endpointFrom validates the decoded ports.
+    decodeWorkerEnvironmentRow(row, JSON.parse(row.ssh_fallback_ports_json) as number[]),
+  );
 }
 function find(db: DatabaseSync, environmentId: string) {
   const rows = executeSqliteQuerySync(
@@ -823,6 +821,7 @@ export function createWorkerEnvironmentStore(
   };
   const prepared = createPreparedEnvironmentStoreOps({ now, read, write, createIntent, get: find });
   const sessionAttachments = createWorkerEnvironmentSessionAttachmentStore({
+    path,
     now,
     read,
     write,
@@ -832,9 +831,8 @@ export function createWorkerEnvironmentStore(
   return {
     ...prepared,
     ...sessionAttachments,
-    createIntent(input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord {
-      return write((db) => createIntent(db, input));
-    },
+    createIntent: (input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord =>
+      write((db) => createIntent(db, input)),
     get: (environmentId: string) => find(read(), required(environmentId, "id")),
     inventoryVersion,
     hasNodeEnrollmentOwner(nodeId: string): boolean {
@@ -951,7 +949,8 @@ export function createWorkerEnvironmentStore(
         db: read(),
         write,
         nowMs,
-        canPruneDemand: (row) => params.canPruneDemand?.(fromRow(row, []), nowMs) ?? true,
+        canPruneDemand: (row) =>
+          params.canPruneDemand?.(decodeWorkerEnvironmentRow(row, []), nowMs) ?? true,
         ...(params.limit === undefined ? {} : { limit: params.limit }),
       });
     },

@@ -125,7 +125,6 @@ describe("type suppression inventory", () => {
     ).toEqual(
       [
         "extensions/openai/realtime-quicksilver-session-lifecycle.test.ts:@ts-expect-error JavaScript callers must still fail before reserving a native session.",
-        "src/infra/backup-archive-publication.ts:@ts-expect-error Remove after adopting the declaration fix in openclaw/fs-safe#495.",
         "src/infra/kysely-sync.types.test.ts:@ts-expect-error Kysely checks selected column string literals.",
         "src/infra/kysely-sync.types.test.ts:@ts-expect-error Kysely checks table string literals.",
         "src/infra/kysely-sync.types.test.ts:@ts-expect-error Kysely checks where-reference string literals.",
@@ -134,7 +133,6 @@ describe("type suppression inventory", () => {
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
         "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
-        "src/infra/update-managed-service-handoff-database.ts:@ts-expect-error Remove after adopting the declaration fix in openclaw/fs-safe#495.",
         "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",
         "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:@ts-expect-error An empty trigger list cannot prove that a hook is inactive.",
         "src/plugin-sdk/plugin-entry.reply-trigger.test.ts:@ts-expect-error Tool authority is only supported for before_prompt_build.",
@@ -143,7 +141,6 @@ describe("type suppression inventory", () => {
         "src/plugins/registry.diagnostics.test.ts:@ts-expect-error Unknown JavaScript hook names must produce a diagnostic.",
         "src/plugins/registry.diagnostics.test.ts:@ts-expect-error Untyped hook input reaches the existing rejection/coercion path.",
         "src/plugins/registry.diagnostics.test.ts:@ts-expect-error Closed registration must stop before coercing untyped hook input.",
-        "src/snapshot/local-repository.ts:@ts-expect-error Remove after adopting the declaration fix in openclaw/fs-safe#495.",
       ].toSorted(),
     );
   });

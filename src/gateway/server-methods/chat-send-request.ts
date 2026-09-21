@@ -23,7 +23,10 @@ import {
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
+import {
+  isProgressCardRefreshInputProvenance,
+  normalizeInputProvenance,
+} from "../../sessions/input-provenance.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
@@ -191,6 +194,9 @@ export function normalizeChatSendRequest(params: {
   const systemInputProvenance = params.goalResume
     ? { kind: "internal_system" as const, sourceTool: "session_goal_resume" }
     : normalizeInputProvenance(p.systemInputProvenance);
+  if (!params.trustedSystemInput && isProgressCardRefreshInputProvenance(systemInputProvenance)) {
+    return { ok: false, error: "Progress refresh input is reserved for progressCard.refresh." };
+  }
   const systemProvenanceReceipt = systemReceiptResult.receipt;
   const stopCommand = !commandInterpretationSuppressed && isChatStopCommandText(inboundMessage);
   if (p.toolBindings) {

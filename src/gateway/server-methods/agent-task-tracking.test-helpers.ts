@@ -1,8 +1,7 @@
+import path from "node:path";
 import { vi } from "vitest";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { resolveSessionStorePathCore } from "../../config/sessions.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -22,19 +21,14 @@ export function spyDetachedCreateRunningTaskRun() {
   return createRunningTaskRunSpy;
 }
 
-// Shared by every spawn control plane whose child turn reaches the gateway as a
-// plain `agent` run: ACP manual spawns, plugin subagents, and native subagents.
-export function mockSpawnedChildSessionEntry(
-  childSessionKey: string,
-  storePath = resolveSessionStorePathCore(undefined, {
-    agentId: resolveAgentIdFromSessionKey(childSessionKey),
-  }),
-) {
+// Shared by every spawned-child handler fixture; keep real reads in its state root.
+export function mockSpawnedChildSessionEntry(childSessionKey: string, root: string) {
   const mocks = getAgentTestMocks();
-  mocks.userTurnStorePath = storePath;
+  // The real transcript target reader must stay inside this fixture's state directory.
+  mocks.userTurnStorePath = path.join(root, "agents", "main", "sessions", "sessions.json");
   mocks.loadSessionEntry.mockReturnValue({
     cfg: {},
-    storePath,
+    storePath: mocks.userTurnStorePath,
     entry: { sessionId: "spawned-child-session", updatedAt: Date.now() },
     canonicalKey: childSessionKey,
   });
@@ -47,12 +41,12 @@ export function mockSpawnedChildSessionEntry(
 /** Join registry completions before retiring their temporary state and native database owners. */
 export async function withPluginSubagentTestState(
   prefix: string,
-  run: () => Promise<void>,
+  run: (state: Awaited<ReturnType<typeof createOpenClawTestState>>) => Promise<void>,
 ): Promise<void> {
   const state = await createOpenClawTestState({ prefix, layout: "state-only" });
   try {
     resetSubagentRegistryForTests({ persist: false });
-    await run();
+    await run(state);
   } finally {
     // Stop producers, then join admitted work before deleting storage. A failed join retains it.
     resetSubagentRegistryForTests({ persist: false });

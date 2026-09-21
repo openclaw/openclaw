@@ -2,6 +2,7 @@ import type { LitElement } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { selectSessionMenuValue } from "../app-sidebar-menu.ts";
+import { focusSidebarPersonWithKeyboard } from "../app-sidebar-setup.ts";
 import {
   createGatewayHarness,
   createSessions,
@@ -250,7 +251,7 @@ describe("AppSidebar viewer presence", () => {
     expect(aliceRow.closest(".sidebar-online__row")?.querySelectorAll("a, button")).toHaveLength(1);
     expect(document.querySelector(".person-activity-hovercard")).toBeNull();
 
-    aliceRow.focus();
+    focusSidebarPersonWithKeyboard(aliceRow);
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
@@ -301,7 +302,7 @@ describe("AppSidebar viewer presence", () => {
     gateway.publishEvent("presence", { presence: [alice, bob] });
     await sidebar.updateComplete;
     const button = sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')!;
-    button.focus();
+    focusSidebarPersonWithKeyboard(button);
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
@@ -364,7 +365,9 @@ describe("AppSidebar viewer presence", () => {
       });
       await sidebar.updateComplete;
       vi.useFakeTimers();
-      sidebar.querySelector<HTMLElement>(".sidebar-online__person")!.focus();
+      focusSidebarPersonWithKeyboard(
+        sidebar.querySelector<HTMLElement>(".sidebar-online__person")!,
+      );
       await vi.dynamicImportSettled();
       await vi.waitFor(() =>
         expect(document.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy(),
@@ -409,7 +412,9 @@ describe("AppSidebar viewer presence", () => {
           presence: [{ ...person, reason: "disconnect" }, returned],
         });
         await sidebar.updateComplete;
-        sidebar.querySelector<HTMLElement>(".sidebar-online__person")!.focus();
+        focusSidebarPersonWithKeyboard(
+          sidebar.querySelector<HTMLElement>(".sidebar-online__person")!,
+        );
         await vi.waitFor(() =>
           expect(
             document.querySelector(".person-activity-hovercard time")?.getAttribute("datetime"),

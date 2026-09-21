@@ -97,13 +97,46 @@ Retries and read-only checks reuse the verified receipt, including transcripts
 discovered outside `sessions.json`. Doctor reports one pending-plugin warning
 for these retained inputs; they do not fail the completed core migration or
 require `doctor --session-sqlite recover`. Warning-only results exit successfully.
-Changed originals and active files
-outside the receipt still need inspection.
+An active legacy JSONL outside that receipt is an advisory awaiting verification.
+`doctor --fix` and `--session-sqlite recover` compare its ordered entries against
+the owning agent's SQLite transcript. Already imported history, including a
+prefix of a longer SQLite transcript, is archived with a verified migration
+receipt. Missing events go through the existing importer before verification;
+current session settings and its active generation remain unchanged. Original
+bytes stay in the migration archive for recovery. A changed, malformed, or
+conflicting source that cannot be verified stays in place with a finding naming
+that agent and file; a healthy agent does not inherit another agent's failure.
 When the legacy index and live transcript inputs are gone, verified historical
 archives keep their existing receipts. They do not require a new legacy-index
 receipt or block post-session plugin repair. The plugin's completion releases
-its retained configuration. Unverified live inputs still require their matching
-index; Doctor names the missing source and the recovery action.
+its retained configuration.
+
+If the original `sessions.json` is unavailable but the completed import receipt
+still identifies the canonical database, import rebuilds its source index from
+the receipt's recorded hashes. It records that repair in the existing receipt
+without recreating `sessions.json` or replaying session metadata. Hash-matching
+sources continue through import; changed or unverifiable sources remain protected
+and are listed by path. Preserve those files for inspection.
+
+A restored copy with the recorded SHA-256 and size remains valid even when its
+inode or modification time differs. `--session-sqlite recover` records its current
+identity in the existing receipt, including when no failed migration manifest exists.
+If the database file was replaced, recovery first verifies retained transcript
+content against the current SQLite database before rebinding the receipt. It does
+not overwrite current session settings or resurrect deleted history. Incomplete
+matches stay protected with an actionable finding naming the remaining source.
+
+A receipt identity mismatch does not prevent Gateway readiness when retained
+content verifies. Doctor owns the repair and the Gateway keeps serving SQLite.
+Recovery reports include every remaining issue code and distinguish unresolved
+findings from completed validation.
+
+When both a recorded legacy index and its archive are missing, Doctor verifies
+the remaining transcripts against canonical SQLite before reporting that the
+canonical transcripts are complete and the legacy index entries are informational.
+It preserves those live transcripts and migration records, skips another import,
+and allows post-session plugin repair to continue. It does not keep requesting
+an import for that verified history.
 
 Doctor also discovers primary conversation transcripts omitted from the legacy
 registry, including timestamp-prefixed filenames. It verifies the session header,
@@ -161,7 +194,7 @@ Modes:
 | `import`   | Import legacy entries and transcript events into SQLite for the selected targets.                                      |
 | `validate` | Compare the selected legacy sources against SQLite rows and transcript event counts.                                   |
 | `compact`  | Checkpoint and VACUUM selected agent SQLite databases to reclaim free pages after large deletes or archive cleanup.    |
-| `recover`  | Restore the latest failed migration run, validate its targets, and prepare a sanitized GitHub issue report.            |
+| `recover`  | Restore a failed migration run, verify and archive leftover active JSONL files, and prepare a sanitized issue report.  |
 | `restore`  | Restore archived transcript artifacts from recorded migration manifests without deleting SQLite data.                  |
 
 Selectors:
@@ -226,6 +259,10 @@ run recovery:
 ```bash
 openclaw doctor --session-sqlite recover --github-issue
 ```
+
+Use `--yes` to authorize issue creation during noninteractive recovery. Without
+it, redirected input, `--non-interactive`, and JSON output skip the prompt and
+record why issue creation was skipped.
 
 Recovery selects the latest failed migration manifest, restores only the
 manifest's archived artifacts, validates the affected targets, and prepares

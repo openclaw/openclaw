@@ -18,6 +18,8 @@ import {
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { buildPreparedModelsProviderData } from "./commands-models-catalog.js";
+import { handleModelsCommand, resolveModelsCommandReply } from "./commands-models.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const catalogMocks = vi.hoisted(() => ({
@@ -27,9 +29,6 @@ const catalogMocks = vi.hoisted(() => ({
   authModes: {} as PreparedAgentCredentialModes,
   isCurrent: (): boolean => true,
 }));
-
-const { buildPreparedModelsProviderData, handleModelsCommand, resolveModelsCommandReply } =
-  await import("./commands-models.js");
 
 const staleCfg = {
   agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },

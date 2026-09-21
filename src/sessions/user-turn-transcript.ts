@@ -556,6 +556,7 @@ export function createUserTurnTranscriptRecorder(
             ...options,
             requestFingerprint: params.pendingInputRequestFingerprint,
             trackCompletion: params.trackInputCompletion,
+            replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
             message: candidate,
             config,
             prepareMessageAfterIdempotencyCheck: (next) =>

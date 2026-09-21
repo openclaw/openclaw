@@ -222,7 +222,10 @@ function areSameAgentDatabasePathIdentities(
 }
 
 /** Create a synchronous-operation matcher that prepares each exact locator once. */
-export function createOpenClawAgentDatabasePathMatcher(): (left: string, right: string) => boolean {
+export function createOpenClawAgentDatabasePathMatcher(): {
+  (left: string, right: string): boolean;
+  isCurrent(): boolean;
+} {
   const identities = new Map<string, AgentDatabasePathIdentity>();
   const resolveIdentity = (pathname: string): AgentDatabasePathIdentity => {
     const lexicalPath = anchorDatabasePathWithoutNormalizing(pathname);
@@ -235,8 +238,30 @@ export function createOpenClawAgentDatabasePathMatcher(): (left: string, right: 
     identities.set(lexicalPath, identity);
     return identity;
   };
-  return (left, right) =>
-    areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right));
+  return Object.assign(
+    (left: string, right: string) =>
+      areSameAgentDatabasePathIdentities(resolveIdentity(left), resolveIdentity(right)),
+    {
+      isCurrent() {
+        for (const previous of identities.values()) {
+          const current = resolveAgentDatabasePathIdentity(previous.lexicalPath);
+          // Equal locators alone cannot validate a snapshot after replacement.
+          if (
+            previous.realPath !== current.realPath ||
+            previous.device !== current.device ||
+            previous.inode !== current.inode ||
+            previous.parentDevice !== current.parentDevice ||
+            previous.parentInode !== current.parentInode ||
+            previous.parentRealPath !== current.parentRealPath ||
+            previous.unresolvedSuffix !== current.unresolvedSuffix
+          ) {
+            return false;
+          }
+        }
+        return true;
+      },
+    },
+  );
 }
 
 /** Compare two database locators by canonical filesystem identity when available. */

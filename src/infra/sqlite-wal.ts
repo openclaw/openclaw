@@ -8,16 +8,23 @@ import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
+import {
+  normalizeSqliteNonNegativeInteger,
+  runWithSqliteBusyTimeout,
+} from "./sqlite-busy-timeout.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
   createSqliteWalCheckpoint,
   type SqliteWalCheckpointMode,
   type SqliteWalCheckpointOptions,
   type SqliteWalHealth,
 } from "./sqlite-wal-checkpoint.js";
+import {
+  reclaimSqliteWalFreePages,
+  type SqliteWalReclamationOptions,
+  type SqliteWalReclamationResult,
+} from "./sqlite-wal-reclamation.js";
 import {
   detectSqliteWalSplitBrain,
   terminateForSqliteWalSplitBrain,
@@ -29,6 +36,7 @@ import {
 } from "./sqlite-wal-write-admission.js";
 
 export type { SqliteWalHealth } from "./sqlite-wal-checkpoint.js";
+export type { SqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
@@ -38,9 +46,6 @@ const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
 // commit. Keep it well above the usual ~4 MiB autocheckpoint window so only
 // pathological high-water marks pay the truncation cost.
 const DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
-// 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
-// bounded so maintenance can never behave like a blocking full VACUUM.
-const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
 const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
@@ -73,6 +78,7 @@ export type SqliteWalMaintenance = {
   /** Last maintenance observation; reading it never checkpoints or probes storage. */
   readonly health?: SqliteWalHealth;
   checkpoint: () => boolean;
+  reclaimFreePages: (options?: SqliteWalReclamationOptions) => SqliteWalReclamationResult;
   /** Inspect this retained WAL connection, independently of checkpoint completion elsewhere. */
   inspectIdle?: () => "healthy" | "retire";
   close: (options?: { checkpointMode?: SqliteWalCheckpointMode }) => boolean;
@@ -483,12 +489,16 @@ export function configureSqliteWalMaintenance(
     requireRollbackJournalMode(db, options);
     return {
       checkpoint: () => true,
+      reclaimFreePages: (reclaimOptions = {}) =>
+        reclaimSqliteWalFreePages(db, () => true, reclaimOptions),
       close: () => true,
     };
   }
   if (!enableWalJournalMode(db, busyTimeoutMs, options)) {
     return {
       checkpoint: () => true,
+      reclaimFreePages: (reclaimOptions = {}) =>
+        reclaimSqliteWalFreePages(db, () => true, reclaimOptions),
       close: () => true,
     };
   }
@@ -515,26 +525,6 @@ export function configureSqliteWalMaintenance(
     }
   };
 
-  // Bounded page release for databases opened with auto_vacuum=INCREMENTAL.
-  // A no-op elsewhere, and never a blocking full VACUUM: unbounded vacuums on
-  // the event loop have starved channel sockets in production (#83712).
-  const runIncrementalVacuum = (): void => {
-    try {
-      // Page limits do not bound lock waits; service worker commit requests before taking the lock.
-      runSqliteImmediateTransactionSync(
-        db,
-        () => db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS});`),
-        {
-          busyTimeoutMs: options.busyTimeoutMs,
-          databaseLabel: options.databaseLabel ?? options.databasePath,
-          operationLabel: "incremental-vacuum",
-        },
-      );
-    } catch (error) {
-      options.onCheckpointError?.(error);
-    }
-  };
-
   const runMaintenance = (operation: () => boolean): boolean => {
     if (invalidated) {
       return false;
@@ -547,6 +537,28 @@ export function configureSqliteWalMaintenance(
     }
   };
   const checkpoint = (): boolean => runMaintenance(() => runCheckpoint(checkpointMode));
+  const reclaimFreePages = (
+    reclaimOptions: SqliteWalReclamationOptions = {},
+  ): SqliteWalReclamationResult => {
+    let result: SqliteWalReclamationResult | undefined;
+    let failure: { error: unknown } | undefined;
+    runMaintenance(() => {
+      try {
+        result = reclaimSqliteWalFreePages(db, runCheckpoint, reclaimOptions);
+        return result.checkpointCompleted;
+      } catch (error) {
+        failure = { error };
+        throw error;
+      }
+    });
+    if (failure) {
+      throw failure.error;
+    }
+    if (!result) {
+      throw new Error("SQLite page reclamation owner is unavailable");
+    }
+    return { ...result, checkpoint: checkpointOwner.snapshot };
+  };
 
   let timer: IntervalHandle | null = null;
   const maintain = createSqliteWalMaintenanceScheduler(
@@ -557,8 +569,18 @@ export function configureSqliteWalMaintenance(
         return;
       }
       runMaintenance(() => {
-        const checkpointed = runCheckpoint(periodicCheckpointMode);
-        runIncrementalVacuum();
+        const checkpointed = reclaimSqliteWalFreePages(db, runCheckpoint, {
+          checkpointMode: periodicCheckpointMode,
+        }).checkpointCompleted;
+        if (
+          checkpointed &&
+          periodicCheckpointMode === "PASSIVE" &&
+          (checkpointOwner.health?.walBytes ?? 0) > DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES
+        ) {
+          // A completed PASSIVE checkpoint need not recycle its high-water file
+          // until another commit. Try once without waiting for readers or writers.
+          runWithSqliteBusyTimeout(db, 0, () => runCheckpoint("TRUNCATE"));
+        }
         return checkpointed;
       });
     },
@@ -606,6 +628,7 @@ export function configureSqliteWalMaintenance(
       return checkpointOwner.health;
     },
     checkpoint,
+    reclaimFreePages,
     inspectIdle: () =>
       runMaintenance(() =>
         checkpointOwner.inspectIdle(db.prepare("PRAGMA wal_checkpoint(PASSIVE);").get()),

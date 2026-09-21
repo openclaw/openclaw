@@ -19,7 +19,7 @@ import { resolveAcpSessionTarget } from "./manager.utils.js";
 
 afterEach(async () => {
   const maintenance = await import("../../tasks/task-registry.maintenance.js");
-  maintenance.stopTaskRegistryMaintenance();
+  await maintenance.stopTaskRegistryMaintenance();
   maintenance.resetTaskRegistryMaintenanceRuntimeForTests();
 });
 

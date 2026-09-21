@@ -10,7 +10,9 @@ import { registerBackgroundTasksEnglish } from "../../ui/src/i18n/locales/en-bac
 import { registerBoardWebsiteEnglish } from "../../ui/src/i18n/locales/en-board-website.ts";
 import { registerBrowserEnglish } from "../../ui/src/i18n/locales/en-browser.ts";
 import { registerChatCiEnglish } from "../../ui/src/i18n/locales/en-chat-ci.ts";
+import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
+import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
 import { registerCronEnglish } from "../../ui/src/i18n/locales/en-cron.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
@@ -30,6 +32,7 @@ import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../ui/src/i18n/locales/en-plugin-management.ts";
 import { registerPortalsEnglish } from "../../ui/src/i18n/locales/en-portals.ts";
+import { registerSessionPeopleEnglish } from "../../ui/src/i18n/locales/en-session-people.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerSidebarAttentionEnglish } from "../../ui/src/i18n/locales/en-sidebar-attention.ts";
@@ -63,7 +66,9 @@ const sourceFiles = [
   "en-board-website.ts",
   "en-browser.ts",
   "en-chat-ci.ts",
+  "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
+  "en-code-blocks.ts",
   "en-command-palette.ts",
   "en-cron.ts",
   "en-debug.ts",
@@ -79,6 +84,7 @@ const sourceFiles = [
   "en-model-accounts.ts",
   "en-model-controls.ts",
   "en-model-setup.ts",
+  "en-session-people.ts",
   "en-session-placement.ts",
   "en-new-session-setup.ts",
   "en-plugin-consent.ts",
@@ -114,6 +120,9 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     sessionsView[key] = value;
     if (key === "searchPlaceholder") {
       Object.assign(sessionsView, registerCommandPaletteEnglish.catalog.sessionsView);
+    }
+    if (key === "assignToMe") {
+      Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);
     }
   }
   const boardWidget: TranslationMap = {};
@@ -154,6 +163,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerBackgroundTasksEnglish.catalog,
     registerBrowserEnglish.catalog,
     registerChatCiEnglish.catalog,
+    registerChatGoalsEnglish.catalog,
+    registerCodeBlocksEnglish.catalog,
     registerCronEnglish.catalog,
     registerDevicesEnglish.catalog,
     registerDreamingEnglish.catalog,

@@ -22,11 +22,18 @@ export type {
 
 /** Release only this QA root's parent stores before its files are removed. */
 export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
-  const [auth, { closeOpenClawAgentDatabasesAsync }, state, paths] = await Promise.all([
+  const [
+    auth,
+    { closeOpenClawAgentDatabasesAsync },
+    state,
+    paths,
+    { closeIdleSqliteCoordinators },
+  ] = await Promise.all([
     import("../agents/auth-profiles/sqlite.js"),
     import("../state/openclaw-agent-db.js"),
     import("../state/openclaw-state-db.js"),
     import("../state/openclaw-state-db.paths.js"),
+    import("../infra/sqlite-coordinator.js"),
   ]);
   // Agent close releases leases through shared state. Keep that owner alive
   // until every scoped handle closes, or exit-time release can recreate the root.
@@ -35,6 +42,7 @@ export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
   await state.closeOpenClawStateDatabaseByPathAsync(
     paths.resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(tempRoot, "state") }),
   );
+  closeIdleSqliteCoordinators(tempRoot);
 }
 
 type QaRuntimeSurface = {

@@ -244,6 +244,7 @@ export async function prepareGitRuntimePromotion(
       const candidate = path.join(temporary, "candidate");
       await fs.cp(sourceRoot, candidate, {
         recursive: true,
+        preserveTimestamps: true,
         verbatimSymlinks: true,
         filter: (source) => !disposableCaches.has(source),
       });

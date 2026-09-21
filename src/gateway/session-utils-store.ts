@@ -136,7 +136,7 @@ function readAcpMetaForDeletedAgentCheck(params: {
 function loadSessionEntryWithMode(
   sessionKey: string,
   opts:
-    | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection"> & {
+    | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env"> & {
         includeStoreChildEntries?: boolean;
         targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
       })
@@ -151,6 +151,7 @@ function loadSessionEntryWithMode(
     exactRead: true,
     readOnly,
     projection: opts?.projection,
+    env: opts?.env,
     targetDiscoveryCache: opts?.targetDiscoveryCache,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
@@ -186,7 +187,7 @@ function loadSessionEntryWithMode(
 
 export function loadGatewaySessionEntry(
   sessionKey: string,
-  opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
+  opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, false);
 }
@@ -196,7 +197,7 @@ export function loadGatewaySessionEntryReadOnly(
   opts?: {
     includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
+  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }

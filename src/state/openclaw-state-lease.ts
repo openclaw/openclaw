@@ -12,7 +12,6 @@ import {
 import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { loggingState } from "../logging/state.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
 import {
   OpenClawStateLeaseError,
@@ -32,6 +31,7 @@ import {
 } from "./openclaw-state-lease-storage.js";
 import {
   type OpenClawStateLeaseAcquisition,
+  type OpenClawStateLeaseIdentity,
   readOpenClawStateLeaseExpiry,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
@@ -179,12 +179,7 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
   };
 }
 
-type LeaseIdentity = {
-  scope: string;
-  key: string;
-  owner: string;
-  leaseLabel: string;
-};
+type LeaseIdentity = OpenClawStateLeaseIdentity & { leaseLabel: string };
 
 function renew(
   params: LeaseIdentity & {
@@ -400,6 +395,7 @@ export async function withOpenClawStateLease<T>(
     validated.signal?.removeEventListener("abort", abortAcquisition);
   }
 
+  const acquiredAt = confirmedExpiresAt - validated.leaseMs;
   const identity: LeaseIdentity = {
     scope: validated.scope,
     key: validated.key,
@@ -518,8 +514,7 @@ export async function withOpenClawStateLease<T>(
     }
     if (fileExclusion.assertIfExcluded()) {
       if (transaction) {
-        fileExclusion.assertMutationCurrent();
-        assertLeaseOwnedInDatabase(transaction, identity);
+        throw new Error("a file-excluded lease cannot authorize a write transaction");
       }
       return;
     }
@@ -570,6 +565,7 @@ export async function withOpenClawStateLease<T>(
       identity,
       leaseMs: validated.leaseMs,
       heartbeatMs,
+      acquiredAt,
       expiresAt,
       onLost: abortLost,
       renewDuringStartup: () => {
@@ -610,16 +606,6 @@ export async function withOpenClawStateLease<T>(
       return readLeaseDatabase(validated.database, (db) =>
         assertLeaseOwnedInDatabase(db, identity),
       );
-    },
-    readMutationExpiry: (databasePath) => {
-      const expiresAt = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-        ({ db }) => assertLeaseOwnedInDatabase(db, identity),
-        { ...validated.database.options, path: databasePath },
-      );
-      if (expiresAt === undefined) {
-        throw invalidInput("mutated state database is absent");
-      }
-      return expiresAt;
     },
     pause: async () => {
       // Give drainage a current lease before freezing its durable expiry for capture.
@@ -681,7 +667,6 @@ export async function withOpenClawStateLease<T>(
         const lease: OpenClawStateLeaseContext = {
           withDatabaseFileExclusion: (operation, bindCaptured) =>
             fileExclusion.run(operation, bindCaptured),
-          withDatabaseFileMutation: (operation) => fileExclusion.runMutation(operation),
           signal: operationSignal,
           renew: renewOperation,
           assertOwned: assertOperationOwned,
