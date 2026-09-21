@@ -51,7 +51,7 @@ describe.each([
       resource === "graphql" ? { errors: [{ type, message: detail }] } : { message: detail },
     );
   const response = (body: string, headers = "", status = resource === "graphql" ? 200 : 403) =>
-    `HTTP/2.0 ${status} Response\r\nX-RateLimit-Resource: ${resource}\r\nX-RateLimit-Remaining: 0\r\n${headers}\r\n${body}`;
+    `HTTP/2.0 ${status} Response\r\nX-RateLimit-Resource: ${resource}\r\nX-RateLimit-Remaining: 0\r\nAccess-Control-Expose-Headers: ETag, Retry-After, X-RateLimit-Remaining\r\n${headers}\r\n${body}`;
 
   it.each(resource === "graphql" ? ["RATE_LIMIT", "RATE_LIMITED"] : ["REST primary limit"])(
     "recognizes the original %s response with and without headers",

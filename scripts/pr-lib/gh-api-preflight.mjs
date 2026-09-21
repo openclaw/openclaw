@@ -62,8 +62,10 @@ function isPrimaryQuotaExhausted(error, resource) {
       : resourceHeader !== undefined &&
         (resourceHeader !== "core" || response.resource !== "core")) ||
     (response.remaining !== undefined && response.remaining !== 0) ||
+    /^retry-after:/im.test(stdout) ||
     /\b(?:secondary rate limit|abuse detection|retry-after|proxy authentication required)\b/i.test(
-      `${stdout}\n${stderr}`,
+      // CORS exposed-header names are not retry directives.
+      `${response.status ? JSON.stringify(response.body) : stdout}\n${stderr}`,
     ) ||
     [...stderr.matchAll(/\bHTTP(?:\/\d+(?:\.\d+)?)?\s+([1-5]\d{2})\b/gi)].some(
       ([, status]) => !statuses.includes(status),
