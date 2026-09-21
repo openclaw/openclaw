@@ -58,6 +58,7 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     channels: [],
     channelLabels: {},
     runs: [],
+    runsState: "ready",
     runsTotal: 0,
     runsHasMore: false,
     runsLoadingMore: false,

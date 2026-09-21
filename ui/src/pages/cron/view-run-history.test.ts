@@ -291,7 +291,37 @@ describe("cron view run history", () => {
     expect(body.textContent).toContain("boom");
   });
 
-  it("distinguishes an unfiltered empty state from filtered no-matches", () => {
+  it("shows empty guidance only for settled history and offers recovery after failure", () => {
+    for (const runsState of ["idle", "pending", "failed"] as const) {
+      for (const runsQuery of ["", "fail"]) {
+        const onRefresh = vi.fn();
+        const container = renderView({ listTab: "activity", runsState, runsQuery, onRefresh });
+        expect(container.textContent).not.toContain("No runs yet");
+        expect(container.textContent).not.toContain("No matching runs.");
+        expect(container.querySelector('[data-test-id="cron-runs-loading"]') !== null).toBe(
+          runsState === "pending",
+        );
+        expect(container.querySelector(".cron-runs")?.getAttribute("aria-busy")).toBe(
+          String(runsState === "pending"),
+        );
+        const retry = Array.from(container.querySelectorAll("button")).find(
+          (button) => button.textContent?.trim() === "Retry",
+        );
+        expect(retry !== undefined).toBe(runsState === "failed");
+        retry?.click();
+        expect(onRefresh).toHaveBeenCalledTimes(runsState === "failed" ? 1 : 0);
+      }
+    }
+    const retained = renderView({
+      listTab: "activity",
+      runsState: "failed",
+      error: "History unavailable",
+      runs: [{ ts: 1, jobId: "job-1", action: "finished", summary: "Previously accepted run" }],
+    });
+    expect(retained.querySelector(".cron-run-entry")?.textContent).toContain(
+      "Previously accepted run",
+    );
+    expect(retained.textContent).toContain("History unavailable");
     const empty = renderView({ listTab: "activity" });
     expect(empty.querySelector(".cron-empty-state")?.textContent).toContain("No runs yet");
 

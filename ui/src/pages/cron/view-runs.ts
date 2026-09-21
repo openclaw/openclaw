@@ -14,6 +14,7 @@ import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
+import type { CronRunsViewState } from "../../lib/cron/runs.ts";
 import { formatDurationCompact, formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
@@ -32,6 +33,7 @@ type CronRunsSectionProps = {
   basePath: string;
   agentId: string;
   runs: CronRunLogEntry[];
+  runsState: CronRunsViewState;
   highlightedRunId?: string | null;
   runsHasMore: boolean;
   runsLoadingMore: boolean;
@@ -45,6 +47,7 @@ type CronRunsSectionProps = {
     lastFiredAtMs?: number;
   };
   onLoadMoreRuns: () => void;
+  onRefresh: () => void;
   onRunsFiltersChange: (patch: {
     cronRunsStatuses?: CronRunsStatusValue[];
     cronRunsDeliveryStatuses?: CronDeliveryStatus[];
@@ -229,7 +232,7 @@ export function renderRunsSection(props: CronRunsSectionProps) {
   const sortLabel =
     props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
   return html`
-    <div class="cron-runs">
+    <div class="cron-runs" aria-busy=${String(props.runsState === "pending")}>
       ${props.conditionActivity ? renderConditionActivity(props.conditionActivity) : nothing}
       <div class="cron-run-filters">
         <div class="cron-search-box cron-run-filter-search">
@@ -311,28 +314,40 @@ export function renderRunsSection(props: CronRunsSectionProps) {
           </wa-dropdown>
         </div>
       </div>
+      ${props.runsState === "failed" ? html`<button class="btn btn--sm" @click=${props.onRefresh}>${t("common.retry")}</button>` : nothing}
       ${
         runs.length === 0
-          ? hasRunFilters
-            ? html`<div class="muted cron-runs__empty">${t("cron.runs.noMatching")}</div>`
-            : html`
-                <div class="cron-empty-state">
-                  <div class="cron-empty-state__title">
-                    ${
-                      props.conditionActivity
-                        ? t("cron.runs.emptyConditionTitle")
-                        : t("cron.runs.emptyTitle")
-                    }
-                  </div>
-                  <div class="cron-empty-state__copy">
-                    ${
-                      props.conditionActivity
-                        ? conditionEmptyHint(props.conditionActivity)
-                        : t("cron.runs.emptyHint")
-                    }
-                  </div>
-                </div>
-              `
+          ? props.runsState === "pending"
+            ? html`<div
+                class="cron-empty-state"
+                role="status"
+                aria-live="polite"
+                data-test-id="cron-runs-loading"
+              >
+                ${t("cron.list.loading")}
+              </div>`
+            : props.runsState !== "ready"
+              ? nothing
+              : hasRunFilters
+                ? html`<div class="muted cron-runs__empty">${t("cron.runs.noMatching")}</div>`
+                : html`
+                    <div class="cron-empty-state">
+                      <div class="cron-empty-state__title">
+                        ${
+                          props.conditionActivity
+                            ? t("cron.runs.emptyConditionTitle")
+                            : t("cron.runs.emptyTitle")
+                        }
+                      </div>
+                      <div class="cron-empty-state__copy">
+                        ${
+                          props.conditionActivity
+                            ? conditionEmptyHint(props.conditionActivity)
+                            : t("cron.runs.emptyHint")
+                        }
+                      </div>
+                    </div>
+                  `
           : html`
               <div class="cron-runs__list">
                 ${runs.map((entry) =>

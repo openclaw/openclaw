@@ -51,6 +51,7 @@ import {
   resolveCronJobLastRunStatus,
 } from "../../lib/cron-status.ts";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
+import type { CronRunsViewState } from "../../lib/cron/runs.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
@@ -108,6 +109,7 @@ type CronProps = {
   channelLabels?: Record<string, string>;
   channelMeta?: ChannelUiMetaEntry[];
   runs: CronRunLogEntry[];
+  runsState: CronRunsViewState;
   highlightedRunId?: string | null;
   runsTotal: number;
   runsHasMore: boolean;
