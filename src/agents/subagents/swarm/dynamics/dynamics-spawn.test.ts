@@ -34,9 +34,7 @@ describe("native dynamics spawn preparation", () => {
 
   it("binds resolved profile and host-owned lineage into reproducible task bytes", () => {
     const first = prepareDynamicsSpawn({ ...base, dynamics: { profile: "explorer" } });
-    expect(first).toEqual(
-      prepareDynamicsSpawn({ ...base, dynamics: { profile: "explorer" } }),
-    );
+    expect(first).toEqual(prepareDynamicsSpawn({ ...base, dynamics: { profile: "explorer" } }));
     expect(first.task).not.toBe(
       prepareDynamicsSpawn({ ...base, dynamics: { profile: "builder" } }).task,
     );

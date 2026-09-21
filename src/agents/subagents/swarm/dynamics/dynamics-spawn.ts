@@ -50,8 +50,7 @@ export function prepareDynamicsSpawn(params: {
     throw new Error("dynamics accepts only profile and handoff");
   }
   const profile = resolveDynamicsProfile(readText(options.profile, "dynamics.profile", 64));
-  const raw =
-    options.handoff === undefined ? {} : readRecord(options.handoff, "dynamics.handoff");
+  const raw = options.handoff === undefined ? {} : readRecord(options.handoff, "dynamics.handoff");
   if (
     Object.keys(raw).some(
       (key) => !["candidateDigest", "artifactRefs", "evidenceRefs", "summary"].includes(key),
@@ -65,9 +64,7 @@ export function prepareDynamicsSpawn(params: {
     ...(raw.candidateDigest !== undefined
       ? { candidateDigest: readText(raw.candidateDigest, "candidateDigest", 256) }
       : {}),
-    ...(raw.summary !== undefined
-      ? { summary: readText(raw.summary, "summary", 4096) }
-      : {}),
+    ...(raw.summary !== undefined ? { summary: readText(raw.summary, "summary", 4096) } : {}),
   };
   const handoff = buildHandoffManifest({
     sourceReplicaId: readText(params.sourceReplicaId, "source replica", 1024),

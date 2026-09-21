@@ -19,8 +19,7 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: vi.fn(),
 }));
 vi.mock("./agent-tool-source-execution-guard.js", () => ({
-  captureAgentToolSourceExecutionGuard: (signal?: AbortSignal) => () =>
-    signal?.throwIfAborted(),
+  captureAgentToolSourceExecutionGuard: (signal?: AbortSignal) => () => signal?.throwIfAborted(),
   runAgentToolSourceExecutionGuard: () => {
     if (state.blocked) {
       throw new Error("source revoked");

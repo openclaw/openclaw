@@ -21,13 +21,7 @@ describe("cognitive dynamics profiles", () => {
   });
 
   it("resolves the deliberately small documented profile catalog", () => {
-    for (const id of [
-      "explorer",
-      "builder",
-      "critic",
-      "independent-verifier",
-      "glass-breaker",
-    ]) {
+    for (const id of ["explorer", "builder", "critic", "independent-verifier", "glass-breaker"]) {
       expect(resolveDynamicsProfile(id).id).toBe(id);
     }
   });
