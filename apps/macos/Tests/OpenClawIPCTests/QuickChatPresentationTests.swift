@@ -7,7 +7,13 @@ import XCTest
 
 @MainActor
 final class QuickChatPresentationTests: XCTestCase {
-    func testConversationDisclosurePreservesOneComposerAndItsDraft() async throws {
+    func testConversationDisclosurePreservesOneComposerAndItsDraft() throws {
+        try AppKitTestSupport.runAsyncXCTest {
+            try await self.checkConversationDisclosurePreservesOneComposerAndItsDraft()
+        }
+    }
+
+    private func checkConversationDisclosurePreservesOneComposerAndItsDraft() async throws {
         let application = AppKitTestSupport.application
         let suiteName = "ai.openclaw.quickchat-proof.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -217,7 +223,13 @@ final class QuickChatPresentationTests: XCTestCase {
             .write(to: output.appendingPathComponent("\(name).png"))
     }
 
-    func testShortcutPresentsAnEditorWithoutRequiringForegroundOwnership() async throws {
+    func testShortcutPresentsAnEditorWithoutRequiringForegroundOwnership() throws {
+        try AppKitTestSupport.runAsyncXCTest {
+            try await self.checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership()
+        }
+    }
+
+    private func checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership() async throws {
         let application = AppKitTestSupport.application
         XCTAssertTrue(AppKitTestSupport.didSetActivationPolicy)
         var shortcut: (() -> Void)?

@@ -8,7 +8,13 @@ import XCTest
 
 @MainActor
 final class QuickChatCatalogPresentationTests: XCTestCase {
-    func testRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed() async throws {
+    func testRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed() throws {
+        try AppKitTestSupport.runAsyncXCTest {
+            try await self.checkRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed()
+        }
+    }
+
+    private func checkRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed() async throws {
         let application = AppKitTestSupport.application
         XCTAssertTrue(AppKitTestSupport.didSetActivationPolicy)
         if ProcessInfo.processInfo.environment["OPENCLAW_TEST_QUICKCHAT_APPEARANCE"] == "dark" {
