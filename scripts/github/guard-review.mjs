@@ -1,5 +1,10 @@
 import { readFile } from "node:fs/promises";
-import { createGitHubApi, parseApprovalCommands, publishGuardStatus } from "./guard-shared.mjs";
+import {
+  GitHubRateLimitError,
+  createGitHubApi,
+  parseApprovalCommands,
+  publishGuardStatus,
+} from "./guard-shared.mjs";
 import { securityReviewRollout } from "./security-review-rollout.mjs";
 
 const requestMarker = "<!-- openclaw:approval-request ";
@@ -97,6 +102,9 @@ export async function openGuard({ context, commentMarker, approvalCommand }, pre
   try {
     rollout = review.rollout ?? (await securityReviewRollout(review));
   } catch (error) {
+    if (error instanceof GitHubRateLimitError) {
+      throw error;
+    }
     await publishGuardStatus(guard, "failure", "Security review policy could not be evaluated");
     throw error;
   }

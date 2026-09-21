@@ -52,11 +52,13 @@ const otherReview = {
   creator: { login: "github-actions[bot]", type: "Bot" },
 };
 
-function evaluate(routes: Record<string, unknown> = {}, mode = "enforce") {
+function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadline?: number) {
   const root = tempDirs.make("security-review-");
   const logPath = path.join(root, "requests.jsonl");
   const fixturePath = path.join(root, "fixture.json");
   const eventPath = path.join(root, "event.json");
+  const environmentPath = path.join(root, "environment");
+  writeFileSync(environmentPath, "");
   writeFileSync(logPath, "");
   // The resolver selects the PR for CI-completion events as well as PR/comments.
   writeFileSync(eventPath, JSON.stringify({ workflow_run: { id: 10 } }));
@@ -64,6 +66,7 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce") {
     fixturePath,
     JSON.stringify({
       logPath,
+      clock: true,
       routes: {
         [`GET ${pullPath}`]: pr,
         [`GET /repos/openclaw/openclaw/commits/${head}/statuses`]: [],
@@ -93,7 +96,11 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce") {
       encoding: "utf8",
       env: {
         GITHUB_TOKEN: "fixture-token",
+        ...(deadline === undefined
+          ? {}
+          : { OPENCLAW_SECURITY_REVIEW_DEADLINE_MS: String(deadline) }),
         GITHUB_EVENT_PATH: eventPath,
+        GITHUB_ENV: environmentPath,
         GITHUB_REPOSITORY: "openclaw/openclaw",
         GITHUB_RUN_ID: "123",
         OPENCLAW_SECURITY_REVIEW_PR_NUMBER: "7",
@@ -111,13 +118,16 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce") {
       (line) =>
         JSON.parse(line) as {
           method: string;
+          delay?: number;
           path: string;
           body?: { context?: string; state?: string; body?: string };
         },
     );
   return {
     ...result,
+    environment: readFileSync(environmentPath, "utf8"),
     requests,
+    waits: requests.filter((entry) => entry.method === "WAIT").map((entry) => entry.delay!),
     combined: requests
       .filter((entry) => entry.body?.context === "openclaw/ci-gate")
       .map((entry) => entry.body?.state),
@@ -126,6 +136,100 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce") {
 }
 
 describe("combined security review entry point", () => {
+  it.each([
+    {
+      httpError: 403,
+      headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1767315600" },
+      minimum: 3_600_000,
+    },
+    { httpError: 429, headers: { "retry-after": "90" }, minimum: 90_000 },
+    {
+      httpError: 403,
+      headers: {
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": "1767315600",
+        "retry-after": "120",
+      },
+      minimum: 3_600_000,
+    },
+    { httpError: 403, message: "You have exceeded a secondary rate limit.", minimum: 60_000 },
+  ])(
+    "recovers a rate-limited PR lookup using server timing: $httpError $minimum",
+    ({ minimum, ...limited }) => {
+      const result = evaluate({ [`GET ${pullPath}`]: { responses: [limited, pr] } });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits).toHaveLength(1);
+      expect(result.waits[0]).toBeGreaterThanOrEqual(minimum);
+      expect(result.waits[0]).toBeLessThan(minimum + 17_000);
+      expect(result.combined.at(-1)).toBe("success");
+      expect(result.environment).toBe(
+        `OPENCLAW_SECURITY_REVIEW_DEADLINE_MS=${Date.parse("2026-01-02T01:05:00Z")}\n`,
+      );
+    },
+  );
+
+  it("rereads authority after a rate-limited success write instead of replaying it", () => {
+    const result = evaluate({
+      // First POST records pending; the dependency guard then records failure and success.
+      [`POST /repos/openclaw/openclaw/statuses/${head}`]: {
+        responses: [{}, {}, { httpError: 429 }, {}],
+      },
+      [rolePath]: {
+        responses: [{ role_name: "maintain" }, { role_name: "maintain" }, { role_name: "read" }],
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toHaveLength(1);
+    const afterWait = result.requests.slice(
+      result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+    );
+    expect(afterWait[0]?.path).toBe(pullPath);
+    expect(afterWait.some((entry) => entry.body?.state === "success")).toBe(false);
+    expect(result.combined.at(-1)).toBe("failure");
+  });
+
+  it("recovers rate-limited notice writes instead of treating them as missing permissions", () => {
+    const result = evaluate({
+      "POST /repos/openclaw/openclaw/issues/7/labels": {
+        responses: [{ httpError: 403, headers: { "retry-after": "60" } }, {}],
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toHaveLength(1);
+    expect(result.combined.at(-1)).toBe("success");
+    expect(result.stderr).not.toContain("Skipping");
+  });
+
+  it("stops rate-limit recovery after three restarts without publishing success", () => {
+    const result = evaluate({ [rolePath]: { httpError: 429 } });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("recovery budget exhausted");
+    expect(result.waits).toHaveLength(3);
+    for (const [index, delay] of result.waits.entries()) {
+      expect(delay).toBeGreaterThanOrEqual(60_000 * 2 ** index);
+    }
+    expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
+  });
+
+  it("does not shorten a server wait to fit the shared recovery deadline", () => {
+    const result = evaluate(
+      { [`GET ${pullPath}`]: { httpError: 429, headers: { "retry-after": "120" } } },
+      "enforce",
+      Date.parse("2026-01-02T00:01:00Z"),
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("recovery budget exhausted");
+    expect(result.waits).toEqual([]);
+    expect(result.combined).toEqual([]);
+  });
+
+  it("does not retry an ordinary permission rejection", () => {
+    const result = evaluate({ [rolePath]: { httpError: 403 } });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([]);
+    expect(result.combined.at(-1)).toBe("failure");
+  });
+
   it("requires successful CI and both guard decisions on the actual PR head", () => {
     const result = evaluate();
     expect(result.status, result.stderr).toBe(0);

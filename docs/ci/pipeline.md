@@ -260,6 +260,20 @@ This prevents an earlier evaluation from leaving a stale failed job after automa
 reevaluation clears the status. Evaluation errors still fail the job and keep the
 required status closed.
 
+When GitHub returns a rate-limit response, the resolver and review scripts stop
+API requests, honor `Retry-After` and exhausted-quota reset times, and restart
+with fresh PR, approval, role, and CI data. Each script permits up to three restarts
+within a shared 65-minute deadline for its job; individual HTTP requests still
+have a 30-second timeout. Secondary limits without timing guidance use at least
+one minute of exponential backoff. Small randomized delays spread retries after
+quota resets. Jobs have a 75-minute ceiling, and waiting occupies their runner.
+Recovery is automatic in the same run and does not require another PR event or
+manual dispatch. Exhausted recovery fails the job without publishing success;
+quota exhaustion can also prevent a new status from being published. Ordinary
+permission errors, uncertain writes, and other evaluation errors are not retried.
+Checkout, runtime setup, and separately minted autoscrub token expiry are outside
+this recovery mechanism.
+
 The **Security Sensitive Guard** publishes `openclaw/security-sensitive-review`.
 Its inventory in `.github/security-review-policy.yml` covers Gateway
 authentication, pairing and permissions; credentials, secrets and redaction;

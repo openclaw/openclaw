@@ -1,8 +1,10 @@
 // Runs guard entry points without credentials or network access. Every API read
 // must have an explicit fixture; writes are recorded for contract assertions.
 import { appendFileSync, readFileSync } from "node:fs";
+import { installGuardClock } from "./github-guard-clock.mjs";
 
 const fixture = JSON.parse(readFileSync(process.env.OPENCLAW_GUARD_TEST_FIXTURE, "utf8"));
+if (fixture.clock) installGuardClock(fixture.logPath);
 const publishedStatuses = new Map();
 globalThis.fetch = async (url, options = {}) => {
   const parsed = new URL(url);
@@ -34,8 +36,9 @@ globalThis.fetch = async (url, options = {}) => {
       : route.responses[0]
     : route;
   if (value?.httpError) {
-    return new Response(JSON.stringify({ message: "Fixture API failure" }), {
+    return new Response(JSON.stringify({ message: value.message ?? "Fixture API failure" }), {
       status: value.httpError,
+      headers: value.headers,
     });
   }
   recordStatus();
