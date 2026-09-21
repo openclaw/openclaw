@@ -762,6 +762,42 @@ class RichObservationTest(unittest.TestCase):
                 self.assertEqual(known[(-2002, 42 << 20)]["senderId"], 202)
 
 
+class ServeTargetTest(unittest.TestCase):
+    def test_serves_dm_group_and_forum_without_losing_observed_topic(self):
+        client = observation_client()
+        client.request.side_effect = None
+        client.request.return_value = {"id": 303}
+        client.next_update = lambda timeout: None
+        def send(chat_id, text, reply_to=None, forum_topic_id=None):
+            message = native_message({"@type": "messageText", "text": {"text": text, "entities": []}}, chat_id=chat_id, sender_id=303)
+            if forum_topic_id is not None:
+                message["topic_id"] = {"@type": "messageTopicForum", "forum_topic_id": forum_topic_id}
+            return message
+        instance = SimpleNamespace(client=client, authorize=lambda *_: None,
+            resolve_chat=lambda value: int(value), check_group_write_access=Mock(return_value=True),
+            send_text=Mock(side_effect=send))
+        commands = [
+            {"id": "1", "method": "send", "text": "dm", "chatId": "200"},
+            {"id": "2", "method": "send", "text": "group"},
+            {"id": "3", "method": "send", "text": "forum", "chatId": "-2002", "forumTopicId": 42},
+            {"id": "4", "method": "send", "text": "invalid", "forumTopicId": True},
+        ]
+        events = []
+        with patch.object(driver, "load_config", return_value=({}, {})), \
+                patch.object(driver, "UserDriver", return_value=instance), \
+                patch.object(driver, "write_ndjson", side_effect=events.append), \
+                patch.object(driver.sys, "stdin", io.StringIO("\n".join(driver.json.dumps(value) for value in commands))), \
+                patch.object(driver.select, "select", side_effect=lambda *_: ([driver.sys.stdin], [], [])):
+            driver.command_serve(SimpleNamespace(chat="-1001", observe_chat=["-2002"], timeout_ms=1000))
+        sent = [event["result"] for event in events if "result" in event]
+        self.assertEqual([value["chatId"] for value in sent], [200, -1001, -2002])
+        self.assertEqual([value["senderId"] for value in sent], [303, 303, 303])
+        self.assertEqual(sent[-1]["forumTopicId"], 42)
+        self.assertIn("positive integer", events[-1]["error"])
+        self.assertEqual(instance.send_text.call_count, 3)
+        self.assertEqual([call.args[0] for call in instance.check_group_write_access.call_args_list], [-1001, -2002, 200])
+
+
 class GroupWriteAccessTest(unittest.TestCase):
     def make_driver(self, status, default=True, boosts=None, kind="chatTypeSupergroup", active=True):
         instance = driver.UserDriver.__new__(driver.UserDriver)

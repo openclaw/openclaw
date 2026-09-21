@@ -1315,6 +1315,8 @@ def serve_message(message, users):
         "senderId": normalized.get("senderId"),
         "senderUsername": normalized.get("senderUsername"),
         "replyToMessageId": normalized.get("replyToMessageId"),
+        "threadId": normalized.get("threadId"),
+        "forumTopicId": (message.get("topic_id") or {}).get("forum_topic_id"),
         "timestamp": int(message.get("date") or 0) * 1000,
         "contentType": normalized["contentType"],
         "text": normalized["text"],
@@ -1425,6 +1427,11 @@ def command_serve(args):
     chat_id = driver.resolve_chat(args.chat)
     tester = driver.client.request({"@type": "getMe"})
     driver.check_group_write_access(chat_id, tester["id"])
+    selected_chats = {chat_id}
+    for target in getattr(args, "observe_chat", []):
+        selected = driver.resolve_chat(target)
+        driver.check_group_write_access(selected, tester["id"])
+        selected_chats.add(selected)
     write_ndjson(
         {
             "type": "ready",
@@ -1435,7 +1442,7 @@ def command_serve(args):
     known_messages = {}
     while True:
         update = driver.client.next_update(timeout=0.1)
-        if update and update_chat_id(update) == chat_id:
+        if update and update_chat_id(update) in selected_chats:
             event = serve_update(update, driver.client, known_messages)
             if event:
                 write_ndjson({"type": "update", "update": event})
@@ -1457,7 +1464,14 @@ def command_serve(args):
             if not isinstance(text, str) or not text:
                 raise DriverError("serve send command requires text")
             reply_to = request.get("replyToMessageId")
-            sent = driver.send_text(chat_id, text, reply_to=reply_to)
+            target = driver.resolve_chat(request["chatId"]) if "chatId" in request else chat_id
+            if target not in selected_chats:
+                driver.check_group_write_access(target, tester["id"])
+                selected_chats.add(target)
+            topic = request.get("forumTopicId")
+            if topic is not None and (type(topic) is not int or topic <= 0):
+                raise DriverError("serve forumTopicId must be a positive integer")
+            sent = driver.send_text(target, text, reply_to=reply_to, forum_topic_id=topic)
             normalized = serve_message(sent, driver.client.users)
             known_messages[(normalized["chatId"], normalized["messageId"])] = normalized
             write_ndjson({"type": "response", "id": request_id, "result": normalized})
@@ -1583,6 +1597,7 @@ def main():
 
     serve = sub.add_parser("serve")
     serve.add_argument("--chat", default="")
+    serve.add_argument("--observe-chat", action="append", default=[])
     serve.add_argument("--timeout-ms", type=int, default=120000)
     serve.set_defaults(func=command_serve)
 

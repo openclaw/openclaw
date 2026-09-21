@@ -58,6 +58,7 @@ describe("Telegram userbot driver runtime", () => {
         "print(json.dumps({'type':'ready','chatId':-1001,'user':{'id':100}}), flush=True)",
         "for line in sys.stdin:",
         "    request = json.loads(line)",
+        "    assert request['chatId'] == '-2002' and request['forumTopicId'] == 42",
         "    message_id = 10 + int(request['id'])",
         "    update = {'kind':'message','chatId':-1001,'messageId':message_id + 1,'senderId':200,'timestamp':1000,'text':request['text'],'entities':entities,'contentType':'messagePhoto'}",
         "    print(json.dumps({'type':'update','update':update}), flush=True)",
@@ -67,7 +68,7 @@ describe("Telegram userbot driver runtime", () => {
         "    for rich in [rich_message, {**rich_message, 'is_full':False}, None]:",
         "        update = {**update, 'richMessage':rich, 'text':'x', 'entities':[], 'contentType':'messageRichMessage' if rich else 'messageText'}",
         "        print(json.dumps({'type':'update','update':update}), flush=True)",
-        "    result = {'chatId':-1001,'messageId':message_id,'senderId':100,'timestamp':1000,'text':request['text'],'entities':entities,'contentType':'messageText'}",
+        "    result = {'chatId':-1001,'messageId':message_id,'senderId':100,'timestamp':1000,'text':request['text'],'entities':entities,'contentType':'messageText','forumTopicId':request['forumTopicId']}",
         "    print(json.dumps({'type':'response','id':request['id'],'result':result}), flush=True)",
       ].join("\n"),
     );
@@ -75,6 +76,7 @@ describe("Telegram userbot driver runtime", () => {
     const leaseFailure = new Promise<Error>(() => {});
     const driver = await TelegramUserbotDriver.start({
       chatId: "-1001",
+      expectedUserId: "100",
       driverEnv: {},
       leaseHealth: { assertHealthy() {}, whenUnhealthy: leaseFailure },
       userDriverPath: scriptPath,
@@ -84,13 +86,16 @@ describe("Telegram userbot driver runtime", () => {
     });
     expect(driver.chatId).toBe(-1001);
     try {
-      await expect(driver.send({ text })).resolves.toMatchObject({
-        messageId: 11,
-        senderId: 100,
-        contentType: "messageText",
-        text,
-        entities,
-      });
+      await expect(driver.send({ text, chatId: "-2002", forumTopicId: 42 })).resolves.toMatchObject(
+        {
+          forumTopicId: 42,
+          messageId: 11,
+          senderId: 100,
+          contentType: "messageText",
+          text,
+          entities,
+        },
+      );
       await vi.waitFor(() => expect(updates).toHaveLength(6));
       expect(updates).toMatchObject([
         {
