@@ -9,6 +9,42 @@ import {
 
 describe("roleScopesAllow", () => {
   it.each([
+    ["operator.read", "operator.sessions.read", true],
+    ["operator.read", "operator.sessions.write", false],
+    ["operator.write", "operator.sessions.write", true],
+    ["operator.sessions.write", "operator.sessions.read", true],
+    ["operator.sessions.read", "operator.read", false],
+    ["operator.sessions.write", "operator.write", false],
+    ["operator.sessions.write", "operator.admin", false],
+    ["operator.sessions.write", "operator.approvals", false],
+  ])(
+    "checks grant %s against %s without broadening session authority",
+    (grant, requested, allowed) => {
+      expect(
+        roleScopesAllow({ role: "operator", requestedScopes: [requested], allowedScopes: [grant] }),
+      ).toBe(allowed);
+    },
+  );
+
+  it("derives an explicitly selected session ceiling from existing grants without inventing write access", () => {
+    expect(
+      intersectOperatorScopes(["operator.read", "operator.write"], ["operator.sessions.write"]),
+    ).toEqual(["operator.sessions.write"]);
+    expect(intersectOperatorScopes(["operator.admin"], ["operator.sessions.read"])).toEqual([
+      "operator.sessions.read",
+    ]);
+    expect(intersectOperatorScopes(["operator.read"], ["operator.sessions.write"])).toEqual([
+      "operator.sessions.read",
+    ]);
+    expect(intersectOperatorScopes(["operator.sessions.write"], ["operator.read"])).toEqual([
+      "operator.sessions.read",
+    ]);
+    expect(intersectOperatorScopes([], ["operator.sessions.write"])).toEqual([]);
+    expect(intersectOperatorScopes(["operator.write"], ["operator.write"])).toEqual([
+      "operator.write",
+    ]);
+  });
+  it.each([
     { requestedScopes: [], allowedScopes: [] },
     { requestedScopes: ["", " \t"], allowedScopes: [] },
     { requestedScopes: ["", " \t"], allowedScopes: ["operator.admin"] },

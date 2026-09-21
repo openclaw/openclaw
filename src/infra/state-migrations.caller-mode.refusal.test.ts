@@ -752,7 +752,7 @@ module.exports = { stateMigrations: [{
     });
 
     const tuiReceipt = result.stepReceipts.find((receipt) => receipt.id === "tui-last-session");
-    expect(tuiReceipt).toMatchObject({
+    expect(tuiReceipt, JSON.stringify(tuiReceipt?.originatingRefusal)).toMatchObject({
       outcome: "refused",
       refusal: { code: "step-refused" },
     });

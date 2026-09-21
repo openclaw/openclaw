@@ -84,7 +84,7 @@ env:
   IOS_SCREENSHOT_FASTLANE_VERSION: "2.239.0"
   IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
   IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"
-  NODE_VERSION: "24.x"
+  NODE_VERSION: "24.19.0"
 
 jobs:
   # Preflight: establish routing truth and job matrices once, then let real

@@ -204,6 +204,12 @@ jobs:
       validation_purpose: ${{ steps.publication_request.outputs.validation_purpose }}
       publication_selection_json: ${{ steps.publication_request.outputs.publication_selection_json }}
     steps:
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Retain root dispatch inputs
         id: dispatch_witness
         env:
@@ -1673,6 +1679,12 @@ jobs:
           ref: ${{ github.sha }}
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - &artifact_producer_resolution
         name: Recover original artifact producer
         id: producer
@@ -1711,6 +1723,12 @@ jobs:
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
     steps:
       - *artifact_tooling_checkout
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Wait for exact npm qualification
         id: bundle
         run: node scripts/full-release-artifacts.mjs wait
@@ -1742,6 +1760,12 @@ jobs:
         if: github.run_attempt == 1
         run: *full_release_child_dispatch
       - *artifact_tooling_checkout
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *artifact_producer_resolution
       - name: Wait for exact Docker preparation
         id: bundle
@@ -1779,6 +1803,12 @@ jobs:
         if: github.run_attempt == 1
         run: *full_release_child_dispatch
       - *artifact_tooling_checkout
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *artifact_producer_resolution
       - name: Wait for exact validation candidate
         id: bundle
@@ -1847,6 +1877,12 @@ jobs:
           path: ${{ runner.temp }}/full-release-publication-admission
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Seal immutable release execution plan
         id: plan
@@ -2067,6 +2103,12 @@ jobs:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Evaluate release decision
         id: state
         continue-on-error: true
@@ -2132,6 +2174,12 @@ jobs:
         with:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Drain child diagnostics
         id: state
@@ -2245,6 +2293,12 @@ jobs:
         with:
           pattern: full-release-diagnostics-${{ github.run_id }}-*
           path: ${{ runner.temp }}/full-release-diagnostic-attempts
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Select newest compatible release state artifacts
         id: selected_state

@@ -423,7 +423,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     });
   const orphanRepair = reconciledCurrentUser ? undefined : orphanRepairCandidate;
   if (orphanRepair?.removeLeaf) {
-    const repairedTarget = await withSessionManagerWrite(sessionManager, () => {
+    const repairedTarget = await withSessionManagerWrite(sessionManager, async () => {
       input.abortSignal?.throwIfAborted();
       if (orphanRepair.messageEntry.parentId) {
         sessionManager.branch(orphanRepair.messageEntry.parentId);
@@ -439,7 +439,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
           appendParentId: sessionManager.getAppendParentId(),
         });
       }
-      replayTrailingEntriesForOrphanRepair(sessionManager, orphanRepair.trailingEntries);
+      await replayTrailingEntriesForOrphanRepair(sessionManager, orphanRepair.trailingEntries);
       return target;
     });
     if (repairedTarget) {

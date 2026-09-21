@@ -258,7 +258,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     "runs every unit-fast file while keeping failures and Bun skips on Node under %s",
     async (policy) => {
       const skippedOnBun = "src/process/spawn-broker/cleanup.test.ts";
-      const includePatterns = [bunTarget, nodeTarget, skippedOnBun];
+      const v8HeapTest = "src/infra/worker-task-pool.memory.test.ts";
+      const includePatterns = [bunTarget, nodeTarget, skippedOnBun, v8HeapTest];
       const shard = { configs: [bunConfig], includePatterns, shard_name: "partition" };
       const seen: Array<{
         runtime: string | undefined;
@@ -293,7 +294,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       expect(seen).toEqual([
         {
           runtime: "node",
-          includes: policy === "dual" ? includePatterns : [nodeTarget, skippedOnBun].toSorted(),
+          includes:
+            policy === "dual" ? includePatterns : [nodeTarget, skippedOnBun, v8HeapTest].toSorted(),
           label: `${nodePrefix}partition`,
           timing: `${nodePrefix}partition`,
         },

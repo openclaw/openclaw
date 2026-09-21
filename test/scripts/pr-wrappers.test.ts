@@ -51,7 +51,7 @@ describe.each([
       resource === "graphql" ? { errors: [{ type, message: detail }] } : { message: detail },
     );
   const response = (body: string, headers = "", status = resource === "graphql" ? 200 : 403) =>
-    `HTTP/2.0 ${status} Response\r\nX-RateLimit-Resource: ${resource}\r\nX-RateLimit-Remaining: 0\r\n${headers}\r\n${body}`;
+    `HTTP/2.0 ${status} Response\r\nX-RateLimit-Resource: ${resource}\r\nX-RateLimit-Remaining: 0\r\nAccess-Control-Expose-Headers: ETag, Retry-After, X-RateLimit-Remaining\r\n${headers}\r\n${body}`;
 
   it.each(resource === "graphql" ? ["RATE_LIMIT", "RATE_LIMITED"] : ["REST primary limit"])(
     "recognizes the original %s response with and without headers",
@@ -578,6 +578,23 @@ describe("scripts/pr wrappers", () => {
       ["123", "not-an-outcome", "--confirmed-operator-recovery"],
       ["123", "a".repeat(40), "--confirmed-no-running-tools"],
       ["123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
+      ["123", "a".repeat(40), "--confirmed-operator-recovery", "--cancel-auto", "--cancel-auto"],
+      [
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        "--cancel-auto",
+        "--body-file",
+        "message.md",
+      ],
+      [
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        "--cancel-auto",
+        "--replacement-head",
+        "b".repeat(40),
+      ],
       ...[
         [],
         [""],
@@ -633,7 +650,7 @@ describe("scripts/pr wrappers", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n`,
+      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n`,
     );
   });
 
@@ -705,8 +722,12 @@ describe("scripts/pr wrappers", () => {
       join(fixture.canonical, "scripts/pr-lib/merge.sh"),
       `merge_run() { printf '<%s>\\n' "$@"; }\n`,
     );
-    for (const replacement of [[], ["--replacement-head", "b".repeat(40)]]) {
+    for (const replacement of [[], ["--replacement-head", "b".repeat(40)], ["--cancel-auto"]]) {
       for (const body of [[], ["--body-file", "message.md"]]) {
+        const cancel = replacement[0] === "--cancel-auto";
+        if (cancel && body.length) {
+          continue;
+        }
         const result = spawnSync(
           join(fixture.canonical, "scripts/pr"),
           [
@@ -721,7 +742,7 @@ describe("scripts/pr wrappers", () => {
         );
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toBe(
-          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n`,
+          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n<${cancel}>\n`,
         );
       }
     }
@@ -760,7 +781,7 @@ describe("scripts/pr wrappers", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${join(caller, "proof")}>\n`,
+      `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${join(caller, "proof")}>\n<false>\n`,
     );
   });
 

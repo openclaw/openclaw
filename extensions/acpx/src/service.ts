@@ -4,6 +4,7 @@
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -52,6 +53,7 @@ type AcpxRuntimeLike = CompleteAcpRuntime & {
 };
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
 const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
+const MAX_ACPX_TOKIO_WORKER_THREADS = 8;
 
 type AcpxRuntimeFactoryParams = {
   pluginConfig: ResolvedAcpxPluginConfig;
@@ -84,6 +86,17 @@ function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number |
   return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 1;
 }
 
+function resolveAgentProcessEnv(): Record<string, string> | undefined {
+  if (process.env.TOKIO_WORKER_THREADS?.trim()) {
+    return undefined;
+  }
+  // Each managed ACP child owns a Tokio pool; cap its implicit host-wide default
+  // so concurrent children do not multiply the Gateway's scheduler footprint.
+  return {
+    TOKIO_WORKER_THREADS: String(Math.min(availableParallelism(), MAX_ACPX_TOKIO_WORKER_THREADS)),
+  };
+}
+
 async function createDefaultRuntime(params: AcpxRuntimeFactoryParams): Promise<AcpxRuntimeLike> {
   // Snapshot filenames once under the service owner. Runtime never migrates or reads legacy payloads.
   const names = await fs
@@ -110,6 +123,7 @@ async function createDefaultRuntime(params: AcpxRuntimeFactoryParams): Promise<A
   }
   return new AcpxRuntime({
     cwd: params.pluginConfig.cwd,
+    agentProcessEnv: resolveAgentProcessEnv(),
     openclawLegacyBareSessionKeys: legacyBareSessionKeys,
     openclawGatewayInstanceId: params.gatewayInstanceId,
     openclawProcessLeaseStore: params.processLeaseStore,

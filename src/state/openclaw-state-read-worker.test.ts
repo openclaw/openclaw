@@ -737,6 +737,36 @@ it("captures update history filters and charges retained selectors before dispat
   }
 });
 
+it.each(["skills.library.descriptions", "skills.library.manifests"] as const)(
+  "retains library pins and their byte charge while dispatch waits (%s)",
+  async (type) => {
+    const { options } = source();
+    const input = [{ skillId: "技能🦞".repeat(512), revision: "版本🦞".repeat(512) }];
+    const expected = structuredClone(input);
+    const dispatch = createDeferredCore();
+    const task = queueTask(dispatch.promise);
+    const result = executeExistingOpenClawStateRead(options, { type, input });
+    const returned: OpenClawStateReadReply = { ok: true, type, sourceAdmitted: true, value: [] };
+    try {
+      const submitted = await task.submitted;
+      input[0]!.skillId = "changed";
+      input[0]!.revision = "changed";
+      input.push({ skillId: "extra", revision: "extra" });
+      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
+        Buffer.byteLength(expected[0]!.skillId) + Buffer.byteLength(expected[0]!.revision),
+      );
+      dispatch.resolve();
+      expect((await task.captured).command).toEqual({ type, input: expected });
+      task.result.resolve(returned);
+      expect(await result).toEqual(returned);
+    } finally {
+      dispatch.resolve();
+      task.result.resolve(returned);
+      await Promise.allSettled([result]);
+    }
+  },
+);
+
 it.each([
   {
     input: {

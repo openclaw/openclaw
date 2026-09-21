@@ -327,6 +327,7 @@ describePosix("native squash attribution", () => {
       title: "COMMIT_OR_PR_TITLE",
       message: "COMMIT_MESSAGES",
       count: 1,
+      localFixup: true,
       expected: "First description\n\n- Detail",
     },
     {
@@ -354,7 +355,7 @@ describePosix("native squash attribution", () => {
     },
   ])(
     "preserves REST squash defaults $title/$message for $count source commits with refresh=$refresh and override=$override",
-    ({ title, message, count, refresh, override, expected }) => {
+    ({ title, message, count, refresh, localFixup, override, expected }) => {
       const result = prepareBody({
         restPreview: true,
         squashTitle: title,
@@ -366,10 +367,12 @@ describePosix("native squash attribution", () => {
         ].slice(0, count),
         refreshMergeAuthor: refresh ? { name: "Refresh", email: "refresh@example.com" } : undefined,
         refreshMergeMessage: "Merge refreshed main\n\nRefresh description",
-        localFixup: {
-          message: "Unpublished description",
-          author: { name: "Local", email: "local@example.com" },
-        },
+        localFixup: localFixup
+          ? {
+              message: "Unpublished description",
+              author: { name: "Local", email: "local@example.com" },
+            }
+          : undefined,
         overrideBody: override,
       });
       expect(result.status, result.stderr).toBe(0);

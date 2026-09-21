@@ -724,7 +724,6 @@ function createBackgroundTasks(
       rows: [],
       overflowCount: 0,
       taskIds: new Set<string>(),
-      nextExpiryAt: null,
     },
     cancellingTaskIds: new Set<string>(),
     finishedCollapsed: false,

@@ -1,4 +1,5 @@
 // Diagnostic memory tests cover pressure events and diagnostic log output.
+import { channel } from "node:diagnostics_channel";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -172,6 +173,25 @@ describe("diagnostic memory", () => {
     stop();
 
     expect(events.map((event) => event.type)).toEqual(["diagnostic.memory.pressure"]);
+  });
+
+  it("requests idle retirement on every critical sample despite log suppression", () => {
+    const pressure = channel("openclaw.memory.critical");
+    const retireIdle = vi.fn();
+    pressure.subscribe(retireIdle);
+    try {
+      for (const now of [1_000, 2_000]) {
+        emitDiagnosticMemorySample({
+          now,
+          emitSample: false,
+          memoryUsage: memoryUsage({ rss: 4_000 }),
+          thresholds: { rssCriticalBytes: 3_000, pressureRepeatMs: 60_000 },
+        });
+      }
+      expect(retireIdle).toHaveBeenCalledTimes(2);
+    } finally {
+      pressure.unsubscribe(retireIdle);
+    }
   });
 
   it.each([1, 8, 16, 32])(

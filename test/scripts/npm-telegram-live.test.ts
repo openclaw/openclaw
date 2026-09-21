@@ -825,7 +825,7 @@ for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
     ).toBeUndefined();
   });
 
-  it.each(["2026.6.35", "2026.7.33", "2026.7.34"])(
+  it.each(["2026.6.35", "2026.7.33", "2026.7.34", "2026.7.35"])(
     "preserves the frozen %s package projection",
     (version) => {
       const mutateConfig = testing.resolvePackageConfigMutation({

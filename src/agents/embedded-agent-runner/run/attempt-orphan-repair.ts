@@ -10,8 +10,8 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 type OrphanRepairSessionManager = {
   getLeafEntry: () => SessionManagerEntry | undefined;
   getEntry: (entryId: string) => SessionManagerEntry | undefined;
-  appendThinkingLevelChange: (thinkingLevel: string) => string;
-  appendModelChange: (provider: string, modelId: string) => string;
+  appendThinkingLevelChange: (thinkingLevel: string) => Promise<string>;
+  appendModelChange: (provider: string, modelId: string) => Promise<string>;
   appendCustomEntry: (customType: string, data?: unknown) => string;
   appendSessionInfo: (name: string) => string;
   appendLabelChange: (targetId: string, label?: string) => string;
@@ -41,17 +41,23 @@ function findTrailingMessageEntryForOrphanRepair(
     : undefined;
 }
 
-function appendTrailingEntryForOrphanRepair(
+async function appendTrailingEntryForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
   entry: SessionManagerEntry,
   replayedEntryIds: Map<string, string>,
-): void {
+): Promise<void> {
   if (entry.type === "thinking_level_change") {
-    replayedEntryIds.set(entry.id, sessionManager.appendThinkingLevelChange(entry.thinkingLevel));
+    replayedEntryIds.set(
+      entry.id,
+      await sessionManager.appendThinkingLevelChange(entry.thinkingLevel),
+    );
     return;
   }
   if (entry.type === "model_change") {
-    replayedEntryIds.set(entry.id, sessionManager.appendModelChange(entry.provider, entry.modelId));
+    replayedEntryIds.set(
+      entry.id,
+      await sessionManager.appendModelChange(entry.provider, entry.modelId),
+    );
     return;
   }
   if (entry.type === "custom") {
@@ -72,13 +78,13 @@ function appendTrailingEntryForOrphanRepair(
   }
 }
 
-export function replayTrailingEntriesForOrphanRepair(
+export async function replayTrailingEntriesForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
   trailingEntries: SessionManagerEntry[],
-): void {
+): Promise<void> {
   const replayedEntryIds = new Map<string, string>();
   for (const entry of trailingEntries) {
-    appendTrailingEntryForOrphanRepair(sessionManager, entry, replayedEntryIds);
+    await appendTrailingEntryForOrphanRepair(sessionManager, entry, replayedEntryIds);
   }
 }
 

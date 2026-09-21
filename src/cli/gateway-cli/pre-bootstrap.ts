@@ -367,19 +367,25 @@ async function guardGatewayRunSelectedConfig(
     }
     // The service marker also owns config SecretRefs. Only dotenv-absent keys with no current
     // config reference are stale; clearing the broad marker blindly would drop file-backed refs.
-    clearMissingManagedServiceEnvKeys({
-      environment: process.env,
-      managedKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
-      presentKeys: trustedEnvLoad.dotenvPresentKeys,
+    const managedKeys = readManagedSystemdServiceEnvKeysFromEnvironment(process.env);
+    if (managedKeys.size > 0) {
+      const preserveKeys = collectEnvSecretRefIds(trustedSnapshot.sourceConfig);
       // Startup repair may relocate a referenced setting, which retires the recorded path along
       // with it. The read that produced this snapshot still names every variable the config
       // depends on, and keeping a key one boot too long only defers cleanup, while dropping a
       // live one refuses startup outright.
-      preserveKeys: new Set([
-        ...collectEnvSecretRefIds(trustedSnapshot.sourceConfig),
-        ...collectEnvSecretRefIds(snapshot.sourceConfig),
-      ]),
-    });
+      if (trustedSnapshot.sourceConfig !== snapshot.sourceConfig) {
+        for (const key of collectEnvSecretRefIds(snapshot.sourceConfig)) {
+          preserveKeys.add(key);
+        }
+      }
+      clearMissingManagedServiceEnvKeys({
+        environment: process.env,
+        managedKeys,
+        presentKeys: trustedEnvLoad.dotenvPresentKeys,
+        preserveKeys,
+      });
+    }
     const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
     applySelectedConfigEnv(trustedSnapshot);
     // Only selection inputs survive a selection hop. Reload credentials once the final config and

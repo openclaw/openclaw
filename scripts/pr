@@ -480,6 +480,8 @@ Usage:
     Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
     Keeps prior evidence and reruns admission; requires the same method and no auto/queue/admin route.
+    --cancel-auto instead retires the exact accepted non-queue auto request before any head repair.
+    Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.
   scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion
     Finish a verified merge receipt after cleanup; never dispatches a merge or deletes resources.
     Posts a first completion comment only from merged; uncertain comment attempts are lookup-only.
@@ -578,7 +580,7 @@ main() {
         [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
       ;;
     merge-run | merge-recover)
-      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path="" legacy_directory=""
+      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false
       [ -n "$merge_pr" ] || { usage; exit 2; }
       shift
       if [ "$cmd" = merge-recover ]; then
@@ -589,6 +591,11 @@ main() {
       fi
       while [ "$#" -gt 0 ]; do
         case "$1" in
+          --cancel-auto)
+            [ "$cmd" = merge-recover ] && [ "$cancel_auto" = false ] || { usage; exit 2; }
+            cancel_auto=true
+            shift
+            ;;
           --auto-merge)
             [ "$cmd" = merge-run ] && [ "$auto_merge" = false ] || { usage; exit 2; }
             auto_merge=true
@@ -617,6 +624,7 @@ main() {
         auto_merge=true
       fi
       [ -z "$legacy_directory" ] || [ -n "$replacement_head" ] || { usage; exit 2; }
+      [ "$cancel_auto" = false ] || [ -z "$replacement_head$body_path$legacy_directory" ] || { usage; exit 2; }
       set -- "$merge_pr"
       ;;
     review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
@@ -746,7 +754,7 @@ main() {
       merge_verify "$pr"
       ;;
     merge-run | merge-recover)
-      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory"
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto"
       ;;
     merge-complete)
       merge_complete "$1" "$2"

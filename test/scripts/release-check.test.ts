@@ -207,7 +207,8 @@ describe("release-check", () => {
             `console.log(JSON.stringify({\n` +
             `  execArgv: process.execArgv,\n` +
             `  fixture: readFileSync("consumer/src/index.ts", "utf8"),\n` +
-            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8")\n` +
+            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8"),\n` +
+            `  concurrentSparkplugDisabled: process.execArgv.includes("--no-concurrent-sparkplug")\n` +
             `}));`,
         ],
         {
@@ -233,6 +234,7 @@ describe("release-check", () => {
           join(toolingRoot, "scripts/fixtures/packed-plugin-sdk-setup-consumer.ts"),
           "utf8",
         ),
+        concurrentSparkplugDisabled: !process.versions.bun,
       });
 
       diagnostics.stage("packed-fixture-setup");

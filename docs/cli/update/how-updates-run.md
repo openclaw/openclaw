@@ -127,6 +127,11 @@ classification. The live plugin files and host links stay unchanged. Channels,
 cron, automatic updates, background task maintenance, and other side services are
 suppressed in this canary. Copied task records remain available for startup
 validation without recovery or pruning.
+The canary also defers session catalog hydration, worker recovery, and startup
+maintenance until activation, recording a warning. Required configuration,
+database ownership, schema, and migration checks still run before readiness;
+plugin runtime loading remains part of validation. The serving Gateway prepares
+its session catalogs and maintenance normally after activation.
 
 Update build and validation processes resolve source-linked plugin SDKs from
 the staged installation root, even when the serving source launcher passed its own checkout

@@ -433,6 +433,21 @@ afterEach(() => {
 });
 
 describe("update status readiness outcome", () => {
+  it("keeps a real failure visible after a retained dry run", async () => {
+    const failed = createUpdateRun({ trigger: "cli" });
+    const failure = finishUpdateRun(failed.runId, {
+      status: "failed",
+      reason: "preflight-fetch",
+    });
+    const preview = createUpdateRun({ trigger: "cli", preview: true });
+    finishUpdateRun(preview.runId, { status: "skipped", reason: "dry-run" });
+
+    await updateStatusCommand({ json: true });
+
+    expect(runtime.writeJson.mock.lastCall?.[0].lastRun).toEqual(failure);
+    expect(listUpdateRuns().map((run) => run.runId)).toEqual([preview.runId, failed.runId]);
+  });
+
   it("shows installed but unverified as a closed non-success outcome", async () => {
     const run = createUpdateRun({ trigger: "cli" });
     recordUpdateRunVerification(run.runId, { serviceRunning: true, readyz: false, settled: false });

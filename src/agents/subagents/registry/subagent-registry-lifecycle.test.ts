@@ -77,6 +77,7 @@ import {
   setSubagentRegistryDepsForTest,
   subagentRegistryDeps,
 } from "./subagent-registry-deps.js";
+import { registerDetachedCleanupAuthorityTest } from "./subagent-registry-lifecycle-cleanup.test-support.js";
 import {
   mockBlockedCompletionDeliveryOwner,
   registerPrivateCompletionSettlementTests,
@@ -852,50 +853,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
   });
 
-  it("runs detached cleanup outside a disposed requester transcript owner", async () => {
-    const sessionKey = "agent:main:disposed-cleanup-owner";
-    const entry = createRunEntry({
-      requesterSessionKey: sessionKey,
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-      retainAttachmentsOnKeep: true,
-    });
-    let disposed = false;
-    let releaseCleanup!: () => void;
-    const cleanupReady = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
-    const requesterTranscriptWrite = vi.fn();
-    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      requesterTranscriptWrite();
-      if (disposed) {
-        throw new Error("attempt disposed before transcript write");
-      }
-      return await operation();
-    };
-    const freshTranscriptWrite = vi.fn(async () => {});
-    const runSubagentAnnounceFlow = vi.fn(async () => {
-      await cleanupReady;
-      await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
-      return "delivered" as const;
-    });
-    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
-
-    await withOwnedSessionTranscriptWrites(
-      { sessionKey, withTranscriptWrite: withRequesterTranscriptWrite },
-      async () => {
-        expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
-      },
-    );
-
-    disposed = true;
-    releaseCleanup();
-
-    await waitForLifecycleState(() => expect(freshTranscriptWrite).toHaveBeenCalledOnce());
-    await waitForLifecycleState(() => expect(entry.delivery?.status).toBe("delivered"));
-    expect(requesterTranscriptWrite).not.toHaveBeenCalled();
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-  });
+  registerDetachedCleanupAuthorityTest({ createRunEntry, createLifecycleController });
 
   it("emits one progress end event at the canonical terminal transition", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: false });

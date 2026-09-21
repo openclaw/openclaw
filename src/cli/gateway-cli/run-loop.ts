@@ -886,41 +886,32 @@ export async function runGatewayLoop(params: {
           server = null;
         }
         if (action === "restart") {
-          try {
-            if (!acceptedRequest.hostedStop) {
-              await hostLifecycle?.retire();
-            }
-            if (shutdownFailure) {
-              if (installationReplacement && supervisorMode && !getManagedUpdateOwner()) {
-                writeStabilityBundle(
-                  "gateway.restart_close_failed",
-                  shutdownFailure.error,
-                  shutdownFailure.step,
-                );
-                await handleRestartAfterServerClose(undefined, false, shutdownFailure);
-              } else {
-                await forceExitAfterStabilityBundle(
-                  "gateway.restart_close_failed",
-                  1,
-                  shutdownFailure,
-                );
-              }
-            } else if (handoffClosed) {
-              await handleRestartAfterServerClose(
-                managedUpdateOwner,
-                managedUpdateCancellation === "restored-in-process",
+          if (!acceptedRequest.hostedStop) {
+            await hostLifecycle?.retire();
+          }
+          if (shutdownFailure) {
+            if (installationReplacement && supervisorMode && !getManagedUpdateOwner()) {
+              writeStabilityBundle(
+                "gateway.restart_close_failed",
+                shutdownFailure.error,
+                shutdownFailure.step,
+              );
+              await handleRestartAfterServerClose(undefined, false, shutdownFailure);
+            } else {
+              await forceExitAfterStabilityBundle(
+                "gateway.restart_close_failed",
+                1,
+                shutdownFailure,
               );
             }
-          } finally {
-            clearForceExitTimer();
-            forceActiveRestartExit = null;
+          } else if (handoffClosed) {
+            await handleRestartAfterServerClose(
+              managedUpdateOwner,
+              managedUpdateCancellation === "restored-in-process",
+            );
           }
         } else if (acceptedRequest.hostedStop) {
-          try {
-            await handleHostedStopAfterServerClose(acceptedRequest.hostedStop, shutdownFailure);
-          } finally {
-            clearForceExitTimer();
-          }
+          await handleHostedStopAfterServerClose(acceptedRequest.hostedStop, shutdownFailure);
         } else {
           await hostLifecycle?.retire();
           if (isRestart && shutdownFailure) {
@@ -949,10 +940,17 @@ export async function runGatewayLoop(params: {
             await releaseLockIfHeld();
             await exitProcessAfterLogFlush(shutdownFailure ? 1 : 0);
           }
-          clearForceExitTimer();
         }
+        // Even process.exit() can throw from an exit listener. Keep both deadline
+        // owners armed until the complete handoff succeeds, not just server close.
+        clearForceExitTimer();
       }
-    })();
+    })().finally(() => {
+      // A settled restart cannot transfer its deadlines to a later request.
+      if (action === "restart") {
+        forceActiveRestartExit = null;
+      }
+    });
     if (acceptedRequest.action === "stop") {
       acceptedStartupOperations.stopCompletion = completion;
     }

@@ -122,6 +122,8 @@ export type PreparedModelWorkerResult =
 export const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 
 const GATEWAY_CATALOG_WORKERS = 1;
+// Leave room for source loaders and overlapping generations without inheriting the host heap budget.
+const CATALOG_WORKER_HEAP_LIMIT_MB = 512;
 type CatalogPoolInput = PreparedModelWorkerRequest | PreparedModelCatalogWorkerTask;
 type CatalogPool = WorkerTaskPool<CatalogPoolInput, PreparedModelWorkerResult>;
 type CatalogPoolBorrower = {
@@ -224,6 +226,7 @@ async function getGatewayCatalogPool(
       validate: undefined,
       pool: new WorkerTaskPool<CatalogPoolInput, PreparedModelWorkerResult>({
         workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
+        workerOptions: { resourceLimits: { maxOldGenerationSizeMb: CATALOG_WORKER_HEAP_LIMIT_MB } },
         maxWorkers: GATEWAY_CATALOG_WORKERS,
         // Source modules belong to this inventory, not to any one agent or idle request.
         idleTimeoutMs: 0,
@@ -480,6 +483,7 @@ export function createPreparedModelCatalogWorker(
   const createPool = () =>
     new WorkerTaskPool<CatalogPoolInput, PreparedModelWorkerResult>({
       workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
+      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: CATALOG_WORKER_HEAP_LIMIT_MB } },
       maxWorkers: 1,
       // Recreating this worker would import changed plugin code under the old generation.
       // Only the lifecycle owner may retire it; crashes close the generation permanently.

@@ -33,6 +33,8 @@ const runtimePartitions = new Map<
         "packages/markdown-core/src/render-aware-chunking.test.ts",
         "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
+        // Native heap accounting, GC, and Worker limits require V8.
+        "src/infra/worker-task-pool.memory.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",

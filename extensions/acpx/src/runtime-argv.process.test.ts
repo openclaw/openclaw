@@ -58,6 +58,32 @@ async function prompt(
   return JSON.parse(chunks.join(""));
 }
 
+it("passes child-only environment through the ACPX process factory", async () => {
+  await withOpenClawTestState({ label: "acpx-agent-env" }, async (state) => {
+    const peerDirectory = path.join(state.root, "peer");
+    await fs.mkdir(peerDirectory);
+    const runtime = new AcpxRuntime({
+      cwd: state.root,
+      agentProcessEnv: { TOKIO_WORKER_THREADS: "7" },
+      permissionMode: "deny-all",
+      sessionStore: createFileSessionStore({ stateDir: path.join(state.root, "state") }),
+      agentRegistry: createAgentRegistry({
+        overrides: { fixture: [process.execPath, script, peerDirectory, "--capture-worker-env"] },
+      }),
+    });
+    let handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>> | undefined;
+    try {
+      handle = await runtime.ensureSession({ sessionKey, agent: "fixture", mode: "persistent" });
+      expect(await prompt(runtime, handle, "inspect")).toMatchObject({ workerThreads: "7" });
+    } finally {
+      if (handle) {
+        await runtime.close({ handle, reason: "test" });
+      }
+      await runtime.shutdown();
+    }
+  });
+});
+
 it.each([
   { wrapped: false, form: "path" },
   { wrapped: true, form: "path" },

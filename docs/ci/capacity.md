@@ -315,6 +315,12 @@ main and release proofs; no committed weight baseline was changed for tiering.
 
 ## Measured shard weights
 
+Infrastructure and host-owned SQLite test consumers also follow the existing
+worker ceiling, retaining isolated forks and fixture-owned home/state directories.
+Directory-sensitive regressions run in joined child processes, and backup command
+fixtures consume the invocation's prepared runtime. File parallelism does not add
+compact groups, runner registrations, or a separate worker budget.
+
 Gateway core, database-worker, methods, methods-isolated, server, and
 server-isolated configs run with exclusive plan admission. Cold in-process
 Gateway boot measured 37 seconds alone and 50 seconds under contention against

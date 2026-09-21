@@ -356,3 +356,26 @@ describe("diagnostic support redaction", () => {
     expect(serialized).toContain("~\\\\AppData\\\\Local\\\\openclaw\\\\gateway-service.json");
   });
 });
+
+it("preserves exact typed lease guidance without widening maintenance prose", () => {
+  const context = { env: {}, stateDir: "/synthetic/state" };
+  const guidance =
+    "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.";
+  expect(redactPublicSupportDiagnosticLine(guidance, context)).toBe(guidance);
+  for (const input of [
+    guidance + " /private/state.db token=fixture-only-token alice@example.invalid",
+    "Doctor could not enter maintenance. OpenClawAgentDatabaseLeaseActiveError: private message",
+  ]) {
+    expect(redactPublicSupportDiagnosticLine(input, context)).toBe(
+      "Doctor could not enter maintenance.",
+    );
+  }
+  expect(
+    redactPublicSupportDiagnosticLine(
+      "Error: Doctor could not enter maintenance. Error: The update parent owns Gateway activation. /private/state.db",
+      context,
+    ),
+  ).toBe(
+    "Error: Doctor could not enter maintenance. Error: The update parent owns Gateway activation.",
+  );
+});

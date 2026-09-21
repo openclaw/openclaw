@@ -68,6 +68,7 @@ import { createPluginSdkLightVitestConfig } from "../vitest/vitest.plugin-sdk-li
 import { createPluginSdkVitestConfig } from "../vitest/vitest.plugin-sdk.config.ts";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
 import { createRuntimeConfigVitestConfig } from "../vitest/vitest.runtime-config.config.ts";
+import { sharedVitestConfig } from "../vitest/vitest.shared.config.ts";
 import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mjs";
 import { createTasksVitestConfig } from "../vitest/vitest.tasks.config.ts";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
@@ -3991,7 +3992,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it.each(["github", "blacksmith", "hybrid"] as const)(
-    "bounds serial storage-state files per physical %s job without losing coverage",
+    "bounds storage-state files per physical %s job without losing coverage",
     (runnerBackend) => {
       const owner = "core-runtime-infra-storage-state";
       const expected = defaultShards.find((shard) => shard.shardName === owner)!.includePatterns!;
@@ -4008,7 +4009,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(new Set(actual).size).toBe(actual.length);
       expect(plan.length).toBeLessThanOrEqual(90);
       const config = createInfraVitestConfig({});
-      expect(config.test?.fileParallelism).toBe(false);
+      expect(config.test?.fileParallelism).toBe(sharedVitestConfig.test.fileParallelism);
+      expect(config.test?.maxWorkers).toBe(sharedVitestConfig.test.maxWorkers);
       expect(config.test?.isolate).toBe(true);
       expect(config.test?.pool).toBe(diagnosticForksPool);
     },

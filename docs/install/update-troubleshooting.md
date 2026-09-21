@@ -317,6 +317,14 @@ changed` when the updater's umask differs from the installed launcher's
   not writable by the invoking user; fix ownership and permissions, then retry.
   Re-run the [installer](/install/installer) if the package install is
   incomplete.
+- `runtime-verification-failed` near 300 seconds at `candidate gateway canary`
+  when updating from 2026.9.4: the installed updater shares that deadline across
+  the snapshot and candidate checks, even with a larger `--timeout`. The elapsed
+  failure duration is not Gateway startup time alone. Use the same
+  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+  then run `openclaw doctor --fix` and restart the Gateway. See
+  [#144858](https://github.com/openclaw/openclaw/issues/144858) and
+  [#154381](https://github.com/openclaw/openclaw/issues/154381).
 - `doctor-failed`: run `openclaw doctor` on the Gateway host, resolve its
   findings, then retry. See [Doctor](/cli/doctor) for the check list and
   `--fix` behavior.

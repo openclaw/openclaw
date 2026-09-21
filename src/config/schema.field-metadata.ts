@@ -2,10 +2,6 @@ import type { z } from "zod";
 import { walkConfigSchema } from "./schema.walk.js";
 import { configUiMetadata } from "./zod-schema.sensitive.js";
 
-export type ConfigSchemaShape<T extends object> = {
-  [Key in keyof T]-?: z.ZodType<T[Key]>;
-};
-
 /** Derive documented paths from the schema instead of maintaining a second field inventory. */
 export function projectConfigFieldMetadata(schema: z.ZodType, path: string) {
   const labels: Record<string, string> = {};

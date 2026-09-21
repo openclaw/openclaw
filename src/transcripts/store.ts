@@ -53,11 +53,7 @@ import {
   updateMeetingTranscriptExportManifestInDatabase,
   writeMeetingTranscriptSessionInDatabase,
 } from "./store-sqlite-write.js";
-import {
-  meetingTranscriptDb,
-  meetingTranscriptSessionQuery,
-  sessionFromRow,
-} from "./store-sqlite.js";
+import { meetingTranscriptDb, sessionFromRow } from "./store-sqlite.js";
 import type * as StoreTypes from "./store-types.js";
 import type {
   TranscriptAppendScheduler,
@@ -144,18 +140,13 @@ export class TranscriptsStore {
     };
   }
 
-  private readExportOwnership(session: TranscriptSessionDescriptor): {
+  private async readExportOwnership(session: TranscriptSessionDescriptor): Promise<{
     manifest: Record<string, string>;
     pending: Set<string>;
-  } {
-    const database = this.database();
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      meetingTranscriptSessionQuery(database.db, session).select([
-        "export_manifest_json",
-        "export_pending_json",
-      ]),
-    );
+  }> {
+    const row = await this.readWorker("transcripts.exportOwnership", {
+      params: { session: { sessionId: session.sessionId, startedAt: session.startedAt } },
+    });
     return row
       ? {
           manifest: parseTranscriptExportManifest(row.export_manifest_json),
@@ -223,7 +214,7 @@ export class TranscriptsStore {
       }
       throw error;
     }
-    const ownership = this.readExportOwnership(session);
+    const ownership = await this.readExportOwnership(session);
     const caseSensitive = await isCaseSensitiveDirectory(sessionDir);
     let expectedHashes: Record<string, string> | undefined;
     const repairedHashes: Record<string, string> = {};
@@ -366,9 +357,11 @@ export class TranscriptsStore {
     if (
       !(await this.readSessionByIdentity(session)) &&
       !(await hasAliasedCanonicalTranscriptExportPathOwner({
-        session,
+        selector: transcriptSessionSelector(session),
         exportRootDir: this.exportRootDir,
-        databaseOptions: this.databaseOptions,
+        owners: await this.readWorker("transcripts.exportPathOwners", {
+          params: { exportKey: transcriptSessionExportKey(session) },
+        }),
       }))
     ) {
       await this.assertExportDestinationOwned(session);
@@ -613,9 +606,11 @@ export class TranscriptsStore {
     const exportedHashes: Record<string, string> = {};
     const removedExports = new Set<string>();
     await assertTranscriptExportPathAvailable({
-      session,
+      selector: transcriptSessionSelector(session),
       exportRootDir: this.exportRootDir,
-      databaseOptions: this.databaseOptions,
+      collisions: await this.readWorker("transcripts.exportPathCollisions", {
+        params: { exportKey: transcriptSessionExportKey(session) },
+      }),
     });
     await this.assertExportDestinationOwned(session);
     const pendingFiles = [

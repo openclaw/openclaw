@@ -412,6 +412,9 @@ export function executeSharedStateCommand(
   }
   switch (command.type) {
     case "transcripts.readEntries":
+    case "transcripts.exportOwnership":
+    case "transcripts.exportPathCollisions":
+    case "transcripts.exportPathOwners":
     case "transcripts.sessionEntries":
     case "transcripts.matches":
     case "transcripts.session":

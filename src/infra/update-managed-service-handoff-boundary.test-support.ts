@@ -214,7 +214,7 @@ export function createManagedServiceManagerBoundary({
       }
       if (options?.replaceLedgerWriter) {
         const installedLedgerModule = `${ledgerRuntimeImport}
-        export const { finishUpdateRun } = ledger;
+        export const { finishUpdateRun, recordUpdateRunDiagnostic } = ledger;
       `;
         updaterScript =
           `require("node:fs").writeFileSync(${JSON.stringify(recoveryModulePath)}, ${JSON.stringify(installedLedgerModule)});` +

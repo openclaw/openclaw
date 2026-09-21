@@ -600,6 +600,12 @@ jobs:
       upgrade_baselines: ${{ steps.upgrade_baselines.outputs.baselines }}
       upgrade_baseline_scope: ${{ steps.upgrade_baselines.outputs.baseline_scope }}
     steps:
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       # github.workflow_sha identifies the caller during workflow_call. Resolve the called
       # workflow SHA from job context so trusted harness checkouts cannot drift to candidate code.
       - name: Resolve job workflow identity
@@ -2417,6 +2423,12 @@ jobs:
           fi
           echo "required=$source_package_required" >> "$GITHUB_OUTPUT"
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Validate prepare-only Docker E2E package source metadata
         if: inputs.prepare_only && steps.package_source.outputs.required == 'true'
         env:
@@ -3153,6 +3165,12 @@ jobs:
           path: .release-harness
           persist-credentials: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Restore exact trusted workflow revision
         id: workflow
         env:
@@ -3648,6 +3666,12 @@ jobs:
           path: .release-harness
           persist-credentials: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - name: Pack live-test image artifact
         id: image_artifact
         if: inputs.shared_image_policy == 'no-push-artifact'
@@ -3780,6 +3804,12 @@ jobs:
           path: .artifacts/live-test-image
           run-id: ${{ needs.prepare_live_test_image.outputs.image_artifact_run_id }}
           github-token: ${{ github.token }}
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Verify and load live-test image artifact
         if: contains(matrix.profiles, inputs.release_test_profile) && inputs.shared_image_policy == 'no-push-artifact'
@@ -3935,6 +3965,12 @@ jobs:
         if: inputs.shared_image_policy == 'no-push-artifact'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with: *live_test_image_download_with
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Verify and load live-test image artifact
         if: inputs.shared_image_policy == 'no-push-artifact'
@@ -4514,6 +4550,13 @@ jobs:
           fetch-depth: 1
           path: .release-harness
           persist-credentials: false
+
+      - name: Setup supported Node runtime
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || inputs.live_suite_filter == matrix.suite_group)
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
 
       - name: Resolve frozen Codex live compatibility
         id: codex_compat

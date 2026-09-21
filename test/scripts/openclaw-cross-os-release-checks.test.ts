@@ -93,7 +93,6 @@ import {
   resolveInstalledPrefixDirFromCliPath,
   resolvePublishedInstallerUrl,
   resolveRequestedSuites,
-  resolveRunnerMatrix,
   resolveStaticFileContentType,
   startStaticFileServer,
   trimForSummary,
@@ -1431,54 +1430,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveRequestedSuites("both", input)).toEqual(expected);
   });
 
-  it("builds a suite-aware runner matrix with the beefy Windows default", () => {
-    const matrix = resolveRunnerMatrix({
-      mode: "both",
-      ref: "main",
-      ubuntuRunner: "",
-      windowsRunner: "",
-      macosRunner: "",
-      varUbuntuRunner: "",
-      varWindowsRunner: "",
-      varMacosRunner: "",
-    });
-
-    expect(matrix.include).toHaveLength(12);
-    expect(
-      matrix.include.find((entry) => entry.os_id === "windows" && entry.suite === "dev-update"),
-    ).toEqual({
-      artifact_name: "windows",
-      display_name: "Windows",
-      lane: "upgrade",
-      os_id: "windows",
-      runner: "blacksmith-32vcpu-windows-2025",
-      suite: "dev-update",
-      suite_label: "dev update",
-    });
-    expect(
-      matrix.include.find((entry) => entry.os_id === "ubuntu" && entry.suite === "installer-fresh"),
-    ).toEqual({
-      artifact_name: "linux",
-      display_name: "Linux",
-      lane: "fresh",
-      os_id: "ubuntu",
-      runner: "blacksmith-8vcpu-ubuntu-2404",
-      suite: "installer-fresh",
-      suite_label: "installer fresh",
-    });
-    expect(
-      matrix.include.find((entry) => entry.os_id === "macos" && entry.suite === "packaged-fresh"),
-    ).toEqual({
-      artifact_name: "macos",
-      display_name: "macOS",
-      lane: "fresh",
-      os_id: "macos",
-      runner: "blacksmith-6vcpu-macos-15",
-      suite: "packaged-fresh",
-      suite_label: "packaged fresh",
-    });
-  });
-
   it("keeps matrix resolution independent of package dependency imports", () => {
     const configSource = readFileSync("scripts/lib/cross-os-release-checks/config.ts", "utf8");
     const installSource = readFileSync("scripts/lib/cross-os-release-checks/install.ts", "utf8");
@@ -1531,58 +1482,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
-  });
-
-  it("filters the cross-OS runner matrix to a focused OS suite", () => {
-    const matrix = resolveRunnerMatrix({
-      mode: "both",
-      ref: "main",
-      suiteFilter: "windows/packaged-upgrade",
-      ubuntuRunner: "",
-      windowsRunner: "",
-      macosRunner: "",
-      varUbuntuRunner: "",
-      varWindowsRunner: "",
-      varMacosRunner: "",
-    });
-
-    expect(matrix.include).toEqual([
-      {
-        artifact_name: "windows",
-        display_name: "Windows",
-        lane: "upgrade",
-        os_id: "windows",
-        runner: "blacksmith-32vcpu-windows-2025",
-        suite: "packaged-upgrade",
-        suite_label: "packaged upgrade",
-      },
-    ]);
-  });
-
-  it("filters the cross-OS runner matrix by suite across platforms", () => {
-    const matrix = resolveRunnerMatrix({
-      mode: "both",
-      ref: "main",
-      suiteFilter: "packaged-fresh",
-      ubuntuRunner: "",
-      windowsRunner: "",
-      macosRunner: "",
-      varUbuntuRunner: "",
-      varWindowsRunner: "",
-      varMacosRunner: "",
-    });
-
-    expect(matrix.include).toHaveLength(3);
-    expect(matrix.include.map((entry) => entry.os_id).toSorted()).toEqual([
-      "macos",
-      "ubuntu",
-      "windows",
-    ]);
-    expect(matrix.include.map((entry) => entry.suite)).toEqual([
-      "packaged-fresh",
-      "packaged-fresh",
-      "packaged-fresh",
-    ]);
   });
 
   it("rejects unsupported cross-OS suite filter tokens", () => {
