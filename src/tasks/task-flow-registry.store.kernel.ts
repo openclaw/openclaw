@@ -361,6 +361,15 @@ export function updateTaskFlowRecordInDatabase(
     return { applied: false, reason: "not_found" };
   }
   const current = normalizeRestoredFlowRecord(stored);
+  return updateSelectedTaskFlowRecordInDatabase(db, current, params);
+}
+
+/** The caller selected and normalized current inside this same SQLite write transaction. */
+export function updateSelectedTaskFlowRecordInDatabase(
+  db: DatabaseSync,
+  current: TaskFlowRecord,
+  params: Pick<TaskFlowRegistryUpdate, "expectedRevision" | "patch">,
+): TaskFlowRegistryUpdateResult {
   if (current.revision !== params.expectedRevision) {
     return { applied: false, reason: "revision_conflict", current };
   }

@@ -14,7 +14,7 @@ import { normalizeRestoredFlowRecord } from "./task-flow-registry.records.js";
 import {
   deleteTaskFlowRowInDatabase,
   readTaskFlowRecord,
-  updateTaskFlowRecordInDatabase,
+  updateSelectedTaskFlowRecordInDatabase,
 } from "./task-flow-registry.store.kernel.js";
 import { listTaskRecordsForFlowReadInDatabase } from "./task-registry.store.kernel.js";
 
@@ -50,8 +50,7 @@ export function maintainTaskFlowInDatabase(
             deleteTaskFlowRowInDatabase(db, current.flowId);
             return "pruned";
           }
-          const result = updateTaskFlowRecordInDatabase(db, {
-            flowId: current.flowId,
+          const result = updateSelectedTaskFlowRecordInDatabase(db, current, {
             expectedRevision: input.expectedRevision,
             patch: action.patch,
           });
