@@ -150,6 +150,24 @@ describe("Firecrawl scrape payloads", () => {
     expect(String(result.title)).toContain("tttt");
   });
 
+  it.each([
+    ["truncates content when it exceeds maxChars", "a".repeat(200), 50, true],
+    ["does not truncate content within maxChars limit", "short content here", 50_000, false],
+    ["handles truncation at exact boundary (not truncated)", "x".repeat(100), 100, false],
+    ["truncates content one character over maxChars", "x".repeat(101), 100, true],
+    ["handles maxChars of 0 (truncates everything)", "some content", 0, true],
+  ] as const)("%s", (_name, markdown, maxChars, truncated) => {
+    const result = firecrawlClient.parseFirecrawlScrapePayload({
+      payload: { data: { markdown } },
+      url: "https://example.com/requested",
+      extractMode: "markdown",
+      maxChars,
+    });
+
+    expect(result.truncated).toBe(truncated);
+    expect(result.rawLength).toBe(markdown.length);
+  });
+
   it("keeps the requested target when provider redirect metadata is hostile", () => {
     const result = firecrawlClient.parseFirecrawlScrapePayload({
       payload: {
