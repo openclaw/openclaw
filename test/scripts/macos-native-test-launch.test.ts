@@ -398,6 +398,22 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       }
       expect(roots.size).toBe(tests.length);
       expect(f.capturePath("default")).toBe(captures[defaultCode === 0 ? 1 : 0]);
+      const captureUpload = workflow.jobs["macos-swift"].steps.find(
+        (step: { name?: string }) => step.name === "Upload default-profile chat menu captures",
+      );
+      const uploaded = new Set(
+        (captureUpload.with.path as string)
+          .trim()
+          .split("\n")
+          .flatMap((pattern) =>
+            fs.globSync(pattern.replace("${{ runner.temp }}", f.env.RUNNER_TEMP)),
+          ),
+      );
+      for (const exported of captures.slice(0, Math.min(tests.length, 2))) {
+        for (const name of fs.readdirSync(exported)) {
+          expect(uploaded.has(path.join(exported, name)), name).toBe(true);
+        }
+      }
       const logDirectory = path.join(f.env.RUNNER_TEMP, "openclaw-native-test-logs");
       const logs = fs.readdirSync(logDirectory).toSorted();
       expect(logs).toHaveLength(tests.length);

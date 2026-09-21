@@ -5345,10 +5345,10 @@ jobs:
         with:
           name: macos-chat-menu-captures-default
           path: |
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-window.png
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-menu-*.png
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-capture-status.json
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/capture-export.json
+            ${{ runner.temp }}/openclaw-menu-default-*/*-window.png
+            ${{ runner.temp }}/openclaw-menu-default-*/*-menu-*.png
+            ${{ runner.temp }}/openclaw-menu-default-*/*-capture-status.json
+            ${{ runner.temp }}/openclaw-menu-default-*/capture-export.json
           if-no-files-found: error
           retention-days: 7
 

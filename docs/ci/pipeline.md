@@ -168,6 +168,8 @@ Each launcher invocation retains a full log in the `macos-native-test-logs`
 artifact. CI forwards only a bounded tail after the invocation exits, keeping
 Actions log backpressure outside the tests while preserving process and output
 closure checks before resource cleanup.
+The default-profile capture artifact retains each invocation's directory, so
+browser sign-in captures from the bulk suite survive the later Quick Chat run.
 
 Both phases use Xcode 27 on GitHub-hosted `xcode-27`, the preview macOS 27
 image, with at most two concurrent jobs. Full manual
