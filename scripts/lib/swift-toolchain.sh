@@ -5,6 +5,21 @@ REQUIRED_SWIFT_TOOLS_MINOR=3
 REQUIRED_XCODE_MAJOR=26
 REQUIRED_XCODE_MINOR=4
 
+select_xcode_toolchain() {
+  local expected_version="$1"
+  sudo xcode-select -s "/Applications/Xcode_${expected_version}.app/Contents/Developer" || return 1
+
+  local xcodebuild_version xcode_version
+  xcodebuild_version="$(xcodebuild -version)" || return 1
+  printf '%s\n' "$xcodebuild_version"
+  xcode_version="$(printf '%s\n' "$xcodebuild_version" | awk 'NR == 1 { print $2 }')"
+  if [[ "$xcode_version" != "$expected_version"* ]]; then
+    echo "error: expected Xcode ${expected_version}, got ${xcode_version}" >&2
+    return 1
+  fi
+  swift --version
+}
+
 require_swift_toolchain() {
   local xcodebuild_version
   if ! xcodebuild_version="$(xcrun xcodebuild -version 2>&1)"; then

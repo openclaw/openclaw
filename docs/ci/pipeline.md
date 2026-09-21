@@ -146,11 +146,17 @@ baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilat
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
 
-Both phases use `macos-26`, with at most two concurrent jobs. Full manual
-validation adds the existing `release` phase under the same cap. This adds one
+Both phases use Xcode 27 on GitHub-hosted `xcode-27`, the preview macOS 27
+image, with at most two concurrent jobs. Full manual
+validation adds the existing `release` phase under the same cap. The package split adds one
 hosted Mac job and its checkout/setup cost per selected run, with no additional
 Blacksmith registrations. Compare complete hosted timings, including queue and
 setup time, before treating the removed serial work as an observed speedup.
+
+The Xcode 27 rollout preserves the existing hosted placement, job counts,
+30-minute phase budgets, coverage, and Swift 6.3 source-language minimum.
+Native builds/tests and complete job timings must qualify the new toolchain;
+the earlier package-split measurement does not establish its performance.
 
 Only the app phases restore the app build cache. SwiftPM dependency caches remain
 restore-only in `packages`; the existing primary phase owns shared cache writes.
@@ -233,7 +239,7 @@ Standalone Periphery workflows enforce zero dead-code findings for the iOS and m
 
 All four scans use `scripts/install-periphery.sh` to install the checksum-pinned Periphery 3.8.0 OSS release, including its adjacent `libIndexStore.dylib`, in a dedicated runner-temporary directory. The installer rejects download, checksum, and version failures without falling back to Homebrew. Installer changes select all three native workflows.
 
-[Upstream archived the OSS project](https://github.com/peripheryapp/periphery/commit/56a0eb6fb97b785c8fbc1044ccbc7b5d9f06ebec). The pin is a maintainer-owned bridge for the workflows' Xcode 26.6 toolchain, not a claim of ongoing upstream support. Native CI maintainers must revalidate both app scans and both shared consumers before changing Xcode, the pinned release, or the analyzer; retain the zero-findings policy and exact-USR intersection rather than adding a baseline or a weaker fallback.
+[Upstream archived the OSS project](https://github.com/peripheryapp/periphery/commit/56a0eb6fb97b785c8fbc1044ccbc7b5d9f06ebec). The pin remains a maintainer-owned bridge, not a claim of ongoing upstream support. All four scans now target Xcode 27 on GitHub-hosted `xcode-27`. Retain Periphery 3.8.0 while obtaining native compatibility proof for both app scans and both shared consumers on the new toolchain; selecting the runner does not establish compatibility. Changes to the pinned release or analyzer require that same proof, preserving the zero-findings policy and exact-USR intersection without a baseline or weaker fallback.
 
 ## Security review checks
 

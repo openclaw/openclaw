@@ -270,8 +270,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   OpenClawKit test, and Swabble test graphs in `packages`.
   Ordinary full-scope manual validation adds independent release compilation,
   moves the guards to `release`, and retains health renders in `tests`.
-  All phases use GitHub-hosted `macos-26`, `max-parallel: 2`, and the existing
-  30-minute budget. This adds one hosted job and no Blacksmith registrations;
+  All phases use Xcode 27 on GitHub-hosted `xcode-27` (preview macOS 27),
+  `max-parallel: 2`, and the existing 30-minute budget. The toolchain rollout
+  changes no hosted/Blacksmith placement, job counts, coverage, or Swift 6.3
+  source-language minimum. Require complete native proof and old/new job timings.
+  The existing package split adds one hosted job and no Blacksmith registrations;
   measure complete hosted timing including duplicated setup. Packages do not
   restore or save app build products. Build caches stay phase-owned; the sole eligible shared
   SwiftPM cache writer is regular `tests` or full-validation `release`.
@@ -289,7 +292,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   and Debug/native-test phases, both screenshot shards, and the evidence reducer.
   Frozen full-manual targets keep their Debug-only contract without screenshots;
   npm qualification still defers native jobs. All iOS build phases and screenshot
-  shards use `macos-26` from the first attempt.
+  shards use Xcode 27 on GitHub-hosted `xcode-27` from the first attempt.
+  All four Periphery scans use the same toolchain and retain the checksum-pinned
+  3.8.0 release pending native compatibility proof for both app scans and both
+  shared consumers. Preserve zero findings and exact-USR intersection; selecting
+  the new runner is not compatibility proof.
   The conservative full-tier non-Node inventory, including Control UI performance, is
   87 rows, or 88 for historical UI targets. Excluding those four hosted rows
   plus all three macOS Swift phases and the always-hosted aggregate gate leaves at

@@ -3306,7 +3306,7 @@ fi
         file: ".github/workflows/ios-beta-release.yml",
         name: "iOS Beta Release",
         platform: "ios",
-        releaseRunner: "macos-26",
+        releaseRunner: "xcode-27",
         signingCheckoutName: "Checkout encrypted iOS signing assets",
         signingCheckoutRevalidateName:
           "Revalidate release authority immediately before iOS signing checkout",
@@ -4515,7 +4515,7 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
       };
     };
     const releaseSteps = workflow.jobs.release.steps;
-    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 26");
+    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode 27");
     const rustIndex = releaseSteps.findIndex(
       (step) => step.name === "Install Watch Rust toolchain",
     );

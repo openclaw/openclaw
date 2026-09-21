@@ -3291,7 +3291,7 @@ NODE
         expect(selected, phase).toEqual(expected);
         if (jobName === "ios-build") {
           for (const name of [
-            "Select Xcode 26",
+            "Select Xcode 27",
             "Setup Node environment",
             "Install Watch Rust toolchain",
             "Install iOS Swift tooling",
@@ -3440,7 +3440,7 @@ NODE
   it("starts Apple builds and screenshots directly on hosted capacity", () => {
     const workflow = readCiWorkflow();
     for (const jobName of ["macos-swift", "ios-build", "ios-screenshot-shard"]) {
-      expect(workflow.jobs[jobName]["runs-on"], jobName).toBe("macos-26");
+      expect(workflow.jobs[jobName]["runs-on"], jobName).toBe("xcode-27");
     }
     expect(workflow.jobs["macos-swift"]["timeout-minutes"]).toBe(30);
   });
@@ -5977,7 +5977,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
     expect(readWorkflowOutputs(outputPath).sha).toBe("a".repeat(40));
   });
 
-  it("pins Swift 6.3 workflow jobs to Xcode 26.6-capable runners", () => {
+  it("selects the declared compiler for native builds and analysis", () => {
     const codeql = parse(
       readFileSync(".github/workflows/codeql-macos-critical-security.yml", "utf8"),
     );
@@ -6106,18 +6106,26 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
     expect(codeqlSelect.run).toContain("/Applications/Xcode_26.6.app/Contents/Developer");
     expect(codeqlSelect.run).toContain('if [[ "$xcode_version" != 26.6* ]]; then');
 
-    for (const [workflowPath, selectorCount] of [
-      [".github/workflows/ci.yml", 2],
-      [".github/workflows/ios-periphery.yml", 1],
-      [".github/workflows/macos-periphery.yml", 1],
-      [".github/workflows/shared-openclawkit-periphery.yml", 2],
+    for (const [workflowPath, jobNames] of [
+      [".github/workflows/ci.yml", ["macos-swift", "ios-build", "ios-screenshot-shard"]],
+      [".github/workflows/ios-periphery.yml", ["scan"]],
+      [".github/workflows/macos-periphery.yml", ["scan"]],
+      [".github/workflows/shared-openclawkit-periphery.yml", ["scan-ios", "scan-macos"]],
     ] as const) {
-      const source = readFileSync(workflowPath, "utf8");
-      expect(source.match(/\/Applications\/Xcode_26\.6\.app/gu), workflowPath).toHaveLength(
-        selectorCount,
-      );
-      expect(source.match(/expected Xcode 26\.6/gu), workflowPath).toHaveLength(selectorCount);
-      expect(source, workflowPath).not.toContain("Xcode_26.5.app");
+      const workflow = parse(readFileSync(workflowPath, "utf8"));
+      for (const jobName of jobNames) {
+        const job = workflow.jobs[jobName];
+        expect(job["runs-on"], `${workflowPath}: ${jobName}`).toBe("xcode-27");
+        const selection = expectDefined(
+          job.steps.find((step: WorkflowStep) =>
+            ["Select Xcode 27", "Verify Xcode"].includes(step.name ?? ""),
+          ),
+          `${workflowPath}: ${jobName} toolchain selection`,
+        );
+        const toolingRoot = workflowPath === ".github/workflows/ci.yml" ? ".ci-harness/" : "";
+        expect(selection.run).toContain(`source ${toolingRoot}scripts/lib/swift-toolchain.sh`);
+        expect(selection.run).toContain("select_xcode_toolchain 27.0");
+      }
     }
   });
 
