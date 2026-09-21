@@ -168,6 +168,10 @@ debugger type/value inspection requires a normal local debug build. The app test
 cache uses a separate build profile so it cannot restore the old indexed products;
 Release build flags and caches remain unchanged.
 
+The macOS Periphery configuration retains the native SwiftPM backend because
+Periphery 3.8 reads its `.build/debug/index/store` layout. Native test
+crashes emit noninteractive Swift backtraces, without register dumps.
+
 Ordinary Markdown and MDX pages under `docs/`, plus root `README.md`, retain
 their separate `check-docs` coverage beside precise pull-request Node tests.
 Page deletions and renames preserve this targeting. Explicit Node owners for

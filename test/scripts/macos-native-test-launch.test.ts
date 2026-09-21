@@ -297,6 +297,9 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
         }
         expect(test.env.OPENCLAW_PROFILE).not.toBe(f.env.OPENCLAW_PROFILE);
         expect(test.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+        expect(test.env.SWIFT_BACKTRACE).toBe(
+          "enable=yes,interactive=no,color=no,sanitize=yes,threads=crashed,registers=none,images=mentioned",
+        );
         for (const key of [
           "DEVELOPER_DIR",
           "DYLD_FRAMEWORK_PATH",
