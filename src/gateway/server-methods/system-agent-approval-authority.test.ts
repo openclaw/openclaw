@@ -643,7 +643,9 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       const completion = session.pendingApproval?.completion;
       expect(completion).toBeDefined();
       (abortLease === "first" ? firstController : secondController).abort();
-      await expect(manager.resolve(firstApprovalId, "allow-once", "operator-ui")).resolves.toBe(applies);
+      await expect(manager.resolve(firstApprovalId, "allow-once", "operator-ui")).resolves.toBe(
+        applies,
+      );
       await completion;
       if (applies) {
         expect(resolveOperatorApproval).toHaveBeenCalledWith(
@@ -731,7 +733,9 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     );
 
     expect(session.pendingApproval?.id).toBe(ownerResolution.id);
-    expect(manager.listPendingRecords().map((record) => record.id)).toEqual([ownerResolution.id]);
+    await expect(manager.listPendingRecords()).resolves.toEqual([
+      expect.objectContaining({ id: ownerResolution.id }),
+    ]);
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
     expect(manager.resolve(ownerResolution.id, "allow-once", "operator-ui")).toBe(true);
     await expect(ownerResolution.completion).resolves.toMatchObject({ applied: true });
