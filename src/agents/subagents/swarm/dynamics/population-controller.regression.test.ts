@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveDynamicsProfile } from "./dynamics-profiles.js";
-import type { CognitiveReplica } from "./dynamics-types.js";
 import { assessPopulation, buildPopulationSnapshot } from "./population-controller.js";
-import type { LocalDynamicsObservation } from "./population-types.js";
+import type { LocalDynamicsObservation, PopulationSnapshot } from "./population-types.js";
 
 function observation(
   replicaId: string,
@@ -23,7 +22,7 @@ function observation(
     ...overrides,
   };
 }
-function replica(replicaId: string): CognitiveReplica {
+function replica(replicaId: string): PopulationSnapshot["replicas"][number] {
   return {
     replicaId,
     campaignId: "c",
