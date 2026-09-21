@@ -42,6 +42,7 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   pairedClientId?: string;
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
+  authPolicyGeneration?: string;
   presenceKey?: string;
   /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
   personPresence?: { onlineSince: number; lastActivityAt?: number };

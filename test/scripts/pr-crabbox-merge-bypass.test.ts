@@ -386,7 +386,7 @@ else if (args[0] === "pr" && args[1] === "checks" && args.includes("--required")
 } else if (args[0] === "pr" && args[1] === "merge") out("synthetic merge request accepted");
 else if (args[0] === "workflow" && args[1] === "run") { value.dispatched = true; save(); }
 else if (endpoint === "graphql" && args.some(arg => arg.includes("viewerMergeBodyText"))) {
-  out({data:{repository:{pullRequest:{...pr,viewerMergeBodyText:value.mergePreview}}}});
+  out({data:{repository:{pullRequest:{...pr,viewerMergeHeadlineText:"Fixture merge headline",viewerMergeBodyText:value.mergePreview}}}});
 }
 else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(owner:"))) {
   out({data:{repository:{...repo,id:repoNodeId,databaseId:repo.id,ref:{target:{oid:"${mainSha}"}},pullRequest:pr}}});
@@ -668,6 +668,8 @@ describe("Crabbox authorization before final effects", () => {
           headSha,
           "--body-file",
           expect.any(String),
+          "--subject",
+          "Fixture merge headline",
         ]);
         expect(result.calls.indexOf(requests[0]!)).toBeGreaterThan(
           result.calls.indexOf(memberships[1]!),

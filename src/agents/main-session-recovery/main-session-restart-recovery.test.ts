@@ -116,10 +116,7 @@ import {
 } from "./main-session-recovery-store.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
-import {
-  discoverRestartRecoveryStoreTargets,
-  mainSessionRecoveryLog,
-} from "./main-session-restart-recovery-shared.js";
+import { discoverRestartRecoveryStoreTargets } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 import {
   markRestartAbortedMainSessions,
@@ -4668,64 +4665,6 @@ describe("main-session-restart-recovery", () => {
         vi.mocked(callGateway).mock.calls.filter(([call]) => call.method === "agent"),
       ).toHaveLength(2);
     });
-  });
-
-  it("stops exhaustion reconciliation while its Gateway admission is suspended", async () => {
-    const { storePath } = await makeMainSessionFixture({
-      mainRestartRecovery: {
-        cycleId: "cycle-suspended-exhaustion",
-        revision: 1,
-        chargedAttempts: 2,
-      },
-      pendingFinalDelivery: makePendingFinalDelivery(),
-    });
-    const suspension = { lease: null as ReturnType<typeof tryBeginGatewaySuspendAdmission> };
-    vi.mocked(callGateway)
-      .mockImplementationOnce(async () => {
-        suspension.lease = tryBeginGatewaySuspendAdmission(() => {});
-        throw new Error("final ambiguous dispatch failure");
-      })
-      .mockResolvedValueOnce({ runId: "run-resumed" });
-    const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
-    const recovery = scheduleRestartAbortedMainSessionRecovery({
-      getConfig: () => ({}),
-      delayMs: 0,
-      maxRetries: 1,
-      stateDir: tmpDir,
-    });
-    let stopping: Promise<void> | undefined;
-    try {
-      await waitForFast(() => {
-        expect(suspension.lease).not.toBeNull();
-        expect(callGateway).toHaveBeenCalledTimes(2);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-      });
-      let stopped = false;
-      stopping = recovery.stop().then(() => {
-        stopped = true;
-      });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(stopped).toBe(true);
-      suspension.lease?.rollback();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(callGateway).toHaveBeenCalledTimes(2);
-      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
-        status: "running",
-        abortedLastRun: true,
-        mainRestartRecovery: { chargedAttempts: 3 },
-      });
-      expect(warn).not.toHaveBeenCalledWith(
-        expect.stringContaining("main-session exhaustion reconciliation failed"),
-      );
-    } finally {
-      suspension.lease?.rollback();
-      await (stopping ?? recovery.stop());
-      warn.mockRestore();
-    }
   });
 
   it("tombstones when message-tool-only authority cannot be reconstructed", async () => {

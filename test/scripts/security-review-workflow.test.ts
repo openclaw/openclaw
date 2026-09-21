@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type WorkflowStep = {
   "continue-on-error"?: boolean;
+  "timeout-minutes"?: number;
   env?: Record<string, string>;
   if?: string;
   id?: string;
@@ -80,6 +81,7 @@ describe("security review workflow trust boundaries", () => {
     for (const [name, job] of Object.entries(workflow.jobs)) {
       const checkouts = job.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
       expect(checkouts).toHaveLength(1);
+      expect(checkouts[0]?.["timeout-minutes"]).toBe(5);
       expect(checkouts[0]?.with).toMatchObject({
         "persist-credentials": false,
       });
@@ -88,12 +90,16 @@ describe("security review workflow trust boundaries", () => {
       }
       const runtime = job.steps.filter((step) => step.uses === `./${runtimeActionPath}`);
       expect(runtime).toHaveLength(name === "review" ? 1 : 0);
+      if (runtime.length > 0) {
+        expect(runtime[0]?.["timeout-minutes"]).toBe(3);
+      }
       const bootstrap = job.steps.filter((step) => step.uses?.startsWith("actions/setup-node@"));
       expect(bootstrap).toEqual(
         name === "resolve"
           ? [
               {
                 name: "Setup supported Node runtime",
+                "timeout-minutes": 3,
                 uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
                 with: { "node-version": "24.19.0", "package-manager-cache": false },
               },

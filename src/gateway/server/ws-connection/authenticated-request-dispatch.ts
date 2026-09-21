@@ -21,12 +21,14 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
+import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
 } from "../../operator-access-policy.js";
+import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
 import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import {
@@ -78,10 +80,12 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
   let deviceCredentialMutationBarrier: Promise<void> | undefined;
 
   const closeInvalidatedClient = (client: GatewayWsClient, method: string): boolean => {
-    if (!client.invalidated) {
+    const policyChanged = !isGatewayAuthPolicyCurrent(client.authPolicyGeneration);
+    if (!client.invalidated && !policyChanged) {
       return false;
     }
-    const reason = client.invalidatedReason ?? "invalidated";
+    const reason =
+      client.invalidatedReason ?? (policyChanged ? "gateway-policy-changed" : "invalidated");
     setCloseCause("client-invalidated", {
       reason,
       method,
@@ -124,6 +128,13 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers);
     logWs("in", "req", { connId, id: req.id, method: req.method });
     const context = buildRequestContext();
+    const sourceContext = context.resolveGatewayContext?.() ?? context;
+    const isCommittedPolicyCurrent = () =>
+      client.authPolicyGeneration === undefined ||
+      isGatewayAuthPolicyCurrent(
+        client.authPolicyGeneration,
+        sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig(),
+      );
     const expectedProfileBinding = createExpectedProfileBinding(req.expectedProfileId, client);
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
@@ -164,9 +175,19 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         (!client.usesSharedGatewayAuth ||
           getSharedGatewaySessionGenerationReaderState(getRequiredSharedGatewaySessionGeneration))
         ? {
-            isCurrent: () => hasCurrentGatewayPolicyClientSource(client),
+            isCurrent: () =>
+              hasCurrentGatewayPolicyClientSource(client) && isCommittedPolicyCurrent(),
             subscribe: (onRevoked) => {
               const releaseClient = onGatewayPolicyClientInvalidated(client, onRevoked);
+              const releasePolicy = onOperatorRolePolicyChanged((change) => {
+                if (
+                  change.kind === "config" &&
+                  change.context === sourceContext &&
+                  !isCommittedPolicyCurrent()
+                ) {
+                  onRevoked();
+                }
+              });
               const releaseGeneration = client.usesSharedGatewayAuth
                 ? onSharedGatewayAuthInvalidated(
                     getRequiredSharedGatewaySessionGeneration,
@@ -176,6 +197,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 : undefined;
               return () => {
                 releaseClient();
+                releasePolicy();
                 releaseGeneration?.();
               };
             },

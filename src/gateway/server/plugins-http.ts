@@ -99,6 +99,9 @@ async function withPluginRouteRuntimeScope<T>(
   scope: PluginRouteRuntimeScope,
   run: () => Promise<T>,
 ): Promise<T> {
+  if (scope.hasCurrentClientAuthority?.() === false) {
+    throw new Error("HTTP request authority expired");
+  }
   // HTTP clients are not in the connected-client set. Keep their prepared role/aliases
   // current across handler and projection awaits, using the same publication owner.
   const client = scope.client;
@@ -169,19 +172,25 @@ function createPluginRouteRuntimeScope(params: {
   );
   const operatorAccessAuthority = runtimeClient?.internal?.operatorAccessAuthority;
   operatorAccessAuthority?.assertCurrent();
+  const hasCurrentClientAuthority =
+    params.route.auth === "gateway"
+      ? params.gatewayRequestAuth?.hasCurrentClientAuthority
+      : undefined;
   return {
     pluginRegistry: params.registry,
     ...(params.route.auth === "gateway" && params.gatewayRequestAuth?.revalidate
       ? { revalidate: params.gatewayRequestAuth.revalidate }
       : {}),
-    ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
-    client: runtimeClient,
-    ...(operatorAccessAuthority
+    ...(hasCurrentClientAuthority || operatorAccessAuthority
       ? {
-          signal: operatorAccessAuthority.signal,
-          hasCurrentClientAuthority: () => hasCurrentGatewayOperatorAccess(operatorAccessAuthority),
+          hasCurrentClientAuthority: () =>
+            hasCurrentClientAuthority?.() !== false &&
+            hasCurrentGatewayOperatorAccess(operatorAccessAuthority),
         }
       : {}),
+    ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
+    client: runtimeClient,
+    ...(operatorAccessAuthority ? { signal: operatorAccessAuthority.signal } : {}),
     isWebchatConnect: () => false,
     ...(params.route.pluginId ? { pluginId: params.route.pluginId } : {}),
     ...(params.route.source ? { pluginSource: params.route.source } : {}),

@@ -105,8 +105,15 @@ plugin must return current authority for the person; another plugin's policy
 cannot satisfy the requirement. Configuration validation permits an unavailable
 plugin reference so the Gateway can still start for repair. Independent staff
 roles without this binding and the Gateway owner retain their existing access.
-Restore the required plugin to admit the bound role; removing or changing the
-binding is a role-policy change and follows the existing Gateway restart flow.
+Restore the required plugin to admit the bound role. Removing or changing the
+binding applies through the same live role-policy update described below.
+
+With live configuration reload enabled, edits to `gateway.roles` and
+`gateway.auth.identityScopes` apply without restarting the Gateway. Existing
+Gateway clients reconnect to receive the current scope ceiling. Pending
+handshakes and mutations recheck the policy before acquiring authority;
+already-admitted runs retain their normal completion and cancellation lifecycle,
+including cancellation when their original access-policy grant expires or is revoked.
 
 When roles are configured, identity-authenticated operator connections do not
 receive reusable device or bootstrap tokens: those tokens are not bound to a

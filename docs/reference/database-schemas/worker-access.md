@@ -63,6 +63,11 @@ dispatch can refuse work; cancellation after execution must still join its nativ
 settlement. Close and shutdown join accepted work and cleanup before releasing
 the store or replacing its generation.
 
+Session-reclamation retirement honors settled cleanup reported by its worker,
+including after a failed request. After an unsettled native exit, the shared-state
+cleanup worker releases the exact retained lease. Retirement joins lease deletion and cleanup
+store close, keeping those writes off the host connection used by live snapshots.
+
 ## Migrate a caller
 
 1. Trace the registered request, event, or timer through the store owner. Check

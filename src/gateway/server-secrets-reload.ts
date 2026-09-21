@@ -65,28 +65,6 @@ export type GatewaySecretsReloaderParams = {
   logChannels: { info: (message: string) => void };
 };
 
-async function activateSnapshotIfCurrent(
-  snapshot: PreparedSecretsRuntimeSnapshot,
-  expectedRevision: number,
-  options: {
-    canActivate: () => boolean;
-    onActivated: () => void;
-    runtimeSourceConfig: OpenClawConfig | undefined;
-  },
-): Promise<number | null> {
-  const runtime = await import("../secrets/runtime.js");
-  if (
-    !options.canActivate() ||
-    !runtime.activateSecretsRuntimeSnapshotIfCurrent(snapshot, expectedRevision, {
-      runtimeSourceConfig: options.runtimeSourceConfig,
-    })
-  ) {
-    return null;
-  }
-  options.onActivated();
-  return runtime.getActiveSecretsRuntimeSnapshotRevision();
-}
-
 async function restoreSnapshotIfCurrent(
   snapshot: PreparedSecretsRuntimeSnapshot,
   expectedRevision: number,
@@ -242,35 +220,19 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
               params.sharedGatewaySessionGenerationState,
               previousOwnership,
             );
-          const activateIfCurrent = params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
-          if (activateIfCurrent) {
-            const activated = await activateIfCurrent(
-              prepared,
-              previousRevision,
-              {
-                reason: "reload",
-                activate: true,
-                runtimeSourceConfig: previousRuntimeSourceConfig,
-              },
-              claimGeneration,
-              ownsPreviousGeneration,
-            );
-            if (!activated) {
-              continue;
-            }
-          } else {
-            const publishedSnapshotRevision = await activateSnapshotIfCurrent(
-              prepared,
-              previousRevision,
-              {
-                canActivate: ownsPreviousGeneration,
-                onActivated: claimGeneration,
-                runtimeSourceConfig: previousRuntimeSourceConfig,
-              },
-            );
-            if (publishedSnapshotRevision === null) {
-              continue;
-            }
+          const activated = await params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent(
+            prepared,
+            previousRevision,
+            {
+              reason: "reload",
+              activate: true,
+              runtimeSourceConfig: previousRuntimeSourceConfig,
+            },
+            claimGeneration,
+            ownsPreviousGeneration,
+          );
+          if (!activated) {
+            continue;
           }
           if (!transaction) {
             throw new Error("Secrets runtime activation did not publish ownership.");

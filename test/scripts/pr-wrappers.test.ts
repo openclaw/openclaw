@@ -674,7 +674,7 @@ describe("scripts/pr wrappers", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n`,
+      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n`,
     );
   });
 
@@ -763,45 +763,50 @@ describe("scripts/pr wrappers", () => {
         );
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toBe(
-          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n<${cancel}>\n`,
+          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n<${cancel}>\n<>\n`,
         );
       }
     }
   });
 
-  itPosix("pins legacy refusal evidence and requires an explicit current recovery head", () => {
-    const fixture = makeMismatchedWrapperRepo();
-    const caller = join(fixture.canonical, "nested");
-    mkdirSync(caller);
-    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
-    writeFileSync(
-      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
-      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
-    );
-    const args = [
-      "merge-recover",
-      "123",
-      "a".repeat(40),
-      "--confirmed-operator-recovery",
-      "--legacy-refusal",
-      "proof",
-    ];
-    const missing = spawnSync(join(fixture.canonical, "scripts/pr"), args, {
-      cwd: caller,
-      encoding: "utf8",
-      env: fixture.env,
-    });
-    expect(missing.status, missing.stdout + missing.stderr).toBe(2);
-    const result = spawnSync(
-      join(fixture.canonical, "scripts/pr"),
-      [...args, "--replacement-head", "b".repeat(40)],
-      { cwd: caller, encoding: "utf8", env: fixture.env },
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${join(caller, "proof")}>\n<false>\n`,
-    );
-  });
+  itPosix.each(["legacy-refusal", "pre-dispatch-refusal"])(
+    "pins %s evidence relative to the original caller",
+    (flag) => {
+      const fixture = makeMismatchedWrapperRepo();
+      const caller = join(fixture.canonical, "nested");
+      mkdirSync(caller);
+      writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
+      writeFileSync(
+        join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+        `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+      );
+      const args = [
+        "merge-recover",
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        `--${flag}`,
+        "proof",
+      ];
+      const missing = spawnSync(join(fixture.canonical, "scripts/pr"), args, {
+        cwd: caller,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(missing.status, missing.stdout + missing.stderr).toBe(
+        flag === "legacy-refusal" ? 2 : 0,
+      );
+      const result = spawnSync(
+        join(fixture.canonical, "scripts/pr"),
+        [...args, "--replacement-head", "b".repeat(40)],
+        { cwd: caller, encoding: "utf8", env: fixture.env },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toBe(
+        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n`,
+      );
+    },
+  );
 
   it("runs a mismatched advisory wrapper locally with an explicit developer opt-in", () => {
     const fixture = makeMismatchedWrapperRepo();

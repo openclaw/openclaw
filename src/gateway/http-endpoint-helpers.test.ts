@@ -3,6 +3,7 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 
@@ -35,6 +36,7 @@ const { authorizeGatewayHttpRequestOrReply, resolveTrustedHttpOperatorScopes } =
 const { authorizeOperatorScopesForMethod } = await import("./method-scopes.js");
 
 type EndpointOptions = Parameters<typeof handleGatewayPostJsonEndpoint>[2];
+type RequestAuth = NonNullable<Awaited<ReturnType<typeof authorizeGatewayHttpRequestOrReply>>>;
 type RequestOptions = {
   url?: string;
   method?: string;
@@ -51,6 +53,16 @@ function request(options: RequestOptions = {}): IncomingMessage {
 
 function response(): ServerResponse {
   return {} as unknown as ServerResponse;
+}
+
+function authorizedRequest(overrides: Partial<RequestAuth> = {}): RequestAuth {
+  return {
+    trustDeclaredOperatorScopes: true,
+    hasCurrentClientAuthority: () => true,
+    assertCurrent: () => {},
+    revalidate: async () => {},
+    ...overrides,
+  };
 }
 
 function endpointOptions(overrides: Partial<EndpointOptions> = {}): EndpointOptions {
@@ -77,6 +89,33 @@ function handleEndpoint(
 }
 
 describe("handleGatewayPostJsonEndpoint", () => {
+  it("does not admit a parsed body after its authority was revoked while reading", async () => {
+    const body = createDeferred<unknown>();
+    const reading = createDeferred();
+    const res = Object.assign(response(), { writableEnded: false });
+    let current = true;
+    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValueOnce(
+      authorizedRequest({
+        hasCurrentClientAuthority: () => current,
+        revalidate: async () => {
+          if (!current) {
+            Object.assign(res, { writableEnded: true });
+            throw new Error("Unauthorized");
+          }
+        },
+      }),
+    );
+    vi.mocked(readJsonBodyOrError).mockImplementationOnce(() => {
+      reading.resolve();
+      return body.promise;
+    });
+    const pending = handleEndpoint({ response: res });
+    await reading.promise;
+    current = false;
+    body.resolve({ message: "must not execute" });
+    await expect(pending).resolves.toBeUndefined();
+  });
+
   it("returns false when path does not match", async () => {
     const result = await handleEndpoint({ request: { url: "/nope" } });
     expect(result).toBe(false);
@@ -97,23 +136,21 @@ describe("handleGatewayPostJsonEndpoint", () => {
   });
 
   it("returns body when auth succeeds and JSON parsing succeeds", async () => {
-    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
-      trustDeclaredOperatorScopes: true,
-    });
+    const requestAuth = authorizedRequest();
+    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue(requestAuth);
     vi.mocked(readJsonBodyOrError).mockResolvedValue({ hello: "world" });
     vi.mocked(resolveTrustedHttpOperatorScopes).mockReturnValue(["operator.write"]);
     const result = await handleEndpoint();
     expect(result).toEqual({
       body: { hello: "world" },
-      requestAuth: { trustDeclaredOperatorScopes: true },
+      requestAuth,
       operatorScopes: ["operator.write"],
     });
   });
 
   it("matches paths without trusting malformed Host headers", async () => {
-    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
-      trustDeclaredOperatorScopes: true,
-    });
+    const requestAuth = authorizedRequest();
+    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue(requestAuth);
     vi.mocked(readJsonBodyOrError).mockResolvedValue({ ok: true });
     vi.mocked(resolveTrustedHttpOperatorScopes).mockReturnValue(["operator.write"]);
 
@@ -121,15 +158,15 @@ describe("handleGatewayPostJsonEndpoint", () => {
 
     expect(result).toEqual({
       body: { ok: true },
-      requestAuth: { trustDeclaredOperatorScopes: true },
+      requestAuth,
       operatorScopes: ["operator.write"],
     });
   });
 
   it("returns undefined and replies when required operator scope is missing", async () => {
-    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
-      trustDeclaredOperatorScopes: false,
-    });
+    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue(
+      authorizedRequest({ trustDeclaredOperatorScopes: false }),
+    );
     vi.mocked(resolveTrustedHttpOperatorScopes).mockReturnValue(["operator.approvals"]);
     vi.mocked(authorizeOperatorScopesForMethod).mockReturnValue({
       allowed: false,
@@ -156,13 +193,16 @@ describe("handleGatewayPostJsonEndpoint", () => {
   });
 
   it("uses a custom operator scope resolver when provided", async () => {
-    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue({
+    const requestAuth = authorizedRequest({
       authMethod: "token",
       trustDeclaredOperatorScopes: false,
     });
+    vi.mocked(authorizeGatewayHttpRequestOrReply).mockResolvedValue(requestAuth);
     vi.mocked(authorizeOperatorScopesForMethod).mockReturnValue({ allowed: true });
     vi.mocked(readJsonBodyOrError).mockResolvedValue({ ok: true });
-    const resolveOperatorScopes = vi.fn(() => ["operator.admin", "operator.write"]);
+    const resolveOperatorScopes = vi.fn<NonNullable<EndpointOptions["resolveOperatorScopes"]>>(
+      () => ["operator.admin", "operator.write"],
+    );
 
     const result = await handleEndpoint({
       endpoint: {
@@ -171,14 +211,12 @@ describe("handleGatewayPostJsonEndpoint", () => {
       },
     });
 
-    const [, requestAuth] = (resolveOperatorScopes.mock.calls.at(0) as unknown as
-      | [IncomingMessage, { authMethod?: string; trustDeclaredOperatorScopes: boolean }]
-      | undefined) ?? [undefined, undefined];
-    expect(requestAuth?.authMethod).toBe("token");
-    expect(requestAuth?.trustDeclaredOperatorScopes).toBe(false);
+    const [, resolvedAuth] = resolveOperatorScopes.mock.calls.at(0) ?? [undefined, undefined];
+    expect(resolvedAuth?.authMethod).toBe("token");
+    expect(resolvedAuth?.trustDeclaredOperatorScopes).toBe(false);
     expect(result).toEqual({
       body: { ok: true },
-      requestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
+      requestAuth,
       operatorScopes: ["operator.admin", "operator.write"],
     });
   });

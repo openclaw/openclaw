@@ -8,7 +8,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { deviceHandlers } from "../../server-methods/devices.js";
 import { createSecretsHandlers } from "../../server-methods/secrets.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
-import { disconnectAllSharedGatewayAuthClients } from "../../server-shared-auth-generation.js";
+import { disconnectStaleSharedGatewayAuthClients } from "../../server-shared-auth-generation.js";
 import { holdGatewayPolicyResponse } from "../ws-policy-close.js";
 import {
   createDispatchTestHarness,
@@ -100,7 +100,10 @@ describe("policy writer response ownership", () => {
           await Promise.race([entered.promise, request]);
           linkEmail("policy-source@example.test", target.id);
           // The accepted policy writer may bypass transport invalidation, never profile binding.
-          disconnectAllSharedGatewayAuthClients([fixture.client]);
+          disconnectStaleSharedGatewayAuthClients({
+            clients: [fixture.client],
+            expectedGeneration: null,
+          });
           release.resolve();
           await request;
           expect(await fixture.harness.awaitResponseFrame("bound-writer")).toEqual({
@@ -129,7 +132,10 @@ describe("policy writer response ownership", () => {
       const release = createDeferredCore();
       const handlers = createSecretsHandlers({
         reloadSecrets: async () => {
-          disconnectAllSharedGatewayAuthClients([fixture.client]);
+          disconnectStaleSharedGatewayAuthClients({
+            clients: [fixture.client],
+            expectedGeneration: null,
+          });
           published.resolve();
           await release.promise;
           if (failed) {
@@ -207,7 +213,10 @@ describe("policy writer response ownership", () => {
           dispatches.push(fixture.dispatch(writer.id, method));
           await writer.started.promise;
         }
-        disconnectAllSharedGatewayAuthClients([fixture.client]);
+        disconnectStaleSharedGatewayAuthClients({
+          clients: [fixture.client],
+          expectedGeneration: null,
+        });
         readRelease.resolve();
         await dispatches[0];
         expect(fixture.harness.send).not.toHaveBeenCalled();
@@ -309,7 +318,10 @@ describe("policy writer response ownership", () => {
       const fixture = createFixture();
       runtime.handler.mockImplementation(async ({ respond }) => {
         holdGatewayPolicyResponse(respond);
-        disconnectAllSharedGatewayAuthClients([fixture.client]);
+        disconnectStaleSharedGatewayAuthClients({
+          clients: [fixture.client],
+          expectedGeneration: null,
+        });
         if (completion === "throw") {
           throw new Error("write failed");
         }

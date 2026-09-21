@@ -218,7 +218,7 @@ describe("secret reload model-runtime publication", () => {
 
   it("observes model rejection when activation throws after starting publication", async () => {
     const { reload, activator } = await coldRuntime();
-    const activate = activator.activatePreparedSnapshotIfCurrent!;
+    const activate = activator.activatePreparedSnapshotIfCurrent;
     const buildStarted = createDeferred();
     activator.activatePreparedSnapshotIfCurrent = async (...args) => {
       await activate(...args);

@@ -27,6 +27,7 @@ import { waitForFast } from "../subagent-test-fixtures.test-helpers.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery-admission.js";
 import { createMainSessionRecoveryCapacity } from "./main-session-recovery-capacity.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
+import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
 import {
   recoverRestartAbortedMainSessions as recoverRestartAbortedMainSessionsBase,
   retryRestartAbortedMainSessionRecovery,
@@ -57,6 +58,16 @@ function gatewayParams() {
   return vi.mocked(callGateway).mock.calls[0]?.[0].params;
 }
 
+function makePendingFinalDelivery(): InternalSessionEntry["pendingFinalDelivery"] {
+  return {
+    kind: "replayable",
+    text: "interrupted response",
+    createdAt: Date.now(),
+    intentId: "intent-prepared-default",
+    deliveries: [{ id: "delivery-prepared-default", state: "prepared" }],
+  };
+}
+
 describe("startup recovery admission", () => {
   let tmpDir: string;
 
@@ -74,12 +85,10 @@ describe("startup recovery admission", () => {
     await cleanupSessionStateForTest({ stateDir: tmpDir });
   });
 
-  async function makeMainSessionFixture(
-    pendingFinalDelivery?: InternalSessionEntry["pendingFinalDelivery"],
-  ) {
+  async function makeMainSessionFixture(overrides: Partial<InternalSessionEntry> = {}) {
+    const sessionKey = "agent:main:main";
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionKey = "agent:main:main";
     await fs.mkdir(sessionsDir, { recursive: true });
     await replaceSessionEntry(
       { sessionKey, storePath },
@@ -89,7 +98,7 @@ describe("startup recovery admission", () => {
         updatedAt: Date.now() - 10_000,
         status: "running",
         abortedLastRun: true,
-        pendingFinalDelivery,
+        ...overrides,
       },
     );
     return { sessionsDir, storePath, sessionKey };
@@ -228,11 +237,7 @@ describe("startup recovery admission", () => {
 
   it("admits each scheduled recovery attempt as independent root work", async () => {
     const { storePath, sessionKey } = await makeMainSessionFixture({
-      kind: "replayable",
-      text: "interrupted response",
-      createdAt: Date.now(),
-      intentId: "intent-prepared-default",
-      deliveries: [{ id: "delivery-prepared-default", state: "prepared" }],
+      pendingFinalDelivery: makePendingFinalDelivery(),
     });
 
     const suspensionRef: {
@@ -308,6 +313,65 @@ describe("startup recovery admission", () => {
       await recovery.stop();
       admissionSpy.mockRestore();
       vi.useRealTimers();
+    }
+  });
+  it("stops exhaustion reconciliation while its Gateway admission is suspended", async () => {
+    const { storePath } = await makeMainSessionFixture({
+      mainRestartRecovery: {
+        cycleId: "cycle-suspended-exhaustion",
+        revision: 1,
+        chargedAttempts: 2,
+      },
+      pendingFinalDelivery: makePendingFinalDelivery(),
+    });
+    const suspension = { lease: null as ReturnType<typeof tryBeginGatewaySuspendAdmission> };
+    vi.mocked(callGateway)
+      .mockImplementationOnce(async () => {
+        suspension.lease = tryBeginGatewaySuspendAdmission(() => {});
+        throw new Error("final ambiguous dispatch failure");
+      })
+      .mockResolvedValueOnce({ runId: "run-resumed" });
+    const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+    const reconciliationEntered = createDeferred();
+    const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+    const admissionSpy = vi
+      .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+      .mockImplementation(<T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
+        const admitted = admit(run, origin, signal);
+        if (origin === "main-session:target-recovery") {
+          reconciliationEntered.resolve();
+        }
+        return admitted;
+      });
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      getConfig: () => ({}),
+      delayMs: 0,
+      maxRetries: 1,
+      stateDir: tmpDir,
+      gatewayRuntime,
+    });
+    try {
+      await reconciliationEntered.promise;
+      expect(suspension.lease).not.toBeNull();
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      // Stop must settle while admission remains closed, not after reopening it.
+      await recovery.stop();
+      expect(suspension.lease?.rollback()).toBe(true);
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        status: "running",
+        abortedLastRun: true,
+        mainRestartRecovery: { chargedAttempts: 3 },
+      });
+      expect(warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("main-session exhaustion reconciliation failed"),
+      );
+    } finally {
+      suspension.lease?.rollback();
+      await recovery.stop();
+      admissionSpy.mockRestore();
+      warn.mockRestore();
     }
   });
 });

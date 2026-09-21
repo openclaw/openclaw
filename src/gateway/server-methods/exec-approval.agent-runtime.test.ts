@@ -1,36 +1,15 @@
-import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { describe, expect, it, vi } from "vitest";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { waitForApprovalRequested } from "./approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 vi.mock("../../infra/command-analysis/explain.js", () => ({
   resolveCommandAnalysisSummaryForDisplay: vi.fn(async () => null),
 }));
-
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    for (const dir of tempDirs.dirs) {
-      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }));
-    }
-    cleanup();
-  }),
-);
-
-function databaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.realpathSync(tempDirs.make("exec-approval-id-"));
-  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-}
 
 function identity(enabled: boolean): AgentRuntimeIdentity {
   return {
@@ -103,115 +82,141 @@ function requestOptions(
 
 describe("exec approval signed agent runtime", () => {
   it("rejects closed authority before creating an exec approval", async (testContext) => {
-    const manager = createTestApprovalManager(testContext, {
+    const fixture = await createPreparedTestApprovalManager(testContext, {
       validateAgentRuntimeDelegatedAuthority: () => false,
     });
-    const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
-    const opts = requestOptions(identity(false), () => false);
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+      const opts = requestOptions(identity(false), () => false);
 
-    await handler(opts);
+      await handler(opts);
 
-    expect(await manager.listPendingRecords()).toHaveLength(0);
-    expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
-      message: expect.stringContaining("no longer active"),
+      expect(await manager.listPendingRecords()).toHaveLength(0);
+      expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
+        message: expect.stringContaining("no longer active"),
+      });
     });
   });
 
   it("sanitizes display-only cwd and resolvedPath in the stored request", async (testContext) => {
-    const manager = createTestApprovalManager(testContext, {
+    const fixture = await createPreparedTestApprovalManager(testContext, {
       validateAgentRuntimeDelegatedAuthority: () => true,
     });
-    const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
-    const opts = requestOptions(identity(false));
-    // Bidi override in cwd/resolvedPath can spoof what path reviewers see.
-    (opts.params as Record<string, unknown>).cwd = "/tmp/safe‮evil";
-    (opts.params as Record<string, unknown>).resolvedPath = "/usr/bin/echo​x";
-    // Free-form policy strings must not reach reviewer meta rows: security/ask
-    // are closed enums (arbitrary values null out), host is escape-hardened.
-    (opts.params as Record<string, unknown>).security = "full‮looks-deny";
-    (opts.params as Record<string, unknown>).ask = "always​ish";
-    const pending = handler(opts);
-    await vi.waitFor(async () => expect(await manager.listPendingRecords()).toHaveLength(1));
-    const record = (await manager.listPendingRecords())[0]!;
-    expect(record.request.cwd).toBe("/tmp/safe\\u{202E}evil");
-    expect(record.request.resolvedPath).toBe("/usr/bin/echo\\u{200B}x");
-    expect(record.request.security).toBeNull();
-    expect(record.request.ask).toBeNull();
-    await manager.resolve(record.id, "deny");
-    await pending;
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+      const opts = requestOptions(identity(false));
+      // Bidi override in cwd/resolvedPath can spoof what path reviewers see.
+      (opts.params as Record<string, unknown>).cwd = "/tmp/safe‮evil";
+      (opts.params as Record<string, unknown>).resolvedPath = "/usr/bin/echo​x";
+      // Free-form policy strings must not reach reviewer meta rows: security/ask
+      // are closed enums (arbitrary values null out), host is escape-hardened.
+      (opts.params as Record<string, unknown>).security = "full‮looks-deny";
+      (opts.params as Record<string, unknown>).ask = "always​ish";
+      const { pending } = await waitForApprovalRequested(
+        opts.context,
+        "exec.approval.requested",
+        () => fixture.track(Promise.resolve(handler(opts))),
+      );
+      expect(await manager.listPendingRecords()).toHaveLength(1);
+      const record = (await manager.listPendingRecords())[0]!;
+      expect(record.request.cwd).toBe("/tmp/safe\\u{202E}evil");
+      expect(record.request.resolvedPath).toBe("/usr/bin/echo\\u{200B}x");
+      expect(record.request.security).toBeNull();
+      expect(record.request.ask).toBeNull();
+      await manager.resolve(record.id, "deny");
+      await pending;
+    });
   });
 
   it("cancels an exec approval when authority closes after the handshake", async (testContext) => {
     let active = true;
-    const manager = createTestApprovalManager(testContext, {
+    const fixture = await createPreparedTestApprovalManager(testContext, {
       validateAgentRuntimeDelegatedAuthority: () => active,
     });
-    const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
-    const opts = requestOptions(identity(false), () => active);
-    const pending = handler(opts);
-    await vi.waitFor(async () => expect(await manager.listPendingRecords()).toHaveLength(1));
-    const record = (await manager.listPendingRecords())[0]!;
-    active = false;
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+      const opts = requestOptions(identity(false), () => active);
+      const { pending } = await waitForApprovalRequested(
+        opts.context,
+        "exec.approval.requested",
+        () => fixture.track(Promise.resolve(handler(opts))),
+      );
+      expect(await manager.listPendingRecords()).toHaveLength(1);
+      const record = (await manager.listPendingRecords())[0]!;
+      active = false;
 
-    await expect(manager.awaitDecision(record.id)).resolves.toBeNull();
-    await pending;
-    expect(await manager.getSnapshot(record.id)).toMatchObject({ status: "cancelled" });
+      await expect(manager.awaitDecision(record.id)).resolves.toBeNull();
+      await pending;
+      expect(await manager.getSnapshot(record.id)).toMatchObject({ status: "cancelled" });
+    });
   });
 
-  it.each([
+  it.for([
     ["enabled", true],
     ["disabled", false],
-  ] as const)("uses signed runtime provenance with collection %s", async (_label, enabled) => {
-    const options = databaseOptions();
-    const manager = new ExecApprovalManager({
-      approvalKind: "exec",
-      persistence: { runtimeEpoch: "runtime-a", databaseOptions: options },
-      validateAgentRuntimeDelegatedAuthority: () => true,
-    });
-    const handler = createExecApprovalHandlers(manager)["exec.approval.request"];
-    if (!handler) {
-      throw new Error("exec approval request handler is unavailable");
-    }
-    const opts = requestOptions(identity(enabled));
-
-    const pending = handler(opts);
-    await vi.waitFor(() => expect(opts.context.broadcast).toHaveBeenCalled());
-    const approvalId = String(
-      (vi.mocked(opts.context.broadcast).mock.calls[0]?.[1] as { id?: unknown } | undefined)?.id,
-    );
-    expect((await manager.getSnapshot(approvalId))?.request).toMatchObject({
-      agentId: "main",
-      sessionKey: "agent:main:session-1",
-      sessionId: null,
-      runId: "run-1",
-      turnSourceChannel: "telegram",
-      turnSourceTo: "chat-1",
-      turnSourceAccountId: "default",
-      turnSourceThreadId: "thread-1",
-    });
-    const db = openOpenClawStateDatabase(options).db;
-    if (enabled) {
-      expect(
-        db
-          .prepare(
-            "SELECT approval_id, source_context_id, source_execution_id FROM operator_approval_execution_identities WHERE approval_id = ?",
-          )
-          .get(approvalId),
-      ).toEqual({
-        approval_id: approvalId,
-        source_context_id: "context-1",
-        source_execution_id: "execution-1",
+  ] as const)(
+    "uses signed runtime provenance with collection %s",
+    async ([_label, enabled], testContext) => {
+      const fixture = await createPreparedTestApprovalManager(testContext, {
+        approvalKind: "exec",
+        validateAgentRuntimeDelegatedAuthority: () => true,
       });
-    } else {
-      expect(
-        db
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approval_execution_identities'",
-          )
-          .get(),
-      ).toBeUndefined();
-    }
-    await manager.resolve(approvalId, "deny");
-    await pending;
-  });
+      const { manager, databaseOptions: options } = fixture;
+      await fixture.run(async () => {
+        const handler = createExecApprovalHandlers(manager)["exec.approval.request"];
+        if (!handler) {
+          throw new Error("exec approval request handler is unavailable");
+        }
+        const opts = requestOptions(identity(enabled));
+
+        const { pending } = await waitForApprovalRequested(
+          opts.context,
+          "exec.approval.requested",
+          () => fixture.track(Promise.resolve(handler(opts))),
+        );
+        expect(opts.context.broadcast).toHaveBeenCalled();
+        const approvalId = String(
+          (vi.mocked(opts.context.broadcast).mock.calls[0]?.[1] as { id?: unknown } | undefined)
+            ?.id,
+        );
+        expect((await manager.getSnapshot(approvalId))?.request).toMatchObject({
+          agentId: "main",
+          sessionKey: "agent:main:session-1",
+          sessionId: null,
+          runId: "run-1",
+          turnSourceChannel: "telegram",
+          turnSourceTo: "chat-1",
+          turnSourceAccountId: "default",
+          turnSourceThreadId: "thread-1",
+        });
+        const db = openOpenClawStateDatabase(options).db;
+        if (enabled) {
+          expect(
+            db
+              .prepare(
+                "SELECT approval_id, source_context_id, source_execution_id FROM operator_approval_execution_identities WHERE approval_id = ?",
+              )
+              .get(approvalId),
+          ).toEqual({
+            approval_id: approvalId,
+            source_context_id: "context-1",
+            source_execution_id: "execution-1",
+          });
+        } else {
+          expect(
+            db
+              .prepare(
+                "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approval_execution_identities'",
+              )
+              .get(),
+          ).toBeUndefined();
+        }
+        await manager.resolve(approvalId, "deny");
+        await pending;
+      });
+    },
+  );
 });

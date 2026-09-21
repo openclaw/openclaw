@@ -11,10 +11,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../infra/sqlite-worker-identity.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import {
@@ -464,23 +461,6 @@ export function readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(
     sharedStatePath: database.path,
     sharedStateIdentity: readDatabasePathIdentitySync(database.path).key,
   };
-}
-
-/** Only the owning parent calls this after joining this receipt's native Worker exit. */
-export function releaseExitedOpenClawAgentDatabaseWorkerLease(
-  receipt: OpenClawAgentDatabaseWorkerLeaseReceipt,
-): void {
-  assertExistingDatabaseIdentity(receipt.sharedStatePath, receipt.sharedStateIdentity);
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      assertExistingDatabaseIdentity(receipt.sharedStatePath, receipt.sharedStateIdentity);
-      releaseExitedOpenClawAgentDatabaseLeaseInDatabase(database.db, receipt);
-    },
-    {
-      path: receipt.sharedStatePath,
-      env: { OPENCLAW_STATE_DIR: resolveOpenClawStateDirForDatabasePath(receipt.sharedStatePath) },
-    },
-  );
 }
 
 /** The caller owns the original shared transaction and has joined the exact native Worker exit. */

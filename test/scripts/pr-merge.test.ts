@@ -299,6 +299,7 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
                 author: { login: scenario.prAuthor ?? "maintainer", __typename: "User" },
                 headRefOid: scenario.previewHead ?? publishedHead,
                 isMergeQueueEnabled: scenario.previewQueue ?? false,
+                viewerMergeHeadlineText: "Fixture merge headline",
                 viewerMergeBodyText:
                   scenario.previewBody === undefined
                     ? "Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n\n"

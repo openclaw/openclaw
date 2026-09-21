@@ -9,6 +9,7 @@ export const gatewayPluginTestFiles = [
 export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/agent-turn/agent-run-dispatch.execution-binding.test.ts",
   "src/gateway/agent-turn/agent-run-dispatch.sqlite.test.ts",
+  "src/gateway/approval-fixture.test.ts",
   "src/gateway/board-http.test.ts",
   "src/gateway/board-store.test.ts",
   "src/gateway/chat-display-projection.cron.test.ts",
@@ -46,6 +47,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/link-understanding.product.test.ts",
   "src/gateway/local-request-context.session-tools.test.ts",
   "src/gateway/local-request-context.test.ts",
+  "src/gateway/managed-image-attachments.authority.test.ts",
   "src/gateway/managed-image-attachments.sqlite-visibility.test.ts",
   "src/gateway/managed-image-attachments.test.ts",
   "src/gateway/managed-image-record-store.test.ts",

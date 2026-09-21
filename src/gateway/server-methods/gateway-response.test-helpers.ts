@@ -1,18 +1,11 @@
 /**
  * Assertion helpers for gateway method response envelopes.
  */
-import { expect, type Mock } from "vitest";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { expect } from "vitest";
 
 type MockCallSource = {
   mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> };
 };
-
-export function observeGatewayResponse(respond: Mock): Promise<void> {
-  const firstResponse = createDeferredCore();
-  respond.mockImplementationOnce(() => firstResponse.resolve());
-  return firstResponse.promise;
-}
 
 /** Verifies that a mocked respond callback emitted the expected gateway error. */
 export function expectGatewayErrorResponse(

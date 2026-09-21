@@ -1765,9 +1765,10 @@ jobs:
             env,
             fallbackMaxWorkers,
             includePatterns,
+            minTotalMemoryBytes,
             shard_name,
             timing_key,
-          }) => ({ configs, env, fallbackMaxWorkers, includePatterns, shard_name, timing_key });
+          }) => ({ configs, env, fallbackMaxWorkers, includePatterns, minTotalMemoryBytes, shard_name, timing_key });
           const testRuntimePolicyPath = "./scripts/lib/ci-test-runtime.mts";
           const testRuntimePolicy = existsSync(testRuntimePolicyPath)
             ? await importTargetPlan(testRuntimePolicyPath)

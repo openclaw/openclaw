@@ -218,8 +218,8 @@ const enSettings = {
       keepNone: "None (default)",
       keepOne: "Keep one",
       savePolicy: "Save retention policy",
-      policyRestart: "Policy changes take effect after the Gateway restarts.",
-      policySaved: "Retention policy saved. Restart the Gateway to apply it.",
+      policyApplies: "Policy changes apply without restarting the Gateway.",
+      policySaved: "Retention policy saved.",
       policySaveFailed: "Could not save retention policy. Refresh the config and try again.",
       buildSnapshot: "Build snapshot",
       rebuild: "Rebuild",
@@ -250,7 +250,6 @@ const enSettings = {
         "Request cleanup for this failed build and hide it from this view. The Gateway keeps the failed record until its retention window ends, so it can reappear after a reload.",
       buildDismissed: "Failed build dismissed",
       buildAge: "Age: {age}",
-      buildAfterRestart: "After the Gateway restarts, build a snapshot from the Snapshots view.",
       buildStates: {
         requested: "Requested",
         provisioning: "Provisioning",
@@ -270,8 +269,7 @@ const enSettings = {
       recoverMessage:
         "Clear this capture reservation after manual provider cleanup. Recovery preserves recorded images and allocation choices. It does not stop workers or delete provider artifacts.",
       acknowledgement: "I stopped the owning capture and worker and reconciled provider artifacts",
-      recovered:
-        "Capture reservation cleared. Restart the Gateway after reconciliation; the next eligible worker can capture again.",
+      recovered: "Capture reservation cleared. The next eligible worker can capture again.",
       recoveryChanged: "The Gateway connection changed. Refresh snapshots and try recovery again.",
       migration: "Needs migration",
       migrationHint:
@@ -286,9 +284,11 @@ const enSettings = {
     editAction: "Edit",
     deleteTitle: "Delete cloud worker profile",
     deleteConfirm:
-      "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions cannot use it after restart.",
+      "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions will no longer use it.",
     advertised: "Advertised",
-    restartRequired: "Restart required",
+    unavailable: "Unavailable",
+    profileSaved: "Profile saved. Build a snapshot from the Snapshots view.",
+    settingsSaved: "Saved. Changes apply without restarting the Gateway.",
     adminRequired: "Administrator access is required to manage cloud worker profiles.",
     catalogFailed: "Could not load advertised profiles: {error}. Check the gateway and retry.",
     providerFact: "Provider: {provider}",
@@ -358,7 +358,8 @@ const enSettings = {
       suspendAfterHelp:
         "Reclaim an idle worker after a duration such as 45m or 2h (minimum 1m). Leave empty to keep workers running.",
       actions: "Save profile",
-      actionsHelp: "Saving updates the config; the gateway must restart before using it.",
+      actionsHelp:
+        "New workers use the saved profile. Existing workers keep their provisioning settings.",
     },
     errors: {
       title: "Profile needs attention",
@@ -1155,7 +1156,7 @@ const enSettings = {
     sessionSources: {
       title: "Session sources",
       hint: "Choose which coding apps show their existing conversations in the sidebar.",
-      scope: "Applies to everyone on this Gateway. Changes require a Gateway restart.",
+      scope: "Applies to everyone on this Gateway without restarting it.",
       claude: "Show Claude Code sessions",
       codex: "Show Codex sessions",
       opencode: "Show OpenCode sessions",

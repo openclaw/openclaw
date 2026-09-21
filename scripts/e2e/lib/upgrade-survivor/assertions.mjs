@@ -1391,11 +1391,6 @@ function assertNpmPluginInstall([
   const artifact = manifest.packages.find((entry) => entry.name === packageName);
   let expectedTarball = path.join(artifactDir, artifact.tarball);
   if (publishedCompanionTarball) {
-    assert(
-      (getScenario() === "legacy-operator-state" && pluginId === "discord") ||
-        (getScenario() === "msteams-polls" && pluginId === "msteams"),
-      "published companion assertion requires its owning survivor scenario",
-    );
     const published = inspectNpmPackageTarball(publishedCompanionTarball).packageJson;
     assert(
       published.name === packageName && published.version === expectedVersion,

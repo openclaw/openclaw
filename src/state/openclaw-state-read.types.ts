@@ -92,6 +92,7 @@ export type OpenClawStateReadCommand =
   | { type: "fleet.get"; tenantId: string }
   | { type: "nodeHost.config" }
   | { type: "workspace.snapshot"; workspaceDir: string }
+  | { type: "workerEnvironments.hasSessionAttachment"; environmentId: string }
   | { type: "sandboxRegistry.list" }
   | { type: "sandboxRegistry.get"; containerName: string }
   | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
@@ -203,6 +204,12 @@ export type OpenClawStateReadReply = (
       row: Pick<Selectable<ConfigMachineState>, "value_json" | "updated_at_ms"> | undefined;
     }
   | { ok: true; type: "workspace.snapshot"; sourceAdmitted: true; snapshot: WorkspaceStateSnapshot }
+  | {
+      ok: true;
+      type: "workerEnvironments.hasSessionAttachment";
+      sourceAdmitted: true;
+      attached: boolean;
+    }
   | {
       ok: true;
       type: "sandboxRegistry.list";

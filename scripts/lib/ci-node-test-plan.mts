@@ -75,6 +75,7 @@ export type NodeTestShardGroup = {
   runner: string;
   env?: Record<string, string>;
   fallbackMaxWorkers?: number;
+  minTotalMemoryBytes?: number;
 };
 
 function compactGroupTimingKey(group: NodeTestShardGroup): string {
@@ -775,6 +776,7 @@ function isParallelCompactGroup(group: NodeTestShardGroup): boolean {
 const PINNED_WORKER_COMPACT_GROUP_RE =
   /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-config$|^core-runtime-media-ui-(?:\d+|support)$|^agentic-cli(?:-process)?$|^agentic-gateway-(?:core-\d+|methods)$/u;
 const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
+const MEASURED_GATEWAY_ISOLATED_GROUP_RE = /^agentic-gateway-server-isolated(?:-hosted-\d+)?$/u;
 
 function isAutoReplyReplyGroup(group: NodeTestShardGroup): boolean {
   return (
@@ -868,7 +870,8 @@ function usesMeasuredCompactWorkers(group: NodeTestShardGroup, runnerBackend: st
   return (
     (runnerBackend === undefined || runnerBackend === "blacksmith" || runnerBackend === "hybrid") &&
     (group.shard_name === "agentic-cli" ||
-      /^agentic-gateway-core-2(?:-hosted-\d+)?$/u.test(group.shard_name))
+      /^agentic-gateway-core-2(?:-hosted-\d+)?$/u.test(group.shard_name) ||
+      MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(group.shard_name))
   );
 }
 
@@ -958,7 +961,16 @@ function applyCompactGroupWorkerPins(
     };
   }
   if (usesMeasuredCompactWorkers(group, runnerBackend)) {
-    return { ...group, fallbackMaxWorkers: 2 };
+    return {
+      ...group,
+      ...(MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(group.shard_name)
+        ? {
+            env: { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: "8" },
+            minTotalMemoryBytes: 28 * 1024 ** 3,
+          }
+        : {}),
+      fallbackMaxWorkers: 2,
+    };
   }
   if (!PINNED_WORKER_COMPACT_GROUP_RE.test(group.shard_name)) {
     return group;
@@ -3299,10 +3311,20 @@ function splitOversizedCompactGroup(
   });
   // The measured worker cutover changes timing identity, not admission budgets.
   // Retain the previous two-worker observations as floors until timing refits retire them.
-  const previousWorkerGeneration = usesMeasuredCompactWorkers(group, runnerBackend)
+  const previousWorkerEnv: Record<string, string> | undefined = usesMeasuredCompactWorkers(
+    group,
+    runnerBackend,
+  )
+    ? { ...group.env, ...PINNED_COMPACT_GROUP_ENV }
+    : undefined;
+  // The isolated cohort inherited its old two-worker cap from the job, not its descriptor.
+  if (previousWorkerEnv && MEASURED_GATEWAY_ISOLATED_GROUP_RE.test(group.shard_name)) {
+    delete previousWorkerEnv.OPENCLAW_VITEST_MAX_WORKERS;
+  }
+  const previousWorkerGeneration = previousWorkerEnv
     ? createCompactSplitTimingGeneration({
         configs: group.configs,
-        env: { ...group.env, ...PINNED_COMPACT_GROUP_ENV },
+        env: previousWorkerEnv,
         parentShardName: splitTimingParent,
         stripes,
       })
@@ -3350,7 +3372,7 @@ function splitOversizedCompactGroup(
   const previousWorkerTimingKeys = previousWorkerGeneration
     ? createCompactSplitTimingGeneration({
         configs: group.configs,
-        env: { ...group.env, ...PINNED_COMPACT_GROUP_ENV },
+        env: previousWorkerEnv,
         parentShardName: splitTimingParent,
         stripes,
       }).timingKeys
@@ -4180,7 +4202,7 @@ function createCompactNodeTestShardBundles(
       continue;
     }
     // Finish placement before moving the job cap onto every unproven sibling,
-    // including donated runtime groups. Measured groups keep autosizing.
+    // including donated runtime groups. Measured groups retain their own worker limits.
     const { OPENCLAW_VITEST_MAX_WORKERS: _workers, ...env } = job.env;
     job.env = Object.keys(env).length > 0 ? env : undefined;
     job.groups = job.groups.map((group) =>

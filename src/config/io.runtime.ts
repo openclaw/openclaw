@@ -138,18 +138,20 @@ export function getRuntimeConfig(options?: {
   return loadConfig(options);
 }
 
+type RuntimeConfigAsyncReader<T> = (() => Promise<T>) & { assertCurrent: () => void };
+
 /** Capture the config source before a task read, and load only if its owner needs config facts. */
 export function captureRuntimeConfigAsyncReader(options: {
   assertCurrent?: () => void;
   capture: true;
-}): () => Promise<CapturedRuntimeConfigRead>;
+}): RuntimeConfigAsyncReader<CapturedRuntimeConfigRead>;
 export function captureRuntimeConfigAsyncReader(options?: {
   assertCurrent?: () => void;
   capture?: false;
-}): () => Promise<OpenClawConfig>;
+}): RuntimeConfigAsyncReader<OpenClawConfig>;
 export function captureRuntimeConfigAsyncReader(
   options: { assertCurrent?: () => void; capture?: boolean } = {},
-): () => Promise<OpenClawConfig | CapturedRuntimeConfigRead> {
+): RuntimeConfigAsyncReader<OpenClawConfig | CapturedRuntimeConfigRead> {
   const sourceEnv = process.env;
   const cwd = tryProcessCwd();
   const readSelectors = () =>
@@ -186,7 +188,7 @@ export function captureRuntimeConfigAsyncReader(
     },
   });
   let pending: Promise<OpenClawConfig | CapturedRuntimeConfigRead> | undefined;
-  return () => {
+  const read = () => {
     assertCurrent();
     const loadFresh = async (assertPinned: () => void) => {
       try {
@@ -211,6 +213,7 @@ export function captureRuntimeConfigAsyncReader(
       ? loadPinnedRuntimeConfigAsync(loadFresh, { assertCurrent, capture: true })
       : loadPinnedRuntimeConfigAsync(loadFresh, { assertCurrent }));
   };
+  return Object.assign(read, { assertCurrent });
 }
 
 function createCurrentConfigReader(params: {

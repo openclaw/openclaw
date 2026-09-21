@@ -1,6 +1,5 @@
 /** Shared harness for node invoke plugin-policy tests. */
 import { expect, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -11,6 +10,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import type { NodeRegistry, NodeSession } from "./node-registry.js";
+import { waitForApprovalRequested } from "./server-methods/approval-request.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
 export const DEMO_PLUGIN_ID = "demo";
@@ -57,53 +57,26 @@ export function createContext(opts?: {
       error: null,
     };
   });
-  let requested = createDeferred();
-  const observeRequest = (event: string) => {
-    if (event === "plugin.approval.requested") {
-      requested.resolve();
-    }
-  };
-  const context = {
-    trackExecution: trackAsyncWork,
-    getRuntimeConfig:
-      opts?.getRuntimeConfig ?? (() => nodeCommandsConfig({ allow: [DEMO_COMMAND] })),
-    nodeRegistry: {
-      get: () => nodeSession,
-      getForPairingGeneration: () => nodeSession,
-      invoke,
-    },
-    broadcast: vi.fn(observeRequest),
-    broadcastToConnIds: vi.fn(observeRequest),
-    pluginApprovalManager: opts?.pluginApprovalManager,
-    getApprovalClientConnIds: opts?.getApprovalClientConnIds,
-    hasExecApprovalClients: opts?.hasExecApprovalClients,
-    forwardPluginApprovalRequest: opts?.forwardPluginApprovalRequest,
-    pluginApprovalIosPushDelivery: opts?.pluginApprovalIosPushDelivery,
-    validateAgentRuntimeApprovalAuthority: opts?.validateAgentRuntimeApprovalAuthority,
-  } as unknown as GatewayRequestContext;
   return {
-    context,
+    context: {
+      trackExecution: trackAsyncWork,
+      getRuntimeConfig:
+        opts?.getRuntimeConfig ?? (() => nodeCommandsConfig({ allow: [DEMO_COMMAND] })),
+      nodeRegistry: {
+        get: () => nodeSession,
+        getForPairingGeneration: () => nodeSession,
+        invoke,
+      },
+      broadcast: vi.fn(),
+      broadcastToConnIds: vi.fn(),
+      pluginApprovalManager: opts?.pluginApprovalManager,
+      getApprovalClientConnIds: opts?.getApprovalClientConnIds,
+      hasExecApprovalClients: opts?.hasExecApprovalClients,
+      forwardPluginApprovalRequest: opts?.forwardPluginApprovalRequest,
+      pluginApprovalIosPushDelivery: opts?.pluginApprovalIosPushDelivery,
+      validateAgentRuntimeApprovalAuthority: opts?.validateAgentRuntimeApprovalAuthority,
+    } as unknown as GatewayRequestContext,
     invoke,
-    nextApproval: async (operation: Promise<unknown>): Promise<PluginApprovalRecord> => {
-      const manager = context.pluginApprovalManager;
-      if (!manager) {
-        throw new Error("expected plugin approval manager");
-      }
-      await Promise.race([
-        requested.promise,
-        operation.then(() => {
-          throw new Error("Node policy completed without requesting approval");
-        }),
-      ]);
-      requested = createDeferred();
-      const records = await manager.listPendingRecords();
-      expect(records).toHaveLength(1);
-      const [record] = records;
-      if (!record) {
-        throw new Error("expected pending approval");
-      }
-      return record;
-    },
   };
 }
 
@@ -223,6 +196,26 @@ export async function invokeDemoPolicy(
     command: DEMO_COMMAND,
     params: DEMO_PARAMS,
   });
+}
+
+export async function expectSinglePendingApproval<T>(
+  manager: ExecApprovalManager<PluginApprovalRequestPayload>,
+  context: GatewayRequestContext,
+  start: () => Promise<T>,
+) {
+  const { pending, payload } = await waitForApprovalRequested(
+    context,
+    "plugin.approval.requested",
+    start,
+  );
+  const records = await manager.listPendingRecords();
+  expect(records).toHaveLength(1);
+  const [record] = records;
+  if (!record) {
+    throw new Error("expected pending approval");
+  }
+  expect(payload).toMatchObject({ id: record.id });
+  return { record, pending };
 }
 
 export async function expectApprovalResolution(

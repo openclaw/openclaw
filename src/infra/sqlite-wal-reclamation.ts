@@ -3,18 +3,22 @@ import type { DatabaseSync } from "node:sqlite";
 import { runWithSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
-import type { SqliteWalCheckpointMode, SqliteWalHealth } from "./sqlite-wal-checkpoint.js";
+import type {
+  SqliteWalCheckpointMode,
+  SqliteWalCheckpointSnapshot,
+} from "./sqlite-wal-checkpoint.js";
 
 export type SqliteWalReclamationOptions = {
   maxPages?: number;
   checkpointMode?: SqliteWalCheckpointMode;
   beforeMutation?: () => void;
   onCommit?: () => void;
+  afterCommit?: () => void;
 };
 
 export type SqliteWalReclamationResult = {
   checkpointCompleted: boolean;
-  checkpoint?: SqliteWalHealth;
+  checkpoint?: SqliteWalCheckpointSnapshot;
   freePagesBefore: number | null;
   remainingFreePages: number | null;
   checkpointCalls: number;
@@ -114,6 +118,7 @@ export function reclaimSqliteWalFreePages(
     } finally {
       result.vacuumMs += performance.now() - startedAt;
     }
+    options.afterCommit?.();
     if (checkpoint()) {
       result.remainingFreePages = freePages();
     }

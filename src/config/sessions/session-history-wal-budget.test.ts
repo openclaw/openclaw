@@ -2,11 +2,19 @@ import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
-import { publishSqliteWalCheckpointHealth } from "../../infra/sqlite-wal-checkpoint.js";
+import {
+  sqliteReaderDatabasePathKey,
+  withSqliteReaderOwner,
+} from "../../infra/sqlite-reader-lifecycle.js";
+import {
+  onSqliteWalCheckpoint,
+  publishSqliteWalCheckpointObservation,
+  type SqliteWalCheckpointSnapshot,
+} from "../../infra/sqlite-wal-checkpoint.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -58,6 +66,7 @@ it.each(["transaction", "iterator"] as const)(
     });
     const options = { agentId: "main", env: state.env };
     const database = openOpenClawAgentDatabase(options);
+    const databasePathKey = sqliteReaderDatabasePathKey(database.path);
     ensureSessionTranscriptArchiveSchema(database.db);
     database.db.exec("PRAGMA wal_autocheckpoint=0");
     const sessions = state.sessionsDir();
@@ -73,8 +82,18 @@ it.each(["transaction", "iterator"] as const)(
       fs.writeFileSync(path.join(sessions, name), bytes);
       return name;
     });
-    expect(database.walMaintenance.checkpoint()).toBe(true);
-    const previouslyCompleted = database.walMaintenance.health;
+    const initialCheckpoints: SqliteWalCheckpointSnapshot[] = [];
+    const stopObserving = onSqliteWalCheckpoint(({ databasePath, health, observedAtNs }) => {
+      if (databasePath === databasePathKey) {
+        initialCheckpoints.push({ health, observedAtNs });
+      }
+    });
+    try {
+      expect(database.walMaintenance.checkpoint()).toBe(true);
+    } finally {
+      stopObserving();
+    }
+    const previouslyCompleted = initialCheckpoints.at(-1);
     assert(previouslyCompleted);
     const initial = await measureSessionPhysicalDiskUsage(storePath);
     const maintenance = resolveMaintenanceConfigFromInput({
@@ -179,10 +198,14 @@ it.each(["transaction", "iterator"] as const)(
         }),
       ]);
       assert(blocked?.checkpoint);
-      // A delayed worker fact must not clear a newer incomplete observation.
-      publishSqliteWalCheckpointHealth(database.path, {
+      // A delayed worker fact remains older even when its wall clock was ahead.
+      publishSqliteWalCheckpointObservation(database.path, {
         ...previouslyCompleted,
-        observedAtMs: blocked.checkpoint.observedAtMs - 1,
+        health: {
+          ...previouslyCompleted.health,
+          observedAtMs: blocked.checkpoint.observedAtMs + 3600_000,
+          lastCompletedAtMs: blocked.checkpoint.observedAtMs + 3600_000,
+        },
       });
       for (let hour = 1; hour <= 3; hour++) {
         kickSessionHistoryDiskBudgetMaintenance({
@@ -224,7 +247,14 @@ it.each(["transaction", "iterator"] as const)(
       release();
       // Release alone is not an observed successful checkpoint.
       await expect(enforce()).resolves.toMatchObject({ deferredReason: "checkpoint-incomplete" });
-      expect(database.walMaintenance.checkpoint()).toBe(true);
+      const checkpointClock = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(blocked.checkpoint.observedAtMs - 1);
+      try {
+        expect(database.walMaintenance.checkpoint()).toBe(true);
+      } finally {
+        checkpointClock.mockRestore();
+      }
       expect(fs.statSync(`${database.path}-wal`).size).toBe(0);
       const recovered = await enforce();
       const lastPruning = (
@@ -234,28 +264,37 @@ it.each(["transaction", "iterator"] as const)(
       )?.archivePruning;
       expect(
         recovered?.deferredReason,
-        JSON.stringify(
-          {
-            blockedCheckpoint: blocked.checkpoint,
-            recovered,
-            diagnosticsCount: diagnostics.length,
-            lastArchivePruning: {
-              completed: lastPruning?.completed,
-              checkpointCalls: lastPruning?.checkpointCalls,
-              checkpointIncomplete: lastPruning?.checkpointIncomplete,
-              checkpoint: lastPruning?.checkpoint,
-              walBytesBefore: lastPruning?.walBytesBefore,
-              walBytesAfter: lastPruning?.walBytesAfter,
-            },
-          },
-          // Checkpoint errors can contain paths; retain only the recorded health facts.
-          (key, value) => (key === "error" ? undefined : value),
-        ),
+        recovered?.deferredReason === undefined
+          ? undefined
+          : JSON.stringify(
+              {
+                blockedCheckpoint: blocked.checkpoint,
+                hostCheckpoint: database.walMaintenance.health,
+                now: Date.now(),
+                realClock: performance.timeOrigin + performance.now(),
+                dateNowMocked: vi.isMockFunction(Date.now),
+                recovered,
+                diagnosticsCount: diagnostics.length,
+                lastArchivePruning: {
+                  completed: lastPruning?.completed,
+                  checkpointCalls: lastPruning?.checkpointCalls,
+                  checkpointIncomplete: lastPruning?.checkpointIncomplete,
+                  checkpoint: lastPruning?.checkpoint,
+                  walBytesBefore: lastPruning?.walBytesBefore,
+                  walBytesAfter: lastPruning?.walBytesAfter,
+                },
+              },
+              // Checkpoint errors can contain paths; retain only the recorded health facts.
+              (key, value) => (key === "error" ? undefined : value),
+            ),
       ).toBeUndefined();
       expect(recovered?.totalBytesAfter).toBeLessThanOrEqual(maintenance.highWaterBytes!);
       expect(diagnostics.at(-1)).toMatchObject({
         archivePruning: { completed: true, checkpointIncomplete: 0 },
       });
+      expect(() =>
+        JSON.stringify({ blocked, recovered, diagnostics, health: database.walMaintenance.health }),
+      ).not.toThrow();
     } finally {
       writes.unsubscribe(observe);
       release();

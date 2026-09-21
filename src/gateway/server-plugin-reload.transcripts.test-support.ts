@@ -157,3 +157,16 @@ export function registerTranscriptFixture(api: OpenClawPluginApi, owner: "first"
     },
   };
 }
+
+export function createTranscriptFixtures() {
+  const providers = {
+    first: [] as ReturnType<typeof registerTranscriptFixture>[],
+    sibling: [] as ReturnType<typeof registerTranscriptFixture>[],
+  };
+  return {
+    providers,
+    register: (api: OpenClawPluginApi, owner: "first" | "sibling") => {
+      providers[owner].push(registerTranscriptFixture(api, owner));
+    },
+  };
+}

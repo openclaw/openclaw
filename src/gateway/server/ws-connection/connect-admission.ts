@@ -29,6 +29,10 @@ import {
   isBrowserOperatorUiClient,
   isOperatorUiClient,
 } from "../../../utils/message-channel.js";
+import {
+  isGatewayAuthPolicyCurrent,
+  resolveGatewayAuthPolicyGeneration,
+} from "../../auth-policy.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
 import type { OperatorScope } from "../../operator-scopes.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
@@ -188,6 +192,9 @@ export function resolveGatewayConnectPolicyFailure(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
+  if (!isGatewayAuthPolicyCurrent(resolveGatewayAuthPolicyGeneration(context.configSnapshot))) {
+    return { kind: "auth" };
+  }
   if (
     state.sessionUsesSharedGatewayAuth &&
     context.handler.getRequiredSharedGatewaySessionGeneration &&
