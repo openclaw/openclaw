@@ -251,6 +251,7 @@ export type OpenClawPluginNodeInvokePolicyContext = {
     displayName?: string;
     platform?: string;
     deviceFamily?: string;
+    caps?: string[];
     commands?: string[];
   };
   client?: {
@@ -373,7 +374,21 @@ export type OpenClawPluginServiceContext = {
   logger: PluginLogger;
   serviceHealth?: OpenClawPluginServiceHealth;
   /** Gateway-owned scheduler access, revoked when this service stops. */
-  getCron?: () => import("./hook-types.js").PluginHookGatewayCronService | undefined;
+  getCron?: () => import("./hook-gateway.types.js").PluginHookGatewayCronService | undefined;
+  /** Service-owned node calls for this plugin's commands; normal node policy still applies. */
+  invokeNode?: (
+    params: Omit<
+      Parameters<import("./runtime/types.js").PluginRuntime["nodes"]["invoke"]>[0],
+      "scopes"
+    >,
+  ) => Promise<unknown>;
+  /** Service-owned binary transport for this plugin's duplex node commands. */
+  openNodeDuplex?: (
+    params: Omit<
+      Parameters<import("./runtime/types.js").PluginRuntime["nodes"]["openDuplex"]>[0],
+      "scopes"
+    > & { assertCurrent?: () => void },
+  ) => ReturnType<import("./runtime/types.js").PluginRuntime["nodes"]["openDuplex"]>;
   gatewayEvents?: import("./gateway-events.js").OpenClawPluginGatewayEvents;
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;

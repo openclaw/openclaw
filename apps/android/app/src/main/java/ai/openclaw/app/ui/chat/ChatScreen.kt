@@ -60,6 +60,7 @@ import ai.openclaw.app.operatorScopesAllowAdmin
 import ai.openclaw.app.operatorScopesAllowWrite
 import ai.openclaw.app.providerDisplayName
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.ui.AppModalBottomSheet
 import ai.openclaw.app.ui.FoldAwareDropdownMenu
 import ai.openclaw.app.ui.FoldAwareMenuItem
 import ai.openclaw.app.ui.ProviderSignInDialog
@@ -179,7 +180,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderState
@@ -253,9 +253,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.DateFormat
 import java.time.Instant
-import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
@@ -277,7 +275,6 @@ internal fun resolvePendingAssistantAutoSend(
 }
 
 internal enum class ChatComposerPrimaryAction {
-  StartTalk,
   None,
   Stop,
   Send,
@@ -293,7 +290,7 @@ internal fun resolveChatComposerPrimaryAction(
     hasContent && !talkActive -> ChatComposerPrimaryAction.Send
     runActive -> ChatComposerPrimaryAction.Stop
     talkActive -> ChatComposerPrimaryAction.None
-    else -> ChatComposerPrimaryAction.StartTalk
+    else -> ChatComposerPrimaryAction.None
   }
 
 internal object ChatUserMessageDisclosurePolicy {
@@ -353,6 +350,8 @@ internal fun ChatScreen(
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
   val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
+  val talkFailureText by viewModel.talkFailureText.collectAsState()
+  val talkStatusText by viewModel.talkModeStatusText.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
@@ -374,7 +373,7 @@ internal fun ChatScreen(
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
-  val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
+  val pendingToolCalls by viewModel.chatToolActivities.collectAsState()
   val subagentActivities by viewModel.chatSubagentActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
   val progressCard by viewModel.chatProgressCard.collectAsState()
@@ -581,6 +580,12 @@ internal fun ChatScreen(
         viewModel.isCurrentChatComposerOwner(expected)
       }
     }
+  val attachmentPicker =
+    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
+      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
+        viewModel.isCurrentChatComposerOwner(expected)
+      }
+    }
   val branchPicker =
     remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
       ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
@@ -604,6 +609,7 @@ internal fun ChatScreen(
     backgroundTasks.publishFeatures(publication)
     reviewDiff.publishFeatures(publication)
     branchPicker.publishFeatures(publication)
+    attachmentPicker.publishFeatures(publication)
   }
   SideEffect {
     modelPicker.refreshTarget()
@@ -611,15 +617,17 @@ internal fun ChatScreen(
     backgroundTasks.refreshTarget()
     reviewDiff.refreshTarget()
     branchPicker.refreshTarget()
+    attachmentPicker.refreshTarget()
     branchOpening?.let { isCurrentBranchOpening(it) }
   }
-  DisposableEffect(modelPicker, effortPicker, backgroundTasks, reviewDiff, branchPicker) {
+  DisposableEffect(modelPicker, effortPicker, backgroundTasks, reviewDiff, branchPicker, attachmentPicker) {
     onDispose {
       modelPicker.dispose()
       effortPicker.dispose()
       backgroundTasks.dispose()
       reviewDiff.dispose()
       branchPicker.dispose()
+      attachmentPicker.dispose()
     }
   }
   var detailsExpanded by rememberSaveable { mutableStateOf(false) }
@@ -677,39 +685,40 @@ internal fun ChatScreen(
   val voiceNoteLevel by voiceNoteRecorder.inputLevel.collectAsState()
   val dictationController = rememberChatDictationController(viewModel)
   val dictationState by dictationController.state.collectAsState()
-  val dictationActive =
-    dictationState is ChatDictationState.Starting || dictationState is ChatDictationState.Listening
-  val pickImages =
-    rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-      val lease = imagePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
-      if (uris.isNullOrEmpty()) {
-        composerState.cancelMediaAcquisition(lease.authorizationId)
-        return@rememberLauncherForActivityResult
-      }
-      val importOwner =
-        if (shouldMigrateComposerDraft(lease.owner, currentPickerOwner, currentPickerMainSessionKey)) {
-          currentPickerOwner
-        } else {
-          lease.owner
+  val dictationPartialTranscript by dictationController.partialTranscript.collectAsState()
+  val dictationActive = dictationState.isActive
+
+  fun importGalleryMedia(
+    lease: ChatComposerMediaLease,
+    uris: List<android.net.Uri>,
+  ) {
+    if (uris.isEmpty()) {
+      composerState.cancelMediaAcquisition(lease.authorizationId)
+      return
+    }
+    val importOwner =
+      if (shouldMigrateComposerDraft(lease.owner, currentPickerOwner, currentPickerMainSessionKey)) currentPickerOwner else lease.owner
+    viewModel.importChatComposerAttachments(
+      owner = importOwner,
+      mediaAuthorizationId = lease.authorizationId,
+      mainSessionKey = currentPickerMainSessionKey,
+      expectedCount = uris.size,
+    ) {
+      uris.take(CHAT_COMPOSER_MAX_ATTACHMENTS).mapNotNull { uri ->
+        try {
+          loadPickedMediaOrDocumentAttachment(resolver, uri)
+        } catch (err: CancellationException) {
+          throw err
+        } catch (_: Exception) {
+          null
         }
-      val selectedUris = uris.take(8)
-      viewModel.importChatComposerAttachments(
-        owner = importOwner,
-        mediaAuthorizationId = lease.authorizationId,
-        mainSessionKey = currentPickerMainSessionKey,
-        expectedCount = uris.size,
-      ) {
-        selectedUris
-          .mapNotNull { uri ->
-            try {
-              loadSizedImageAttachment(resolver, uri)
-            } catch (err: CancellationException) {
-              throw err
-            } catch (_: Throwable) {
-              null
-            }
-          }
       }
+    }
+  }
+  val pickImages =
+    rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(CHAT_COMPOSER_MAX_ATTACHMENTS)) { uris ->
+      val lease = imagePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
+      importGalleryMedia(lease, uris)
     }
   val pickMediaOrDocument =
     rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -959,6 +968,12 @@ internal fun ChatScreen(
         body = userFacingChatError(error = error, gatewayConnected = gatewayConnectionDisplay.isConnected),
       )
     }
+    if (talkActive) {
+      ChatNotice(title = nativeString("Talk"), body = talkStatusText)
+    }
+    talkFailureText?.takeIf { !talkActive && it.isNotBlank() }?.let { failure ->
+      ChatNotice(title = nativeString("Talk stopped"), body = failure)
+    }
     ChatSwarmProgress(groups = swarmGroups)
   }
   ChatMessageList(
@@ -1103,24 +1118,7 @@ internal fun ChatScreen(
       commands = chatCommands,
       onOpenEffortPicker = { effortPicker.open(composerOwner, sessionKey) },
       onOpenModelPicker = { modelPicker.open(composerOwner, sessionKey) },
-      onPickImages = {
-        if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
-        val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
-        imagePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
-        pickImages.launch("image/*")
-      },
-      onPickAudioOrDocument = {
-        if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
-        val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
-        filePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
-        pickMediaOrDocument.launch(SHARED_AUDIO_DOCUMENT_MIME_TYPES)
-      },
-      onPickVideo = {
-        if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
-        val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
-        filePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
-        pickMediaOrDocument.launch(SHARED_VIDEO_MIME_TYPES)
-      },
+      onOpenAttachments = { attachmentPicker.open(composerOwner, sessionKey) },
       onRemoveAttachment = { id -> composerState.removeAttachments(composerOwner, setOf(id)) },
       voiceNoteState = voiceNoteState,
       voiceNoteElapsedMs = voiceNoteElapsedMs,
@@ -1165,6 +1163,7 @@ internal fun ChatScreen(
       },
       onFinishVoiceNote = voiceNoteRecorder::finish,
       dictationState = dictationState,
+      dictationPartialTranscript = dictationPartialTranscript,
       dictationEnabled =
         !talkActive &&
           pendingRunCount == 0 &&
@@ -1217,6 +1216,56 @@ internal fun ChatScreen(
         sendCheckpointFull = result == ChatComposerSendStartResult.CheckpointFull
       },
     )
+  }
+
+  attachmentPicker.visible?.let { opening ->
+    key(opening) {
+      ChatAttachmentSheet(
+        opening = opening,
+        admit = { attachmentPicker.admit(opening) },
+        onDismiss = { attachmentPicker.retire(opening) },
+        onBrowseGallery = {
+          if (attachmentPicker.admit(opening)) {
+            val owner = opening.composerOwner
+            val authorizationId = composerState.beginMediaAcquisition(owner)
+            if (authorizationId != null) {
+              imagePickerOwnerCheckpoint.begin(owner, authorizationId)
+              pickImages.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+            }
+            attachmentPicker.retire(opening)
+          }
+        },
+        onPickFile = {
+          if (attachmentPicker.admit(opening)) {
+            val owner = opening.composerOwner
+            val authorizationId = composerState.beginMediaAcquisition(owner)
+            if (authorizationId != null) {
+              filePickerOwnerCheckpoint.begin(owner, authorizationId)
+              pickMediaOrDocument.launch(SHARED_AUDIO_DOCUMENT_MIME_TYPES)
+            }
+            attachmentPicker.retire(opening)
+          }
+        },
+        onPickVideo = {
+          if (attachmentPicker.admit(opening)) {
+            val owner = opening.composerOwner
+            val authorizationId = composerState.beginMediaAcquisition(owner)
+            if (authorizationId != null) {
+              filePickerOwnerCheckpoint.begin(owner, authorizationId)
+              pickMediaOrDocument.launch(SHARED_VIDEO_MIME_TYPES)
+            }
+            attachmentPicker.retire(opening)
+          }
+        },
+        onLocation = { location ->
+          if (attachmentPicker.admit(opening)) {
+            val owner = opening.composerOwner
+            inputDrafts[owner] = mergeSharedChatText(location, inputDrafts[owner])
+            attachmentPicker.retire(opening)
+          }
+        },
+      )
+    }
   }
 
   effortPicker.visible?.let { opening ->
@@ -1765,6 +1814,7 @@ private fun ChatMessageList(
                         live = false,
                         content = visibleContent(item.message).filter { it.toolActivity == null },
                         timestampMs = item.message.timestampMs,
+                        metadata = chatMessageMetadata(item.message),
                         onReplyMessage = onReplyMessage,
                         sessionActionsEnabled = sessionActionsEnabled,
                         onRewindMessage = onRewindMessage,
@@ -2122,6 +2172,7 @@ internal fun ChatBubble(
   sourcePreviewConfig: GatewaySourcePreviewConfig? = null,
   loadSourceFavicon: suspend (GatewaySourcePreviewConfig, String) -> GatewayLoadedImage? = { _, _ -> null },
   senderLabel: String? = null,
+  metadata: List<Pair<String, String>> = emptyList(),
   disclosure: @Composable () -> Unit = {},
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
@@ -2178,146 +2229,120 @@ internal fun ChatBubble(
       null
     }
 
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+  ChatBubbleContainer(
+    user = isUser,
+    speaker = speaker,
+    messageActions = { modifier, body ->
+      ChatMessageActionHost(
+        text = messageText,
+        onReply = onReplyMessage,
+        showSessionActions = isUser && entryId != null && sessionActionsEnabled,
+        onRewind = entryId?.let { value -> { onRewindMessage(value) } },
+        onFork = entryId?.let { value -> { onForkMessage(value) } },
+        enabled = !live,
+        listenActive = messageSpeech?.isActive == true,
+        onToggleListen = toggleListen,
+        modifier = modifier,
+        content = body,
+      )
+    },
   ) {
-    ChatMessageActionHost(
-      text = messageText,
-      onReply = onReplyMessage,
-      showSessionActions = isUser && entryId != null && sessionActionsEnabled,
-      onRewind = entryId?.let { value -> { onRewindMessage(value) } },
-      onFork = entryId?.let { value -> { onForkMessage(value) } },
-      enabled = !live,
-      listenActive = messageSpeech?.isActive == true,
-      onToggleListen = toggleListen,
-      modifier =
-        Modifier
-          .fillMaxWidth(chatBubbleWidthFraction(isUser))
-          .semantics(mergeDescendants = true) { contentDescription = speaker },
-    ) {
-      Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(if (isUser) CHAT_BUBBLE_CORNER_RADIUS_DP.dp else 0.dp),
-        color = if (isUser) ClawTheme.colors.userMessageSurface else Color.Transparent,
-        contentColor = ClawTheme.colors.text,
-        border = null,
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-      ) {
-        Column(
-          modifier =
-            if (isUser) {
-              Modifier.padding(horizontal = 11.dp, vertical = 8.dp)
-            } else {
-              Modifier.padding(vertical = 4.dp)
-            },
-          verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-          caption?.let {
-            Text(
-              text = it,
-              style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium),
-              color = ClawTheme.colors.textMuted,
-            )
-          }
-          if (collapsibleUserText && messageText.isNotBlank()) {
-            ChatUserMessageText(
-              textParts = displayableContent.mapNotNull { it.text },
-              plainText = messageText,
-              expanded = userMessageExpanded,
-              onExpandedChange = { userMessageExpanded = it },
-            )
-          }
-          displayableContent.forEach { part ->
-            when {
-              part.type == "text" && !collapsibleUserText -> {
-                ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
-              }
+    caption?.let {
+      Text(
+        text = it,
+        style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium),
+        color = ClawTheme.colors.textMuted,
+      )
+    }
+    if (collapsibleUserText && messageText.isNotBlank()) {
+      ChatUserMessageText(
+        textParts = displayableContent.mapNotNull { it.text },
+        plainText = messageText,
+        expanded = userMessageExpanded,
+        onExpandedChange = { userMessageExpanded = it },
+      )
+    }
+    displayableContent.forEach { part ->
+      when {
+        part.type == "text" && !collapsibleUserText -> {
+          ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+        }
 
-              part.type == "text" -> {}
+        part.type == "text" -> {}
 
-              part.isAudioAttachment() && part.hasPlayableMediaArtifact() -> {
-                ChatAudioPlayerCard(
-                  content = part,
-                  playbackBlocked = inlineMediaPlaybackBlocked,
-                  loadMedia = loadMediaArtifact,
-                )
-              }
+        part.isAudioAttachment() && part.hasPlayableMediaArtifact() -> {
+          ChatAudioPlayerCard(
+            content = part,
+            playbackBlocked = inlineMediaPlaybackBlocked,
+            loadMedia = loadMediaArtifact,
+          )
+        }
 
-              part.isVideoAttachment() && part.hasPlayableMediaArtifact() -> {
-                ChatVideoPlayerCard(
-                  content = part,
-                  playbackBlocked = inlineMediaPlaybackBlocked,
-                  loadMedia = loadMediaArtifact,
-                )
-              }
+        part.isVideoAttachment() && part.hasPlayableMediaArtifact() -> {
+          ChatVideoPlayerCard(
+            content = part,
+            playbackBlocked = inlineMediaPlaybackBlocked,
+            loadMedia = loadMediaArtifact,
+          )
+        }
 
-              part.isAudioAttachment() || part.isVideoAttachment() -> {
-                ChatMediaAttachmentLabel(content = part)
-              }
+        part.isAudioAttachment() || part.isVideoAttachment() -> {
+          ChatMediaAttachmentLabel(content = part)
+        }
 
-              part.type == "image" && !part.base64.isNullOrBlank() -> {
-                ChatBase64Image(base64 = part.base64, mimeType = part.mimeType)
-              }
+        part.type == "image" && !part.base64.isNullOrBlank() -> {
+          ChatBase64Image(base64 = part.base64, mimeType = part.mimeType)
+        }
 
-              part.type == "image" && !part.artifactId.isNullOrBlank() -> {
-                ChatManagedImage(
-                  artifactId = part.artifactId,
-                  label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
-                  resolverReady = inlineWidgetResolverReady,
-                  loadImage = loadImageArtifact,
-                )
-              }
+        part.type == "image" && !part.artifactId.isNullOrBlank() -> {
+          ChatManagedImage(
+            artifactId = part.artifactId,
+            label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
+            resolverReady = inlineWidgetResolverReady,
+            loadImage = loadImageArtifact,
+          )
+        }
 
-              part.type == "canvas" && normalizedRole == "assistant" -> {
-                ChatInlineWidget(
-                  preview = checkNotNull(part.widget),
-                  resolverReady = inlineWidgetResolverReady,
-                  resolveResource = resolveInlineWidgetResource,
-                )
-              }
+        part.type == "canvas" && normalizedRole == "assistant" -> {
+          ChatInlineWidget(
+            preview = checkNotNull(part.widget),
+            resolverReady = inlineWidgetResolverReady,
+            resolveResource = resolveInlineWidgetResource,
+          )
+        }
 
-              else -> {
-                Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-              }
-            }
-          }
-          if (omittedImageCount > 0) {
-            Text(
-              text = nativeString("Additional images hidden: \${omittedImageCount}", omittedImageCount),
-              style = ClawTheme.type.caption,
-              color = ClawTheme.colors.textMuted,
-            )
-          }
-          if (messageId != null) {
-            ChatSourcePreviews(sourcePreviews, sourcePreviewConfig, loadSourceFavicon)
-            ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent, excludedUrls = sourcePreviews.flatMap { it.aliases }.toSet())
-          }
-          disclosure()
-          messageSpeech?.let { speech ->
-            FullChatSpeechIndicator(
-              phase = speech.phase,
-              onToggle = { onToggleListen(checkNotNull(messageId), messageText) },
-            )
-          }
-          timestampMs?.let {
-            Text(
-              text = formatChatTimestamp(it),
-              style = ClawTheme.type.caption.copy(fontSize = 11.5.sp, lineHeight = 14.sp, fontWeight = FontWeight.Normal),
-              color = ClawTheme.colors.textSubtle,
-              modifier = Modifier.align(if (isUser) Alignment.End else Alignment.Start),
-            )
-          }
+        else -> {
+          Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
       }
     }
+    if (omittedImageCount > 0) {
+      Text(
+        text = nativeString("Additional images hidden: \${omittedImageCount}", omittedImageCount),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
+    }
+    if (messageId != null) {
+      ChatSourcePreviews(sourcePreviews, sourcePreviewConfig, loadSourceFavicon)
+      ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent, excludedUrls = sourcePreviews.flatMap { it.aliases }.toSet())
+    }
+    disclosure()
+    messageSpeech?.let { speech ->
+      FullChatSpeechIndicator(
+        phase = speech.phase,
+        onToggle = { onToggleListen(checkNotNull(messageId), messageText) },
+      )
+    }
+    timestampMs?.let {
+      ChatMessageTimestamp(
+        timestampMs = it,
+        metadata = if (normalizedRole == "assistant" && !live) metadata else emptyList(),
+        modifier = Modifier.align(if (isUser) Alignment.End else Alignment.Start),
+      )
+    }
   }
 }
-
-internal fun chatBubbleWidthFraction(isUser: Boolean): Float = if (isUser) 0.78f else 1f
-
-internal const val CHAT_BUBBLE_CORNER_RADIUS_DP = 24
 
 @Composable
 private fun FullChatSpeechIndicator(
@@ -2441,17 +2466,27 @@ private fun ChatText(
 private fun ToolBubble(toolCalls: List<ChatPendingToolCall>) {
   ClawPanel {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawStatusPill(text = nativeString("Tools running"), status = ClawStatus.Warning)
-      toolCalls.take(4).forEach { tool ->
+      ClawStatusPill(text = nativeString("Tool activity"), status = ClawStatus.Warning)
+      toolCalls.filter { it.activity?.isVisible != false }.forEach { tool ->
         ClawListItem(
-          title = tool.name,
-          subtitle = nativeString("OpenClaw is working"),
+          title = tool.activity?.title ?: tool.name,
+          subtitle =
+            when (tool.activity?.status) {
+              "running" -> nativeString("OpenClaw is working")
+              "completed" -> nativeString("Finished")
+              "failed" -> nativeString("Failed")
+              "blocked" -> nativeString("Blocked")
+              else -> if (tool.activity == null && !tool.isComplete) nativeString("OpenClaw is working") else nativeString("No result")
+            },
           trailing = { tool.liveDiff?.let { DiffStatChips(it) } },
         )
       }
-      if (toolCalls.size > 4) {
-        Text(text = nativeString("+\${toolCalls.size - 4} more", toolCalls.size - 4), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
-      }
+      CompletedToolActivity(
+        toolCalls.filter { it.activity?.isVisible == false }.map {
+          ChatToolActivity(it.toolCallId, it.name, null, null, it.isError == true, it.args, it.activity, true)
+        },
+        stableKey = "pending-tool-details",
+      )
     }
   }
 }
@@ -2462,7 +2497,7 @@ private fun CompletedToolActivity(
   stableKey: String,
 ) {
   if (tools.isEmpty()) return
-  if (tools.size == 1) {
+  if (tools.size == 1 && !tools.single().activityPrepared && tools.single().activity == null) {
     val tool = tools.single()
     CompletedToolActivityItem(
       tool = tool,
@@ -2471,15 +2506,10 @@ private fun CompletedToolActivity(
     )
     return
   }
-  if (tools.all { completedToolKind(it.name) == CompletedToolKind.Progress }) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      tools.forEach { ProgressToolReceipt(it) }
-    }
-    return
-  }
   var expanded by rememberSaveable(stableKey) { mutableStateOf(false) }
   var showAll by rememberSaveable(stableKey) { mutableStateOf(false) }
   val summary = completedToolGroupSummary(tools)
+  val hasError = tools.any { it.isError }
   val state = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
   // Remeasure disclosures immediately: nested size springs leave blank space
   // while the reverse-layout transcript readjusts its bottom anchor.
@@ -2508,11 +2538,14 @@ private fun CompletedToolActivity(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Icon(
-          imageVector = Icons.AutoMirrored.Filled.List,
+          imageVector = if (hasError) Icons.Default.Close else Icons.AutoMirrored.Filled.List,
           contentDescription = null,
           modifier = Modifier.size(16.dp),
-          tint = ClawTheme.colors.textMuted,
+          tint = if (hasError) ClawTheme.colors.danger else ClawTheme.colors.textMuted,
         )
+        if (hasError) {
+          Text(text = nativeString("Tool error"), style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
+        }
         Text(
           text = summary,
           modifier = Modifier.weight(1f, fill = false),
@@ -2634,17 +2667,24 @@ private fun CompletedToolActivityItem(
       ) {
         Icon(
           imageVector =
-            when (kind) {
-              CompletedToolKind.Command -> Icons.Default.Terminal
-              CompletedToolKind.Read -> Icons.Default.Description
-              CompletedToolKind.Edit, CompletedToolKind.Write -> Icons.Default.Edit
-              CompletedToolKind.Search, CompletedToolKind.Fetch -> Icons.Default.Search
-              else -> Icons.AutoMirrored.Filled.List
+            if (tool.isError) {
+              Icons.Default.Close
+            } else {
+              when (kind) {
+                CompletedToolKind.Command -> Icons.Default.Terminal
+                CompletedToolKind.Read -> Icons.Default.Description
+                CompletedToolKind.Edit, CompletedToolKind.Write -> Icons.Default.Edit
+                CompletedToolKind.Search, CompletedToolKind.Fetch -> Icons.Default.Search
+                else -> Icons.AutoMirrored.Filled.List
+              }
             },
           contentDescription = null,
           modifier = Modifier.size(16.dp),
-          tint = ClawTheme.colors.textMuted,
+          tint = if (tool.isError) ClawTheme.colors.danger else ClawTheme.colors.textMuted,
         )
+        resultPresentation.outcome?.let { outcome ->
+          Text(text = outcome, style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
+        }
         Row(
           modifier = Modifier.weight(1f),
           horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -2944,7 +2984,7 @@ private fun ChatNotice(
       Box(modifier = Modifier.size(6.dp).background(ClawTheme.colors.warning, CircleShape))
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       }
     }
   }
@@ -3161,7 +3201,10 @@ private fun minimumChatLineHeight(style: TextStyle): Int {
 
 @Composable
 private fun minimumChatInputHeight(): Dp {
-  val lineHeight = minimumChatLineHeight(chatDraftStyle())
+  val style = chatDraftStyle()
+  val wrapped = rememberTextMeasurer().measure("H\nH", style = style)
+  // Multiline paragraph rounding can make a line one pixel taller than a single-line measurement.
+  val lineHeight = maxOf(minimumChatLineHeight(style), ceil(wrapped.getLineBottom(0) - wrapped.getLineTop(0)).toInt())
   return with(LocalDensity.current) {
     // Match each separately rounded editor/action padding and the text's full pixel line.
     (
@@ -3204,9 +3247,7 @@ private fun ChatComposer(
   commands: List<ChatCommandEntry>,
   onOpenEffortPicker: () -> Unit,
   onOpenModelPicker: () -> Unit,
-  onPickImages: () -> Unit,
-  onPickAudioOrDocument: () -> Unit,
-  onPickVideo: () -> Unit,
+  onOpenAttachments: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
   voiceNoteState: VoiceNoteRecorderState,
   voiceNoteElapsedMs: Long,
@@ -3216,6 +3257,7 @@ private fun ChatComposer(
   onCancelVoiceNote: () -> Unit,
   onFinishVoiceNote: () -> Unit,
   dictationState: ChatDictationState,
+  dictationPartialTranscript: String,
   dictationEnabled: Boolean,
   onToggleDictation: () -> Unit,
   talkActive: Boolean,
@@ -3230,8 +3272,7 @@ private fun ChatComposer(
     remember(value, commands) {
       matchingSlashCommands(input = value, commands = commands)
     }
-  val dictationActive =
-    dictationState is ChatDictationState.Starting || dictationState is ChatDictationState.Listening
+  val dictationActive = dictationState.isActive
   val hasContent = value.trim().isNotEmpty() || attachments.isNotEmpty()
   // Offline sends queue durably too (text, images, and voice notes), so the gate is identical
   // to the connected one; admission errors keep the draft when the durable queue refuses it.
@@ -3353,12 +3394,13 @@ private fun ChatComposer(
             onOpenDetails = if (compactHeight) ({ onDetailsExpandedChange(true) }) else null,
             value = value,
             onValueChange = onValueChange,
-            onPickImages = onPickImages,
-            onPickAudioOrDocument = onPickAudioOrDocument,
-            onPickVideo = onPickVideo,
+            onOpenAttachments = onOpenAttachments,
             onStartVoiceNote = onStartVoiceNote,
             recordVoiceNoteEnabled = ownerReady && recordVoiceNoteEnabled,
-            dictationActive = dictationActive,
+            dictationState = dictationState,
+            dictationPartialTranscript = dictationPartialTranscript,
+            preparingAttachments = shareStaging,
+            queuingMessage = sendInFlight,
             dictationEnabled = ownerReady && dictationEnabled,
             onToggleDictation = onToggleDictation,
             talkActive = talkActive,
@@ -3447,7 +3489,10 @@ internal fun resolveChatEffortPosition(
   return ChatEffortPosition(optionIndex = selectedIndex, fraction = fraction)
 }
 
-internal fun chatEffortNeedleAngle(position: ChatEffortPosition): Float? = position.fraction?.let { 150f + it * 240f }
+internal fun chatEffortNeedleAngle(
+  position: ChatEffortPosition,
+  fastMode: Boolean = false,
+): Float? = if (fastMode) 330f else position.fraction?.let { 180f + it * 120f }
 
 internal fun chatEffortVisualFraction(
   fraction: Float,
@@ -3470,6 +3515,7 @@ private fun ChatThinkingLevelPicker(
   val description = nativeString("Thinking")
   val dialColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
   val needleColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle
+  val fastZoneColor = ClawTheme.colors.danger.copy(alpha = if (enabled) 1f else 0.5f)
   Surface(
     onClick = onOpen,
     enabled = enabled,
@@ -3482,40 +3528,28 @@ private fun ChatThinkingLevelPicker(
     color = Color.Transparent,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Box(modifier = Modifier.size(20.dp).testTag("chat-thinking-gauge")) {
-        Canvas(modifier = Modifier.matchParentSize()) {
-          val dialStrokeWidth = 1.5.dp.toPx()
-          val needleStrokeWidth = 2.dp.toPx()
-          // The dial omits its bottom arc; center the visible ink with the other controls.
-          translate(top = size.height / 8f) {
-            drawArc(color = dialColor, startAngle = 150f, sweepAngle = 240f, useCenter = false, style = Stroke(width = dialStrokeWidth, cap = StrokeCap.Round))
-            // An unadvertised effective level is not the minimum/Off position.
-            chatEffortNeedleAngle(position)?.let { angle ->
-              rotate(angle) {
-                drawLine(
-                  color = needleColor,
-                  start = center,
-                  end = Offset(size.width * 0.82f, center.y),
-                  strokeWidth = needleStrokeWidth,
-                  cap = StrokeCap.Round,
-                )
-              }
-              drawCircle(color = needleColor, radius = 1.25.dp.toPx(), center = center)
-            }
-          }
+      Canvas(modifier = Modifier.size(22.dp).testTag("chat-thinking-gauge")) {
+        val radius = size.width * 0.43f
+        val hub = Offset(center.x, size.height * 0.72f)
+        val bounds = Offset(hub.x - radius, hub.y - radius)
+        val dialSize = Size(radius * 2, radius * 2)
+        val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Butt)
+        for (start in listOf(180f, 225f, 270f)) {
+          drawArc(dialColor, start, 39f, false, bounds, dialSize, style = stroke)
         }
-        if (fastMode) {
-          Box(
-            modifier =
-              Modifier
-                .align(Alignment.BottomEnd)
-                .size(8.dp)
-                .background(ClawTheme.colors.surface, CircleShape)
-                .testTag("chat-fast-mode-badge"),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(7.dp), tint = ClawTheme.colors.primary)
+        drawArc(fastZoneColor, 315f, 45f, false, bounds, dialSize, style = stroke)
+        // Fast mode occupies the red zone; otherwise the needle reflects advertised effort.
+        chatEffortNeedleAngle(position, fastMode)?.let { angle ->
+          rotate(angle, pivot = hub) {
+            drawLine(
+              color = needleColor,
+              start = hub,
+              end = Offset(hub.x + radius * 0.83f, hub.y),
+              strokeWidth = 2.dp.toPx(),
+              cap = StrokeCap.Round,
+            )
           }
+          drawCircle(color = needleColor, radius = 1.5.dp.toPx(), center = hub)
         }
       }
     }
@@ -3676,7 +3710,7 @@ private fun ChatEffortSheet(
   onDismiss: () -> Unit,
 ) {
   val thinkingOptions = if (thinkingSupported) options else emptyList()
-  ModalBottomSheet(
+  AppModalBottomSheet(
     modifier = Modifier.foldAwareSheet(opening.geometry),
     onDismissRequest = onDismiss,
     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -3736,7 +3770,7 @@ private fun BranchSwitcherSheet(
   onDismiss: () -> Unit,
   onSelect: (String) -> Unit,
 ) {
-  ModalBottomSheet(
+  AppModalBottomSheet(
     modifier = Modifier.foldAwareSheet(opening.geometry),
     onDismissRequest = onDismiss,
     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -3836,7 +3870,7 @@ private fun ChatModelPickerSheet(
   LaunchedEffect(permissionPickerEnabled) {
     if (showPermissionPicker && !permissionPickerEnabled && admit()) showPermissionPicker = false
   }
-  ModalBottomSheet(
+  AppModalBottomSheet(
     modifier = Modifier.foldAwareSheet(opening.geometry),
     onDismissRequest = onDismiss,
     // IME dismissal can remove a partial-height anchor while the selector opens.
@@ -4250,12 +4284,13 @@ private fun ChatInputPill(
   onOpenDetails: (() -> Unit)?,
   value: String,
   onValueChange: (String) -> Unit,
-  onPickImages: () -> Unit,
-  onPickAudioOrDocument: () -> Unit,
-  onPickVideo: () -> Unit,
+  onOpenAttachments: () -> Unit,
   onStartVoiceNote: () -> Unit,
   recordVoiceNoteEnabled: Boolean,
-  dictationActive: Boolean,
+  dictationState: ChatDictationState,
+  dictationPartialTranscript: String,
+  preparingAttachments: Boolean,
+  queuingMessage: Boolean,
   dictationEnabled: Boolean,
   onToggleDictation: () -> Unit,
   talkActive: Boolean,
@@ -4279,7 +4314,7 @@ private fun ChatInputPill(
   modifier: Modifier = Modifier,
 ) {
   val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
-  var attachmentMenuExpanded by remember { mutableStateOf(false) }
+  var voiceOptionsExpanded by remember { mutableStateOf(false) }
   val draftStyle = chatDraftStyle()
 
   Surface(
@@ -4291,50 +4326,129 @@ private fun ChatInputPill(
     shadowElevation = 1.dp,
   ) {
     Column {
-      ChatTextFieldValueAdapter(
-        value = value,
-        onValueChange = onValueChange,
-        keyHandler = hardwareEnterHandler,
-      ) { textFieldValue, updateTextFieldValue ->
-        BasicTextField(
-          value = textFieldValue,
-          enabled = inputEnabled,
-          // A pending IME callback must not edit the draft behind Details.
-          onValueChange = { if (inputEnabled) updateTextFieldValue(it) },
-          textStyle = draftStyle.copy(color = ClawTheme.colors.text),
-          cursorBrush = SolidColor(ClawTheme.colors.primary),
-          minLines = 1,
-          maxLines = 6,
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              // Reserve the action row before measuring the draft in the IME viewport.
-              .weight(1f, fill = false)
-              .heightIn(min = ClawTheme.spacing.touchTarget)
-              .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp)
-              .onPreInterceptKeyBeforeSoftKeyboard { event ->
-                inputEnabled &&
-                  hardwareEnterHandler.handle(
-                    event = event,
-                    sendEnabled = sendEnabled,
-                    textEmpty = textFieldValue.text.isEmpty(),
-                    compositionActive = textFieldValue.composition != null,
-                    onSend = onSend,
-                  )
-              },
-          decorationBox = { innerTextField ->
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-              if (value.isEmpty()) {
-                // BasicTextField's line limit does not constrain its decoration.
-                Text(text = nativeString("Message OpenClaw"), style = draftStyle, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-              }
-              innerTextField()
-            }
-          },
-        )
-      }
       Row(
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().weight(1f, fill = false).padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
+          Icon(Icons.Default.Add, contentDescription = nativeString("Add attachment"), modifier = Modifier.size(20.dp))
+        }
+        ChatTextFieldValueAdapter(
+          value = value,
+          onValueChange = onValueChange,
+          keyHandler = hardwareEnterHandler,
+        ) { textFieldValue, updateTextFieldValue ->
+          val scroll = rememberScrollState()
+          var textLayout by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+          val selection = textFieldValue.selection
+          // Keep the moved endpoint through unrelated recomposition and manual reading.
+          var selectionFollow by remember { mutableStateOf(selection to selection.end) }
+          if (selection != selectionFollow.first) {
+            val offset = if (selection.start != selectionFollow.first.start) selection.start else selection.end
+            selectionFollow = selection to offset
+          }
+          val caret = textLayout?.takeIf { it.layoutInput.text.text == textFieldValue.text }?.getCursorRect(selectionFollow.second)
+          val viewportHeight = scroll.viewportSize
+          val sixLines = rememberTextMeasurer().measure("H\nH\nH\nH\nH\nH", style = draftStyle).size.height
+          // Keep the native field bounded for paging; only its decoration contents scroll.
+          // The unbounded inner text has no private overflow competing with this viewport.
+          // Scroll changes themselves are deliberately not effect keys: manual reading
+          // stays put until the selection or available geometry actually changes.
+          LaunchedEffect(selectionFollow, caret, viewportHeight, inputEnabled) {
+            val cursor = caret
+            if (inputEnabled && cursor != null && viewportHeight > 0) {
+              val top = scroll.value
+              val target =
+                when {
+                  cursor.bottom > top + viewportHeight -> ceil(cursor.bottom - viewportHeight).toInt()
+                  cursor.top < top -> kotlin.math.floor(cursor.top).toInt()
+                  else -> top
+                }
+              if (target != top) scroll.scrollTo(target)
+            }
+          }
+          Box(
+            Modifier
+              .weight(1f)
+              .heightIn(min = ClawTheme.spacing.touchTarget, max = with(LocalDensity.current) { sixLines.toDp() } + 12.dp)
+              .padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
+          ) {
+            BasicTextField(
+              value = textFieldValue,
+              enabled = inputEnabled,
+              // A pending IME callback must not edit the draft behind Details.
+              onValueChange = { if (inputEnabled) updateTextFieldValue(it) },
+              textStyle = draftStyle.copy(color = ClawTheme.colors.text),
+              cursorBrush = SolidColor(ClawTheme.colors.primary),
+              minLines = 1,
+              maxLines = Int.MAX_VALUE,
+              onTextLayout = { textLayout = it },
+              modifier =
+                Modifier
+                  .fillMaxWidth()
+                  .semantics(mergeDescendants = true) {}
+                  .onPreInterceptKeyBeforeSoftKeyboard { event ->
+                    inputEnabled &&
+                      hardwareEnterHandler.handle(
+                        event = event,
+                        sendEnabled = sendEnabled,
+                        textEmpty = textFieldValue.text.isEmpty(),
+                        compositionActive = textFieldValue.composition != null,
+                        onSend = onSend,
+                      )
+                  },
+              decorationBox = { innerTextField ->
+                Box(modifier = Modifier.fillMaxWidth().verticalScroll(scroll, enabled = inputEnabled), contentAlignment = Alignment.CenterStart) {
+                  if (value.isEmpty()) {
+                    // BasicTextField's line limit does not constrain its decoration.
+                    Text(text = nativeString("Message OpenClaw"), style = draftStyle, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                  }
+                  innerTextField()
+                }
+              },
+            )
+          }
+        }
+
+        if (talkActive) {
+          LiveTalkButton(active = true, onClick = onToggleTalk)
+        } else {
+          Box {
+            ChatComposerMicButton(
+              dictationState = dictationState,
+              dictationEnabled = dictationEnabled,
+              voiceNoteEnabled = recordVoiceNoteEnabled,
+              onToggleDictation = onToggleDictation,
+              onStartVoiceNote = onStartVoiceNote,
+              onOpenVoiceOptions = { voiceOptionsExpanded = true },
+            )
+            FoldAwareDropdownMenu(
+              expanded = voiceOptionsExpanded,
+              onDismissRequest = { voiceOptionsExpanded = false },
+              items =
+                buildList {
+                  if (dictationEnabled) add(FoldAwareMenuItem("dictation", nativeString("Dictation"), onToggleDictation, Icons.Default.Mic))
+                  if (recordVoiceNoteEnabled) add(FoldAwareMenuItem("voice-note", voiceNoteRecordLabel(), onStartVoiceNote, Icons.Default.Mic))
+                  add(FoldAwareMenuItem("talk", nativeString("Start Talk"), onToggleTalk, Icons.Default.Mic))
+                },
+            )
+          }
+        }
+        when (resolveChatComposerPrimaryAction(talkActive = talkActive, runActive = runActive, hasContent = hasContent)) {
+          ChatComposerPrimaryAction.Send -> SendButton(enabled = inputEnabled && sendEnabled, onClick = onSend)
+          ChatComposerPrimaryAction.Stop -> StopButton(onClick = onAbort)
+          ChatComposerPrimaryAction.None -> Unit
+        }
+      }
+      ChatComposerActivity(
+        dictationState = dictationState,
+        partialTranscript = dictationPartialTranscript,
+        preparingAttachments = preparingAttachments,
+        queuingMessage = queuingMessage,
+        modifier = Modifier.padding(horizontal = 14.dp),
+      )
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         if (onOpenDetails != null) {
@@ -4342,24 +4456,10 @@ private fun ChatInputPill(
             Icon(Icons.Default.MoreVert, contentDescription = nativeString("Details"))
           }
         }
-        Box {
-          Surface(onClick = { attachmentMenuExpanded = true }, enabled = inputEnabled, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.textMuted) {
-            Box(contentAlignment = Alignment.Center) {
-              Icon(imageVector = Icons.Default.Add, contentDescription = nativeString("Add attachment"), modifier = Modifier.size(20.dp))
-            }
-          }
-          FoldAwareDropdownMenu(
-            expanded = attachmentMenuExpanded && inputEnabled,
-            onDismissRequest = { attachmentMenuExpanded = false },
-            items =
-              listOf(
-                FoldAwareMenuItem("photos", nativeString("Photos"), onPickImages, Icons.Default.Photo),
-                FoldAwareMenuItem("videos", nativeString("Videos"), onPickVideo, Icons.Default.Videocam),
-                FoldAwareMenuItem("files", nativeString("Files"), onPickAudioOrDocument, Icons.Default.AttachFile),
-              ),
-          )
-        }
-        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+          modifier = Modifier.weight(1f),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
           ChatComposerModelPicker(
             label = selectedModelLabel,
             contextUsage = contextUsage,
@@ -4379,22 +4479,28 @@ private fun ChatInputPill(
             )
           }
         }
-        if (talkActive) {
-          LiveTalkButton(active = true, onClick = onToggleTalk)
-        } else {
-          ChatComposerMicButton(
-            dictationActive = dictationActive,
-            dictationEnabled = dictationEnabled,
-            voiceNoteEnabled = recordVoiceNoteEnabled,
-            onToggleDictation = onToggleDictation,
-            onStartVoiceNote = onStartVoiceNote,
+        val fraction = contextMeterWidth(contextUsage)
+        val summary = chatContextSummary(contextUsage)
+        Row(
+          Modifier.weight(1f).padding(horizontal = 8.dp).semantics {
+            contentDescription = nativeString("Context")
+            summary?.let { stateDescription = it.detail }
+          },
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = fraction?.let { nativeString("Context \$percent", "${(it * 100).toInt()}%") } ?: nativeString("Context –"),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f),
           )
-        }
-        when (resolveChatComposerPrimaryAction(talkActive = talkActive, runActive = runActive, hasContent = hasContent)) {
-          ChatComposerPrimaryAction.Send -> SendButton(enabled = inputEnabled && sendEnabled, onClick = onSend)
-          ChatComposerPrimaryAction.StartTalk -> LiveTalkButton(active = false, onClick = onToggleTalk)
-          ChatComposerPrimaryAction.Stop -> StopButton(onClick = onAbort)
-          ChatComposerPrimaryAction.None -> Unit
+          Box(Modifier.width(36.dp).height(3.dp).background(ClawTheme.colors.borderStrong, CircleShape)) {
+            if (fraction != null) Box(Modifier.fillMaxWidth(fraction).height(3.dp).background(ClawTheme.colors.primary, CircleShape))
+          }
         }
       }
     }
@@ -4718,9 +4824,13 @@ private fun AttachmentStrip(
   attachments: List<PendingAttachment>,
   onRemoveAttachment: (String) -> Unit,
 ) {
-  Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-    attachments.forEach { attachment ->
-      AttachmentChip(attachment = attachment, onRemove = { onRemoveAttachment(attachment.id) })
+  BoxWithConstraints(Modifier.fillMaxWidth()) {
+    // Capture the composer width before horizontal scrolling makes the row unbounded.
+    val chipMaxWidth = maxWidth
+    Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      attachments.forEach { attachment ->
+        AttachmentChip(attachment = attachment, maxWidth = chipMaxWidth, onRemove = { onRemoveAttachment(attachment.id) })
+      }
     }
   }
 }
@@ -4728,6 +4838,7 @@ private fun AttachmentStrip(
 @Composable
 private fun AttachmentChip(
   attachment: PendingAttachment,
+  maxWidth: Dp,
   onRemove: () -> Unit,
 ) {
   val videoThumbnail =
@@ -4735,6 +4846,7 @@ private fun AttachmentChip(
       attachment.videoThumbnailBase64?.let(::decodeBase64Bitmap)
     }
   Surface(
+    modifier = Modifier.widthIn(max = maxWidth),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
@@ -4763,13 +4875,14 @@ private fun AttachmentChip(
         text =
           attachment.durationMs?.let { duration -> nativeString("Voice note · \${formatVoiceNoteDuration(duration)}", formatVoiceNoteDuration(duration)) }
             ?: attachment.fileName,
+        modifier = Modifier.weight(1f, fill = false),
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
-      Surface(onClick = onRemove, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
-        Box(contentAlignment = Alignment.Center) {
+      Surface(onClick = onRemove, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
+        Box(modifier = Modifier.padding(8.dp).background(ClawTheme.colors.canvas, CircleShape), contentAlignment = Alignment.Center) {
           Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Remove attachment"), modifier = Modifier.size(13.dp))
         }
       }
@@ -4914,5 +5027,3 @@ internal fun chatThinkingOptionLabel(
     }
   return localizedUppercase(localizedLabel.take(1), languageTag) + localizedLabel.drop(1)
 }
-
-private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))

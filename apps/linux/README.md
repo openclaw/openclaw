@@ -13,6 +13,12 @@ web UI's typography and light/dark palettes. They follow system appearance chang
 while open, preserving connection drafts, credential visibility, and Quick Chat
 replies. The connected dashboard retains its own web UI appearance setting.
 
+Quick Chat places the latest reply above a single bottom composer. Its disclosure
+button collapses the reply while retaining streamed text, widget contents, and
+the next draft. Return sends; Shift-Return adds a newline. The next draft remains
+editable while a reply streams, and sending becomes available when that turn
+finishes. **Open dashboard** opens the Primary Gateway's full interface.
+
 During remote setup or in Connection Settings, choose token or password under
 **Authentication**. **Show credential** reveals only what you entered; changing
 authentication types clears that draft and masks the new field. Press Enter or
@@ -46,6 +52,11 @@ requirement.
 
 See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
 for package updates, desktop limitations, and native-app distinctions.
+
+New Session uses `Cmd+Shift+O` on macOS and `Ctrl+Shift+O` on Linux and Windows
+only while its dashboard is focused. Quick Chat keeps the separate global
+`Cmd+Shift+Space` or `Ctrl+Shift+Space` shortcut, including when another app is
+in front.
 
 ## Omarchy
 
@@ -107,6 +118,16 @@ cargo build
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
 Desktop notifications use each platform's system notification service. macOS 13+ uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.
+
+On macOS, a test launch with an isolated `HOME` or `CFFIXED_USER_HOME` can make
+the user's default keychain unavailable to that process. The saved-Gateway notice
+describes the app's launch environment; it does not mean the Mac has no login
+keychain. Keep credential-free tests isolated and treat saved-Gateway storage as
+unavailable in that fixture. Do not restore the user's keychain or redirect the
+test to real credentials to silence the notice. For an installed app, quit and
+reopen it from Finder to use the normal login environment. If the configured
+keychain is still unavailable, check its configuration in Keychain Access before
+attempting any repair.
 
 ### Inline browser live regression on Linux
 
@@ -324,6 +345,65 @@ package-managed installs still link to the existing release page. The
 `linux-stable` publication channel does not change those client defaults.
 Changing them requires separate release-owner approval and signed
 installed-client migration proof.
+
+## Desktop sharing
+
+**Settings → This computer → Desktop sharing** controls this companion's desktop
+viewer on Linux and Windows. The macOS Tauri build calls that settings page
+**This Mac**. Sharing defaults to enabled once the local CLI is available and
+its settings can be resolved. An authored `desktop.host.enabled: false` remains
+an opt-out until you explicitly change the native setting. The native choice
+is saved in the companion's existing system credential store.
+
+The companion starts a desktop-only CLI node for the Primary Gateway, including
+when the settings page has never been opened. Approve its device and desktop
+capability requests on that Gateway when prompted. **Running** confirms the
+local sharing process is active; opening the viewer also requires approved
+pairing and an authenticated local Screen Sharing/VNC server. On macOS, enable
+**System Settings → General → Sharing → Screen Sharing**. Linux and Windows use
+an authenticated VNC server reachable on loopback. The viewer reports setup or
+authentication errors when you open it.
+
+Turning sharing off or quitting the companion closes its desktop relay and
+joins its process tree. Changing Primary retires the old node before starting
+the replacement. Each logical Gateway and local config profile has its own node
+identity; recovery of an SSH tunnel retains that identity when its local port
+changes. Computer Control and Keep computer awake retain their separate
+settings and permissions.
+
+The CLI remains the owner of local configuration, including `$include` files.
+The companion reads its resolved setting and passes the canonical config path
+to the node. Missing CLI support, invalid config, and failed startup appear in
+**Desktop sharing status** with a recovery message. If an off preference cannot
+be saved, sharing stops for this run and the status warns that the previous
+saved choice may return after restarting the app.
+
+## Keep computer awake
+
+Enable **Keep computer awake** beside **Start at Login** in the native tray menu
+to prevent idle sleep while this companion is running. It starts off and remembers
+your choice across restarts using the companion's existing system credential
+store. The checkmark shows the saved preference. If a saved request cannot be
+restored, the menu says **Keep computer awake (inactive)** and reports an error;
+you can still uncheck it without retrying the unavailable power service. A new
+enable request is saved only after the native request succeeds.
+Turning it off or quitting releases the request. Closing the dashboard to the
+tray does not release it.
+
+Linux uses GNOME’s native session inhibitor when available, or another desktop’s
+xdg-desktop-portal idle inhibitor, such as KDE’s backend. A working session or
+portal backend that supports idle inhibition is required; a
+logind sleep-delay inhibitor alone is not a keep-awake implementation. Desktop
+idle inhibition may also keep the display from dimming and delay automatic
+locking. Windows and the macOS Tauri build inhibit system idle sleep without
+requesting that the display stay on. Manual locking, manual sleep, and lid-close
+behavior remain under the operating system's control. This option does not wake
+or unlock a computer and does not replace the Gateway's sleep preparation.
+
+If turning the option off cannot save the preference, idle sleep is still allowed
+for this run, but the error warns that the saved choice may enable it again after
+a restart. The checked menu item is marked **inactive**; restore access to the
+credential store and uncheck it again to save the off preference.
 
 ## Quick Chat widgets
 

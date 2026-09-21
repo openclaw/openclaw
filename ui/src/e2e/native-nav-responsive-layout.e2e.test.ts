@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { BrowserContext } from "playwright";
 import { afterEach, expect, it } from "vitest";
+import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
@@ -18,9 +21,12 @@ suite.define(() => {
     context = undefined;
   });
 
+  const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
   async function openPage(options: {
     hasTouch?: boolean;
     height?: number;
+    phone?: boolean;
     webChrome?: boolean;
     width?: number;
   }) {
@@ -28,6 +34,14 @@ suite.define(() => {
       hasTouch: options.hasTouch,
       locale: "en-US",
       serviceWorkers: "block",
+      ...(options.phone
+        ? {
+            deviceScaleFactor: 3,
+            isMobile: true,
+            userAgent:
+              "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
+          }
+        : {}),
       viewport: { height: options.height ?? 900, width: options.width ?? 1280 },
     });
     const page = await context.newPage();
@@ -109,6 +123,7 @@ suite.define(() => {
     const page = await openPage({ width: 1440 });
     const sidebarBrand = page.locator(".sidebar-brand");
     const agentName = sidebarBrand.locator(".sidebar-agent-card__name-text");
+    await expect.poll(() => agentName.textContent()).toBe("OpenClaw");
 
     await expect
       .poll(() =>
@@ -229,13 +244,14 @@ suite.define(() => {
       });
 
     await expect.poll(() => actionInset("ltr")).toBe(2);
-    await expect.poll(nameFade).toEqual(["0px", "8px", expect.stringContaining("90deg")]);
+    await expect.poll(nameFade).toEqual(["0px", "8px", "none"]);
     await page.evaluate(() => {
       document.documentElement.dir = "rtl";
     });
     await expect.poll(() => actionInset("rtl")).toBe(0);
     await expect.poll(controlGaps).toEqual([0, 0]);
-    await expect.poll(nameFade).toEqual(["8px", "0px", expect.stringContaining("270deg")]);
+    // The fitting Latin name keeps its own direction in RTL page chrome.
+    await expect.poll(nameFade).toEqual(["0px", "8px", "none"]);
   });
 
   it("keeps the native sidebar avatar larger", async () => {
@@ -248,6 +264,55 @@ suite.define(() => {
         }),
       )
       .toEqual(["32px", "32px"]);
+  });
+
+  it("opens search from the phone drawer while keeping the chat header compact", async () => {
+    const page = await openPage({ hasTouch: true, height: 852, phone: true, width: 393 });
+    const shell = page.locator(".shell");
+    await expect.poll(() => shell.getAttribute("class")).toContain("shell--mobile-nav");
+    await expect.poll(() => shell.getAttribute("class")).toContain("shell--merged-chat-chrome");
+    await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
+
+    const header = page.locator(".chat-pane__header").first();
+    const drawerButton = header.getByRole("button", { name: "Expand sidebar" });
+    await drawerButton.waitFor({ state: "visible" });
+    await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
+    if (captureProof) {
+      await writeFile(
+        path.join(suite.artifactDir, "01-chat-title-bar.png"),
+        await takeControlUiElementScreenshot(page, header, [drawerButton]),
+      );
+    }
+
+    await drawerButton.tap();
+    await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+    const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
+    await expect.poll(() => drawerSearch.isVisible()).toBe(true);
+    await expect
+      .poll(() => page.locator(".shell-nav .sidebar-brand__collapse").isVisible())
+      .toBe(false);
+
+    if (captureProof) {
+      await writeFile(
+        path.join(suite.artifactDir, "02-sidebar-drawer.png"),
+        await takeControlUiElementScreenshot(page, page.locator(".sidebar-brand").first(), [
+          drawerSearch,
+        ]),
+      );
+    }
+
+    await drawerSearch.tap();
+    const paletteInput = page.locator(".cmd-palette__input");
+    await paletteInput.waitFor({ state: "visible" });
+    await expect.poll(() => paletteInput.evaluate((input) => input.matches(":focus"))).toBe(true);
+    if (captureProof) {
+      await writeFile(
+        path.join(suite.artifactDir, "03-command-palette.png"),
+        await takeControlUiElementScreenshot(page, page.locator(".cmd-palette").first(), [
+          paletteInput,
+        ]),
+      );
+    }
   });
 
   it.each([

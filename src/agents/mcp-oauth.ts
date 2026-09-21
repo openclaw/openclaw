@@ -16,6 +16,7 @@ import {
   bindMcpOAuthLeaseAssertion,
   createMcpOAuthClientProvider,
   type McpOAuthConfig,
+  type McpOAuthLoginLifecycle,
   withMcpOAuthLeaseSignal,
 } from "./mcp-oauth-provider.js";
 import {
@@ -353,13 +354,17 @@ export async function readMcpOAuthCredentialsStatus(
   return { state: "unauthenticated" };
 }
 
-function buildMcpOAuthAuthorizationFetch(config: ResolvedHttpMcpTransportConfig): FetchLike {
+function buildMcpOAuthAuthorizationFetch(
+  config: ResolvedHttpMcpTransportConfig,
+  beforeRequest?: () => void,
+): FetchLike {
   const fetchFn = buildMcpHttpFetch({
     sslVerify: config.sslVerify,
     clientCert: config.clientCert,
     clientKey: config.clientKey,
     resourceUrl: config.url,
     timeoutMs: config.requestTimeoutMs,
+    beforeRequest,
   });
   return withSameOriginMcpHttpHeaders({
     fetchFn,
@@ -377,6 +382,7 @@ async function runMcpOAuthAuthorizationAttempt(
     resourceMetadataUrl?: URL;
     scope?: string;
     suppressStoredTokens?: boolean;
+    login?: McpOAuthLoginLifecycle;
   },
   lease: OpenClawStateLeaseContext,
 ): Promise<"authorized" | "redirect"> {
@@ -386,77 +392,98 @@ async function runMcpOAuthAuthorizationAttempt(
     allowAuthorizationRedirect: true,
     suppressStoredTokens: params.suppressStoredTokens,
     lease,
+    login: params.login,
   });
   const result = await auth(provider, {
     serverUrl: params.identity.serverUrl,
     authorizationCode: normalizeOptionalString(params.authorizationCode),
     resourceMetadataUrl: params.resourceMetadataUrl,
     scope: normalizeOptionalString(params.scope) ?? normalizeOptionalString(params.config?.scope),
-    fetchFn: withMcpOAuthLeaseSignal(params.fetchFn, lease.signal),
+    fetchFn: withMcpOAuthLeaseSignal(params.fetchFn, lease.signal, params.login?.assertCurrent),
   });
   lease.assertOwned();
+  params.login?.assertCurrent();
   return result === "AUTHORIZED" ? "authorized" : "redirect";
 }
 
 export async function startMcpOAuthAuthorization(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
-  opts: { redirectUrl?: string },
+  opts: { redirectUrl?: string; login?: McpOAuthLoginLifecycle },
 ): Promise<McpOAuthAuthorizationStartResult> {
   const storeKey = identity.storeKey;
-  return await withMcpOAuthLease(storeKey, async (lease) => {
-    const store = readMcpOAuthStore(storeKey);
-    const pendingChallenge = store.pendingAuthorizationChallenge;
-    const configuredRedirectUrl =
-      normalizeOptionalString(opts.redirectUrl) ??
-      normalizeOptionalString(config.oauth?.redirectUrl) ??
-      store.redirectUrl;
-    const oauthConfig: McpOAuthConfig = {
-      ...config.oauth,
-      ...(configuredRedirectUrl ? { redirectUrl: configuredRedirectUrl } : {}),
-    };
-    const attempt = {
-      identity,
-      config: oauthConfig,
-      fetchFn: buildMcpOAuthAuthorizationFetch(config),
-      resourceMetadataUrl: pendingChallenge?.resourceMetadataUrl
-        ? new URL(pendingChallenge.resourceMetadataUrl)
-        : undefined,
-      scope: normalizeOptionalString(pendingChallenge?.scope),
-      suppressStoredTokens: pendingChallenge?.requiresAuthorization === true,
-    };
-    let result: "authorized" | "redirect";
-    try {
-      result = await runMcpOAuthAuthorizationAttempt(attempt, lease);
-    } catch (error) {
+  return await withMcpOAuthLease(
+    storeKey,
+    async (lease) => {
+      opts.login?.assertCurrent();
+      const store = readMcpOAuthStore(storeKey);
       if (
-        !normalizeOptionalString(opts.redirectUrl) &&
-        !normalizeOptionalString(config.oauth?.redirectUrl) &&
-        isMcpOAuthRedirectRegistrationError(error)
+        opts.login &&
+        store.tokens?.access_token &&
+        store.pendingAuthorizationChallenge?.requiresAuthorization !== true &&
+        (store.tokenExpiresAt === undefined ||
+          store.tokenExpiresAt > Date.now() + TOKEN_EXPIRY_SKEW_MS)
       ) {
-        result = await runMcpOAuthAuthorizationAttempt(
-          {
-            ...attempt,
-            config: { ...config.oauth, redirectUrl: LOCALHOST_REDIRECT_URL },
-          },
-          lease,
-        );
-      } else {
-        throw error;
+        return { status: "authorized" };
       }
-    }
-    if (result === "authorized") {
-      return { status: "authorized" };
-    }
-    const pending = readMcpOAuthStore(storeKey);
-    const authorizationUrl = pending.lastAuthorizationUrl;
-    const state = authorizationUrl ? new URL(authorizationUrl).searchParams.get("state") : null;
-    if (!authorizationUrl || !pending.codeVerifier || !pending.redirectUrl || !state) {
-      throw new Error("MCP OAuth authorization session was not persisted.");
-    }
-    writeMcpOAuthPendingAuthorization(storeKey, state, bindMcpOAuthLeaseAssertion(lease));
-    return { status: "redirect", authorizationUrl, redirectUrl: pending.redirectUrl, state };
-  });
+      const pendingChallenge = store.pendingAuthorizationChallenge;
+      const configuredRedirectUrl =
+        normalizeOptionalString(opts.redirectUrl) ??
+        normalizeOptionalString(config.oauth?.redirectUrl) ??
+        store.redirectUrl;
+      const oauthConfig: McpOAuthConfig = {
+        ...config.oauth,
+        ...(configuredRedirectUrl ? { redirectUrl: configuredRedirectUrl } : {}),
+      };
+      const attempt = {
+        identity,
+        config: oauthConfig,
+        fetchFn: buildMcpOAuthAuthorizationFetch(config, opts.login?.assertCurrent),
+        resourceMetadataUrl: pendingChallenge?.resourceMetadataUrl
+          ? new URL(pendingChallenge.resourceMetadataUrl)
+          : undefined,
+        scope: normalizeOptionalString(pendingChallenge?.scope),
+        suppressStoredTokens: pendingChallenge?.requiresAuthorization === true,
+        login: opts.login,
+      };
+      let result: "authorized" | "redirect";
+      try {
+        result = await runMcpOAuthAuthorizationAttempt(attempt, lease);
+      } catch (error) {
+        if (
+          !normalizeOptionalString(opts.redirectUrl) &&
+          !normalizeOptionalString(config.oauth?.redirectUrl) &&
+          isMcpOAuthRedirectRegistrationError(error)
+        ) {
+          result = await runMcpOAuthAuthorizationAttempt(
+            {
+              ...attempt,
+              config: { ...config.oauth, redirectUrl: LOCALHOST_REDIRECT_URL },
+            },
+            lease,
+          );
+        } else {
+          throw error;
+        }
+      }
+      if (result === "authorized") {
+        return { status: "authorized" };
+      }
+      const pending = readMcpOAuthStore(storeKey);
+      const authorizationUrl = pending.lastAuthorizationUrl;
+      const state = authorizationUrl ? new URL(authorizationUrl).searchParams.get("state") : null;
+      if (!authorizationUrl || !pending.codeVerifier || !pending.redirectUrl || !state) {
+        throw new Error("MCP OAuth authorization session was not persisted.");
+      }
+      writeMcpOAuthPendingAuthorization(
+        storeKey,
+        state,
+        bindMcpOAuthLeaseAssertion(lease, opts.login?.assertCurrent),
+      );
+      return { status: "redirect", authorizationUrl, redirectUrl: pending.redirectUrl, state };
+    },
+    opts.login?.signal,
+  );
 }
 
 export async function completeMcpOAuthAuthorization(
@@ -486,28 +513,37 @@ async function completeMcpOAuthAuthorizationUnderLease(
   config: ResolvedHttpMcpTransportConfig,
   input: { code: string },
   lease: OpenClawStateLeaseContext,
+  login?: McpOAuthLoginLifecycle,
 ): Promise<"authorized"> {
+  const authorizationCode = normalizeOptionalString(input.code);
+  if (!authorizationCode) {
+    throw new Error("Missing MCP OAuth authorization code. Run the login flow again.");
+  }
   const storeKey = identity.storeKey;
   const store = readMcpOAuthStore(storeKey);
   if (!store.codeVerifier || !store.redirectUrl) {
     throw new Error("Missing MCP OAuth authorization session. Run the login flow again.");
   }
   const pendingChallenge = store.pendingAuthorizationChallenge;
-  await runMcpOAuthAuthorizationAttempt(
+  const result = await runMcpOAuthAuthorizationAttempt(
     {
       identity,
       config: { ...config.oauth, redirectUrl: store.redirectUrl },
-      fetchFn: buildMcpOAuthAuthorizationFetch(config),
-      authorizationCode: input.code,
+      fetchFn: buildMcpOAuthAuthorizationFetch(config, login?.assertCurrent),
+      authorizationCode,
       resourceMetadataUrl: pendingChallenge?.resourceMetadataUrl
         ? new URL(pendingChallenge.resourceMetadataUrl)
         : undefined,
       scope: normalizeOptionalString(pendingChallenge?.scope),
       suppressStoredTokens: pendingChallenge?.requiresAuthorization === true,
+      login,
     },
     lease,
   );
-  const assertLeaseOwned = bindMcpOAuthLeaseAssertion(lease);
+  if (result !== "authorized") {
+    throw new Error("MCP OAuth authorization did not complete. Run the login flow again.");
+  }
+  const assertLeaseOwned = bindMcpOAuthLeaseAssertion(lease, login?.assertCurrent);
   updateMcpOAuthStore(
     storeKey,
     (current) => {
@@ -528,16 +564,46 @@ export async function completeOAuthCallback(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
   input: { code: string; state: string },
+  login?: McpOAuthLoginLifecycle,
 ): Promise<"authorized" | "expired"> {
-  return await withMcpOAuthLease(identity.storeKey, async (lease) => {
+  return await withMcpOAuthLease(
+    identity.storeKey,
+    async (lease) => {
+      const assertLeaseOwned = bindMcpOAuthLeaseAssertion(lease, login?.assertCurrent);
+      if (!consumeOAuthState(identity.storeKey, input.state, assertLeaseOwned)) {
+        return "expired";
+      }
+      const store = readMcpOAuthStore(identity.storeKey);
+      if (readMcpOAuthAuthorizationState(store.lastAuthorizationUrl) !== input.state) {
+        return "expired";
+      }
+      return await completeMcpOAuthAuthorizationUnderLease(identity, config, input, lease, login);
+    },
+    login?.signal,
+  );
+}
+
+export async function cancelMcpOAuthAuthorization(
+  identity: McpOAuthIdentity,
+  state: string,
+): Promise<void> {
+  await withMcpOAuthLease(identity.storeKey, async (lease) => {
+    const current = readMcpOAuthStore(identity.storeKey);
+    if (readMcpOAuthAuthorizationState(current.lastAuthorizationUrl) !== state) {
+      return;
+    }
     const assertLeaseOwned = bindMcpOAuthLeaseAssertion(lease);
-    if (!consumeOAuthState(identity.storeKey, input.state, assertLeaseOwned)) {
-      return "expired";
-    }
-    const store = readMcpOAuthStore(identity.storeKey);
-    if (readMcpOAuthAuthorizationState(store.lastAuthorizationUrl) !== input.state) {
-      return "expired";
-    }
-    return await completeMcpOAuthAuthorizationUnderLease(identity, config, input, lease);
+    updateMcpOAuthStore(
+      identity.storeKey,
+      (store) => {
+        const next = { ...store };
+        delete next.codeVerifier;
+        delete next.lastAuthorizationUrl;
+        delete next.redirectUrl;
+        return next;
+      },
+      assertLeaseOwned,
+    );
+    deleteMcpOAuthPendingAuthorization(identity.storeKey, assertLeaseOwned);
   });
 }

@@ -9,7 +9,9 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -36,7 +38,9 @@ describe("memory legacy migration cleanup", () => {
     await manager?.close();
     manager = undefined;
     await closeAllMemoryIndexManagers();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     if (originalStateDir === undefined) {
       Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");

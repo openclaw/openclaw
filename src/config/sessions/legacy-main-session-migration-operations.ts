@@ -48,6 +48,7 @@ import {
 } from "./session-accessor.sqlite-generation-copy.js";
 import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation.types.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
+import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import {
@@ -87,6 +88,7 @@ function writeMigratedSessionClaim(
   sessionKey: string,
   entry: SessionEntry,
 ): void {
+  invalidateSessionEntryMaintenanceAgeFact(database.db);
   writeSessionEntry(database, sessionKey, entry, {
     allowStoredAliases: true,
     previousEntry: null,

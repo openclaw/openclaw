@@ -874,7 +874,7 @@ describe("subagent registry persistence resume", () => {
           const runId = `run-restored-wake-${index}`;
           return createDeliveredWake(
             runId,
-            activationSettlement ? undefined : { status: "pending", attemptCount: 0 },
+            requesterYielded ? undefined : { status: "pending", attemptCount: 0 },
             {
               childSessionKey: `agent:main:subagent:restored-wake-${index}`,
               requesterSessionKey: `agent:main:requester-${index}`,
@@ -1023,10 +1023,15 @@ describe("subagent registry persistence resume", () => {
         } else {
           expect(restored?.requesterSettleWake).toBeUndefined();
         }
-        await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
-          timeout: 1_000,
-          interval: 10,
-        });
+        if (requesterYielded) {
+          await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
+            timeout: 1_000,
+            interval: 10,
+          });
+        } else {
+          await nextTask();
+          expect(wakeRequester).not.toHaveBeenCalled();
+        }
       });
     },
   );

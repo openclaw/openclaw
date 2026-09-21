@@ -8,6 +8,13 @@ import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
+import {
+  SessionTranscriptWriterClaimReboundError,
+  withSessionMetadataPublication,
+  withSessionTranscriptWriteAssertion,
+  type SessionMetadataChange,
+  type SessionMetadataCommit,
+} from "../../config/sessions/transcript-write-context.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -42,6 +49,7 @@ import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
+import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -113,15 +121,6 @@ interface CreateAgentSessionResult {
   /** Warning if session was restored with a different model than saved */
   modelFallbackMessage?: string;
 }
-
-// Re-exports
-
-export type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionFactory,
-  ToolDefinition,
-} from "./extensions/index.js";
 
 // Helper Functions
 
@@ -290,9 +289,27 @@ async function createAgentSessionImpl(
   const sessionManager =
     options.sessionManager ?? (await createDefaultSdkSessionManager(cwd, install));
 
+  const initialTarget = sessionManager.getSessionTarget();
+  const initialSessionId = sessionManager.getSessionId();
+  const assertInitialSessionCurrent = () => {
+    const current = sessionManager.getSessionTarget();
+    if (
+      sessionManager.getSessionId() !== initialSessionId ||
+      (initialTarget
+        ? !current ||
+          (["agentId", "sessionId", "sessionKey", "storePath"] as const).some(
+            (key) => current[key] !== initialTarget[key],
+          )
+        : current !== undefined)
+    ) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+  };
+
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
     await resourceLoader.reload();
+    assertInitialSessionCurrent();
     modelRegistry.refresh();
   }
 
@@ -441,6 +458,7 @@ async function createAgentSessionImpl(
       ? await options.withSessionWriteSettlement(run)
       : await run();
 
+  assertInitialSessionCurrent();
   const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
@@ -496,7 +514,7 @@ async function createAgentSessionImpl(
           }),
       );
     },
-    sessionId: sessionManager.getSessionId(),
+    sessionId: initialSessionId,
     transformContext: async (messages) => {
       const runner = extensionRunnerRef.current;
       if (!runner) {
@@ -517,21 +535,63 @@ async function createAgentSessionImpl(
     bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
   }
 
-  await withSessionManagerWrite(sessionManager, () => {
-    // Restore messages if session has existing data.
-    if (hasExistingSession) {
-      agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
-      if (!hasThinkingEntry) {
-        sessionManager.appendThinkingLevelChange(thinkingLevel);
+  let metadataCommit: SessionMetadataCommit | undefined;
+  const appendInitialMetadata = (change: SessionMetadataChange, append: () => Promise<string>) =>
+    withSessionMetadataPublication(
+      sessionManager,
+      change,
+      (commit) => {
+        metadataCommit = commit;
+      },
+      append,
+    );
+  const appendInitialThinking = () =>
+    appendInitialMetadata({ type: "thinking_level_change", thinkingLevel }, () =>
+      sessionManager.appendThinkingLevelChange(thinkingLevel),
+    );
+  const initializeMetadata = () =>
+    withSessionManagerWrite(sessionManager, async () => {
+      assertInitialSessionCurrent();
+      // Restore messages if session has existing data.
+      if (hasExistingSession) {
+        if (!hasThinkingEntry) {
+          await appendInitialThinking();
+          assertInitialSessionCurrent();
+        }
+        agent.state.messages = sanitizeCompactionReplayMessages(existingSession.messages);
+      } else {
+        // Persist initial settings before exposing the new session to callers.
+        if (model) {
+          await appendInitialMetadata(
+            { type: "model_change", provider: model.provider, modelId: model.id },
+            () => sessionManager.appendModelChange(model.provider, model.id),
+          );
+          assertInitialSessionCurrent();
+        }
+        await appendInitialThinking();
       }
-    } else {
-      // Persist initial settings before exposing the new session to callers.
-      if (model) {
-        sessionManager.appendModelChange(model.provider, model.id);
-      }
-      sessionManager.appendThinkingLevelChange(thinkingLevel);
+    });
+  try {
+    await (initialTarget
+      ? withSessionTranscriptWriteAssertion(
+          initialTarget,
+          assertInitialSessionCurrent,
+          initializeMetadata,
+        )
+      : initializeMetadata());
+    // Cleanup can yield after the last append, before this factory exposes its session.
+    assertInitialSessionCurrent();
+  } catch (cause) {
+    if (cause instanceof SessionMetadataCommittedError || !metadataCommit) {
+      throw cause;
     }
-  });
+    throw new SessionMetadataCommittedError(
+      metadataCommit.entry,
+      metadataCommit.version,
+      cause,
+      metadataCommit.target,
+    );
+  }
 
   const session = new AgentSession({
     agent,

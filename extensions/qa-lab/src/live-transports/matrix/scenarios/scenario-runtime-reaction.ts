@@ -1,5 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime reaction behavior.
-
 import { createMatrixQaClient } from "../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {

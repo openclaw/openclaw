@@ -1,4 +1,3 @@
-// Memory Core plugin module implements manager status state behavior.
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type {
@@ -48,7 +47,7 @@ export function resolveStatusProviderInfo(params: {
   provider: StatusProvider | null;
   providerInitialized: boolean;
   requestedProvider: string;
-  configuredModel?: string;
+  resolveConfiguredModel?: () => string | undefined;
 }): {
   provider: string;
   model?: string;
@@ -70,7 +69,7 @@ export function resolveStatusProviderInfo(params: {
   }
   return {
     provider: params.requestedProvider,
-    model: params.configuredModel || undefined,
+    model: params.resolveConfiguredModel?.() || undefined,
     searchMode: "hybrid",
   };
 }

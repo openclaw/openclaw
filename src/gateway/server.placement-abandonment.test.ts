@@ -132,6 +132,10 @@ it.for(cases)(
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       let offlineDeviceSeeded = false;
       let cleaningUp = false;
+      const offlineTransport = transport();
+      offlineTransport.hasCurrentRunner = () => false;
+      offlineTransport.listCurrentNodes = async () => [];
+      const offlineNodeLookup = vi.spyOn(offlineTransport, "getCurrentNode");
       const cleanupTransport = transport();
       const cleanupNodes = await cleanupTransport.listCurrentNodes();
       signal.throwIfAborted();
@@ -145,7 +149,7 @@ it.for(cases)(
         .mockImplementation((options) =>
           createTunnel({
             ...options,
-            getTransport: () => (cleaningUp ? cleanupTransport : options.getTransport()),
+            getTransport: () => (cleaningUp ? cleanupTransport : offlineTransport),
           }),
         );
       cleanups.push(() => tunnelFixture.mockRestore());
@@ -387,6 +391,7 @@ it.for(cases)(
       expect(placements.getPlacementMove(sessionId)).toBeUndefined();
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       expect(environments.get(environmentId)).toEqual(retainedCleanup);
+      expect(offlineNodeLookup).toHaveBeenCalledWith("offline-device");
       expect(stopInvoke).not.toHaveBeenCalled();
     } catch (error) {
       bodyFailure = { error };

@@ -4,7 +4,7 @@ import {
   openNodeSqliteDatabase,
   tableExists,
   type SqliteWorkerBackend,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type { QaExecutionIdentityStorageOperations } from "./execution-identity-storage-inspection.js";
 
 type QaExecutionIdentityDatabase = {

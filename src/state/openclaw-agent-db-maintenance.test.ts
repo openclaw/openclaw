@@ -1,8 +1,11 @@
 import { AsyncResource } from "node:async_hooks";
+import { fork } from "node:child_process";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import {
@@ -10,6 +13,7 @@ import {
   assertNoOpenClawAgentDatabaseLeases,
   runWithAgentDatabaseMaintenanceAuthority,
 } from "./openclaw-agent-db-lease.js";
+import { getOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -19,6 +23,7 @@ import {
   withAgentDatabaseMaintenanceLease,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -26,6 +31,11 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, fork: vi.fn(actual.fork) };
+});
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -120,6 +130,61 @@ function withAbortableMaintenance<T>(
 }
 
 describe("asynchronous agent database maintenance admission", () => {
+  it("reuses one integrity process across agent maintenance while checking each file afresh", async () => {
+    const f = fixture();
+    const createTarget = (agentId: string) => {
+      const database = openOpenClawAgentDatabase({ agentId, env: f.env });
+      const validation = expectDefined(
+        getOpenClawAgentDatabaseValidation(database),
+        "verified maintenance target",
+      );
+      return { agentId, pathname: database.path, validation };
+    };
+    const second = createTarget("second");
+    const third = createTarget("third");
+    await closeOpenClawAgentDatabasesAsync();
+    expect(Atomics.load(new Int32Array(second.validation.valid), 0)).toBe(1);
+    expect(Atomics.load(new Int32Array(third.validation.valid), 0)).toBe(1);
+    vi.mocked(fork).mockClear();
+    const entry = resolveRuntimeProcessEntrypointUrl("sqliteIntegrity").href;
+    const children = () =>
+      vi.mocked(fork).mock.calls.flatMap((args, index) => {
+        if (String(args[0]) !== entry) {
+          return [];
+        }
+        const result = expectDefined(vi.mocked(fork).mock.results[index], "integrity fork result");
+        if (result.type !== "return") {
+          throw new Error("Integrity worker did not start");
+        }
+        return [result.value];
+      });
+    await withAgentDatabaseMaintenanceLease({ env: f.env }, async (maintenance) => {
+      expect(Atomics.load(new Int32Array(second.validation.valid), 0)).toBe(0);
+      expect(Atomics.load(new Int32Array(third.validation.valid), 0)).toBe(0);
+      await migrateOpenClawAgentDatabaseForMaintenance(f.options, maintenance);
+      await withAgentDatabaseMaintenanceLease({ env: f.env }, async (nested) => {
+        await migrateOpenClawAgentDatabaseForMaintenance(second, nested);
+      });
+      await migrateOpenClawAgentDatabaseForMaintenance(third, maintenance);
+      expect(children()).toHaveLength(1);
+      const child = expectDefined(children()[0], "reused integrity child");
+      expect(child.exitCode).toBeNull();
+
+      installIndexDrift(f.options.pathname, true);
+      await expect(
+        integrityWorker.assertSqliteIntegrityInWorker(f.options.pathname, 250, maintenance.signal),
+      ).rejects.toMatchObject({ name: "SqliteIntegrityError" });
+      expect(child.exitCode).toBe(0);
+      await migrateOpenClawAgentDatabaseForMaintenance(f.options, maintenance);
+      expect(readIndexState(f.options.pathname).integrity).toEqual([{ integrity_check: "ok" }]);
+      maintenance.assertOwned();
+    });
+    expect(children().every((child) => child.exitCode !== null || child.signalCode !== null)).toBe(
+      true,
+    );
+    expect(f.state.db.prepare("SELECT owner FROM state_leases").all()).toEqual([]);
+  });
+
   it("yields during real integrity admission while retaining the maintenance fence", async () => {
     const f = fixture();
     const before = readIndexState(f.options.pathname);
@@ -200,6 +265,7 @@ describe("asynchronous agent database maintenance admission", () => {
 
   it("refuses a foreign caller coalesced onto the mutation owner's real async admission", async () => {
     const f = fixture();
+    clearOpenClawAgentIntegrityVerification(f.options.pathname, f.env);
     const ready = createDeferred();
     const release = createDeferred();
     const inspect = integrityWorker.assertSqliteIntegrityInWorker;

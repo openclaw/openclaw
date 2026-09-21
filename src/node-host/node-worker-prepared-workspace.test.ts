@@ -13,7 +13,10 @@ import {
 import * as workspaceReconcile from "../gateway/worker-environments/workspace-reconcile-core.js";
 import { readActualWorkspaceManifest } from "../gateway/worker-environments/workspace-reconcile.js";
 import { runExec } from "../process/exec.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import type { NodeWorkerPreparedWorkspaceBinding } from "../worker/node-workspace-prepared-protocol.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
 import { NodeWorkerPreparedWorkspaceStore } from "./node-worker-prepared-workspace-store.js";
@@ -28,8 +31,13 @@ import { listen } from "./node-worker-transfer-client.test-support.js";
 import * as workspaceCommands from "./node-worker-workspace-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 afterEach(() => vi.restoreAllMocks());
 const preparationKey = "a".repeat(64);
 const cacheKey = "c".repeat(64);
@@ -55,9 +63,11 @@ async function fixture(setupWrites = false) {
   );
   const workspaceDir = path.join(ownerRoot, "workspace");
   const homeDir = path.join(ownerRoot, "home");
+  // Match the private owner root created by project preparation, independent of host umask.
+  await fsp.mkdir(ownerRoot, { recursive: true, mode: 0o700 });
   await Promise.all([
-    fsp.mkdir(workspaceDir, { recursive: true }),
-    fsp.mkdir(homeDir, { recursive: true }),
+    fsp.mkdir(workspaceDir, { recursive: true, mode: 0o700 }),
+    fsp.mkdir(homeDir, { recursive: true, mode: 0o700 }),
   ]);
   const git = async (...args: string[]) =>
     (await runExec("git", ["-C", workspaceDir, ...args], { timeoutMs: 10_000 })).stdout.trim();
@@ -429,13 +439,13 @@ describe("prepared node workspace ownership", () => {
       retain: [],
     };
     const acquired = f.runtime.acquireManagedWorkspace(f.request);
-    await expect(f.runtime.applyRetainSnapshot(retain, () => [])).resolves.toMatchObject({
+    await expect(f.runtime.applyRetainSnapshot(retain, async () => [])).resolves.toMatchObject({
       deleted: 0,
     });
     expect((await fsp.stat(f.workspaceDir)).isDirectory()).toBe(true);
     acquired.release();
     await expect(
-      f.runtime.applyRetainSnapshot({ ...retain, sequence: 2 }, () => []),
+      f.runtime.applyRetainSnapshot({ ...retain, sequence: 2 }, async () => []),
     ).resolves.toMatchObject({ deleted: 1 });
     expect(
       new NodeWorkerPreparedWorkspaceStore({ env: f.env }).find(binding.environmentId),
@@ -478,7 +488,7 @@ describe("prepared node workspace ownership", () => {
       retain: [],
     };
     const operation = f.runtime
-      .applyRetainSnapshot(retain, () => [], controller.signal)
+      .applyRetainSnapshot(retain, async () => [], controller.signal)
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -497,7 +507,7 @@ describe("prepared node workspace ownership", () => {
     const restarted = new NodeWorkerWorkspaceRuntime(f.options);
     await expect(restarted.exec(f.command)).rejects.toThrow("does not own");
     await expect(
-      restarted.applyRetainSnapshot({ ...retain, sequence: 2 }, () => []),
+      restarted.applyRetainSnapshot({ ...retain, sequence: 2 }, async () => []),
     ).resolves.toMatchObject({ deleted: 1 });
     expect(store.find(binding.environmentId)?.state).toBe("retired");
   });
@@ -776,6 +786,12 @@ describe("prepared node workspace ownership", () => {
         );
         if (lateChange === "apply failure" || lateChange === "publication failure") {
           await expect(transfer).rejects.toThrow("workspace-transfer-failed");
+          await expect(transfer).rejects.toHaveProperty(
+            "cause.message",
+            lateChange === "publication failure"
+              ? "injected manifest publication failure"
+              : "injected failure after patch application",
+          );
           expect(await fsp.readFile(path.join(f.workspaceDir, "source.txt"), "utf8")).toBe(
             "prepared source\n",
           );

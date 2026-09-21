@@ -30,6 +30,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
+import { findCodexAppServerSpawnError } from "./spawn-error.js";
 import { createCodexTestModel } from "./test-support.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
 
@@ -567,7 +568,13 @@ describe("Codex app-server startup retry", () => {
     fixture.pluginConfig.appServer.command = command;
     const spawnSpy = vi.spyOn(childProcess, "spawn");
     try {
-      await expect(startFixtureAttempt(fixture)).rejects.toMatchObject({ code: "ENOENT" });
+      const error = await startFixtureAttempt(fixture).catch((caught: unknown) => caught);
+      expect(findCodexAppServerSpawnError(error)).toMatchObject({
+        command,
+        cause: expect.objectContaining({ code: "ENOENT" }),
+      });
+      expect(isCodexAppServerConnectionClosedError(error)).toBe(false);
+      await expect(startFixtureAttempt(fixture)).rejects.toBe(error);
       expect(spawnSpy.mock.calls.filter(([program]) => program === command)).toHaveLength(1);
     } finally {
       spawnSpy.mockRestore();

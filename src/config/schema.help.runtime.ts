@@ -122,7 +122,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.updatePlan":
     "Unified `progress_card` status tool for durable plans and narrative notes in parent sessions. Enabled by default; set false to opt out. Always unavailable to subagents.",
   "tools.toolSearch":
-    "Compact large OpenClaw, MCP, and client tool catalogs. Supported local runtimes use structured Tool Search automatically when unset. Set false to disable it, true for the code bridge, or use the object form to choose a mode.",
+    "Compact large OpenClaw, MCP, and client tool catalogs. OpenClaw runtimes use structured Tool Search automatically when unset; engaged Code Mode takes precedence and Codex uses its native search. Set false to disable it, true for the code bridge, or use the object form to choose a mode.",
   "tools.toolSearch.enabled":
     "Enables Tool Search. When on, OpenClaw hides large tool catalogs behind `tool_search_code` or structured search/describe/call tools during embedded runtime runs.",
   "tools.toolSearch.mode":
@@ -140,8 +140,6 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode.runtime": 'Guest JavaScript runtime. Only "quickjs-wasi" is supported.',
   "tools.codeMode.mode":
     'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',
-  "tools.codeMode.languages":
-    'Accepted source languages for `exec`. Supported values are "javascript" and "typescript".',
   "tools.codeMode.timeoutMs": "Maximum milliseconds for one code-mode `exec` or `wait` call.",
   "tools.codeMode.memoryLimitBytes": "QuickJS heap limit for one code-mode VM.",
   "tools.codeMode.maxOutputBytes": "Maximum serialized bytes returned through code-mode output.",
@@ -207,7 +205,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.experimental":
     "Opt-in Control UI experiments. These capabilities may change between releases and remain disabled unless explicitly enabled.",
   "gateway.controlUi.experimental.customPlugins":
-    "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Restart the Gateway and reload open Control UI pages after changing this setting.",
+    "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Changes apply without a Gateway restart. Reload open Control UI pages to clear previously loaded plugin code.",
   "gateway.controlUi.environment":
     "Optional public environment identity shown in the Control UI stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
   "gateway.controlUi.environment.label":
@@ -225,11 +223,18 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.allowExternalEmbedUrls":
     "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
   "gateway.controlUi.automaticallyFetchFavicons":
-    "Fetch link favicons through the Gateway (default on). The Gateway requests only HTTPS /favicon.ico from public destinations, applies strict SSRF checks to every DNS result and redirect, and validates bounded image bytes. Set false to prevent all favicon route requests and destination fetches.",
+    "Fetch link favicons and browser-tab social previews through the Gateway (default on). Browser-tab cards load public page metadata and declared images without browser cookies or site credentials. All requests use strict SSRF checks and bounded HTML/image processing. Set false to disable both automatic favicon and page-preview fetches; live browser screenshots are unaffected.",
   "gateway.controlUi.allowedOrigins":
     'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "DANGEROUS toggle that enables Host-header based origin fallback for Control UI/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
+  "gateway.portals": "Portal publication and private ingress settings.",
+  "gateway.portals.ingress":
+    "Optional operator-managed private HTTPS wildcard reverse proxy. Forward original Host, paths, and WebSocket upgrades to the dedicated loopback listener. Portal bearer authentication remains required. Requires Gateway restart.",
+  "gateway.portals.ingress.domain":
+    "Bare DNS domain for random portal subdomains (for example previews.example.net). Configure wildcard DNS and HTTPS privately; do not share the Gateway or Control UI hostname namespace.",
+  "gateway.portals.ingress.port":
+    "Dedicated loopback HTTP port receiving the private wildcard HTTPS proxy. Must differ from the Gateway port. This is the backend port, not the public HTTPS port.",
   "gateway.publicOrigin":
     "Externally reachable HTTPS origin of the Gateway. HTTP is allowed only for localhost, 127.0.0.1, or [::1]. Per-requester MCP OAuth uses it to build the callback URL at /oauth/mcp/callback; channel session links and plugin-generated viewer links use it to reach the Control UI and Gateway routes.",
   "mcp.apps":
@@ -286,6 +291,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
+  "nodeHost.autoUpdate":
+    "Controls automatic updates of the separate runtime for packaged headless node hosts. Checks hourly and waits for all node work to finish before restarting; automatic restarts are at least 12 hours apart.",
+  "nodeHost.autoUpdate.enabled":
+    "Enable automatic stable or beta updates for long-running packaged headless nodes (default: true). Set false to opt out. Also disabled by update.checkOnStart=false or OPENCLAW_NO_AUTO_UPDATE=1; source checkouts, native apps, private workers, dev, and extended-stable do not auto-apply.",
   "nodeHost.agentRuns":
     "Opt in to approval-gated native agent turns on this headless node host. Disabled by default.",
   "nodeHost.agentRuns.claude":

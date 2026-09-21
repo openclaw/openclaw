@@ -14,6 +14,7 @@ import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
+import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -39,8 +40,8 @@ function write(root: string, relative: string, content: string) {
   return target;
 }
 
-function createCheckout() {
-  const root = fs.realpathSync(fixture.createTempDir("openclaw-dist-owner-"));
+function createCheckout(prefix = "openclaw-dist-owner-") {
+  const root = fs.realpathSync(fixture.createTempDir(prefix));
   write(root, "package.json", '{"type":"module"}');
   write(root, "pnpm-workspace.yaml", "packages: []\n");
   write(root, "src/plugin-sdk/qa-channel-protocol.ts", "export interface Channel { id: string }\n");
@@ -99,9 +100,13 @@ function installBuildCheckpoint(root: string, checkpoint: string) {
   write(root, "pnpm.cjs", 'import("./node_modules/tsdown/dist/run.mjs");\n');
 }
 
-function installScripts(root: string, scripts: string[]) {
+function installScripts(
+  root: string,
+  scripts: string[],
+  { compiler = true, dependencies = ["tsx", "@openclaw/fs-safe"] } = {},
+) {
   // Keep the checkpoint launcher when installCompiler already owns this toolchain.
-  if (!fs.existsSync(path.join(root, "node_modules/typescript/package.json"))) {
+  if (compiler && !fs.existsSync(path.join(root, "node_modules/typescript/package.json"))) {
     materializeNativeCompiler(root);
   }
   for (const script of ["tsx.mjs", ...scripts]) {
@@ -122,11 +127,12 @@ function installScripts(root: string, scripts: string[]) {
   }
   write(root, "scripts/lib/plugin-sdk-entrypoints.json", '["qa-channel-protocol"]');
   fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
-  for (const name of ["tsx", "@openclaw/fs-safe"]) {
+  for (const name of dependencies) {
     fs.mkdirSync(path.dirname(path.join(root, "node_modules", name)), { recursive: true });
     fs.symlinkSync(
       path.join(sourceRoot, "node_modules", name),
       path.join(root, "node_modules", name),
+      process.platform === "win32" ? "junction" : "dir",
     );
   }
 }
@@ -296,6 +302,97 @@ async function runWithProcesses(
     await cleanup();
   }
 }
+
+describe("native check launchers in paths with spaces", () => {
+  it.for(
+    ["run-tsgo-core-test-shards.mts", "run-oxlint.mts", "run-oxlint-shards.mts"].flatMap((script) =>
+      [0, 7].map((exitCode) => ({ script, exitCode })),
+    ),
+  )(
+    "joins $script children before releasing artifacts (exit $exitCode)",
+    async ({ script, exitCode }, { signal }) => {
+      await withProcesses(async ({ checkpoint, start }) => {
+        const root = createCheckout("openclaw check launchers ");
+        installScripts(
+          root,
+          ["run-tsgo-core-test-shards.mts", "run-oxlint.mts", "run-oxlint-shards.mts"],
+          { compiler: false, dependencies: ["tsx", "@openclaw/fs-safe", "p-map", "koffi"] },
+        );
+        const nativeJob = "src/process/supervisor/service-child-windows-job-native.ts";
+        write(root, nativeJob, fs.readFileSync(path.join(sourceRoot, nativeJob), "utf8"));
+        const compiler = script === "run-tsgo-core-test-shards.mts";
+        const workload = compiler
+          ? "run-tsgo.mts"
+          : "prepare-extension-package-boundary-artifacts.mts";
+        const observed = path.join(root, "child.json");
+        const settled = path.join(root, "child-settled");
+        const consumed = path.join(root, "lint-consumed");
+        // Keep the real CLI, artifact handoff and managed process owner. Only the
+        // terminal compiler/preparation workload waits at this completion barrier.
+        write(
+          root,
+          `scripts/${workload}`,
+          `
+        import fs from 'node:fs';
+        import { createRequire } from 'node:module';
+        const require = createRequire(import.meta.url);
+        fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ argv: process.argv.slice(2), pid: process.pid }));
+        await new Promise(resolve => {
+          ${checkpoint("child-running")}
+          socket.on('close', resolve);
+        });
+        fs.writeFileSync(${JSON.stringify(settled)}, 'settled');
+        process.exitCode = ${exitCode};
+      `,
+        );
+        const lint = write(
+          root,
+          "node_modules/.bin/oxlint",
+          `#!/usr/bin/env node
+        require('node:fs').writeFileSync(${JSON.stringify(consumed)}, 'consumed');
+      `,
+        );
+        fs.chmodSync(lint, 0o755);
+        if (process.platform === "win32") {
+          write(
+            root,
+            "node_modules/.bin/oxlint.cmd",
+            `@"${testNodeExecPath}" "%~dp0oxlint" %*\r\n`,
+          );
+        }
+        const args = compiler
+          ? ["--stripe", `1/${TSGO_CORE_TEST_SHARDS.length}`]
+          : script === "run-oxlint.mts"
+            ? ["--tsconfig", "extensions/tsconfig.json", "extensions"]
+            : ["--only", "extensions"];
+        const command = start(root, path.join(root, "scripts", script), args);
+        const gate = await command.event("child-running");
+        const child: { argv: string[]; pid: number } = JSON.parse(
+          fs.readFileSync(observed, "utf8"),
+        );
+        expect(child.argv).toEqual(
+          compiler
+            ? ["-b", TSGO_CORE_TEST_SHARDS[0].config, "--builders", "1"]
+            : ["--mode=package-boundary"],
+        );
+        const lock = resolveDistArtifactLockPath(root);
+        expect(fs.existsSync(path.join(lock, "owner.json"))).toBe(true);
+        expect(fs.readdirSync(lock)).toContain(`child-${child.pid}`);
+        expect(fs.existsSync(settled)).toBe(false);
+        expect(fs.existsSync(consumed)).toBe(false);
+        gate.write("continue");
+        const result = await command.done;
+        expect(result.code, result.output).toBe(
+          script === "run-oxlint.mts" && exitCode !== 0 ? 1 : exitCode,
+        );
+        expect(fs.readFileSync(settled, "utf8")).toBe("settled");
+        expect(fs.existsSync(consumed)).toBe(!compiler && exitCode === 0);
+        expect(() => process.kill(child.pid, 0)).toThrow();
+        expect(fs.readdirSync(lock)).toEqual([]);
+      }, signal);
+    },
+  );
+});
 
 // Native TypeScript emits the declarations. Only
 // process completion is gated; ordering never depends on sleeps or host speed.
@@ -861,10 +958,13 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     }, signal);
   }, 30_000);
 
-  it("preserves compiler shard concurrency inside one checkout owner", async ({ signal }) => {
+  it("preserves compiler shard concurrency without the tsx loader", async ({ signal }) => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
-      installScripts(root, ["run-tsgo-core-test-shards.mts", "run-tsgo.mts"]);
+      installScripts(root, ["run-tsgo-core-test-shards.mts", "run-tsgo.mts"], {
+        dependencies: ["@openclaw/fs-safe"],
+      });
+      fs.unlinkSync(path.join(root, "scripts/tsx.mjs"));
       fs.unlinkSync(path.join(root, "node_modules/.bin/tsgo"));
       const compiler = write(
         root,

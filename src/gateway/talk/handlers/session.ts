@@ -25,6 +25,7 @@ import { ADMIN_SCOPE } from "../../operator-scopes.js";
 import { resolveOperatorSessionCreation } from "../../server-methods/session-creation-provenance.js";
 import type { GatewayRequestHandlers, RespondFn } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
+import { getSessionRowProjection } from "../../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../../session-sharing.js";
 import { resolveSessionKeyFromResolveParams } from "../../sessions-resolve.js";
 import { formatForLog } from "../../ws-log.js";
@@ -186,13 +187,17 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const runtimeConfig = context.getRuntimeConfig();
         const target = requestedSessionKey
           ? requirePreparedTalkSessionTarget(sessionMutationAuthorization?.talkSessionTarget)
           : undefined;
         sessionMutationAuthorization?.assertCurrent();
-        const resolvedSession = await resolveSessionKeyFromResolveParams({
-          cfg: runtimeConfig,
+        const projection = getSessionRowProjection(context);
+        if (!projection) {
+          respondInvalidRequest(respond, "Session rows are initializing; try again");
+          return;
+        }
+        const resolvedSession = resolveSessionKeyFromResolveParams({
+          projection,
           client,
           p: {
             key: target?.canonicalKey,

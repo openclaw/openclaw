@@ -1,6 +1,7 @@
 import path from "node:path";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { QaRunnerTransportArtifacts } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
 import type { QaLabLatestReport } from "./lab-server.types.js";
 import {
@@ -144,6 +145,7 @@ export async function runQaFlowSuiteIsolated(
   let parentTransportCleaned = false;
   let completionProgress: string | undefined;
   let terminalScenarios: QaSuiteScenarioResult[] | undefined;
+  let transportArtifacts: QaRunnerTransportArtifacts | undefined;
   try {
     if (params?.channelDriver === "live") {
       // The parent only renders aggregate artifacts. Release its live credentials
@@ -299,6 +301,8 @@ export async function runQaFlowSuiteIsolated(
           params?.failFast === true && scenarioResult.status === "fail",
       },
     );
+    await artifactWriteQueue;
+    transportArtifacts = await transport.captureArtifacts?.({ outputDir });
     terminalScenarios = scenarios;
     completionProgress = "run complete";
   } catch (error) {
@@ -346,7 +350,7 @@ export async function runQaFlowSuiteIsolated(
     concurrency,
     channel: params?.channelId ?? transport.id,
     channelDriver: transportFactoryResult.driver,
-    publishTransportArtifacts: true,
+    transportArtifacts,
     isolatedWorkers: true,
     writeEvidenceFile: params?.writeEvidenceFile,
     scenarioIds:

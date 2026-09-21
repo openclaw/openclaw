@@ -1,5 +1,6 @@
 // Gateway known-weak credential guard.
-// Rejects published placeholder auth values before the gateway starts.
+// Rejects active shared-secret placeholders before the gateway starts.
+import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 
 const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
@@ -30,11 +31,37 @@ export function isInvalidGatewaySecret(value: unknown): boolean {
   return typeof value === "string" && ["", "undefined", "null"].includes(value.trim());
 }
 
+/** Optional proxy passwords remain diagnosable without owning proxy startup. */
+export function getTrustedProxyPasswordRedactionWarning(
+  auth: Pick<ResolvedGatewayAuth, "mode" | "password">,
+): string | undefined {
+  if (auth.mode !== "trusted-proxy" || !isRedactedSecretValue(auth.password)) {
+    return undefined;
+  }
+  return "Gateway optional password is a known redaction sentinel. Trusted-proxy authentication remains available, but local password fallback is unavailable. Replace or remove gateway.auth.password / OPENCLAW_GATEWAY_PASSWORD and restart the Gateway.";
+}
+
 export function assertGatewayAuthNotKnownWeak(
   auth: ResolvedGatewayAuth,
   rawToken?: unknown,
   rawPassword?: unknown,
 ): void {
+  if (auth.mode !== "token" && auth.mode !== "password") {
+    return;
+  }
+  const credentialKind = auth.mode;
+  if (
+    isRedactedSecretValue(
+      auth[credentialKind] ?? (credentialKind === "token" ? rawToken : rawPassword),
+    )
+  ) {
+    throw new Error(
+      `Gateway auth ${credentialKind} is a known redaction sentinel, not a credential. ` +
+        (credentialKind === "password"
+          ? "Replace gateway.auth.password, OPENCLAW_GATEWAY_PASSWORD, or its external secret source with a real password, then restart the Gateway."
+          : "Run `openclaw doctor --fix` to repair the Gateway token or replace the external secret, then restart and re-pair devices."),
+    );
+  }
   if (auth.mode === "token") {
     // Token/password checks stay separate because auth mode is exclusive and
     // error text should name the credential the operator must rotate.

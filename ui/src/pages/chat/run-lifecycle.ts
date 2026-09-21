@@ -533,42 +533,22 @@ function reconcileSessionRows(
   options: ReconcileOptions,
   occurredAt: number,
 ) {
-  if (!options.outcome) {
+  if (!options.outcome && !options.yielded) {
     return;
   }
   const keys = sessionKeysFor(host, options);
-  if (keys.size === 0) {
+  if (options.outcome && keys.size === 0) {
     return;
   }
-  const status =
-    options.sessionStatus ?? (options.outcome === "done" ? ("done" as const) : ("killed" as const));
+  const status = options.outcome
+    ? (options.sessionStatus ?? (options.outcome === "done" ? "done" : "killed"))
+    : "running";
   const terminal: SessionRunTerminal = {
     sessionKeys: [...keys],
     agentId: options.agentId,
     runId: options.runId ?? host.chatRunId ?? null,
     status,
-    errorMessage: options.errorMessage,
-    endedAt: occurredAt,
-  };
-  if (host.sessionsResult) {
-    host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
-  }
-  host.sessions?.reconcileRunTerminal?.(terminal);
-}
-
-function reconcileYieldedSessionRows(
-  host: RunLifecycleHost,
-  options: ReconcileOptions,
-  occurredAt: number,
-) {
-  if (!options.yielded) {
-    return;
-  }
-  const terminal: SessionRunTerminal = {
-    sessionKeys: [...sessionKeysFor(host, options)],
-    agentId: options.agentId,
-    runId: options.runId ?? host.chatRunId ?? null,
-    status: "running",
+    ...(options.outcome ? { errorMessage: options.errorMessage } : {}),
     endedAt: occurredAt,
   };
   if (host.sessionsResult) {
@@ -629,7 +609,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
       scheduleRunStatusClear(host, status);
     }
   } else if (options.yielded) {
-    reconcileYieldedSessionRows(host, sessionOptions, occurredAt);
+    reconcileSessionRows(host, sessionOptions, occurredAt);
     host.lastLocalTerminalReconcile = null;
     clearChatRunStatus(host);
   } else if (options.clearRunStatus) {
@@ -755,10 +735,30 @@ export function reconcileChatRunFromSessionRow(
   if (row.hasActiveRun !== false && !terminalStatus) {
     return false;
   }
+  const runId = host.chatRunId;
+  let errorMessage: string | undefined;
+  if (runId && row.lastRunId === runId && (row.status === "failed" || row.status === "timeout")) {
+    // Session publication can beat (or replace) chat.error. Show its diagnostic
+    // before retiring the run, without freezing the bounded row summary into the
+    // terminal reducer: a later live/history diagnostic can contain more detail.
+    errorMessage =
+      host.chatRunError?.runId === runId
+        ? host.chatRunError.summary
+        : row.lastRunError?.trim() ||
+          t(
+            row.status === "timeout"
+              ? "sessionsView.runErrorTimedOut"
+              : "sessionsView.runErrorUnknown",
+          );
+    if (host.chatRunError?.runId !== runId) {
+      setChatRunError(host, errorMessage, runId);
+    }
+  }
   reconcileChatRunLifecycle(host, {
     outcome: row.status === "done" ? "done" : "interrupted",
     sessionStatus: row.status === "running" || row.status === undefined ? "killed" : row.status,
-    runId: host.chatRunId,
+    errorMessage,
+    runId,
     sessionKey: host.sessionKey,
     sessionKeys: [row.key],
     clearLocalRun: true,

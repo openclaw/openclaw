@@ -387,6 +387,7 @@ export async function executeRemoteExecTurn(params: {
   try {
     skillResources = await transferSkillResources({
       snapshot: params.turn.skillsSnapshot,
+      workspaceDir: params.turn.workspaceDir,
       explicitSelections: params.turn.explicitSkillSelections,
       tunnel,
       remoteWorkspaceDir: params.placement.remoteWorkspaceDir,

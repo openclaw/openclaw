@@ -56,8 +56,6 @@ describe("resolveSidebarSessionSubtitle", () => {
   it.each(["stuck", "waiting-on-user"] as const)(
     "keeps a %s observer headline when previews are hidden",
     (health) => {
-      // isCriticalObserverHealth owns these two states; the chat pane announces them
-      // too, so a display preference must not silence them in the sidebar.
       expect(
         resolveSidebarSessionSubtitle({
           session: {

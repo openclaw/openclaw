@@ -297,20 +297,38 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
         }
       }
     }
-    return Object.values(node)
-      .flat()
-      .some(
-        (child) =>
-          child &&
-          typeof child === "object" &&
-          "type" in child &&
-          needsTransform(
-            // SAFETY: Children belong to the Acorn tree, as in the reference visitor below.
-            child as AnyNode,
-            exportedDeclaration ||
-              (node.type === "ExportNamedDeclaration" && child === node.declaration),
-          ),
-      );
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (const child of value) {
+          if (
+            child &&
+            typeof child === "object" &&
+            "type" in child &&
+            needsTransform(
+              // SAFETY: Array children belong to the same Acorn tree.
+              child as AnyNode,
+              exportedDeclaration ||
+                (node.type === "ExportNamedDeclaration" && child === node.declaration),
+            )
+          ) {
+            return true;
+          }
+        }
+      } else if (
+        value &&
+        typeof value === "object" &&
+        "type" in value &&
+        needsTransform(
+          // SAFETY: Children belong to the Acorn tree, as in the reference visitor below.
+          value as AnyNode,
+          exportedDeclaration ||
+            (node.type === "ExportNamedDeclaration" && value === node.declaration),
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
   };
   return needsTransform(tree) ? undefined : tree;
 }
@@ -450,10 +468,17 @@ export function visitPluginSourceReferences(
         visitDirectoryAsset(name, args.slice(1).map(staticString));
       }
     }
-    for (const child of Object.values(node).flat()) {
-      if (child && typeof child === "object" && "type" in child) {
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (const child of value) {
+          if (child && typeof child === "object" && "type" in child) {
+            // SAFETY: Array children belong to the same Acorn tree.
+            visit(child as AnyNode);
+          }
+        }
+      } else if (value && typeof value === "object" && "type" in value) {
         // SAFETY: The tree comes directly from Acorn; typed child fields are Acorn nodes.
-        visit(child as AnyNode);
+        visit(value as AnyNode);
       }
     }
   };

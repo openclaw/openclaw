@@ -18,7 +18,6 @@ import {
   resolveDeletedAgentIdFromSessionKey,
 } from "../session-utils.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
-import { chatHandlers } from "./chat.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { isFreshChatSendStarted } from "./session-create-initial-turn.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
@@ -181,11 +180,7 @@ async function handleSessionSend(params: {
       client: params.client,
       isWebchatConnect: params.isWebchatConnect,
     };
-    if (params.queueMode === "interrupt") {
-      await handleDirectExternalChatSend(options);
-      return;
-    }
-    await expectDefined(chatHandlers["chat.send"], "chat.send handler")(options);
+    await handleDirectExternalChatSend(options);
   };
   const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
     allowPendingWorkspace: true,

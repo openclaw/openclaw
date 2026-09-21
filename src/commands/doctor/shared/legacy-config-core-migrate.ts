@@ -165,9 +165,8 @@ export function normalizeCompatibilityConfigValues(
     options.blockedModelIdentities,
   );
   const tuningCandidate = structuredClone(next);
-  if (stripRetiredTuningKnobs(tuningCandidate)) {
+  if (stripRetiredTuningKnobs(tuningCandidate, changes)) {
     next = tuningCandidate;
-    changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
   }
   const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
   if (channelMigrations.changes.length > 0) {

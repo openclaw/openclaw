@@ -14,8 +14,6 @@ import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
   buildPluginCapabilitySummary,
   computeDeclaredSurfaceHash,
-  formatPluginCapabilityConsentRequired,
-  resolveAcceptedSurfaceCurrent,
   resolvePluginInstallRecordIntegrity,
   resolvePluginInstallRecordTrust,
   resolvePluginPackageDeclaredSurface,
@@ -68,7 +66,6 @@ import {
   resolveOfficialExternalPluginLabel,
 } from "./official-external-plugin-catalog.js";
 import type { OfficialCatalogResult } from "./official-external-plugin-catalog.types.js";
-import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { createPluginCache, getProcessPluginCache, withPluginCache } from "./plugin-cache.js";
 import { resolvePluginConfigEnablement } from "./plugin-config-enablement.js";
 import {
@@ -78,10 +75,7 @@ import {
 } from "./plugin-metadata-snapshot.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
-import {
-  buildPluginDependencyStatus,
-  projectPluginDependencyHealth,
-} from "./status-dependencies-core.js";
+import { projectPluginInstallHealth } from "./status-snapshot.js";
 
 function resolveManagedPluginState(params: {
   enabled: boolean;
@@ -108,33 +102,25 @@ function pluginVersionKey(name: string, version: string): string {
 function resolveManagedPluginDiagnostics(
   snapshot: PluginMetadataSnapshot,
   config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
 ): PluginDiagnostic[] {
-  const dependencies = getManagedPluginCache().dependencyStatus;
   const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, config);
-  const { diagnostics } = projectPluginDependencyHealth({
-    plugins: snapshot.index.plugins.map((record) => {
-      const manifest = snapshot.byPluginId.get(record.pluginId);
-      const enabled = isEnabled(record.pluginId);
-      if (manifest && !dependencies.has(manifest) && tracksPluginDependencyStatus(record)) {
-        dependencies.set(
-          manifest,
-          buildPluginDependencyStatus({
-            rootDir: record.rootDir,
-            dependencies: manifest.packageDependencies,
-            optionalDependencies: manifest.packageOptionalDependencies,
-          }),
-        );
-      }
-      return {
-        id: record.pluginId,
-        source: manifest?.source ?? record.source ?? record.manifestPath,
-        enabled,
-        status: enabled ? ("loaded" as const) : ("disabled" as const),
-        dependencyStatus: manifest ? dependencies.get(manifest) : undefined,
-      };
-    }),
-    diagnostics: [...snapshot.diagnostics],
-  });
+  const { diagnostics } = projectPluginInstallHealth(
+    {
+      plugins: snapshot.index.plugins.map((record) => {
+        const manifest = snapshot.byPluginId.get(record.pluginId);
+        const enabled = isEnabled(record.pluginId);
+        return {
+          id: record.pluginId,
+          source: manifest?.source ?? record.source ?? record.manifestPath,
+          enabled,
+          status: enabled ? ("loaded" as const) : ("disabled" as const),
+        };
+      }),
+      diagnostics: [...snapshot.diagnostics],
+    },
+    { metadata: snapshot, config, env },
+  );
   return diagnostics;
 }
 
@@ -254,8 +240,8 @@ export const listManagedPlugins = withManagedPluginCache(
     const env = params.env ?? process.env;
     const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
     const metadata = params.metadata ?? resolveManagedPluginMetadata(params.config, env);
-    const pluginDiagnostics = resolveManagedPluginDiagnostics(metadata, params.config);
     const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
+    const pluginDiagnostics = resolveManagedPluginDiagnostics(metadata, params.config, env);
     // Prepare the merged entry once; display names never add install identities.
     const officialEntries = prepareCatalogEntries(officialCatalog.entries);
     const bundledOfficialEntries = prepareCatalogEntries(
@@ -264,7 +250,6 @@ export const listManagedPlugins = withManagedPluginCache(
     const installedIconsById = new Map<string, boolean>();
     const installedClawHubPackages = new Set<string>();
     const discoveryRegistry = resolveClawHubBaseUrl();
-    const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
     const categoryTargetsByRegistry = new Map<
       string,
       Map<
@@ -290,22 +275,6 @@ export const listManagedPlugins = withManagedPluginCache(
       const ownership = ownershipResolver.resolvePackage(record.pluginId);
       const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
       const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
-      if (
-        enabled &&
-        record.origin !== "bundled" &&
-        !manifest?.trustedOfficialInstall &&
-        ownership.ok &&
-        installRecord
-      ) {
-        const declared = resolvePluginPackageDeclaredSurface(ownership.value, metadata.byPluginId);
-        if (!declared || !resolveAcceptedSurfaceCurrent(installRecord, declared)) {
-          capabilityConsentDiagnostics.push({
-            level: "warn",
-            pluginId: record.pluginId,
-            message: formatPluginCapabilityConsentRequired(record.pluginId),
-          });
-        }
-      }
       const { entry: officialEntry, clawhubPackage } = resolveInstalledHostedOfficialEntry({
         record,
         ...(installOwner ? { installOwner } : {}),
@@ -552,11 +521,8 @@ export const listManagedPlugins = withManagedPluginCache(
       });
     }
     const diagnostics: unknown[] = getProcessGatewayPluginMetadataSnapshot()
-      ? [...pluginDiagnostics, ...capabilityConsentDiagnostics]
-      : appendPluginControlPlaneWorkspaceDiagnostic(
-          [...pluginDiagnostics, ...capabilityConsentDiagnostics],
-          workspace,
-        );
+      ? pluginDiagnostics
+      : appendPluginControlPlaneWorkspaceDiagnostic(pluginDiagnostics, workspace);
     if (officialCatalog.error) {
       diagnostics.push({
         level: "warn",

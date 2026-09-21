@@ -33,7 +33,10 @@ import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wa
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { readSystemDisks } from "../../infra/system-disks.js";
-import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
+import {
+  resolveSystemEventQueueKey,
+  withSystemEventOwner,
+} from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -47,6 +50,9 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 let advertisedLanHostPromise: Promise<string | null> | null = null;
+let cpuInfoSnapshot:
+  | (Pick<SystemInfoResult, "cpuCount" | "cpuModel"> & { sampledAtMs: number })
+  | undefined;
 
 function resolveCachedAdvertisedLanHost(): Promise<string | null> {
   // Route discovery may spawn a platform command. Keep the result process-stable
@@ -56,8 +62,22 @@ function resolveCachedAdvertisedLanHost(): Promise<string | null> {
 }
 
 async function collectSystemInfo(context: GatewayRequestContext): Promise<SystemInfoResult> {
-  const cpus = os.cpus();
-  const cpuModel = cpus[0]?.model.trim() || undefined;
+  const now = Date.now();
+  // os.cpus() also gathers per-core timings; only retain identity here. A short
+  // snapshot bounds CPU-topology staleness without delaying live process vitals.
+  if (
+    !cpuInfoSnapshot ||
+    now < cpuInfoSnapshot.sampledAtMs ||
+    now - cpuInfoSnapshot.sampledAtMs >= 2_000
+  ) {
+    const cpus = os.cpus();
+    cpuInfoSnapshot = {
+      sampledAtMs: now,
+      cpuCount: cpus.length,
+      cpuModel: cpus[0]?.model.trim() || undefined,
+    };
+  }
+  const { cpuCount, cpuModel } = cpuInfoSnapshot;
   const [oneMinute = 0, fiveMinutes = 0, fifteenMinutes = 0] = os.loadavg();
   const loadAverage: [number, number, number] = [oneMinute, fiveMinutes, fifteenMinutes];
   const stateDir = resolveStateDir();
@@ -96,7 +116,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     pid: process.pid,
     processInstanceId: getGatewayProcessInstanceId(),
     uptimeMs: Math.round(process.uptime() * 1000),
-    cpuCount: cpus.length,
+    cpuCount,
     ...(cpuModel ? { cpuModel } : {}),
     ...(loadAverage.some((value) => value !== 0) ? { loadAverage } : {}),
     memoryTotalBytes: os.totalmem(),
@@ -293,7 +313,10 @@ export const systemHandlers: GatewayRequestHandlers = {
       const reasonChanged = changed.has("reason") && !ignoreReason;
       const hasChanges = hostChanged || ipChanged || versionChanged || modeChanged || reasonChanged;
       if (hasChanges) {
-        const contextChanged = isSystemEventContextChanged(sessionKey, presenceUpdate.key);
+        const contextChanged = isSystemEventContextChanged(
+          resolveSystemEventQueueKey(sessionKey, eventOwnerAgentId),
+          presenceUpdate.key,
+        );
         const parts: string[] = [];
         // Re-state node identity only when the line would otherwise lose
         // routing context or the host/IP changed.

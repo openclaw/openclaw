@@ -269,6 +269,52 @@ describe("worker turn launcher failure recovery", () => {
     }
   });
 
+  it("persists launch context and cancellation diagnosis when failure details exceed the display bound", async () => {
+    seedActivePlacement();
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    const turnClaim = placements.claimTurn({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      claimId: "rejected-launch-claim",
+      runId: "rejected-launch-run",
+      owner: placementTurnOwner(active),
+    });
+    const secret = "synthetic-worker-recovery-secret";
+    const launchDiagnosis = "node worker supervisor worker.launch.v1 failed: invalid descriptor";
+    const cancellationDiagnosis =
+      "node worker cancellation did not produce a terminal receipt before its deadline";
+    await failHandedOffTurn({
+      environments: {
+        ...unusedEnvironments(),
+        stopTunnel: async () => {},
+        destroy: async () => attachedEnvironment(),
+      },
+      placements,
+      placement: active,
+      turnClaim,
+      error: new AggregateError(
+        [
+          new Error(`${launchDiagnosis}\n token="${secret}"\n${"x".repeat(2_048)}`),
+          new Error(cancellationDiagnosis),
+        ],
+        "node worker launch failed and cancellation could not be confirmed",
+      ),
+    });
+
+    const failed = placements.get(SESSION_ID);
+    expect(failed).toMatchObject({ state: "failed", turnClaim: null });
+    expect(failed?.recoveryError).toContain(launchDiagnosis);
+    expect(failed?.recoveryError).toContain(cancellationDiagnosis);
+    expect(failed?.recoveryError).not.toContain(secret);
+    expect(failed?.recoveryError).not.toContain("\n");
+    expect(failed?.recoveryError?.length).toBeLessThanOrEqual(1_024);
+    expect(failed?.terminalReason).toBe(failed?.recoveryError);
+  });
+
   it.each(["worker-turn", "remote-exec"] as const)(
     "releases an exact %s claim after another lifecycle owner starts draining",
     async (executionMode) => {

@@ -265,6 +265,7 @@ export async function hydrateChatHistory(
         ? { activeLeafEntryId: nextDisplayedLeafEntryId }
         : {}),
     });
+    state.chatSubmissions?.observeInitialSession(sessionKey, client, nextSessionId);
     // Only the pane-owned reducer proves which live and pending rows survive;
     // terminal-renderer cleanup must not reclassify them as history. A new
     // session or leaf starts empty.

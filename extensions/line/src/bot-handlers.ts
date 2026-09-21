@@ -1,4 +1,3 @@
-// Line plugin module implements bot handlers behavior.
 import type { webhook } from "@line/bot-sdk";
 import {
   type buildChannelInboundEventContext,

@@ -13,7 +13,6 @@ import {
   githubPublicationBaseFetchArgs,
   githubPublicationBaseLineageArgs,
   githubPublicationBaseLookupArgs,
-  githubPublicationBranchCreationArgs,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
 import {
@@ -200,21 +199,18 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     if (baseFetched.code !== 0) {
       throw new Error("GitHub publication workspace base could not be materialized.");
     }
-    const creation = await run(githubPublicationBranchCreationArgs(branch), { cwd: worktree.path });
-    const creationEntries = creation.stdout.toString("utf8").trim().split(/\r?\n/u);
-    const creationBase = creationEntries.at(-1) ?? "";
-    if (creation.code !== 0 || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(creationBase)) {
-      throw new Error("GitHub publication workspace creation base could not be verified.");
+    // Reflogs can expire or restart when a branch is recreated; commits own its history.
+    const lineage = await run(["git", "merge-base", sourceHeadCommit, remoteBaseSha], {
+      cwd: worktree.path,
+    });
+    if (lineage.code === 1) {
+      throw new GitHubPublicationKnownFailure("GitHub publication histories are unrelated.", {
+        code: "workspace_changed",
+        nextAction:
+          "The accepted commit and pull request base have no shared Git history. Preserve your work and apply the intended changes to a session branch based on the target repository before publishing again.",
+      });
     }
-    const creationOwnsRemote = await run(
-      githubPublicationBaseLineageArgs(creationBase, remoteBaseSha),
-      { cwd: worktree.path },
-    );
-    const creationOwnsSource = await run(
-      githubPublicationBaseLineageArgs(creationBase, sourceHeadCommit),
-      { cwd: worktree.path },
-    );
-    if (creationOwnsRemote.code !== 0 || creationOwnsSource.code !== 0) {
+    if (lineage.code !== 0) {
       throw new Error("GitHub publication workspace base lineage could not be verified.");
     }
     const baseTree = await command(["git", "rev-parse", `${remoteBaseSha}^{tree}`], {

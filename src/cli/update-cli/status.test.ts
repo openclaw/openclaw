@@ -8,7 +8,12 @@ import {
   writeSessionSqliteMigrationManifest,
 } from "../../commands/doctor-session-sqlite-migration-run.js";
 import { buildStatusUpdateRows } from "../../commands/status-update-restart.js";
+import * as configModule from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
+import {
+  completeGatewayBootLifecycle,
+  recordGatewayBootStart,
+} from "../../infra/gateway-boot-lifecycle.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
@@ -40,14 +45,20 @@ const runtime = vi.hoisted(() => ({
 const service = vi.hoisted(() => ({
   readCommand: vi.fn(),
   resolveNodeRuntimeInfo: vi.fn(),
+  audit: vi.fn(),
 }));
 const confirmGatewayReachable = vi.hoisted(() =>
   vi.fn<typeof import("../daemon-cli/restart-health-probe.js").confirmGatewayReachable>(),
 );
 vi.mock("../daemon-cli/restart-health-probe.js", () => ({ confirmGatewayReachable }));
+const callGateway = vi.hoisted(() => vi.fn());
+vi.mock("../../gateway/call.js", () => ({ callGateway }));
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: service.readCommand }),
+}));
+vi.mock("../../daemon/service-audit.js", () => ({
+  auditGatewayServiceConfig: service.audit,
 }));
 vi.mock("../../daemon/runtime-paths.js", () => ({
   resolveNodeRuntimeInfo: service.resolveNodeRuntimeInfo,
@@ -79,10 +90,154 @@ const tempDirs = createTempDirTracker();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  callGateway.mockReset().mockRejectedValue(new Error("Gateway unavailable"));
   service.readCommand.mockResolvedValue(null);
+  service.audit.mockResolvedValue({ ok: true, issues: [] });
   const stateDir = tempDirs.make("openclaw-update-status-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+});
+
+describe("update status installation replacement history", () => {
+  it.each([true, false])(
+    "reports the recorded replacement while the Gateway is unavailable (JSON: %s)",
+    async (json) => {
+      const reason =
+        "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
+      const completedAtMs = Date.UTC(2026, 8, 19, 12);
+      const bootId = recordGatewayBootStart(process.env, completedAtMs - 1_000);
+      completeGatewayBootLifecycle(
+        bootId,
+        { outcome: "planned_restart", reason },
+        process.env,
+        completedAtMs,
+      );
+
+      await updateStatusCommand({ json });
+
+      if (json) {
+        expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
+          lastGatewayInstallationReplacement: { reason, completedAtMs },
+        });
+      } else {
+        const output = runtime.log.mock.calls.flat().join("\n");
+        expect(output).toContain("Previous Gateway installation replacement");
+        expect(output).toContain(new Date(completedAtMs).toISOString());
+        expect(output).toContain(reason);
+      }
+    },
+  );
+
+  it("does not attribute local replacement history to a remote Gateway", async () => {
+    const bootId = recordGatewayBootStart();
+    completeGatewayBootLifecycle(bootId, {
+      outcome: "planned_restart",
+      reason: "gateway.installation_replaced: local install changed",
+    });
+    vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
+      gateway: { mode: "remote" },
+    });
+
+    await updateStatusCommand({ json: true });
+
+    expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty(
+      "lastGatewayInstallationReplacement",
+    );
+  });
+});
+
+describe("update status service definition facts", () => {
+  it.each([true, false])(
+    "reports drift and unknown edits without repairing them (JSON: %s)",
+    async (json) => {
+      const drift = [
+        {
+          kind: "outdated",
+          key: "Service.KillMode",
+          current: null,
+          expected: "mixed",
+          message: "Service.KillMode: missing; installer expects mixed.",
+        },
+        {
+          kind: "unknown-edit",
+          key: "Service.ExecStartPre",
+          reason: "Operator-authored directive",
+          message: "Service.ExecStartPre: unknown edit; preserved.",
+        },
+      ];
+      service.readCommand.mockResolvedValue({ programArguments: ["/fixture/gateway"] });
+      service.audit.mockResolvedValue({ ok: true, issues: [], definitionDrift: drift });
+
+      await updateStatusCommand({ json });
+
+      if (json) {
+        expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
+          serviceDefinition: { drift, warnings: drift.map((fact) => fact.message) },
+          availability: expect.any(Object),
+        });
+      } else {
+        const output = runtime.log.mock.calls.flat().join("\n");
+        for (const fact of drift) {
+          expect(output).toContain(fact.message);
+        }
+      }
+    },
+  );
+
+  it.each(["read", "audit"])(
+    "keeps update availability when definition %s fails",
+    async (failure) => {
+      service.readCommand.mockResolvedValue({ programArguments: ["/fixture/gateway"] });
+      if (failure === "read") {
+        service.readCommand.mockRejectedValue(new Error("Service manager unavailable"));
+      } else {
+        service.audit.mockResolvedValue({
+          ok: true,
+          issues: [],
+          definitionDriftError: "Service definition inspection failed: unit unreadable",
+        });
+      }
+      await updateStatusCommand({ json: true });
+      expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
+        availability: expect.any(Object),
+        serviceDefinition: { drift: [], warnings: [expect.stringContaining("inspection failed")] },
+      });
+    },
+  );
+});
+
+describe("update status channel failures", () => {
+  it.each([true, false])("shows the Gateway's recorded trust refusal (JSON: %s)", async (json) => {
+    const issue = {
+      channel: "feishu",
+      accountId: "default",
+      kind: "runtime",
+      message:
+        'Plugin "feishu" loaded from "/fixture/plugins-local/feishu/index.js"; installSource="path". Install the official npm package or ClawHub listing.',
+      fix: "resolve the reported channel error, then restart the channel",
+    };
+    callGateway.mockResolvedValue({ statusIssues: [issue] });
+
+    await updateStatusCommand({ json, timeout: "2" });
+
+    expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        method: "channels.status",
+        params: { probe: false, timeoutMs: 2_000 },
+        timeoutMs: 2_000,
+        sharedStateMode: "read-only",
+      }),
+    );
+    if (json) {
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ channelIssues: [issue] }),
+      );
+    } else {
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output).toContain(`Channel feishu default: ${issue.message}`);
+      expect(output).toContain(issue.fix);
+    }
+  });
 });
 
 describe("update status Node runtime findings", () => {
@@ -278,6 +433,21 @@ afterEach(() => {
 });
 
 describe("update status readiness outcome", () => {
+  it("keeps a real failure visible after a retained dry run", async () => {
+    const failed = createUpdateRun({ trigger: "cli" });
+    const failure = finishUpdateRun(failed.runId, {
+      status: "failed",
+      reason: "preflight-fetch",
+    });
+    const preview = createUpdateRun({ trigger: "cli", preview: true });
+    finishUpdateRun(preview.runId, { status: "skipped", reason: "dry-run" });
+
+    await updateStatusCommand({ json: true });
+
+    expect(runtime.writeJson.mock.lastCall?.[0].lastRun).toEqual(failure);
+    expect(listUpdateRuns().map((run) => run.runId)).toEqual([preview.runId, failed.runId]);
+  });
+
   it("shows installed but unverified as a closed non-success outcome", async () => {
     const run = createUpdateRun({ trigger: "cli" });
     recordUpdateRunVerification(run.runId, { serviceRunning: true, readyz: false, settled: false });

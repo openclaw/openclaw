@@ -1,6 +1,7 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
 import {
@@ -174,6 +175,7 @@ function readSessionHeaderStartedAtMs(params: {
   agentId?: string;
   sessionKey?: string;
   storePath?: string;
+  readHeader?: (sessionId: string) => unknown;
 }): number | undefined {
   const sessionId = params.entry.sessionId?.trim();
   const sessionKey = params.sessionKey?.trim();
@@ -183,12 +185,16 @@ function readSessionHeaderStartedAtMs(params: {
     return undefined;
   }
   try {
-    const header = loadTranscriptHeaderSync({
-      agentId,
-      sessionId,
-      ...(params.storePath ? { storePath: params.storePath } : {}),
-      ...(sessionKey ? { sessionKey } : {}),
-    }) as { type?: unknown; id?: unknown; timestamp?: unknown } | undefined;
+    const header = (
+      params.readHeader
+        ? params.readHeader(sessionId)
+        : loadTranscriptHeaderSync({
+            agentId,
+            sessionId,
+            ...(params.storePath ? { storePath: params.storePath } : {}),
+            ...(sessionKey ? { sessionKey } : {}),
+          })
+    ) as { type?: unknown; id?: unknown; timestamp?: unknown } | undefined;
     if (
       header?.type !== "session" ||
       (typeof header.id === "string" && header.id.trim() && header.id !== sessionId)
@@ -206,7 +212,8 @@ export function resolveSessionLifecycleTimestamps(params: {
   agentId?: string;
   sessionKey?: string;
   storePath?: string;
-}): { sessionStartedAt?: number; lastInteractionAt?: number } {
+  readHeader?: (sessionId: string) => unknown;
+}): SessionLifecycleTimestamps {
   const entry = params.entry;
   if (!entry) {
     return {};

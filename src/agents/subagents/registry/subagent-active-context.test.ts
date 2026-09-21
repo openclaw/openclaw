@@ -1,6 +1,9 @@
 // Active subagent prompt tests cover the compact current-turn facts that tells
 // a parent session which child runs are still in flight.
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentRunRecordOverrides } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildActiveSubagentRuntimeContext } from "./subagent-active-context.js";
@@ -12,6 +15,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /** Keep in sync with module-private RECENT_PROMPT_MAX_ENTRIES. */
 const RECENT_PROMPT_MAX_ENTRIES = 8;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   resetSubagentRegistryForTests();
@@ -22,6 +26,45 @@ afterEach(() => {
 });
 
 describe("buildActiveSubagentRuntimeContext", () => {
+  it.each(["same", "replaced", "unknown"] as const)(
+    "keeps pending child context bound to the parent store: %s",
+    (store) => {
+      const directory = tempDirs.make("openclaw-child-context-store-");
+      const original: OpenClawConfig = {
+        session: { store: path.join(directory, "original.sqlite") },
+      };
+      const controllerSessionKey = "agent:main:main";
+      const storePath = resolvePhysicalSessionStorePath(
+        { sessionKey: controllerSessionKey },
+        original,
+      );
+      addSubagentRunForTests({
+        runId: "old-child-result",
+        childSessionKey: "agent:main:subagent:old-child",
+        controllerSessionKey,
+        requesterSessionKey: controllerSessionKey,
+        requesterStorePath: store === "unknown" ? undefined : storePath,
+        controllerStorePath: store === "unknown" ? undefined : storePath,
+        task: "original store task",
+        expectsCompletionMessage: true,
+        execution: { status: "terminal", endedAt: Date.now() },
+        completion: { required: true, resultText: "original store child result" },
+        delivery: { status: "pending" },
+      });
+      const cfg =
+        store === "replaced"
+          ? { session: { store: path.join(directory, "replacement.sqlite") } }
+          : original;
+      const prompt = buildActiveSubagentRuntimeContext({ cfg, controllerSessionKey });
+      if (store === "same") {
+        expect(prompt).toContain("original store child result");
+        expect(prompt).toContain("original store task");
+      } else {
+        expect(prompt).toBeUndefined();
+      }
+    },
+  );
+
   it("returns nothing without active or recently completed children", () => {
     expect(
       buildActiveSubagentRuntimeContext({

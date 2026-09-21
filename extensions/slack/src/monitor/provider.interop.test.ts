@@ -137,6 +137,9 @@ describe("createSlackBoltApp", () => {
 
   class FakeSocketModeReceiver {
     args: Record<string, unknown>;
+    client = Object.assign(new EventEmitter(), {
+      send: vi.fn<(envelopeId: string) => Promise<void>>().mockResolvedValue(undefined),
+    });
 
     constructor(args: Record<string, unknown>) {
       this.args = args;
@@ -509,7 +512,7 @@ describe("createSlackBoltApp", () => {
             ? Buffer.concat(data)
             : Buffer.isBuffer(data)
               ? data
-              : Buffer.from(data);
+              : Buffer.from(new Uint8Array(data));
           acknowledgements.push(JSON.parse(bytes.toString("utf8")).envelope_id);
         });
         socket.send(JSON.stringify({ type: "hello" }));

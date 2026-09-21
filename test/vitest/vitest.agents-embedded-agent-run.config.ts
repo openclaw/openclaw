@@ -7,6 +7,7 @@ export function createAgentsEmbeddedRunVitestConfig(env?: Record<string, string 
   return createScopedVitestConfig(owner.include, {
     dir: owner.dir,
     env,
+    exclude: owner.exclude,
     fileParallelism: false,
     name: owner.name,
   });

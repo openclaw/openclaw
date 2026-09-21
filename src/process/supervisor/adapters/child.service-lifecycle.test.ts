@@ -1,49 +1,27 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as realDelay } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { waitForPidFile } from "../../../../test/helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { killPidIfAlive } from "../../../test-utils/process-tree.js";
+import * as relayIntegration from "../../spawn-broker/relay-integration.js";
 import { createProcessSupervisor } from "../supervisor.js";
 import { createChildAdapter } from "./child.js";
+import {
+  describeSpawnTransports,
+  isAlive,
+  serviceChildHostTransportPrelude,
+  waitFor,
+} from "./child.service-lifecycle.test-support.js";
 import { readyChildAdapter } from "./child.test-support.js";
 
 const startChildAdapter = readyChildAdapter(createChildAdapter);
 
 const activePids = new Set<number>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-  if (process.platform !== "linux") {
-    return true;
-  }
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    // kill(pid, 0) also succeeds for a terminated process awaiting reaping.
-    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
-  } catch {
-    return false;
-  }
-}
-
-async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() >= deadline) {
-      throw new Error("timed out waiting for process state");
-    }
-    await realDelay(20);
-  }
-}
 
 function parsePidPair(output: string): [number, number] {
   const match = /(\d+)\s+(\d+)/u.exec(output);
@@ -81,7 +59,7 @@ function createRetainedDescendantFixture() {
       descendant.unref();
     `,
     readPid,
-    releaseAndJoin: async (waitForExtinction: () => Promise<void>) => {
+    releaseAndJoin: async <T>(waitForExtinction: () => Promise<T>) => {
       await writeFile(releasePath, "", "utf8");
       // Read again on failure paths where readiness was not observed before cleanup.
       const pid = await readPid();
@@ -94,7 +72,7 @@ function createRetainedDescendantFixture() {
   };
 }
 
-async function expectPending(promise: Promise<void>) {
+async function expectPending<T>(promise: Promise<T>) {
   const settled = await Promise.race([
     promise.then(() => true),
     new Promise<false>((resolve) => {
@@ -118,7 +96,7 @@ afterEach(async () => {
   activePids.clear();
 });
 
-describe.skipIf(process.platform === "win32")("POSIX child invocation identity", () => {
+describeSpawnTransports("POSIX child invocation identity", () => {
   it.each(["direct", "service-managed"] as const)(
     "preserves caller-selected argv0 through the %s path",
     async (mode) => {
@@ -146,7 +124,7 @@ describe.skipIf(process.platform === "win32")("POSIX child invocation identity",
   );
 });
 
-describe.skipIf(process.platform === "win32")("service-managed child lifecycle", () => {
+describeSpawnTransports("service-managed child lifecycle", () => {
   it("cancels the complete admitted command group before settling", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const adapter = await startChildAdapter({
@@ -324,7 +302,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       stdinMode: "pipe-closed",
     });
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
+      adapter.onExit!(() => resolve());
     });
 
     let stdout = "";
@@ -687,11 +665,25 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
         });
       });
     `;
-      const adapter = await startChildAdapter({
-        ownProcessTree: true,
-        argv: [process.execPath, "-e", rootScript],
-        stdinMode: "pipe-closed",
-      });
+      const relayExited = createDeferred();
+      const spawnRelay = relayIntegration.spawnServiceChildRelay;
+      const observeRelay = vi
+        .spyOn(relayIntegration, "spawnServiceChildRelay")
+        .mockImplementation((params) => {
+          const relay = spawnRelay(params);
+          relay.child.once("exit", () => relayExited.resolve());
+          return relay;
+        });
+      let adapter: Awaited<ReturnType<typeof startChildAdapter>>;
+      try {
+        adapter = await startChildAdapter({
+          ownProcessTree: true,
+          argv: [process.execPath, "-e", rootScript],
+          stdinMode: "pipe-closed",
+        });
+      } finally {
+        observeRelay.mockRestore();
+      }
       let output = "";
       adapter.onStdout((chunk) => {
         output += chunk;
@@ -700,14 +692,33 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       const [rootPid, descendantPid] = parsePidPair(output);
       activePids.add(rootPid);
       activePids.add(descendantPid);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
+        const extinction = adapter.waitForExtinction!();
+        let settled = false;
+        void extinction.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          },
+        );
         adapter.kill(signal);
-        await expect(adapter.waitForExtinction!()).rejects.toThrow(
+        // Real relay exit follows the closing acknowledgement; its host deadline is now armed.
+        await relayExited.promise;
+        expect(isAlive(descendantPid)).toBe(true);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(extinction).rejects.toThrow(
           "service child cleanup did not complete before its hard deadline",
         );
         await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
         expect(isAlive(descendantPid)).toBe(true);
       } finally {
+        vi.useRealTimers();
         killPidIfAlive(descendantPid);
         try {
           await waitFor(() => !isAlive(descendantPid));
@@ -884,12 +895,15 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       scriptPath,
       `
         process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+        ${serviceChildHostTransportPrelude()}
         const { createChildAdapter } = await import(${JSON.stringify(childModuleUrl)});
-        const { adapter, ready } = await createChildAdapter({
-          argv: ["/bin/sh", "-c", "sleep 0.05; kill -KILL $PPID; sleep 0.05"],
-          stdinMode: "pipe-closed",
-        });
+        const { adapter, ready } = await withTransport(() => createChildAdapter({
+          argv: ["/bin/sh", "-c", "read gate; kill -KILL $PPID; sleep 0.05"],
+          stdinMode: "pipe-open",
+        }));
         await ready;
+        adapter.stdin.write("kill\\n");
+        adapter.stdin.end();
         await new Promise((resolve) => setTimeout(resolve, 200));
         try {
           await adapter.wait();
@@ -924,11 +938,12 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       scriptPath,
       `
         process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+        ${serviceChildHostTransportPrelude()}
         const { createChildAdapter } = await import(${JSON.stringify(childModuleUrl)});
-        const { adapter, ready } = await createChildAdapter({
+        const { adapter, ready } = await withTransport(() => createChildAdapter({
           argv: ["/bin/sh", "-c", 'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\\\n" "$$" "$child"; wait'],
           stdinMode: "pipe-closed",
-        });
+        }));
         await ready;
         let output = "";
         adapter.onStdout((chunk) => { output += chunk; });

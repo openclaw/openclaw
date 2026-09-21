@@ -550,10 +550,13 @@ export function buildBuiltinChatCommands(
       ],
       argsMenu: "auto",
     }),
+    // Reset handlers must reach lifecycle cleanup before waiting on the work they interrupt.
     defineBuiltinCommand("reset", "Reset the current session.", "session", "essential", {
+      activeRunSafe: true,
       acceptsArgs: true,
     }),
     defineBuiltinCommand("new", "Start a new session.", "session", "essential", {
+      activeRunSafe: true,
       modelIndependent: "always",
       acceptsArgs: true,
     }),

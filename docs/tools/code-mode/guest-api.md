@@ -9,6 +9,9 @@ read_when:
 
 ## Guest runtime API
 
+The following TypeScript declarations document the guest API. Executable cells
+use plain JavaScript without type annotations.
+
 ```typescript
 declare const catalog: ToolCatalog;
 declare const MCP: Record<string, unknown>;
@@ -173,17 +176,21 @@ inbox capacity, search rejects with guidance to narrow the request.
 It never silently substitutes an empty or partial match list. A narrower search
 remains available after the error.
 
+Exact callable spelling takes precedence over case-insensitive matching. Use a
+handle's `callableName` to find that same tool when enabled names differ only in
+capitalization.
+
 Paired Gateway nodes are available through the `nodes` global:
 
-```typescript
+```javascript
 const available = await nodes.list();
 const node = await nodes.get(available[0].id);
 const status = await node.invoke("device.status");
 ```
 
 `nodes.list()` returns paired node ids, names, platforms, connection state, and
-advertised commands. TypeScript preflight knows these fields and the node handle
-methods. Command parameters and results remain `unknown` because each node
+advertised commands. The API declarations describe these fields and the node
+handle methods. Command parameters and results remain `unknown` because each node
 command defines its own payload; check the result before composing it. `nodes.get(idOrName)` resolves an exact id before a display
 name and returns a handle with `id`, `name`, and `invoke(command, params?)`.
 Invocation uses the normal `nodes` tool path, so pairing, command policy, scopes,
@@ -195,7 +202,7 @@ approvals, timeouts, hooks, and telemetry are unchanged. A handle includes
 Call quick-index globals directly, or use callable catalog handles when lookup
 is needed:
 
-```typescript
+```javascript
 const content = await read({ path: "README.md" });
 
 const [tool] = await catalog.search("...");

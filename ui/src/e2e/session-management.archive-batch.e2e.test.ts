@@ -128,10 +128,8 @@ suite.define(() => {
           code: "UNAVAILABLE",
           message: "Archive list refresh unavailable",
         };
-        // Keep later roster reads failed too: a successful read supplies the real pin timestamp.
-        await gateway.setMethodResponse("sessions.list", {
-          cases: [{ match: rosterMatch, response: { __mockError: error } }],
-        });
+        // All roster readers must stay unavailable, including the active chat's child roster.
+        await gateway.setMethodResponse("sessions.list", { __mockError: error });
         await gateway.rejectDeferred("sessions.list", error);
       } else if (scenario === "Undo without restore events") {
         // These committed events arrive while the original rows are still held.
@@ -222,10 +220,8 @@ suite.define(() => {
             code: "UNAVAILABLE",
             message: "Undo list refresh unavailable",
           };
-          // Keep later roster reads failed too: a successful read supplies the real pin timestamp.
-          await gateway.setMethodResponse("sessions.list", {
-            cases: [{ match: rosterMatch, response: { __mockError: error } }],
-          });
+          // All roster readers must stay unavailable, including the active chat's child roster.
+          await gateway.setMethodResponse("sessions.list", { __mockError: error });
           await gateway.rejectDeferred("sessions.list", error);
           await expect
             .poll(() => page.locator("[data-sidebar-session-error]").textContent())

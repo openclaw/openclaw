@@ -9,6 +9,7 @@ import {
 } from "./src/crabbox-sandbox-backend.js";
 import { resolveCrabboxSandboxConfig } from "./src/crabbox-sandbox-config.js";
 import { mintCrabboxSandboxLeaseId } from "./src/crabbox-sandbox-lease.js";
+import { createCrabboxTool } from "./src/crabbox-tool.js";
 import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./src/crabbox-worker-provider.js";
 import { resolveCrabboxWarmImagePolicy } from "./src/crabbox-worker-warm-image-policy.js";
 
@@ -21,6 +22,16 @@ export default definePluginEntry({
   name: "Crabbox Worker Provider",
   description: "Cloud worker provider and lease-backed sandbox backend for the Crabbox CLI",
   register(api) {
+    api.registerTool((context) => createCrabboxTool({ context, gateway: api.runtime.gateway }), {
+      name: "crabbox",
+    });
+    api.registerToolMetadata({
+      toolName: "crabbox",
+      displayName: "Crabbox",
+      description: "Run and present apps on a temporary machine attached to this conversation.",
+      risk: "high",
+      tags: ["cloud", "desktop"],
+    });
     api.registerCli(
       async ({ program }) => {
         const { registerCrabboxWarmImageCommands } =

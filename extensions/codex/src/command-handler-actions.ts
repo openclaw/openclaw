@@ -300,7 +300,6 @@ function formatNativeGoal(response: JsonValue | undefined): string {
 export async function stopConversationTurn(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
 ): Promise<string> {
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
   const { target, binding } = authority;
@@ -311,9 +310,6 @@ export async function stopConversationTurn(
     await deps.stopCodexConversationTurn({
       identity: target.identity,
       binding,
-      pluginConfig,
-      agentDir: target.agentDir,
-      config: ctx.config,
       assertCurrent: authority.assertCurrent,
     })
   ).message;
@@ -322,7 +318,6 @@ export async function stopConversationTurn(
 export async function steerConversationTurn(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
   message: string,
 ): Promise<string> {
   const authority = await resolvePreparedCodexCommandAuthority(deps, ctx);
@@ -335,9 +330,6 @@ export async function steerConversationTurn(
       identity: target.identity,
       binding,
       message,
-      pluginConfig,
-      agentDir: target.agentDir,
-      config: ctx.config,
       assertCurrent: authority.assertCurrent,
     })
   ).message;

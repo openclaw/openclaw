@@ -57,6 +57,13 @@ alias was removed with it. `pnpm run lint:plugins:no-extension-test-core-imports
 (`scripts/check-no-extension-test-core-imports.ts`) keeps extension tests on
 the focused test subpaths above.
 
+Bundled channel integration tests can use `agent-runtime-test-contracts` for
+real session and subscriber fixtures, `reply-payload-testing` for payload
+construction and delivery settlement, and `plugin-test-runtime` for hook
+runners and registries. These helpers reuse their core owners; register the
+session fixture lifecycle explicitly. Use published runtime subpaths when
+they already expose the needed operation.
+
 ### Available exports
 
 | Export                                                                    | Purpose                                                                                                                                     |

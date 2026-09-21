@@ -88,6 +88,7 @@ export function pluginOwnerSnapshotEntries(
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      providerAuthContributions: [],
       modelIdNormalizationPolicies: new Map(),
     },
   };

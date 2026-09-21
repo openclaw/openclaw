@@ -4,6 +4,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  collectBundledPluginBuildEntries,
+  collectRootPackageExcludedExtensionDirs,
+} from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   assertPluginReleaseDependencyFreshness,
@@ -23,6 +27,8 @@ import {
   resolveSelectedPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
+import type { PluginPackageJson } from "../scripts/lib/plugin-publication-collector.ts";
+import { isExternallyDistributedPlugin } from "../src/plugins/official-external-plugin-catalog.js";
 import { createDeferred } from "./helpers/promise.js";
 import { writePublishablePluginFixture } from "./helpers/publishable-plugin-fixture.js";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
@@ -685,18 +691,7 @@ describe("collectPublishablePluginPackages", () => {
   });
 
   it("keeps publishable plugin dist trees out of the core npm package unless bundled", () => {
-    // These publication targets intentionally remain in the core distribution.
-    // bundledDist: true would defer their separate npm/ClawHub publication.
-    const corePackageRuntimePluginIds = new Set([
-      "discord",
-      "logbook",
-      "memory-wiki",
-      "onepassword",
-    ]);
-    const rootPackage = JSON.parse(readFileSync("package.json", "utf8")) as {
-      files?: unknown;
-    };
-    const packageFiles = new Set(Array.isArray(rootPackage.files) ? rootPackage.files : []);
+    const excludedDirs = collectRootPackageExcludedExtensionDirs();
     const publishablePlugins = [
       ...collectPublishablePluginPackages(),
       ...collectClawHubPublishablePluginPackages(),
@@ -704,26 +699,53 @@ describe("collectPublishablePluginPackages", () => {
     for (const plugin of publishablePlugins) {
       const packageJson = JSON.parse(
         readFileSync(join(plugin.packageDir, "package.json"), "utf8"),
-      ) as {
-        openclaw?: {
-          build?: {
-            bundledDist?: unknown;
-          };
-        };
-      };
-      if (packageJson.openclaw?.build?.bundledDist === true) {
-        corePackageRuntimePluginIds.add(plugin.extensionId);
-      }
+      ) as PluginPackageJson;
+      expect(excludedDirs.has(plugin.extensionId), plugin.extensionId).toBe(
+        isExternallyDistributedPlugin({
+          pluginId: plugin.extensionId,
+          packageName: plugin.packageName,
+          packageBuild: packageJson.openclaw?.build,
+        }),
+      );
     }
-    const missingExclusions = Array.from(
-      new Set(
-        publishablePlugins
-          .filter((plugin) => !corePackageRuntimePluginIds.has(plugin.extensionId))
-          .map((plugin) => `!dist/extensions/${plugin.extensionId}/**`),
-      ),
-    ).filter((entry) => !packageFiles.has(entry));
+  });
 
-    expect(missingExclusions).toStrictEqual([]);
+  it("keeps deferred publication targets bundled with staged release metadata", () => {
+    const bundledIds = collectBundledPluginBuildEntries({ env: {} }).map(({ id }) => id);
+    const excludedDirs = collectRootPackageExcludedExtensionDirs();
+    const publicationIds = new Set(
+      [...collectPublishablePluginPackages(), ...collectClawHubPublishablePluginPackages()].map(
+        ({ extensionId }) => extensionId,
+      ),
+    );
+    for (const { id, minHostVersion } of [
+      { id: "logbook", minHostVersion: ">=2026.9.5" },
+      { id: "memory-wiki", minHostVersion: ">=2026.9.4" },
+      { id: "onepassword", minHostVersion: ">=2026.9.4" },
+    ]) {
+      const packageJson = JSON.parse(
+        readFileSync(join("extensions", id, "package.json"), "utf8"),
+      ) as PluginPackageJson;
+      expect(packageJson, id).toMatchObject({
+        name: `@openclaw/${id}`,
+        openclaw: {
+          build: { bundledDist: true },
+          install: { minHostVersion },
+          release: { publishToNpm: true, publishToClawHub: true },
+        },
+      });
+      expect(bundledIds, id).toContain(id);
+      expect(excludedDirs.has(id), id).toBe(false);
+      expect(publicationIds.has(id), id).toBe(false);
+      expect(
+        isExternallyDistributedPlugin({
+          pluginId: id,
+          packageName: packageJson.name,
+          packageBuild: packageJson.openclaw?.build,
+        }),
+        id,
+      ).toBe(false);
+    }
   });
 
   it("collects publishable npm plugins from extension package manifests", () => {

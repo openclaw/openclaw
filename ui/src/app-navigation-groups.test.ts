@@ -20,6 +20,7 @@ import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
+  createTauriDeviceSettingsSnapshot,
 } from "./test-helpers/native-device-settings.ts";
 
 const settingsGroups = visibleSettingsNavigationGroups(true);
@@ -35,9 +36,16 @@ describe("sidebar entries", () => {
       openSystemSettings: () => undefined,
       openPanel: () => undefined,
       checkForUpdates: () => undefined,
+      chromeExtensionStatus: async () => ({
+        nativeHostRegistered: false,
+        installRequested: false,
+        installedProfiles: 0,
+        discoveredProfiles: 0,
+      }),
       installChromeExtension: async () => ({
         nativeHostRegistered: false,
         installRequested: false,
+        installedProfiles: 0,
         discoveredProfiles: 0,
       }),
       refresh: () => undefined,
@@ -56,8 +64,8 @@ describe("sidebar entries", () => {
     expect(search("Dock icon", capability)).toContainEqual(
       expect.objectContaining({ routeId: "device" }),
     );
-    expect(search("computer presence", null)).toEqual([]);
-    expect(search("computer presence", capability)).toContainEqual(
+    expect(search("System-wide presence detection", null)).toEqual([]);
+    expect(search("System-wide presence detection", capability)).toContainEqual(
       expect.objectContaining({ routeId: "device-permissions" }),
     );
     const browserGroups = visibleSettingsNavigationGroups(canAdmin);
@@ -79,6 +87,20 @@ describe("sidebar entries", () => {
       labelKey: "nav.settingsGroupDevice",
       routes: ["device", "device-permissions"],
     });
+    for (const platform of ["linux", "windows"] as const) {
+      const desktopCapability = {
+        ...capability,
+        snapshot: createTauriDeviceSettingsSnapshot(platform),
+      };
+      expect(visibleSettingsNavigationGroups(canAdmin, desktopCapability)[1]).toEqual({
+        labelKey: "nav.settingsGroupThisComputer",
+        routes: ["device"],
+      });
+      expect(search("Desktop sharing", desktopCapability)).toContainEqual(
+        expect.objectContaining({ routeId: "device" }),
+      );
+      expect(search("Precise location", desktopCapability)).toEqual([]);
+    }
     expect(
       visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: null })[1]?.labelKey,
     ).toBe("nav.settingsGroupThisDevice");
@@ -115,7 +137,7 @@ describe("sidebar entries", () => {
       "Launch at login",
       "Quick Chat",
       "Cookie sync",
-      "computer presence",
+      "System-wide presence detection",
     ]) {
       expect(search(query, capability)).not.toEqual([]);
       expect(search(query, iosCapability)).toEqual([]);

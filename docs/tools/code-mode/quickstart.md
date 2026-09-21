@@ -187,7 +187,8 @@ return shipments.filter((shipment) => !shipment.paid).length;
 Every load returns an independent JSON copy. Modifying it does not change the
 saved value. Use `await results.delete(id)` to release capacity. Missing or
 expired references reject with a catchable error. `API.read("results.d.ts")`
-provides the TypeScript declarations; loaded data remains `unknown` until checked.
+provides TypeScript-style documentation; loaded data is declared as `unknown`,
+so inspect its shape before composing it.
 
 References last only for the current agent run and catalog. They survive cell
 completion and `wait`, but not run end, abort, catalog replacement, permission
@@ -237,7 +238,7 @@ one from an unawaited call or timer callback, fails the cell instead of silently
 reporting success. Handlers attached after a suspension still handle their
 original promises.
 
-JavaScript syntax errors, TypeScript transform errors, and uncaught nested tool
+JavaScript syntax errors and uncaught nested tool
 failures become failed `exec` or `wait` results. The model can read the error,
 correct its code, inspect the current state, and continue with the normal tool
 surface. A failed cell does not impose a separate recovery mode or mutation budget.

@@ -1,18 +1,10 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import type { AgentHarnessModelCatalogParams } from "./harness/types.js";
 import { prepareModelCatalogView } from "./model-catalog-view.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
@@ -29,13 +21,11 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
+const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
+const { mocks } = fixture;
 
 describe("prepared model runtime config stamps", () => {
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    await resetPreparedModelRuntimeHarness(state);
+  beforeEach(() => {
     mocks.configuredAgentIds = ["default"];
   });
 
@@ -43,12 +33,7 @@ describe("prepared model runtime config stamps", () => {
     const initialConfig = {};
     const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
     await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
-    const input = {
-      agentId: "default",
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
-      config: initialConfig,
-    };
+    const input = fixture.agentInput("default", initialConfig);
     const existingReader = await prepareModelRuntimeSnapshot(input);
     const materializations = [
       {
@@ -137,13 +122,13 @@ describe("prepared model runtime config stamps", () => {
       },
     });
     mocks.resolveAgentEffectiveModelPrimary.mockReturnValue("custom/model");
-    mocks.configuredWorkspaces.set("default", state.workspaceDir);
+    mocks.configuredWorkspaces.set("default", fixture.state.workspaceDir);
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
       catalogMode: "static",
     });
-    const input = { config, agentId: "default", agentDir: state.agentDir("default") };
+    const input = { config, agentId: "default", agentDir: fixture.state.agentDir("default") };
     const snapshot = await prepareModelRuntimeSnapshot(input);
     const catalog = await snapshot.loadFullModelCatalog!({ refresh: true });
     expect(catalog.entries).toContainEqual(expect.objectContaining(row));
@@ -157,7 +142,7 @@ describe("prepared model runtime config stamps", () => {
         cfg: reader.config,
         agentId: "default",
         agentDir,
-        workspaceDir: state.workspaceDir,
+        workspaceDir: fixture.state.workspaceDir,
         snapshot: catalog,
         metadataSnapshot: reader.metadataSnapshot,
         pluginRegistry: reader.pluginRegistry,
@@ -174,7 +159,9 @@ describe("prepared model runtime config stamps", () => {
     expect(advanced.observationConfig).toBe(discovery.config);
     expect(evaluate(advanced).availability).toBe(true);
     expect(evaluate(advanced, { ...discovery.config }).availability).toBe(false);
-    expect(evaluate(advanced, discovery.config, state.agentDir("other")).availability).toBe(false);
+    expect(evaluate(advanced, discovery.config, fixture.state.agentDir("other")).availability).toBe(
+      false,
+    );
     observations.delete(discovery.config);
     expect(evaluate(advanced).availability).toBe(false);
   });
@@ -192,12 +179,7 @@ describe("prepared model runtime config stamps", () => {
     await publication;
 
     await expect(
-      prepareModelRuntimeSnapshot({
-        agentId: "default",
-        agentDir: state.agentDir("default"),
-        inheritedAuthDir: state.agentDir("default"),
-        config: nextConfig,
-      }),
+      prepareModelRuntimeSnapshot(fixture.agentInput("default", nextConfig)),
     ).resolves.toMatchObject({ config: nextConfig });
     await expect(
       loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
@@ -224,12 +206,7 @@ describe("prepared model runtime config stamps", () => {
 
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
       await expect(
-        prepareModelRuntimeSnapshot({
-          agentId: "default",
-          agentDir: state.agentDir("default"),
-          inheritedAuthDir: state.agentDir("default"),
-          config: nextConfig,
-        }),
+        prepareModelRuntimeSnapshot(fixture.agentInput("default", nextConfig)),
       ).resolves.toMatchObject({ config: nextConfig });
     } finally {
       supplierReady.resolve();
@@ -263,7 +240,7 @@ describe("prepared model runtime config stamps", () => {
       const readerSettled = vi.fn();
       const reader = prepareModelRuntimeSnapshot({
         agentId: "default",
-        agentDir: state.agentDir("default"),
+        agentDir: fixture.state.agentDir("default"),
         config: staleConfig,
       }).then(readerSettled, readerSettled);
       claimCurrent = false;
@@ -276,12 +253,7 @@ describe("prepared model runtime config stamps", () => {
 
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
       await expect(
-        prepareModelRuntimeSnapshot({
-          agentId: "default",
-          agentDir: state.agentDir("default"),
-          inheritedAuthDir: state.agentDir("default"),
-          config: nextConfig,
-        }),
+        prepareModelRuntimeSnapshot(fixture.agentInput("default", nextConfig)),
       ).resolves.toMatchObject({ config: nextConfig });
       await expect(
         loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
@@ -312,12 +284,7 @@ describe("prepared model runtime config stamps", () => {
       advancePreparedModelRuntimeConfig(nextConfig);
       finishAuthRefreshGate.resolve();
 
-      const snapshot = await prepareModelRuntimeSnapshot({
-        agentId: "default",
-        agentDir: state.agentDir("default"),
-        inheritedAuthDir: state.agentDir("default"),
-        config: nextConfig,
-      });
+      const snapshot = await prepareModelRuntimeSnapshot(fixture.agentInput("default", nextConfig));
       expect(resolvePublishedModelCatalogOwner(snapshot)).toMatchObject({
         agentId: "default",
         workspaceDir: "/tmp/unused-workspace",
@@ -329,8 +296,4 @@ describe("prepared model runtime config stamps", () => {
       await Promise.allSettled([loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })]);
     }
   });
-});
-
-afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

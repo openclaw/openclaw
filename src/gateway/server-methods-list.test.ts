@@ -146,6 +146,12 @@ describe("listGatewayMethods", () => {
     "plugins.catalog.get",
   ];
   const voiceSelectionMethods = ["talk.voice.get", "talk.voice.set", "talk.voice.complete"];
+  const sessionEnvironmentMethods = [
+    ["environments.session.status", "operator.read", undefined],
+    ["environments.session.create", "operator.admin", true],
+    ["environments.session.destroy", "operator.admin", true],
+    ["environments.session.exec", "operator.admin", undefined],
+  ] as const;
 
   it("advertises plugin surface refresh for capability rotation", () => {
     expect(listGatewayMethods()).toContain("plugin.surface.refresh");
@@ -215,6 +221,21 @@ describe("listGatewayMethods", () => {
       ...voiceSelectionMethods,
       "plugins.credentials.inspect",
       "plugins.skills.read",
+      "diagnostics.heapProfile",
+      "desktop.release",
+      "mcp.authLogin",
+      ...sessionEnvironmentMethods.map(([method]) => method),
+      "sessions.setInvolvement",
+      "transcripts.summarize",
+      "controlUi.linkPreview",
+      "themes.list",
+      "themes.get",
+      "themes.set",
+      "themes.import",
+      "controlUi.githubDetail",
+      "progressCard.refresh",
+      "webSearch.status",
+      "webSearch.test",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -256,6 +277,21 @@ describe("listGatewayMethods", () => {
       ...voiceSelectionMethods,
       "plugins.credentials.inspect",
       "plugins.skills.read",
+      "diagnostics.heapProfile",
+      "desktop.release",
+      "mcp.authLogin",
+      ...sessionEnvironmentMethods.map(([method]) => method),
+      "sessions.setInvolvement",
+      "transcripts.summarize",
+      "controlUi.linkPreview",
+      "themes.list",
+      "themes.get",
+      "themes.set",
+      "themes.import",
+      "controlUi.githubDetail",
+      "progressCard.refresh",
+      "webSearch.status",
+      "webSearch.test",
     ]);
   });
 
@@ -426,6 +462,21 @@ describe("listGatewayMethods", () => {
       ...voiceSelectionMethods,
       "plugins.credentials.inspect",
       "plugins.skills.read",
+      "diagnostics.heapProfile",
+      "desktop.release",
+      "mcp.authLogin",
+      ...sessionEnvironmentMethods.map(([method]) => method),
+      "sessions.setInvolvement",
+      "transcripts.summarize",
+      "controlUi.linkPreview",
+      "themes.list",
+      "themes.get",
+      "themes.set",
+      "themes.import",
+      "controlUi.githubDetail",
+      "progressCard.refresh",
+      "webSearch.status",
+      "webSearch.test",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
@@ -466,6 +517,7 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("sessions.move")).toBe(methods.indexOf("portal.close") + 1);
     expect(methods.indexOf("sessions.assignOwner")).toBe(methods.indexOf("sessions.move") + 1);
     expect(methods.indexOf("progressCard.get")).toBe(methods.indexOf("sessions.assignOwner") + 1);
+    expect(methods).toContain("sessions.setInvolvement");
     expect(methods.indexOf("progressCard.put")).toBe(methods.indexOf("progressCard.get") + 1);
     expect(methods.indexOf("session.members.listEvidence")).toBe(
       methods.indexOf("diagnostics.lanes") + 1,
@@ -509,7 +561,7 @@ describe("listGatewayMethods", () => {
     }
   });
 
-  it("advertises and wires cloud worker environment mutations", () => {
+  it("advertises and wires cloud worker environment methods with their required scopes", () => {
     const methods = [
       "environments.create",
       "environments.destroy",
@@ -528,6 +580,13 @@ describe("listGatewayMethods", () => {
         startup: "unavailable-until-sidecars",
         controlPlaneWrite: true,
       });
+    }
+    for (const [method, scope, controlPlaneWrite] of sessionEnvironmentMethods) {
+      expect(advertisedMethods).toContain(method);
+      expect(coreGatewayHandlers[method]).toBeTypeOf("function");
+      const descriptor = descriptors.find((candidate) => candidate.name === method);
+      expect(descriptor).toMatchObject({ name: method, scope, since: "2026.9" });
+      expect(descriptor?.controlPlaneWrite).toBe(controlPlaneWrite);
     }
   });
 

@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
+import type { WorkerNodePlacementAuthority } from "./device-placement-eligibility.js";
 import {
   createPlacementFailureActions,
   type WorkerActivationBarrier,
@@ -12,7 +13,6 @@ import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js
 import {
   createWorkerPlacementDispatchStartup,
   type WorkerDevicePlacementRequirementResolver,
-  type WorkerNodePlacementAuthority,
   type WorkerPlacementRecoveryBarrier,
 } from "./placement-dispatch-startup.js";
 import { createWorkerPlacementMoveAbandonment } from "./placement-move-abandon.js";
@@ -224,33 +224,18 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       reportPlacementTransition(onTransition, placement);
       const environment = prepared
         ? prepared.environment
-        : request.inheritedProfile
-          ? await environments.createFromProfileSnapshot(
-              {
-                profileId: request.profileId,
-                providerId: request.inheritedProfile.providerId,
-                profileSnapshot: request.inheritedProfile.profileSnapshot,
-              },
-              idempotencyKey,
-              request.machineClass,
-              request.executionMode,
-              projectPath,
-              signal,
-              request.os,
-              request.runSetupScript,
-              preparedIntent,
-            )
-          : await environments.create(
-              request.profileId,
-              idempotencyKey,
-              request.machineClass,
-              request.executionMode,
-              projectPath,
-              signal,
-              request.os,
-              request.runSetupScript,
-              preparedIntent,
-            );
+        : await environments.createWithRequest({
+            profileId: request.profileId,
+            idempotencyKey,
+            machineClass: request.machineClass,
+            executionMode: request.executionMode,
+            projectPath,
+            signal,
+            os: request.os,
+            runSetupScript: request.runSetupScript,
+            admittedIntent: preparedIntent,
+            inheritedProfile: request.inheritedProfile,
+          });
       return await startup.continueProvisionedDispatch({
         request,
         placement,

@@ -14,7 +14,11 @@ import {
   recordOutboundMessageForPromptContext,
   type TelegramOutboundPromptContextMessage,
 } from "./outbound-message-context.js";
-import { buildTelegramRichMarkdownPlan } from "./rich-message.js";
+import {
+  buildTelegramRichBlocksPlan,
+  buildTelegramRichMarkdownPlan,
+  type TelegramInputRichMessage,
+} from "./rich-message.js";
 import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
 import { sendLogger, withTelegramApiContext, type TelegramApiContext } from "./send-context.js";
 import type { TelegramApiCallOpts, TelegramSendOpts } from "./send-message-types.js";
@@ -31,10 +35,13 @@ type TelegramEditMessageCaptionParams = Parameters<
   TelegramApiContext["api"]["editMessageCaption"]
 >[2];
 
-type TelegramEditReplyMarkupOpts = TelegramApiCallOpts & Pick<TelegramSendOpts, "buttons">;
+type TelegramEditReplyMarkupOpts = TelegramApiCallOpts &
+  Pick<TelegramSendOpts, "buttons" | "signal" | "assertPlatformSendAuthorized">;
 
 type TelegramEditOpts = TelegramEditReplyMarkupOpts &
   Pick<TelegramSendOpts, "textMode"> & {
+    /** Native blocks prepared by the existing progress preview renderer. */
+    richMessage?: TelegramInputRichMessage;
     /** Controls whether link previews are shown in the edited message. */
     linkPreview?: boolean;
     /** Use Telegram's media-caption edit endpoint, or fall back to it when text edits target media. */
@@ -149,10 +156,14 @@ export async function editMessageTelegram(
 
       const performTextEdit = async () => {
         const richPlan = useRichMessages
-          ? buildTelegramRichMarkdownPlan(text, {
-              tableMode,
-              skipEntityDetection: !linkPreviewEnabled,
-            })
+          ? opts.richMessage
+            ? buildTelegramRichBlocksPlan(opts.richMessage.blocks, {
+                skipEntityDetection: opts.richMessage.skip_entity_detection === true,
+              })
+            : buildTelegramRichMarkdownPlan(text, {
+                tableMode,
+                skipEntityDetection: !linkPreviewEnabled,
+              })
           : undefined;
         // An edit replaces one message. Keep the complete rich document so a
         // structural-limit rejection recovers all its text, not just the first send page.
@@ -259,7 +270,6 @@ export async function editMessageTelegram(
           chatId,
           message: editedMessage,
           messageId: editedMessage.message_id,
-          recordGroupHistory: false,
           successfulSendThread,
           ...(botUserId !== undefined ? { botUserId } : {}),
           ...(editedMessage.message_thread_id !== undefined

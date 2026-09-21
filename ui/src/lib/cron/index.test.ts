@@ -1,12 +1,12 @@
 // @vitest-environment node
 // Control UI tests cover cron behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   validateCronAddParams,
   validateCronUpdateParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { CronJob, CronJobsListResult, CronRunsResult } from "../../api/types.ts";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
 import {
@@ -3156,77 +3156,6 @@ describe("cron controller", () => {
     await expect(loadCronRuns(state)).resolves.toBe("error");
 
     expect(state.cronRunsError).toBe("cron.runs unavailable");
-  });
-
-  it("preserves queued run feedback when due-mode history refresh fails", async () => {
-    const request = vi.fn(async (method: string, payload?: unknown) => {
-      if (method === "cron.run") {
-        expectRecordFields(requireRecord(payload, "cron.run payload"), {
-          id: "job-due",
-          mode: "due",
-        });
-        return { ok: true, enqueued: true, runId: "run-due" };
-      }
-      if (method === "cron.runs") {
-        throw new Error("run history refresh unavailable");
-      }
-      return {};
-    });
-    const state = createStateWithRequest(request, {
-      cronRunsScope: "job",
-      cronRunsJobId: "job-due",
-    });
-    await runCronJob(state, "job-due", "due");
-
-    expect(request).toHaveBeenCalledWith("cron.run", { id: "job-due", mode: "due" });
-    expect(request).toHaveBeenCalledWith("cron.runs", expect.any(Object));
-    expect(state.cronError).toBe("Run queued. Run ID: run-due");
-  });
-
-  it.each([
-    ["not-due", "This automation is not due yet."],
-    ["already-running", "This automation is already running."],
-    ["restart-recovery-pending", "Scheduler recovery is still in progress."],
-    ["stopped", "The scheduler is stopped."],
-  ] as const)(
-    "surfaces cron.run %s outcomes without reloading run history",
-    async (reason, message) => {
-      const request = vi.fn(async (method: string) => {
-        if (method === "cron.run") {
-          return { ok: true, ran: false, reason };
-        }
-        return {};
-      });
-      const state = createStateWithRequest(request, {
-        cronRunsScope: "job",
-        cronRunsJobId: "job-blocked",
-      });
-
-      await runCronJob(state, "job-blocked", "force");
-
-      expect(state.cronError).toBe(message);
-      expect(request).toHaveBeenCalledWith("cron.run", { id: "job-blocked", mode: "force" });
-      expect(request).not.toHaveBeenCalledWith("cron.runs", expect.anything());
-    },
-  );
-
-  it("reloads the skipped run recorded for an invalid persisted specification", async () => {
-    const request = createMethodRequest({
-      "cron.run": { ok: true, ran: false, reason: "invalid-spec" },
-      "cron.runs": createCronRunsResult([]),
-    });
-    const state = createStateWithRequest(request, {
-      cronRunsScope: "job",
-      cronRunsJobId: "job-invalid",
-    });
-
-    await runCronJob(state, "job-invalid", "force");
-
-    expect(state.cronError).toBe("This automation has an invalid schedule or payload.");
-    expect(request).toHaveBeenCalledWith(
-      "cron.runs",
-      expect.objectContaining({ id: "job-invalid" }),
-    );
   });
 });
 

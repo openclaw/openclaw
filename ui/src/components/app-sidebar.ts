@@ -153,6 +153,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       (agentIdentity, notify) => agentIdentity.subscribe(notify),
     )
     .watch(
+      () => this.context?.theme,
+      (theme, notify) => theme.subscribe(notify),
+    )
+    .watch(
       () => this.context?.config,
       (config, notify) => config.subscribe(notify),
       () => this.syncCommunityInviteState(),
@@ -592,6 +596,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       empty: visibleSessions.length === 0,
       sections,
       nativeSessionsHaveMore: this.sessionData.sessionsResult?.hasMore === true,
+      nativeSessionsLoading: this.sessionData.sessionsLoading,
       catalogRenderer: this.catalogRenderer,
       catalogs: {
         catalogs,

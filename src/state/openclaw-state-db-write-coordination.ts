@@ -4,6 +4,7 @@ import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { runWithSqliteCoordinator } from "../infra/sqlite-coordinator.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import {
+  logSlowSqliteCoordinatorWait,
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
@@ -33,12 +34,23 @@ export function withSharedStateWriteCoordinator<T>(
   }
   // Cached and supplied handles join the same lifecycle gate as fresh opens.
   // Acquire before BEGIN and retain through outer commit and postcommit work.
-  const coordinator = acquireStateDatabaseCoordinator({
-    databasePath: params.databasePath,
-    busyTimeoutMs:
-      params.busyTimeoutMs ??
-      (params.existing ? readSqliteBusyTimeout(params.existing) : OPENCLAW_SQLITE_BUSY_TIMEOUT_MS),
-  });
+  const started = performance.now();
+  let coordinator: ReturnType<typeof acquireStateDatabaseCoordinator>;
+  try {
+    coordinator = acquireStateDatabaseCoordinator({
+      databasePath: params.databasePath,
+      busyTimeoutMs:
+        params.busyTimeoutMs ??
+        (params.existing
+          ? readSqliteBusyTimeout(params.existing)
+          : OPENCLAW_SQLITE_BUSY_TIMEOUT_MS),
+    });
+  } finally {
+    logSlowSqliteCoordinatorWait(performance.now() - started, {
+      databaseLabel: params.databasePath,
+      operationLabel: params.operationLabel ?? "state.write",
+    });
+  }
   return runWithSqliteCoordinator(coordinator, params.operationLabel ?? "state.write", operation);
 }
 

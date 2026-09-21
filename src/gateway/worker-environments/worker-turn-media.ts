@@ -38,10 +38,8 @@ import {
 } from "../../worker/transcript-message.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
-import {
-  MAX_RECONCILIATION_TOTAL_BYTES,
-  MAX_RECONCILIATION_ENTRIES,
-} from "./workspace-manifest.js";
+const MAX_WORKER_ATTACHMENT_BYTES = 256 * 1024 * 1024;
+const MAX_WORKER_ATTACHMENT_FILES = 25_000;
 
 function prepareInput(
   content: Extract<AgentMessage, { role: "user" }>["content"],
@@ -179,10 +177,7 @@ export async function prepareWorkerTurnMedia(params: {
         return remotePath;
       }
       bytes += data.length;
-      if (
-        bytes > MAX_RECONCILIATION_TOTAL_BYTES ||
-        stagedPaths.size >= MAX_RECONCILIATION_ENTRIES
-      ) {
+      if (bytes > MAX_WORKER_ATTACHMENT_BYTES || stagedPaths.size >= MAX_WORKER_ATTACHMENT_FILES) {
         throw new Error(
           "Cloud worker attachments exceed the workspace transfer budget; send fewer or smaller files.",
         );

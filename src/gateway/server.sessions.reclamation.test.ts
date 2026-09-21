@@ -1,12 +1,9 @@
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
-import { afterEach, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { listSessionsNeedingTranscriptIndexReconcile } from "../config/sessions/session-transcript-index.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
@@ -22,11 +19,6 @@ const UNRELATED_SESSION_KEY = "discord:group:phase3-reclamation-unrelated";
 const ROWS = 200_000;
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
 
 function countRows(
   database: ReturnType<typeof openOpenClawAgentDatabase>,
@@ -53,10 +45,12 @@ function seedTranscriptState(storePath: string): void {
   const insertEvent = database.db.prepare(
     "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
   );
+  // The fixture is already projected; NULL eligibility would schedule an
+  // unrelated background index rebuild during the deletion measurement.
   const insertActive = database.db.prepare(
     `INSERT INTO session_transcript_active_events
-       (session_id, active_position, event_seq, message_position)
-     VALUES (?, ?, ?, ?)`,
+       (session_id, active_position, event_seq, message_position, context_eligible)
+     VALUES (?, ?, ?, ?, 1)`,
   );
   const insertFts = database.db.prepare(
     `INSERT INTO session_transcript_fts (text, session_id, message_id, role, timestamp)
@@ -91,10 +85,10 @@ function seedTranscriptState(storePath: string): void {
       .prepare(
         `INSERT INTO session_transcript_index_state (
            session_id, indexed_seq, needs_rebuild, active_event_count,
-           active_message_count, updated_at
-         ) VALUES (?, ?, 0, ?, ?, ?)`,
+           active_message_count, fts_row_count, updated_at
+         ) VALUES (?, ?, 0, ?, ?, ?, ?)`,
       )
-      .run(SESSION_ID, ROWS - 1, ROWS, ROWS, now);
+      .run(SESSION_ID, ROWS - 1, ROWS, ROWS, ROWS, now);
     database.db
       .prepare(
         `INSERT INTO transcript_rewrite_watermarks (session_id, generation, updated_at)
@@ -108,8 +102,8 @@ function seedTranscriptState(storePath: string): void {
       .prepare(
         `INSERT INTO session_transcript_index_state (
            session_id, indexed_seq, needs_rebuild, active_event_count,
-           active_message_count, updated_at
-         ) VALUES (?, 0, 0, 1, 1, ?)`,
+           active_message_count, fts_row_count, updated_at
+         ) VALUES (?, 0, 0, 1, 1, 1, ?)`,
       )
       .run(HISTORICAL_SESSION_ID, now);
     database.db
@@ -123,6 +117,7 @@ function seedTranscriptState(storePath: string): void {
       0,
       JSON.stringify({
         type: "message",
+        id: `${UNRELATED_SESSION_ID}-message-0`,
         message: { content: "unrelated transcript message", role: "assistant" },
       }),
       now,
@@ -133,8 +128,8 @@ function seedTranscriptState(storePath: string): void {
       .prepare(
         `INSERT INTO session_transcript_index_state (
            session_id, indexed_seq, needs_rebuild, active_event_count,
-           active_message_count, updated_at
-         ) VALUES (?, 0, 0, 1, 1, ?)`,
+           active_message_count, fts_row_count, updated_at
+         ) VALUES (?, 0, 0, 1, 1, 1, ?)`,
       )
       .run(UNRELATED_SESSION_ID, now);
     database.db
@@ -143,6 +138,13 @@ function seedTranscriptState(storePath: string): void {
          VALUES (?, 'phase3-unrelated-generation', ?)`,
       )
       .run(UNRELATED_SESSION_ID, now);
+    database.db
+      .prepare(
+        `INSERT INTO session_transcript_fts_rows (session_id, fts_rowid)
+         SELECT session_id, rowid FROM session_transcript_fts
+         WHERE session_id IN (?, ?, ?)`,
+      )
+      .run(SESSION_ID, HISTORICAL_SESSION_ID, UNRELATED_SESSION_ID);
     // sqlite-allow-raw -- commits the deterministic fixture before measurement.
     database.db.exec("COMMIT");
   } catch (error) {
@@ -150,6 +152,7 @@ function seedTranscriptState(storePath: string): void {
     database.db.exec("ROLLBACK");
     throw error;
   }
+  expect(listSessionsNeedingTranscriptIndexReconcile(database.db)).toEqual([]);
 }
 
 test("sessions.delete keeps the Gateway responsive while reclaiming a large session", async () => {
@@ -207,6 +210,7 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   const targetCounts = {
     active: countRows(database, "session_transcript_active_events", SESSION_ID),
     fts: countRows(database, "session_transcript_fts", SESSION_ID),
+    ftsRows: countRows(database, "session_transcript_fts_rows", SESSION_ID),
     indexState: countRows(database, "session_transcript_index_state", SESSION_ID),
     transcriptEvents: countRows(database, "transcript_events", SESSION_ID),
     rewriteWatermarks: countRows(database, "transcript_rewrite_watermarks", SESSION_ID),
@@ -215,6 +219,7 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   const historicalCounts = {
     active: countRows(database, "session_transcript_active_events", HISTORICAL_SESSION_ID),
     fts: countRows(database, "session_transcript_fts", HISTORICAL_SESSION_ID),
+    ftsRows: countRows(database, "session_transcript_fts_rows", HISTORICAL_SESSION_ID),
     indexState: countRows(database, "session_transcript_index_state", HISTORICAL_SESSION_ID),
     transcriptEvents: countRows(database, "transcript_events", HISTORICAL_SESSION_ID),
     rewriteWatermarks: countRows(database, "transcript_rewrite_watermarks", HISTORICAL_SESSION_ID),
@@ -223,6 +228,7 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   const unrelatedCounts = {
     active: countRows(database, "session_transcript_active_events", UNRELATED_SESSION_ID),
     fts: countRows(database, "session_transcript_fts", UNRELATED_SESSION_ID),
+    ftsRows: countRows(database, "session_transcript_fts_rows", UNRELATED_SESSION_ID),
     indexState: countRows(database, "session_transcript_index_state", UNRELATED_SESSION_ID),
     transcriptEvents: countRows(database, "transcript_events", UNRELATED_SESSION_ID),
     rewriteWatermarks: countRows(database, "transcript_rewrite_watermarks", UNRELATED_SESSION_ID),
@@ -280,6 +286,7 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   expect(targetCounts).toEqual({
     active: 0,
     fts: 0,
+    ftsRows: 0,
     indexState: 0,
     transcriptEvents: 0,
     rewriteWatermarks: 0,
@@ -289,6 +296,7 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   expect(historicalCounts).toEqual({
     active: 0,
     fts: 0,
+    ftsRows: 0,
     indexState: 0,
     transcriptEvents: 0,
     rewriteWatermarks: 0,
@@ -297,6 +305,7 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
   expect(unrelatedCounts).toEqual({
     active: 1,
     fts: 1,
+    ftsRows: 1,
     indexState: 1,
     transcriptEvents: 1,
     rewriteWatermarks: 1,

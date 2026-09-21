@@ -193,6 +193,20 @@ function notConnectedToolResult(serverName: string, toolName: string) {
   };
 }
 
+function resolveHarnessCapabilityProfile(
+  params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
+) {
+  return (
+    params.conversationCapabilityProfile ??
+    (params.policyContext
+      ? resolveConversationCapabilityProfile({
+          ...params.policyContext,
+          runtimeToolAllowlist: params.toolsAllow,
+        })
+      : undefined)
+  );
+}
+
 function applyHarnessToolPolicy(
   tools: AnyAgentTool[],
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams & {
@@ -205,14 +219,7 @@ function applyHarnessToolPolicy(
   const allowed = applyEmbeddedAttemptToolsAllow(tools, params.toolsAllow, {
     toolMeta: (tool) => getPluginToolMeta(tool),
   });
-  const profile =
-    params.conversationCapabilityProfile ??
-    (params.policyContext
-      ? resolveConversationCapabilityProfile({
-          ...params.policyContext,
-          runtimeToolAllowlist: params.toolsAllow,
-        })
-      : undefined);
+  const profile = params.conversationCapabilityProfile;
   if (!profile) {
     return allowed;
   }
@@ -264,6 +271,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     retireSessionRuntimeAfterDispose?: boolean;
   },
 ): Promise<StaticHarnessMcpTools> {
+  const conversationCapabilityProfile = resolveHarnessCapabilityProfile(params);
   const acquisition = await acquireSessionMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -272,6 +280,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
     toolOverrides: params.toolOverrides,
+    toolDenylist: conversationCapabilityProfile?.policy.explicitToolDenylist,
   });
   const retireSnapshotRuntime = params.retireSessionRuntimeAfterDispose
     ? async () => {
@@ -298,6 +307,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     const omissions: string[] = [];
     const policyParams = {
       ...params,
+      conversationCapabilityProfile,
       onFilter: (event: ToolPolicyFilterEvent) => {
         const omittedCount = event.before.length - event.after.length;
         if (omittedCount > 0) {
@@ -369,6 +379,10 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
 export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
+  const policyParams = {
+    ...params,
+    conversationCapabilityProfile: resolveHarnessCapabilityProfile(params),
+  };
   const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -380,6 +394,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     requesterSenderId: params.requesterSenderId,
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel,
+    toolDenylist: policyParams.conversationCapabilityProfile?.policy.explicitToolDenylist,
   });
   const scopedRuntime = scopedRuntimeHandle?.runtime;
 
@@ -421,8 +436,8 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     // Live tools supply execution; advertised catalog supplies the stable name/schema surface.
     const tools = advertisedTools.map((tool) => liveByName.get(tool.name) ?? tool);
 
-    const filteredTools = applyHarnessToolPolicy(tools, params);
-    const filteredAdvertised = applyHarnessToolPolicy(advertisedTools, params);
+    const filteredTools = applyHarnessToolPolicy(tools, policyParams);
+    const filteredAdvertised = applyHarnessToolPolicy(advertisedTools, policyParams);
     // Requester-scoped tools run as dynamic tools, so every prompt-required MCP
     // call passes the same per-call approval gate as the configured path before
     // the bridge dispatches it — whenever the caller provides an approval

@@ -1,12 +1,13 @@
 /** Verifies public-surface runtime artifact loading for bundled plugins. */
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   resolveBundledPluginPublicSurfacePath,
   resolveBundledPluginSourcePublicSurfacePath,
+  resolvePluginRootPublicSurfacePath,
 } from "./public-surface-runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -68,6 +69,27 @@ describe("bundled plugin public surface runtime", () => {
       ".cts",
       ".cjs",
     ]);
+  });
+
+  it("accepts a public surface whose Windows root and entry use physical aliases", () => {
+    const parent = fs.realpathSync(tempDirs.make("openclaw-public-surface-alias-"));
+    const root = path.join(parent, "canonical-root");
+    const alias = path.join(parent, "root-alias");
+    const entrySource = path.join(root, "index.js");
+    const publicSurface = path.join(root, "api.js");
+    fs.mkdirSync(root);
+    fs.writeFileSync(entrySource, "export default {};\n");
+    fs.writeFileSync(publicSurface, "export {};\n");
+    fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+    expect(
+      resolvePluginRootPublicSurfacePath({
+        pluginRoot: alias,
+        entrySource,
+        artifactBasename: "api.js",
+      }),
+    ).toBe(publicSurface);
   });
 
   it.each(["my-ngc:nvidia", "../outside", "..\\outside", ".", ".."])(

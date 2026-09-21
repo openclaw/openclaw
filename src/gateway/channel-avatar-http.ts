@@ -4,7 +4,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
 import { readMediaBuffer } from "../media/store.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";

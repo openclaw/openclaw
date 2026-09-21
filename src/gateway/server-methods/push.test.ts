@@ -10,7 +10,10 @@ import { pushHandlers } from "./push.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
+  findBoundWebPushSubscriptionByEndpoint:
+    vi.fn<(params: { endpoint: string }) => Promise<BoundWebPushSubscription | null>>(),
 }));
+const findBoundWebPushSubscriptionByEndpoint = mocks.findBoundWebPushSubscriptionByEndpoint;
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
@@ -30,7 +33,10 @@ vi.mock("../../infra/push-web.js", () => ({
   WebPushSubscriptionBindingError: class extends Error {},
   broadcastWebPush: vi.fn(),
   clearBoundWebPushSubscription: vi.fn(),
-  findBoundWebPushSubscriptionByEndpoint: vi.fn(),
+  withBoundWebPushSubscriptionByEndpoint: async <T>(
+    params: { endpoint: string },
+    prepare: (subscription: BoundWebPushSubscription | null) => { start: () => T } | undefined,
+  ) => prepare(await mocks.findBoundWebPushSubscriptionByEndpoint(params))?.start(),
   registerWebPushSubscription: vi.fn(),
   resolveVapidKeys: vi.fn(),
   setWebPushSubscriptionPreferences: vi.fn(),
@@ -58,9 +64,9 @@ import {
 import {
   broadcastWebPush,
   clearBoundWebPushSubscription,
-  findBoundWebPushSubscriptionByEndpoint,
   registerWebPushSubscription,
   setWebPushSubscriptionPreferences,
+  type BoundWebPushSubscription,
 } from "../../infra/push-web.js";
 
 type ApnsPushResult = Awaited<ReturnType<typeof sendApnsAlert>>;
@@ -184,6 +190,8 @@ function createWebPushSubscribeInvokeParams(options?: {
         context: { getRuntimeConfig: () => options?.config ?? {} } as never,
         client: {
           connect: {
+            role: "operator",
+            scopes: ["operator.read", "operator.write"],
             device: options?.deviceId ? { id: options.deviceId } : undefined,
           },
           ...(options?.userProfileId
@@ -217,7 +225,11 @@ function createBoundWebPushInvokeParams(
         respond: respond as never,
         context: { broadcastToConnIds: vi.fn() } as never,
         client: {
-          connect: { device: { id: options.deviceId ?? "browser-device" } },
+          connect: {
+            role: "operator",
+            scopes: ["operator.read", "operator.write"],
+            device: { id: options.deviceId ?? "browser-device" },
+          },
           ...(options.userProfileId
             ? { authenticatedUserProfile: { profileId: options.userProfileId } }
             : {}),
@@ -538,6 +550,7 @@ describe("push.web.subscribe handler", () => {
       endpoint: "https://push.example.test/subscription",
       keys: { p256dh: "p256dh", auth: "auth" },
       binding: { deviceId: "browser-device", userProfileId: "profile-1" },
+      guard: expect.objectContaining({ assertCurrent: expect.any(Function) }),
     });
     expect(firstRespondCall(respond)).toEqual([
       true,
@@ -576,7 +589,7 @@ describe("bound Web Push handlers", () => {
     vi.mocked(clearBoundWebPushSubscription).mockResolvedValue(true);
     vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReset();
     vi.mocked(setWebPushSubscriptionPreferences).mockReset();
-    vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
+    vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue({
       subscriptionId: "subscription-1",
       endpoint: "https://push.example.test/subscription",
       keys: { p256dh: "p256dh", auth: "auth" },
@@ -586,7 +599,7 @@ describe("bound Web Push handlers", () => {
       userProfileId: null,
       devicePreferences: { enabled: true, label: "" },
     });
-    vi.mocked(setWebPushSubscriptionPreferences).mockReturnValue(true);
+    vi.mocked(setWebPushSubscriptionPreferences).mockResolvedValue(true);
   });
 
   it.each([
@@ -596,10 +609,10 @@ describe("bound Web Push handlers", () => {
   ] as const)(
     "%s rejects a deleted profile instead of treating it as profileless",
     async (method) => {
-      const subscription = findBoundWebPushSubscriptionByEndpoint({
+      const subscription = await findBoundWebPushSubscriptionByEndpoint({
         endpoint: "https://push.example.test/subscription",
       });
-      vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
+      vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue({
         ...expectDefined(subscription, "bound subscription fixture"),
         userProfileId: "deleted-profile",
       });
@@ -648,6 +661,7 @@ describe("bound Web Push handlers", () => {
       preferences,
       expectedDeviceId: "browser-device",
       expectedUserProfileId: null,
+      guard: expect.objectContaining({ assertCurrent: expect.any(Function) }),
     });
     expect(firstRespondCall(respond)).toEqual([true, { scope: "device", preferences }, undefined]);
   });
@@ -656,12 +670,12 @@ describe("bound Web Push handlers", () => {
     "saves human mention preference %s, defaulting older client payloads to off",
     async (humanMentioned) => {
       const subscription = expectDefined(
-        findBoundWebPushSubscriptionByEndpoint({
+        await findBoundWebPushSubscriptionByEndpoint({
           endpoint: "https://push.example.test/subscription",
         }),
         "bound subscription fixture",
       );
-      vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
+      vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue({
         ...subscription,
         userProfileId: "profile-owner",
       });
@@ -706,7 +720,7 @@ describe("bound Web Push handlers", () => {
   );
 
   it("fails closed when the subscription binding changes during the update", async () => {
-    vi.mocked(setWebPushSubscriptionPreferences).mockReturnValue(false);
+    vi.mocked(setWebPushSubscriptionPreferences).mockResolvedValue(false);
     const { respond, invoke } = createBoundWebPushInvokeParams("push.web.preferences.set", {
       endpoint: "https://push.example.test/subscription",
       scope: "device",
@@ -724,10 +738,10 @@ describe("bound Web Push handlers", () => {
     async (scope) => {
       const userProfileId = scope === "user" ? "profile-owner" : undefined;
       if (userProfileId) {
-        const subscription = findBoundWebPushSubscriptionByEndpoint({
+        const subscription = await findBoundWebPushSubscriptionByEndpoint({
           endpoint: "https://push.example.test/subscription",
         });
-        vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
+        vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue({
           ...expectDefined(subscription, "bound subscription fixture"),
           userProfileId,
         });

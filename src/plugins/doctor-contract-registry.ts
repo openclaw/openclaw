@@ -32,10 +32,8 @@ import {
 } from "./doctor-contract-relevance.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import { isActivatedManifestOwner } from "./manifest-owner-policy.js";
-import {
-  loadBundledPluginManifestRegistry,
-  type PluginManifestRegistry,
-} from "./manifest-registry.js";
+import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
+import type { PluginManifestRegistry } from "./manifest-registry.types.js";
 import type { PluginManifestDoctorContract } from "./manifest-types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";

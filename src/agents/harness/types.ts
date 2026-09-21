@@ -38,6 +38,8 @@ export type AgentHarnessSupportContext = {
     azureApiVersion?: string;
     /** Secret-free projection of request behavior a native harness must reproduce. */
     requestTransportOverrides?: ProviderRouteOverridePresence;
+    /** Authored endpoints that a native runtime must reproduce. */
+    endpointOverrides?: ProviderRouteOverridePresence;
     /** Provider-owned native-runtime compatibility for the prepared route. */
     runtimePolicy?: ProviderModelRouteRuntimePolicy;
     /** Secret-free auth source the native runtime must reproduce for this attempt. */
@@ -86,23 +88,13 @@ type AgentHarnessCanonicalAttemptResult = Omit<
   AgentHarnessDeprecatedAttemptTerminalFields;
 
 /** @deprecated Return `terminal` instead. Remove no earlier than the 2026.9 stable release. */
-type AgentHarnessLegacyAttemptResult = Omit<
-  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult,
-  "contextEngineTerminalAnchor" | "terminal"
-> &
-  AgentHarnessDeprecatedAttemptTerminalFields & {
-    aborted: boolean;
-    externalAbort: boolean;
-    timedOut: boolean;
-    idleTimedOut: boolean;
-    timedOutDuringCompaction: boolean;
-    timedOutDuringToolExecution?: boolean;
-    timedOutByRunBudget?: boolean;
-    promptError: unknown;
-    promptErrorSource:
-      | import("../agent-run-terminal-outcome.js").AgentRunAttemptFailureSource
-      | null;
-  };
+type AgentHarnessLegacyAttemptResult = Omit<AgentHarnessCanonicalAttemptResult, "terminal"> &
+  Required<
+    Omit<
+      AgentHarnessDeprecatedAttemptTerminalFields,
+      "timedOutDuringToolExecution" | "timedOutByRunBudget"
+    >
+  >;
 
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
@@ -396,6 +388,8 @@ type AgentHarnessRunCapability<
    */
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
+  /** Core must reject containment this runtime cannot implement before invoking it. */
+  executionEnvironment?: "host-only";
   /** Certifies exact runAttempt enforcement; direct-policy-restricted channel side questions fail in core. */
   conversationToolPolicySupport?: "exact";
   /**

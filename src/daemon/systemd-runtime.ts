@@ -166,12 +166,18 @@ export async function readSystemdServiceRuntime(
     );
   }
   const timeoutMs = opts?.timeoutMs;
-  let commandInspectionFailure: GatewayServiceRuntime | undefined;
+  let commandInspectionFailure =
+    opts?.commandInspection?.kind === "unavailable"
+      ? createServiceRuntimeInspectionFailure(
+          sanitizeServiceInspectionError(opts.commandInspection.error),
+        )
+      : undefined;
   if (installed?.scope !== "system") {
     try {
       await assertSystemdAvailable(env, timeoutMs);
     } catch (err) {
       return {
+        ...commandInspectionFailure,
         status: "unknown",
         detail: formatErrorMessage(err),
         ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),

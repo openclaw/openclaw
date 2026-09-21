@@ -129,7 +129,9 @@ it.each(["connect", "setup"] as const)(
             "Radius account",
           ),
         );
-        [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
+        page.querySelector<HTMLButtonElement>('[data-models-login-provider="radius"]')!.click();
+        await page.updateComplete;
+        [...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button")]
           .find((button) => button.textContent?.includes("Radius account"))!
           .click();
       } else {
@@ -313,7 +315,9 @@ it.each([
             "Radius account",
           ),
         );
-        [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
+        page.querySelector<HTMLButtonElement>('[data-models-login-provider="radius"]')!.click();
+        await page.updateComplete;
+        [...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button")]
           .find((button) => button.textContent?.includes("Radius account"))!
           .click();
       } else {

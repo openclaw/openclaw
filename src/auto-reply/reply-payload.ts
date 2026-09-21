@@ -1,12 +1,16 @@
 import { asPositiveFiniteNumber as normalizePairingQrExpiresAtMs } from "@openclaw/normalization-core/number-coercion";
 import {
+  normalizeOptionalString,
   readNonBlankString,
   readNonBlankString as normalizeTtsSupplementSpokenText,
 } from "@openclaw/normalization-core/string-coerce";
 /** Reply payload contracts and metadata helpers shared by dispatch and channel renderers. */
+import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import type { ReplyToMode } from "../config/types.base.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ReplyPayload, ReplyPayloadTtsSupplement } from "../shared/reply-payload.types.js";
 import type { BlockReplySource } from "./reply/block-reply-source.types.js";
 
@@ -17,6 +21,33 @@ export type {
 } from "../shared/reply-payload.types.js";
 
 export type ReplyMediaFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
+
+/** Adds the BTW question banner for channels that only accept plain text bodies. */
+export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
+  const text = normalizeOptionalString(payload.text);
+  if (!text) {
+    return payload.text;
+  }
+  const question = normalizeOptionalString(payload.btw?.question);
+  if (!question) {
+    return payload.text;
+  }
+  const formatted = `BTW\nQuestion: ${question}\n\n${text}`;
+  return text === formatted || text.startsWith("BTW\nQuestion:") ? text : formatted;
+}
+
+/** True when a payload has visible or playable content for delivery. */
+export function isRenderablePayload(payload: ReplyPayload): boolean {
+  return hasReplyPayloadContent(payload, {
+    extraContent:
+      payload.audioAsVoice || payload.location != null || hasReplyPayloadSpeechContent(payload),
+  });
+}
+
+/** True when a payload should stay internal as reasoning-only output. */
+export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
+  return payload.isReasoning === true;
+}
 
 /** Producer-owned outcome for one attachment that could not be delivered. */
 export type ReplyMediaFailure = {
@@ -177,11 +208,11 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
     btw: _btw,
     ...mediaPayload
   } = payload;
-  return {
+  return copyReplyPayloadMetadata(payload, {
     ...mediaPayload,
     spokenText: supplement.spokenText,
     ttsSupplement: supplement,
-  };
+  });
 }
 
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
@@ -197,6 +228,8 @@ export type SessionWriterDeliveryAuthority = {
 };
 
 export type ReplyPayloadMetadata = {
+  /** Raw parsing classified the text as silent before removing its control token. */
+  silentReply?: true;
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;
@@ -212,6 +245,10 @@ export type ReplyPayloadMetadata = {
   ttsExplicit?: true;
   /** Original runtime MEDIA references used to identify the persisted assistant row. */
   assistantTranscriptMediaUrls?: string[];
+  /** Original references associated with each successfully normalized media URL. */
+  replyMediaSourceUrls?: ReadonlyMap<string, readonly string[]>;
+  /** A delivery modifier selected the current payload media for this operation. */
+  replyMediaSelectionChanged?: true;
   /** Ordered per-source failures retained until transcript/display projection. */
   assistantMediaFailures?: ReplyMediaFailure[];
   /** The runtime owns the transcript decision for this assistant payload. */
@@ -222,6 +259,8 @@ export type ReplyPayloadMetadata = {
   replyDispatcherNormalizationOwner?: object;
   /** The command owner produced this terminal reply without starting an agent run. */
   commandReply?: true;
+  /** A read-only status command exchange belongs in history, not model context. */
+  contextFreeCommand?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
   onFinalDeliverySuccess?: () => void;
   /** Host-projected monitoring final; notification policy already normalized its text. */
@@ -234,6 +273,8 @@ export type ReplyPayloadMetadata = {
   finalDeliveryCapture?: object;
   /** One host-visible status gates a child-completion wake for this exact turn. */
   continuationStatus?: true;
+  /** One-shot transfer of an identified ongoing progress surface to its core task owner. */
+  progressContinuation?: ProgressContinuationCapability;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */
   pendingFinalDeliveryCompletion?: {
     deliveryId: string;
@@ -245,6 +286,8 @@ export type ReplyPayloadMetadata = {
   };
   /** replyToId existed before reply threading could inject an implicit target. */
   replyToIdExplicit?: boolean;
+  /** The host's single-use reply policy already consumed its target. */
+  replyTargetSuppressed?: true;
   /** Canonical reply policy used by both message-tool dedupe and final delivery routing. */
   replyDelivery?: ReplyDeliveryContext;
   /** Route identity that produced replyDelivery, used to reject stale cross-route policy. */
@@ -291,7 +334,11 @@ export type ReplyPayloadMetadata = {
   heartbeatScratchProposal?: string;
 };
 
-const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
+// Source Gateways and native plugin SDK chunks must share the same payload identity.
+const replyPayloadMetadata = resolveGlobalSingleton(
+  Symbol.for("openclaw.replyPayloadMetadata"),
+  () => new WeakMap<object, ReplyPayloadMetadata>(),
+);
 
 /** Adds internal metadata to a reply payload object. */
 export function setReplyPayloadMetadata<T extends object>(
@@ -306,6 +353,28 @@ export function setReplyPayloadMetadata<T extends object>(
 /** Reads internal metadata attached to a reply payload object. */
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
+}
+
+/** Explicit speech remains content while the payload waits for TTS admission. */
+export function hasReplyPayloadSpeechContent(payload: object): boolean {
+  return Boolean(readNonBlankString(getReplyPayloadMetadata(payload)?.tts?.text));
+}
+
+export function isReplyPayloadTargetSuppressed(payload: object): boolean {
+  return getReplyPayloadMetadata(payload)?.replyTargetSuppressed === true;
+}
+
+/** Keep derived reply fields consistent with the host's recorded target decision. */
+export function applyReplyPayloadTargetPolicy(payload: ReplyPayload): ReplyPayload {
+  if (!isReplyPayloadTargetSuppressed(payload)) {
+    return payload;
+  }
+  return copyReplyPayloadMetadata(payload, {
+    ...payload,
+    replyToId: undefined,
+    replyToCurrent: false,
+    replyToTag: false,
+  });
 }
 
 /** Revalidates an authority-bearing payload against a freshly loaded session row. */
@@ -385,9 +454,16 @@ export function isReplyPayloadStatusNotice(
   return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
 }
 
-/** Returns whether a payload carries terminal assistant content rather than a supplemental lane. */
-export const isReplyPayloadTerminalContent = (payload: ReplyPayload): boolean =>
-  payload.isReasoning !== true &&
-  payload.isCommentary !== true &&
-  !isReplyPayloadStatusNotice(payload) &&
-  !isReplyPayloadTtsSupplement(payload);
+/** Classifies terminal vs. supplemental reply lanes, not content, sendability, or authority. */
+export const isReplyPayloadTerminalContent = (payload: ReplyPayload): boolean => {
+  const supplement = getReplyPayloadTtsSupplement(payload);
+  return (
+    payload.isReasoning !== true &&
+    payload.isCommentary !== true &&
+    (!isReplyPayloadStatusNotice(payload) ||
+      getReplyPayloadMetadata(payload)?.commandReply === true) &&
+    (!supplement ||
+      (supplement.visibleTextAlreadyDelivered !== true &&
+        Boolean(readNonBlankString(payload.text))))
+  );
+};

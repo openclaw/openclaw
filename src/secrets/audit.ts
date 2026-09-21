@@ -20,15 +20,19 @@ import { coerceSecretRef, resolveSecretInputRef, type SecretRef } from "../confi
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { findSecretStorePlaintextResidueFindings } from "./audit-store.js";
+import { findEnvPlaintextFindings } from "./audit-env.js";
+import {
+  findSecretStorePlaintextResidueFindings,
+  findSecretStoreRedactedValueFindings,
+} from "./audit-store.js";
 import type { PlaintextAssignment } from "./audit-store.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { listAuthProfileStoreTargets, type AuthProfileStoreTarget } from "./auth-store-paths.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
 import { isLikelySensitiveModelProviderHeaderName } from "./model-provider-header-policy.js";
-import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { secretRefKey } from "./ref-contract.js";
+import { isSecretResolutionError } from "./resolve-errors.js";
 import {
   isProviderScopedSecretResolutionError,
   resolveSecretRefValue,
@@ -43,7 +47,6 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
   listSecretsDotEnvPaths,
-  parseEnvAssignmentValue,
   readJsonObjectIfExists,
 } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
@@ -52,6 +55,7 @@ import { discoverConfigSecretTargets } from "./target-registry.js";
 type SecretsAuditCode =
   | "PLAINTEXT_FOUND"
   | "REF_UNRESOLVED"
+  | "PLACEHOLDER_VALUE"
   | "REF_SHADOWED"
   | "STORE_PLAINTEXT_RESIDUE"
   | "LEGACY_RESIDUE";
@@ -153,37 +157,6 @@ function trackAuthProviderState(
     hasUsableStaticOrOAuth: true,
     modes: new Set([mode]),
   });
-}
-
-function collectEnvPlaintext(params: { envPath: string; collector: AuditCollector }): void {
-  if (!fs.existsSync(params.envPath)) {
-    return;
-  }
-  params.collector.filesScanned.add(params.envPath);
-  const knownKeys = new Set(listKnownSecretEnvVarNames());
-  const raw = fs.readFileSync(params.envPath, "utf8");
-  const lines = raw.split(/\r?\n/);
-  for (const line of lines) {
-    const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!match) {
-      continue;
-    }
-    const key = match[1] ?? "";
-    if (!knownKeys.has(key)) {
-      continue;
-    }
-    const value = parseEnvAssignmentValue(match[2] ?? "");
-    if (!value) {
-      continue;
-    }
-    addFinding(params.collector, {
-      code: "PLAINTEXT_FOUND",
-      severity: "warn",
-      file: params.envPath,
-      jsonPath: `$env.${key}`,
-      message: `Potential secret found in .env (${key}).`,
-    });
-  }
 }
 
 function collectConfigSecrets(params: {
@@ -562,7 +535,10 @@ async function collectUnresolvedRefFindings(params: {
     const resolveErr = errorsByRefKey.get(key);
     if (resolveErr) {
       addFinding(params.collector, {
-        code: "REF_UNRESOLVED",
+        code:
+          isSecretResolutionError(resolveErr) && resolveErr.code === "SECRET_REF_REDACTED_VALUE"
+            ? "PLACEHOLDER_VALUE"
+            : "REF_UNRESOLVED",
         severity: "error",
         file: assignment.file,
         jsonPath: assignment.path,
@@ -628,7 +604,9 @@ function collectShadowingFindings(collector: AuditCollector): void {
 function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport["summary"] {
   return {
     plaintextCount: findings.filter((entry) => entry.code === "PLAINTEXT_FOUND").length,
-    unresolvedRefCount: findings.filter((entry) => entry.code === "REF_UNRESOLVED").length,
+    unresolvedRefCount: findings.filter(
+      (entry) => entry.code === "REF_UNRESOLVED" || entry.code === "PLACEHOLDER_VALUE",
+    ).length,
     shadowedRefCount: findings.filter((entry) => entry.code === "REF_SHADOWED").length,
     storeResidueCount: findings.filter((entry) => entry.code === "STORE_PLAINTEXT_RESIDUE").length,
     legacyResidueCount: findings.filter((entry) => entry.code === "LEGACY_RESIDUE").length,
@@ -710,8 +688,22 @@ export async function runSecretsAudit(
   }
 
   for (const envPath of envPaths) {
-    collectEnvPlaintext({ envPath, collector });
+    const findings = findEnvPlaintextFindings(envPath);
+    if (findings) {
+      collector.filesScanned.add(envPath);
+      collector.findings.push(...findings);
+    }
   }
+  collector.findings.push(
+    ...findSecretStoreRedactedValueFindings({
+      database: { env },
+      excludeNames: new Set(
+        collector.refAssignments
+          .filter((assignment) => assignment.ref.source === "store")
+          .map((assignment) => assignment.ref.id),
+      ),
+    }),
+  );
   collectLegacyAuthSourceFindings({ config, stateDir, env, collector });
   const summary = summarizeFindings(collector.findings);
   const status: SecretsAuditStatus =

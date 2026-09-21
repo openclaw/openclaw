@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
+import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
 import { clawhubVerdictKey } from "../lib/skills/index.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -29,6 +30,13 @@ import "./usage/usage-page.ts";
 
 // Mirrors the module-private default usage TTL asserted below.
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
+
+function usageResult(key?: string): NonNullable<UsageRouteData["result"]> {
+  return {
+    ...cacheSnapshot("fresh").result,
+    sessions: key ? [{ key, usage: null }] : [],
+  };
+}
 
 const settledEmptyProviderUsage = {
   state: "settled",
@@ -185,6 +193,12 @@ async function replaceContext(
   replacementClient: GatewayBrowserClient,
   options: { connected?: boolean; agentsList?: unknown; selectedAgentId?: string | null } = {},
 ): Promise<void> {
+  const previous = page.context.gateway.snapshot;
+  // End the old connection through its real metadata owner before replacing the test source.
+  createGatewayMetadataObserver(() => true).synchronize(previous, {
+    ...previous,
+    phase: "stopped",
+  });
   page.remove();
   page.context = contextWithClient(replacementClient, options);
   document.body.append(page);
@@ -201,7 +215,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client, { connected: true });
-    const result = { sessions: [{ key: "old" }] } as unknown as UsageRouteData["result"];
+    const result = usageResult("old");
     const routeData = {
       gateway: context.gateway,
       gatewaySnapshot: context.gateway.snapshot,
@@ -232,7 +246,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
   });
 
   it("rejects usage route data from an earlier same-client gateway epoch", async () => {
-    const freshResult = { sessions: [{ key: "fresh" }] } as unknown as UsageRouteData["result"];
+    const freshResult = usageResult("fresh");
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.usage") {
         return freshResult;
@@ -241,7 +255,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client, { connected: true });
-    const staleResult = { sessions: [{ key: "stale" }] } as unknown as UsageRouteData["result"];
+    const staleResult = usageResult("stale");
     const page = createPage("openclaw-usage-page", context) as TestPage & {
       routeData: UsageRouteData;
       usageResult: UsageRouteData["result"];
@@ -276,7 +290,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
     const context = contextWithClient(client, { connected: true });
-    const result = { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"];
+    const result = usageResult("cached");
     const page = createPage("openclaw-usage-page", context) as TestPage & {
       routeData: UsageRouteData;
       gateway: TestGatewayController;
@@ -314,7 +328,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const interrupted = deferred<UsageRouteData["result"]>();
-    const freshResult = { sessions: [{ key: "fresh" }] } as unknown as UsageRouteData["result"];
+    const freshResult = usageResult("fresh");
     let usageRequestCount = 0;
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.usage") {
@@ -341,7 +355,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
         timeZone: "local",
         agentId: null,
       },
-      result: { sessions: [{ key: "cached" }] } as unknown as UsageRouteData["result"],
+      result: usageResult("cached"),
       costSummary: null,
       providerUsage: settledEmptyProviderUsage,
       loadedAtMs: Date.now(),
@@ -362,7 +376,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2),
     );
     await waitForFast(() => expect(page.usageResult).toBe(freshResult));
-    interrupted.resolve({ sessions: [{ key: "stale" }] } as unknown as UsageRouteData["result"]);
+    interrupted.resolve(usageResult("stale"));
     await Promise.resolve();
     await Promise.resolve();
     expect(page.usageResult).toBe(freshResult);
@@ -373,7 +387,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.usage") {
-        return { sessions: [] };
+        return usageResult();
       }
       if (method === "usage.status") {
         return { providers: [] };
@@ -382,7 +396,7 @@ describe("gateway source replacement across reconnect with a reused client", () 
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const harness = contextWithMutableGateway(client);
-    const result = { sessions: [] } as unknown as UsageRouteData["result"];
+    const result = usageResult();
     const page = createPage("openclaw-usage-page", harness.context) as TestPage & {
       routeData: UsageRouteData;
       readonly usageLoading: boolean;
@@ -423,23 +437,21 @@ describe("gateway source replacement across reconnect with a reused client", () 
     window.dispatchEvent(new Event("focus"));
     await waitForFast(() => expect(page.usageLoading).toBe(false));
     const initialMethods = request.mock.calls.map(([method]) => method);
-    expect(initialMethods).toHaveLength(3);
-    expect(initialMethods).toEqual(
-      expect.arrayContaining(["sessions.usage", "usage.cost", "usage.status"]),
-    );
+    expect(initialMethods).toHaveLength(2);
+    expect(initialMethods).toEqual(expect.arrayContaining(["sessions.usage", "usage.status"]));
 
     page.refreshPolicy.request("manual");
     await waitForFast(() => expect(page.usageLoading).toBe(false));
-    expect(request).toHaveBeenCalledTimes(6);
+    expect(request).toHaveBeenCalledTimes(4);
 
     const failedRefresh = deferred<never>();
     request.mockImplementationOnce(() => failedRefresh.promise);
     page.refreshPolicy.setLastLoadedAtMs(Date.now() - USAGE_PAYLOAD_TTL_MS);
     page.refreshPolicy.request("manual");
-    expect(request).toHaveBeenCalledTimes(9);
+    expect(request).toHaveBeenCalledTimes(6);
     page.refreshPolicy.request("focus");
     failedRefresh.reject(new Error("connection interrupted"));
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(12));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(8));
     await waitForFast(() => expect(page.usageLoading).toBe(false));
   });
 
@@ -807,23 +819,20 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const page = createPage("openclaw-sessions-page", contextWithClient(client)) as TestPage & {
       result: unknown;
       selectedKeys: Set<string>;
-      checkpointItemsByKey: Record<string, unknown>;
     };
     document.body.append(page);
     await page.updateComplete;
     page.result = { sessions: [{ key: "old" }] };
     page.selectedKeys = new Set(["old"]);
-    page.checkpointItemsByKey = { old: [{}] };
 
     await replaceContext(page, client);
 
     expect(page.result).toBeNull();
     expect(page.selectedKeys.size).toBe(0);
-    expect(page.checkpointItemsByKey).toEqual({});
   });
 
   it("clears usage loaded by the previous provider", async () => {
-    const snapshot = cacheSnapshot("sessions", "fresh");
+    const snapshot = cacheSnapshot("fresh");
     const result = { ...snapshot.result, sessions: [{ key: "old", usage: null }] };
     const providerUsage = {
       updatedAt: 1,
@@ -832,9 +841,6 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.usage") {
         return result;
-      }
-      if (method === "usage.cost") {
-        return snapshot.costSummary;
       }
       if (method === "usage.status") {
         return providerUsage;
@@ -856,7 +862,10 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await page.updateComplete;
     await page.loadUsage();
     expect(page.usageResult).toBe(result);
-    expect(page.usageCostSummary).toBe(snapshot.costSummary);
+    expect(page.usageCostSummary).toMatchObject({
+      totals: result.totals,
+      daily: result.aggregates.costDaily,
+    });
     expect(page.providerUsageSummary).toBe(providerUsage);
     page.usageSelectedSessions = ["old"];
 

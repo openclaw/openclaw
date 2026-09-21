@@ -36,7 +36,6 @@ import {
   peekSystemEventEntries,
 } from "../infra/system-events.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
-import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
 import type { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -447,8 +446,8 @@ async function sendStalledBody(params: {
   });
 }
 
-async function startLoopbackServerForTest(port = 0) {
-  await ensureMcpLoopbackServer(port);
+async function startLoopbackServerForTest() {
+  await ensureMcpLoopbackServer(0);
   const runtime = getActiveMcpLoopbackRuntime();
   if (!runtime) {
     throw new Error("expected active MCP loopback runtime");
@@ -1277,11 +1276,7 @@ describe("mcp loopback server", () => {
   });
 
   it("passes session, account, message channel, and inbound event headers into shared tool resolution", async () => {
-    const port = await getFreePortBlockWithPermissionFallback({
-      offsets: [0],
-      fallbackBase: 53_000,
-    });
-    const { runtime, port: serverPort } = await startLoopbackServerForTest(port);
+    const { runtime, port: serverPort } = await startLoopbackServerForTest();
 
     const response = await sendRaw({
       port: serverPort,
@@ -1352,11 +1347,7 @@ describe("mcp loopback server", () => {
 
   it("binds an attach grant's session owner and ignores ALL spoofed context headers", async () => {
     const grant = mintAttachGrant({ sessionKey: "global", agentId: "ops" });
-    const port = await getFreePortBlockWithPermissionFallback({
-      offsets: [0],
-      fallbackBase: 53_000,
-    });
-    const { port: serverPort } = await startLoopbackServerForTest(port);
+    const { port: serverPort } = await startLoopbackServerForTest();
 
     const response = await sendRaw({
       port: serverPort,

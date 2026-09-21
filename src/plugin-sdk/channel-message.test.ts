@@ -38,6 +38,13 @@ describe("defineChannelMessageAdapter", () => {
     expect(channelOutbound.defineChannelMessageAdapter).toBe(defineCoreChannelMessageAdapter);
   });
 
+  it("keeps new outbound helpers off the deprecated compatibility facade", () => {
+    const [channelOutbound, channelMessage] = pluginSdkSubpaths;
+
+    expect(channelOutbound.isCompleteAgentPreamble).toBeTypeOf("function");
+    expect(channelMessage).not.toHaveProperty("isCompleteAgentPreamble");
+  });
+
   it("preserves legacy count-shaped dispatch projections", () => {
     const [, channelMessage, channelInbound] = pluginSdkSubpaths;
     const legacyResult = {

@@ -1,0 +1,8 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true
+  },
+  // Oxlint discovers this project for CommonJS test preloads; other sources use the root project.
+  "include": ["**/*.test-support.cjs"]
+}

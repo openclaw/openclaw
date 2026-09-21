@@ -13,6 +13,7 @@ import {
   sidebarSessionOrder,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { watchNavigationFollowIntent } from "./chat-navigation-follow.test-support.ts";
 import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -176,9 +177,11 @@ suite.define(() => {
         page.locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
         );
+      const finishFirstVisit = await watchNavigationFollowIntent(page, sessionB);
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
       await waitForChatScrollIdle(page);
+      await finishFirstVisit(false);
       expect(await gateway.getRequests("agent.identity.get")).toHaveLength(
         initialIdentityRequestCount,
       );
@@ -189,6 +192,7 @@ suite.define(() => {
       expect(firstVisitDistance).toBeLessThanOrEqual(8);
 
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+      const finishReadingReturn = await watchNavigationFollowIntent(page, sessionA);
       await sessionLink(sessionA).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
       await waitForChatScrollIdle(page);
@@ -209,8 +213,10 @@ suite.define(() => {
         JSON.stringify({ restoredAnchor, storedAnchor }),
       ).toBeLessThanOrEqual(2);
       expect(restored.distanceFromBottom).toBeGreaterThan(8);
+      await finishReadingReturn(true);
 
       const historyRequestsBeforeEndReturn = (await gateway.getRequests("chat.history")).length;
+      const finishEndReturn = await watchNavigationFollowIntent(page, sessionB);
       await sessionLink(sessionB).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
       await waitForChatScrollIdle(page);
@@ -222,6 +228,7 @@ suite.define(() => {
         return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
       });
       expect(endAnchoredDistance).toBeLessThanOrEqual(8);
+      await finishEndReturn(false);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -342,6 +342,42 @@ describe("handleFileWrite — symlink protection", () => {
     await expect(fs.readFile(moved, "utf8")).resolves.toBe("approved");
   });
 
+  it("checks hard links on the bound write handle after path validation", async () => {
+    const target = path.join(tmpRoot, "target.txt");
+    const alias = path.join(tmpRoot, "outside-alias.txt");
+    await fs.writeFile(target, "before");
+    const params = {
+      path: target,
+      contentBase64: b64("after"),
+      overwrite: true,
+      rejectHardlinks: true,
+    };
+    const preflight = await handleFileWrite({ ...params, preflightOnly: true });
+    if (!preflight.ok) {
+      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+    }
+    const originalOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      if (args[0] === target && args[1] === "r+") {
+        await fs.link(target, alias);
+      }
+      return handle;
+    });
+    try {
+      const result = await handleFileWrite({
+        ...params,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      });
+      expectFailure(result, "HARDLINK_TARGET_DENIED");
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("before");
+      await expect(fs.readFile(alias, "utf8")).resolves.toBe("before");
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it.each(["", "after", "after!", "a longer replacement"])(
     "preserves the preflight-bound inode and hardlinks for payload %j",
     async (content) => {

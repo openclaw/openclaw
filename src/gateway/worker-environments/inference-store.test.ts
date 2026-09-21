@@ -2,12 +2,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -101,6 +103,10 @@ describe("worker inference SQLite store", () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-inference-store-"));
     nowMs = 1_000;
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    initializeStore();
+  });
+
+  function initializeStore(): void {
     createWorkerEnvironmentStore({ database, now: () => nowMs }).createIntent({
       environmentId: ENVIRONMENT_ID,
       providerId: "fixture-provider",
@@ -109,7 +115,7 @@ describe("worker inference SQLite store", () => {
       provisionOperationId: "fixture-operation",
     });
     store = createWorkerInferenceStore({ database, now: () => nowMs });
-  });
+  }
 
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
@@ -129,14 +135,17 @@ describe("worker inference SQLite store", () => {
     return rows.map((row) => row.run_id);
   }
 
-  function completeTurn(runId: string): WorkerInferenceTurnInput {
+  function completeTurn(
+    runId: string,
+    outcome: WorkerInferenceTerminalOutcome = PROVIDER_ERROR,
+  ): WorkerInferenceTurnInput {
     const input = {
       ...BASE_INPUT,
       runId,
       turnId: `turn-${runId}`,
     };
     expect(store.begin(input)).toEqual({ kind: "claimed" });
-    expect(store.complete({ ...input, outcome: PROVIDER_ERROR })).toEqual(PROVIDER_ERROR);
+    expect(store.complete({ ...input, outcome })).toEqual(outcome);
     return input;
   }
 
@@ -227,21 +236,61 @@ describe("worker inference SQLite store", () => {
     expect(terminalRunIds()).toEqual(["run-second"]);
   });
 
-  it("prunes terminal turns beyond maxBytes", () => {
-    completeTurn("run-first");
-    nowMs += 1;
-    store = createWorkerInferenceStore({
-      database,
-      now: () => nowMs,
-      retention: {
-        maxAgeMs: 10_000,
-        maxRows: 10,
-        maxBytes: Buffer.byteLength(JSON.stringify(PROVIDER_ERROR), "utf8"),
-      },
-    });
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
+    "prunes %s terminal turns by UTF-8 maxBytes and retains exact replay",
+    (encoding) => {
+      if (encoding !== "UTF-8") {
+        closeOpenClawStateDatabaseForTest();
+        const databasePath = path.join(root, "encoded.sqlite");
+        const seed = new DatabaseSync(databasePath);
+        seed.exec(
+          `PRAGMA encoding = '${encoding}'; CREATE TABLE encoding_seed (id INTEGER); DROP TABLE encoding_seed;`,
+        );
+        seed.close();
+        database = openOpenClawStateDatabase({ path: databasePath });
+        initializeStore();
+      }
+      expect(database.db.prepare("PRAGMA encoding").get()?.encoding).toBe(encoding);
+      const outcome: WorkerInferenceTerminalOutcome = {
+        ...PROVIDER_ERROR,
+        message: "問題🦞".repeat(64),
+      };
+      completeTurn("run-first", outcome);
+      nowMs += 1;
+      const maxBytes = Buffer.byteLength(JSON.stringify(outcome), "utf8") * 2;
+      store = createWorkerInferenceStore({
+        database,
+        now: () => nowMs,
+        retention: { maxAgeMs: 10_000, maxRows: 10, maxBytes },
+      });
 
-    completeTurn("run-second");
-    expect(terminalRunIds()).toEqual(["run-second"]);
+      const second = completeTurn("run-second", outcome);
+      expect(terminalRunIds()).toEqual(["run-first", "run-second"]);
+      store = createWorkerInferenceStore({
+        database,
+        now: () => nowMs,
+        retention: { maxAgeMs: 10_000, maxRows: 10, maxBytes: maxBytes - 1 },
+      });
+      expect(store.begin(second)).toEqual({ kind: "replay", outcome });
+      expect(terminalRunIds()).toEqual(["run-second"]);
+    },
+  );
+
+  it("prunes retention without hydrating cached terminal payloads", () => {
+    const outcome = { ...PROVIDER_ERROR, message: "🦞".repeat(128) };
+    completeTurn("run-first", outcome);
+    completeTurn("run-second", outcome);
+    const counter = trackSqliteStatementExecutions(database.db, ["inference"], (query) =>
+      query.includes("worker_inference_turns") ? "inference" : null,
+    );
+    try {
+      expect(store.begin({ ...BASE_INPUT, runId: "run-next" })).toEqual({ kind: "claimed" });
+      expect(counter.rowCounts.inference).toBeGreaterThan(0);
+      expect(counter.textBytes.inference).toBeLessThan(1024);
+    } finally {
+      counter.restore();
+    }
+    expect(terminalRunIds()).toEqual(["run-first", "run-second"]);
   });
 
   it("preserves the active identity while pruning after completion", () => {

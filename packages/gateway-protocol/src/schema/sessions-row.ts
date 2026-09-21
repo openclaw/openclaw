@@ -136,6 +136,8 @@ export const SessionRowSchema = Type.Object(
     updatedAt: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
     /** Gateway sampling time, retained when a read reuses a cached projection. */
     snapshotAt: Type.Optional(Type.Number()),
+    /** Personal list preference for the authenticated viewer; not session visibility. */
+    hiddenFromInvolvingMe: Type.Optional(Type.Boolean()),
     archived: Type.Optional(Type.Boolean()),
     archivedAt: Type.Optional(Type.Number()),
     archivedBy: Type.Optional(SessionCreatedActorSchema),
@@ -190,6 +192,10 @@ export const SessionRowSchema = Type.Object(
     /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
     workspaceDir: Type.Optional(Type.String()),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
+    /** Authorized per-chat containment opt-out; omission follows configured sandbox policy. */
+    sandboxMode: Type.Optional(Type.Literal("off")),
+    /** Administrator consent to the exact external runtime's own permissions for this incarnation. */
+    nativeRuntimeConsent: Type.Optional(NonEmptyString),
     permissionModePending: Type.Optional(Type.Boolean()),
     sessionRoot: Type.Optional(Type.String()),
     createdVia: Type.Optional(

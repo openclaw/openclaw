@@ -102,7 +102,17 @@ combined with a legacy `default: true` marker.
 For root-file writes, changing `session.store` clears a copied
 `agents.defaults.sessionStore.agentId` because that owner belongs to the previous
 store. To assign the destination store's owner, set that owner path explicitly in
-the same batch.
+the same batch. Unrelated writes preserve the owner, including when `session.store`
+is unset and per-agent default stores apply. A committed write that clears the
+owner prints a warning naming the key and the store change.
+
+If an older version already removed the owner, Doctor checks the retained config
+backups and offers to restore the most recent owner with the same authored
+`session.store` value. Restoration
+requires interactive confirmation because the removal might have been intentional;
+unattended Doctor runs show the recovery command instead. If no usable backup
+remains, the legacy-session finding names `agents.defaults.sessionStore.agentId`
+so you can assign the owner explicitly.
 
 ### `config get`
 

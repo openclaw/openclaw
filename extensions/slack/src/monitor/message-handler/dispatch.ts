@@ -1,4 +1,3 @@
-// Slack plugin module implements dispatch behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   dispatchChannelInboundTurn,
@@ -10,7 +9,6 @@ import {
 import {
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
-  isChannelProgressDraftWorkToolName,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -495,7 +493,6 @@ async function dispatchSlackMessageWithSetup(
         },
       },
       record: prepared.turn.record as InboundReplyRecordOptions,
-      history: prepared.turn.history,
       botLoopProtection: resolveSlackBotLoopProtection(prepared),
       replyOptions: {
         groupThreadReplyFormatter: formatSlackGroupThreadReply,
@@ -560,53 +557,19 @@ async function dispatchSlackMessageWithSetup(
           if (statusReactionsEnabled) {
             await statusReactions.setTool(payload.name);
           }
-          if (payload.phase === "start") {
-            progress.progressWorkCounter.noteToolCall(payload.name);
-          }
-          // Work still opens the delayed preview gate, but must not accumulate
-          // file statistics or replace the preamble with intermediate failures.
-          // Approvals and terminal replies retain their separate delivery paths.
-          if (progress.preambleOnlyProgress) {
-            return isChannelProgressDraftWorkToolName(payload.name)
-              ? await progress.progressDraft.noteActivity()
-              : false;
-          }
           return await progress.progressDraft.pushToolEvent(payload);
         },
         onItemEvent: async (payload) => {
-          // Slack freezes notification text on the first post. Keep incomplete
-          // preambles out of the compositor until a message actually exists;
-          // later edits may stream. A timer or tool event must not flush "I".
-          if (
-            payload.kind === "preamble" &&
-            (payload.phase === "start" || payload.phase === "update") &&
-            !draftStream?.messageId() &&
-            !delivery.streamSession?.delivered
-          ) {
+          if (payload.hideFromChannelProgress || payload.suppressChannelProgress) {
+            return progress.preambleOnlyProgress
+              ? false
+              : progress.progressDraft.pushItemEvent(payload);
+          }
+          if (payload.kind === "preamble" && progress.shouldYieldDraftProgress()) {
             return false;
           }
-          if (progress.isProgressMode && payload.kind === "preamble") {
-            if (progress.shouldYieldDraftProgress()) {
-              return false;
-            }
-            const headlineVisible = await progress.progressDraft.pushPreambleHeadline(
-              payload.progressText,
-              {
-                itemId: payload.itemId,
-              },
-            );
-            if (progress.commentaryProgressEnabled) {
-              const accepted = await progress.progressDraft.pushCommentaryProgress(
-                payload.progressText,
-                {
-                  itemId: payload.itemId,
-                },
-              );
-              return accepted || headlineVisible;
-            }
-            return headlineVisible;
-          }
-          return progress.preambleOnlyProgress
+          progress.progressWorkCounter.noteItem(payload);
+          return progress.preambleOnlyProgress && payload.kind !== "preamble"
             ? await progress.progressDraft.noteActivity()
             : await progress.progressDraft.pushItemEvent(payload);
         },
@@ -621,14 +584,6 @@ async function dispatchSlackMessageWithSetup(
           );
         },
         onApprovalEvent: (payload) => progress.progressDraft.pushApprovalEvent(payload),
-        onCommandOutput: async (payload) =>
-          progress.preambleOnlyProgress
-            ? await progress.progressDraft.noteActivity()
-            : await progress.progressDraft.pushCommandOutputEvent(payload),
-        onPatchSummary: async (payload) =>
-          progress.preambleOnlyProgress
-            ? await progress.progressDraft.noteActivity()
-            : await progress.progressDraft.pushPatchEvent(payload),
       },
     });
     if (turnResult.dispatched) {

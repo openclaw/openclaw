@@ -1,3 +1,4 @@
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 
@@ -28,4 +29,5 @@ export function onUserProfilesChanged(listener: () => void): () => void {
 export function emitUserProfilesChanged(): void {
   changes.version += 1;
   notifyListeners(changes.listeners, undefined);
+  sessionChanges.emit({ all: true, scope: "profiles" });
 }

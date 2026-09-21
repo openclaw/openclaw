@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { preparePublishedModelRuntimeChoice } from "../agents/model-runtime-choice.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
@@ -18,6 +19,22 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
+// Prepared runtime eligibility is covered by the native choice owner tests.
+vi.mock("../agents/model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<typeof preparePublishedModelRuntimeChoice>(
+    async ({ runtimeId, preferredRuntimeId }) => ({
+      kind: "ready",
+      runtimeId: runtimeId ?? preferredRuntimeId ?? "fixture-harness",
+      validate: () => undefined,
+    }),
+  ),
+}));
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+});
+
+// Register after the reset so stacked teardown drains fixture stores first.
 const { createSelectedGlobalSessionStore } = setupGatewaySessionsHandlerTestHarness();
 
 const mainModel = { id: "main-only", name: "Main Model", provider: "main-provider" };
@@ -29,10 +46,6 @@ function createAgentModelCatalogLoader() {
     return { entries, routeVariants: entries };
   });
 }
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
 
 const mainRef = "main-provider/main-only";
 const workRef = "work-provider/work-only";

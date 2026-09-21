@@ -6,14 +6,62 @@ import { directive } from "lit/directive.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import type { SessionProgressCardRefreshState } from "../lib/session-progress-cards.ts";
 import { icons } from "./icons.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { scrollState } from "./scroll-state.ts";
 import {
   composerDisclosure,
   type ComposerProgressRunLifecycle,
 } from "./session-progress-disclosure-controller.ts";
 
 type SessionProgressCardPlacement = "board" | "composer";
+
+const REFRESH_STATUS_LABEL_KEYS: Record<SessionProgressCardRefreshState, Parameters<typeof t>[0]> =
+  {
+    pending: "sessionProgressCard.refresh.pending",
+    failed: "sessionProgressCard.refresh.failed",
+    timeout: "sessionProgressCard.refresh.timeout",
+    updated: "sessionProgressCard.refresh.updated",
+  };
+
+export type SessionProgressCardRefreshAction = {
+  state?: SessionProgressCardRefreshState;
+  onRefresh: (card: ProgressCard) => void;
+};
+
+function renderRefresh(card: ProgressCard, action?: SessionProgressCardRefreshAction) {
+  if (!action) {
+    return nothing;
+  }
+  const pending = action.state === "pending";
+  const retry = action.state === "failed" || action.state === "timeout";
+  const label = t(
+    pending
+      ? "sessionProgressCard.refresh.pending"
+      : retry
+        ? "sessionProgressCard.refresh.retry"
+        : "sessionProgressCard.refresh.label",
+  );
+  return html`<button
+    class="session-progress-card__refresh"
+    type="button"
+    data-state=${action.state ?? "idle"}
+    aria-label=${label}
+    title=${retry && action.state ? t(REFRESH_STATUS_LABEL_KEYS[action.state]) : label}
+    aria-busy=${String(pending)}
+    ?disabled=${pending}
+    @click=${(event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!pending) {
+        action.onRefresh(card);
+      }
+    }}
+  >
+    ${pending ? icons.loader : action.state === "updated" ? icons.check : icons.refresh}
+  </button>`;
+}
 type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";
 
 const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
@@ -284,6 +332,7 @@ export function renderSessionProgressCard(
   hasActiveRun = true,
   collapseComposerByDefault = false,
   composerRunLifecycle?: ComposerProgressRunLifecycle,
+  refreshAction?: SessionProgressCardRefreshAction,
 ) {
   if (!card) {
     return nothing;
@@ -303,7 +352,10 @@ export function renderSessionProgressCard(
     validEndedAt !== undefined &&
     validEndedAt >= validStartedAt &&
     validUpdatedAt !== undefined &&
-    validUpdatedAt >= validStartedAt;
+    validUpdatedAt >= validStartedAt &&
+    validUpdatedAt <= validEndedAt;
+  // A refreshed snapshot written after a run ended belongs to the new status
+  // check, not that run’s old completion time or outcome.
   // A later run does not own durable progress last updated before it starts.
   // Queued runs can retain the previous run's timestamps, but do not own its progress.
   const hasCurrentRunActivity =
@@ -393,11 +445,7 @@ export function renderSessionProgressCard(
         composerRunLifecycle,
       )}
     >
-      <summary
-        class="session-progress-card__summary"
-        aria-label=${summaryLabel}
-        title=${t("sessionProgressCard.gestureHint")}
-      >
+      <summary class="session-progress-card__summary" aria-label=${summaryLabel}>
         <span
           class="session-progress-card__summary-indicator session-progress-card__current-marker${
             complete || effectiveSessionStatus === "done"
@@ -433,13 +481,31 @@ export function renderSessionProgressCard(
             >${dismiss}</span
           >
         </span>
-        <span
-          class="session-progress-card__summary-chevron session-progress-card__chevron"
-          aria-hidden="true"
-          >${icons.chevronDown}</span
-        >
+        <span class="session-progress-card__summary-controls">
+          ${renderRefresh(card, refreshAction)}
+          <span
+            class="session-progress-card__summary-chevron session-progress-card__chevron"
+            aria-hidden="true"
+            >${icons.chevronDown}</span
+          >
+        </span>
+        ${
+          refreshAction?.state
+            ? html`<span
+                class="session-progress-card__refresh-status"
+                data-state=${refreshAction.state}
+                role="status"
+                >${t(REFRESH_STATUS_LABEL_KEYS[refreshAction.state])}</span
+              >`
+            : nothing
+        }
       </summary>
-      <div class="session-progress-card__body" role="region" aria-label=${composerCountLabel}>
+      <div
+        class="session-progress-card__body"
+        role="region"
+        aria-label=${composerCountLabel}
+        ${scrollState()}
+      >
         ${renderProgressCardMarkdown(card.markdown)}
         ${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}
       </div>

@@ -1,4 +1,10 @@
 // Declaration paths are shared metadata; only the runner imports their build values.
+export const nativeSchtasksIntegrationEnabled =
+  process.platform === "win32" && process.env.CI_WINDOWS_SCHTASKS_INTEGRATION === "1";
+
+// The CLI loads this package-root supervisor by URL instead of bundling it.
+export const vitestWorkerRuntimeAssets = ["node-host-launcher.mjs"];
+
 export const runtimeProcessDeclarationEntries = {
   "extensions/memory-core/manager-cpu-entrypoints":
     "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
@@ -10,6 +16,11 @@ export const runtimeProcessDeclarationEntries = {
 };
 export const vitestWorkerDeclarationEntries = {
   ...runtimeProcessDeclarationEntries,
+  "extensions/discord/src/voice/audio-worker-entrypoints.test-support":
+    "extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts",
+  // Codex is package-owned and excluded from the root runtime bundle.
+  "extensions/codex/catalog-page-worker-entrypoint":
+    "extensions/codex/catalog-page-worker-entrypoint.ts",
   "extensions/memory-core/manager-publication-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts",
   "state/openclaw-agent-worker-store.runtime.test-support":
@@ -26,6 +37,12 @@ export const vitestWorkerDeclarationEntries = {
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
   "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
   "cli/cli-entrypoint.test-support": "src/cli/cli-entrypoint.test-support.ts",
+  ...(nativeSchtasksIntegrationEnabled
+    ? {
+        "daemon/schtasks-native-entrypoints.test-support":
+          "src/daemon/schtasks-native-entrypoints.test-support.ts",
+      }
+    : {}),
   "cli/update-cli/update-command-executor-native-runtime.test-support":
     "src/cli/update-cli/update-command-executor-native-runtime.test-support.ts",
   "commands/doctor-config-runtime.test-support":
@@ -36,15 +53,19 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts",
   "plugins/loader-sdk-bridge-artifacts.test-support":
     "src/plugins/loader-sdk-bridge-artifacts.test-support.ts",
+  "plugins/runtime-retention-entrypoint.test-support":
+    "src/plugins/runtime-retention-entrypoint.test-support.ts",
   "system-agent/setup-inference-groq-sdk.test-support":
     "src/system-agent/setup-inference-groq-sdk.test-support.ts",
+  "agents/auth-profiles/store-scope-cwd-runtime.test-support":
+    "src/agents/auth-profiles/store-scope-cwd-runtime.test-support.ts",
   "agents/code-mode-retention-entrypoint.test-support":
     "src/agents/code-mode-retention-entrypoint.test-support.ts",
   "agents/command/cli-compaction-runtime.test-support":
     "src/agents/command/cli-compaction-runtime.test-support.ts",
+  "agents/sessions/bash-output-spill-entrypoints.test-support":
+    "src/agents/sessions/bash-output-spill-entrypoints.test-support.ts",
   "cron/owner-hardening-runtime.test-support": "src/cron/owner-hardening-runtime.test-support.ts",
-  "gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support":
-    "src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts",
   "gateway/session-child-cache-retention-entrypoint.test-support":
     "src/gateway/session-child-cache-retention-entrypoint.test-support.ts",
   "gateway/session-title-retention.test-support":
@@ -52,6 +73,10 @@ export const vitestWorkerDeclarationEntries = {
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
   "skills/library/persistence-runtime.test-support":
     "src/skills/library/persistence-runtime.test-support.ts",
+  "snapshot/git-backup-command-runtime.test-support":
+    "src/snapshot/git-backup-command-runtime.test-support.ts",
+  "state/openclaw-database-verify-runtime.test-support":
+    "src/state/openclaw-database-verify-runtime.test-support.ts",
   "state/openclaw-state-lease-runtime.test-support":
     "src/state/openclaw-state-lease-runtime.test-support.ts",
   "state/openclaw-agent-db-module-identity-runtime.test-support":

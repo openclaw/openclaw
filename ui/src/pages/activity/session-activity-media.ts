@@ -8,7 +8,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts"
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
-import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";

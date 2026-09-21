@@ -194,35 +194,62 @@ describe("scripts/test-extension.mts", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("splits the iMessage batch between persistence and channel owners without double counting", () => {
-    const batch = resolveExtensionBatchPlan({ extensionIds: ["imessage"] });
-    const files = listExtensionTestFilesForRoots(["extensions/imessage"]);
-    const workerFiles = databaseWorkerExtensionTestFiles.filter((file) =>
-      file.startsWith("extensions/imessage/"),
-    );
-    expect(batch.extensionIds).toEqual(["imessage"]);
-    expect(batch.testFileCount).toBe(files.length);
-    expect(batch.planGroups).toEqual([
-      expect.objectContaining({
-        config: "test/vitest/vitest.extension-database-workers.config.ts",
-        roots: workerFiles,
-        extensionIds: ["imessage"],
-        testFileCount: workerFiles.length,
-      }),
-      expect.objectContaining({
-        config: "test/vitest/vitest.extension-imessage.config.ts",
-        roots: ["extensions/imessage"],
-        extensionIds: ["imessage"],
-        testFileCount: files.length - workerFiles.length,
-      }),
-    ]);
-    expect(listExtensionTestFilesForRoots(batch.planGroups[0]!.roots)).toEqual(
-      workerFiles.toSorted(),
-    );
-    const shards = createExtensionTestShards({ extensionIds: ["imessage"], shardCount: 2 });
-    expect(shards).toHaveLength(1);
-    expect(shards[0]?.planGroups).toEqual(batch.planGroups);
-  });
+  it.each([
+    {
+      extensionId: "imessage",
+      workerFiles: databaseWorkerExtensionTestFiles.filter((file) =>
+        file.startsWith("extensions/imessage/"),
+      ),
+    },
+    {
+      extensionId: "feishu",
+      workerFiles: [
+        "bot.broadcast.test.ts",
+        "bot.test.ts",
+        "dedup.test.ts",
+        "feishu-ingress.test.ts",
+        "monitor.bot-menu.test.ts",
+        "monitor.dedupe-lifecycle.test.ts",
+        "monitor.helpers.test.ts",
+        "monitor.lifecycle.test.ts",
+        "monitor.reaction.test.ts",
+        "monitor.startup.test.ts",
+        "monitor.webhook-e2e.test.ts",
+        "monitor.webhook-security.test.ts",
+        "outbound-delivery.test.ts",
+        "outbound.send-authority.test.ts",
+      ].map((file) => `extensions/feishu/src/${file}`),
+    },
+  ])(
+    "splits the $extensionId batch between persistence and channel owners without double counting",
+    ({ extensionId, workerFiles }) => {
+      const root = `extensions/${extensionId}`;
+      const batch = resolveExtensionBatchPlan({ extensionIds: [extensionId] });
+      const files = listExtensionTestFilesForRoots([root]);
+      expect(batch.extensionIds).toEqual([extensionId]);
+      expect(batch.testFileCount).toBe(files.length);
+      expect(batch.planGroups).toEqual([
+        expect.objectContaining({
+          config: "test/vitest/vitest.extension-database-workers.config.ts",
+          roots: workerFiles,
+          extensionIds: [extensionId],
+          testFileCount: workerFiles.length,
+        }),
+        expect.objectContaining({
+          config: `test/vitest/vitest.extension-${extensionId}.config.ts`,
+          roots: [root],
+          extensionIds: [extensionId],
+          testFileCount: files.length - workerFiles.length,
+        }),
+      ]);
+      expect(listExtensionTestFilesForRoots(batch.planGroups[0]!.roots)).toEqual(
+        workerFiles.toSorted(),
+      );
+      const shards = createExtensionTestShards({ extensionIds: [extensionId], shardCount: 2 });
+      expect(shards).toHaveLength(1);
+      expect(shards[0]?.planGroups).toEqual(batch.planGroups);
+    },
+  );
 
   it.each([
     {
@@ -535,6 +562,9 @@ describe("scripts/test-extension.mts", () => {
         config: "test/vitest/vitest.extension-database-workers.config.ts",
         extensionIds: [
           "acpx",
+          "browser",
+          "diffs",
+          "feishu",
           "matrix",
           "mattermost",
           "memory-core",
@@ -542,18 +572,26 @@ describe("scripts/test-extension.mts", () => {
           "qa-lab",
           "telegram",
           "voice-call",
+          "whatsapp",
           "zalo",
           "zalouser",
         ],
         roots: [
-          ...["matrix", "telegram", "mattermost", "voice-call", "zalo", "zalouser"].flatMap(
-            (extensionId) =>
-              databaseWorkerExtensionTestFiles.filter((file) =>
-                file.startsWith(`extensions/${extensionId}/`),
-              ),
+          ...[
+            "matrix",
+            "telegram",
+            "mattermost",
+            "voice-call",
+            "whatsapp",
+            "zalo",
+            "zalouser",
+          ].flatMap((extensionId) =>
+            databaseWorkerExtensionTestFiles.filter((file) =>
+              file.startsWith(`extensions/${extensionId}/`),
+            ),
           ),
           bundledPluginRoot("memory-core"),
-          ...["msteams", "acpx", "qa-lab"].flatMap((extensionId) =>
+          ...["msteams", "feishu", "acpx", "diffs", "browser", "qa-lab"].flatMap((extensionId) =>
             databaseWorkerExtensionTestFiles.filter((file) =>
               file.startsWith(`extensions/${extensionId}/`),
             ),
@@ -842,12 +880,13 @@ describe("scripts/test-extension.mts", () => {
   });
 
   it.each([
-    { enableMaglev: false, realHomeReplay: false },
-    { enableMaglev: true, realHomeReplay: false },
-    { enableMaglev: false, realHomeReplay: true },
+    { enableMaglev: false, realHomeReplay: false, pool: "forks" },
+    { enableMaglev: true, realHomeReplay: false, pool: "forks" },
+    { enableMaglev: false, realHomeReplay: true, pool: "forks" },
+    { enableMaglev: false, realHomeReplay: false, pool: "threads" },
   ])(
-    "runs installed Vitest without pnpm (Maglev: $enableMaglev, owner-authorized real home: $realHomeReplay)",
-    ({ enableMaglev, realHomeReplay }) => {
+    "runs installed Vitest without pnpm (pool: $pool, Maglev: $enableMaglev, owner-authorized real home: $realHomeReplay)",
+    ({ enableMaglev, realHomeReplay, pool }) => {
       const root = realpathSync(
         mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-native-")),
       );
@@ -865,12 +904,13 @@ describe("scripts/test-extension.mts", () => {
         config,
         `import assert from 'node:assert/strict';
 assert.equal(process.execArgv.includes('--no-maglev'), ${!enableMaglev}, 'batch Node defaults');
-export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
+assert.equal(process.execArgv.includes('--no-concurrent-sparkplug'), true, 'batch Sparkplug policy');
+export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:${JSON.stringify(pool)},execArgv:['--no-warnings'],globalSetup:[${JSON.stringify(path.join(process.cwd(), "test/vitest/vitest.node-policy.global-setup.ts"))}],maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
       );
       const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
       writeFileSync(
         path.join(root, "selected.test.mjs"),
-        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
+        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
       );
       for (const name of ["excluded", "unrelated"]) {
         writeFileSync(
@@ -915,6 +955,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
               SystemRoot: process.env.SystemRoot,
               COREPACK_ENABLE_NETWORK: "0",
               NODE_DISABLE_COMPILE_CACHE: "1",
+              NODE_OPTIONS: "--trace-warnings",
               CI: "1",
             },
           },
@@ -1132,9 +1173,14 @@ await new Promise(()=>{});export default {};`,
       databaseWorkerExtensionTestFiles.includes(`extensions/${file}`),
     ).length;
     expect(calls).toHaveLength(
-      Math.ceil(workerCount / 12) + Math.ceil((expectedFiles.length - workerCount) / 12),
+      Math.ceil(workerCount / 12) + Math.ceil((expectedFiles.length - workerCount) / 24),
     );
-    expect(calls.every((call) => call.targets.length <= 12)).toBe(true);
+    expect(calls.every((call) => call.targets.length <= 24)).toBe(true);
+    expect(
+      calls
+        .filter((call) => call.config === "test/vitest/vitest.extension-database-workers.config.ts")
+        .every((call) => call.targets.length <= 12),
+    ).toBe(true);
     expect(calls.flatMap((call) => call.targets).toSorted()).toEqual(expectedFiles.toSorted());
     expect(new Set(calls.flatMap((call) => call.targets)).size).toBe(expectedFiles.length);
     for (const call of calls) {

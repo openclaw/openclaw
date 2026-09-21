@@ -2,6 +2,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -14,15 +15,9 @@ import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 import {
   getSessionMemberKysely,
   hasSessionMemberInDatabase,
+  listSessionMembersInDatabase,
+  type SessionMember,
 } from "./session-sharing-store.kernel.js";
-
-type SessionMember = {
-  identityId: string;
-  addedBy: string;
-  addedAt: number;
-};
-
-const SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE = 400;
 
 function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabaseOptions {
   return toDatabaseOptions(resolveSqliteScope(scope));
@@ -33,66 +28,14 @@ function readSessionMembers<T>(
   fallback: T,
   operation: (database: Pick<OpenClawAgentDatabase, "db">) => T,
 ): T {
-  const result = withOpenClawAgentDatabaseReadOnly(operation, resolveDatabaseOptions(scope), {
-    throwOnMissingTable: true,
-  });
+  const result = withOpenClawAgentDatabaseReadOnly(operation, resolveDatabaseOptions(scope));
   return result.found ? result.value : fallback;
 }
 
 export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
-  return readSessionMembers(scope, [], (database) => {
-    const db = getSessionMemberKysely(database);
-    return executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_members")
-        .select(["identity_id", "added_by", "added_at"])
-        .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
-        .orderBy("identity_id"),
-    ).rows.map((row) => ({
-      identityId: row.identity_id,
-      addedBy: row.added_by,
-      addedAt: row.added_at,
-    }));
-  });
-}
-
-export function listSessionMembershipKeys(
-  scope: SessionAccessScope,
-  sessionKeys: readonly string[],
-  identityId: string,
-): Set<string> {
-  const normalizedIdentityId = identityId.trim();
-  const normalizedSessionKeys = [...new Set(sessionKeys.map((key) => key.trim()).filter(Boolean))];
-  if (!normalizedIdentityId || normalizedSessionKeys.length === 0) {
-    return new Set();
-  }
-  return readSessionMembers(scope, new Set<string>(), (database) => {
-    const db = getSessionMemberKysely(database);
-    const memberships = new Set<string>();
-    for (
-      let offset = 0;
-      offset < normalizedSessionKeys.length;
-      offset += SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE
-    ) {
-      const chunk = normalizedSessionKeys.slice(
-        offset,
-        offset + SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE,
-      );
-      const rows = executeSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("session_members")
-          .select("session_key")
-          .where("identity_id", "=", normalizedIdentityId)
-          .where("session_key", "in", chunk),
-      ).rows;
-      for (const row of rows) {
-        memberships.add(row.session_key);
-      }
-    }
-    return memberships;
-  });
+  return readSessionMembers(scope, [], (database) =>
+    listSessionMembersInDatabase(database, resolveSqliteScope(scope).sessionKey),
+  );
 }
 
 export function isSessionMember(scope: SessionAccessScope, identityId: string): boolean {
@@ -137,27 +80,28 @@ export function addSessionMember(
     throw new Error("session member identity and actor are required");
   }
   const options = resolveDatabaseOptions(scope);
+  const { agentId, sessionKey } = resolveSqliteScope(scope);
   const addedAt = params.addedAt ?? Date.now();
   const inserted = runOpenClawAgentWriteTransaction((database) => {
-    assertAuthorizedSessionInstance(
-      database,
-      resolveSqliteScope(scope).sessionKey,
-      params.expectedSessionId,
-    );
+    assertAuthorizedSessionInstance(database, sessionKey, params.expectedSessionId);
     const db = getSessionMemberKysely(database);
     const result = executeSqliteQuerySync(
       database.db,
       db
         .insertInto("session_members")
         .values({
-          session_key: resolveSqliteScope(scope).sessionKey,
+          session_key: sessionKey,
           identity_id: identityId,
           added_by: addedBy,
           added_at: addedAt,
         })
         .onConflict((conflict) => conflict.columns(["session_key", "identity_id"]).doNothing()),
     );
-    return (result.numAffectedRows ?? 0n) > 0n;
+    const changed = (result.numAffectedRows ?? 0n) > 0n;
+    if (changed) {
+      sessionChanges.emit({ agentId, storePath: database.path, sessionKey }, database.db);
+    }
+    return changed;
   }, options);
   return { member: { identityId, addedBy, addedAt }, inserted };
 }
@@ -173,19 +117,16 @@ export function removeSessionMember(
     return null;
   }
   const options = resolveDatabaseOptions(scope);
+  const { agentId, sessionKey } = resolveSqliteScope(scope);
   return runOpenClawAgentWriteTransaction((database) => {
-    assertAuthorizedSessionInstance(
-      database,
-      resolveSqliteScope(scope).sessionKey,
-      expectedSessionId,
-    );
+    assertAuthorizedSessionInstance(database, sessionKey, expectedSessionId);
     const db = getSessionMemberKysely(database);
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
       db
         .selectFrom("session_members")
         .select(["identity_id", "added_by", "added_at"])
-        .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
+        .where("session_key", "=", sessionKey)
         .where("identity_id", "=", normalizedIdentityId),
     );
     if (
@@ -198,9 +139,10 @@ export function removeSessionMember(
       database.db,
       db
         .deleteFrom("session_members")
-        .where("session_key", "=", resolveSqliteScope(scope).sessionKey)
+        .where("session_key", "=", sessionKey)
         .where("identity_id", "=", normalizedIdentityId),
     );
+    sessionChanges.emit({ agentId, storePath: database.path, sessionKey }, database.db);
     return { identityId: row.identity_id, addedBy: row.added_by, addedAt: row.added_at };
   }, options);
 }

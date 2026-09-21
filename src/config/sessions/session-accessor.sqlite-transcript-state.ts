@@ -7,6 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
@@ -25,37 +26,58 @@ import {
   resolveDeliveryProvenCanonicalSessionKey,
 } from "./store-entry.js";
 
-export type SessionTranscriptContextVersion = {
-  generation: string | null;
-  rawSeq: number | null;
-  updatedAt: number | null;
-};
+function createTranscriptContextVersionQuery(database: Pick<OpenClawAgentDatabase, "db">) {
+  const db = getSessionKysely(database.db);
+  return prepareSqliteQueryTakeFirstSync<string, SessionTranscriptContextVersion>(
+    database.db,
+    (parameter) =>
+      db
+        .selectFrom("transcript_events")
+        .select((eb) => [
+          eb.fn.max<number | null>("seq").as("rawSeq"),
+          eb
+            .selectFrom("transcript_rewrite_watermarks")
+            .select("generation")
+            .where(
+              "session_id",
+              "=",
+              parameter((sessionId) => sessionId),
+            )
+            .as("generation"),
+          eb
+            .selectFrom("session_windows")
+            .select("transcript_updated_at")
+            .where(
+              "session_id",
+              "=",
+              parameter((sessionId) => sessionId),
+            )
+            .as("updatedAt"),
+        ])
+        .where(
+          "session_id",
+          "=",
+          parameter((sessionId) => sessionId),
+        ),
+  );
+}
+
+const transcriptContextVersionQueries = new WeakMap<
+  OpenClawAgentDatabase["db"],
+  ReturnType<typeof createTranscriptContextVersionQuery>
+>();
 
 export function readTranscriptContextVersionInTransaction(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ) {
-  const db = getSessionKysely(database.db);
   const cold = readSessionColdTranscript(database.db, sessionId);
-  const version = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => [
-        eb.fn.max<number | null>("seq").as("rawSeq"),
-        eb
-          .selectFrom("transcript_rewrite_watermarks")
-          .select("generation")
-          .where("session_id", "=", sessionId)
-          .as("generation"),
-        eb
-          .selectFrom("session_windows")
-          .select("transcript_updated_at")
-          .where("session_id", "=", sessionId)
-          .as("updatedAt"),
-      ])
-      .where("session_id", "=", sessionId),
-  )!;
+  let query = transcriptContextVersionQueries.get(database.db);
+  if (!query) {
+    query = createTranscriptContextVersionQuery(database);
+    transcriptContextVersionQueries.set(database.db, query);
+  }
+  const version = query(sessionId)!;
   return cold ? { ...version, rawSeq: cold.last_seq } : version;
 }
 
@@ -219,7 +241,7 @@ export function ensureTranscriptSessionRoot(
           .set({ entry_valid: -1 })
           .where("session_key", "=", scope.sessionKey),
       );
-      publishSessionEntryCacheInvalidation(database);
+      publishSessionEntryCacheInvalidation(database, { sessionKey: scope.sessionKey });
     }
   }
   executeSqliteQuerySync(

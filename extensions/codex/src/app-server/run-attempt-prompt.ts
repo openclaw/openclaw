@@ -15,6 +15,7 @@ import {
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import {
+  CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
   fitCodexProjectedContextForTurnStart,
   CodexContextAttachmentError,
   isCodexDurableCustomMessage,
@@ -38,7 +39,10 @@ import {
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
 import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
-import { buildCodexParentLocalInstructions } from "./turn-params.js";
+import {
+  buildCodexHistoryProvenancePrefix,
+  buildCodexParentLocalInstructions,
+} from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 function isRestrictivePromptToolsAllow(toolsAllow: string[] | undefined): boolean {
@@ -82,6 +86,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
+  const nativeHistoryProvenancePrefix =
+    params.trigger === "user" ? buildCodexHistoryProvenancePrefix(params) : undefined;
   const forkedSession =
     !mutable.startupBinding?.threadId && params.sessionTarget
       ? getSessionEntry({
@@ -413,6 +419,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         : undefined;
     const fitted = fitCodexProjectedContextForTurnStart({
       promptText: turnPromptText,
+      maxChars:
+        CODEX_TURN_START_TEXT_INPUT_MAX_CHARS - (nativeHistoryProvenancePrefix?.length ?? 0),
       contextRange: projectedRanges?.contextRange,
       requestRange: projectedRanges?.requestRange,
       preservedRange,
@@ -566,9 +574,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       binding,
       bindingStore,
       identity: bindingIdentity,
-      sessionFile: params.sessionFile,
       agentDir,
-      codexHome: appServer.start.env?.CODEX_HOME,
+      codexHome: appServer.start.codexHome ?? appServer.start.env?.CODEX_HOME,
       config: params.config,
       contextEngineActive: Boolean(activeContextEngine),
       expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,
@@ -635,6 +642,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       return turnContextImageGroups;
     },
     codexModelInputHistoryMessages,
+    nativeHistoryProvenancePrefix,
     turnState,
     refreshWorkspaceReferences: (include: boolean) => {
       turnState.codexTurnPromptText = decorateCodexTurnPromptText(turnState.promptBuild, include);

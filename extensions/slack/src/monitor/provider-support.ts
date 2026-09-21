@@ -363,7 +363,20 @@ export function createSlackBoltApp(params: {
     | undefined;
   if (params.slackMode === "socket") {
     const socketReceiver = new params.interop.SocketModeReceiver(socketModeReceiverOptions);
-    installSlackSocketModeEnvelopeGuard(socketReceiver, socketModeLogger);
+    const socketClient = socketReceiver.client;
+    // Slack's declarations hide the private acknowledgement sender's signature.
+    // Validate and bind the SDK method before constructing the receive guard.
+    const send: unknown = Reflect.get(socketClient, "send");
+    if (typeof send !== "function") {
+      throw new Error("Slack Socket Mode client requires the SDK acknowledgement sender.");
+    }
+    installSlackSocketModeEnvelopeGuard(
+      socketClient,
+      async (envelopeId) => {
+        await send.call(socketClient, envelopeId);
+      },
+      socketModeLogger,
+    );
     installSlackNativeReconnectFailureObserver(socketReceiver);
     receiver = socketReceiver;
   } else if (params.slackMode === "http") {

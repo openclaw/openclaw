@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
+import { assertNoSymlinkParentsSync } from "../infra/fs-safe-advanced.js";
 import * as replaceFile from "../infra/replace-file.js";
 import { VERSION } from "../version.js";
 import {
@@ -419,24 +420,24 @@ export function isRegularFileWithoutFollowingSymlinks(filePath: string): boolean
   }
 }
 
-export function hasSymbolicLinkInDirectoryPath(directoryPath: string): boolean {
+export function hasSymbolicLinkInDirectoryPath(
+  directoryPath: string,
+  allowRootChildSymlink = false,
+): boolean {
   const resolvedPath = path.resolve(directoryPath);
   const root = path.parse(resolvedPath).root;
-  let currentPath = root;
-  for (const segment of path.relative(root, resolvedPath).split(path.sep).filter(Boolean)) {
-    currentPath = path.join(currentPath, segment);
-    try {
-      if (fs.lstatSync(currentPath).isSymbolicLink()) {
-        return true;
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      return true;
-    }
+  // Node can drop the trailing separator from an exact Windows extended drive root.
+  const rootDir = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  try {
+    assertNoSymlinkParentsSync({
+      rootDir,
+      targetPath: resolvedPath === root ? rootDir : resolvedPath,
+      allowRootChildSymlink,
+    });
+    return false;
+  } catch {
+    return true;
   }
-  return false;
 }
 
 export function filterRestoreManifestTargets(
@@ -571,27 +572,10 @@ function hasUnsupportedV1DirectorySymlink(manifest: SessionSqliteMigrationManife
       path.dirname(move.sourcePath),
     ]),
   ]);
-  return directoryPaths.some((directoryPath) => {
-    const resolvedPath = path.resolve(directoryPath);
-    const root = path.parse(resolvedPath).root;
-    let currentPath = root;
-    for (const segment of path.relative(root, resolvedPath).split(path.sep).filter(Boolean)) {
-      currentPath = path.join(currentPath, segment);
-      try {
-        const stat = fs.lstatSync(currentPath);
-        // Version 1 predates canonical paths. Only filesystem-root aliases such as
-        // macOS /var and /tmp are safe to normalize without trusting manifest data.
-        if (stat.isSymbolicLink() && path.dirname(currentPath) !== root) {
-          return true;
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          return true;
-        }
-      }
-    }
-    return false;
-  });
+  // Version 1 predates canonical paths; only filesystem-root aliases may normalize.
+  return directoryPaths.some((directoryPath) =>
+    hasSymbolicLinkInDirectoryPath(directoryPath, true),
+  );
 }
 
 export function canonicalMigrationFilePath(filePath: string): string {

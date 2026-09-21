@@ -13,6 +13,7 @@ type NodeWorkerDesktopStreamInput = {
   attachPath: string;
   port: number;
   passwordFilePath?: string;
+  username?: string;
 };
 
 function parseJson(raw?: string | null): unknown {
@@ -48,7 +49,7 @@ export function parseNodeWorkerDesktopStreamInput(
   const value = parseJson(raw);
   if (
     !isRecord(value) ||
-    !hasExactOwnKeys(value, ["ticket", "attachPath", "port"], ["passwordFilePath"])
+    !hasExactOwnKeys(value, ["ticket", "attachPath", "port"], ["passwordFilePath", "username"])
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker desktop stream request");
   }
@@ -66,11 +67,25 @@ export function parseNodeWorkerDesktopStreamInput(
     value.passwordFilePath === undefined
       ? undefined
       : requireAbsolutePath(value.passwordFilePath, "passwordFilePath");
+  const username = value.username;
+  if (
+    username !== undefined &&
+    (typeof username !== "string" ||
+      !username.trim() ||
+      username.includes("\0") ||
+      Buffer.byteLength(username, "utf8") > 63 ||
+      !passwordFilePath)
+  ) {
+    throw new Error(
+      "INVALID_REQUEST: desktop username requires a bounded account name and password file",
+    );
+  }
   return {
     ticket,
     attachPath,
     port: value.port,
     ...(passwordFilePath ? { passwordFilePath } : {}),
+    ...(username === undefined ? {} : { username }),
   };
 }
 

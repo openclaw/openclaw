@@ -165,9 +165,10 @@ describe("Code Mode subscribed host denial", () => {
         );
         expect(harness.spawn).not.toHaveBeenCalled();
         expect(harness.remote).not.toHaveBeenCalled();
+        // One nested exec owns one item; command output does not create a second lifecycle.
         expect(harness.subscription.getItemLifecycle()).toMatchObject({
-          startedCount: 2,
-          completedCount: 2,
+          startedCount: 1,
+          completedCount: 1,
           activeCount: 0,
         });
       } finally {

@@ -1,71 +1,19 @@
 // Gateway request scope tracks request-local plugin runtime context across async work.
-import type {
-  GatewayContextResolver,
-  GatewayRequestContext,
-  GatewayRequestOptions,
-} from "../../gateway/server-methods/types.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   getPluginExecutionFrame,
   pluginInstanceInvocation,
   runWithPluginExecutionFrame,
 } from "../plugin-instance-invocation.js";
-import type {
-  PluginExecutionFrame,
-  PluginInstanceInvocation,
-} from "../plugin-instance-invocation.types.js";
+import type { PluginInstanceInvocation } from "../plugin-instance-invocation.types.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 import type { PluginRegistry } from "../registry-types.js";
 import { getPluginRegistryState } from "../runtime-state.js";
-import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
+import { getPluginRuntimeExecutionFrame, PluginRuntimeExecutionFrame } from "./execution-frame.js";
+import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.types.js";
 import { getPluginRuntimeLoadContextState } from "./load-context-state.js";
-
-type PluginRuntimeGatewayRequestScope = {
-  /** Recheck the admitted HTTP device grant before effects; rejection sends HTTP 401 and throws. */
-  revalidate?: () => Promise<void>;
-  /** Exact placement owner captured before the local harness begins. */
-  assertNodeExecutionCurrent?: (request: {
-    runId: string;
-    agentId: string;
-    nodeId: string;
-    workspace: OpenClawPluginNodeWorkspace;
-  }) => void;
-  /** In-process admitted owner only; never projected into RPC parameters. */
-  invokeWithSessionNodeAuthority?: <T>(
-    request: {
-      pluginId: string;
-      command: string;
-      source: "session-full" | "human-approved";
-      nodeId: string;
-      workspace: OpenClawPluginNodeWorkspace;
-    },
-    invoke: (assertCurrent: () => void, signal: AbortSignal) => Promise<T>,
-  ) => Promise<T | undefined>;
-  /** Closure-bound admitted owner used to validate placement grant bindings. */
-  nodePlacementGrantAuthority?: {
-    agentId: string;
-    sessionKey: string;
-    runId: string;
-    assertCurrent: (request: {
-      pluginId: string;
-      command: string;
-      nodeId: string;
-      workspace: OpenClawPluginNodeWorkspace;
-    }) => void;
-  };
-  context?: GatewayRequestContext;
-  resolveGatewayContext?: GatewayContextResolver;
-  client?: GatewayRequestOptions["client"];
-  isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
-  pluginId?: string;
-  pluginSource?: string;
-  pluginOrigin?: PluginOrigin;
-  pluginTrustedOfficialInstall?: boolean;
-  gatewayMethodDispatchAllowed?: boolean;
-  pluginRegistry?: PluginRegistry;
-  declaredProviderOwners?: DeclaredProviderOwnerIndex;
-};
 
 type PluginRuntimePluginScope = {
   pluginId: string;
@@ -74,27 +22,8 @@ type PluginRuntimePluginScope = {
   pluginTrustedOfficialInstall?: boolean;
 };
 
-// Duplicate source/built modules need the same constructor for typed frame narrowing.
-const GatewayFrameConstructor = resolveGlobalSingleton(
-  Symbol.for("openclaw.pluginGatewayExecutionFrame"),
-  () =>
-    class GatewayFrame implements PluginExecutionFrame {
-      constructor(
-        readonly gatewayScope: PluginRuntimeGatewayRequestScope,
-        readonly invocation: PluginInstanceInvocation | undefined,
-      ) {}
-
-      withInvocation(invocation: PluginInstanceInvocation | undefined): GatewayFrame {
-        return invocation === this.invocation
-          ? this
-          : new GatewayFrame(this.gatewayScope, invocation);
-      }
-    },
-);
-
 function getPluginGatewayScope(): PluginRuntimeGatewayRequestScope | undefined {
-  const frame = getPluginExecutionFrame();
-  return frame instanceof GatewayFrameConstructor ? frame.gatewayScope : undefined;
+  return getPluginRuntimeExecutionFrame()?.gatewayScope;
 }
 
 function runWithPluginGatewayScope<T>(
@@ -103,12 +32,15 @@ function runWithPluginGatewayScope<T>(
   invocation = pluginInstanceInvocation.getStore(),
 ): T {
   const current = getPluginExecutionFrame();
+  const runtime = getPluginRuntimeExecutionFrame(current);
   return runWithPluginExecutionFrame(
-    current instanceof GatewayFrameConstructor &&
-      current.gatewayScope === gatewayScope &&
-      current.invocation === invocation
-      ? current
-      : new GatewayFrameConstructor(gatewayScope, invocation),
+    runtime?.gatewayScope === gatewayScope && runtime.invocation === invocation
+      ? runtime
+      : new PluginRuntimeExecutionFrame(
+          { ...current, invocation },
+          gatewayScope,
+          runtime?.generationRegistry,
+        ),
     run,
   );
 }
@@ -271,7 +203,7 @@ export function withPluginRuntimeRegistryScope<T>(
   );
 }
 
-function createRegistryScope(
+export function createRegistryScope(
   registry: PluginRegistry,
   current: PluginRuntimeGatewayRequestScope | undefined,
   declaredProviderOwners?: DeclaredProviderOwnerIndex,

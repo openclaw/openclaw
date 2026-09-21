@@ -17,6 +17,7 @@ import {
   withSqliteSessionImportStage,
   type SqliteSessionImportStage,
 } from "./session-accessor.sqlite-import-stage.js";
+import { invalidateSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   formatSqliteSessionReferenceForScope,
   getSessionKysely,
@@ -135,6 +136,7 @@ function importSqliteSessionRowsInTransaction(
   }
   // Historical generations append under their existing node without changing its current pointer.
   if (!preserveHistoricalNode) {
+    invalidateSessionEntryMaintenanceAgeFact(database.db);
     writeSessionEntry(database, resolved.sessionKey, importedEntry, {
       allowStoredAliases: true,
       previousEntry: currentEntry ?? null,
@@ -168,7 +170,7 @@ function importSqliteSessionRowsInTransaction(
     );
     // Doctor imports run outside gateway requests and must finish with a complete projection.
     reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
-    publishSessionEntryCacheInvalidation(database);
+    publishSessionEntryCacheInvalidation(database, { sessionKey: resolved.sessionKey });
   }
   if (params.transcriptMtimeMs !== undefined) {
     advanceTranscriptMutationAtInTransaction(

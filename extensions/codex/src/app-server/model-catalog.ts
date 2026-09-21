@@ -10,7 +10,7 @@ import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import { listAllCodexAppServerModels, type CodexAppServerModel } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
-import { isJsonObject, type CodexGetAccountResponse } from "./protocol.js";
+import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { captureSharedCodexAppServerCatalogLifetime } from "./shared-client.js";
 
@@ -150,13 +150,12 @@ export function createCodexAppServerModelCatalog(runtime: string) {
             method: "account/read",
             requestParams: { refreshToken: false },
           });
-          const observedType = isJsonObject(account.account) ? account.account.type : undefined;
-          const accountType =
-            account.requiresOpenaiAuth === true
-              ? observedType === "apiKey" || observedType === "chatgpt"
-                ? observedType
-                : undefined
-              : undefined;
+          const observedType = account.account?.type;
+          const accountType = account.requiresOpenaiAuth
+            ? observedType === "apiKey" || observedType === "chatgpt"
+              ? observedType
+              : undefined
+            : undefined;
           return { models, isCurrent, accountType } as const;
         },
       );

@@ -1,3 +1,4 @@
+import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   ChatSendIntent,
   QueueMode,
@@ -18,6 +19,7 @@ export async function requestChatSend(
   state: ChatState,
   params: {
     message: string;
+    workContext?: ChatWorkContext;
     mentions?: readonly HumanMention[];
     attachments?: ChatAttachment[];
     runId: string;
@@ -43,6 +45,7 @@ export async function requestChatSend(
     ...(sessionId ? { sessionId } : {}),
     ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
+    ...(params.workContext ? { workContext: params.workContext } : {}),
     ...(params.mentions?.length ? { mentions: params.mentions } : {}),
     ...(params.intent ? { intent: params.intent } : {}),
     deliver: false,

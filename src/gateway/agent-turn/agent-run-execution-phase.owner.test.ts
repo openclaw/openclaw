@@ -21,6 +21,7 @@ vi.mock("./agent-run-dispatch.js", () => ({
 function createExecution(options: { aborted?: boolean; assertContextCurrent?: () => void } = {}) {
   const abortCleanup = vi.fn();
   const gatewayRelease = vi.fn();
+  const callerRelease = vi.fn();
   const { promise: runtimeReleased, resolve: resolveRuntimeReleased } = createDeferred();
   const runtimeRelease = vi.fn(async () => resolveRuntimeReleased());
   const controller = new AbortController();
@@ -30,11 +31,13 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
   return {
     abortCleanup,
     gatewayRelease,
+    callerRelease,
     runtimeRelease,
     runtimeReleased,
     params: {
       assertContextCurrent: options.assertContextCurrent,
       prepared: {
+        releaseCallerAuthority: callerRelease,
         activeGatewayWorkAdmission: {
           release: gatewayRelease,
           run: async (run: () => Promise<void>) => await run(),
@@ -253,10 +256,12 @@ describe("startAgentRunExecution Gateway ownership", () => {
 
     dispatch?.cleanupAbortController();
     dispatch?.cleanupAbortController();
+    expect(execution.callerRelease).not.toHaveBeenCalled();
     resolveCleanupObserved();
     await expect(borrowedAfterCleanup).resolves.toBeUndefined();
     await completion;
     expect(execution.runtimeRelease).toHaveBeenCalledOnce();
+    expect(execution.callerRelease).toHaveBeenCalledOnce();
   });
 
   it("releases the admitted runtime once when aborted before dispatch", async () => {
@@ -267,6 +272,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     expect(execution.abortCleanup).toHaveBeenCalledOnce();
     expect(execution.gatewayRelease).toHaveBeenCalledOnce();
     expect(execution.runtimeRelease).toHaveBeenCalledOnce();
+    expect(execution.callerRelease).toHaveBeenCalledOnce();
   });
 
   it("joins asynchronous runtime disposal before execution finishes", async () => {
@@ -276,10 +282,12 @@ describe("startAgentRunExecution Gateway ownership", () => {
     const finished = vi.fn();
     const completion = startAgentRunExecution(execution.params).then(finished);
     await vi.waitFor(() => expect(execution.runtimeRelease).toHaveBeenCalledOnce());
+    expect(execution.callerRelease).not.toHaveBeenCalled();
     expect(finished).not.toHaveBeenCalled();
     finishDisposal();
     await completion;
     expect(finished).toHaveBeenCalledOnce();
+    expect(execution.callerRelease).toHaveBeenCalledOnce();
   });
 
   it("releases the admitted runtime once when its owner retires before dispatch", async () => {

@@ -211,6 +211,45 @@ describe("official plugin read-only authority", () => {
     expect(fixture.handleAction).not.toHaveBeenCalled();
   });
 
+  it("admits a dashboard read without promoting its origin or replacing native context", async () => {
+    const fixture = registerReader();
+    const assertDashboardReadCurrent = vi.fn();
+    const context = {
+      ...fixture.context,
+      requesterAccountId: undefined,
+      toolContext: undefined,
+      assertDirectAdapterHandoff: vi.fn(),
+    };
+    expect(() => prepareExternalMessageActionTargetForResolution(context)).toThrow(
+      "requires current provider and account context",
+    );
+    const authorized = {
+      ...context,
+      messageActionAuthorization: { assertDashboardReadCurrent },
+    };
+    expect(prepareExternalMessageActionTargetForResolution(authorized).params).toBe(context.params);
+    await expect(dispatchChannelMessageAction(authorized)).resolves.toBe(receipt);
+    expect(assertDashboardReadCurrent).toHaveBeenCalled();
+    expect(fixture.handleAction.mock.calls[0]?.[0].conversationReadOrigin).toBe("delegated");
+    expect(fixture.handleAction.mock.calls[0]?.[0]).not.toHaveProperty(
+      "messageActionAuthorization",
+    );
+    await expect(
+      dispatchChannelMessageAction({
+        ...authorized,
+        requesterAccountId: "another-account",
+        toolContext: fixture.context.toolContext,
+      }),
+    ).rejects.toThrow("requires current provider and account context");
+    assertDashboardReadCurrent.mockImplementation(() => {
+      throw new Error("dashboard admission closed");
+    });
+    await expect(dispatchChannelMessageAction(authorized)).rejects.toThrow(
+      "dashboard admission closed",
+    );
+    expect(fixture.handleAction).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { trusted: false },
     { fenced: false },
@@ -228,6 +267,14 @@ describe("official plugin read-only authority", () => {
     );
     expect(fixture.handleAction).not.toHaveBeenCalled();
     // Existing exact-current and direct-operator behavior is unchanged.
+    await expect(
+      dispatchChannelMessageAction({
+        ...fixture.context,
+        requesterAccountId: undefined,
+        toolContext: undefined,
+        messageActionAuthorization: { assertDashboardReadCurrent: vi.fn() },
+      }),
+    ).rejects.toThrow("exact current conversation");
     expect(
       await dispatchChannelMessageAction({
         ...fixture.context,

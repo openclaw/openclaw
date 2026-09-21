@@ -61,6 +61,8 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
       } finally {
         read.release();
       }
+      expect(read.isCurrent()).toBe(false);
+      await closeOpenClawAgentDatabaseByPathAsync(read.readSource!.path);
       expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
   },

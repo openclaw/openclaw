@@ -195,21 +195,30 @@ export async function finalizeTelegramOutbound(params: {
   const projection = params.promptContextProjectionPlan?.cursor.take(
     params.promptContextProjectionPlan.finalPart,
   );
-  const recorded = await recordOutboundMessageForPromptContext({
-    cfg,
-    ownerAgentId,
-    account,
-    botUserId: params.botUserId,
-    chatId: params.prepared.chatId,
-    message: params.result,
-    messageId,
-    text: params.text,
-    messageThreadId: params.messageThreadId ?? params.prepared.threadSpec?.id,
-    successfulSendThread: params.prepared.threadSpec,
-    promptContextProjection: projection,
-  });
-  if (projection && !recorded) {
+  try {
+    const recorded = await recordOutboundMessageForPromptContext({
+      cfg,
+      ownerAgentId,
+      account,
+      botUserId: params.botUserId,
+      chatId: params.prepared.chatId,
+      message: params.result,
+      messageId,
+      text: params.text,
+      messageThreadId: params.messageThreadId ?? params.prepared.threadSpec?.id,
+      successfulSendThread: params.prepared.threadSpec,
+      promptContextProjection: projection,
+    });
+    if (projection && !recorded) {
+      params.promptContextProjectionPlan?.cursor.invalidate();
+    }
+  } catch (error) {
     params.promptContextProjectionPlan?.cursor.invalidate();
+    throw createChannelPartialDeliveryError(error, {
+      messageIds: [resultIds.messageId],
+      ...(resultIds.receipt ? { receipt: resultIds.receipt } : {}),
+      visibleReplySent: true,
+    });
   }
   params.beforeActivity?.(resultIds);
   recordChannelActivity({

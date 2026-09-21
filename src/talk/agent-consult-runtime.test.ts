@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   emitTrustedDiagnosticEvent,
@@ -324,7 +325,11 @@ describe("realtime voice agent consult runtime", () => {
   });
 
   it("runs an embedded agent using the shared session and prompt contract", async () => {
-    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      setReplyPayloadMetadata({ text: "Earlier answer." }, { precedingInputAnswer: true }),
+      { text: "Speak this." },
+      { text: "Then this." },
+    ]);
 
     const result = await consultRealtimeVoiceAgent({
       cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
@@ -349,7 +354,7 @@ describe("realtime voice agent consult runtime", () => {
       timeoutMs: 10_000,
     });
 
-    expect(result).toEqual({ text: "Speak this." });
+    expect(result).toEqual({ text: "Speak this.\n\nThen this." });
     const voiceSession = sessionStore["voice:15550001234"];
     if (!voiceSession) {
       throw new Error("Expected voice consult session entry");
@@ -703,7 +708,10 @@ describe("realtime voice agent consult runtime", () => {
 
   it("returns a speakable fallback when the embedded agent has no visible text", async () => {
     const warn = vi.fn();
-    const { runtime } = createAgentRuntime([{ text: "hidden", isReasoning: true }]);
+    const { runtime } = createAgentRuntime([
+      setReplyPayloadMetadata({ text: "Earlier answer." }, { precedingInputAnswer: true }),
+      { text: "hidden", isReasoning: true },
+    ]);
 
     const result = await consultRealtimeVoiceAgent({
       cfg: {} as never,

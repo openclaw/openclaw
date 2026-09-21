@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { sleepWithAbort } from "../../infra/backoff.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
@@ -60,18 +62,22 @@ function createOAuthRefreshTimeoutError(label: string, timeoutMs: number): Error
 export async function observeOAuthRefreshFenceSettlement<TSnapshot, TResult>(params: {
   label: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   read: () => TSnapshot | Promise<TSnapshot>;
   isPending: (snapshot: TSnapshot) => boolean;
   resolve: (snapshot: TSnapshot) => Promise<TResult | null>;
 }): Promise<TResult | null> {
   const deadline = Date.now() + params.timeoutMs;
   while (true) {
+    params.signal?.throwIfAborted();
     const snapshot = await observeOAuthRefreshSettlementBeforeDeadline(
       params.label,
       params.timeoutMs,
       deadline,
       Promise.resolve().then(() => params.read()),
+      params.signal,
     );
+    params.signal?.throwIfAborted();
     if (!params.isPending(snapshot)) {
       return await params.resolve(snapshot);
     }
@@ -79,9 +85,7 @@ export async function observeOAuthRefreshFenceSettlement<TSnapshot, TResult>(par
     if (remainingMs <= 0) {
       throw createOAuthRefreshTimeoutError(params.label, params.timeoutMs);
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, Math.min(25, remainingMs));
-    });
+    await sleepWithAbort(Math.min(25, remainingMs), params.signal);
   }
 }
 
@@ -324,12 +328,14 @@ export async function observeOAuthRefreshSettlement<T>(
   label: string,
   timeoutMs: number,
   settlement: Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   return await observeOAuthRefreshSettlementBeforeDeadline(
     label,
     timeoutMs,
     Date.now() + timeoutMs,
     settlement,
+    signal,
   );
 }
 
@@ -338,24 +344,28 @@ async function observeOAuthRefreshSettlementBeforeDeadline<T>(
   timeoutMs: number,
   deadline: number,
   settlement: Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   let timeoutHandle: NodeJS.Timeout | undefined;
   try {
-    return await new Promise<T>((resolve, reject) => {
-      timeoutHandle = setTimeout(
-        () => {
-          reject(createOAuthRefreshTimeoutError(label, timeoutMs));
-        },
-        Math.max(0, deadline - Date.now()),
-      );
-      settlement
-        .finally(() => {
-          if (Date.now() >= deadline) {
-            throw createOAuthRefreshTimeoutError(label, timeoutMs);
-          }
-        })
-        .then(resolve, reject);
-    });
+    return await racePromiseWithAbortSignal(
+      new Promise<T>((resolve, reject) => {
+        timeoutHandle = setTimeout(
+          () => {
+            reject(createOAuthRefreshTimeoutError(label, timeoutMs));
+          },
+          Math.max(0, deadline - Date.now()),
+        );
+        settlement
+          .finally(() => {
+            if (Date.now() >= deadline) {
+              throw createOAuthRefreshTimeoutError(label, timeoutMs);
+            }
+          })
+          .then(resolve, reject);
+      }),
+      signal,
+    );
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);

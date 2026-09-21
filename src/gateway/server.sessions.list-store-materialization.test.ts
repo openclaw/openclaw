@@ -4,16 +4,18 @@
  */
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import * as agentScope from "../agents/agent-scope.js";
 import * as sessionsConfig from "../config/sessions.js";
-import { canPrewarmCombinedSessionStoresForGateway } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as sessionEntryReader from "../config/sessions/session-accessor.sqlite-entry.js";
+import * as sessionEntryStatus from "../config/sessions/session-accessor.sqlite-status.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import * as agentDatabaseRegistry from "../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
+import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { ready as isMaterializedSessionRow } from "./session-row-projection-record.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -114,7 +116,7 @@ test("sessions.list keeps roster enumeration bounded as ordinary rows grow", asy
   expect(rosterReads[1]).toBeLessThanOrEqual(rosterReads[0]!);
 });
 
-test("sessions.list keeps cold and warm transcript title batches valid beyond the database handle cap", async () => {
+test("sessions.list retains stored titles and transcript previews beyond the database handle cap", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
@@ -136,7 +138,10 @@ test("sessions.list keeps cold and warm transcript title batches valid beyond th
     await writeSessionStore({
       agentId,
       entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, { updatedAt: 1_781_000_000_000 - index }),
+        [sessionKey]: sessionStoreEntry(sessionId, {
+          updatedAt: 1_781_000_000_000 - index,
+          displayName: `Title ${agentId}`,
+        }),
       },
       storePath,
     });
@@ -152,74 +157,52 @@ test("sessions.list keeps cold and warm transcript title batches valid beyond th
     });
   }
 
-  const watermarkBatchSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptWatermarkBatch");
+  const cfg = { session: { store: storeTemplate }, agents: testState.agentsConfig };
+  const backfilled = observeSessionRowBackfill(agentIds.map((agentId) => `agent:${agentId}:main`));
+  const projection = await createSessionRowProjection({ cfg });
   try {
-    for (const phase of ["cold", "warm"]) {
-      const result = await directSessionReq<SessionsListResult>("sessions.list", {
-        includeDerivedTitles: true,
-        includeLastMessage: true,
-        ...(phase === "warm" ? { limit: 100 } : {}),
-      });
-
-      expect(result.ok, `${phase} transcript title batch`).toBe(true);
-      expect(result.payload?.sessions, `${phase} transcript title batch`).toHaveLength(
-        agentIds.length,
+    await backfilled;
+    await projection.ensureMaterialized();
+    for (const limit of [undefined, 100]) {
+      const result = await directSessionReq<SessionsListResult>(
+        "sessions.list",
+        { includeDerivedTitles: true, includeLastMessage: true, limit },
+        {
+          context: {
+            getRuntimeConfig: () => cfg,
+            ...bindSessionRowProjection({}, () => projection),
+          },
+        },
       );
+
+      expect(result.ok).toBe(true);
+      expect(result.payload?.sessions).toHaveLength(agentIds.length);
       expect(
-        result.payload?.sessions.every(
-          (session) =>
-            session.derivedTitle?.startsWith("Title ") &&
-            session.lastMessagePreview?.startsWith("Reply "),
-        ),
-        `${phase} transcript title batch`,
-      ).toBe(true);
-      if (phase === "warm") {
-        expect(
-          watermarkBatchSpy.mock.calls.some(([scopes]) => scopes.length === agentIds.length),
-        ).toBe(true);
-      }
-      watermarkBatchSpy.mockClear();
+        result.payload?.sessions.map(({ agentId, derivedTitle, lastMessagePreview }) => ({
+          agentId,
+          derivedTitle,
+          lastMessagePreview,
+        })),
+      ).toEqual(
+        agentIds.map((agentId) => ({
+          agentId,
+          derivedTitle: `Title ${agentId}`,
+          lastMessagePreview: `Reply ${agentId}`,
+        })),
+      );
     }
   } finally {
-    watermarkBatchSpy.mockRestore();
+    projection.dispose();
   }
 });
 
-test("startup prewarm reuses requested durable targets when no incognito store is open", async () => {
-  const stateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
-  }
-  const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
-  const storePath = storeTemplate.replace("{agentId}", "main");
-  await writeSessionStore({
-    entries: { main: sessionStoreEntry("sess-main") },
-    storePath,
-  });
-  const matcher = vi.spyOn(agentDatabaseRegistry, "createOpenClawAgentDatabasePathMatcher");
-  try {
-    expect(
-      canPrewarmCombinedSessionStoresForGateway(
-        {
-          agents: { list: [{ id: "main", default: true }] },
-          session: { store: storeTemplate },
-        },
-        { agentIds: ["main"], maxRows: 10 },
-      ),
-    ).toBe(true);
-    expect(matcher).toHaveBeenCalledTimes(1);
-  } finally {
-    matcher.mockRestore();
-  }
-});
-
-test("startup prewarm fills session snapshot and title caches before the first list", async () => {
+test("clean snapshots retain stored titles and backfilled previews without transcript reads", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:warm-cache";
   const sessionId = "warm-cache";
   await writeSessionStore({
     entries: {
-      [sessionKey]: sessionStoreEntry(sessionId),
+      [sessionKey]: sessionStoreEntry(sessionId, { displayName: "Warm title" }),
     },
   });
   await seedSessionTranscript({
@@ -232,73 +215,43 @@ test("startup prewarm fills session snapshot and title caches before the first l
     sessionKey,
     storePath,
   });
-  const titleBatchSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptTitleProbeBatch");
-  const titlePageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
-  let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
-  vi.useFakeTimers();
-  try {
-    const cfg = {
+  const projection = await createSessionRowProjection({
+    cfg: {
       agents: { list: [{ id: "main", default: true }] },
       session: { store: storePath },
-    } as never;
-    const { promise: sessionPrewarm, resolve: resolveSessionPrewarm } = createDeferred();
-    sidecar = scheduleGatewayHandlerPrewarm({
-      cfgAtStart: cfg,
-      log: { warn: vi.fn() },
-      startupTrace: {
-        measure: async (name, run) => {
-          try {
-            return await run();
-          } finally {
-            if (name === "post-ready.gateway-data.sessions.main") {
-              resolveSessionPrewarm();
-            }
-          }
-        },
-      },
-    });
-    await vi.advanceTimersToNextTimerAsync();
-    await sessionPrewarm;
-    await sidecar.stop();
-    expect(titleBatchSpy).toHaveBeenCalled();
-    expect(titlePageSpy).not.toHaveBeenCalled();
-    titleBatchSpy.mockClear();
-    titlePageSpy.mockClear();
-    vi.useRealTimers();
-    const cachedEntries = sessionAccessor.listSessionEntriesReadOnly({
-      agentId: "main",
-      clone: false,
-      projection: "list",
-      storePath,
-    });
-
-    const result = await directSessionReq<SessionsListResult>("sessions.list", {
-      ...LIST_PARAMS,
-      includeDerivedTitles: true,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.payload?.sessions).toContainEqual(
-      expect.objectContaining({ key: sessionKey, derivedTitle: "Warm title" }),
+    },
+  });
+  await vi.waitFor(() => {
+    expect(
+      projection.snapshot({ agentId: "main", key: sessionKey }, { includeLastMessage: true }).row
+        ?.lastMessagePreview,
+    ).toBe("Warm response");
+  });
+  const titlePageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEventPage");
+  const previewPageSpy = vi.spyOn(sessionAccessor, "readSessionTranscriptBoundedMessageTailPage");
+  try {
+    expect(
+      projection.snapshot(
+        { agentId: "main", key: sessionKey },
+        { includeDerivedTitles: true, includeLastMessage: true },
+      ).row,
+    ).toEqual(
+      expect.objectContaining({
+        key: sessionKey,
+        derivedTitle: "Warm title",
+        lastMessagePreview: "Warm response",
+      }),
     );
-    expect(titleBatchSpy).not.toHaveBeenCalled();
     expect(titlePageSpy).not.toHaveBeenCalled();
-    const afterListEntries = sessionAccessor.listSessionEntriesReadOnly({
-      agentId: "main",
-      clone: false,
-      projection: "list",
-      storePath,
-    });
-    expect(afterListEntries[0]?.entry).toBe(cachedEntries[0]?.entry);
+    expect(previewPageSpy).not.toHaveBeenCalled();
   } finally {
-    await sidecar?.stop();
-    vi.useRealTimers();
-    titleBatchSpy.mockRestore();
+    projection.dispose();
     titlePageSpy.mockRestore();
+    previewPageSpy.mockRestore();
   }
 });
 
-test("startup skips a large session prewarm while request-time listing remains available", async () => {
+test("projection startup retains every row beyond the former prewarm limit", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
     entries: Object.fromEntries(
@@ -308,46 +261,20 @@ test("startup skips a large session prewarm while request-time listing remains a
       ]),
     ),
   });
-  const info = vi.fn();
-  const listSpy = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
-  let sidecar: ReturnType<typeof scheduleGatewayHandlerPrewarm> | undefined;
-  vi.useFakeTimers();
+  const projection = await createSessionRowProjection({
+    cfg: {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { store: storePath },
+    },
+  });
   try {
-    const { promise: sessionPrewarm, resolve: resolveSessionPrewarm } = createDeferred();
-    sidecar = scheduleGatewayHandlerPrewarm({
-      cfgAtStart: {
-        agents: { list: [{ id: "main", default: true }] },
-        session: { store: storePath },
-      } as never,
-      log: { info, warn: vi.fn() },
-      startupTrace: {
-        measure: async (name, run) => {
-          try {
-            return await run();
-          } finally {
-            if (name === "post-ready.gateway-data.sessions.main") {
-              resolveSessionPrewarm();
-            }
-          }
-        },
-      },
-    });
-
-    await vi.advanceTimersToNextTimerAsync();
-    await sessionPrewarm;
-    await sidecar.stop();
-    expect(info).toHaveBeenCalledWith(
-      "skipping optional dashboard session prewarm: combined stores exceed 2000 rows",
+    await projection.ensureMaterialized();
+    expect(projection.selectEntries().filter(isMaterializedSessionRow).length).toBe(2_001);
+    expect(projection.snapshot({ agentId: "main", key: "agent:main:large-2000" }).row).toEqual(
+      expect.objectContaining({ key: "agent:main:large-2000", sessionId: "large-2000" }),
     );
-    expect(listSpy).not.toHaveBeenCalled();
-
-    vi.useRealTimers();
-    const result = await directSessionReq("sessions.list", LIST_PARAMS);
-    expect(result.ok).toBe(true);
   } finally {
-    await sidecar?.stop();
-    vi.useRealTimers();
-    listSpy.mockRestore();
+    projection.dispose();
   }
 });
 
@@ -394,29 +321,41 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   expect(fullEntries[0]?.entry.skillsSnapshot).toBeDefined();
   expect(fullEntries[0]?.entry.systemPromptReport?.source).toBe("run");
 
-  const projections: Array<string | undefined> = [];
-  const originalReadOnly = sessionAccessor.listSessionEntriesReadOnly;
-  const originalWritable = sessionAccessor.listSessionEntriesCore;
-  const spies = [
-    vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly").mockImplementation((scope) => {
-      projections.push(scope?.projection);
-      return originalReadOnly(scope);
-    }),
-    vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation((scope) => {
-      projections.push(scope?.projection);
-      return originalWritable(scope);
-    }),
-  ];
+  const readonly = vi.spyOn(sessionEntryReader, "listSessionEntriesReadOnly");
+  const decode = vi.spyOn(sessionEntryStatus, "parseSessionEntryJson");
+  const cfg = {
+    agents: { list: [{ id: "main", default: true }] },
+    session: { store: storePath },
+  };
+  let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
   try {
-    const result = await directSessionReq("sessions.list", LIST_PARAMS);
+    projection = await createSessionRowProjection({ cfg });
+    expect(readonly).toHaveBeenCalledWith(
+      expect.objectContaining({ projection: "list", clone: false }),
+    );
+    expect(readonly.mock.calls.every(([scope]) => scope?.projection === "list")).toBe(true);
+    const resident = projection.describe({ agentId: "main", key: stored.session_key });
+    expect(resident?.storedEntry?.skillsSnapshot).toBeUndefined();
+    expect(resident?.storedEntry?.systemPromptReport).toBeUndefined();
+    readonly.mockClear();
+    decode.mockClear();
+
+    const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS, {
+      context: { getRuntimeConfig: () => cfg, ...bindSessionRowProjection({}, () => projection) },
+    });
     expect(result.ok).toBe(true);
-    expect(projections.length).toBeGreaterThan(0);
-    expect(projections).toEqual(projections.map(() => "list"));
+    expect(result.payload?.sessions.map((row) => row.sessionId)).toEqual(["sess-main"]);
+    expect(readonly).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalled();
   } finally {
-    for (const spy of spies) {
-      spy.mockRestore();
-    }
+    projection?.dispose();
+    readonly.mockRestore();
+    decode.mockRestore();
   }
+
+  expect(sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath })).toEqual(
+    fullEntries,
+  );
 
   const listEntries = sessionAccessor.listSessionEntriesReadOnly({
     agentId: "main",

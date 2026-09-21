@@ -14,6 +14,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
+import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalRequestPayload,
@@ -99,6 +100,12 @@ export type { GatewayOperatorRoleActor };
 
 export type { RespondFn } from "./response-types.js";
 
+export type PreparedSessionApprovalReplay = {
+  replay: SessionApprovalReplay;
+  /** Check in the response frame; a publication may race promise delivery. */
+  isCurrent: () => boolean;
+};
+
 /** Minimal hosted OpenClaw contract retained by the gateway request router. */
 /**
  * Structural mirror of the engine's SystemAgentAssistantTurn. Kept local as a
@@ -161,6 +168,8 @@ export type GatewaySystemAgentSession = {
   welcome: string;
   /** Recorded with the welcome; external-edit notices and setup are not optional. */
   optionalWelcome?: boolean;
+  /** Passive creation entry, retained so reconnects do not append duplicate history. */
+  newAgentWelcome?: string;
   welcomeQuestion?: SystemAgentChatQuestion;
   /** Audit cursor captured with the pending caretaker welcome; cleared after delivery. */
   welcomeAuditSequence?: number;
@@ -189,6 +198,10 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
+  getCommittedRuntimeConfig?: () => OpenClawConfig;
+  sessionRowProjectionOwner?: object;
+  ensureSessionRowProjection?: () => Promise<void>;
   /** Live reload owner, including same-config restart work and shutdown. */
   isConfigReloadSettled: () => boolean;
   /** Prepared listener certificate pin; undefined when Gateway TLS is disabled. */
@@ -204,11 +217,22 @@ type GatewayKernelContext = {
   questionManager?: QuestionManager;
   scopeUpgradeCoordinator?: ScopeUpgradeCoordinator;
   /** Exact authority cancels bound approvals; legacy run ids cancel only unbound exec requests. */
-  cancelRunBoundApprovals?: (target: string | AgentRunDelegatedAuthority) => number;
+  cancelRunBoundApprovals?: (target: string | AgentRunDelegatedAuthority) => Promise<number>;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   placementStandingGrants?: PlacementStandingGrantRuntime;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
+  forwardExecApprovalRequest?: (request: ExecApprovalRequest) => Promise<boolean>;
+  execApprovalIosPushDelivery?: {
+    handleRequested?: (
+      request: ExecApprovalRequest,
+      opts?: {
+        isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+      },
+    ) => Promise<boolean>;
+    handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
+    handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
+  };
   approvalWebPushDelivery?: {
     handleRequested: <TPayload>(record: ExecApprovalRecord<TPayload>) => boolean | Promise<boolean>;
     handleResolved: (resolved: { id: string }) => Promise<void>;
@@ -226,7 +250,7 @@ type GatewayKernelContext = {
   listSessionPendingApprovals?: (
     sessionKey: string,
     client: GatewayClient | null,
-  ) => SessionApprovalReplay;
+  ) => Promise<PreparedSessionApprovalReplay>;
   loadGatewayModelCatalog: (params?: {
     agentId?: string;
     agentDir?: string;

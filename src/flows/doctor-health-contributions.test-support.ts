@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { maybeRepairGatewayServiceConfig } from "../commands/doctor-gateway-services.js";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig, OpenClawConfigInput } from "../config/config.js";
 import type {
@@ -88,4 +89,17 @@ export async function runDoctorHealthContributionList(
   contributions: readonly DoctorHealthContribution[],
 ): Promise<void> {
   await getTestApi().runDoctorHealthContributionList(ctx, contributions);
+}
+
+/** Keep the token candidate and service-repair writer on the same persistence path. */
+export function createGatewayWriterFixture(token: string) {
+  const config: OpenClawConfig = { gateway: { auth: { mode: "token", token } } };
+  const repair: typeof maybeRepairGatewayServiceConfig = async (
+    _cfg,
+    _mode,
+    _runtime,
+    _prompter,
+    options,
+  ) => options.writeConfig(config);
+  return { config, repair };
 }

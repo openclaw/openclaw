@@ -75,7 +75,6 @@ import { createOverlayHandlers } from "./tui-overlays.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 import { createTuiQuestionController } from "./tui-questions.js";
 import { createSessionActions } from "./tui-session-actions.js";
-import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import { createTuiRunIdTracker } from "./tui-session-run-coordinator.js";
 import {
   createEditorSubmitHandler,
@@ -1120,19 +1119,16 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     const rememberedKey = candidate.key;
-    const sessions = await client
-      .listSessions({
-        limit: TUI_SESSION_LOOKUP_LIMIT,
-        search: rememberedKey,
-        includeGlobal: rememberedKey === "global",
-        includeUnknown: false,
+    const description = await client
+      .describeSession({
+        sessionKey: rememberedKey,
         agentId: state.currentAgentId,
       })
       .catch(() => null);
     if (expectedConnectionGeneration !== connectionGeneration || exitRequested) {
       return;
     }
-    if (!sessions) {
+    if (!description) {
       // A failed lookup clears the preview, but leaves restoration eligible
       // for a later connection to validate the remembered session.
       provisionalSessionLabel = null;
@@ -1143,7 +1139,8 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     const restored = resolveRememberedTuiSessionKey({
       rememberedKey,
       currentAgentId: state.currentAgentId,
-      sessions: sessions.sessions,
+      sessions:
+        description.session && description.session.key !== "unknown" ? [description.session] : [],
     });
     if (!restored || restored === state.currentSessionKey) {
       provisionalSessionLabel = null;

@@ -107,13 +107,15 @@ function createTelegramInboundHandlers(
           id: post.sender_chat.id,
           is_bot: true as const,
           first_name: post.sender_chat.title || "Channel",
-          username: post.sender_chat.username,
+          ...(post.sender_chat.username !== undefined
+            ? { username: post.sender_chat.username }
+            : {}),
         }
       : {
           id: chatId,
           is_bot: true as const,
           first_name: post.chat.title || "Channel",
-          username: post.chat.username,
+          ...(post.chat.username !== undefined ? { username: post.chat.username } : {}),
         };
     return {
       ...post,

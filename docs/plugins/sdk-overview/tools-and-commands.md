@@ -110,3 +110,19 @@ underscores, or hyphens, and stay within 64 characters. MCP-backed node tools
 can set `agentTool.mcp` metadata so catalog and tool-search surfaces can show
 the remote MCP server/tool identity, but execution still goes through the
 advertised node command.
+
+Node-host commands must provide `hasActiveWork(): boolean` to allow automatic node
+updates. Read already-owned state synchronously and return `false` only when
+background processes, retained streams, and their cleanup have settled. Commands
+whose work finishes within `handle(...)` can declare `hasActiveWork: () => false`;
+the node host separately tracks in-flight invocations.
+`createSessionCatalogNodeHostBindings` forwards its `hasActiveWork` option to
+each generated command.
+
+An absent hook, a thrown error, or any result other than `false` defers activation.
+This preserves work owned by older plugins that predate the idle hook. The query
+also runs for unavailable commands because availability can change while work is
+still retained. Keep teardown in the command's existing lifecycle, such as
+`onDisconnect`, and report idle only after that work settles. `onDisconnect` alone
+does not establish idleness. Update older plugins to add the hook or use
+`openclaw update` and an operator-controlled node restart.

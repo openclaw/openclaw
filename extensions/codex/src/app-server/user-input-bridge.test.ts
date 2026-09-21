@@ -3,7 +3,9 @@ import {
   claimPendingAgentQuestionAnswer,
   type AgentHarnessQuestionGatewayCall,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CodexServerRequestResolvedError } from "./server-requests.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { createCodexUserInputTestParams as createParams } from "./user-input-bridge.test-support.js";
 
@@ -170,6 +172,73 @@ describe("Codex app-server user input bridge", () => {
     );
   });
 
+  it.each(["failure", "run abort"] as const)(
+    "records one response when the Gateway wait rejects on %s and settles queued work",
+    async (outcome) => {
+      const controller = new AbortController();
+      const params = createParams(controller.signal);
+      const firstWait = createDeferred<unknown>();
+      const gatewayCall: AgentHarnessQuestionGatewayCall = vi.fn(
+        async (method, _opts, raw, options) => {
+          if (method === "question.request") {
+            return { id: (raw as { id: string }).id };
+          }
+          if (method === "question.waitAnswer") {
+            options?.signal?.addEventListener(
+              "abort",
+              () => firstWait.reject(options?.signal?.reason),
+              { once: true },
+            );
+            return await firstWait.promise;
+          }
+          return { status: "cancelled" };
+        },
+      );
+      const onOrdinaryResponse = vi.fn();
+      const bridge = createCodexUserInputBridge({
+        paramsForRun: params,
+        threadId: "thread-1",
+        turnId: "turn-1",
+        signal: controller.signal,
+        gatewayCall,
+        onOrdinaryResponse,
+      });
+      const first = bridge.handleRequest({
+        id: "first",
+        params: requestParams({ itemId: "first" }),
+      });
+      await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+      const second = bridge.handleRequest({
+        id: "second",
+        params: requestParams({ itemId: "second" }),
+      });
+      expect(
+        vi.mocked(gatewayCall).mock.calls.filter(([method]) => method === "question.request"),
+      ).toHaveLength(1);
+      vi.mocked(gatewayCall).mockImplementation(async (method, _opts, raw) =>
+        method === "question.request"
+          ? { id: (raw as { id: string }).id }
+          : method === "question.waitAnswer"
+            ? { status: "answered", answers: { answers: { choice: ["Deep"] } } }
+            : { status: "cancelled" },
+      );
+      if (outcome === "run abort") {
+        controller.abort(new Error("run stopped"));
+      } else {
+        firstWait.reject(new Error("Gateway wait failed"));
+      }
+      const response = await first;
+      expect(response).toEqual({ answers: {} });
+      await expect(second).resolves.toEqual(
+        outcome === "run abort" ? { answers: {} } : { answers: { choice: { answers: ["Deep"] } } },
+      );
+      expect(onOrdinaryResponse.mock.calls.map(([result]) => result.itemId)).toEqual(
+        outcome === "run abort" ? ["first"] : ["first", "second"],
+      );
+      expect(onOrdinaryResponse.mock.calls[0]?.[0].response).toBe(response);
+    },
+  );
+
   it("does not register a gateway question after the run already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
@@ -310,34 +379,24 @@ describe("Codex app-server user input bridge", () => {
     });
   });
 
-  it("cancels the matching gateway record on serverRequest/resolved", async () => {
+  it("dismisses a resolved inbound request without recording an invented empty answer", async () => {
+    const controller = new AbortController();
     const params = createParams();
     const gateway = createGatewayStub();
+    const onOrdinaryResponse = vi.fn();
     const bridge = createCodexUserInputBridge({
       paramsForRun: params,
       threadId: "thread-1",
       turnId: "turn-1",
       gatewayCall: gateway.call,
+      onOrdinaryResponse,
     });
-    const response = bridge.handleRequest({ id: 42, params: requestParams() });
+    const response = bridge.handleRequest({ id: 42, params: requestParams() }, controller.signal);
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
-    let accessed = false;
-    const accessorParams = { requestId: 42 };
-    Object.defineProperty(accessorParams, "threadId", {
-      get: () => {
-        accessed = true;
-        return "thread-1";
-      },
-    });
-    bridge.handleNotification({ method: "serverRequest/resolved", params: accessorParams });
-    expect(accessed).toBe(false);
-
-    bridge.handleNotification({
-      method: "serverRequest/resolved",
-      params: { threadId: "thread-1", requestId: 42 },
-    });
+    controller.abort(new CodexServerRequestResolvedError());
 
     await expect(response).resolves.toEqual({ answers: {} });
+    expect(onOrdinaryResponse).not.toHaveBeenCalled();
     expect(gateway.calls).toContainEqual(
       expect.objectContaining({
         method: "question.resolve",

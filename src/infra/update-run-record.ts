@@ -1,5 +1,7 @@
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
+import type { UpdateRunRecoveryState } from "./update-run-recovery-state.js";
 import type { UpdateRunRecordSchema } from "./update-run-schema.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
@@ -87,6 +89,27 @@ export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
 export type UpdateRunPhase = UpdateRunRecord["phase"];
 export type UpdateRunStep = UpdateRunRecord["steps"][number];
 
+// Record recovery depends on legacy expiry for its reason; both use the leaf recovery-state type.
+export function isAbandonedUpdateRun(
+  record: Pick<UpdateRunRecoveryState, "status" | "reason">,
+): boolean {
+  return (
+    record.status === "failed" &&
+    (record.reason === "abandoned" || record.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON)
+  );
+}
+
+export function isAcknowledgedAbandonedUpdateRun(
+  record: Pick<UpdateRunRecoveryState, "status" | "reason" | "steps">,
+): boolean {
+  return (
+    isAbandonedUpdateRun(record) &&
+    record.steps.some(
+      (step) => step.step === "reconcile:acknowledged" && step.status === "completed",
+    )
+  );
+}
+
 export type FinishUpdateRunResult = {
   status: Exclude<UpdateRunRecord["status"], "running">;
   reason?: string;
@@ -122,6 +145,35 @@ export function finishUpdateRunRecord(
   record.finishedAtMs = now;
   record.after = { ...record.after, ...result.after };
   record.downtimeMs = result.downtimeMs ?? record.downtimeMs;
+}
+
+/** Only the package-owner refusal before update work can bypass repair finalization. */
+export function isUnacknowledgedPackageOwnerRefusal(record: UpdateRunRecord): boolean {
+  const requested = record.steps.find((step) => step.step === "requested");
+  return (
+    record.trigger === "cli" &&
+    record.phase === "finished" &&
+    record.target.kind !== "git" &&
+    !Object.keys(record.after).length &&
+    !Object.keys(record.verification).length &&
+    !record.repair.length &&
+    record.steps.every(
+      (step) =>
+        step.step === "requested" ||
+        (step.step === "driver:adopted" && step.status === "completed") ||
+        (step.step === "installation-inspection" && step.status === "skipped"),
+    ) &&
+    ((record.status === "skipped" &&
+      record.reason === "unmanaged-package-install" &&
+      requested?.status === "skipped") ||
+      // 2026.9.4 threw this exact error before it could record a structured refusal.
+      (record.status === "failed" &&
+        record.reason === "update-failed" &&
+        requested?.status === "failed" &&
+        requested.detail?.startsWith(
+          "Update refused: package manager owner is unknown; no changes were made.",
+        ) === true))
+  );
 }
 
 export type UpdateFetchFailure = {

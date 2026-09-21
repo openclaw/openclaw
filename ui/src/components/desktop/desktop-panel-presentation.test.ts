@@ -164,6 +164,47 @@ describe("desktop panel presentation lifecycle", () => {
     expect(panel.renderRoot.querySelector(".desktop-picker")).not.toBeNull();
   });
 
+  it("keeps disconnect recovery live when a hide and show share one update", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "environments.list"
+        ? { environments: [desktopEnvironment] }
+        : { transport: "rfb", wsPath: "/desktop/observe", control: false },
+    );
+    const handle = createConnectionHandle();
+    const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+      options.onConnect?.();
+      return handle;
+    });
+    const panel = createPanel();
+    panel.client = createGatewayClient(request).client;
+    panel.available = true;
+    panel.embedded = true;
+    panel.presented = true;
+    panel.desktopClientFactory = () => ({ connect });
+    document.body.append(panel);
+    await waitForFast(() =>
+      expect(panel.renderRoot.querySelector(".desktop-environment button")).not.toBeNull(),
+    );
+    clickPanelButton(panel);
+    await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+    await settleTasks();
+
+    panel.presented = false;
+    panel.presented = true;
+    await panel.updateComplete;
+    await settleTasks();
+
+    expect(handle.disconnect).not.toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledOnce();
+    connect.mock.calls[0]![0].onDisconnect?.({ clean: false, reason: "Desktop connection lost" });
+    await panel.updateComplete;
+    expect(panel.renderRoot.textContent).toContain("Desktop connection lost");
+    expect(panel.renderRoot.querySelector(".desktop-surface")).toBeNull();
+    expect(panel.renderRoot.querySelector(".desktop-status button")?.textContent).toContain(
+      "Reconnect",
+    );
+  });
+
   it.each(["session", "source", "client", "unavailable", "unmount"] as const)(
     "immediately releases a hidden viewer on %s change",
     async (change) => {

@@ -11,7 +11,7 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
-import { getFreePort } from "../test-utils/ports.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   clearInstanceBindingProbeCoordinators,
   installInstanceBindingProbeCoordinator,
@@ -73,7 +73,7 @@ describe("Gateway plugin replacement channel ownership", () => {
   });
 
   it(
-    "hot-applies first channel setup and pending installs while retaining a sibling channel",
+    "hot-applies pending installs without restarting a sibling whose package metadata keys were reordered",
     { timeout: 120_000 },
     async () => {
       const bundledRoot = tempDirs.make("openclaw-cold-channel-");
@@ -87,7 +87,7 @@ describe("Gateway plugin replacement channel ownership", () => {
             name: id,
             type: "commonjs",
             main: "index.js",
-            openclaw: { extensions: ["./index.js"] },
+            openclaw: { extensions: ["./index.js"], runtimeExtensions: ["./index.js"] },
             peerDependencies: { openclaw: ">=2026.1.1" },
           }),
         );
@@ -117,8 +117,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const channel = ${JSON.stringify(channel)};
   const captured = api.config.channels?.[channel] ?? null;
   let starts = 0, stops = 0;
-  api.registerGatewayMethod(channel + ".probe", ({ respond }) => {
-    respond(true, { instance, captured, starts, stops, pid: process.pid });
+  api.registerGatewayMethod(channel + ".probe", ({ context, respond }) => {
+    respond(true, { instance, captured, starts, stops, pid: process.pid, reloadSettled: context.isConfigReloadSettled() });
   }, { scope: "operator.read" });
   if (!captured?.enabled) return;
   api.registerChannel({ id: channel,
@@ -161,7 +161,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       };
       config.channels = { "sibling-chat": { enabled: true, label: "retained" } };
       await fs.writeFile(configPath, JSON.stringify(config));
-      const port = await getFreePort();
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
       const runtimeModule = await import("../plugins/runtime/index.js");
       const loaderModule = await import("../plugins/loader-module-runtime.js");
@@ -172,7 +171,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           createLazyRuntime({ ...params, loadPluginModule: () => runtimeModule }),
         );
       onTestFinished(() => runtimeLoader.mockRestore());
-      server = await startTestGatewayServer(port, {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const port = portClaim.port;
+      server = await startTestGatewayServer(portClaim, {
         auth: { mode: "none" },
         controlUiEnabled: false,
         sidecarStartup: "start",
@@ -187,16 +188,25 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         starts: number;
         stops: number;
         pid: number;
+        reloadSettled: boolean;
       };
       const probe = async (channel: string) => {
         const result = await rpcReq<Probe>(connected, `${channel}.probe`, {});
         expect(result.ok, result.error?.message).toBe(true);
         assert.ok(result.payload);
-        return result.payload;
+        // Registration is visible before the watcher releases its lifecycle lease.
+        // Wait for the owner's settlement signal, not a retry of a mutating RPC.
+        const { reloadSettled, ...binding } = result.payload;
+        return { binding, reloadSettled };
       };
-      await expect.poll(async () => (await probe("sibling-chat")).starts).toBe(1);
-      const sibling = await probe("sibling-chat");
-      const cold = await probe("cold-chat");
+      const settledProbe = async (channel: string) =>
+        await vi.waitUntil(async () => {
+          const result = await probe(channel);
+          return result.reloadSettled ? result.binding : false;
+        });
+      await expect.poll(async () => (await settledProbe("sibling-chat")).starts).toBe(1);
+      const sibling = await settledProbe("sibling-chat");
+      const cold = await settledProbe("cold-chat");
       expect(cold).toMatchObject({ captured: null, starts: 0, stops: 0, pid: process.pid });
       for (const label of ["first setup", "edited setup"]) {
         const current = await rpcReq<{ hash: string }>(connected, "config.get", {});
@@ -208,11 +218,28 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         expect(changed.payload).toMatchObject({
           sentinel: { payload: { stats: { requiresRestart: false } } },
         });
-        await expect.poll(async () => (await probe("cold-chat")).captured?.label).toBe(label);
-        expect(await probe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
-        expect((await probe("cold-chat")).instance).not.toBe(cold.instance);
-        expect(await probe("sibling-chat")).toEqual(sibling);
+        await expect
+          .poll(async () => (await settledProbe("cold-chat")).captured?.label)
+          .toBe(label);
+        expect(await settledProbe("cold-chat")).toMatchObject({
+          starts: 1,
+          stops: 0,
+          pid: cold.pid,
+        });
+        expect((await settledProbe("cold-chat")).instance).not.toBe(cold.instance);
+        expect(await settledProbe("sibling-chat")).toEqual(sibling);
       }
+      // Installing another plugin can rebuild metadata through a different producer.
+      // Reordering an unchanged sibling's package keys must not stop its live account.
+      const siblingPackagePath = path.join(bundledRoot, "sibling-chat-owner", "package.json");
+      const siblingPackage = JSON.parse(await fs.readFile(siblingPackagePath, "utf8"));
+      await fs.writeFile(
+        siblingPackagePath,
+        JSON.stringify({
+          ...siblingPackage,
+          openclaw: { runtimeExtensions: ["./index.js"], extensions: ["./index.js"] },
+        }),
+      );
       const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
       const committed = await commitConfigWithPendingPluginInstalls({
         nextConfig: {
@@ -235,10 +262,15 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       });
       expect(committed.afterWrite.mode).toBe("auto");
       await expect
-        .poll(async () => (await probe("cold-chat")).captured?.label)
+        .poll(async () => (await settledProbe("cold-chat")).captured?.label)
         .toBe("installed setup");
-      expect(await probe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
-      expect(await probe("sibling-chat")).toEqual(sibling);
+      expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
+      expect(await settledProbe("sibling-chat")).toEqual(sibling);
+      const explicit = await rpcReq(connected, "plugins.reload", {
+        plugins: [{ pluginId: "cold-chat-owner" }],
+      });
+      expect(explicit.ok, explicit.error?.message).toBe(true);
+      expect(await settledProbe("sibling-chat")).toEqual(sibling);
       expect(connected.readyState).toBe(connected.OPEN);
       expect(hotReloadRecovery).not.toHaveBeenCalled();
     },
@@ -337,7 +369,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       },
     };
     await fs.writeFile(configPath, JSON.stringify(config));
-    const port = await getFreePort();
     const hotReloadRecovery = vi.fn(() => ({
       status: "emitted" as const,
     }));
@@ -351,7 +382,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         createLazyRuntime({ ...params, loadPluginModule: () => runtimeModule }),
       );
     onTestFinished(() => runtimeLoader.mockRestore());
-    server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const port = portClaim.port;
+    server = await startTestGatewayServer(portClaim, {
       auth: { mode: "none" },
       controlUiEnabled: false,
       sidecarStartup: "start",

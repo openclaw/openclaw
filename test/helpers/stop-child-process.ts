@@ -2,14 +2,19 @@ import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 
-export async function stopChildProcess(child: ChildProcess, timeoutMs: number): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
+export async function stopChildProcess(
+  child: ChildProcess,
+  timeoutMs: number,
+  options: { force?: boolean } = {},
+): Promise<void> {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
     return;
   }
   const exitWait = new AbortController();
   const exited = once(child, "exit", { signal: exitWait.signal });
   try {
-    for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    const signals = options.force ? (["SIGKILL"] as const) : (["SIGTERM", "SIGKILL"] as const);
+    for (const signal of signals) {
       const timeoutError = new Error(
         `child ${String(child.pid)} did not exit within ${timeoutMs}ms after ${signal}`,
       );

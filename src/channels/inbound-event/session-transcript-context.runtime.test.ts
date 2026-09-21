@@ -65,6 +65,37 @@ describe("session transcript inbound context", () => {
     ]);
   });
 
+  it("renders the configured native window without restoring stale transcript content", async () => {
+    readRecent.mockResolvedValue([
+      { id: "deleted", role: "user", text: "deleted platform message", timestamp: 3_000 },
+    ]);
+    const ctx = context({
+      ChatType: "channel",
+      SessionTranscriptContext: { historyLimit: 50, historyKind: "recent" },
+      InboundHistory: Array.from({ length: 55 }, (_, index) => ({
+        sender: "Alice",
+        body: `native-line-${String(index).padStart(2, "0")}`,
+        timestamp: index,
+      })),
+    });
+    let prompt = "";
+    await runPreparedChannelTurn({
+      channel: "slack",
+      routeSessionKey: ctx.SessionKey!,
+      storePath: path.join(tempDirs.make("openclaw-native-history-context-"), "sessions.json"),
+      ctxPayload: ctx,
+      recordInboundSession: vi.fn(async () => undefined),
+      runDispatch: async () => {
+        prompt = buildInboundUserContextPrefix(ctx);
+        return { queuedFinal: false };
+      },
+    });
+    expect(prompt.match(/native-line-\d{2}/g)).toEqual(
+      Array.from({ length: 50 }, (_, index) => `native-line-${String(index + 5).padStart(2, "0")}`),
+    );
+    expect(prompt).not.toContain("deleted platform message");
+  });
+
   it("restores marked Cron delivery context when no live chat window survives", async () => {
     readRecent.mockImplementation(async (params) =>
       params.includeCronDirectDeliveryContext

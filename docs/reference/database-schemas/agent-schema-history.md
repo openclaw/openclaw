@@ -29,8 +29,40 @@ title: "Agent schema history"
 | 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | Unreleased                                      |
 | 20      | Authoritative cold transcript archives with exact restoration metadata and self-contained backup payloads                                                                                                                                              | Unreleased                                      |
 | 21      | Incremental canonical-session validation with transactional node, window, and main-key invalidation                                                                                                                                                    | Unreleased                                      |
+| 22      | Exact transcript FTS row ownership for session-local deletion and reconciliation                                                                                                                                                                       | Unreleased                                      |
 
 Version 3 was an unshipped development step folded into version 4.
+
+### Transcript FTS row ownership
+
+Agent schema **22** adds `session_transcript_fts_rows` and the nullable
+`session_transcript_index_state.fts_row_count`. The transcript projection owner
+records every inserted FTS rowid in the same transaction as its FTS row. An index
+on `session_id` makes deletion proportional to the session's indexed rows even
+when different sessions' appends are interleaved. These are derived search facts;
+raw transcript bytes, visibility, retention and synchronous rebuild limits stay
+unchanged.
+
+Migration creates an empty mapping and marks existing index state
+`needs_rebuild = 1`, with `fts_row_count = NULL`. It does not scan or backfill FTS
+content. On the next reconcile, unknown or incomplete ownership takes the legacy
+session-filtered delete during that first rebuild and publishes exact mappings
+with their count. Worker rebuilds retain bounded delete chunks, so a legacy
+projection may need a fallback scan per chunk until that first rebuild finishes.
+Subsequent deletes use exact rowids. Synchronous and worker reconciliation,
+suffix replacement, deletion and cold restoration maintain the same ownership.
+There is no foreign-key cascade on the mapping: deletion needs those rowids even
+after the session window has been removed; the projection owner removes them
+with their FTS rows.
+
+Both schema version markers advance through the existing maintenance owner in
+the same transaction. Stop writers and take a verified WAL-aware backup before
+running the compatible build's `openclaw doctor --fix`. Older builds refuse
+schema 22 because their writes cannot maintain row ownership. Rollback requires
+the pre-migration backup and matching build; lowering version markers is unsafe.
+The existing [older-updater contract](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+applies, including private rehearsal and verified backup coverage for supported
+2026.9.2 package updates.
 
 ### Incremental canonical-session validation
 
@@ -63,13 +95,32 @@ their established raw-row parser behavior; a fresh reader, policy change or
 owner replacement must cross admission again. Pending keys make that admission
 incremental without caching session identity or permission results.
 
-Gateway startup certifies up to two agent databases concurrently, using the same
-disk-work bound as database preflight. Each agent retains one mutation worker
-across its validation batches and closes it before worktree detection, orphan
-recovery, and transcript reconciliation use that database. A refusal stops new
-admissions and drains active work before startup fails. Ordinary archive work
-keeps its global FIFO; certification retains per-database write ordering and
-fresh physical-owner checks.
+Typed worker reads can continue an existing committed reader admission for one
+retained request. The continuation expires with its source admission or connection
+and remains bound to the physical file, main-key policy, and readiness. It cannot
+admit an unrelated pooled read or replace strict validation when that proof is
+missing, transactional, changed, or revoked.
+
+Gateway startup reuses valid canonical receipts for the same physical generation;
+they do not replace integrity checks. Stores needing fresh proof are certified up
+to two at a time, using the same disk-work bound as database preflight. Two
+execution workers serve separate
+per-database tasks. Each task retains its worker across validation batches, then
+closes the exact database and lease under the parent's coordinated close request
+before downstream maintenance or another task can proceed. Uncertain native
+termination retains writer admission and cleanup custody. A refusal stops new
+admissions and drains active work before startup fails; the startup owner joins
+its execution workers before returning. Ordinary archive work keeps its global
+FIFO; certification retains per-database write ordering and fresh physical-owner
+checks.
+
+Transcript-index reconciliation shares one worker across agent databases, including
+repairs scheduled by dashboard title reads. Each task retains its own message
+channel, source snapshot, and deletion lease. Successful reuse follows read-handle
+close, parent write settlement, and exact lease release. After a native worker
+failure, recovery joins termination and accepted parent writes before releasing
+the failed task's lease. Final Gateway shutdown closes admission, drains accepted
+repairs and lease recovery, then joins worker exit before shared-state retirement.
 
 The 20-to-21 migration installs the table and triggers and marks every existing
 node pending without parsing, repairing or certifying session contents. Both

@@ -8,9 +8,10 @@ import type { SessionCreatedActor } from "../config/sessions/session-entry-prove
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { getUserProfileRole } from "../state/user-profiles.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
-import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import {
   resolveOperatorSessionCreation,
   type TrustedSessionCreation,
@@ -21,6 +22,10 @@ const operatorRoleLog = createSubsystemLogger("gateway/operator-roles");
 const MAX_OPERATOR_ROLE_ASSIGNMENTS = 1_024;
 const operatorRoleAssignments = new Map<string, string | null>();
 const reportedUnknownAssignments = new Set<string>();
+type OperatorRolePolicyChange =
+  | { kind: "assignment"; profileId: string }
+  | { kind: "config"; context: object };
+const policyListeners = new Set<(change: OperatorRolePolicyChange) => void>();
 const deniedOperatorRole: GatewayOperatorRoleDefinition = {
   sessions: { others: "none" },
   agents: [],
@@ -64,6 +69,20 @@ export function invalidateOperatorRolePolicy(profileId: string): void {
     if (reported.startsWith(`${profileId}:`)) {
       reportedUnknownAssignments.delete(reported);
     }
+  }
+  notifyListeners([...policyListeners], { kind: "assignment", profileId });
+}
+
+export function onOperatorRolePolicyChanged(
+  listener: (change: OperatorRolePolicyChange) => void,
+): () => void {
+  return registerListener(policyListeners, listener);
+}
+
+/** Called after this Gateway's committed runtime reader advances, never at tentative activation. */
+export function publishOperatorRoleConfigChange(context: object | undefined): void {
+  if (context) {
+    notifyListeners([...policyListeners], { kind: "config", context });
   }
 }
 
@@ -134,7 +153,7 @@ export function resolveGatewayOperatorRoleActor(
   if (actor) {
     return actor;
   }
-  const profileId = gatewayClientSessionCreator(client ?? null)?.id;
+  const profileId = client?.authenticatedUserProfile?.profileId;
   return profileId && profileId !== GATEWAY_OWNER_PROFILE_ID
     ? { kind: "operator", profileId }
     : undefined;
@@ -150,6 +169,28 @@ export function resolveOperatorRolePolicy(
     return undefined;
   }
   return resolveOperatorRolePolicyForProfile(actor?.profileId, cfg);
+}
+
+/** A retained caller cannot keep grants removed by the current named role. */
+export function authorizeCurrentOperatorRoleScopes(
+  client: GatewayClient | null,
+  cfg: OpenClawConfig,
+): ErrorShape | undefined {
+  const policy = resolveOperatorRolePolicy(client, cfg);
+  if (
+    policy &&
+    !roleScopesAllow({
+      role: "operator",
+      requestedScopes: client?.connect.scopes ?? [],
+      allowedScopes: policy.scopes,
+    })
+  ) {
+    return errorShape(
+      ErrorCodes.FORBIDDEN,
+      "Your operator role changed; reconnect before continuing.",
+    );
+  }
+  return undefined;
 }
 
 export function operatorSessionCap(client: GatewayClient | null, cfg: OpenClawConfig) {

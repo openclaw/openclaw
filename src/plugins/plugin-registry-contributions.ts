@@ -17,7 +17,10 @@ import {
   listPluginManifestContributionIds,
   type PluginMetadataContributionKey,
 } from "./plugin-metadata-contributions.js";
-import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshotForRegistry,
+  resolvePluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
@@ -143,7 +146,7 @@ function listContributionManifestPlugins(
     const includePlugin = createContributionPluginFilter(params, lookUpTable.index);
     return lookUpTable.plugins.filter((plugin) => includePlugin(plugin.id));
   }
-  const { snapshot: index, manifestRegistry } = loadPluginRegistrySnapshotWithMetadata(params);
+  const { snapshot: index, manifestRegistry } = loadContributionRegistrySnapshot(params);
   const pluginIds = index.plugins.map((plugin) => plugin.pluginId);
   return loadPluginManifestRegistryForInstalledIndex({
     index,
@@ -158,10 +161,19 @@ function listContributionManifestPlugins(
   }).plugins;
 }
 
+function loadContributionRegistrySnapshot(params: LoadPluginRegistryManifestParams) {
+  const metadata = params.bundledChannelConfigCollector
+    ? undefined
+    : loadPluginMetadataSnapshotForRegistry(params);
+  return metadata
+    ? { snapshot: metadata.index, manifestRegistry: metadata.manifestRegistry }
+    : loadPluginRegistrySnapshotWithMetadata(params);
+}
+
 export function loadPluginManifestRegistryForPluginRegistry(
   params: LoadPluginRegistryManifestParams = {},
 ): PluginManifestRegistry {
-  const { snapshot: index, manifestRegistry } = loadPluginRegistrySnapshotWithMetadata(params);
+  const { snapshot: index, manifestRegistry } = loadContributionRegistrySnapshot(params);
   return loadPluginManifestRegistryForInstalledIndex({
     index,
     ...(manifestRegistry ? { manifestRegistry } : {}),

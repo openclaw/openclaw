@@ -5,28 +5,46 @@ import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
+  readChannelContextGatewayContextResolver,
 } from "../channels/message-access/admission-evidence.js";
 import type { ResolvedChannelMessageIngress } from "../channels/message-access/runtime-types.js";
 import { resolveStableChannelMessageIngress } from "../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+} from "../gateway/server-methods/types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createPluginRegistry } from "./registry.js";
+import {
+  bindGatewayContextResolver,
+  hasGatewayContextOwner,
+} from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
-function createRuntimeBuilder(params: { origin: PluginOrigin; id?: string }) {
+function createRuntimeBuilder(params: {
+  origin: PluginOrigin;
+  id?: string;
+  trustedOfficialInstall?: boolean;
+  gatewayContextResolver?: GatewayContextResolver;
+}) {
+  const subagent = {} as PluginRuntime["subagent"];
+  bindGatewayContextResolver(subagent, params.gatewayContextResolver);
   const registryBuilder = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: {
       channel: { inbound: { buildContext: buildChannelInboundEventContext } },
+      subagent,
     } as PluginRuntime,
     activateGlobalSideEffects: false,
   });
   const record = createPluginRecord({
     id: params.id ?? "channel-owner",
     origin: params.origin,
+    trustedOfficialInstall: params.trustedOfficialInstall,
   });
   const api = registryBuilder.createApi(record, {
     config: {} as OpenClawConfig,
@@ -135,6 +153,27 @@ function inspect(context: object) {
 }
 
 describe("bundled channel ingress runtime ownership", () => {
+  it.each(["bundled", "global", "config"] as const)(
+    "retains the host Gateway resolver for a trusted %s channel ingress",
+    async (origin) => {
+      const gatewayContext = {} as GatewayRequestContext;
+      const gatewayContextResolver = vi.fn(() => gatewayContext);
+      const channel = createRuntimeBuilder({
+        origin,
+        trustedOfficialInstall: origin !== "bundled",
+        gatewayContextResolver,
+      });
+      const ingress = await resolveIngress("person-a");
+      const context = channel.buildContext(contextParams({ ingress }));
+
+      const retainedResolver = readChannelContextGatewayContextResolver(context);
+      expect(retainedResolver?.()).toBe(gatewayContext);
+      expect(hasGatewayContextOwner(retainedResolver!, gatewayContextResolver)).toBe(true);
+      markPluginRegistryRetired(channel.registryBuilder.registry);
+      expect(retainedResolver?.()).toBeUndefined();
+    },
+  );
+
   it("binds authenticated owner turns to the exact live trusted channel plugin", async () => {
     const runtime = createPluginRuntime();
     const command = vi.fn(async () => ({ payloads: [] }));

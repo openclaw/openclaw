@@ -7,7 +7,10 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "../../agents/worktrees/service.js";
 import * as processExec from "../../process/exec.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   cleanupWorkerWorkspaceResultRef,
   deleteStagedWorkerWorkspaceResult,
@@ -21,7 +24,8 @@ import {
 
 const tempDirs = createTempDirTracker();
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   closeOpenClawStateDatabaseForTest();

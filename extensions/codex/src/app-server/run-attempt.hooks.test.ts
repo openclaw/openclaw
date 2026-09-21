@@ -13,6 +13,7 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import {
   createMockPluginRegistry,
@@ -52,7 +53,14 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const llmInput = vi.fn();
     const llmOutput = vi.fn();
     const agentEnd = vi.fn();
-    const onRunAgentEvent = vi.fn();
+    const modelAnnounced = createDeferred<void>();
+    const onRunAgentEvent = vi.fn<NonNullable<ReturnType<typeof createParams>["onAgentEvent"]>>(
+      (event) => {
+        if (event.stream === "lifecycle" && event.data.phase === "model") {
+          modelAnnounced.resolve();
+        }
+      },
+    );
     const globalAgentEvents: AgentEventPayload[] = [];
     onAgentEvent((event) => globalAgentEvents.push(event));
     initializeGlobalHookRunner(
@@ -75,162 +83,175 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     params.sandboxSessionKey = "agent:main:policy";
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.onAgentEvent = onRunAgentEvent;
+    // Protocol events own this case; fixture I/O must not spend the execution watchdog.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    expect(llmInput).toHaveBeenCalled();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    try {
+      await Promise.race([
+        modelAnnounced.promise,
+        run.then((result) => {
+          throw new Error("Attempt ended before its lifecycle model announcement", {
+            cause: result,
+          });
+        }),
+      ]);
+      expect(llmInput).toHaveBeenCalled();
 
-    const [llmInputPayload, llmInputContext] = mockCall(llmInput, "llm_input") as [
-      {
-        historyMessages?: Array<{ role?: string }>;
-        imagesCount?: number;
-        model?: string;
-        prompt?: string;
-        provider?: string;
-        runId?: string;
-        sessionId?: string;
-        systemPrompt?: string;
-      },
-      { runId?: string; sessionId?: string; sessionKey?: string },
-    ];
-    expect(llmInputPayload.runId).toBe("run-1");
-    expect(llmInputPayload.sessionId).toBe("session-1");
-    expect(llmInputPayload.provider).toBe("codex");
-    expect(llmInputPayload.model).toBe("gpt-5.4-codex");
-    expect(llmInputPayload.prompt).toBe("hello");
-    expect(llmInputPayload.imagesCount).toBe(0);
-    expect(llmInputPayload.historyMessages).toEqual([]);
-    expect(llmInputPayload.systemPrompt).toContain(
-      "You are a personal agent running inside OpenClaw.",
-    );
-    expect(llmInputPayload.systemPrompt).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
-    expect(llmInputContext.runId).toBe("run-1");
-    expect(llmInputContext.sessionId).toBe("session-1");
-    expect(llmInputContext.sessionKey).toBe("agent:main:session-1");
-
-    await harness.notify({
-      method: "item/agentMessage/delta",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "msg-1",
-        delta: "hello back",
-      },
-    });
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    const result = await run;
-
-    expect(result.assistantTexts).toEqual(["hello back"]);
-    expect(llmOutput).toHaveBeenCalledTimes(1);
-    expect(agentEnd).toHaveBeenCalledTimes(1);
-    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
-      data: {
-        endedAt?: number;
-        phase?: string;
-        startedAt?: number;
-        text?: string;
-      };
-      stream: string;
-    }>;
-    const lifecycleStart = agentEvents.find(
-      (event) => event.stream === "lifecycle" && event.data.phase === "start",
-    );
-    expect(typeof lifecycleStart?.data.startedAt).toBe("number");
-    const assistantEvents = agentEvents.filter((event) => event.stream === "assistant");
-    expect(assistantEvents).toHaveLength(2);
-    expect(assistantEvents[0]?.data).toEqual({
-      itemId: "msg-1",
-      text: "hello back",
-      delta: "hello back",
-      replaceable: true,
-    });
-    expect(assistantEvents[1]?.data).toEqual({ text: "hello back" });
-    const lifecycleEnd = agentEvents.find(
-      (event) => event.stream === "lifecycle" && event.data.phase === "end",
-    );
-    expect(typeof lifecycleEnd?.data.startedAt).toBe("number");
-    expect(typeof lifecycleEnd?.data.endedAt).toBe("number");
-    const startIndex = agentEvents.findIndex(
-      (event) => event.stream === "lifecycle" && event.data.phase === "start",
-    );
-    const assistantIndex = agentEvents.findIndex((event) => event.stream === "assistant");
-    const endIndex = agentEvents.findIndex(
-      (event) => event.stream === "lifecycle" && event.data.phase === "end",
-    );
-    expect(startIndex).toBeGreaterThanOrEqual(0);
-    expect(assistantIndex).toBeGreaterThan(startIndex);
-    expect(endIndex).toBeGreaterThan(assistantIndex);
-    const globalAssistantEvents = globalAgentEvents.filter((event) => event.stream === "assistant");
-    expect(globalAssistantEvents).toHaveLength(2);
-    expect(globalAssistantEvents[0]?.runId).toBe("run-1");
-    expect(globalAssistantEvents[0]?.sessionKey).toBe("agent:main:session-1");
-    expect(globalAssistantEvents[0]?.data).toEqual({
-      itemId: "msg-1",
-      text: "hello back",
-      delta: "hello back",
-      replaceable: true,
-    });
-    expect(globalAssistantEvents[1]?.data).toEqual({ text: "hello back" });
-    const globalEndEvent = globalAgentEvents.find(
-      (event) => event.stream === "lifecycle" && event.data.phase === "end",
-    );
-    expect(globalEndEvent?.runId).toBe("run-1");
-    expect(globalEndEvent?.sessionKey).toBe("agent:main:session-1");
-
-    const [llmOutputPayload, llmOutputContext] = mockCall(llmOutput, "llm_output") as [
-      {
-        assistantTexts?: string[];
-        harnessId?: string;
-        lastAssistant?: { role?: string };
-        model?: string;
-        provider?: string;
-        resolvedRef?: string;
-        runId?: string;
-        sessionId?: string;
-        contextTokenBudget?: number;
-        contextWindowSource?: string;
-        contextWindowReferenceTokens?: number;
-      },
-      {
-        runId?: string;
-        sessionId?: string;
-        contextTokenBudget?: number;
-        contextWindowSource?: string;
-        contextWindowReferenceTokens?: number;
-      },
-    ];
-    expect(llmOutputPayload.runId).toBe("run-1");
-    expect(llmOutputPayload.sessionId).toBe("session-1");
-    expect(llmOutputPayload.provider).toBe("codex");
-    expect(llmOutputPayload.model).toBe("gpt-5.4-codex");
-    expect(llmOutputPayload.contextTokenBudget).toBe(150_000);
-    expect(llmOutputPayload.contextWindowSource).toBe("agentContextTokens");
-    expect(llmOutputPayload.contextWindowReferenceTokens).toBe(200_000);
-    expect(llmOutputPayload.resolvedRef).toBe("codex/gpt-5.4-codex");
-    expect(llmOutputPayload.harnessId).toBe("codex");
-    expect(llmOutputPayload.assistantTexts).toEqual(["hello back"]);
-    expect(llmOutputPayload.lastAssistant?.role).toBe("assistant");
-    expect(llmOutputContext.runId).toBe("run-1");
-    expect(llmOutputContext.sessionId).toBe("session-1");
-    expect(llmOutputContext.contextTokenBudget).toBe(150_000);
-    expect(llmOutputContext.contextWindowSource).toBe("agentContextTokens");
-    expect(llmOutputContext.contextWindowReferenceTokens).toBe(200_000);
-    const [agentEndPayload, agentEndContext] = mockCall(agentEnd, "agent_end") as [
-      { messages?: Array<{ role?: string }>; success?: boolean },
-      { runId?: string; sessionId?: string },
-    ];
-    expect(agentEndPayload.success).toBe(true);
-    expect(agentEndPayload.messages?.some((message) => message.role === "user")).toBe(true);
-    expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
-    expect(agentEndContext.runId).toBe("run-1");
-    expect(agentEndContext.sessionId).toBe("session-1");
-    for (const hook of [beforePromptBuild, llmInput, llmOutput, agentEnd]) {
-      expect(hook).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ agentId: "main", sessionKey: params.sessionKey }),
+      const [llmInputPayload, llmInputContext] = mockCall(llmInput, "llm_input") as [
+        {
+          historyMessages?: Array<{ role?: string }>;
+          imagesCount?: number;
+          model?: string;
+          prompt?: string;
+          provider?: string;
+          runId?: string;
+          sessionId?: string;
+          systemPrompt?: string;
+        },
+        { runId?: string; sessionId?: string; sessionKey?: string },
+      ];
+      expect(llmInputPayload.runId).toBe("run-1");
+      expect(llmInputPayload.sessionId).toBe("session-1");
+      expect(llmInputPayload.provider).toBe("codex");
+      expect(llmInputPayload.model).toBe("gpt-5.4-codex");
+      expect(llmInputPayload.prompt).toBe("hello");
+      expect(llmInputPayload.imagesCount).toBe(0);
+      expect(llmInputPayload.historyMessages).toEqual([]);
+      expect(llmInputPayload.systemPrompt).toContain(
+        "You are a personal agent running inside OpenClaw.",
       );
+      expect(llmInputPayload.systemPrompt).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+      expect(llmInputContext.runId).toBe("run-1");
+      expect(llmInputContext.sessionId).toBe("session-1");
+      expect(llmInputContext.sessionKey).toBe("agent:main:session-1");
+
+      await harness.notify({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "msg-1",
+          delta: "hello back",
+        },
+      });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      const result = await run;
+
+      expect(result.terminal).toEqual({ kind: "ok" });
+      expect(result.assistantTexts).toEqual(["hello back"]);
+      expect(llmOutput).toHaveBeenCalledTimes(1);
+      expect(agentEnd).toHaveBeenCalledTimes(1);
+      const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
+        data: {
+          endedAt?: number;
+          phase?: string;
+          startedAt?: number;
+          text?: string;
+        };
+        stream: string;
+      }>;
+      const lifecycleStart = agentEvents.find(
+        (event) => event.stream === "lifecycle" && event.data.phase === "start",
+      );
+      expect(typeof lifecycleStart?.data.startedAt).toBe("number");
+      const assistantEvents = agentEvents.filter((event) => event.stream === "assistant");
+      expect(assistantEvents).toHaveLength(2);
+      expect(assistantEvents[0]?.data).toEqual({
+        itemId: "msg-1",
+        text: "hello back",
+        delta: "hello back",
+        replaceable: true,
+      });
+      expect(assistantEvents[1]?.data).toEqual({ text: "hello back" });
+      const lifecycleEnd = agentEvents.find(
+        (event) => event.stream === "lifecycle" && event.data.phase === "end",
+      );
+      expect(typeof lifecycleEnd?.data.startedAt).toBe("number");
+      expect(typeof lifecycleEnd?.data.endedAt).toBe("number");
+      const startIndex = agentEvents.findIndex(
+        (event) => event.stream === "lifecycle" && event.data.phase === "start",
+      );
+      const assistantIndex = agentEvents.findIndex((event) => event.stream === "assistant");
+      const endIndex = agentEvents.findIndex(
+        (event) => event.stream === "lifecycle" && event.data.phase === "end",
+      );
+      expect(startIndex).toBeGreaterThanOrEqual(0);
+      expect(assistantIndex).toBeGreaterThan(startIndex);
+      expect(endIndex).toBeGreaterThan(assistantIndex);
+      const globalAssistantEvents = globalAgentEvents.filter(
+        (event) => event.stream === "assistant",
+      );
+      expect(globalAssistantEvents).toHaveLength(2);
+      expect(globalAssistantEvents[0]?.runId).toBe("run-1");
+      expect(globalAssistantEvents[0]?.sessionKey).toBe("agent:main:session-1");
+      expect(globalAssistantEvents[0]?.data).toEqual({
+        itemId: "msg-1",
+        text: "hello back",
+        delta: "hello back",
+        replaceable: true,
+      });
+      expect(globalAssistantEvents[1]?.data).toEqual({ text: "hello back" });
+      const globalEndEvent = globalAgentEvents.find(
+        (event) => event.stream === "lifecycle" && event.data.phase === "end",
+      );
+      expect(globalEndEvent?.runId).toBe("run-1");
+      expect(globalEndEvent?.sessionKey).toBe("agent:main:session-1");
+
+      const [llmOutputPayload, llmOutputContext] = mockCall(llmOutput, "llm_output") as [
+        {
+          assistantTexts?: string[];
+          harnessId?: string;
+          lastAssistant?: { role?: string };
+          model?: string;
+          provider?: string;
+          resolvedRef?: string;
+          runId?: string;
+          sessionId?: string;
+          contextTokenBudget?: number;
+          contextWindowSource?: string;
+          contextWindowReferenceTokens?: number;
+        },
+        {
+          runId?: string;
+          sessionId?: string;
+          contextTokenBudget?: number;
+          contextWindowSource?: string;
+          contextWindowReferenceTokens?: number;
+        },
+      ];
+      expect(llmOutputPayload.runId).toBe("run-1");
+      expect(llmOutputPayload.sessionId).toBe("session-1");
+      expect(llmOutputPayload.provider).toBe("codex");
+      expect(llmOutputPayload.model).toBe("gpt-5.4-codex");
+      expect(llmOutputPayload.contextTokenBudget).toBe(150_000);
+      expect(llmOutputPayload.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputPayload.contextWindowReferenceTokens).toBe(200_000);
+      expect(llmOutputPayload.resolvedRef).toBe("codex/gpt-5.4-codex");
+      expect(llmOutputPayload.harnessId).toBe("codex");
+      expect(llmOutputPayload.assistantTexts).toEqual(["hello back"]);
+      expect(llmOutputPayload.lastAssistant?.role).toBe("assistant");
+      expect(llmOutputContext.runId).toBe("run-1");
+      expect(llmOutputContext.sessionId).toBe("session-1");
+      expect(llmOutputContext.contextTokenBudget).toBe(150_000);
+      expect(llmOutputContext.contextWindowSource).toBe("agentContextTokens");
+      expect(llmOutputContext.contextWindowReferenceTokens).toBe(200_000);
+      const [agentEndPayload, agentEndContext] = mockCall(agentEnd, "agent_end") as [
+        { messages?: Array<{ role?: string }>; success?: boolean },
+        { runId?: string; sessionId?: string },
+      ];
+      expect(agentEndPayload.success).toBe(true);
+      expect(agentEndPayload.messages?.some((message) => message.role === "user")).toBe(true);
+      expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
+      expect(agentEndContext.runId).toBe("run-1");
+      expect(agentEndContext.sessionId).toBe("session-1");
+      for (const hook of [beforePromptBuild, llmInput, llmOutput, agentEnd]) {
+        expect(hook).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ agentId: "main", sessionKey: params.sessionKey }),
+        );
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -626,6 +647,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
           turn: {
             id: "turn-1",
             status,
+            items: [],
             ...(error ? { error } : {}),
           },
         },
@@ -780,6 +802,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         turn: {
           id: "turn-1",
           status: "failed",
+          items: [],
           error: { message: "codex exploded" },
         },
       },

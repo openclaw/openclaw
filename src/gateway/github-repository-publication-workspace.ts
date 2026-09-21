@@ -35,7 +35,17 @@ export function repositoryOwner(session: RepositoryPublicationSessionIdentity) {
   return owner;
 }
 
-export function resolveReceiptOwner(row: RepositoryGitHubPublicationRow) {
+export function resolveReceiptOwner(
+  row: Pick<
+    RepositoryGitHubPublicationRow,
+    | "session_key"
+    | "agent_id"
+    | "session_id"
+    | "session_lifecycle_revision"
+    | "workspace_id"
+    | "branch"
+  >,
+) {
   const loaded = loadGatewaySessionEntryReadOnly(row.session_key, { agentId: row.agent_id });
   const workspace = getSessionRepositoryWorkspaceStore().get(row.workspace_id);
   if (

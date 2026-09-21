@@ -59,7 +59,9 @@ vi.mock("../../infra/gateway-lock.js", async (importOriginal) => {
 });
 
 vi.mock("../../infra/restart-intent.js", () => ({
+  prepareGatewayRestartIntentLegacyProcess: async () => undefined,
   writeGatewayRestartIntentSync: (params: unknown) => writeGatewayRestartIntentSync(params),
+  writeGatewayServiceRestartIntentSync: (params: unknown) => writeGatewayRestartIntentSync(params),
   clearGatewayRestartIntentSync: () => clearGatewayRestartIntentSync(),
 }));
 
@@ -218,7 +220,7 @@ describe("external gateway supervision lifecycle", () => {
           ownerId: "gateway-owner-old",
           port: 19_455,
         },
-        restartIntent: { force: true },
+        restartIntent: { force: true, drainBudgetMs: 300_000 },
       },
       localPortOverride: 19_455,
       ignoreEnvUrlOverride: true,
@@ -235,7 +237,8 @@ describe("external gateway supervision lifecycle", () => {
     });
     expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
       port: 19_455,
-      attempts: 120,
+      // Allow the five-minute drain budget before the one-minute readiness window.
+      attempts: 720,
       delayMs: 500,
       previousLockIdentity: lockIdentity,
       waitIndefinitelyForPreviousOwner: false,

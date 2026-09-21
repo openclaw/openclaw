@@ -9,7 +9,10 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
+import {
+  SessionTranscriptProjectionUnavailableError,
+  SessionTranscriptStorageUnavailableError,
+} from "./session-transcript-projection-error.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 export function withCurrentProjectionSnapshot<T>(
@@ -22,14 +25,10 @@ export function withCurrentProjectionSnapshot<T>(
   const readSnapshot = (database: CurrentTranscriptProjection["database"]) =>
     readCurrentProjectionSnapshot(database, resolved, read);
   const result = options.readOnly
-    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions, {
-        throwOnMissingTable: true,
-      })
+    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions)
     : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
   if (!result.found) {
-    throw new Error(
-      "Session transcript storage is unavailable; open the source gateway and retry.",
-    );
+    throw new SessionTranscriptStorageUnavailableError();
   }
   if (result.value.kind === "value") {
     return result.value.value;

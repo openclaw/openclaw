@@ -112,11 +112,6 @@ vi.mock("../../../state/user-profiles-owner-migration.js", () => ({
   repairMergedGatewayOwnerProfile,
 }));
 
-const activeToolSchemaState = vi.hoisted(() => ({
-  warnings: [] as string[],
-  params: undefined as { runWithPluginMetadataSnapshot?: unknown } | undefined,
-}));
-
 const commandSecretState = vi.hoisted(() => ({
   targetIds: new Set<string>(),
   resolvedConfig: undefined as OpenClawConfig | undefined,
@@ -152,7 +147,6 @@ vi.mock("../channel-capabilities.js", () => {
 });
 
 vi.mock("./channel-doctor.js", () => ({
-  collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(() => []),
   collectChannelDoctorPreviewWarnings: vi.fn(
     async ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {
       const telegram = cfg.channels?.telegram as { allowFrom?: unknown } | undefined;
@@ -359,15 +353,6 @@ vi.mock("./stale-auth-order.js", () => ({
   collectStaleConfiguredAuthOrderWarnings: () => staleAuthOrderState.warnings,
 }));
 
-vi.mock("./active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: async (params: {
-    runWithPluginMetadataSnapshot?: unknown;
-  }) => {
-    activeToolSchemaState.params = params;
-    return activeToolSchemaState.warnings;
-  },
-}));
-
 vi.mock("./codex-route-warnings.js", () => ({
   collectCodexRouteWarnings: vi.fn(() => []),
 }));
@@ -443,8 +428,6 @@ describe("doctor preview warnings", () => {
       changes: [],
       warnings: [],
     });
-    activeToolSchemaState.warnings = [];
-    activeToolSchemaState.params = undefined;
     commandSecretState.targetIds = new Set<string>();
     commandSecretState.resolvedConfig = undefined;
     commandSecretState.diagnostics = [];
@@ -756,38 +739,6 @@ describe("doctor preview warnings", () => {
     expectSingleWarningContaining(
       warnings,
       "auth.order.anthropic references only missing profiles",
-    );
-  });
-
-  it("includes active tool schema projection warnings", async () => {
-    activeToolSchemaState.warnings = [
-      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
-    ];
-
-    const warnings = await collectDoctorPreviewWarnings({
-      cfg: { tools: { allow: ["fuzzplugin_move_angles"] } },
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(
-      warnings.some((warning) => warning.includes('active tool "fuzzplugin_move_angles"')),
-    ).toBe(true);
-  });
-
-  it("scopes active tool schema preview checks to the Doctor metadata lifecycle", async () => {
-    const runWithPluginMetadataSnapshot = <T>(
-      _scope: { config: OpenClawConfig; workspaceDir?: string },
-      run: () => T,
-    ): T => run();
-
-    await collectDoctorPreviewWarnings({
-      cfg: {},
-      doctorFixCommand: "openclaw doctor --fix",
-      runWithPluginMetadataSnapshot,
-    });
-
-    expect(activeToolSchemaState.params?.runWithPluginMetadataSnapshot).toBe(
-      runWithPluginMetadataSnapshot,
     );
   });
 

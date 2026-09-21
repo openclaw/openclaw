@@ -1,7 +1,6 @@
 // Agent method tests cover run/steer/reset/wait behavior, task/subagent state,
 // approval followups, lifecycle hooks, and emitted gateway events.
 import { expectDefined } from "@openclaw/normalization-core";
-import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
@@ -26,11 +25,26 @@ import {
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-registry-runtime.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
+import type { GatewaySessionRow } from "../session-utils.types.js";
+import {
+  flushScheduledDispatchStep,
+  setDateOnlyFakeClockActive,
+  waitForAssertion,
+} from "./agent-clock.test-helpers.js";
 import { agentIdentityHandlers } from "./agent-identity.js";
+import { createAgentTestSessionRowProjection } from "./agent-session-projection.test-support.js";
 import { agentHandlers } from "./agent.js";
+import { createAgentTestUserTurnRecorder } from "./agent.user-turn-recorder.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
+export {
+  flushScheduledDispatchStep,
+  setDateOnlyFakeClockActive,
+  waitForAssertion,
+} from "./agent-clock.test-helpers.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -43,7 +57,6 @@ export const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("bas
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
-  loadGatewaySessionRow: vi.fn<typeof import("../session-utils.js").loadGatewaySessionRow>(),
   updateSessionStore: vi.fn(),
   applySessionEntryReplacements: vi.fn(),
   patchSessionEntryTarget: vi.fn(),
@@ -119,7 +132,6 @@ vi.mock("../session-utils.js", async () => {
       const loaded = mocks.loadSessionEntry(...args) as ReturnType<typeof actual.loadSessionEntry>;
       return { ...loaded, cfg: resolveAgentTestConfig(loaded.cfg) };
     },
-    loadGatewaySessionRow: mocks.loadGatewaySessionRow,
   };
 });
 
@@ -173,21 +185,11 @@ vi.mock("../../sessions/user-turn-transcript.js", async () => {
     createUserTurnTranscriptRecorder: (
       params: Parameters<typeof actual.createUserTurnTranscriptRecorder>[0],
     ) =>
-      actual.createUserTurnTranscriptRecorder({
-        ...params,
-        // Handler-unit fixtures mock session loading with ordered returns. The
-        // gateway-server suites own real target revalidation and SQLite proof.
-        target: mocks.userTurnStorePath
-          ? params.target
-          : {
-              sessionId: "test-session-id",
-              expectedSessionId: "test-session-id",
-              sessionKey: "agent:main:main",
-              sessionEntry: { sessionId: "test-session-id", updatedAt: Date.now() },
-              storePath: "/tmp/sessions.json",
-              agentId: "main",
-            },
-      }),
+      createAgentTestUserTurnRecorder(
+        actual.createUserTurnTranscriptRecorder,
+        params,
+        mocks.userTurnStorePath,
+      ),
   };
 });
 
@@ -294,7 +296,8 @@ vi.mock("../../agents/agent-scope.js", async () => {
   };
 });
 
-vi.mock("../../infra/agent-events.js", () => ({
+vi.mock("../../infra/agent-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-events.js")>()),
   assertAgentRunLifecycleGenerationCurrent: (lifecycleGeneration: string) => {
     if (lifecycleGeneration === mocks.lifecycleGeneration) {
       return;
@@ -303,17 +306,11 @@ vi.mock("../../infra/agent-events.js", () => ({
     error.name = "AbortError";
     throw error;
   },
-  claimAgentRunContext: mocks.registerAgentRunContext,
-  clearAgentRunContext: mocks.clearAgentRunContext,
   emitAgentEvent: mocks.emitAgentEvent,
   getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
-  getAgentRunContext: vi.fn(() => undefined),
-  resolveProjectedAgentRunProgressState: vi.fn(() => undefined),
   isAgentEventLifecycleGenerationCurrent: (generation: string) =>
     generation === mocks.lifecycleGeneration,
   registerAgentEventLifecycleRotationHandler: vi.fn(),
-  registerAgentRunContext: mocks.registerAgentRunContext,
-  onAgentEvent: vi.fn(),
 }));
 vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
@@ -402,7 +399,10 @@ vi.mock("../../channels/message/runtime.js", async () => {
   };
 });
 
-export const makeContext = (): GatewayRequestContext =>
+export const makeContext = (session?: {
+  agentId: string;
+  row: GatewaySessionRow;
+}): GatewayRequestContext =>
   ({
     trackExecution: trackAsyncWork,
     dedupe: new Map(),
@@ -418,6 +418,14 @@ export const makeContext = (): GatewayRequestContext =>
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
     getRuntimeConfig: () => resolveAgentTestConfig(),
+    ...bindSessionRowProjection(
+      {},
+      () =>
+        createAgentTestSessionRowProjection(
+          resolveAgentTestConfig,
+          session,
+        ) as unknown as SessionRowProjection,
+    ),
   }) as unknown as GatewayRequestContext;
 
 type AgentHandler = NonNullable<typeof agentHandlers.agent>;
@@ -433,43 +441,6 @@ type AgentIdentityGetHandler = NonNullable<(typeof agentIdentityHandlers)["agent
 type AgentIdentityGetHandlerArgs = Parameters<AgentIdentityGetHandler>[0];
 
 type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
-
-const realSetTimeout = globalThis.setTimeout.bind(globalThis);
-
-let dateOnlyFakeClockActive = false;
-
-export function setDateOnlyFakeClockActive(active: boolean): void {
-  dateOnlyFakeClockActive = active;
-}
-
-function waitForRealTimer(ms: number) {
-  return new Promise<void>((resolve) => {
-    realSetTimeout(resolve, ms);
-  });
-}
-
-export async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
-  let lastError: unknown;
-  for (let elapsed = 0; elapsed <= timeoutMs; elapsed += stepMs) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-
-    await Promise.resolve();
-    if (vi.isFakeTimers() && !dateOnlyFakeClockActive) {
-      await vi.advanceTimersByTimeAsync(stepMs);
-    } else {
-      await waitForRealTimer(stepMs);
-    }
-  }
-  throw toLintErrorObject(
-    lastError ?? new Error("assertion did not pass in time"),
-    "Non-Error thrown",
-  );
-}
 
 export function requireValue<T>(value: T | null | undefined, message: string): T {
   if (value == null) {
@@ -519,16 +490,6 @@ export function expectRespondError(
   return expectRecordFields(mockCallArg(mock, 0, 2), expected);
 }
 
-export async function flushScheduledDispatchStep() {
-  await Promise.resolve();
-  if (vi.isFakeTimers() && !dateOnlyFakeClockActive) {
-    await vi.runOnlyPendingTimersAsync();
-  } else {
-    await waitForRealTimer(15);
-  }
-  await Promise.resolve();
-}
-
 async function waitForAcceptedRunDispatch(params: {
   respond: ReturnType<typeof vi.fn>;
   commandCallCount: number;
@@ -558,7 +519,7 @@ export function mockMainSessionEntry(
 ) {
   mocks.loadSessionEntry.mockReturnValue({
     cfg,
-    storePath: "/tmp/sessions.json",
+    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
     entry: {
       sessionId: "existing-session-id",
       updatedAt: Date.now(),
@@ -774,7 +735,7 @@ resetSessionAccessorMocks();
 
 export function setupNewYorkTimeConfig(isoDate: string) {
   vi.useFakeTimers({ toFake: ["Date"] });
-  dateOnlyFakeClockActive = true;
+  setDateOnlyFakeClockActive(true);
   vi.setSystemTime(new Date(isoDate)); // Wed Jan 28, 8:30 PM EST
   mocks.loadConfigReturn = {
     agents: {
@@ -787,7 +748,7 @@ export function setupNewYorkTimeConfig(isoDate: string) {
 
 export function resetTimeConfig() {
   mocks.loadConfigReturn = {};
-  dateOnlyFakeClockActive = false;
+  setDateOnlyFakeClockActive(false);
   vi.useRealTimers();
 }
 
@@ -913,7 +874,7 @@ export function setupCronContinuationReleaseFixture() {
   };
   mocks.loadSessionEntry.mockReturnValue({
     cfg: {},
-    storePath: "/tmp/sessions.json",
+    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
     canonicalKey: sessionKey,
     entry,
   });
@@ -1120,12 +1081,10 @@ export function applyGatewaySubagentRegistryTestDeps(
   overrides?: Parameters<typeof setSubagentRegistryDepsForTest>[0],
 ) {
   setSubagentRegistryDepsForTest({
-    // Direct handler tests have no live Gateway owner. Keep registry polling
-    // deterministic so a real connection timeout cannot cross test boundaries.
+    // Registration alone does not complete a child. Completion fixtures supply
+    // their own terminal observation before exercising cleanup or announcement.
     callGateway: (async () => ({
-      status: "ok",
-      startedAt: Date.now(),
-      endedAt: Date.now(),
+      status: "pending",
     })) as SubagentRegistryDeps["callGateway"],
     loadAgentRuntimePluginRegistryHandle: () => undefined,
     // Handler fixtures own no browser sessions; lifecycle cleanup has separate coverage.
@@ -1146,11 +1105,10 @@ export function restoreAgentTaskRegistryRuntimeAfterTests(): void {
   resetTaskRegistryForTests({ persist: false });
 }
 
-export const describe0AfterEach0 = () => {
+export const describe0AfterEach0 = async () => {
   mocks.userTurnStorePath = undefined;
   // Drain deferred broadcasts before retiring the test-owned row and runtime state.
-  flushPendingSessionsChangedEvents();
-  mocks.loadGatewaySessionRow.mockReset();
+  await flushPendingSessionsChangedEvents();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetDiagnosticEventsForTest();
@@ -1179,12 +1137,12 @@ export const describe0AfterEach0 = () => {
       }),
     );
   mocks.lifecycleGeneration = "test-generation";
-  dateOnlyFakeClockActive = false;
+  setDateOnlyFakeClockActive(false);
   vi.useRealTimers();
 };
 
-function resetIntegrationState() {
-  flushPendingSessionsChangedEvents();
+async function resetIntegrationState() {
+  await flushPendingSessionsChangedEvents();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetAgentTaskRegistryForTests();
@@ -1192,7 +1150,6 @@ function resetIntegrationState() {
   applyGatewaySubagentRegistryTestDeps();
   mocks.agentCommand.mockReset();
   mocks.loadConfigReturn = {};
-  mocks.loadGatewaySessionRow.mockReset();
   mocks.loadSessionEntry.mockReset();
   mocks.updateSessionStore.mockReset();
   resetSessionAccessorMocks();
@@ -1209,16 +1166,16 @@ function resetIntegrationState() {
   mocks.resolveVoiceWakeRouteByTrigger.mockReset();
   mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
   mocks.lifecycleGeneration = "test-generation";
-  dateOnlyFakeClockActive = false;
+  setDateOnlyFakeClockActive(false);
   vi.useRealTimers();
 }
 
 export const describe1BeforeEach0 = () => {
-  resetIntegrationState();
+  return resetIntegrationState();
 };
 
 export const describe1AfterEach1 = () => {
-  resetIntegrationState();
+  return resetIntegrationState();
 };
 
 export function prime(sessionId = "existing-session-id", cfg: Record<string, unknown> = {}) {

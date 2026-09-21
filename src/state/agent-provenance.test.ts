@@ -25,7 +25,7 @@ it("records, replaces, lists, and deletes agent creation provenance", async () =
         { createdVia: "agent", creatorAgentId: "Main" },
         { env: state.env, nowMs: 20 },
       );
-      expect(listAgentProvenance({ env: state.env })).toEqual([
+      expect(await listAgentProvenance({ env: state.env })).toEqual([
         {
           agentId: "worker",
           createdVia: "agent",

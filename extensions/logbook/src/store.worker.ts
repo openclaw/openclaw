@@ -14,7 +14,7 @@ import {
   prepareSqliteQuerySync,
   runSqliteImmediateTransactionSync,
   type SqliteWorkerBackend,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { pickKeyframeId } from "./analyze.js";
 import type {
   LogbookBatchInput,
@@ -306,11 +306,23 @@ class LogbookDatabaseStore {
     return row ? toFrame(row) : null;
   }
 
-  framesInRange(startMs: number, endMs: number): LogbookFrame[] {
+  framesInRange(
+    startMs: number,
+    endMs: number,
+  ): Pick<LogbookFrame, "id" | "capturedAtMs" | "idle">[] {
     return executeSqliteQuerySync(
       this.db,
-      this.framesQuery.where("captured_at_ms", ">=", startMs).where("captured_at_ms", "<", endMs),
-    ).rows.map(toFrame);
+      this.framesQuery
+        .clearSelect()
+        // Keep native integer decoding and overflow errors for unused numeric fields.
+        .select(["id", "captured_at_ms", "screen_index", "width", "height", "byte_size", "idle"])
+        .where("captured_at_ms", ">=", startMs)
+        .where("captured_at_ms", "<", endMs),
+    ).rows.map((row) => ({
+      id: row.id,
+      capturedAtMs: row.captured_at_ms,
+      idle: row.idle === 1,
+    }));
   }
 
   createBatch(params: LogbookBatchInput): number {

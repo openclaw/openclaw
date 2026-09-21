@@ -1,9 +1,10 @@
 ---
-summary: "Manifest fields for icons, CLI, MCP, Control UI, dashboard, QA, channel, and backup surfaces"
+summary: "Manifest fields for icons, themes, CLI, MCP, Control UI, dashboard, QA, channel, and backup surfaces"
 read_when:
   - You are adding plugin branding or compact tool activity artwork
   - Your plugin contributes a CLI command, MCP server, or dashboard widget
   - You are shipping native Control UI or a QA runner
+  - Your plugin contributes a theme to the shared appearance catalog
   - You need backups or transcripts to know about plugin-owned data
 title: "Manifest host surface fields"
 sidebarTitle: "Host surface fields"
@@ -150,6 +151,70 @@ package's `files` list when used. OpenClaw's bundled metadata copier and plugin
 runtime package builder include these paths automatically. Asset discovery
 uses the Gateway's prepared plugin metadata; restart or explicitly reload the
 plugin after changing its artwork.
+
+## Themes
+
+Declare portable themes in `openclaw.plugin.json` to make them available in
+Settings → Appearance and the agent's [theme tool](/tools/theme). The same
+catalog serves both surfaces. Theme discovery reads static JSON and does not
+execute plugin code or require the Custom plugin UI Labs setting.
+
+```json
+{
+  "id": "starship",
+  "configSchema": { "type": "object", "additionalProperties": false },
+  "themes": [
+    {
+      "id": "xenovessel",
+      "name": "Xenovessel",
+      "description": "Near-black indigo, acid lime, and alien cyan with monospace text.",
+      "source": "themes/xenovessel.json"
+    }
+  ]
+}
+```
+
+The catalog ID is `starship/xenovessel`. It preserves the plugin's canonical ID,
+including case, scoped IDs such as `@scope/starship`, and multi-entry IDs such as
+`pack/one`; their theme IDs are `@scope/starship/xenovessel` and
+`pack/one/xenovessel`. The complete catalog ID is limited to 256 characters.
+Each plugin can declare up to 32 themes.
+Local IDs must start with a lowercase letter or digit, contain only lowercase
+letters, digits, underscores, or hyphens, and be at most 64 characters. The
+`user/` namespace belongs to personally imported themes.
+
+`source` is a relative `.json` path inside the plugin root; include it in the
+published package's `files` list. Absolute paths, traversal, and symlinks escaping
+the root are rejected. Each source file can contain at most 16 KiB including
+formatting whitespace. Its normalized definition must fit in 4096 UTF-8 bytes.
+
+The JSON file contains `name`, `description`, and at least one of `light` or
+`dark`; its name and description must match the manifest. Names are limited to
+80 characters and descriptions to 320. Each present mode supplies all semantic
+colors from the [theme definition example](/tools/theme#create-and-apply-a-personal-theme),
+plus optional `font-sans` and `font-mono` font-family lists. Individual values are
+limited to 120 characters. Supported colors are hex, `rgb()`, `rgba()`, `hsl()`,
+`hsla()`, `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, `black`, `white`, and
+`transparent`. CSS declarations, URLs, and references to other CSS variables are
+not theme data. An invalid definition is omitted from the catalog with a plugin
+diagnostic; other plugin capabilities remain available.
+
+The source JSON also accepts optional presentation fields. They belong in the definition referenced by `themes[].source`, alongside `name`, `description`, and the palettes:
+
+- `mascot`: `"claw"` (the default) or `"none"`; `"none"` uses neutral branding and hides the resident lobster and visiting lobster strangers. Ordinary critters can still cross the composer ledge when Lobster visits is enabled, and the toggle stays unchanged.
+- `workingPhrases`: up to 24 literal, untranslated long-wait status phrases. Each phrase is trimmed, must contain 1–24 characters, and cannot contain control characters or duplicate another trimmed phrase. Omit it to keep the default vocabulary; use `[]` to hide long-wait phrases.
+- `critters`: up to 8 unique IDs from the built-in `"penguin"` and `"fedora"` catalog, adding occasional visitors to ordinary composer ledge traffic while Lobster visits is enabled. Omit it or use `[]` for no theme-supplied critters. Unknown IDs and duplicates are rejected.
+- `avatarHat`: `"fedora"`, `"crown"`, `"santa"`, `"party"`, or `"pumpkin"` adds an occasional decorative hat to agent avatars; omission adds no hat.
+
+These fields count toward the same 4096-byte normalized definition limit and are returned with the catalog descriptor. The [theme definition example](/tools/theme#create-and-apply-a-personal-theme) includes all four fields.
+
+Only enabled plugins contribute themes. OpenClaw retains validated definitions
+with the current plugin inventory. After editing a source file or manifest, run
+`openclaw plugins reload starship` or choose **Reload** in the plugin's Lifecycle
+settings. Reload publishes the new palette and refreshes connected clients
+without restarting the Gateway. No filesystem polling is needed. Disabling or
+removing the plugin removes its themes from the catalog; the selected theme can
+then fall back as described in [Plugin themes and hot reload](/tools/theme#plugin-themes-and-hot-reload).
 
 ## Transcript sources reference
 

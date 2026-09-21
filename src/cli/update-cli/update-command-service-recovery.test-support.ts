@@ -7,9 +7,15 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/confi
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import { consumeGatewayRestartIntentPayloadSync } from "../../infra/restart-intent.js";
+import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -19,6 +25,53 @@ import {
   maybeStopManagedServiceBeforeMutableUpdate,
   maybeRestartServiceAfterFailedMutableUpdate,
 } from "./update-command-service.js";
+
+const hostPlatform = process.platform;
+
+function createServingOwnerFixture() {
+  let lease: ReturnType<typeof acquireGatewayOwnerLease> | undefined;
+  let coordinator: ReturnType<typeof acquireGatewayLifecycleCoordinator> | undefined;
+  let env: NodeJS.ProcessEnv;
+  const release = async () => {
+    await lease?.release();
+    lease = undefined;
+    coordinator?.release();
+    coordinator = undefined;
+  };
+  return {
+    async publish(kind: "systemd" | "launchd" = "systemd") {
+      expect(lease).toBeUndefined();
+      env = { ...process.env };
+      const platform = process.platform;
+      // Use the real host's self identity while native service transport is simulated.
+      mockProcessPlatform(hostPlatform);
+      try {
+        coordinator = acquireGatewayLifecycleCoordinator({
+          databasePath: resolveOpenClawStateSqlitePath(env),
+        });
+        lease = acquireGatewayOwnerLease({
+          env,
+          port: 19305,
+          mode: "supervised",
+          supervisor: {
+            kind,
+            name: kind === "systemd" ? "openclaw-gateway.service" : "ai.openclaw.gateway",
+          },
+        });
+        await lease.ready;
+      } finally {
+        mockProcessPlatform(platform);
+      }
+    },
+    async restart() {
+      if (lease) {
+        expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({ reason: "gateway.restart" });
+        await release();
+      }
+    },
+    release,
+  };
+}
 
 export async function createServiceActivationFixture() {
   const root = await fs.realpath(
@@ -71,7 +124,7 @@ export async function createServiceActivationFixture() {
     `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
   );
   await writeRecoveryConfig(configPath, VERSION);
-  return { root, configPath, envSnapshot };
+  return { root, configPath, envSnapshot, servingOwner: createServingOwnerFixture() };
 }
 
 export function readyRecoveryHealth(
@@ -258,7 +311,7 @@ export function registerRecoveryTests(params: {
     },
   );
 
-  it.each(["healthy", "unready", "exited"] as const)(
+  it.each(["healthy", "unready", "exited", "cleanup"] as const)(
     "failed-update recovery requires canonical readiness after start acceptance (%s)",
     async (outcome) => {
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
@@ -279,13 +332,20 @@ export function registerRecoveryTests(params: {
           hints: [],
         },
       }));
-      await expect(
-        maybeRestartServiceAfterFailedMutableUpdate({
-          preManagedServiceStop: before,
-          jsonMode: true,
-          recovery: { serviceRestartSafe: true, version: VERSION, buildId: "restored-git-build" },
-        }),
-      ).resolves.toBe(outcome === "healthy" ? "healthy" : "failed");
+      const cleanup = new CommandProcessCleanupError();
+      if (outcome === "cleanup") {
+        params.mocks.health.mockRejectedValueOnce(cleanup);
+      }
+      const pending = maybeRestartServiceAfterFailedMutableUpdate({
+        preManagedServiceStop: before,
+        jsonMode: true,
+        recovery: { serviceRestartSafe: true, version: VERSION, buildId: "restored-git-build" },
+      });
+      if (outcome === "cleanup") {
+        await expect(pending).rejects.toBe(cleanup);
+      } else {
+        await expect(pending).resolves.toBe(outcome === "healthy" ? "healthy" : "failed");
+      }
       expect(params.mocks.health).toHaveBeenCalledWith(
         expect.objectContaining({
           expectedBuildId: "restored-git-build",

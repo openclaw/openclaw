@@ -5,6 +5,7 @@ import { SqliteQueryCompiler } from "kysely";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -13,12 +14,11 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readMemoryPreimages, storeMemoryPreimage } from "./dreaming-consolidation-artifacts.js";
 import {
-  deleteMemoryEntryOrigins,
+  deleteMemoryEntryOriginsInDatabase,
   listMemoryEntryOrigins,
   listMemorySessionTombstones,
   pruneMemoryEntryOrigins,
   recordMemoryEntryOrigins,
-  recordMemorySessionTombstones,
   reserveMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
@@ -27,6 +27,7 @@ import { recordShortTermRecalls } from "./short-term-promotion-record.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
+  seedMemoryForgetTombstones,
 } from "./test-helpers.js";
 
 describe("memory entry origins", () => {
@@ -63,14 +64,20 @@ describe("memory entry origins", () => {
   }
 
   it("lazily restores the additive origins table without changing the agent schema version", async () => {
-    expect(deleteMemoryEntryOrigins({ agentId: "main", entryKeys: ["candidate"] })).toBe(0);
+    const pruning = {
+      workspaceDir: stateDir,
+      agentIds: ["main"],
+      entryKeys: ["candidate"],
+      retainedEntryKeys: new Set<string>(),
+    };
+    await pruneMemoryEntryOrigins(pruning);
     await expect(fs.access(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).rejects.toThrow();
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     const version = db.prepare("PRAGMA user_version").get();
     db.exec("DROP TABLE IF EXISTS memory_entry_origins");
 
     expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([]);
-    expect(deleteMemoryEntryOrigins({ agentId: "main", entryKeys: ["candidate"] })).toBe(0);
+    await pruneMemoryEntryOrigins(pruning);
     expect(
       db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
     ).toBeUndefined();
@@ -98,7 +105,7 @@ describe("memory entry origins", () => {
     ).toBeUndefined();
 
     expect(
-      recordMemorySessionTombstones({
+      seedMemoryForgetTombstones({
         agentId: "main",
         sessionIds: ["session-2", "session-1", "session-1"],
         createdAt: 1_000,
@@ -109,7 +116,7 @@ describe("memory entry origins", () => {
       .get();
     expect(deletionRevision).not.toEqual(revisionBefore);
     expect(
-      recordMemorySessionTombstones({
+      seedMemoryForgetTombstones({
         agentId: "main",
         sessionIds: ["session-1"],
         reason: "replacement",
@@ -194,11 +201,15 @@ describe("memory entry origins", () => {
       origin("replacement", "session-1"),
       origin("surviving", "session-3"),
     ]);
-    expect(deleteMemoryEntryOrigins({ agentId: "main", entryKeys: ["replacement"] })).toBe(1);
+    await expect(
+      withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+        deleteMemoryEntryOriginsInDatabase(db, { agentId: "main", entryKeys: ["replacement"] }),
+      ),
+    ).resolves.toBe(1);
     expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual([origin("surviving", "session-3")]);
   });
 
-  it("rolls back only newly reserved lineage when a replacement does not commit", () => {
+  it("rolls back only newly reserved lineage when a replacement does not commit", async () => {
     const priorEntry = "- Keep the original deployment target.";
     const prior = Array.from({ length: 32 }, (_, index) =>
       origin("prior", `session-${String(index).padStart(2, "0")}`),
@@ -212,7 +223,11 @@ describe("memory entry origins", () => {
       { entryKeys: ["missing"] },
       { entryKeys: ["candidate"], sessionIds: ["session-1"] },
     ]) {
-      expect(deleteMemoryEntryOrigins({ agentId: "main", ...filter })).toBe(0);
+      await expect(
+        withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+          deleteMemoryEntryOriginsInDatabase(db, { agentId: "main", ...filter }),
+        ),
+      ).resolves.toBe(0);
     }
     expect(listMemoryEntryOrigins({ agentId: "main" })).toEqual(original);
     const compile = vi.spyOn(SqliteQueryCompiler.prototype, "compileQuery");

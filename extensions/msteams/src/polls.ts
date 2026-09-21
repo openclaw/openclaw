@@ -1,4 +1,3 @@
-// Msteams plugin module implements polls behavior.
 import crypto from "node:crypto";
 import {
   parseStrictNonNegativeInteger,
@@ -73,7 +72,6 @@ export const MSTEAMS_POLLS_NAMESPACE = "polls";
 export const MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE = "poll-vote-buckets";
 const MSTEAMS_MAX_POLLS = 1000;
 export const MSTEAMS_SQLITE_MAX_POLL_ROWS = MSTEAMS_MAX_POLLS + 1000;
-// Keep worst-case retained vote buckets below plugin-state's per-plugin live row cap.
 const MSTEAMS_POLL_VOTE_BUCKET_COUNT = 32;
 export const MSTEAMS_MAX_POLL_VOTE_BUCKET_ROWS =
   (MSTEAMS_MAX_POLLS + 1) * MSTEAMS_POLL_VOTE_BUCKET_COUNT;

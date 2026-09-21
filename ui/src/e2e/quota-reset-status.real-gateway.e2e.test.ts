@@ -97,14 +97,26 @@ async function captureFinalStatus(
   observations.push({ action: "models-status", ...cli });
   expect(cli.code, cli.stderr).toBe(0);
   const status: ModelsStatus = JSON.parse(cli.stdout);
+  observations.push({
+    action: "models-profile-status",
+    profile: status.auth.oauth.profiles.find((entry) => entry.profileId === fixture.profileId),
+  });
   expect
     .soft(status.auth.unusableProfiles)
     .not.toContainEqual(expect.objectContaining({ profileId: fixture.profileId }));
+  // Refreshed fixture credentials stay valid for two days, outside the CLI
+  // 24-hour expiry warning; original-credential expiry scenarios remain separate.
   expect
     .soft(status.auth.oauth.profiles)
     .toContainEqual(
       expect.objectContaining({ profileId: fixture.profileId, type: "oauth", status: "ok" }),
     );
+  expect
+    .soft(
+      status.auth.oauth.profiles.find((profile) => profile.profileId === fixture.profileId)
+        ?.remainingMs,
+    )
+    .toBeGreaterThan(0);
 
   const dashboard = await fixture.gateway.cli(["dashboard", "--json"]);
   expect(dashboard.code, dashboard.stderr).toBe(0);
@@ -385,6 +397,14 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             JSON.stringify(observations, null, 2),
           );
           await fs.writeFile(path.join(artifactDir, "gateway-evidence.json"), evidence());
+          const finalStatus = observations.findLast(
+            (entry) => isRecord(entry) && entry.action === "models-profile-status",
+          );
+          const profile = isRecord(finalStatus) ? finalStatus.profile : undefined;
+          await fs.writeFile(
+            path.join(artifactDir, "quota.public.json"),
+            JSON.stringify(await fixture.publicDiagnostics(profile), null, 2),
+          );
         }
       },
     );

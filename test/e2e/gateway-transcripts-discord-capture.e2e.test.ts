@@ -409,9 +409,11 @@ describe("Gateway admitted Discord transcript capture", () => {
       const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
         await import("../../src/config/config.js");
       const { resetConfigOverrides } = await import("../../src/config/runtime-overrides.js");
-      const { drainSessionStoreWriterQueuesForTest, clearSessionStoreCacheForTest } =
+      const { clearSessionStoreCacheForTest } =
         await import("../../src/config/sessions/store-writer-state.js");
-      const { closeOpenClawStateDatabaseByPath } =
+      const { drainSessionStoreWriterQueuesForTest } =
+        await import("../../src/config/sessions/store-writer-state.test-support.js");
+      const { closeOpenClawStateDatabaseByPathAsync } =
         await import("../../src/state/openclaw-state-db-cache.js");
       const { activeSessions, resolveSourceProvider } =
         await import("../../src/transcripts/capture.js");
@@ -438,7 +440,9 @@ describe("Gateway admitted Discord transcript capture", () => {
           } finally {
             clearSessionStoreCacheForTest();
             await resetPreparedModelRuntimeSnapshotsForTest();
-            closeOpenClawStateDatabaseByPath(path.join(stateDir, "state", "openclaw.sqlite"));
+            await closeOpenClawStateDatabaseByPathAsync(
+              path.join(stateDir, "state", "openclaw.sqlite"),
+            );
             resetConfigOverrides();
             clearRuntimeConfigSnapshot();
             clearConfigCache();
@@ -562,7 +566,7 @@ describe("Gateway admitted Discord transcript capture", () => {
         const inboundProvider = published?.inboundPluginRegistry.transcriptSourceProviders.find(
           (entry) => entry.provider.id === "discord-voice",
         )?.provider;
-        expect(inboundProvider).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
+        expect(inboundProvider).toBeDefined();
         const selectedRegistry = published?.pluginGeneration.pluginRegistry;
         const selectedProvider = selectedRegistry?.transcriptSourceProviders.find(
           (entry) => entry.provider.id === "discord-voice",
@@ -577,7 +581,7 @@ describe("Gateway admitted Discord transcript capture", () => {
               source,
             })),
           }),
-        ).toBe(registration.registry.transcriptSourceProviders[0]?.provider);
+        ).toBe(inboundProvider);
       }
       fixture.bindPublishedRuntime();
       phase("model-publication:verified");

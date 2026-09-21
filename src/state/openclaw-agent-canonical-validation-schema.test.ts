@@ -6,10 +6,11 @@ import {
   assertCanonicalSessionValidationSchema,
   withoutCanonicalSessionValidationSchema,
 } from "./openclaw-agent-canonical-validation-schema.js";
-import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { withoutTranscriptFtsRowSchema } from "./openclaw-agent-transcript-fts-schema.js";
 
 const key = "agent:main:target";
 const sibling = "agent:main:sibling";
@@ -198,6 +199,12 @@ describe("canonical session validation invalidation", () => {
 });
 
 describe("canonical validation schema admission", () => {
+  const missingTable = expect.objectContaining({
+    name: "SessionMetadataUnavailableError",
+    reason: "table-missing",
+    missingTables: ["session_canonical_validation_pending"],
+    cause: expect.objectContaining({ message: expect.stringMatching(/missing or drifted/u) }),
+  });
   it.each([
     "DROP TABLE session_canonical_validation_pending",
     "DROP TRIGGER session_nodes_canonical_pending_after_update",
@@ -210,7 +217,9 @@ describe("canonical validation schema admission", () => {
       assertCanonicalSessionValidationSchema(database);
       database.exec(change);
       expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
-        /canonical validation schema is missing or drifted/u,
+        change.startsWith("DROP TABLE")
+          ? missingTable
+          : /canonical validation schema is missing or drifted/u,
       );
     });
   });
@@ -239,9 +248,7 @@ describe("canonical validation schema admission", () => {
         database.open();
         database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
         database.exec(`PRAGMA schema_version = ${cookie}`);
-        expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
-          /missing or drifted/u,
-        );
+        expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(missingTable);
       });
     },
   );
@@ -258,9 +265,7 @@ describe("canonical validation schema admission", () => {
           replacement.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
           replacement.exec(`PRAGMA schema_version = ${cookie}`);
           database.deserialize(replacement.serialize());
-          expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
-            /missing or drifted/u,
-          );
+          expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(missingTable);
         } finally {
           replacement.close();
         }
@@ -276,7 +281,11 @@ describe("agent schema 21 migration", () => {
       const database = new DatabaseSync(pathname);
       let oldWriter: DatabaseSync | undefined;
       try {
-        database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
+        database.exec(
+          withoutCanonicalSessionValidationSchema(
+            withoutTranscriptFtsRowSchema(OPENCLAW_AGENT_SCHEMA_SQL),
+          ),
+        );
         database.exec(`PRAGMA user_version = 20;
           INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
           VALUES ('primary', 'agent', 20, 'main', 1, 1)`);
@@ -302,13 +311,13 @@ describe("agent schema 21 migration", () => {
         );
         expect(pendingKeys(database)).toEqual([key, sibling].toSorted());
         expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
+          OPENCLAW_AGENT_SCHEMA_VERSION,
         );
         expect(
           database
             .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
             .get()?.schema_version,
-        ).toBe(CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION);
+        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
         assertCanonicalSessionValidationSchema(database);
         clearPending(database);
         oldWrite.run(sibling, key);
@@ -325,14 +334,20 @@ describe("agent schema 21 migration", () => {
       const pathname = state.path("interrupted-validation.sqlite");
       const database = new DatabaseSync(pathname);
       try {
-        database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
+        database.exec(
+          withoutCanonicalSessionValidationSchema(
+            withoutTranscriptFtsRowSchema(OPENCLAW_AGENT_SCHEMA_SQL),
+          ),
+        );
         database.exec(`PRAGMA user_version = 20;
           INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
           VALUES ('primary', 'agent', 20, 'main', 1, 1)`);
         insertNode(database, key, "target");
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
           database.setAuthorizer((action, name, value) =>
-            action === constants.SQLITE_PRAGMA && name === "user_version" && value === "21"
+            action === constants.SQLITE_PRAGMA &&
+            name === "user_version" &&
+            value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
               ? constants.SQLITE_DENY
               : constants.SQLITE_OK,
           );

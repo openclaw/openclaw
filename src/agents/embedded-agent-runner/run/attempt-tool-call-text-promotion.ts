@@ -15,6 +15,7 @@ import type { StreamFn } from "../../runtime/index.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { couldNormalizeToolNamePrefixToAllowedTool } from "../../tool-policy.js";
 import { resolveToolCallName } from "./attempt-tool-call-name-resolution.js";
+import { mapAssistantMessageStream } from "./stream-wrapper.js";
 
 type AssistantStream = Awaited<ReturnType<StreamFn>>;
 
@@ -164,13 +165,8 @@ export function wrapStreamFnPromoteStandaloneTextToolCalls(
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return baseFn;
   }
-  return (model, context, streamOptions) => {
-    const maybeStream = baseFn(model, context, streamOptions);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamPromoteStandaloneTextToolCalls(stream, allowedToolNames),
-      );
-    }
-    return wrapStreamPromoteStandaloneTextToolCalls(maybeStream, allowedToolNames);
-  };
+  return (model, context, streamOptions) =>
+    mapAssistantMessageStream(baseFn(model, context, streamOptions), (stream) =>
+      wrapStreamPromoteStandaloneTextToolCalls(stream, allowedToolNames),
+    );
 }

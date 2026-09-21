@@ -129,6 +129,7 @@ vi.mock("./prepared-model-runtime.js", () => {
       config: params.config,
       workspaceDir: params.workspaceDir,
       configuredRuntimeModels: [],
+      findConfiguredRuntimeModel: () => undefined,
       inlineProviderModels: [],
       createStores: () => ({ authStorage, modelRegistry }),
     };

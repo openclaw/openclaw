@@ -29,6 +29,7 @@ export {
   navigateChromeMcpPage,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  selectChromeMcpOption,
   resolveChromeMcpNavigateCallTimeoutMs,
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,

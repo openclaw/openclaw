@@ -27,6 +27,7 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForTurn } from "../../agents/mcp-app-model-context.js";
+import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -45,7 +46,9 @@ import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { ReplyPayload } from "../types.js";
 import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
@@ -62,7 +65,6 @@ import type {
 import {
   buildTerminalAgentRunFailureReplyPayload,
   markAgentRunFailureReplyPayload,
-  resolveExternalRunFailureTextForConversation,
 } from "./agent-runner-failure-reply.js";
 import {
   executeAgentFallbackCycle,
@@ -75,7 +77,8 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
-import type { DirectBlockDelivery } from "./reply-delivery.js";
+import { resolveFollowupAbortSignal } from "./queue/types.js";
+import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
@@ -127,8 +130,7 @@ async function executeAgentTurnInternalLoop(
   compaction: AgentTurnCompaction,
 ): Promise<AgentTurnInternalResult> {
   const heartbeatState = { didLogStrip: false };
-  // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
-  const directlySentBlockKeys = new Set<string>();
+  // Direct delivery receipts retain settlement facts across fallback candidates.
   const directBlockDeliveries: DirectBlockDelivery[] = [];
   const runnableRun = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
     run: params.followupRun.run,
@@ -185,6 +187,7 @@ async function executeAgentTurnInternalLoop(
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
       isControlUiVisible: shouldSurfaceToControlUi,
+      ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
       completionSource: params.completionSource,
     });
   }
@@ -212,6 +215,7 @@ async function executeAgentTurnInternalLoop(
           agentId: params.followupRun.run.agentId,
           sessionKey: params.sessionKey,
           workspaceDir: params.followupRun.run.workspaceDir,
+          mediaNormalizationOwner: params.followupRun.run.mediaNormalizationOwner,
           messageProvider: params.followupRun.run.messageProvider,
           accountId:
             params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
@@ -340,7 +344,6 @@ async function executeAgentTurnInternalLoop(
       const presentation = createAgentTurnPresentation({
         turn: params,
         replyMediaContext,
-        directlySentBlockKeys,
         directBlockDeliveries,
         heartbeatState,
       });
@@ -355,7 +358,6 @@ async function executeAgentTurnInternalLoop(
         currentTurnImages,
         state: fallbackCycleState,
         presentation,
-        directlySentBlockKeys,
         directBlockDeliveries,
         notifyAgentRunStart,
         signalExecutionPhaseForTyping,
@@ -400,6 +402,8 @@ async function executeAgentTurnInternalLoop(
         shouldSurfaceToControlUi,
         timing: agentTurnTiming,
         modelPatch,
+        resolveVisibleReplyDelivery: () =>
+          resolveReplyFailureVisibility(params.resolveVisibleReplyDelivery, directBlockDeliveries),
       });
       if (action.kind === "aborted") {
         return action;
@@ -482,12 +486,7 @@ async function executeAgentTurnInternalLoop(
       if (formattedErrorCandidate) {
         runResult.payloads = [
           markAgentRunFailureReplyPayload({
-            text: resolveExternalRunFailureTextForConversation({
-              text: formattedErrorCandidate,
-              sessionCtx: params.sessionCtx,
-              isGenericRunnerFailure: false,
-              cfg: params.followupRun.run.config,
-            }),
+            text: formattedErrorCandidate,
             isError: true,
           }),
         ];
@@ -498,14 +497,21 @@ async function executeAgentTurnInternalLoop(
     ? false
     : (modelPatch.captureFallbackFailure(fallbackAttempts) ?? false);
   await modelPatch.finish(!terminalRunFailed && !patchedModelNeedsRevert);
-  const terminalFailurePayload = terminalRunFailed
-    ? buildTerminalAgentRunFailureReplyPayload({
-        isHeartbeat: params.isHeartbeat,
-        visibleReplyDelivered: (await params.resolveVisibleReplyDelivery?.()) === true,
-        sessionCtx: params.sessionCtx,
-        cfg: params.followupRun.run.config,
-      })
-    : undefined;
+  let terminalFailurePayload: ReplyPayload | undefined;
+  if (terminalRunFailed) {
+    const replyExpectation = resolveReplyExpectation(params.followupRun.run);
+    terminalFailurePayload = buildTerminalAgentRunFailureReplyPayload({
+      isHeartbeat: params.isHeartbeat,
+      replyExpectation,
+      visibleReplyDelivered:
+        replyExpectation === "optional"
+          ? await resolveReplyFailureVisibility(
+              params.resolveVisibleReplyDelivery,
+              directBlockDeliveries,
+            )
+          : false,
+    });
+  }
 
   return {
     kind: "completed",
@@ -518,7 +524,9 @@ async function executeAgentTurnInternalLoop(
     fallbackAttempts,
     didLogHeartbeatStrip: heartbeatState.didLogStrip,
     autoCompactionCount: compaction.count,
-    directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
+    hasDirectlySentBlockReply:
+      directBlockDeliveries.some((delivery) => delivery.terminalDeliveryConfirmed === true) ||
+      undefined,
     directBlockDeliveries,
     ...(terminalFailurePayload ? { terminalFailurePayload } : {}),
     ...(terminalRunFailed && fallbackCycleState.postCompactionModelAttempted
@@ -544,6 +552,7 @@ async function executeAgentTurnInternal(
     agentId: params.followupRun.run.agentId,
     ingressKind: "channel",
     boundary: "auto-reply.agent-runner",
+    operatorAuthority: params.followupRun.operatorAuthority,
     evidence: params.followupRun.channelAdmissionEvidence,
     onAdmitted: (context) => {
       bindGatewayContextResolver(context, gatewayContextResolver);
@@ -557,7 +566,10 @@ async function executeAgentTurnInternal(
     sessionId: params.followupRun.run.sessionId,
     sessionKey: params.sessionKey,
     sessionFile: params.followupRun.run.sessionFile,
-    abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+    abortSignal: resolveFollowupAbortSignal({
+      abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+      operatorAuthority: params.followupRun.operatorAuthority,
+    }),
   });
   try {
     return await executeAgentTurnInternalLoop(
@@ -695,7 +707,7 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
         autoCompactionCount: internal.autoCompactionCount,
         ...completedCompaction(),
         didLogHeartbeatStrip: internal.didLogHeartbeatStrip,
-        directlySentBlockKeys: internal.directlySentBlockKeys,
+        hasDirectlySentBlockReply: internal.hasDirectlySentBlockReply,
         directBlockDeliveries: internal.directBlockDeliveries,
       },
     };

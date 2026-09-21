@@ -89,16 +89,16 @@ describe("AppSidebar gateway session pagination", () => {
       expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(pageSize * 2);
       harness.list.mockClear();
 
+      vi.useFakeTimers();
       gateway.publishEvent("sessions.changed", {
         sessionKey: keys[0],
         agentId: "main",
         reason: "archive",
       });
 
-      await waitForFast(() => {
-        expect(harness.list).toHaveBeenCalledOnce();
-        expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(pageSize * 2);
-      });
+      await vi.advanceTimersByTimeAsync(200);
+      expect(harness.list).toHaveBeenCalledOnce();
+      expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(pageSize * 2);
       expect(harness.list).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "main",

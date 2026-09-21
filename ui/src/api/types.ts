@@ -17,12 +17,6 @@ import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type {
-  SessionCompactionCheckpoint as ProtocolSessionCompactionCheckpoint,
-  SessionsCompactionBranchResult as ProtocolSessionsCompactionBranchResult,
-  SessionsCompactionListResult as ProtocolSessionsCompactionListResult,
-  SessionsCompactionRestoreResult as ProtocolSessionsCompactionRestoreResult,
-} from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import type {
   GatewaySessionRow as GatewayWireSessionRow,
@@ -225,11 +219,6 @@ export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: SessionWorkspaceArtifactEntry[];
 };
 
-export type SessionCompactionCheckpoint = Omit<
-  ProtocolSessionCompactionCheckpoint,
-  "tokensVersion"
->;
-
 export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
   Pick<SessionRow, "archivedBy" | "updatedAt"> & {
     /** Transient UI-owned Swarm note overlays, not persisted session fields. */
@@ -246,27 +235,6 @@ export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "upda
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
-export type SessionsCompactionListResult = Omit<
-  ProtocolSessionsCompactionListResult,
-  "checkpoints"
-> & {
-  checkpoints: SessionCompactionCheckpoint[];
-};
-
-type SessionCompactionMutationResult<T> = Omit<T, "checkpoint" | "entry"> & {
-  checkpoint: SessionCompactionCheckpoint;
-  entry: {
-    sessionId: string;
-    updatedAt: number;
-  } & Record<string, unknown>;
-};
-
-export type SessionsCompactionBranchResult =
-  SessionCompactionMutationResult<ProtocolSessionsCompactionBranchResult>;
-
-export type SessionsCompactionRestoreResult =
-  SessionCompactionMutationResult<ProtocolSessionsCompactionRestoreResult>;
-
 export type SessionsRewindResult =
   import("../../../packages/gateway-protocol/src/index.js").SessionsRewindResult;
 export type SessionsForkResult =
@@ -279,6 +247,7 @@ export type SessionsBranchesSwitchResult =
 
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
+  category?: GatewaySessionRow["category"];
   updatedAt?: number;
   createdAt?: number;
   pinnedAt?: number;
@@ -286,6 +255,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   lastActivityAt?: number;
   lastInteractionAt?: number;
   permissionMode?: GatewaySessionRow["permissionMode"];
+  nativeRuntimeConsent?: string;
   modelOverrideSource?: GatewayWireSessionsPatchResult["entry"]["modelOverrideSource"];
   boardPresentation?: GatewaySessionRow["boardPresentation"];
   archivedAt?: number;
@@ -338,8 +308,10 @@ export type CronRunResult =
     }
   | { ok: false };
 
-export type CronJobsListResult = {
-  jobs: ProtocolCronJob[];
+export type { CronCompactJob } from "../../../packages/gateway-protocol/src/index.js";
+
+export type CronJobsListResult<Row = ProtocolCronJob> = {
+  jobs: Row[];
   snapshotRevision: string;
   total: number;
   limit: number;
@@ -361,7 +333,7 @@ export type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../../src/skills/discovery/status.types.js";
-export type { ClawHubSkillStatusLink as SkillClawHubLink } from "../../../src/skills/lifecycle/clawhub-status.js";
+export type { ClawHubSkillStatusLink as SkillClawHubLink } from "../../../src/skills/lifecycle/workspace-types.js";
 
 export type StatusSummary = Record<string, unknown>;
 

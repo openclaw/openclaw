@@ -653,6 +653,16 @@ describe("worker desktop tunnels", () => {
     await manager.stopAll();
   });
 
+  it("requires node transport for managed desktop accounts before spawning SSH", async () => {
+    const fake = fakeRunner();
+    const manager = createWorkerDesktopTunnels({ runner: fake.runner });
+    await expect(acquire(manager, 1, { ...DESKTOP, username: "desktop-user" })).rejects.toThrow(
+      "requires the worker node transport",
+    );
+    expect(fake.starts).toEqual([]);
+    expect(fake.runs).toEqual([]);
+  });
+
   it("rejects Windows gateway hosts before spawning SSH", async () => {
     const fake = fakeRunner();
     const manager = createWorkerDesktopTunnels({ runner: fake.runner, platform: "win32" });

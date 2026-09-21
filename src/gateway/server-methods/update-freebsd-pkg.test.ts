@@ -11,8 +11,7 @@ import {
   detectRespawnSupervisorMock,
   mockGlobalInstallSurface,
   resolveUpdateInstallSurfaceMock,
-  runGatewayUpdateMock,
-  scheduleGatewaySigusr1RestartMock,
+  scheduleGatewayRestartMock,
   startManagedServiceUpdateHandoffMock,
 } from "./update.test-harness.js";
 
@@ -64,8 +63,7 @@ describe("FreeBSD pkg RPC admission", () => {
       expect(resolveUpdateInstallSurfaceMock).not.toHaveBeenCalled();
       expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
       expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-      expect(runGatewayUpdateMock).not.toHaveBeenCalled();
-      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
     },
   );
 
@@ -86,7 +84,7 @@ describe("FreeBSD pkg RPC admission", () => {
         await expect(captureUpdateRunPayload()).resolves.toMatchObject({ ok: true });
       });
       expect(query).not.toHaveBeenCalled();
-      expect(runGatewayUpdateMock).toHaveBeenCalledOnce();
+      expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
     },
   );
 });

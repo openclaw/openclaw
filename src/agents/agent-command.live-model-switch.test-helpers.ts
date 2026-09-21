@@ -2,6 +2,18 @@ import type { InternalSessionEntry } from "../config/sessions.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+export function makeSuccessResult(provider: string, model: string) {
+  return {
+    payloads: [{ text: "ok" }],
+    meta: {
+      durationMs: 100,
+      aborted: false,
+      stopReason: "end_turn",
+      agentMeta: { provider, model },
+    },
+  };
+}
+
 export type CommandSessionEntryFixture = Partial<InternalSessionEntry> & {
   channel?: string;
   deliveryContext?: DeliveryContext;

@@ -5,7 +5,6 @@ import {
   emitSessionLifecycleEvent,
   onSessionIdentityMutation,
   onSessionLifecycleEvent,
-  readSessionIdentityMutationVersion,
 } from "./session-lifecycle-events.js";
 
 function createListenerSpy(options: { throws?: boolean } = {}) {
@@ -22,26 +21,19 @@ function createListenerSpy(options: { throws?: boolean } = {}) {
 }
 
 describe("session lifecycle events", () => {
-  it("advances the identity mutation version before notifying listeners", () => {
-    const previousVersion = readSessionIdentityMutationVersion();
-    const observedVersions: number[] = [];
-    const unsubscribe = onSessionIdentityMutation(() => {
-      observedVersions.push(readSessionIdentityMutationVersion());
-    });
-
-    try {
-      emitSessionIdentityMutation({
-        agentId: "main",
-        kind: "create",
-        previous: { sessionKeys: [] },
-        current: { sessionId: "session-1", sessionKeys: ["agent:main:external"] },
-      });
-    } finally {
-      unsubscribe();
-    }
-
-    expect(readSessionIdentityMutationVersion()).toBe(previousVersion + 1);
-    expect(observedVersions).toEqual([previousVersion + 1]);
+  it("delivers keyed identity mutations and stops after unsubscribe", () => {
+    const { calls, listener } = createListenerSpy();
+    const unsubscribe = onSessionIdentityMutation(listener);
+    const mutation = {
+      agentId: "main",
+      kind: "create" as const,
+      previous: { sessionKeys: [] },
+      current: { sessionId: "session-1", sessionKeys: ["agent:main:external"] },
+    };
+    emitSessionIdentityMutation(mutation);
+    unsubscribe();
+    emitSessionIdentityMutation(mutation);
+    expect(calls).toEqual([[mutation]]);
   });
 
   it("delivers events to active listeners and stops after unsubscribe", () => {

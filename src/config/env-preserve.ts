@@ -3,7 +3,13 @@ import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isPlainObject } from "../infra/plain-object.js";
 import { isRecord } from "../utils.js";
-import { containsEnvVarReference, resolveConfigEnvVars } from "./env-substitution.js";
+import {
+  containsAuthoredUnescapedEnvTemplate,
+  containsAuthoredEscapedEnvTemplate,
+  containsUnaccountedActiveEscapedEnvRef,
+  preservesAuthoredEscapedEnvRefs,
+} from "./env-preserve-authored.js";
+import { resolveConfigEnvVars } from "./env-substitution.js";
 
 /**
  * Preserves `${VAR}` environment variable references during config write-back.
@@ -15,14 +21,13 @@ import { containsEnvVarReference, resolveConfigEnvVars } from "./env-substitutio
  *
  * A value is restored only if:
  * 1. The pre-substitution value contained a `${VAR}` pattern
- * 2. Resolving that pattern with current env vars produces the incoming value
+ * 2. The corresponding resolved source value matches the incoming value
  *
  * If a caller intentionally set a new value (different from what the env var
  * resolves to), the new value is kept as-is.
  */
 
 const ENV_VAR_PATTERN = /\$\{[A-Z_][A-Z0-9_]*\}/;
-const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
 export class EnvRefArrayMutationError extends Error {
   constructor() {
@@ -36,171 +41,6 @@ export class EnvRefArrayMutationError extends Error {
  */
 function hasEnvVarRef(value: string): boolean {
   return ENV_VAR_PATTERN.test(value);
-}
-
-type AuthoredEnvRef = { kind: "escaped" | "unescaped"; name: string };
-
-function collectAuthoredEnvRefs(value: string): AuthoredEnvRef[] {
-  const refs: AuthoredEnvRef[] = [];
-  for (let index = 0; index < value.length; index += 1) {
-    if (value[index] !== "$") {
-      continue;
-    }
-    const isEscaped = value[index + 1] === "$" && value[index + 2] === "{";
-    const nameStart = index + (isEscaped ? 3 : 2);
-    if (!isEscaped && value[index + 1] !== "{") {
-      continue;
-    }
-    const nameEnd = value.indexOf("}", nameStart);
-    if (nameEnd === -1 || !ENV_VAR_NAME_PATTERN.test(value.slice(nameStart, nameEnd))) {
-      continue;
-    }
-    refs.push({
-      kind: isEscaped ? "escaped" : "unescaped",
-      name: value.slice(nameStart, nameEnd),
-    });
-    index = nameEnd;
-  }
-  return refs;
-}
-
-function hasEscapedEnvVarRef(value: string): boolean {
-  return collectAuthoredEnvRefs(value).some((ref) => ref.kind === "escaped");
-}
-
-function containsAuthoredUnescapedEnvTemplate(value: unknown): boolean {
-  if (typeof value === "string") {
-    return containsEnvVarReference(value);
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => containsAuthoredUnescapedEnvTemplate(item));
-  }
-  if (isPlainObject(value)) {
-    return Object.values(value).some((item) => containsAuthoredUnescapedEnvTemplate(item));
-  }
-  return false;
-}
-
-function containsAuthoredEscapedEnvTemplate(value: unknown): boolean {
-  if (typeof value === "string") {
-    return hasEscapedEnvVarRef(value);
-  }
-  if (Array.isArray(value)) {
-    return value.some((item) => containsAuthoredEscapedEnvTemplate(item));
-  }
-  if (isPlainObject(value)) {
-    return Object.values(value).some((item) => containsAuthoredEscapedEnvTemplate(item));
-  }
-  return false;
-}
-
-function countAuthoredEnvRefsByPath(
-  value: unknown,
-  kind: AuthoredEnvRef["kind"],
-): Map<string, Map<string, number>> {
-  const countsByName = new Map<string, Map<string, number>>();
-  const visit = (item: unknown, path: string[]) => {
-    if (typeof item === "string") {
-      for (const ref of collectAuthoredEnvRefs(item)) {
-        if (ref.kind === kind) {
-          const pathCounts = countsByName.get(ref.name) ?? new Map<string, number>();
-          const pathKey = JSON.stringify(path);
-          pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
-          countsByName.set(ref.name, pathCounts);
-        }
-      }
-      return;
-    }
-    if (Array.isArray(item)) {
-      item.forEach((child, index) => visit(child, [...path, String(index)]));
-      return;
-    }
-    if (isPlainObject(item)) {
-      Object.entries(item).forEach(([key, child]) => visit(child, [...path, key]));
-    }
-  };
-  visit(value, []);
-  return countsByName;
-}
-
-function countResolvedActiveEnvRefsByPath(
-  incoming: unknown,
-  parsed: unknown,
-  env: NodeJS.ProcessEnv,
-): Map<string, Map<string, number>> {
-  const countsByName = new Map<string, Map<string, number>>();
-  const visit = (incomingItem: unknown, parsedItem: unknown, path: string[]) => {
-    if (typeof incomingItem === "string" && typeof parsedItem === "string") {
-      if (
-        !isDeepStrictEqual(
-          incomingItem,
-          resolveConfigEnvVars(parsedItem, env, { onMissing: () => {} }),
-        )
-      ) {
-        return;
-      }
-      for (const ref of collectAuthoredEnvRefs(parsedItem)) {
-        if (ref.kind === "unescaped") {
-          const pathCounts = countsByName.get(ref.name) ?? new Map<string, number>();
-          const pathKey = JSON.stringify(path);
-          pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
-          countsByName.set(ref.name, pathCounts);
-        }
-      }
-      return;
-    }
-    if (Array.isArray(incomingItem) && Array.isArray(parsedItem)) {
-      parsedItem.forEach((child, index) =>
-        visit(incomingItem[index], child, [...path, String(index)]),
-      );
-      return;
-    }
-    if (isPlainObject(incomingItem) && isPlainObject(parsedItem)) {
-      Object.entries(parsedItem).forEach(([key, child]) =>
-        visit(incomingItem[key], child, [...path, key]),
-      );
-    }
-  };
-  visit(incoming, parsed, []);
-  return countsByName;
-}
-
-function containsUnaccountedActiveEscapedEnvRef(
-  incoming: unknown,
-  escapedParsed: unknown,
-  matchedIncoming: unknown,
-  matchedParsed: unknown,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const escapedCounts = countAuthoredEnvRefsByPath(escapedParsed, "escaped");
-  const incomingActiveCounts = countAuthoredEnvRefsByPath(incoming, "unescaped");
-  const incomingEscapedCounts = countAuthoredEnvRefsByPath(incoming, "escaped");
-  const matchedActiveCounts = countResolvedActiveEnvRefsByPath(matchedIncoming, matchedParsed, env);
-  const matchedEscapedCounts = countAuthoredEnvRefsByPath(matchedParsed, "escaped");
-  return [...escapedCounts].some(
-    ([name, escapedPathCounts]) =>
-      [...(incomingActiveCounts.get(name) ?? new Map())].some(
-        ([path, count]) => count > (matchedActiveCounts.get(name)?.get(path) ?? 0),
-      ) ||
-      [...escapedPathCounts.keys()].some((path) => {
-        const incomingActiveCount = incomingActiveCounts.get(name)?.get(path) ?? 0;
-        return (
-          incomingActiveCount > 0 &&
-          (incomingEscapedCounts.get(name)?.get(path) ?? 0) <
-            (matchedEscapedCounts.get(name)?.get(path) ?? 0)
-        );
-      }),
-  );
-}
-
-function preservesAuthoredEscapedEnvRefs(incoming: unknown, parsed: unknown): boolean {
-  const parsedEscapedCounts = countAuthoredEnvRefsByPath(parsed, "escaped");
-  const incomingEscapedCounts = countAuthoredEnvRefsByPath(incoming, "escaped");
-  return [...parsedEscapedCounts].every(([name, parsedPathCounts]) =>
-    [...parsedPathCounts].every(
-      ([path, count]) => (incomingEscapedCounts.get(name)?.get(path) ?? 0) >= count,
-    ),
-  );
 }
 
 type ArrayIdentityPath = string[];
@@ -322,12 +162,9 @@ function hasStableSameIndexLiteralShape(params: {
 function matchesArrayElementAtSameIndex(
   incoming: unknown,
   parsed: unknown,
-  env: NodeJS.ProcessEnv,
+  resolved: unknown,
 ): boolean {
-  return (
-    isDeepStrictEqual(incoming, parsed) ||
-    isDeepStrictEqual(incoming, resolveEnvVarRefsForComparison(parsed, env))
-  );
+  return isDeepStrictEqual(incoming, parsed) || isDeepStrictEqual(incoming, resolved);
 }
 
 function matchesRetainedArrayItem(params: {
@@ -335,13 +172,13 @@ function matchesRetainedArrayItem(params: {
   incomingIndex: number;
   parsed: unknown[];
   parsedIndex: number;
-  env: NodeJS.ProcessEnv;
+  resolved: unknown[];
 }): boolean {
   if (
     matchesArrayElementAtSameIndex(
       params.incoming[params.incomingIndex],
       params.parsed[params.parsedIndex],
-      params.env,
+      params.resolved[params.parsedIndex],
     )
   ) {
     return true;
@@ -358,14 +195,14 @@ function hasStableSameIndexNeighbors(params: {
   incoming: unknown[];
   parsed: unknown[];
   parsedIndex: number;
-  env: NodeJS.ProcessEnv;
+  resolved: unknown[];
 }): boolean {
   return (
     params.incoming.length === params.parsed.length &&
     params.parsed.every(
       (item, index) =>
         index === params.parsedIndex ||
-        matchesArrayElementAtSameIndex(params.incoming[index], item, params.env),
+        matchesArrayElementAtSameIndex(params.incoming[index], item, params.resolved[index]),
     )
   );
 }
@@ -373,7 +210,7 @@ function hasStableSameIndexNeighbors(params: {
 function matchUniqueRetainedArrayItems(params: {
   incoming: unknown[];
   parsed: unknown[];
-  env: NodeJS.ProcessEnv;
+  resolved: unknown[];
 }): Map<number, number> | undefined {
   if (params.incoming.length >= params.parsed.length) {
     return undefined;
@@ -430,7 +267,7 @@ function matchUniqueRetainedArrayItems(params: {
 function matchAuthoredTemplateArrayItems(params: {
   incoming: unknown[];
   parsed: unknown[];
-  env: NodeJS.ProcessEnv;
+  resolved: unknown[];
 }): Map<number, number> {
   const templateIndexes = params.parsed.flatMap((item, index) =>
     containsAuthoredUnescapedEnvTemplate(item) ? [index] : [],
@@ -438,7 +275,7 @@ function matchAuthoredTemplateArrayItems(params: {
   if (
     params.incoming.length === params.parsed.length &&
     params.incoming.every((item, index) =>
-      matchesArrayElementAtSameIndex(item, params.parsed[index], params.env),
+      matchesArrayElementAtSameIndex(item, params.parsed[index], params.resolved[index]),
     )
   ) {
     return new Map(templateIndexes.map((index) => [index, index]));
@@ -479,21 +316,30 @@ function matchAuthoredTemplateArrayItems(params: {
 
     if (
       parsedIndex < params.incoming.length &&
-      matchesArrayElementAtSameIndex(params.incoming[parsedIndex], parsedItem, params.env)
+      matchesArrayElementAtSameIndex(
+        params.incoming[parsedIndex],
+        parsedItem,
+        params.resolved[parsedIndex],
+      )
     ) {
       const precedingItemsRemainAligned = params.parsed
         .slice(0, parsedIndex)
         .every((item, index) =>
-          matchesArrayElementAtSameIndex(params.incoming[index], item, params.env),
+          matchesArrayElementAtSameIndex(params.incoming[index], item, params.resolved[index]),
         );
       const duplicateAuthoredMatch = params.parsed.some(
         (item, index) =>
           index !== parsedIndex &&
-          matchesArrayElementAtSameIndex(params.incoming[parsedIndex], item, params.env),
+          matchesArrayElementAtSameIndex(
+            params.incoming[parsedIndex],
+            item,
+            params.resolved[index],
+          ),
       );
       const duplicateIncomingMatch = params.incoming.some(
         (item, index) =>
-          index !== parsedIndex && matchesArrayElementAtSameIndex(item, parsedItem, params.env),
+          index !== parsedIndex &&
+          matchesArrayElementAtSameIndex(item, parsedItem, params.resolved[parsedIndex]),
       );
       const positionRemainsStable =
         params.incoming.length === params.parsed.length || precedingItemsRemainAligned;
@@ -515,7 +361,7 @@ function matchAuthoredTemplateArrayItems(params: {
         incoming: params.incoming,
         parsed: params.parsed,
         parsedIndex,
-        env: params.env,
+        resolved: params.resolved,
       });
       if (!isSinglePositionEdit && !hasSameIndexLiteralIdentity && !hasSameIndexNeighbors) {
         throw new EnvRefArrayMutationError();
@@ -526,7 +372,7 @@ function matchAuthoredTemplateArrayItems(params: {
     const crossIndexMatches = params.incoming.some(
       (item, incomingIndex) =>
         incomingIndex !== parsedIndex &&
-        matchesArrayElementAtSameIndex(item, parsedItem, params.env),
+        matchesArrayElementAtSameIndex(item, parsedItem, params.resolved[parsedIndex]),
     );
     if (crossIndexMatches) {
       throw new EnvRefArrayMutationError();
@@ -541,7 +387,7 @@ function matchAuthoredTemplateArrayItems(params: {
 function matchAuthoredEscapedTemplateArrayItems(params: {
   incoming: unknown[];
   parsed: unknown[];
-  env: NodeJS.ProcessEnv;
+  resolved: unknown[];
   usedIncomingIndexes: Set<number>;
 }): Map<number, number> {
   const escapedTemplateIndexes = params.parsed.flatMap((item, index) =>
@@ -552,7 +398,7 @@ function matchAuthoredEscapedTemplateArrayItems(params: {
   if (
     params.incoming.length === params.parsed.length &&
     params.incoming.every((item, index) =>
-      matchesArrayElementAtSameIndex(item, params.parsed[index], params.env),
+      matchesArrayElementAtSameIndex(item, params.parsed[index], params.resolved[index]),
     )
   ) {
     return new Map(escapedTemplateIndexes.map((index) => [index, index]));
@@ -596,17 +442,14 @@ function matchAuthoredEscapedTemplateArrayItems(params: {
       }
     }
 
-    const resolvedItem = resolveEnvVarRefsForComparison(parsedItem, params.env);
+    const resolvedItem = params.resolved[parsedIndex];
     const incomingMatches = params.incoming.flatMap((item, incomingIndex) =>
       !usedIncomingIndexes.has(incomingIndex) && isDeepStrictEqual(item, resolvedItem)
         ? [incomingIndex]
         : [],
     );
     const authoredMatches = escapedTemplateIndexes.filter((index) =>
-      isDeepStrictEqual(
-        resolveEnvVarRefsForComparison(params.parsed[index], params.env),
-        resolvedItem,
-      ),
+      isDeepStrictEqual(params.resolved[index], resolvedItem),
     );
     const authoredRepresentationsAreIdentical = authoredMatches.every((index) =>
       isDeepStrictEqual(params.parsed[index], parsedItem),
@@ -637,7 +480,7 @@ function matchAuthoredEscapedTemplateArrayItems(params: {
         incoming: params.incoming,
         parsed: params.parsed,
         parsedIndex,
-        env: params.env,
+        resolved: params.resolved,
       });
       if (
         stableIdentity.kind === "none" &&
@@ -682,6 +525,19 @@ export function restoreEnvVarRefs(
   parsed: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): unknown {
+  return restoreEnvVarRefsFromResolved(
+    incoming,
+    parsed,
+    resolveEnvVarRefsForComparison(parsed, env),
+  );
+}
+
+/** Restore only references owned by the matching authored/resolved planning read. */
+function restoreEnvVarRefsFromResolved(
+  incoming: unknown,
+  parsed: unknown,
+  resolved: unknown,
+): unknown {
   // If parsed has no env var refs at this level, return incoming as-is
   if (parsed === null || parsed === undefined) {
     return incoming;
@@ -690,7 +546,6 @@ export function restoreEnvVarRefs(
   // String leaf: check if parsed was a ${VAR} template that resolves to incoming
   if (typeof incoming === "string" && typeof parsed === "string") {
     if (hasEnvVarRef(parsed)) {
-      const resolved = resolveConfigEnvVars(parsed, env, { onMissing: () => {} });
       if (resolved === incoming) {
         // The incoming value matches what the env var resolves to — restore the reference
         return parsed;
@@ -702,29 +557,35 @@ export function restoreEnvVarRefs(
   // Array template entries must retain a unique identity before authored refs
   // can be restored; ambiguous moves would attach secrets or activate escaped
   // literals on the wrong entry.
-  if (Array.isArray(incoming) && Array.isArray(parsed)) {
+  if (Array.isArray(incoming) && Array.isArray(parsed) && Array.isArray(resolved)) {
     if (
       !containsAuthoredUnescapedEnvTemplate(parsed) &&
       !containsAuthoredEscapedEnvTemplate(parsed)
     ) {
       return incoming.map((item, index) =>
-        index < parsed.length ? restoreEnvVarRefs(item, parsed[index], env) : item,
+        index < parsed.length
+          ? restoreEnvVarRefsFromResolved(item, parsed[index], resolved[index])
+          : item,
       );
     }
     // Keep same-name real/escaped scalar reorders fail-closed: a raw `${VAR}`
     // is indistinguishable from a moved escaped literal or a newly active ref.
-    const unescapedMatches = matchAuthoredTemplateArrayItems({ incoming, parsed, env });
+    const unescapedMatches = matchAuthoredTemplateArrayItems({ incoming, parsed, resolved });
     const escapedMatches = matchAuthoredEscapedTemplateArrayItems({
       incoming,
       parsed,
-      env,
+      resolved,
       usedIncomingIndexes: new Set(unescapedMatches.values()),
     });
     const matches = new Map([...unescapedMatches, ...escapedMatches]);
     const next = [...incoming];
     const matchedIncomingIndexes = new Set(matches.values());
     for (const [parsedIndex, incomingIndex] of matches) {
-      next[incomingIndex] = restoreEnvVarRefs(incoming[incomingIndex], parsed[parsedIndex], env);
+      next[incomingIndex] = restoreEnvVarRefsFromResolved(
+        incoming[incomingIndex],
+        parsed[parsedIndex],
+        resolved[parsedIndex],
+      );
     }
     for (let index = 0; index < incoming.length && index < parsed.length; index += 1) {
       if (
@@ -732,7 +593,11 @@ export function restoreEnvVarRefs(
         !containsAuthoredUnescapedEnvTemplate(parsed[index]) &&
         !containsAuthoredEscapedEnvTemplate(parsed[index])
       ) {
-        next[index] = restoreEnvVarRefs(incoming[index], parsed[index], env);
+        next[index] = restoreEnvVarRefsFromResolved(
+          incoming[index],
+          parsed[index],
+          resolved[index],
+        );
       }
     }
     const matchedParsedIndexByIncoming = new Map(
@@ -756,7 +621,7 @@ export function restoreEnvVarRefs(
           escapedParsedItem,
           incoming[incomingIndex],
           matchedParsedIndex === undefined ? undefined : parsed[matchedParsedIndex],
-          env,
+          matchedParsedIndex === undefined ? undefined : resolved[matchedParsedIndex],
         );
       });
       if (hasUnaccountedActiveReference) {
@@ -767,11 +632,11 @@ export function restoreEnvVarRefs(
   }
 
   // Objects: walk key by key
-  if (isPlainObject(incoming) && isPlainObject(parsed)) {
+  if (isPlainObject(incoming) && isPlainObject(parsed) && isPlainObject(resolved)) {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(incoming)) {
       if (Object.hasOwn(parsed, key)) {
-        result[key] = restoreEnvVarRefs(value, parsed[key], env);
+        result[key] = restoreEnvVarRefsFromResolved(value, parsed[key], resolved[key]);
       } else {
         // New key added by caller — keep as-is
         result[key] = value;
@@ -881,4 +746,3 @@ export function resolveWriteEnvSnapshotForPath(params: {
   }
   return undefined;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

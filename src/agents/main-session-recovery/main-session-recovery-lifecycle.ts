@@ -145,19 +145,17 @@ export function projectMainSessionRecoveryLifecycle(params: {
   snapshotPatch: Partial<SessionEntry>;
 }): { action: "suppress" } | { action: "apply"; patch: Partial<SessionEntry> } {
   const apply = (patch: Partial<SessionEntry>) => ({ action: "apply" as const, patch });
-  if (params.entry?.mainRestartRecovery?.tombstone) {
-    // Keep the operator boundary while allowing unrelated lifecycle status to settle.
-    return isMainSessionRecoveryLifecycleEvent(params)
-      ? { action: "suppress" }
-      : apply({
-          ...params.snapshotPatch,
-          abortedLastRun: params.entry.abortedLastRun,
-          restartRecoveryRuns: params.entry.restartRecoveryRuns,
-          mainRestartRecovery: params.entry.mainRestartRecovery,
-        });
-  }
   if (isMainSessionRecoveryLifecycleEvent(params)) {
     return { action: "suppress" };
+  }
+  if (params.entry?.mainRestartRecovery?.tombstone) {
+    // Keep the operator boundary while allowing unrelated lifecycle status to settle.
+    return apply({
+      ...params.snapshotPatch,
+      abortedLastRun: params.entry.abortedLastRun,
+      restartRecoveryRuns: params.entry.restartRecoveryRuns,
+      mainRestartRecovery: params.entry.mainRestartRecovery,
+    });
   }
   const phase = lifecyclePhase(params.event);
   const settlesRecovery =
@@ -228,17 +226,11 @@ export function projectMainSessionRecoveryLifecycle(params: {
         ...(foreground.claimId ? { mainRestartRecovery: foreground.state } : {}),
       });
     }
-    if (foreground.claimId) {
-      // This exact foreground run completed while its release lease was still
-      // active. Its terminal snapshot is authoritative and consumes the cycle.
-      Object.assign(patch, buildMainSessionRecoveryClearPatch(params.entry));
-      return apply(patch);
-    }
     const recoveryDeliveryRunId =
       typeof params.entry?.restartRecoveryDeliveryRunId === "string"
         ? params.entry.restartRecoveryDeliveryRunId.trim()
         : undefined;
-    if ((remaining?.length ?? 0) > 0 && recoveryDeliveryRunId !== runId) {
+    if (!foreground.claimId && (remaining?.length ?? 0) > 0 && recoveryDeliveryRunId !== runId) {
       // A different terminal run may consume only its own fence. Another
       // admitted recovery remains the durable owner of the aggregate.
       patch.abortedLastRun = false;
@@ -246,8 +238,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
       patch.mainRestartRecovery = params.entry?.mainRestartRecovery;
       return apply(patch);
     }
-    // An admitted recovery clears the interruption flag before it runs. With
-    // no live owner left, that exact delivery run is the durable cleanup boundary.
+    // The exact foreground or delivery owner retires the cycle once no live owner remains.
     Object.assign(patch, buildMainSessionRecoveryClearPatch(params.entry));
     return apply(patch);
   }

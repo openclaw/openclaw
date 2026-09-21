@@ -6,6 +6,7 @@ import {
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
+import { TRANSCRIPT_FTS_ROW_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -101,6 +102,13 @@ export function createLegacyDatabaseFixture(params: {
           );
       });
       reconcileSessionTranscriptIndexInTransaction(database, sessionId);
+    }
+    if (schemaVersion < TRANSCRIPT_FTS_ROW_SCHEMA_VERSION) {
+      // Current projection seeding must not supply storage absent from the legacy schema.
+      database.exec(`
+        DROP TABLE session_transcript_fts_rows;
+        ALTER TABLE session_transcript_index_state DROP COLUMN fts_row_count;
+      `);
     }
   } finally {
     database.close();

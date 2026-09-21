@@ -58,7 +58,7 @@ function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im"
     ok: true,
     messages: [],
   });
-  const setSlackSessionStatus = vi.fn(async () => {});
+  const setSlackSessionStatus = vi.fn(async () => true);
   const recordSlackSessionTitle = vi.fn();
   const storePath = path.join(tempDir, "sessions.sqlite");
   Object.assign(harness.ctx, {

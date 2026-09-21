@@ -1,4 +1,3 @@
-// Discord plugin module implements native command model picker ui behavior.
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
   resolveEffectiveAgentRuntime,

@@ -14,8 +14,11 @@ import {
   createPluginManifestRecordFixture,
   createPluginMetadataSnapshotFixture,
 } from "./plugin-metadata.test-support.js";
-import { resolveBundledProviderPolicyOwner } from "./provider-policy-owners.js";
-import { listTrustedExternalProviderPolicyOwners } from "./provider-public-artifacts.js";
+import {
+  listProviderPolicyOwners,
+  listTrustedExternalProviderPolicyOwners,
+  resolveBundledProviderPolicyOwner,
+} from "./provider-policy-owners.js";
 
 const registryModes = ["mutable", "snapshot", "manifest", "projected", "restored"] as const;
 
@@ -160,6 +163,18 @@ describe.each(registryModes)("provider policy declaration ownership (%s)", (mode
       expect(listTrustedExternalProviderPolicyOwners("fixture-alias", registry)).toEqual([
         installed,
       ]);
+      expect(listProviderPolicyOwners("fixture-alias", registry)).toEqual([first, installed]);
+    });
+  });
+
+  it("lists a bundled owner with installation trust once", () => {
+    const owner = createPluginManifestRecordFixture({
+      id: "fixture",
+      providers: ["fixture"],
+      trustedOfficialInstall: true,
+    });
+    withRegistry([owner], mode, (registry) => {
+      expect(listProviderPolicyOwners("fixture", registry)).toEqual([owner]);
     });
   });
 });

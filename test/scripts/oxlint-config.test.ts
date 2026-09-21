@@ -362,6 +362,80 @@ describe("oxlint config", () => {
     );
   });
 
+  it("checks unbound methods in TypeScript and CommonJS source test support", () => {
+    const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-source-support-"));
+    for (const file of [".oxlintrc.json", "tsconfig.json", "src/tsconfig.json"]) {
+      if (fs.existsSync(file)) {
+        const target = path.join(tempRoot, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(file, target);
+      }
+    }
+    fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
+    const supportFiles = [
+      "src/cli/diagnostics.test-support.ts",
+      "src/cli/diagnostics.test-support.cjs",
+    ];
+    const files = [...supportFiles, "src/cli/unrelated.cjs", "ui/unrelated.test-support.cjs"];
+    const source = 'const emit = process.emit;\nemit("lint-fixture");\n';
+    for (const file of files) {
+      const target = path.join(tempRoot, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, source);
+    }
+    const lint = () =>
+      spawnSync(
+        process.execPath,
+        [
+          path.resolve("node_modules/oxlint/bin/oxlint"),
+          "--type-aware",
+          "--format",
+          "json",
+          "--threads=1",
+          ...files,
+        ],
+        {
+          cwd: tempRoot,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            ...process.env,
+            OXLINT_TSGOLINT_PATH: path.resolve(
+              "node_modules/.bin",
+              process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
+            ),
+          },
+        },
+      );
+    const broken = lint();
+    expect(broken.error).toBeUndefined();
+    expect(broken.status, broken.stdout + broken.stderr).toBe(1);
+    const report = JSON.parse(broken.stdout) as {
+      diagnostics: Array<{ filename: string; code: string }>;
+    };
+    expect(
+      report.diagnostics.map(({ filename, code }) => ({
+        filename: filename.replaceAll("\\", "/"),
+        code,
+      })),
+    ).toEqual(
+      expect.arrayContaining(
+        supportFiles.map((filename) => ({ filename, code: "typescript(unbound-method)" })),
+      ),
+    );
+    expect(report.diagnostics).toHaveLength(supportFiles.length);
+    for (const file of supportFiles) {
+      fs.writeFileSync(
+        path.join(tempRoot, file),
+        source.replace("process.emit;", "process.emit.bind(process);"),
+      );
+    }
+    const fixed = lint();
+    expect(fixed.error).toBeUndefined();
+    expect(fixed.status, fixed.stdout + fixed.stderr).toBe(0);
+    expect(JSON.parse(fixed.stdout).diagnostics).toEqual([]);
+  });
+
   it("includes bundled extensions in type-aware lint coverage", () => {
     const tsconfig = readJson("config/tsconfig/oxlint.json") as OxlintTsconfig;
 

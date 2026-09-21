@@ -1,5 +1,6 @@
 import { err, ok } from "@openclaw/normalization-core/result";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import type {
   OpenClawStateDatabase,
@@ -10,17 +11,22 @@ import {
   compareAndApplyPluginStateEntry,
   observePluginStateEntry,
 } from "./plugin-state-store.comparison.js";
+import {
+  withPluginStateDatabaseReadOnly,
+  wrapPluginStateError,
+} from "./plugin-state-store.database.js";
 import { registerPluginStateSequencedJournalEntryInDatabase } from "./plugin-state-store.journal.js";
 import {
   countLivePluginStateNamespaceEntries,
+  deleteExpiredPluginStateEntries,
   deletePluginStateEntry,
   lookupPluginStateEntry,
-  registerPluginStateEntry,
 } from "./plugin-state-store.kernel.js";
 import {
   clearPluginStateNamespace,
   consumePluginStateEntry,
   deletePluginStateEntryIfEqual,
+  movePluginStateEntries,
   registerPluginStateEntryIfAbsent,
 } from "./plugin-state-store.mutations.js";
 import {
@@ -28,10 +34,7 @@ import {
   listPluginStateEntriesInKeyRange,
   lookupPluginStateEntries,
 } from "./plugin-state-store.reads.js";
-import {
-  withPluginStateDatabaseReadOnly,
-  wrapPluginStateError,
-} from "./plugin-state-store.sqlite.js";
+import { registerPluginStateEntry } from "./plugin-state-store.retention.js";
 import {
   type PluginStateWorkerOperations,
   pluginStateWorkerOperations,
@@ -136,41 +139,46 @@ export function executePluginStateCommand(
     return ok(
       runOpenClawStateWriteTransaction(
         (store) => {
-          switch (command.type) {
-            case "pluginState.appendJournal":
-              return registerPluginStateSequencedJournalEntryInDatabase(store, command.input);
-            case "pluginState.observe":
-              return observePluginStateEntry(
-                store,
-                command.input,
-                captureOpenClawStateDatabaseReadAdmission(store.path).identity.key,
-              );
-            case "pluginState.compareUpdate":
-            case "pluginState.compareDelete":
-              return compareAndApplyPluginStateEntry(
-                store,
-                command.input,
-                captureOpenClawStateDatabaseReadAdmission(store.path).identity.key,
-              );
-            case "pluginState.register":
-              return registerPluginStateEntry(store, command.input, command.input.maxPluginEntries);
-            case "pluginState.registerIfAbsent":
-              return registerPluginStateEntryIfAbsent(
-                store,
-                command.input,
-                command.input.maxPluginEntries,
-              );
-            case "pluginState.deleteIfEqual":
-              return deletePluginStateEntryIfEqual(store, command.input);
-            case "pluginState.consume":
-              return consumePluginStateEntry(store, command.input);
-            case "pluginState.delete":
-              return deletePluginStateEntry(store.db, command.input) > 0;
-            case "pluginState.clear":
-              return clearPluginStateNamespace(store.db, command.input);
-            default:
-              throw new Error("Plugin-state read command entered its write path");
-          }
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          const result = (() => {
+            switch (command.type) {
+              case "pluginState.appendJournal":
+                return registerPluginStateSequencedJournalEntryInDatabase(store, command.input);
+              case "pluginState.observe":
+                return observePluginStateEntry(
+                  store,
+                  command.input,
+                  captureOpenClawStateDatabaseReadAdmission(store.path).identity.key,
+                );
+              case "pluginState.compareUpdate":
+              case "pluginState.compareDelete":
+                return compareAndApplyPluginStateEntry(
+                  store,
+                  command.input,
+                  captureOpenClawStateDatabaseReadAdmission(store.path).identity.key,
+                );
+              case "pluginState.moveEntries":
+                return movePluginStateEntries(store, command.input);
+              case "pluginState.register":
+                return registerPluginStateEntry(store, command.input);
+              case "pluginState.registerIfAbsent":
+                return registerPluginStateEntryIfAbsent(store, command.input);
+              case "pluginState.deleteIfEqual":
+                return deletePluginStateEntryIfEqual(store, command.input);
+              case "pluginState.consume":
+                return consumePluginStateEntry(store, command.input);
+              case "pluginState.delete":
+                return deletePluginStateEntry(store.db, command.input) > 0;
+              case "pluginState.clear":
+                return clearPluginStateNamespace(store.db, command.input);
+              case "pluginState.sweep":
+                return deleteExpiredPluginStateEntries(store.db, Date.now());
+              default:
+                throw new Error("Plugin-state read command entered its write path");
+            }
+          })();
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          return result;
         },
         { ...options, database },
       ),

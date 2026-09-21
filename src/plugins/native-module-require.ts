@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 
 // Resolution and Jiti must accept the same source family, including typed JSX variants.
 export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
@@ -174,12 +175,9 @@ function resolveCapturedPluginModule<T>(
   return undefined;
 }
 
-/** Captured parents retain their resolver while their instance's consumers drain. */
-export function registerCapturedPluginModuleResolver(binding: CapturedModuleBinding): () => void {
-  // SAFETY: Bun supplies this synchronous public API; Node leaves the optional global absent.
-  const bun = (globalThis as typeof globalThis & { Bun?: BunPluginRuntime }).Bun;
-  if (!capturedModuleResolvers.installed) {
-    bun?.plugin({
+function installCapturedPluginModuleResolver(bun: BunPluginRuntime | undefined): void {
+  if (bun) {
+    bun.plugin({
       name: "openclaw-plugin-source-capture",
       setup(builder) {
         builder.onResolve(
@@ -194,39 +192,55 @@ export function registerCapturedPluginModuleResolver(binding: CapturedModuleBind
         );
       },
     });
+    return;
+  }
+
+  const previous = moduleWithResolver["_resolveFilename"]!;
+  moduleWithResolver["_resolveFilename"] = (request, parent, isMain, options) => {
+    const filename = parent?.filename;
+    const target = filename
+      ? resolveCapturedPluginModule((owner) =>
+          owner.resolve(request, filename, () => previous(request, parent, isMain, options)),
+        )
+      : undefined;
+    return target ?? previous(request, parent, isMain, options);
+  };
+}
+
+function installCapturedPluginModuleLoader(bun: BunPluginRuntime): void {
+  bun.plugin({
+    name: "openclaw-plugin-source-jsx",
+    setup(builder) {
+      builder.onLoad(
+        {
+          filter: new RegExp(
+            `${PLUGIN_SOURCE_CAPTURE_PREFIX}[^/\\\\]+[/\\\\].*\\.[cm]?[jt]sx$`,
+            "u",
+          ),
+          namespace: "file",
+        },
+        ({ path: modulePath }) =>
+          resolveCapturedPluginModule((owner) => owner.load?.(modulePath)) ?? {
+            contents: fs.readFileSync(modulePath, "utf8"),
+            loader: modulePath.toLowerCase().endsWith(".jsx") ? "jsx" : "tsx",
+          },
+      );
+    },
+  });
+}
+
+/** Captured parents retain their resolver while their instance's consumers drain. */
+export function registerCapturedPluginModuleResolver(binding: CapturedModuleBinding): () => void {
+  // SAFETY: Bun supplies this synchronous public API; Node leaves the optional global absent.
+  const bun = (globalThis as typeof globalThis & { Bun?: BunPluginRuntime }).Bun;
+  if (!capturedModuleResolvers.installed) {
+    installCapturedPluginModuleResolver(bun);
     // Older Bun drops createRequire's ESM parent when this private hook is replaced.
     // Its public resolver above retains the importer without changing native resolution.
-    if (!bun) {
-      const previous = moduleWithResolver["_resolveFilename"]!;
-      moduleWithResolver["_resolveFilename"] = (request, parent, isMain, options) => {
-        const filename = parent?.filename;
-        const target = filename
-          ? resolveCapturedPluginModule((owner) =>
-              owner.resolve(request, filename, () => previous(request, parent, isMain, options)),
-            )
-          : undefined;
-        return target ?? previous(request, parent, isMain, options);
-      };
-    }
     capturedModuleResolvers.installed = true;
   }
   if (binding.load && bun && !capturedModuleResolvers.loaderInstalled) {
-    bun.plugin({
-      name: "openclaw-plugin-source-jsx",
-      setup(builder) {
-        builder.onLoad(
-          {
-            filter: /openclaw-plugin-build-[^/\\]+[/\\].*\.[cm]?[jt]sx$/u,
-            namespace: "file",
-          },
-          ({ path: modulePath }) =>
-            resolveCapturedPluginModule((owner) => owner.load?.(modulePath)) ?? {
-              contents: fs.readFileSync(modulePath, "utf8"),
-              loader: modulePath.toLowerCase().endsWith(".jsx") ? "jsx" : "tsx",
-            },
-        );
-      },
-    });
+    installCapturedPluginModuleLoader(bun);
     capturedModuleResolvers.loaderInstalled = true;
   }
   capturedModuleResolvers.owners.add(binding);

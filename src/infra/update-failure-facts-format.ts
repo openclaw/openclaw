@@ -11,5 +11,5 @@ export function selectUpdateFailureReportSteps<
 
 /** Render producer-redacted facts in both server and browser reports. */
 export function formatUpdateFailureFact(fact: UpdateFailureFact): string {
-  return `Failing check ${fact.check} (${fact.code})${fact.pluginId ? `; plugin ${fact.pluginId}` : ""}${fact.affectedKey ? `; key ${fact.affectedKey}` : ""}${fact.message ? `: ${fact.message}` : ""}`;
+  return `Failing check ${fact.check} (${fact.code})${fact.location ? ` at ${fact.location}` : ""}${fact.pluginId ? `; plugin ${fact.pluginId}` : ""}${fact.affectedKey ? `; key ${fact.affectedKey}` : ""}${fact.message ? `: ${fact.message}` : ""}`;
 }

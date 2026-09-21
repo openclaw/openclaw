@@ -82,12 +82,13 @@ const clockTicks = readPositiveIntEnvOrGetconf("OPENCLAW_PROC_CLK_TCK", "CLK_TCK
 
 function readProcSnapshot() {
   const stats = new Map();
-  for (const entry of fs.readdirSync("/proc", { withFileTypes: true })) {
-    if (!entry.isDirectory() || !/^\d+$/u.test(entry.name)) {
+  // Dirent resolution can lstat a process that exits during enumeration.
+  for (const entry of fs.readdirSync("/proc")) {
+    if (!/^\d+$/u.test(entry)) {
       continue;
     }
-    const pid = Number.parseInt(entry.name, 10);
-    const statPath = path.join("/proc", entry.name, "stat");
+    const pid = Number.parseInt(entry, 10);
+    const statPath = path.join("/proc", entry, "stat");
     try {
       const raw = fs.readFileSync(statPath, "utf8");
       const closeParen = raw.lastIndexOf(")");

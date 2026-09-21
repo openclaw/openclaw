@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot handlersebounce key behavior.
 import { buildTelegramGroupPeerId, type TelegramThreadSpec } from "./bot/helpers.js";
 export function buildTelegramInboundDebounceKey(params: {
   accountId?: string | null;

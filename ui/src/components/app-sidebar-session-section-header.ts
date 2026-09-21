@@ -1,5 +1,4 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { startHoverMarqueeFromEvent, stopHoverMarqueeFromEvent } from "../lib/hover-marquee.ts";
 import { writeSidebarSectionDragData } from "../lib/sessions/drag.ts";
 
 export function renderSidebarSessionSectionHeader(params: {
@@ -52,8 +51,6 @@ export function renderSidebarSessionSectionHeader(params: {
         (event.currentTarget as HTMLElement).removeAttribute("data-section-drag-blocked");
         params.onFinishDrag();
       }}
-      @mouseenter=${startHoverMarqueeFromEvent}
-      @mouseleave=${stopHoverMarqueeFromEvent}
       @contextmenu=${params.onContextMenu ?? nothing}
     >
       <span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>

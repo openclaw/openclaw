@@ -1,328 +1,732 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
-import type { CodexThreadListParams } from "./app-server/protocol.js";
-import { normalizeLimit, readControlCursor } from "./session-catalog-parsing.js";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import type { CodexThread } from "./app-server/protocol.js";
+import { CodexCatalogAvailability } from "./session-catalog-availability.js";
+import { CodexCatalogCurrency } from "./session-catalog-currency.js";
+import { subscribeCodexCatalogEvents } from "./session-catalog-events.js";
+import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.js";
+import { readCodexCatalogCursor } from "./session-catalog-index-cursor.js";
+import { CodexCatalogIndexEvents } from "./session-catalog-index-events.js";
+import { CodexCatalogField } from "./session-catalog-index-field.js";
+import { applyCodexCatalogName } from "./session-catalog-index-names.js";
+import { CodexCatalogObservations } from "./session-catalog-index-observations.js";
+import {
+  CodexCatalogOrdering,
+  retainCodexCatalogRow,
+  type CodexCatalogOrderKey,
+} from "./session-catalog-index-order.js";
+import { prepareCodexCatalogQuery } from "./session-catalog-index-query.js";
 import type {
-  CodexCatalogHome,
+  CodexCatalogIndexRow,
+  CodexCatalogRolloutFingerprint,
+} from "./session-catalog-index-row.js";
+import {
+  codexCatalogMetadataPage,
+  CodexCatalogPersistence,
+} from "./session-catalog-index-state.js";
+import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
+import { withCodexCatalogListRequest } from "./session-catalog-list-request.js";
+import {
+  CodexCatalogNativePages,
+  readCodexCatalogHydrationPages,
+} from "./session-catalog-native-page.js";
+import { projectCodexCatalogNativeThread } from "./session-catalog-native-projection.js";
+import {
+  projectCodexCatalogThread,
+  mergeCodexCatalogRolloutRow,
+  CodexCatalogProjections,
+  CodexCatalogProjectionCapacityError,
+} from "./session-catalog-projection.js";
+import {
+  scanCodexCatalogRollouts,
+  codexCatalogRolloutLogicalPath,
+  indexCodexCatalogRowsByRollout,
+  isCodexCatalogRolloutPathCovered,
+  readCodexCatalogRollout,
+  resolveCodexCatalogRolloutFingerprint,
+} from "./session-catalog-rollouts.js";
+import { CodexCatalogSettingsIndex } from "./session-catalog-settings.js";
+import { setCodexCatalogSource } from "./session-catalog-source.js";
+import { CodexCatalogStatusIndex } from "./session-catalog-status.js";
+import type {
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
 } from "./session-catalog-types.js";
 
-const CODEX_CATALOG_NATIVE_PAGE_LIMIT = 64;
-export const CODEX_CATALOG_CACHE_TTL_MS = 32_000;
-export const CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 32;
-const MAX_NATIVE_PAGES_PER_REFRESH = 16;
-const HEAD_REFRESH_INTERVAL = 10;
+type FieldRevision = { status: number; name: number };
 
-export type CodexCatalogIndexRow = {
-  threadId: string;
-  updatedAt: number | null;
-  recencyAt: number | null;
-  page: CodexSessionCatalogPage;
-};
-type NativePage = {
-  rows: CodexCatalogIndexRow[];
-  nextCursor?: string;
-  backwardsCursor?: string;
-};
-export type CodexCatalogIndexRead = (params: CodexThreadListParams) => Promise<NativePage>;
-type Head = {
-  native: NativePage;
-  page: CodexSessionCatalogPage;
-  refreshedAt: number;
-  probes: number;
-};
-type Query = {
-  rows: Map<string, CodexCatalogIndexRow>;
-  head?: Head;
-  stale?: boolean;
-  pending: Map<string, Promise<CodexSessionCatalogPage>>;
-};
-
-function catalogPage(native: NativePage): CodexSessionCatalogPage {
-  const managedThreads = native.rows.flatMap((row) => row.page.managedThreads ?? []);
-  return {
-    sessions: native.rows.flatMap((row) => row.page.sessions),
-    ...(managedThreads.length ? { managedThreads } : {}),
-    ...(native.nextCursor ? { nextCursor: native.nextCursor } : {}),
-    ...(native.backwardsCursor ? { backwardsCursor: native.backwardsCursor } : {}),
-  };
-}
-
-function unchanged(previous: CodexCatalogIndexRow | undefined, row: CodexCatalogIndexRow) {
-  // Names and runtime status can change without advancing the native timestamp.
-  return (
-    previous?.updatedAt === row.updatedAt &&
-    previous.recencyAt === row.recencyAt &&
-    isDeepStrictEqual(previous.page, row.page)
-  );
-}
-
-/** Lazily remembers native ordered pages; membership and continuation remain native-owned. */
+/** One home owns resident queries and authoritative overflow discovery. */
 export class CodexCatalogIndex {
-  private readonly queries = new Map<string, Query>();
+  private readonly rows = new Map<string, CodexCatalogIndexRow>();
+  private readonly availability = new CodexCatalogAvailability();
+  private readonly liveStatus = new CodexCatalogStatusIndex();
+  private readonly liveSettings = new CodexCatalogSettingsIndex();
+  private readonly nativePages = new CodexCatalogNativePages(this.liveSettings, this.liveStatus);
+  private readonly names = new CodexCatalogField<string | null>();
+  private initializing: Promise<void> | undefined;
+  private initialized = false;
+  private overflow = false;
+  private needsNativeRefresh = false;
+  private restored = false;
+  private restoring: Promise<void> | undefined;
+  private failure: { error: unknown } | undefined;
+  private closed = false;
+  private readonly currency: CodexCatalogCurrency;
+  private readonly projections = new CodexCatalogProjections();
+  private readonly unsubscribe: () => void;
+  private reconciling: Promise<void> | undefined;
+  private reconcilingNative: Promise<void> | undefined;
+  private observedFiles = new Map<string, CodexCatalogRolloutFingerprint>();
+  private readonly persistence: CodexCatalogPersistence;
+  private readonly obsoleteStoredKeys = new Set<string>();
+  private sourceRevision = 0;
+  private readonly ordering = new CodexCatalogOrdering();
+  private readonly observations = new CodexCatalogObservations();
+  private readonly events: CodexCatalogIndexEvents;
 
-  constructor(
-    private readonly now: () => number,
-    private readonly cwd: string | undefined,
-    private readonly onSettled: () => void,
-  ) {}
-
-  hasPendingWork(): boolean {
-    for (const query of this.queries.values()) {
-      if (query.pending.size) {
-        return true;
-      }
-    }
-    return false;
+  constructor(private readonly options: CodexCatalogIndexOptions) {
+    this.currency = new CodexCatalogCurrency({
+      local: Boolean(options.localSessionsRoot),
+      reconcileFiles: () => this.reconcile(),
+      reconcileNative: (full) => this.reconcileNative(full),
+      runBackground: options.runBackground,
+      report: (error) => this.report(error),
+    });
+    this.persistence = new CodexCatalogPersistence(options.state, (error) => this.report(error));
+    this.events = new CodexCatalogIndexEvents({
+      get: (id) => this.rows.get(id),
+      updateStatus: (id, status, source) => {
+        this.liveStatus.update(id, status, source);
+        if (status.status === "notLoaded") {
+          this.liveSettings.withdraw(id, source);
+        }
+      },
+      updateSettings: (id, settings, source) => this.liveSettings.update(id, settings, source),
+      rename: (id, name) => {
+        this.currency.requestNativeRefresh();
+        this.names.update(id, name);
+        const row = this.rows.get(id);
+        if (row && !this.closed) {
+          this.put(row);
+        }
+      },
+      upsert: (thread) => this.upsertThread(thread),
+      reserveTurnStartOrder: () => this.ordering.reserveEvent(),
+      requestNativeRefresh: () => this.currency.requestNativeRefresh(),
+      refresh: (id, readThread, sourceOrder) => this.refreshThread(id, readThread, sourceOrder),
+      archive: (id) => this.archive(id),
+      remove: (id) => {
+        this.currency.requestNativeRefresh();
+        this.remove(id);
+      },
+      report: (error) => this.report(error),
+    });
+    this.unsubscribe = subscribeCodexCatalogEvents(
+      options.homeId,
+      (event, readThread, source) => this.events.handle(event, readThread, source),
+      {
+        onEphemeralThread: (id) => this.remove(id),
+        onClose: (source) => {
+          this.liveStatus.invalidate(source);
+          this.liveSettings.invalidate(source);
+        },
+        onResume: (response, source) => {
+          this.liveSettings.update(response.thread.id, response, source);
+          return this.upsertThread(setCodexCatalogSource(response.thread, source));
+        },
+        onRemoteReady: () => {
+          if (this.closed || options.localSessionsRoot) {
+            return;
+          }
+          this.sourceRevision++;
+          if (!this.initializing) {
+            this.initialized = false;
+            this.scheduleHydration();
+          }
+        },
+      },
+    );
   }
 
-  private async produce(
-    query: Query,
-    params: CodexThreadListParams,
-    read: CodexCatalogIndexRead,
-  ): Promise<CodexSessionCatalogPage> {
-    const prior = query.head;
-    if (params.cursor || !prior) {
-      const native = await read(params);
-      for (const row of native.rows) {
-        query.rows.set(row.threadId, row);
-      }
-      pruneMapToMaxSize(
-        query.rows,
-        CODEX_CATALOG_NATIVE_PAGE_LIMIT * CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES,
-      );
-      const page = catalogPage(native);
-      if (!params.cursor) {
-        query.head = { native, page, refreshedAt: this.now(), probes: 0 };
-      }
-      return page;
+  private assertCurrent(): void {
+    if (this.closed) {
+      throw new Error("Codex resident catalog is closed");
     }
+    try {
+      this.options.assertCurrent();
+    } catch (error) {
+      void this.close();
+      throw error;
+    }
+  }
 
-    const first = prior.native.rows[0];
-    const second = prior.native.rows[1];
-    // A distinct newest second lets an unchanged one-row probe reuse the page.
-    // Tied heads need the full page and overlap, since API timestamps expose only seconds.
+  private report(error: unknown): void {
+    if (!this.closed && !this.currency.stopForTerminalFailure(error)) {
+      embeddedAgentLog.warn("Codex resident catalog background update failed", { error });
+    }
+  }
+
+  private withName(row: CodexCatalogIndexRow): CodexCatalogIndexRow {
+    const known = this.names.get(row.threadId);
+    const name = known !== undefined ? known : this.rows.get(row.threadId)?.page.sessions[0]?.name;
+    return applyCodexCatalogName(row, name);
+  }
+
+  private put(candidate: CodexCatalogIndexRow): void {
+    if (this.closed) {
+      return;
+    }
+    const previous = this.rows.get(candidate.threadId);
+    const preview = candidate.preview ?? previous?.preview;
+    const patched = this.withName({ ...candidate, ...(preview !== undefined ? { preview } : {}) });
+    const row = {
+      ...patched,
+      page: codexCatalogMetadataPage(patched.page),
+      ...(patched.rolloutPath
+        ? { rolloutPath: codexCatalogRolloutLogicalPath(patched.rolloutPath) }
+        : {}),
+      sourceOrder: this.ordering.position(patched, previous),
+    };
+    if (isDeepStrictEqual(previous, row)) {
+      return;
+    }
+    const oldest = retainCodexCatalogRow(this.rows, row);
+    this.overflow ||= this.rows.size >= CODEX_CATALOG_MAX_ROWS;
+    this.ordering.invalidate();
+    if (oldest?.threadId === row.threadId) {
+      return;
+    }
+    if (oldest) {
+      this.evict(oldest.threadId);
+    }
+    this.persistence.put(row);
+  }
+
+  private evict(threadId: string): void {
+    // Retention does not withdraw observations supported by an open native connection.
+    this.rows.delete(threadId);
+    this.ordering.invalidate();
+    this.persistence.remove(threadId);
+  }
+
+  private remove(threadId: string): void {
+    this.observations.mark(threadId);
+    this.evict(threadId);
+    this.liveStatus.delete(threadId);
+    this.liveSettings.delete(threadId);
+    this.names.delete(threadId);
+  }
+
+  async initialize(): Promise<void> {
+    this.assertCurrent();
+    this.currency.assertRunnable();
+    this.currency.cancelHydration();
+    if (this.initialized && !this.needsNativeRefresh) {
+      return;
+    }
+    if (!this.initializing) {
+      this.availability.begin();
+      const sourceRevision = this.sourceRevision;
+      this.initializing = (async () => {
+        await this.restore();
+        await this.persistence.pruneObsolete(this.obsoleteStoredKeys, this.rows.values());
+        this.obsoleteStoredKeys.clear();
+        await this.reconcilingNative?.catch((error: unknown) => this.report(error));
+        if (!this.initialized) {
+          let observedRevision: number;
+          do {
+            observedRevision = await this.hydrate(this.availability.complete);
+          } while (observedRevision !== this.sourceRevision);
+          // A complete replacement walk also satisfies a pending snapshot refresh.
+          this.needsNativeRefresh = false;
+        }
+        if (this.needsNativeRefresh) {
+          await this.reconcile();
+          await this.reconcileNative();
+          this.needsNativeRefresh = false;
+        }
+        this.initialized = true;
+        this.failure = undefined;
+        this.currency.start();
+      })()
+        .catch((error: unknown) => {
+          this.failure = { error };
+          this.availability.fail(error);
+          this.currency.stopForTerminalFailure(error);
+          throw error;
+        })
+        .finally(() => {
+          this.initializing = undefined;
+          if (this.failure && sourceRevision !== this.sourceRevision) {
+            this.scheduleHydration();
+          }
+        });
+    }
+    return this.initializing;
+  }
+
+  private async restore(): Promise<void> {
+    if (this.restored) {
+      return;
+    }
+    this.restoring ??= this.observations.observe(async (isCurrent) => {
+      try {
+        const snapshot = await this.persistence.readSnapshot();
+        this.assertCurrent();
+        if (snapshot.cleanupIncomplete) {
+          this.persistence.invalidate(
+            new Error("Codex catalog obsolete snapshot exceeds its cleanup limit"),
+          );
+        }
+        for (const key of snapshot.obsolete) {
+          this.obsoleteStoredKeys.add(key);
+        }
+        for (const row of snapshot.rows) {
+          if (isCurrent(row.threadId)) {
+            const restored = row.rolloutPath
+              ? { ...row, rolloutPath: codexCatalogRolloutLogicalPath(row.rolloutPath) }
+              : row;
+            const patched = this.withName(restored);
+            if (patched !== restored) {
+              this.persistence.put(patched);
+            }
+            const evicted = retainCodexCatalogRow(this.rows, patched);
+            if (evicted) {
+              this.evict(evicted.threadId);
+            }
+            this.ordering.restore(row);
+          }
+        }
+        this.overflow ||= snapshot.overflow || this.rows.size >= CODEX_CATALOG_MAX_ROWS;
+        if (snapshot.complete) {
+          this.availability.publish(undefined, true);
+          this.initialized = true;
+          this.needsNativeRefresh = true;
+          this.currency.start();
+        }
+      } catch (error) {
+        // Unknown stored keys cannot be certified by a replacement hydration.
+        this.persistence.invalidate(error);
+      }
+      this.restored = true;
+    });
+    await this.restoring;
+  }
+
+  private scheduleHydration(): void {
+    if ((this.initialized && !this.needsNativeRefresh) || this.initializing || this.closed) {
+      return;
+    }
+    this.currency.scheduleHydration(() => this.initialize());
+  }
+
+  private captureFields(): FieldRevision {
+    return { status: this.liveStatus.capture(), name: this.names.capture() };
+  }
+
+  private observeFields(row: CodexCatalogIndexRow, revision: FieldRevision): void {
+    const session = row.page.sessions[0];
+    if (!session) {
+      return;
+    }
+    this.liveStatus.observe(row, revision.status);
     if (
-      prior.probes < HEAD_REFRESH_INTERVAL - 1 &&
-      first?.recencyAt != null &&
-      second?.recencyAt != null &&
-      first.recencyAt > second.recencyAt
+      session.name !== undefined &&
+      this.names.observe(row.threadId, session.name, revision.name)
     ) {
-      const probe = await read({ ...params, limit: 1 });
-      const candidate = probe.rows[0];
-      if (probe.rows.length === 1 && candidate && unchanged(first, candidate)) {
-        const page = { ...prior.page };
-        query.head = { ...prior, page, refreshedAt: this.now(), probes: prior.probes + 1 };
-        return page;
+      const current = this.rows.get(row.threadId);
+      if (current && current.page.sessions[0]?.name !== session.name) {
+        this.put(current);
       }
     }
+  }
 
-    const previousHead = new Map<string, CodexCatalogIndexRow>();
-    for (const row of prior.native.rows) {
-      previousHead.set(row.threadId, row);
+  private reconcileNative(full = true): Promise<void> {
+    if (!this.options.localSessionsRoot && this.initializing && !this.initialized) {
+      return this.initializing;
     }
-    const started = performance.now();
-    const changed = new Map<string, CodexCatalogIndexRow>();
-    const remaining = new Map(query.rows);
-    let oldestRecencyAt: number | undefined;
-    for (const row of remaining.values()) {
-      if (row.recencyAt === null) {
-        oldestRecencyAt = undefined;
-        break;
+    if (!this.reconcilingNative) {
+      this.reconcilingNative = this.hydrate(true, !full)
+        .then(() => undefined)
+        .finally(() => {
+          this.reconcilingNative = undefined;
+        });
+    }
+    return this.reconcilingNative;
+  }
+
+  private hydrate(useStateDbOnly = false, incremental = false): Promise<number> {
+    const run = () =>
+      this.observations.observe((isCurrent) =>
+        this.hydratePages(isCurrent, useStateDbOnly, incremental),
+      );
+    return this.options.runNativeWalk?.(run) ?? run();
+  }
+
+  private async hydratePages(
+    isCurrent: (id: string) => boolean,
+    useStateDbOnly: boolean,
+    incremental: boolean,
+  ): Promise<number> {
+    this.assertCurrent();
+    const files =
+      this.options.localSessionsRoot && !useStateDbOnly
+        ? (await scanCodexCatalogRollouts(this.options.localSessionsRoot, new Set())).files
+        : new Map<string, CodexCatalogRolloutFingerprint>();
+    let observedRevision: number | undefined;
+    let frontier: CodexCatalogOrderKey | undefined;
+    const batchOrder = this.ordering.captureBatch(this.availability.complete);
+    const remaining = incremental ? undefined : new Map(this.rows);
+    const pages = readCodexCatalogHydrationPages(async (params, remainingRows) => {
+      this.assertCurrent();
+      const fieldRevision = this.captureFields();
+      const page = await this.options.readNative(params, remainingRows);
+      return { ...page, fieldRevision, sourceRevision: this.sourceRevision };
+    }, useStateDbOnly);
+    for await (const page of pages) {
+      this.assertCurrent();
+      // The first page includes readiness of the client opened by this walk.
+      observedRevision ??= page.sourceRevision;
+      let sourceOrder = page.offset;
+      let changed = false;
+      for (const id of page.excludedThreadIds ?? []) {
+        if (isCurrent(id)) {
+          changed ||= this.rows.has(id);
+          this.remove(id);
+        }
       }
-      oldestRecencyAt = Math.min(oldestRecencyAt ?? Infinity, row.recencyAt);
-    }
-    const cursors = new Set<string>();
-    const head = await read(params);
-    let native = head;
-    let overlap = false;
-    let exhausted = false;
-    let lastRecencyAt: number | null = null;
-    for (let i = 0; i < MAX_NATIVE_PAGES_PER_REFRESH; i++) {
-      const stable =
-        native.rows.length > 0 &&
-        native.rows.every((row) =>
-          unchanged(query.rows.get(row.threadId) ?? previousHead.get(row.threadId), row),
+      for (const row of page.rows) {
+        const position = sourceOrder++;
+        if (position >= CODEX_CATALOG_MAX_ROWS) {
+          continue;
+        }
+        remaining?.delete(row.threadId);
+        const previous = this.rows.get(row.threadId);
+        this.observeFields(row, page.fieldRevision);
+        if (!isCurrent(row.threadId)) {
+          changed = true;
+          continue;
+        }
+        const fingerprint = resolveCodexCatalogRolloutFingerprint(
+          row.rolloutPath,
+          useStateDbOnly ? previous : undefined,
+          files,
         );
-      for (const row of native.rows) {
-        changed.set(row.threadId, row);
-        remaining.delete(row.threadId);
+        this.observations.mark(row.threadId);
+        this.put({
+          ...row,
+          sourceOrder: batchOrder(row, previous, position),
+          ...(fingerprint ? { fingerprint } : {}),
+        });
+        changed ||= this.rows.get(row.threadId) !== previous;
+        frontier = this.rows.get(row.threadId) ?? frontier;
       }
-      lastRecencyAt = native.rows.at(-1)?.recencyAt ?? null;
-      const cursor = native.nextCursor;
-      exhausted = !cursor;
-      if (!cursor || overlap || (!stable && remaining.size === 0)) {
-        break;
-      }
-      if (cursors.has(cursor) || cursor === params.cursor) {
-        throw new Error("Codex session catalog returned a repeated refresh cursor");
-      }
-      // Stop at the visited prefix; older inventory stays reachable through native cursors.
+      // Recency-descending pages have a known prefix once a whole page is unchanged.
+      // Silent older metadata/membership changes belong to the full safety walk.
       if (
-        !stable &&
-        lastRecencyAt !== null &&
-        oldestRecencyAt !== undefined &&
-        lastRecencyAt < oldestRecencyAt
+        incremental &&
+        ((!changed && page.rows.length > 0) || sourceOrder >= CODEX_CATALOG_MAX_ROWS)
       ) {
         break;
       }
-      overlap = stable;
-      cursors.add(cursor);
-      if (
-        i + 1 === MAX_NATIVE_PAGES_PER_REFRESH ||
-        (!overlap && performance.now() - started >= 1_000)
-      ) {
-        break;
+      if (page.nextCursor) {
+        this.availability.publish(frontier);
       }
+    }
+    // DB-only listing can omit local files when indexing is incomplete or the
+    // database is unavailable. Verified file absence and events own their removal.
+    if (remaining && (!useStateDbOnly || !this.options.localSessionsRoot)) {
+      for (const [id, row] of remaining) {
+        if (isCurrent(id) && this.rows.get(id) === row) {
+          this.remove(id);
+        }
+      }
+    }
+    this.availability.publish(frontier, true);
+    await this.persistence.finishHydration(this.overflow);
+    return observedRevision ?? this.sourceRevision;
+  }
+
+  reconcile(): Promise<void> {
+    if (!this.reconciling) {
+      this.reconciling = this.observations
+        .observe((isCurrent) => this.reconcileFiles(isCurrent))
+        .finally(() => {
+          this.reconciling = undefined;
+        });
+    }
+    return this.reconciling;
+  }
+
+  private async reconcileFiles(isCurrent: (id: string) => boolean): Promise<void> {
+    const root = this.options.localSessionsRoot;
+    if (!root || !this.initialized || this.closed) {
+      return;
+    }
+    this.assertCurrent();
+    const byPath = indexCodexCatalogRowsByRollout(this.rows.values());
+    const { files, present } = await scanCodexCatalogRollouts(root, new Set(byPath.keys()));
+    this.assertCurrent();
+    const observed = new Map(files);
+    for (const [file, fingerprint] of files) {
+      const previous = byPath.get(codexCatalogRolloutLogicalPath(file));
+      const known = this.observedFiles.get(file) ?? previous?.fingerprint;
+      if (known?.mtimeMs === fingerprint.mtimeMs && known.size === fingerprint.size) {
+        continue;
+      }
+      this.currency.requestNativeRefresh();
+      // Publish a new fingerprint only after its projection survives concurrent native updates.
+      observed.delete(file);
+      if (known) {
+        observed.set(file, known);
+      }
+      let thread: CodexThread | undefined;
+      try {
+        thread = await readCodexCatalogRollout(root, file);
+      } catch (error) {
+        this.assertCurrent();
+        this.report(error);
+        continue;
+      }
+      this.assertCurrent();
+      if (!thread) {
+        observed.set(file, fingerprint);
+        continue;
+      }
+      if (!isCurrent(thread.id)) {
+        continue;
+      }
+      const existing = this.rows.get(thread.id);
+      if (
+        existing?.rolloutPath &&
+        codexCatalogRolloutLogicalPath(existing.rolloutPath) !==
+          codexCatalogRolloutLogicalPath(file)
+      ) {
+        // Reverts retain older immutable files with the same thread id. Only
+        // native metadata may change which rollout the catalog considers current.
+        observed.set(file, fingerprint);
+        continue;
+      }
+      if (!existing && !thread.preview) {
+        observed.set(file, fingerprint);
+        continue;
+      }
+      thread.preview ||= existing?.preview;
+      const projected = await projectCodexCatalogThread(thread, root);
+      this.assertCurrent();
+      if (!isCurrent(thread.id)) {
+        continue;
+      }
+      observed.set(file, fingerprint);
+      const row = projected.rows[0];
+      if (!row) {
+        continue;
+      }
+      this.observations.mark(row.threadId);
+      this.put(mergeCodexCatalogRolloutRow(row, existing, fingerprint));
       await nextTurn();
-      native = await read({ ...params, cursor });
     }
-    // Publish only after the walked pages settle. Failure leaves the old watermark retryable.
-    for (const [id, row] of remaining) {
+    for (const row of byPath.values()) {
       if (
-        exhausted ||
-        (lastRecencyAt !== null && row.recencyAt !== null && row.recencyAt > lastRecencyAt)
+        row.rolloutPath &&
+        isCodexCatalogRolloutPathCovered(root, row.rolloutPath) &&
+        !present.has(codexCatalogRolloutLogicalPath(row.rolloutPath)) &&
+        this.rows.get(row.threadId) === row
       ) {
-        query.rows.delete(id);
+        this.currency.requestNativeRefresh();
+        this.remove(row.threadId);
       }
     }
-    for (const [id, row] of changed) {
-      query.rows.set(id, row);
+    this.observedFiles = observed;
+  }
+
+  upsertThread(thread: CodexThread): Promise<void> {
+    if (this.closed) {
+      return Promise.resolve();
     }
-    pruneMapToMaxSize(
-      query.rows,
-      CODEX_CATALOG_NATIVE_PAGE_LIMIT * CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES,
+    try {
+      this.assertCurrent();
+    } catch {
+      // Retiring a view must not turn an acknowledged native mutation into failure.
+      return Promise.resolve();
+    }
+    try {
+      this.currency.requestNativeRefresh();
+      return this.upsertPreparedThread(
+        projectCodexCatalogNativeThread(thread, sanitizeTerminalText),
+      );
+    } catch (error) {
+      return Promise.reject(toErrorObject(error, "Codex catalog projection failed"));
+    }
+  }
+
+  private upsertPreparedThread(prepared: CodexThread): Promise<void> {
+    return this.projections
+      .run(() => {
+        this.observations.mark(prepared.id);
+        const fields = this.captureFields();
+        return this.observations.observe((isCurrent) =>
+          this.projectThread(prepared, isCurrent, fields),
+        );
+      })
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        if (!(error instanceof CodexCatalogProjectionCapacityError)) {
+          throw error;
+        }
+        this.report(error);
+      });
+  }
+
+  private refreshThread(
+    id: string,
+    readThread: (id: string) => Promise<CodexThread>,
+    sourceOrder: number | undefined,
+  ): Promise<boolean> {
+    this.assertCurrent();
+    this.observations.mark(id);
+    const fields = this.captureFields();
+    return this.projections.run(() =>
+      this.observations.observe((isCurrent) =>
+        readThread(id).then((thread) => {
+          const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
+          if (prepared.id !== id) {
+            throw new Error("Codex catalog refresh returned a different thread");
+          }
+          return this.closed ? true : this.projectThread(prepared, isCurrent, fields, sourceOrder);
+        }),
+      ),
     );
-    const page = catalogPage(head);
-    query.head = { native: head, page, refreshedAt: this.now(), probes: 0 };
-    return page;
+  }
+
+  private async projectThread(
+    thread: CodexThread,
+    isCurrent: (id: string) => boolean,
+    fieldRevision: FieldRevision,
+    sourceOrder?: number,
+  ): Promise<boolean> {
+    const projected = await projectCodexCatalogThread(thread, this.options.localSessionsRoot);
+    if (this.closed) {
+      return true;
+    }
+    const row = projected.rows[0];
+    if (row) {
+      this.observeFields(row, fieldRevision);
+    }
+    if (!isCurrent(thread.id)) {
+      return false;
+    }
+    if (projected.excludedThreadIds?.includes(thread.id)) {
+      this.remove(thread.id);
+    }
+    if (row) {
+      const previous = this.rows.get(thread.id);
+      const fingerprint = resolveCodexCatalogRolloutFingerprint(row.rolloutPath, previous);
+      this.observations.mark(thread.id);
+      this.put({
+        ...row,
+        // Preserve notification order when tied turns' metadata reads finish out of order.
+        ...(sourceOrder !== undefined ? { sourceOrder } : {}),
+        ...(fingerprint ? { fingerprint } : {}),
+      });
+    }
+    return true;
+  }
+
+  archive(threadId: string): void {
+    // A native acknowledgement is a fact about the captured home even if its
+    // serving configuration changed while the pinned action was running.
+    if (this.closed) {
+      return;
+    }
+    this.currency.requestNativeRefresh();
+    this.observations.mark(threadId);
+    this.liveStatus.delete(threadId);
+    this.liveSettings.delete(threadId);
+    this.names.delete(threadId);
+    const row = this.rows.get(threadId);
+    if (row) {
+      this.put({ ...row, archived: true });
+    } else {
+      this.persistence.remove(threadId);
+    }
+  }
+
+  get(threadId: string): CodexCatalogIndexRow | undefined {
+    return this.rows.get(threadId);
+  }
+
+  hasActiveWork(): boolean {
+    return Boolean(
+      this.initializing ||
+      (!this.restored && this.restoring) ||
+      this.reconciling ||
+      this.reconcilingNative ||
+      this.currency.hasActiveWork() ||
+      this.observations.hasActiveWork() ||
+      this.events.hasActiveWork() ||
+      this.persistence.hasActiveWork(),
+    );
   }
 
   async list(
     params: CodexSessionCatalogPageParams,
-    read: CodexCatalogIndexRead,
+    deadline = performance.now() + (this.options.requestTimeoutMs ?? 60_000),
   ): Promise<CodexSessionCatalogPage> {
-    const limit = Math.min(normalizeLimit(params.limit, "limit"), CODEX_CATALOG_NATIVE_PAGE_LIMIT);
-    const cursor = readControlCursor(params.cursor, "request");
-    const key = String(limit);
-    let query = this.queries.get(key);
-    if (!query) {
-      query = { rows: new Map(), pending: new Map() };
-      this.queries.set(key, query);
-    }
-    this.queries.delete(key);
-    this.queries.set(key, query);
-    for (const [oldKey, old] of this.queries) {
-      if (this.queries.size <= CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES) {
-        break;
-      }
-      if (oldKey !== key && old.pending.size === 0) {
-        this.queries.delete(oldKey);
-      }
-    }
-    const pendingKey = cursor ?? "";
-    const pending = query.pending.get(pendingKey);
-    if (pending) {
-      return await pending;
-    }
-    if (
-      !cursor &&
-      !query.stale &&
-      query.head &&
-      query.head.refreshedAt + CODEX_CATALOG_CACHE_TTL_MS > this.now()
-    ) {
-      return query.head.page;
-    }
-    if (!cursor) {
-      query.stale = true;
-    }
-    const page = this.produce(
-      query,
-      {
-        archived: false,
-        modelProviders: [],
-        sortKey: "recency_at",
-        sortDirection: "desc",
-        limit,
-        ...(cursor ? { cursor } : {}),
-        ...(this.cwd ? { cwd: this.cwd } : {}),
-      },
-      read,
-    )
-      .then((value) => {
-        if (!cursor) {
-          query.stale = false;
+    return await withCodexCatalogListRequest(async (request) => {
+      const expiresAt = request.constrainDeadline(deadline);
+      const cursor = readCodexCatalogCursor(this.options.homeId, params);
+      const query =
+        cursor.kind === "resident" ? prepareCodexCatalogQuery(params, cursor) : undefined;
+      await this.availability.until(this.restore(), expiresAt);
+      this.assertCurrent();
+      this.scheduleHydration();
+      for (;;) {
+        this.assertCurrent();
+        const ordered = this.ordering.read(this.rows);
+        const page = query?.(ordered, this.liveStatus, this.liveSettings, this.availability);
+        if (
+          cursor.kind === "native" ||
+          (this.overflow && (params.cwd || params.searchTerm || (page && !page.nextCursor)))
+        ) {
+          return await this.nativePages.list(params, cursor, this.options, request);
         }
-        return value;
-      })
-      .finally(() => {
-        query.pending.delete(pendingKey);
-        this.onSettled();
-        for (const [oldKey, old] of this.queries) {
-          if (this.queries.size <= CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES) {
-            break;
-          }
-          if (old.pending.size === 0) {
-            this.queries.delete(oldKey);
-          }
+        if (page) {
+          return page;
         }
-      });
-    query.pending.set(pendingKey, page);
-    return await page;
+        await this.availability.next(expiresAt);
+      }
+    });
   }
-}
 
-function pruneIndexes(indexes: Map<string, CodexCatalogIndex>, protectedIndex?: CodexCatalogIndex) {
-  for (const [key, index] of indexes) {
-    if (indexes.size <= CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES) {
-      break;
-    }
-    if (index !== protectedIndex && !index.hasPendingWork()) {
-      indexes.delete(key);
-    }
+  /** Fence future publications before a replacement opens the same persisted home. */
+  retire(): Promise<void> {
+    this.closed = true;
+    this.availability.fail(new Error("Codex resident catalog is closed"));
+    this.liveStatus.invalidate();
+    this.liveSettings.invalidate();
+    this.unsubscribe();
+    // close() joins the running scan after retirement has fenced its publications.
+    void this.currency.close();
+    return this.persistence.retire();
   }
-}
 
-export function createCodexCatalogIndexResolver(params: { now: () => number }) {
-  const indexes = new WeakMap<OpenClawConfig, Map<string, Map<string, CodexCatalogIndex>>>();
-  const noConfig: OpenClawConfig = {};
-  return (
-    agentId: string | undefined,
-    source:
-      | (Pick<CodexCatalogHome, "sourceHomeId"> & Partial<Pick<CodexCatalogHome, "agentDir">>)
-      | undefined,
-    runtime: CodexCatalogHome["appServer"],
-    config: OpenClawConfig = noConfig,
-    cwd?: string,
-  ) => {
-    let bySource = indexes.get(config);
-    if (!bySource) {
-      bySource = new Map();
-      indexes.set(config, bySource);
-    }
-    const sourceKey = JSON.stringify([
-      agentId,
-      source?.sourceHomeId,
-      buildCodexAppServerConnectionFingerprint(runtime, source?.agentDir),
+  async close(): Promise<void> {
+    const writes = this.retire();
+    await Promise.allSettled([
+      this.initializing,
+      this.restoring,
+      this.reconciling,
+      this.reconcilingNative,
+      this.currency.close(),
+      writes,
+      this.events.close(),
     ]);
-    let byCwd = bySource.get(sourceKey);
-    if (!byCwd) {
-      byCwd = new Map();
-      bySource.set(sourceKey, byCwd);
-    }
-    const cwdIndexes = byCwd;
-    const key = cwd?.trim() || "";
-    let index = cwdIndexes.get(key);
-    if (!index) {
-      index = new CodexCatalogIndex(params.now, key || undefined, () => pruneIndexes(cwdIndexes));
-    }
-    cwdIndexes.delete(key);
-    cwdIndexes.set(key, index);
-    pruneIndexes(cwdIndexes, index);
-    return index;
-  };
+    this.rows.clear();
+    this.observedFiles.clear();
+    this.ordering.invalidate();
+  }
 }

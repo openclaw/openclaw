@@ -4,10 +4,7 @@ import {
   normalizeOptionalAgentRuntimeId,
 } from "../../agents/agent-runtime-id.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
-import {
-  resolveCompatibleAgentRuntimeForProvider,
-  resolveSessionRuntimeOverrideForProvider,
-} from "../../agents/session-runtime-compat.js";
+import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -24,25 +21,15 @@ export function resolveModelRuntimeDirective(params: {
   cfg: OpenClawConfig;
   sessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
 }): ModelRuntimeDirectiveResolution {
-  const rawRuntime = params.rawRuntime?.trim();
+  const requestedRuntime = params.rawRuntime?.trim();
+  const rawRuntime = requestedRuntime || params.sessionEntry?.agentRuntimeOverride?.trim();
   if (!rawRuntime) {
-    const persistedRuntime = params.sessionEntry?.agentRuntimeOverride?.trim();
-    if (
-      persistedRuntime &&
-      !resolveSessionRuntimeOverrideForProvider({
-        provider: params.provider,
-        entry: params.sessionEntry,
-        cfg: params.cfg,
-      })
-    ) {
-      return { kind: "clear" };
-    }
     return { kind: "unchanged" };
   }
 
   const runtime = normalizeOptionalAgentRuntimeId(rawRuntime);
   if (isDefaultAgentRuntimeId(runtime)) {
-    return { kind: "clear" };
+    return { kind: requestedRuntime ? "clear" : "unchanged" };
   }
 
   const provider = normalizeProviderId(params.provider);
@@ -52,7 +39,7 @@ export function resolveModelRuntimeDirective(params: {
     cfg: params.cfg,
   });
   if (compatibleRuntime) {
-    return { kind: "set", runtime: compatibleRuntime };
+    return requestedRuntime ? { kind: "set", runtime: compatibleRuntime } : { kind: "unchanged" };
   }
 
   return {
@@ -64,16 +51,24 @@ export function resolveModelRuntimeDirective(params: {
 
 /** Applies a validated runtime choice without disturbing existing pins when no choice was given. */
 export function applyModelRuntimeDirective(
-  entry: Pick<SessionEntry, "agentRuntimeOverride">,
+  entry: Pick<SessionEntry, "agentRuntimeOverride" | "nativeRuntimeConsent">,
   resolution: ModelRuntimeDirectiveResolution,
 ): { updated: boolean } {
   if (resolution.kind === "clear") {
-    const updated = entry.agentRuntimeOverride !== undefined;
+    const updated =
+      entry.agentRuntimeOverride !== undefined || entry.nativeRuntimeConsent !== undefined;
     delete entry.agentRuntimeOverride;
+    delete entry.nativeRuntimeConsent;
     return { updated };
   }
   if (resolution.kind === "set") {
-    const updated = entry.agentRuntimeOverride !== resolution.runtime;
+    const updated =
+      entry.agentRuntimeOverride !== resolution.runtime ||
+      (entry.nativeRuntimeConsent !== undefined &&
+        entry.nativeRuntimeConsent !== resolution.runtime);
+    if (updated) {
+      delete entry.nativeRuntimeConsent;
+    }
     entry.agentRuntimeOverride = resolution.runtime;
     return { updated };
   }

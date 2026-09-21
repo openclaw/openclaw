@@ -4,6 +4,8 @@ import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../../../sessions/session-lifecycle-events.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
@@ -12,6 +14,7 @@ import {
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
   getSubagentRunsSnapshotForChildSession,
+  getSubagentRunsSnapshotForChildSessions,
   getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
   getSubagentRunsSnapshotForSessions,
@@ -97,6 +100,64 @@ describe("subagent registry state read cache", () => {
       process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE = previousReadSqliteFlag;
     }
     vi.useRealTimers();
+  });
+
+  it("publishes old and new retained-run keys only after their owner accepts the write", () => {
+    const previous = {
+      ...createRun("retained"),
+      requesterSessionKey: "agent:main:old-parent",
+    };
+    mocks.loadSubagentSessionListRunsFromSqlite.mockReturnValue(
+      new Map([[previous.runId, previous]]),
+    );
+    getSubagentSessionListRunsSnapshotForRead(new Map());
+    const changed = vi.fn();
+    const stop = sessionChanges.subscribe(changed);
+    try {
+      const current = {
+        ...previous,
+        childSessionKey: "agent:main:subagent:moved",
+        requesterSessionKey: "agent:main:new-parent",
+        controllerSessionKey: "agent:main:controller",
+        swarmRequesterSessionKey: "agent:main:swarm",
+        collect: true,
+      };
+      const currentRuns = new Map([[current.runId, current]]);
+      persistSubagentRunsToDiskOrThrow(currentRuns, [current.runId]);
+      expect(changed.mock.calls.map(([event]) => event)).toEqual([
+        { sessionKey: previous.childSessionKey },
+        { sessionKey: previous.requesterSessionKey },
+        { sessionKey: current.childSessionKey },
+        { sessionKey: current.requesterSessionKey },
+        { sessionKey: current.controllerSessionKey },
+        { sessionKey: current.swarmRequesterSessionKey },
+      ]);
+      changed.mockClear();
+
+      mocks.saveSubagentRegistryChangesToSqlite.mockImplementationOnce(() => {
+        throw new Error("write rolled back");
+      });
+      expect(() => persistSubagentRunsToDiskOrThrow(new Map(), [current.runId])).toThrow(
+        "write rolled back",
+      );
+      expect(changed).not.toHaveBeenCalled();
+
+      const deferred: Array<() => void> = [];
+      publishSubagentRunsAfterAtomicStore(new Map(), [current.runId], deferred);
+      expect(changed).not.toHaveBeenCalled();
+      deferred.forEach((publish) => publish());
+      expect(changed.mock.calls.map(([event]) => event)).toEqual([
+        { sessionKey: current.childSessionKey },
+        { sessionKey: current.requesterSessionKey },
+        { sessionKey: current.controllerSessionKey },
+        { sessionKey: current.swarmRequesterSessionKey },
+      ]);
+      changed.mockClear();
+      persistSubagentRunsToDiskOrThrow(new Map());
+      expect(changed.mock.calls).toEqual([[{ all: true, scope: "subagent-runs" }]]);
+    } finally {
+      stop();
+    }
   });
 
   it.each([
@@ -577,6 +638,63 @@ describe("subagent registry state read cache", () => {
     expect(result.get("shared")?.task).toBe("in-memory");
     expect(mocks.loadSubagentRunsForControllerFromSqlite).toHaveBeenCalledOnce();
     expect(getSubagentRunsSnapshotForController(new Map(), "   ")).toEqual(new Map());
+  });
+
+  it("keeps exact child generations current through named moves, deletion, and live overlays", () => {
+    const old = createRun("old");
+    const successor = {
+      ...createRun("successor"),
+      childSessionKey: old.childSessionKey,
+      generation: 2,
+      requesterSessionKey: "agent:main:other",
+    };
+    const unrelated = createRun("unrelated");
+    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
+      new Map([old, successor, unrelated].map((run) => [run.runId, run])),
+    );
+    const read = () => [...getSubagentRunsSnapshotForChildSessions([old.childSessionKey]).values()];
+    const listener = vi.fn();
+    const stop = onSubagentRegistryPersisted(listener);
+    try {
+      expect(read()).toEqual([old, successor]);
+      const moved = { ...successor, childSessionKey: "agent:main:moved" };
+      persistSubagentRunsToDisk(new Map([[moved.runId, moved]]), [moved.runId]);
+      expect(read()).toEqual([old]);
+      expect(listener).toHaveBeenLastCalledWith(
+        expect.arrayContaining([old.childSessionKey, moved.childSessionKey]),
+      );
+      subagentRuns.set(old.runId, { ...old, childSessionKey: moved.childSessionKey });
+      expect(read()).toEqual([]);
+      subagentRuns.delete(old.runId);
+      persistSubagentRunsToDisk(new Map(), [old.runId]);
+      expect(read()).toEqual([]);
+      expect(mocks.loadSubagentRegistryFromSqlite).toHaveBeenCalledOnce();
+      persistSubagentRunsToDisk(new Map([[old.runId, old]]));
+      expect(read()).toEqual([old]);
+      expect(listener).toHaveBeenLastCalledWith(undefined);
+    } finally {
+      stop();
+      subagentRuns.delete(old.runId);
+    }
+  });
+
+  it("masks a cold persisted change when its live run moved and the full read fails", () => {
+    const persisted = createRun("cold-move");
+    persistSubagentRunsToDisk(new Map([[persisted.runId, persisted]]), [persisted.runId]);
+    mocks.loadSubagentRegistryFromSqlite.mockImplementation(() => {
+      throw new Error("read unavailable");
+    });
+    subagentRuns.set(persisted.runId, { ...persisted, childSessionKey: "agent:main:moved" });
+    try {
+      expect(getSubagentRunsSnapshotForChildSessions([persisted.childSessionKey])).toEqual(
+        new Map(),
+      );
+      expect([...getSubagentRunsSnapshotForChildSessions(["agent:main:moved"]).keys()]).toEqual([
+        persisted.runId,
+      ]);
+    } finally {
+      subagentRuns.delete(persisted.runId);
+    }
   });
 
   it("queries one child directly and returns isolated snapshots", () => {

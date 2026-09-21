@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
-import { patchNewSessionPreference } from "./preferences.ts";
+import { replaceBrowserPreference } from "./preferences.ts";
 
 // The closed list of gates allowed to block without a visible reason: the busy
 // Start button and an empty draft explain themselves. Growing it is a product
@@ -139,7 +139,7 @@ describe("DraftSubmissionFlow submit gates", () => {
           phase: "dispatching",
         }),
         persistRecovery: true,
-        recovering: phase === "dispatching",
+        mode: phase === "dispatching" ? "recover" : "dispatch",
         createdAt: expect.any(Number),
       });
       expect(flow.error).toBeNull();
@@ -213,7 +213,7 @@ describe("DraftSubmissionFlow submit gates", () => {
   });
 
   it("surfaces a reason for Enter during worktree preference restore, then clears it", async () => {
-    patchNewSessionPreference("ws://gateway.example", "main", {
+    replaceBrowserPreference("ws://gateway.example", "main", {
       folder: "/workspace",
       worktree: true,
     });

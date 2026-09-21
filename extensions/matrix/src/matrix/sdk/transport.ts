@@ -1,4 +1,3 @@
-// Matrix plugin module implements transport behavior.
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
@@ -13,6 +12,14 @@ import {
   type SsrFPolicy,
   type PinnedDispatcherPolicy,
 } from "./transport-runtime-api.js";
+
+// The SDK retries every fetch error except AbortError, including stale host authority.
+class MatrixSdkAuthorityError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : "Matrix request authority expired", { cause });
+    this.name = "AbortError";
+  }
+}
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -172,8 +179,13 @@ async function fetchWithMatrixGuardedRedirects(params: {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   assertCurrent?: () => void;
   beforeDispatch?: () => Promise<void> | undefined;
+  assertSendCurrent?: () => void;
 }): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
-  params.assertCurrent?.();
+  const assertDispatchCurrent = () => {
+    params.assertCurrent?.();
+    params.assertSendCurrent?.();
+  };
+  assertDispatchCurrent();
   let currentUrl = new URL(params.url);
   let method = (params.init?.method ?? "GET").toUpperCase();
   let body = params.init?.body;
@@ -191,7 +203,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
     let dispatcher: ReturnType<typeof createPinnedDispatcher> | undefined;
     try {
-      params.assertCurrent?.();
+      assertDispatchCurrent();
       signal?.throwIfAborted();
       const pinned = await resolvePinnedHostnameWithPolicy(currentUrl.hostname, {
         policy: params.ssrfPolicy,
@@ -199,12 +211,12 @@ async function fetchWithMatrixGuardedRedirects(params: {
       });
       dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.ssrfPolicy);
       // The guard can persist dispatch custody, so reject stale requests before it runs.
-      params.assertCurrent?.();
+      assertDispatchCurrent();
       signal?.throwIfAborted();
       await params.beforeDispatch?.();
       const response = await fetchWithMatrixDispatcher({
         url: currentUrl.toString(),
-        assertCurrent: params.assertCurrent,
+        assertCurrent: assertDispatchCurrent,
         onDispatch: () => {
           dispatched = true;
         },
@@ -284,10 +296,15 @@ async function fetchWithMatrixGuardedRedirects(params: {
         }
         // The durable callback must precede I/O, but it is not proof of I/O.
         // Roll back its queue marker if the final fence rejects the first fetch.
-        throw new PlatformMessageNotDispatchedError(
+        const rejected = new PlatformMessageNotDispatchedError(
           error instanceof Error ? error.message : "Matrix request rejected before dispatch",
           { cause: error },
         );
+        if (error instanceof MatrixSdkAuthorityError) {
+          // Retain proven-unsent custody while stopping the SDK's network backoff.
+          rejected.name = "AbortError";
+        }
+        throw rejected;
       }
       if (error instanceof PlatformMessageNotDispatchedError) {
         // A later redirect fence describes only that hop, not the earlier request.
@@ -310,24 +327,40 @@ export function createMatrixGuardedFetch(params: {
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   captureRequestAuthority?: () => (() => void) | undefined;
+  captureSendCurrentness?: (
+    resource: RequestInfo | URL,
+    init?: RequestInit,
+  ) => (() => void) | undefined;
   signal?: AbortSignal;
+  captureRequestSignal?: () => AbortSignal | undefined;
   beforeRequest?: (resource: RequestInfo | URL, init?: RequestInit) => Promise<void> | undefined;
 }): typeof fetch {
   return (async (resource: RequestInfo | URL, init?: RequestInit) => {
-    const assertCurrent = params.captureRequestAuthority?.() ?? captureChannelReadAuthority();
+    const authority = params.captureRequestAuthority?.() ?? captureChannelReadAuthority();
+    const assertCurrent = authority
+      ? () => {
+          try {
+            authority();
+          } catch (error) {
+            throw new MatrixSdkAuthorityError(error);
+          }
+        }
+      : undefined;
+    const assertSendCurrent = params.captureSendCurrentness?.(resource, init);
     assertCurrent?.();
     const url = withoutMatrixStateAfterSyncParam(toFetchUrl(resource));
     const { signal, ...requestInit } = init ?? {};
-    const requestSignal =
-      params.signal && signal
-        ? AbortSignal.any([params.signal, signal])
-        : (params.signal ?? signal ?? undefined);
+    const signals = [params.signal, signal, params.captureRequestSignal?.()].filter(
+      (candidate): candidate is AbortSignal => candidate != null,
+    );
+    const requestSignal = signals.length > 0 ? AbortSignal.any(signals) : undefined;
     const beforeRequest = params.beforeRequest;
     const { response, release } = await fetchWithMatrixGuardedRedirects({
       url,
       init: requestInit,
       signal: requestSignal,
       assertCurrent,
+      assertSendCurrent,
       ssrfPolicy: params.ssrfPolicy,
       dispatcherPolicy: params.dispatcherPolicy,
       // Redirects belong to the same original timeline operation and task owner.
@@ -378,6 +411,7 @@ export async function performMatrixRequest(params: {
   dispatcherPolicy?: PinnedDispatcherPolicy;
   allowAbsoluteEndpoint?: boolean;
   assertCurrent?: () => void;
+  assertSendCurrent?: () => void;
   signal?: AbortSignal;
 }): Promise<{ response: Response; text: string; buffer: Buffer }> {
   const assertCurrent = params.assertCurrent ?? captureChannelReadAuthority();
@@ -426,6 +460,7 @@ export async function performMatrixRequest(params: {
     ssrfPolicy: params.ssrfPolicy,
     dispatcherPolicy: params.dispatcherPolicy,
     assertCurrent,
+    assertSendCurrent: params.assertSendCurrent,
     signal: params.signal,
   });
 

@@ -232,7 +232,7 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       role: "toolResult",
       toolCallId: item.id,
       isError: true,
-      content: [expect.objectContaining({ content: timeoutExplanation, text: timeoutExplanation })],
+      content: [{ type: "text", text: timeoutExplanation }],
     });
     expect(result.lastToolError).toMatchObject({
       toolName: "bash",

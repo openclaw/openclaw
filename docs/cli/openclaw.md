@@ -213,12 +213,12 @@ same way for web-search provider setup, opening the masked search wizard after
 the chat TUI closes. `open gateway wizard` opens masked local Gateway setup;
 when it finishes, run `openclaw gateway restart` to apply the saved settings.
 
-OpenClaw never changes provider/auth access from inside its own session: the
-session already depends on that inference route. For model-provider setup or
-repair, `configure model provider` returns exit/onboarding guidance without
-starting a wizard or writing config. Exit OpenClaw and run `openclaw
-onboard`; onboarding stages the credentials and saves only a route that
-completes a real live turn. Start OpenClaw again after onboarding succeeds.
+`configure model provider` directs you to **Settings → Models → Connect provider**
+without starting a wizard or changing config. Check the connected Gateway and
+selected **System** or agent scope in Settings before signing in. Enter credentials
+only in the protected sign-in controls, never in chat. Connecting another provider
+does not select it as the active model or require stopping the host. Model selection
+is separate; replacing credentials for a provider already in use can affect work.
 
 ## Setup bootstrap
 

@@ -206,6 +206,7 @@ export async function runDoctorRepairSequence(params: {
     repairMissingConfiguredPluginInstalls({
       cfg: state.candidate,
       env,
+      repairVersionDrift: true,
       ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
       ...(staleManagedNpmBundledPluginRepair
         ? { baselineRecords: staleManagedNpmBundledPluginRepair.installRecords }

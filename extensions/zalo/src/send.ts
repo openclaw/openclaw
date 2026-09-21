@@ -22,6 +22,7 @@ type ZaloSendOptions = {
   caption?: string;
   verbose?: boolean;
   proxy?: string;
+  assertDirectAdapterHandoff?: () => void;
 };
 
 type ZaloSendResult = {
@@ -79,12 +80,32 @@ function toZaloSendResult(
 async function runZaloSend(
   failureMessage: string,
   params: { chatId: string; kind: MessageReceiptPartKind },
-  send: () => Promise<{ ok?: boolean; result?: { message_id?: string } }>,
+  assertDirectAdapterHandoff: (() => void) | undefined,
+  send: (assertCurrent: (() => void) | undefined) => Promise<{
+    ok?: boolean;
+    result?: { message_id?: string };
+  }>,
 ): Promise<ZaloSendResult> {
+  let handoffRejected = false;
+  let handoffError: unknown;
+  const assertCurrent = assertDirectAdapterHandoff
+    ? () => {
+        try {
+          assertDirectAdapterHandoff();
+        } catch (error) {
+          handoffRejected = true;
+          handoffError = error;
+          throw error;
+        }
+      }
+    : undefined;
   try {
-    const result = toZaloSendResult(await send(), params);
+    const result = toZaloSendResult(await send(assertCurrent), params);
     return result.ok ? result : { ok: false, error: failureMessage, receipt: result.receipt };
   } catch (err) {
+    if (handoffRejected && Object.is(handoffError, err)) {
+      throw err;
+    }
     return {
       ok: false,
       error: formatErrorMessage(err),
@@ -173,27 +194,34 @@ export async function sendMessageZalo(
     return await runZaloSend(
       "Failed to send photo",
       { chatId: context.chatId, kind: "media" },
-      () =>
+      options.assertDirectAdapterHandoff,
+      (assertCurrent) =>
         sendPhoto(
           context.token,
           {
             chat_id: context.chatId,
             photo: photoUrl,
-            caption: caption !== undefined ? truncateUtf16Safe(caption, 2000) : undefined,
+            caption,
           },
           context.fetcher,
+          assertCurrent,
         ),
     );
   }
 
-  return await runZaloSend("Failed to send message", { chatId: context.chatId, kind: "text" }, () =>
-    sendMessage(
-      context.token,
-      {
-        chat_id: context.chatId,
-        text: truncateUtf16Safe(text, 2000),
-      },
-      context.fetcher,
-    ),
+  return await runZaloSend(
+    "Failed to send message",
+    { chatId: context.chatId, kind: "text" },
+    options.assertDirectAdapterHandoff,
+    (assertCurrent) =>
+      sendMessage(
+        context.token,
+        {
+          chat_id: context.chatId,
+          text: truncateUtf16Safe(text, 2000),
+        },
+        context.fetcher,
+        assertCurrent,
+      ),
   );
 }

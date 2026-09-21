@@ -365,7 +365,7 @@ export function renderEvidenceView(state: UiState): string {
         <p>Saved QA evidence bundles, proof artifacts, logs, and producer context.</p>
       </div>
       <div class="evidence-toolbar-main">
-        <label class="capture-search-field">Evidence path
+        <label class="evidence-search-field">Evidence path
           <input id="evidence-path" value="${esc(state.evidencePathDraft)}" placeholder=".artifacts/qa-e2e/suite-.../qa-evidence.json" />
         </label>
         <button class="btn-primary" data-action="load-evidence"${state.evidenceLoading ? " disabled" : ""}>Load</button>
@@ -391,7 +391,7 @@ export function renderEvidenceView(state: UiState): string {
               .join("")}
           </select>
         </label>
-        <label class="capture-search-field">Search
+        <label class="evidence-search-field">Search
           <input id="evidence-search" value="${esc(state.evidenceSearchText)}" placeholder="coverage, title, artifact..." />
         </label>
       </div>

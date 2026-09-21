@@ -124,7 +124,10 @@ function decodeCronJobConfig(jobJson: Record<string, unknown>): Record<string, u
   return delivery ? { ...jobJson, delivery } : jobJson;
 }
 
-function rowToCronJob(row: CronJobReadRow, jobJson: Record<string, unknown>): CronStoredJob | null {
+function rowToCronJob(
+  row: Pick<CronJobReadRow, "job_id" | "state_json" | "runtime_updated_at_ms" | "updated_at">,
+  jobJson: Record<string, unknown>,
+): CronStoredJob | null {
   const state = tryParseJsonObject(row.state_json);
   if (!state || getInvalidPersistedCronJobReason(jobJson)) {
     return null;
@@ -178,8 +181,14 @@ export function projectCronJobThroughStorageCodec(job: CronStoredJob): CronStore
   if (!normalized) {
     throw new Error(`cannot project invalid cron job ${job.id}`);
   }
-  const row = bindCronJobRow("config-revision", normalized, 0) as CronJobRow;
-  const projected = rowToCronJob(row, tryParseJsonObject(row.job_json) ?? {});
+  const jobJson = JSON.stringify(stripJobRuntimeFields(normalized));
+  const row = {
+    job_id: normalized.id,
+    updated_at: normalized.updatedAtMs,
+    state_json: serializeCronJobState(normalized.state ?? {}),
+    runtime_updated_at_ms: normalized.updatedAtMs,
+  };
+  const projected = rowToCronJob(row, tryParseJsonObject(jobJson) ?? {});
   if (!projected) {
     throw new Error(`cannot project cron job ${job.id} through storage codecs`);
   }
@@ -295,7 +304,20 @@ export function deleteStaleCronJobFamilyRows(
     db,
     getCronStoreKysely(db)
       .selectFrom("cron_jobs")
-      .select(["store_key", "job_id", "declaration_key", "name", "description"])
+      .select(["store_key", "job_id", "declaration_key", "name"])
+      .select((eb) => [
+        // Native UTF-8 decoding can replace malformed bytes; only ASCII names
+        // admit an exact SQL comparison before the existing JavaScript filter.
+        /^\p{ASCII}*$/u.test(family.name)
+          ? eb
+              .case()
+              .when("name", "=", family.name)
+              .then(eb.ref("description"))
+              .else(null)
+              .end()
+              .as("description")
+          : "description",
+      ])
       .where("store_key", "!=", activeStoreKey),
   ).rows.filter(
     (row) =>

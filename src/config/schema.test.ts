@@ -1135,7 +1135,6 @@ describe("config schema", () => {
           enabled: true,
           runtime: "quickjs-wasi",
           mode: "only",
-          languages: ["javascript", "typescript"],
           timeoutMs: 5000,
           memoryLimitBytes: 67_108_864,
           maxOutputBytes: 65_536,
@@ -1150,7 +1149,6 @@ describe("config schema", () => {
       enabled: true,
       runtime: "quickjs-wasi",
       mode: "only",
-      languages: ["javascript", "typescript"],
       timeoutMs: 5000,
       memoryLimitBytes: 67_108_864,
       maxOutputBytes: 65_536,
@@ -1178,6 +1176,7 @@ describe("config schema", () => {
     });
     expect(ToolsSchema.safeParse({ codeMode: "on" }).success).toBe(false);
     expect(ToolsSchema.safeParse({ codeMode: { enabled: "always" } }).success).toBe(false);
+    expect(ToolsSchema.safeParse({ codeMode: { languages: ["javascript"] } }).success).toBe(false);
   });
 
   it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(

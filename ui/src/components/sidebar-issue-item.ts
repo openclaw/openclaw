@@ -7,6 +7,7 @@ import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { formatDateTimeMs, formatRelativeTimestamp } from "../lib/format.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
@@ -18,6 +19,8 @@ import { icons } from "./icons.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import "./sidebar-update-card.ts";
 import "./viewer-facepile.ts";
+
+registerSidebarAttentionEnglish();
 
 type SidebarIssueItemHandlers = {
   basePath: string;

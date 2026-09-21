@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements deliver reply behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,

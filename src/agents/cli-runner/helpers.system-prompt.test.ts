@@ -16,6 +16,37 @@ describe("buildCliAgentSystemPrompt", () => {
     clearPluginCommands();
   });
 
+  it("includes the OpenClaw skills prompt in CLI system prompts", () => {
+    const preparedModelRuntime = {
+      isCurrent: vi.fn(() => true),
+      configuredModelAliases: [{ alias: "Current", provider: "fixture", model: "current" }],
+    };
+    const params = {
+      workspaceDir: "/tmp",
+      modelDisplay: "claude-cli/sonnet",
+      config: { agents: { defaults: { model: "fixture/current" } } },
+      preparedModelRuntime,
+      tools: [],
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>weather</name>",
+        "    <description>Use weather tools.</description>",
+        "    <location>/tmp/skills/weather/SKILL.md</location>",
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+    };
+    const systemPrompt = buildCliAgentSystemPrompt(params);
+
+    expect(systemPrompt).toContain("## Skills");
+    expect(systemPrompt).toContain("<name>weather</name>");
+    expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
+    expect(systemPrompt).toContain("- Current: fixture/current");
+    preparedModelRuntime.isCurrent.mockReturnValue(false);
+    expect(buildCliAgentSystemPrompt(params)).not.toContain("## Model Aliases");
+  });
+
   it.each([true, false])(
     "gates ClawHub guidance on the CLI tool schema (available=%s)",
     (available) => {
@@ -30,7 +61,9 @@ describe("buildCliAgentSystemPrompt", () => {
         modelDisplay: "test/model",
       });
 
-      expect(prompt.includes("including when it is already installed")).toBe(available);
+      expect(
+        prompt.includes("For explicit plugin/skill search/install or missing capability"),
+      ).toBe(available);
     },
   );
 

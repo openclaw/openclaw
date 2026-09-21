@@ -19,8 +19,9 @@ import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
-import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry-listing.js";
+import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
 import { resolveUserPath } from "../utils.js";
+import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import { BACKUP_MAX_DECOMPRESSION_RATIO, buildBackupArchivePath } from "./backup-shared.js";
 import {
   type BackupManifest,
@@ -350,12 +351,13 @@ async function verifySqliteSnapshots(params: {
   archivePath: string;
   entries: NormalizedArchiveEntry[];
   manifest: BackupManifest;
-}): Promise<void> {
+}): Promise<SqliteSnapshotOwner[]> {
+  const verifiedOwners: SqliteSnapshotOwner[] = [];
   const stateDir =
     params.manifest.paths?.stateDir ??
     params.manifest.assets.find((asset) => asset.kind === "state")?.sourcePath;
   if (!stateDir) {
-    return;
+    return verifiedOwners;
   }
   const stateAssetRoot = buildBackupArchivePath(params.manifest.archiveRoot, stateDir);
   const portableStateRoot = resolvePortableArchivePathKey(stateAssetRoot);
@@ -373,7 +375,7 @@ async function verifySqliteSnapshots(params: {
   };
   const globalEntries = listSqliteSnapshotEntries(params.entries, [globalOwner]);
   if (globalEntries.length === 0) {
-    return;
+    return verifiedOwners;
   }
   resolveCanonicalStateAssetRoot(params.manifest);
   const tempRoot = os.tmpdir();
@@ -438,6 +440,7 @@ async function verifySqliteSnapshots(params: {
           } else {
             assertExpectedSqliteRole(database, entry.normalized, entry.role);
           }
+          verifiedOwners.push({ ...entry, archivePath: entry.normalized });
           if (entry.role === "global") {
             const agentOwners = readArchivedAgentDatabaseOwners(
               database,
@@ -482,9 +485,13 @@ async function verifySqliteSnapshots(params: {
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
+  return verifiedOwners;
 }
 
-async function verifyResolvedBackupArchive(archivePath: string): Promise<PreparedBackupArchive> {
+async function verifyResolvedBackupArchive(
+  archivePath: string,
+  requiredSnapshots: readonly BackupSqliteSnapshotFact[],
+): Promise<PreparedBackupArchive> {
   let archiveStat;
   try {
     archiveStat = await fs.stat(archivePath);
@@ -633,7 +640,23 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<Prepare
   ) {
     throw new Error("Backup manifest external symbolic links do not match archive entries.");
   }
-  await verifySqliteSnapshots({ archivePath, entries, manifest });
+  const verifiedSnapshots = await verifySqliteSnapshots({ archivePath, entries, manifest });
+  for (const required of requiredSnapshots) {
+    const expectedPath = buildBackupArchivePath(manifest.archiveRoot, required.sourcePath);
+    if (
+      !verifiedSnapshots.some(
+        (verified) =>
+          verified.archivePath === expectedPath &&
+          verified.role === required.role &&
+          (required.role === "global" ||
+            (verified.role === "agent" && verified.agentId === required.agentId)),
+      )
+    ) {
+      throw new Error(
+        `Backup lacks verified canonical SQLite coverage for ${required.sourcePath}.`,
+      );
+    }
+  }
 
   const result: BackupVerifyResult = {
     ok: true,
@@ -651,17 +674,25 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<Prepare
 }
 
 /** Verify an archive and prepare the exact hardlink targets needed by extraction. */
-export async function prepareBackupArchive(archive: string): Promise<PreparedBackupArchive> {
+export async function prepareBackupArchive(
+  archive: string,
+  requiredSnapshots: readonly BackupSqliteSnapshotFact[] = [],
+): Promise<PreparedBackupArchive> {
   const archivePath = resolveUserPath(archive);
-  return await verifyResolvedBackupArchive(archivePath).catch((error: unknown) => {
-    const detail = error instanceof Error ? error.message : formatErrorMessage(error);
-    throw new Error(`Backup archive verification failed: ${archivePath}. ${detail}`);
-  });
+  return await verifyResolvedBackupArchive(archivePath, requiredSnapshots).catch(
+    (error: unknown) => {
+      const detail = error instanceof Error ? error.message : formatErrorMessage(error);
+      throw new Error(`Backup archive verification failed: ${archivePath}. ${detail}`);
+    },
+  );
 }
 
 /** Verify a backup archive without exposing extraction metadata in CLI output. */
-export async function verifyBackupArchive(archive: string): Promise<BackupVerifyResult> {
-  return (await prepareBackupArchive(archive)).result;
+export async function verifyBackupArchive(
+  archive: string,
+  requiredSnapshots: readonly BackupSqliteSnapshotFact[] = [],
+): Promise<BackupVerifyResult> {
+  return (await prepareBackupArchive(archive, requiredSnapshots)).result;
 }
 
 /** Verify a backup archive, including snapshot shape and canonical SQLite integrity checks. */

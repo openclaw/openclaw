@@ -94,6 +94,7 @@ async function runMainCronCase(
   exercise?: (fixture: MainCronFixture) => Promise<void>,
 ) {
   const sandbox = makeSandbox();
+  const followUpCompleted = createDeferred<Awaited<ReturnType<typeof runHeartbeatOnce>>>();
   const wakeSignals: Array<AbortSignal | undefined> = [];
   const getReplySpy = vi.fn<(ctx: MsgContext) => Promise<MainCronReply>>(async (ctx) => {
     wakeSignals.push(getHeartbeatWakeAbortSignal());
@@ -143,12 +144,17 @@ async function runMainCronCase(
     });
   }
 
-  const runHeartbeatOnceReal: typeof runHeartbeatOnce = (opts) =>
-    runHeartbeatOnce({
+  const runHeartbeatOnceReal: typeof runHeartbeatOnce = async (opts) => {
+    const outcome = await runHeartbeatOnce({
       ...opts,
       cfg,
       deps: { getReplyFromConfig: getReplySpy, telegram: sendTelegram },
     });
+    if (options.mixedExec && getReplySpy.mock.calls.length >= 2) {
+      followUpCompleted.resolve(outcome);
+    }
+    return outcome;
+  };
 
   const heartbeatRunner = startHeartbeatRunner({ cfg, runOnce: runHeartbeatOnceReal });
   const cron = new CronService({
@@ -233,8 +239,9 @@ async function runMainCronCase(
     }
 
     let finishTimeout: ReturnType<typeof setTimeout> | undefined;
-    const terminal = await Promise.race([
-      finished,
+    const [terminal, followUp] = await Promise.race([
+      // Cron emits finished before asynchronous finalization releases its busy guard.
+      Promise.all([finished, options.mixedExec ? followUpCompleted.promise : undefined]),
       new Promise<never>((_, reject) => {
         finishTimeout = setTimeout(
           () => reject(new Error(`${mode} cron run did not finish`)),
@@ -287,7 +294,8 @@ async function runMainCronCase(
       expect(wakeSignals[0]).toBeInstanceOf(AbortSignal);
     }
     if (options.mixedExec) {
-      await vi.waitFor(() => expect(getReplySpy).toHaveBeenCalledTimes(2));
+      expect(followUp).toMatchObject({ status: "ran" });
+      expect(getReplySpy).toHaveBeenCalledTimes(2);
       expect(getReplySpy.mock.calls[0]?.[0].InternalTurnSource).toBe("exec");
       expect(getReplySpy.mock.calls[0]?.[0].Body).not.toContain(
         "Reminder: Send the nightly report",
@@ -298,7 +306,7 @@ async function runMainCronCase(
       });
       expect(getReplySpy.mock.calls[1]?.[0].Body).toContain("Reminder: Send the nightly report");
       expect(getReplySpy.mock.calls[1]?.[0].Body).not.toContain("Exec completed");
-      await vi.waitFor(() => expect(sendTelegram).toHaveBeenCalledTimes(2));
+      expect(sendTelegram).toHaveBeenCalledTimes(2);
       expect(sendTelegram.mock.calls.map(([to]) => to)).toEqual(["-100155462274", "-100155462274"]);
       expect(peekSystemEventEntries(expectedMainSessionKey).map((event) => event.text)).toEqual([
         "Reminder: Late arrival",

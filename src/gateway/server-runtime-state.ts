@@ -12,6 +12,7 @@ import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntimeCore } from "../plugins/runtime/types-core.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiRootState } from "./control-ui.js";
@@ -98,6 +99,8 @@ export async function createGatewayHttpTransport(params: {
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
   bindHost: string;
   port: number;
+  /** Test-instance listener held since allocation; caller closes it if construction fails. */
+  testListener?: HttpServer;
   updateCanary?: boolean;
   controlUiEnabled?: boolean;
   controlUiBasePath: string;
@@ -150,6 +153,20 @@ export async function createGatewayHttpTransport(params: {
     params: Parameters<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>[0],
   ) => ReturnType<PluginRuntimeCore["hooks"]["dispatchHookAgentTurn"]>;
 }> {
+  const spawnBroker = getSpawnBroker();
+  if (params.testListener) {
+    const address = params.testListener.address();
+    if (
+      params.gatewayTls?.enabled ||
+      params.bindHost !== "127.0.0.1" ||
+      !address ||
+      typeof address === "string" ||
+      address.address !== params.bindHost ||
+      address.port !== params.port
+    ) {
+      throw new Error("Test Gateway listener must own the configured HTTP loopback endpoint");
+    }
+  }
   const loadRuntimeConfig = params.getRuntimeConfig ?? (() => params.cfg);
   const resolvePluginRouteRegistry = () =>
     params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
@@ -160,13 +177,15 @@ export async function createGatewayHttpTransport(params: {
     | undefined;
   const getHookDispatcher = async () => {
     const { createGatewayHookDispatcher } = await import("./server/hooks.js");
-    return (loadedHookDispatcher ??= createGatewayHookDispatcher({
-      deps: params.deps,
-      logHooks: params.logHooks,
-      ...(params.getGatewayRequestContext
-        ? { resolveGatewayContext: params.getGatewayRequestContext }
-        : {}),
-    }));
+    return (loadedHookDispatcher ??= runWithSpawnBroker(spawnBroker, () =>
+      createGatewayHookDispatcher({
+        deps: params.deps,
+        logHooks: params.logHooks,
+        ...(params.getGatewayRequestContext
+          ? { resolveGatewayContext: params.getGatewayRequestContext }
+          : {}),
+      }),
+    ));
   };
   const handleHooksRequest: HooksRequestHandler = async (req, res) => {
     const hooksConfig = params.hooksConfig();
@@ -312,14 +331,22 @@ export async function createGatewayHttpTransport(params: {
   const portalService = createGatewayPortalService({
     httpBindHosts,
     httpServers,
+    ingress: params.cfg.gateway?.portals?.ingress,
+    managedTailscale: Boolean(managedTailscaleMode),
+    gatewayOrigins: [
+      params.cfg.gateway?.publicOrigin,
+      ...(params.cfg.gateway?.controlUi?.allowedOrigins ?? []),
+    ].filter((origin): origin is string => Boolean(origin)),
     ...(params.gatewayTls?.enabled ? { tlsOptions: params.gatewayTls.tlsOptions } : {}),
   });
   const reportUnattributableProxy = createGatewayUnattributableProxyReporter(params.log);
   const createGatewayListener = (
     ingressTransport: GatewayIngressTransport,
     tlsOptions: GatewayTlsRuntime["tlsOptions"] | undefined,
+    testListener?: HttpServer,
   ): HttpServer => {
     const httpServer = createGatewayHttpServer({
+      testListener,
       clients: params.clients,
       controlUiEnabled: params.controlUiEnabled,
       controlUiBasePath: params.controlUiBasePath,
@@ -375,10 +402,11 @@ export async function createGatewayHttpTransport(params: {
     });
     return httpServer;
   };
-  for (const _ of bindHosts) {
+  for (const host of bindHosts) {
     const httpServer = createGatewayListener(
       { kind: "ordinary" },
       params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+      host === params.bindHost ? params.testListener : undefined,
     );
     gatewayHttpServers.push(httpServer);
     httpServers.push(httpServer);
@@ -527,12 +555,14 @@ export async function createGatewayHttpTransport(params: {
         // helpers. A collision must fail startup instead of sending credentials to it.
         const requiredLoopbackAlias = host === requiredAlias;
         try {
-          await listenGatewayHttpServer({
-            httpServer: server,
-            bindHost: host,
-            port: params.port,
-            retryEaddrinuse: !requiredLoopbackAlias,
-          });
+          if (server !== params.testListener) {
+            await listenGatewayHttpServer({
+              httpServer: server,
+              bindHost: host,
+              port: params.port,
+              retryEaddrinuse: !requiredLoopbackAlias,
+            });
+          }
           boundHosts.add(host);
         } catch (err) {
           if (host === bindHosts[0] || requiredLoopbackAlias) {
@@ -546,6 +576,9 @@ export async function createGatewayHttpTransport(params: {
       httpBindHosts.push(...bindHosts.filter((host) => boundHosts.has(host)));
       if (httpBindHosts.length === 0) {
         throw new Error("Gateway HTTP server failed to start");
+      }
+      if (!params.updateCanary) {
+        await portalService.startIngress();
       }
       // Published updaters retain the live sandbox port but already pass --update-canary.
       if (!params.updateCanary && params.cfg.mcp?.apps?.enabled === true) {

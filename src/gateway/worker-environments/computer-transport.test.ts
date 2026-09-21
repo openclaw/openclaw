@@ -16,13 +16,14 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
+import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import {
   createApprovalClientLookup,
   createOperatorClient,
   expectSinglePendingApproval,
 } from "../node-invoke-plugin-policy.test-helpers.js";
-import { createWorkerComputerService } from "./computer-transport.js";
+import { createWorkerComputerService } from "./computer-service.js";
 import {
   COMPUTER_USE,
   EXECUTION_ID,
@@ -127,6 +128,88 @@ describe("session computer transport", () => {
     vi.restoreAllMocks();
     resetAgentRunRegistryForTest();
     resetPluginRuntimeStateForTest();
+  });
+
+  it("controls an attached environment without moving the conversation and fences attachment revocation", async () => {
+    const h = createHarness();
+    h.releaseClaim();
+    h.state.environment = { ...h.state.environment, state: "ready", attachedSessionIds: [] };
+    let attached = true;
+    const service = createWorkerComputerService(h.options);
+    const prepared = await service.prepareAttached({
+      environmentId: h.state.environment.environmentId,
+      ownerEpoch: h.state.environment.ownerEpoch,
+      sessionId: h.claim.sessionId,
+      sessionKey: h.state.placement.sessionKey,
+      agentId: h.state.placement.agentId,
+      runId: h.run.runId,
+      assertCurrent: () => {
+        if (!attached) {
+          throw new Error("attachment revoked");
+        }
+      },
+    });
+    expect(prepared).toBeDefined();
+    const transport = prepared!.bind(h.run);
+    await expect(transport.invoke(request("snapshot"))).resolves.toEqual({ ok: true });
+    await expect(transport.invoke(request("type"))).resolves.toEqual({ ok: true });
+    attached = false;
+    await expect(transport.invoke(request("type"))).rejects.toThrow("authority changed");
+    expect(h.state.environment.attachedSessionIds).toEqual([]);
+    await service.close();
+    expect(h.nativeExecutionIds).toHaveLength(3);
+    expect(new Set(h.nativeExecutionIds).size).toBe(1);
+  });
+
+  it("pauses agent input during human control and resumes after release", async () => {
+    const h = createHarness();
+    const desktopRegistry = createDesktopSessionRegistry();
+    const service = createWorkerComputerService({ ...h.options, desktopRegistry });
+    const prepared = await service.prepare(h.claim);
+    const transport = prepared!.bind(h.run);
+    await desktopRegistry.activate({
+      sourceKey: h.state.environment.environmentId,
+      ownerEpoch: h.state.environment.ownerEpoch,
+    });
+    const dispatched = createDeferredCore<AbortSignal>();
+    h.privateInvoke.mockImplementationOnce(async (invocation) => {
+      const signal = invocation.signal!;
+      dispatched.resolve(signal);
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            const reason: unknown = signal.reason;
+            reject(
+              reason instanceof Error
+                ? reason
+                : new Error("Computer transport aborted", { cause: reason }),
+            );
+          },
+          { once: true },
+        );
+      });
+      return { ok: true, payload: { ok: true } };
+    });
+    const input = transport.invoke(request("type"));
+    const rejected = expect(input).rejects.toThrow("operator has control");
+    const inputSignal = await dispatched.promise;
+    const observer = desktopRegistry.attachObserver(h.state.environment.environmentId, {
+      control: true,
+      ownerEpoch: h.state.environment.ownerEpoch,
+      close: vi.fn(),
+    });
+    expect(observer).toBeDefined();
+    await rejected;
+    expect(inputSignal.aborted).toBe(true);
+    await expect(transport.invoke(request("type"))).rejects.toThrow("release control");
+    await expect(transport.invoke(request("snapshot"))).resolves.toEqual({ ok: true });
+    observer!.release();
+    await expect(transport.invoke(request("type"))).rejects.toThrow("fresh screenshot");
+    await expect(transport.invoke(request("snapshot"))).resolves.toEqual({ ok: true });
+    await expect(transport.invoke(request("type"))).resolves.toEqual({ ok: true });
+    await service.close();
+    await desktopRegistry.stopAll();
   });
 
   it("preserves bounded redacted native close causes in the worker RPC error", async () => {
@@ -369,15 +452,15 @@ describe("session computer transport", () => {
       turnClaim: h.claim,
       operationalRunInstance: h.run,
     });
-    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    expect(await manager.resolve(record.id, "allow-once")).toBe(true);
     await expect(operation).resolves.toMatchObject({ ok: true });
-    expect(manager.getSnapshot(record.id)?.consumedDecision).toBe("allow-once");
+    expect((await manager.getSnapshot(record.id))?.consumedDecision).toBe("allow-once");
     releaseAgentRunDelegatedAuthority(h.authority);
     h.releaseClaim();
     h.policyHandle.mockClear();
     await prepared.close("completion");
     expect(h.policyHandle).not.toHaveBeenCalled();
-    expect(manager.listPendingRecords()).toEqual([]);
+    expect(await manager.listPendingRecords()).toEqual([]);
   });
 
   it.each([

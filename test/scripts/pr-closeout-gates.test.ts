@@ -104,15 +104,31 @@ function runCloseout(options: {
   mkdirSync(bin);
   writeFileSync(
     join(bin, "gh"),
-    `#!/bin/sh
-if [ "$1 $2" = "pr view" ]; then
-  printf '%s\\n' "$*" >> gh-calls.log
-  cat metadata.json
-elif [ "$1 $2" = "repo view" ]; then
-  echo openclaw/openclaw
-else
-  exit 1
-fi
+    `#!${process.execPath}
+import { appendFileSync, readFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+if (args[0] === 'browse') {
+  console.log('https://github.com/openclaw/openclaw');
+  process.exit(0);
+}
+const endpoint = args.find(arg => arg.startsWith('repos/'));
+if (args[0] !== 'api') throw new Error('Unexpected GitHub command: ' + args.join(' '));
+const metadata = JSON.parse(readFileSync('metadata.json', 'utf8'));
+const repository = { id: 1, node_id: 'fixture-repo', full_name: 'openclaw/openclaw', html_url: 'https://github.com/openclaw/openclaw' };
+let value;
+if (endpoint === 'repos/openclaw/openclaw') value = repository;
+else if (endpoint === 'repos/openclaw/openclaw/pulls/42') {
+  appendFileSync('gh-calls.log', args.join(' ') + '\\n');
+  value = {
+    number: 42, title: metadata.title, state: 'open', draft: false,
+    head: { ref: metadata.headRefName, sha: metadata.headRefOid, repo: repository },
+    base: { ref: metadata.baseRefName, sha: ${JSON.stringify(mainSha)}, repo: { ...repository, id: metadata.isCrossRepository ? 2 : 1 } },
+  };
+} else if (endpoint === 'repos/openclaw/openclaw/pulls/42/files?per_page=100') value = [[]];
+else if (endpoint === 'repos/openclaw/openclaw/commits/' + metadata.headRefOid + '/check-runs?filter=latest&per_page=100') value = [{ check_runs: [] }];
+else if (endpoint === 'repos/openclaw/openclaw/commits/' + metadata.headRefOid + '/status?per_page=100') value = [{ statuses: [] }];
+else throw new Error('Unexpected GitHub endpoint: ' + endpoint);
+console.log(JSON.stringify(value));
 `,
   );
   chmodSync(join(bin, "gh"), 0o755);
@@ -140,6 +156,8 @@ prepare_gates 42
         PATH: `${bin}:${process.env.PATH}`,
         SCRIPTS: join(repoRoot, "scripts"),
         MAIN_SHA: mainSha,
+        GH_REPO: "openclaw/openclaw",
+        OPENCLAW_GH_BIN: join(bin, "gh"),
         OPENCLAW_TESTBOX: "1",
         OPENCLAW_PR_GATES_REMOTE: "",
         OPENCLAW_ALLOW_ROOT_CHANGELOG_PR: options.override ?? "",

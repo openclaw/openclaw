@@ -20,16 +20,11 @@ import type {
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
 import {
-  ControlUiGitHubError,
-  fetchGitHubJson,
-  GITHUB_API_ORIGIN,
-  resolveGitHubApiCredentialScope,
-} from "./control-ui-github-api.js";
-import {
   loadSessionPullRequestReferences,
   releaseSessionPullRequestReferenceCache,
 } from "./control-ui-session-pr-references.js";
 import { fetchSessionPullRequestCheckRollup } from "./control-ui-session-prs-checks.js";
+import { gitHubPublicApi } from "./github-public-api.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
@@ -275,7 +270,7 @@ function pullsByHeadUrl(owner: string, repo: string, head: string): string {
   const encOwner = encodeURIComponent(owner);
   const encRepo = encodeURIComponent(repo);
   const encHead = encodeURIComponent(head);
-  return `${GITHUB_API_ORIGIN}/repos/${encOwner}/${encRepo}/pulls?head=${encHead}&state=all&sort=updated&direction=desc&per_page=5`;
+  return `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encOwner}/${encRepo}/pulls?head=${encHead}&state=all&sort=updated&direction=desc&per_page=5`;
 }
 
 async function fetchParentRepo(
@@ -284,8 +279,8 @@ async function fetchParentRepo(
   fetchImpl: typeof fetch,
   token: string | undefined,
 ): Promise<{ owner: string; repo: string } | null> {
-  const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-  const value = await fetchGitHubJson(url, fetchImpl, token);
+  const url = `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const value = await gitHubPublicApi.fetchGitHubJson(url, fetchImpl, token);
   return resolveGitHubForkParent(value) ?? null;
 }
 
@@ -293,7 +288,7 @@ async function fetchParentRepo(
 // serves stale chips with the rate-limit flag); anything else just drops the
 // optional field the sub-fetch would have filled.
 function rethrowRateLimit(error: unknown): undefined {
-  if (error instanceof ControlUiGitHubError && error.statusCode === 429) {
+  if (error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429) {
     throw error;
   }
   return undefined;
@@ -332,9 +327,10 @@ async function finishPullRequest(
   if (item.state !== "open" && item.state !== "draft") {
     return chip;
   }
-  const detailUrl = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/pulls/${item.number}`;
+  const detailUrl = `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/pulls/${item.number}`;
   const [details, checks] = await Promise.all([
-    knownDetails ?? fetchGitHubJson(detailUrl, fetchImpl, token).catch(rethrowRateLimit),
+    knownDetails ??
+      gitHubPublicApi.fetchGitHubJson(detailUrl, fetchImpl, token).catch(rethrowRateLimit),
     fetchSessionPullRequestCheckRollup(item, fetchImpl, token).catch(rethrowRateLimit),
   ]);
   return {
@@ -374,7 +370,11 @@ async function fetchBranchPullRequests(
   const hasWorkingBranch = Boolean(context.branch && context.branch !== context.defaultBranch);
   let items = hasWorkingBranch
     ? parsePullList(
-        await fetchGitHubJson(pullsByHeadUrl(context.owner, context.repo, head), fetchImpl, token),
+        await gitHubPublicApi.fetchGitHubJson(
+          pullsByHeadUrl(context.owner, context.repo, head),
+          fetchImpl,
+          token,
+        ),
       )
     : [];
   if (hasWorkingBranch && items.length === 0) {
@@ -382,7 +382,11 @@ async function fetchBranchPullRequests(
     const parent = await fetchParentRepo(context.owner, context.repo, fetchImpl, token);
     if (parent) {
       items = parsePullList(
-        await fetchGitHubJson(pullsByHeadUrl(parent.owner, parent.repo, head), fetchImpl, token),
+        await gitHubPublicApi.fetchGitHubJson(
+          pullsByHeadUrl(parent.owner, parent.repo, head),
+          fetchImpl,
+          token,
+        ),
       );
     }
   }
@@ -408,15 +412,15 @@ async function fetchBranchPullRequests(
       referenced.push(existing);
       continue;
     }
-    const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(context.owner)}/${encodeURIComponent(context.repo)}/pulls/${number}`;
+    const url = `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(context.owner)}/${encodeURIComponent(context.repo)}/pulls/${number}`;
     let details: unknown;
     try {
-      details = await fetchGitHubJson(url, fetchImpl, token);
+      details = await gitHubPublicApi.fetchGitHubJson(url, fetchImpl, token);
     } catch (error) {
-      if (error instanceof ControlUiGitHubError && error.statusCode === 404) {
+      if (error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 404) {
         continue;
       }
-      if (error instanceof ControlUiGitHubError && error.statusCode === 429) {
+      if (error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429) {
         rateLimited = true;
         break;
       }
@@ -462,7 +466,7 @@ async function fetchBranchPullRequests(
       referencesIncomplete,
     };
   } catch (error) {
-    if (!(error instanceof ControlUiGitHubError && error.statusCode === 429)) {
+    if (!(error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429)) {
       throw error;
     }
     // Quota ran out between the list fetch and the per-PR detail fetches:
@@ -516,7 +520,8 @@ async function refreshBranchPullRequests(
     };
     return result;
   } catch (error) {
-    const rateLimited = error instanceof ControlUiGitHubError && error.statusCode === 429;
+    const rateLimited =
+      error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429;
     entry.expiresAt = Date.now() + (rateLimited ? RATE_LIMIT_CACHE_MS : FAILURE_CACHE_MS);
     if (rateLimited) {
       return {
@@ -639,9 +644,9 @@ async function cachedBranchPullRequests(
   requestedReferences: readonly number[] | undefined,
   params: ControlUiSessionPullRequestsParams,
 ): Promise<BranchPullRequestsSnapshot> {
-  let identity: ReturnType<typeof resolveGitHubApiCredentialScope>;
+  let identity: ReturnType<typeof gitHubPublicApi.resolveGitHubApiCredentialScope>;
   try {
-    identity = resolveGitHubApiCredentialScope();
+    identity = gitHubPublicApi.resolveGitHubApiCredentialScope();
   } catch (error) {
     branchCache.release(deps.cacheSignal);
     throw error;

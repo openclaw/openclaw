@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitInternalDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
@@ -72,6 +73,12 @@ describe("diagnostic stability recorder", () => {
       final: true,
       durationMs: 12,
       byteLength: 345,
+    });
+    emitInternalDiagnosticEvent({
+      type: "diagnostic.child_process.spawn",
+      family: "node",
+      count: 2,
+      intervalMs: 60_000,
     });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);

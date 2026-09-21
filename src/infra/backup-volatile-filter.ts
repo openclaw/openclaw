@@ -13,7 +13,6 @@ import { isLegacyAuditMigrationBackupPath } from "./backup-audit-paths.js";
  * partial tail of a live log has no restoration value.
  */
 
-const STATE_TRANSIENT_EXTENSIONS = new Set([".sock", ".pid", ".tmp"]);
 const CHROMIUM_SINGLETON_FILES = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
 const SQLITE_MEMORY_TRANSIENT_PATH_PATTERN =
   /(?:^|\/)(?:[^/]+\.sqlite\.(?:generation-(?:lock|writer)|reindex-lock)\.sqlite|[^/]+\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-wal|-shm|-journal)?$/iu;
@@ -40,8 +39,9 @@ function hasExtension(filePosix: string, extensions: readonly string[]): boolean
   return extensions.includes(ext);
 }
 
-function hasExtensionInSet(filePosix: string, extensions: ReadonlySet<string>): boolean {
-  return extensions.has(path.posix.extname(filePosix).toLowerCase());
+/** Transient names apply to every selected backup root, not just OpenClaw state. */
+export function isTransientBackupPath(filePath: string): boolean {
+  return /.+\.(?:sock$|pid$|tmp(?:\.|$))/iu.test(path.posix.basename(normalizePosix(filePath)));
 }
 
 export function isTransientSqliteBackupPath(filePath: string): boolean {
@@ -134,6 +134,11 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         return true;
       }
 
+      const pluginCaptureRoot = path.posix.join(stateDirPosix, "tmp", "plugin-captures");
+      if (isUnder(filePosix, pluginCaptureRoot)) {
+        return true;
+      }
+
       const sessionsRoot = path.posix.join(stateDirPosix, "sessions");
       if (isUnder(filePosix, sessionsRoot) && hasExtension(filePosix, [".jsonl", ".log"])) {
         return true;
@@ -166,10 +171,7 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
         }
       }
 
-      if (
-        isUnder(filePosix, stateDirPosix) &&
-        hasExtensionInSet(filePosix, STATE_TRANSIENT_EXTENSIONS)
-      ) {
+      if (isUnder(filePosix, stateDirPosix) && isTransientBackupPath(filePosix)) {
         return true;
       }
     }

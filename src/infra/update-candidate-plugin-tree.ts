@@ -1,3 +1,4 @@
+import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -467,7 +468,7 @@ export async function copyUpdateCandidatePluginTrees(
   const privateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const candidateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.candidateRoot));
   if (candidateRoot !== plan.candidateRoot) {
-    throw new Error("Plugin candidate root changed after snapshot inventory");
+    throw new Error("Plugin files changed during update preparation; rerun the update");
   }
   const rebase = (file: string) =>
     relocateRuntimePath(file, [{ sourceRoot: plan.privateRoot, destinationRoot: privateRoot }]);
@@ -503,8 +504,7 @@ export async function copyUpdateCandidatePluginTrees(
     }
     return path.join(owner[1], path.relative(owner[0], source));
   };
-  const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
-    const current = await fs.lstat(entry.path, { bigint: true });
+  const assertEntryStat = (entry: UpdateCandidatePluginEntry, current: BigIntStats) => {
     const sameKind =
       entry.kind === "directory"
         ? current.isDirectory()
@@ -527,10 +527,13 @@ export async function copyUpdateCandidatePluginTrees(
         mtimeNs: BigInt(entry.mtimeNs),
         ctimeNs: BigInt(entry.ctimeNs),
       });
-    const sameLink =
-      entry.kind !== "symlink" ||
-      (current.size === BigInt(entry.size) && (await fs.readlink(entry.path)) === entry.link);
-    if (!sameFile || !sameLink) {
+    if (!sameFile || (entry.kind === "symlink" && current.size !== BigInt(entry.size))) {
+      throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
+    }
+  };
+  const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
+    assertEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
+    if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
   };
@@ -556,28 +559,23 @@ export async function copyUpdateCandidatePluginTrees(
       await fs.mkdir(destinationFor(entry.path), { recursive: true, mode: entry.mode | 0o700 });
     }
   }
-  const staging = await fs.mkdtemp(path.join(privateRoot, ".plugin-copy-"));
-  try {
-    for (const entry of plan.entries) {
-      if (entry.kind === "file") {
-        await assertEntry(entry);
-        const staged = path.relative(privateRoot, path.join(staging, "payload"));
-        // Stream large payloads, then refuse an existing destination during repair.
-        await destinationRoot.copyIn(staged, entry.path, {
-          maxBytes: entry.size,
-          mode: entry.mode | 0o600,
-          sourceHardlinks: "allow",
-        });
-        await assertEntry(entry);
-        const destination = destinationFor(entry.path);
-        await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
-        await destinationRoot.move(staged, path.relative(privateRoot, destination), {
-          overwrite: false,
-        });
-      }
+  for (const entry of plan.entries) {
+    if (entry.kind === "file") {
+      await assertEntry(entry);
+      const destination = destinationFor(entry.path);
+      await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+      // copyIn owns portable create-only publication; no-replace move needs a
+      // native binding. Recheck the inventory before its private stage is published.
+      await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
+        overwrite: false,
+        maxBytes: entry.size,
+        mode: entry.mode | 0o600,
+        sourceHardlinks: "allow",
+        assertBeforeMutation: () =>
+          assertEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true })),
+      });
+      await assertEntry(entry);
     }
-  } finally {
-    await fs.rm(staging, { recursive: true, force: true });
   }
   for (const entry of plan.entries) {
     if (entry.kind === "symlink") {

@@ -151,19 +151,25 @@ def group_signal(pgid, signum, deadline):
     except ProcessLookupError:
         return False
     except PermissionError:
-        # Darwin can report EPERM for a zombie-only group. Only a checked
-        # census proving no live members can authorize continuing.
-        if group_alive(pgid, deadline):
+        # Darwin can refuse signals while members are exiting but not yet zombies.
+        # Keep those members pending until drain proves termination; never accept a live denial.
+        states = group_states(pgid, deadline)
+        if any(not state.startswith("Z") and not (sys.platform == "darwin" and "E" in state)
+               for state in states):
             raise
-        return False
+        return any(not state.startswith("Z") for state in states)
     return True
 
 
 def group_alive(pgid, deadline):
+    return any(not state.startswith("Z") for state in group_states(pgid, deadline))
+
+
+def group_states(pgid, deadline):
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
-        return False
+        return []
     except PermissionError:
         pass  # EPERM can mean zombie-only; the census must still prove extinction.
     # Darwin -g selects a group; procps selects its session (a superset because
@@ -192,13 +198,13 @@ def group_alive(pgid, deadline):
         states = [state for group, state in (line.split() for line in result.stdout.splitlines())
                   if int(group) == pgid]
     if states:
-        return any(not state.startswith("Z") for state in states)
+        return states
     # Empty selection (exit 1), or a session with only other groups, can race
     # extinction. Require native ESRCH; a bare status 1 or EPERM proves nothing.
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
-        return False
+        return []
     raise RuntimeError("Process group census missed a present group")
 
 
@@ -454,6 +460,7 @@ def checkout_selected_ref():
 
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
+    node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
     evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
     upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
@@ -471,7 +478,7 @@ def checkout_harness(sha):
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
         # retained harness files without updating the index or trusting later edits.
-        pathspecs = [".github/actions"]
+        pathspecs = [".github/actions", *node_setup_scripts]
         if kind in ("platform", "linux-node"):
             pathspecs += evidence_scripts
         elif kind == "preflight":
@@ -483,7 +490,7 @@ def checkout_harness(sha):
     else:
         run_git(harness, "init", harness)
         run_git(harness, "remote", "add", "origin", remote)
-        sparse_paths = ["/.github/actions/"]
+        sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
         if kind in ("platform", "linux-node"):
             sparse_paths += [f"/{path}" for path in evidence_scripts]
         if kind == "linux-node":

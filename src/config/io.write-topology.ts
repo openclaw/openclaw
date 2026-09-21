@@ -207,6 +207,7 @@ export function prepareConfigWriteTopology(
   }
   return {
     nextConfig,
+    clearedSessionStoreOwner: sessionStoreOwnership.ownershipPaths.length > 0,
     explicitSetPaths,
     explicitSetValueSource,
     persistCanonicalAgentRoster:

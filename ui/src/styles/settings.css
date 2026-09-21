@@ -670,6 +670,45 @@ textarea.settings-input {
   background: var(--accent);
 }
 
+.settings-permission-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 11rem;
+  align-items: center;
+  gap: var(--space-3);
+  width: 20rem;
+  max-width: 100%;
+}
+
+.settings-permission-control .settings-status {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.settings-permission-control .settings-status > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.settings-permission-check {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.settings-permission-check svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-permission-control > .btn {
+  width: 100%;
+  white-space: normal;
+}
+
+.settings-permission-recovery {
+  grid-column: 2;
+}
+
 .updates-status-control {
   display: inline-flex;
   align-items: center;

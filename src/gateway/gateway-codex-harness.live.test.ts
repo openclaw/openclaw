@@ -11,9 +11,9 @@ import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-
 import type {
   EventFrame,
   SessionsCatalogListResult,
-  TasksListResult,
   ToolsInvokeResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { verifyCodexNativeSubagentBridgeProbe } from "../../test/helpers/gateway-codex-harness-native-subagent.js";
 import {
   createCodexHarnessLiveInstance,
   createCodexHarnessEventCapture,
@@ -35,7 +35,6 @@ import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { pluginStateEntriesInKeyRange } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import type { GatewayClient } from "./client.js";
@@ -216,6 +215,7 @@ type CodexHarnessAttemptUsage = Partial<
 >;
 
 type CodexHarnessAgentResult = {
+  runId: string;
   compactionCount: number;
   elapsedMs: number;
   events: CapturedAgentEvent[];
@@ -568,8 +568,7 @@ async function assertCodexHarnessTranscriptModelIdentity(params: {
 }
 
 async function writeLiveGatewayConfig(params: {
-  codexApprovalPolicy?: "untrusted";
-  codexApprovalsReviewer?: "user";
+  requireCodexFileApprovals?: boolean;
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
   compactionMode: CodexCompactionStressMode;
@@ -605,9 +604,9 @@ async function writeLiveGatewayConfig(params: {
                 ? { command: params.nativeSupervision.command, homeScope: "user" as const }
                 : {}),
               mode: params.codexAppServerMode ?? "yolo",
-              ...(params.codexApprovalPolicy ? { approvalPolicy: params.codexApprovalPolicy } : {}),
-              ...(params.codexApprovalsReviewer
-                ? { approvalsReviewer: params.codexApprovalsReviewer }
+              // Writable roots would let on-request patches bypass the approval-cache proof.
+              ...(params.requireCodexFileApprovals
+                ? { approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: "read-only" }
                 : {}),
               ...(appServerArgs ? { args: appServerArgs } : {}),
               ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
@@ -682,6 +681,7 @@ async function requestAgentTextWithEvents(params: {
   const { extractPayloadText } = await import("./test-helpers.agent-results.js");
   const capture = createCodexHarnessEventCapture(params);
   const { events } = capture;
+  const runId = `idem-${randomUUID()}-codex-guardian`;
   const unsubscribe = onGatewayAgentEvent(capture.onAgentEvent);
   try {
     const requestStartedAt = Date.now();
@@ -690,7 +690,7 @@ async function requestAgentTextWithEvents(params: {
       "agent",
       {
         sessionKey: params.sessionKey,
-        idempotencyKey: `idem-${randomUUID()}-codex-guardian`,
+        idempotencyKey: runId,
         message: params.message,
         deliver: false,
         thinking: CODEX_HARNESS_THINKING,
@@ -712,6 +712,7 @@ async function requestAgentTextWithEvents(params: {
         }
       | undefined;
     return {
+      runId,
       text: extractPayloadText(payload.result),
       events,
       compactionCount: Math.max(0, result?.meta?.agentMeta?.compactionCount ?? 0),
@@ -734,7 +735,7 @@ async function requestAgentText(params: {
   preserveNativeTurnSettings?: boolean;
   sessionKey: string;
 }): Promise<string> {
-  const { text, events } = await requestAgentTextWithEvents({
+  const { text, events, runId } = await requestAgentTextWithEvents({
     client: params.client,
     eventPrefix: "codex_app_server.",
     message: params.message,
@@ -743,6 +744,7 @@ async function requestAgentText(params: {
   expect(text).toContain(params.expectedReply);
   recordCodexAttemptIdentity({
     events,
+    runId,
     preserveNativeTurnSettings: params.preserveNativeTurnSettings,
     sessionKey: params.sessionKey,
   });
@@ -751,10 +753,11 @@ async function requestAgentText(params: {
 
 function recordCodexAttemptIdentity(params: {
   events: CapturedAgentEvent[];
+  runId: string;
   preserveNativeTurnSettings?: boolean;
   sessionKey: string;
 }): void {
-  const { events } = params;
+  const events = params.events.filter((event) => event.runId === params.runId);
   const turnStarting = events.find(
     (event) =>
       event.stream === "codex_app_server.lifecycle" && event.data?.phase === "turn_starting",
@@ -796,6 +799,13 @@ function recordCodexAttemptIdentity(params: {
   const action = threadReady?.data?.action;
   expect(["started", "resumed", "forked"]).toContain(action);
   observedCodexThreadActions.set(params.sessionKey, action as string);
+  logCodexLiveStep("attempt-identity", {
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    threadId,
+    clientId,
+    action,
+  });
 }
 
 async function verifyCodexMultiSessionApprovalPersistence(params: {
@@ -830,7 +840,7 @@ async function verifyCodexMultiSessionApprovalPersistence(params: {
         "*** End Patch",
       ].join("\n");
       const patchCode = `const result = await tools.apply_patch(${JSON.stringify(patch)});\ntext(result);`;
-      const { text, events } = await requestAgentTextWithEvents({
+      const { text, events, runId } = await requestAgentTextWithEvents({
         client: params.client,
         eventPrefixes: ["codex_app_server.", "tool", "approval"],
         sessionKey,
@@ -843,7 +853,7 @@ async function verifyCodexMultiSessionApprovalPersistence(params: {
         ].join("\n"),
       });
       expect(text).toContain(expectedReply);
-      recordCodexAttemptIdentity({ events, sessionKey });
+      recordCodexAttemptIdentity({ events, runId, sessionKey });
       expect(await fs.readFile(targetPath, "utf8")).toBe(`${expectedContent}\n`);
       expect(
         events.some(
@@ -1138,7 +1148,11 @@ async function verifyCodexFullContextStress(params: {
       ].join("\n\n"),
     });
     expect(result.text).toContain(acknowledgement);
-    recordCodexAttemptIdentity({ events: result.events, sessionKey: params.sessionKey });
+    recordCodexAttemptIdentity({
+      events: result.events,
+      runId: result.runId,
+      sessionKey: params.sessionKey,
+    });
     logCodexHarnessTurnMeasurement(`full-stress-${turn}`, result);
     const compaction = readCompletedCodexCompactionStats(result.events);
     expect(compaction.count, "dense threshold-building turns must not compact").toBe(0);
@@ -1189,7 +1203,11 @@ async function verifyCodexFullContextStress(params: {
     message: `Reply exactly ${triggerToken} and nothing else.`,
   });
   expect(triggerResult.text.trim()).toBe(triggerToken);
-  recordCodexAttemptIdentity({ events: triggerResult.events, sessionKey: params.sessionKey });
+  recordCodexAttemptIdentity({
+    events: triggerResult.events,
+    runId: triggerResult.runId,
+    sessionKey: params.sessionKey,
+  });
   logCodexHarnessTurnMeasurement("full-trigger", triggerResult);
   const triggerCompaction = readCompletedCodexCompactionStats(triggerResult.events);
   expect(
@@ -1242,7 +1260,11 @@ async function verifyCodexFullContextStress(params: {
     message: "Reply with exactly the value stored in durable slot A and nothing else.",
   });
   expect(recallResult.text.trim()).toBe(hiddenMarker);
-  recordCodexAttemptIdentity({ events: recallResult.events, sessionKey: params.sessionKey });
+  recordCodexAttemptIdentity({
+    events: recallResult.events,
+    runId: recallResult.runId,
+    sessionKey: params.sessionKey,
+  });
   logCodexHarnessTurnMeasurement("full-post-compaction-recall", recallResult);
 
   const outputMarkers: LongOutputMarkers = {
@@ -1266,7 +1288,11 @@ async function verifyCodexFullContextStress(params: {
     outputTokens,
     stopReason: longOutput.stopReason,
   });
-  recordCodexAttemptIdentity({ events: longOutput.events, sessionKey: params.sessionKey });
+  recordCodexAttemptIdentity({
+    events: longOutput.events,
+    runId: longOutput.runId,
+    sessionKey: params.sessionKey,
+  });
   logCodexHarnessTurnMeasurement("full-bounded-long-output", longOutput);
 
   logCodexLiveStep("full-context-threshold", {
@@ -1316,7 +1342,11 @@ async function verifyCodexCompactionStress(params: {
   let reportedCompactions = 0;
   let startedCompactions = 0;
   const observeTurn = (label: string, result: CodexHarnessAgentResult) => {
-    recordCodexAttemptIdentity({ events: result.events, sessionKey: params.sessionKey });
+    recordCodexAttemptIdentity({
+      events: result.events,
+      runId: result.runId,
+      sessionKey: params.sessionKey,
+    });
     logCodexHarnessTurnMeasurement(label, result);
     const compaction = readCompletedCodexCompactionStats(result.events);
     completedCompactions += compaction.count;
@@ -1948,122 +1978,7 @@ async function verifyCodexSubagentProbe(params: {
   }
 }
 
-async function verifyCodexNativeSubagentBridgeProbe(params: {
-  stateEnv: NodeJS.ProcessEnv;
-  client: GatewayClient;
-  events: EventFrame[];
-  sessionKey: string;
-}): Promise<void> {
-  const runId = randomUUID();
-  const childToken = `CODEX-NATIVE-CHILD-${runId.slice(0, 6).toUpperCase()}`;
-  const parentToken = `CODEX-NATIVE-PARENT-${runId.slice(0, 6).toUpperCase()}`;
-  const { text, events } = await requestAgentTextWithEvents({
-    // Native Codex waiting pauses this parent turn; task delivery resumes it separately.
-    acceptYieldedTimeout: true,
-    client: params.client,
-    eventPrefix: "codex_app_server.",
-    includeAllSessions: true,
-    sessionKey: params.sessionKey,
-    message: [
-      "Bridge probe.",
-      "You must use the Codex native spawn_agent tool exactly once before replying.",
-      `Give the subagent this exact instruction: Reply exactly ${childToken} and nothing else.`,
-      "Wait for the subagent result. Do not answer from your own knowledge.",
-      `After the subagent result returns, reply exactly ${parentToken} ${childToken} and nothing else.`,
-    ].join("\n"),
-  });
-  logCodexLiveStep("native-subagent-bridge-probe:initial-reply", { text });
-  expect(
-    events.some((event) => event.stream === "codex_app_server.lifecycle"),
-    `expected Codex lifecycle events; events=${JSON.stringify(events)}`,
-  ).toBe(true);
-  let codexNativeTasks = await listCodexNativeTasks();
-  let deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
-  const deadline = Date.now() + CODEX_HARNESS_REQUEST_TIMEOUT_MS;
-  while (!deliveredTask && Date.now() < deadline) {
-    await delay(1_000);
-    codexNativeTasks = await listCodexNativeTasks();
-    deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
-  }
-  expect(
-    deliveredTask,
-    `expected delivered Codex-native subagent task with child result; initialText=${JSON.stringify(
-      text,
-    )}; events=${JSON.stringify(events)}; tasks=${JSON.stringify(codexNativeTasks)}`,
-  ).toBeDefined();
-
-  const parentControlledChild = events.some(
-    (event) => event.stream === "codex_app_server.item" && event.data?.type === "subAgentActivity",
-  );
-  if (parentControlledChild) {
-    // Native task IDs record the child thread at creation; model output is not
-    // authoritative enough to select the thread for this ownership probe.
-    const childThreadId = deliveredTask?.sourceId?.match(/^codex-thread:(.+)$/)?.[1];
-    expect(childThreadId).toBeTypeOf("string");
-    const sessionId = await readCodexHarnessSessionId(params);
-    const readBinding = async () => {
-      const row = (
-        await pluginStateEntriesInKeyRange({
-          env: params.stateEnv,
-          pluginId: "codex",
-          namespace: "app-server-thread-bindings",
-          keyStartInclusive: "session-key:dev:",
-          keyEndExclusive: "session-key:dev;",
-          limit: 100,
-        })
-      ).find((entry) => asOptionalRecord(entry.value)?.sessionId === sessionId);
-      // Lease acquisition refreshes the KV write timestamp even when binding content is unchanged.
-      return row ? { key: row.key, value: row.value } : undefined;
-    };
-    const bindingBefore = await readBinding();
-    expect(bindingBefore).toBeDefined();
-    const threadIdBefore = asOptionalRecord(
-      asOptionalRecord(bindingBefore?.value)?.binding,
-    )?.threadId;
-    expect(threadIdBefore).toBeTypeOf("string");
-    expect(threadIdBefore).not.toBe(childThreadId);
-    await requestCodexCommandText({
-      ...params,
-      command: `/codex resume ${childThreadId}`,
-      expectedText: "controlled by its parent",
-    });
-    expect(await readBinding()).toEqual(bindingBefore);
-    await requestAgentText({
-      client: params.client,
-      sessionKey: params.sessionKey,
-      message: "Reply exactly PARENT-STILL-ATTACHED and nothing else.",
-      expectedReply: "PARENT-STILL-ATTACHED",
-    });
-    expect((await readBinding())?.key).toBe(bindingBefore?.key);
-    expect(
-      asOptionalRecord(asOptionalRecord((await readBinding())?.value)?.binding)?.threadId,
-    ).toBe(threadIdBefore);
-    logCodexLiveStep("native-subagent-direct-input:rejected", { childThreadId });
-  } else {
-    logCodexLiveStep("native-subagent-direct-input:legacy-not-applicable");
-  }
-
-  async function listCodexNativeTasks() {
-    const { tasks, nextCursor } = await params.client.request<TasksListResult>("tasks.list", {
-      sessionKey: params.sessionKey,
-      limit: 500,
-    });
-    expect(nextCursor, "isolated native probe must fit in one task page").toBeUndefined();
-    return tasks.filter((entry) => entry.runtime === "subagent" && entry.kind === "codex-native");
-  }
-
-  function findDeliveredCodexNativeTask(tasks: Awaited<ReturnType<typeof listCodexNativeTasks>>) {
-    return tasks.find(
-      (entry) =>
-        entry.status === "completed" &&
-        entry.deliveryStatus === "delivered" &&
-        entry.terminalSummary?.includes(childToken),
-    );
-  }
-}
-
 async function verifyCodexSessionDeletion(params: {
-  stateEnv: NodeJS.ProcessEnv;
   client: GatewayClient;
   events: EventFrame[];
   modelKey: string;
@@ -2073,19 +1988,6 @@ async function verifyCodexSessionDeletion(params: {
   const threadId = observedCodexThreadIds.get(sessionKey);
   expect(threadId).toBeTypeOf("string");
   const sessionId = await readCodexHarnessSessionId({ client, sessionKey });
-  const readBindings = () =>
-    pluginStateEntriesInKeyRange({
-      env: params.stateEnv,
-      pluginId: "codex",
-      namespace: "app-server-thread-bindings",
-      keyStartInclusive: "session-key:dev:",
-      keyEndExclusive: "session-key:dev;",
-      limit: 100,
-    });
-  const before = (await readBindings()).find(
-    (row) => asOptionalRecord(row.value)?.sessionId === sessionId,
-  );
-  expect(before).toBeDefined();
   const siblingKey = `${sessionKey}:deletion-sibling`;
   const selectModel = async (key: string) =>
     requestCodexCommandText({
@@ -2103,11 +2005,7 @@ async function verifyCodexSessionDeletion(params: {
     message: "Reply with exactly SIBLING-READY and nothing else.",
   });
   const siblingThreadId = observedCodexThreadIds.get(siblingKey);
-  const siblingSessionId = await readCodexHarnessSessionId({ client, sessionKey: siblingKey });
-  const siblingBinding = (await readBindings()).find(
-    (row) => asOptionalRecord(row.value)?.sessionId === siblingSessionId,
-  );
-  expect(siblingBinding).toBeDefined();
+  expect(await readCodexHarnessSessionId({ client, sessionKey: siblingKey })).not.toBe(sessionId);
 
   // A competing attachment must reject before displacing either native owner.
   await requestCodexCommandText({
@@ -2117,19 +2015,25 @@ async function verifyCodexSessionDeletion(params: {
     command: `/codex resume ${siblingThreadId}`,
     expectedText: "owned by another OpenClaw session or conversation",
   });
-  expect((await readBindings()).find((row) => row.key === before?.key)).toEqual(before);
-  expect((await readBindings()).find((row) => row.key === siblingBinding?.key)).toEqual(
-    siblingBinding,
-  );
+  await requestAgentText({
+    client,
+    sessionKey,
+    expectedReply: "OWNER-STILL-ATTACHED",
+    message: "Reply with exactly OWNER-STILL-ATTACHED and nothing else.",
+  });
+  await requestAgentText({
+    client,
+    sessionKey: siblingKey,
+    expectedReply: "SIBLING-STILL-ATTACHED",
+    message: "Reply with exactly SIBLING-STILL-ATTACHED and nothing else.",
+  });
+  expect(observedCodexThreadIds.get(sessionKey)).toBe(threadId);
+  expect(observedCodexThreadIds.get(siblingKey)).toBe(siblingThreadId);
 
   const deletion = await client.request<{ deleted: boolean }>("sessions.delete", {
     key: sessionKey,
   });
   expect(deletion.deleted).toBe(true);
-  expect((await readBindings()).some((row) => row.key === before?.key)).toBe(false);
-  expect((await readBindings()).find((row) => row.key === siblingBinding?.key)).toEqual(
-    siblingBinding,
-  );
   await requestAgentText({
     client,
     sessionKey: siblingKey,
@@ -2555,7 +2459,7 @@ describeLive("gateway live (Codex harness)", () => {
 
   it(
     "runs gateway agent turns through the plugin-owned Codex app-server harness",
-    async () => {
+    async (context) => {
       const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
       const token = `test-${randomUUID()}`;
       const instance = await createCodexHarnessLiveInstance(token, CODEX_HARNESS_AUTH_MODE);
@@ -2602,8 +2506,15 @@ describeLive("gateway live (Codex harness)", () => {
         gatewayEvents.push(event);
         maybeResolveGuardianPluginApproval(event);
         if (event.event === "agent") {
+          const agentEvent = event.payload as AgentEventPayload;
+          logCodexLiveStep("agent-event", {
+            runId: agentEvent.runId,
+            stream: agentEvent.stream,
+            phase: agentEvent.data?.phase,
+            type: agentEvent.data?.type,
+          });
           for (const listener of gatewayAgentEventListeners) {
-            listener(event.payload as AgentEventPayload);
+            listener(agentEvent);
           }
         }
       };
@@ -2623,9 +2534,7 @@ describeLive("gateway live (Codex harness)", () => {
           workspace,
           codexAppServerMode:
             CODEX_HARNESS_GUARDIAN_PROBE || CODEX_HARNESS_MULTI_SESSION_PROBE ? "guardian" : "yolo",
-          ...(CODEX_HARNESS_MULTI_SESSION_PROBE
-            ? { codexApprovalPolicy: "untrusted", codexApprovalsReviewer: "user" }
-            : {}),
+          requireCodexFileApprovals: CODEX_HARNESS_MULTI_SESSION_PROBE,
           codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
           compactionMode: CODEX_HARNESS_COMPACTION_MODE,
           ...(CODEX_HARNESS_DISABLE_LOOP_RELAY ? { loopDetectionPreToolUseRelay: false } : {}),
@@ -2689,12 +2598,23 @@ describeLive("gateway live (Codex harness)", () => {
               logCodexLiveStep("subagent-probe:start", { sessionKey });
               await verifyCodexSubagentProbe({ client: activeClient, sessionKey });
               logCodexLiveStep("native-subagent-bridge-probe:start", { sessionKey });
-              await verifyCodexNativeSubagentBridgeProbe({
-                stateEnv: instance.env,
-                client: activeClient,
-                events: gatewayEvents,
-                sessionKey,
-              });
+              await verifyCodexNativeSubagentBridgeProbe(
+                {
+                  annotate: context.annotate,
+                  client: activeClient,
+                  events: gatewayEvents,
+                  sessionKey,
+                },
+                {
+                  requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+                  observedCodexThreadIds,
+                  logCodexLiveStep,
+                  requestAgentTextWithEvents,
+                  recordCodexAttemptIdentity,
+                  requestCodexCommandText,
+                  requestAgentText,
+                },
+              );
               logCodexLiveStep("subagent-probe:done");
               if (CODEX_HARNESS_SUBAGENT_ONLY) {
                 return;
@@ -3033,7 +2953,6 @@ describeLive("gateway live (Codex harness)", () => {
           }
         }
         await verifyCodexSessionDeletion({
-          stateEnv: instance.env,
           client,
           events: gatewayEvents,
           modelKey,

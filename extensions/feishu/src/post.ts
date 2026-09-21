@@ -1,4 +1,3 @@
-// Feishu plugin module implements post behavior.
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,

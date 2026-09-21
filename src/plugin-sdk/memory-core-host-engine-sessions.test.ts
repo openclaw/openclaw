@@ -10,7 +10,10 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadArchivedSessions,
@@ -49,6 +52,7 @@ describe("memory source sessions", () => {
           { ...scope, sessionKey },
           { identity: { type: "profile", id: "profile-source" } },
         );
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
 
         expect(loadMemorySessionMetadata({ ...scope, sessionId, sessionKey })).toMatchObject({
@@ -83,6 +87,7 @@ describe("memory source sessions", () => {
           target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
           archiveTranscript: true,
         });
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
         const archiveName = path.basename(deletion.archivedTranscripts[0]?.archivedPath ?? "");
         expect(loadArchivedSessions({ ...scope, sessionIds: [sessionKey] })).toEqual([
@@ -150,6 +155,7 @@ describe("memory source sessions", () => {
           { sessionId: source, updatedAt: 1_000, hookExternalContentSource: source },
         );
       }
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       for (const source of ["email", "webhook"] as const) {
         expect(loadMemorySessionMetadata({ agentId: "main", sessionId: source })).toMatchObject({

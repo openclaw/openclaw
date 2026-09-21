@@ -41,7 +41,7 @@ async function mountDiscovery(
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   gateway.publish({
     hello: {
-      features: { methods: ["sessions.catalog.list"] },
+      features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
   const mounted = await mountSidebar(
@@ -84,19 +84,23 @@ describe("AppSidebar hidden catalog discovery", () => {
           const gateway = createGatewayHarness(createTestGatewayClient(currentRequest));
           gateway.publish({
             hello: {
-              features: { methods: ["sessions.catalog.list"] },
+              features: {
+                methods: ["sessions.catalog.list"],
+                events: ["sessions.catalog.changed"],
+              },
             } as ApplicationGatewaySnapshot["hello"],
           });
           provider.setContext(createContext(gateway.gateway, context.sessions, TWO_AGENTS));
         }
         await sidebar.updateComplete;
-        await vi.advanceTimersByTimeAsync(50);
+        await vi.advanceTimersByTimeAsync(200);
         await settle(sidebar);
         expect(currentRequest).toHaveBeenCalledTimes(1);
         expect(currentRequest).toHaveBeenLastCalledWith("sessions.catalog.list", {
           agentId: scope === "agent" ? "research" : "main",
           limitPerHost: 40,
           progressId: expect.any(String),
+          allowPartialResults: true,
         });
 
         retiredPage.resolve(
@@ -112,7 +116,7 @@ describe("AppSidebar hidden catalog discovery", () => {
         await settle(sidebar);
         expect(sidebar.textContent).toContain("Current session");
         expect(sidebar.textContent).not.toContain("Retired session");
-        await vi.advanceTimersByTimeAsync(29_999);
+        await vi.advanceTimersByTimeAsync(599_999);
         expect(currentRequest).toHaveBeenCalledTimes(1);
         await vi.advanceTimersByTimeAsync(1);
         await settle(sidebar);
@@ -125,50 +129,28 @@ describe("AppSidebar hidden catalog discovery", () => {
     },
   );
 
-  it("retains cursor progress across bounded refreshes beyond five empty pages", async () => {
-    let furthestPage = 1;
+  it("finishes discovery beyond five empty pages without repeating the root request", async () => {
     const request = createGatewayRequestMock((_method, params) => {
       const cursor = catalogParams(params).cursors?.["gateway:local"];
       const page = cursor ? Number(cursor.slice("page-".length)) : 1;
-      furthestPage = Math.max(furthestPage, page);
       return Promise.resolve(
         page === 8
           ? catalogPage([{ threadId: "found", name: "Discovered session" }])
           : catalogPage([], `page-${page + 1}`),
       );
     });
-    const { sidebar, context, gatewayHarness } = await mountDiscovery(request);
-    expect(furthestPage).toBe(2);
-    context.connectionBootstrap.setForegroundRoute(undefined);
-    await vi.advanceTimersByTimeAsync(5_000);
-    await settle(sidebar);
-    expect(furthestPage).toBe(2);
-    context.connectionBootstrap.setForegroundRoute(null);
-    await settle(sidebar);
-    expect(furthestPage).toBe(3);
-    for (let page = 4; page <= 8; page += 1) {
-      for (const reason of ["agent.input.settled", "patch", "create"]) {
-        gatewayHarness.publishEvent("sessions.changed", {
-          agentId: "main",
-          sessionKey: "agent:main:unrelated",
-          reason,
-        });
-      }
-      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(furthestPage).toBe(page - 1);
-      await vi.advanceTimersByTimeAsync(1);
-      await settle(sidebar);
-      expect(furthestPage).toBe(page);
-    }
+    const { sidebar } = await mountDiscovery(request);
     expect(sidebar.textContent).toContain("Discovered session");
     expect(
       request.mock.calls.map(([, params]) => catalogParams(params).cursors?.["gateway:local"]),
-    ).toEqual(Array.from({ length: 7 }, (_, index) => [undefined, `page-${index + 2}`]).flat());
+    ).toEqual([undefined, ...Array.from({ length: 7 }, (_, index) => `page-${index + 2}`)]);
     expect(sidebar.sessionData.sessionCatalogPageDepths.values().next().value).toBe(7);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(request).toHaveBeenCalledTimes(8);
     await sidebar.sessionData.refreshSessionCatalogs();
     await sidebar.updateComplete;
     expect(sidebar.textContent).toContain("Discovered session");
+    expect(request).toHaveBeenCalledTimes(16);
   });
 
   it.each(["row", "cursor"])(
@@ -189,12 +171,13 @@ describe("AppSidebar hidden catalog discovery", () => {
         return Promise.resolve(
           cursor === "new-page"
             ? catalogPage([{ threadId: "new", name: "New native session" }])
-            : catalogPage([], "page-3"),
+            : catalogPage([]),
         );
       });
-      const { sidebar } = await mountDiscovery(request);
+      const { sidebar, gatewayHarness } = await mountDiscovery(request);
       changed = true;
-      await vi.advanceTimersByTimeAsync(5_000);
+      gatewayHarness.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      await vi.advanceTimersByTimeAsync(200);
       await settle(sidebar);
       expect(sidebar.textContent).toContain("New native session");
       expect(
@@ -207,7 +190,7 @@ describe("AppSidebar hidden catalog discovery", () => {
     },
   );
 
-  it("renews a finished empty sweep so older membership changes remain discoverable", async () => {
+  it("renews a finished empty sweep on invalidation so older membership changes remain discoverable", async () => {
     let added = false;
     const request = createGatewayRequestMock((_method, params) => {
       const cursor = catalogParams(params).cursors?.["gateway:local"];
@@ -221,17 +204,18 @@ describe("AppSidebar hidden catalog discovery", () => {
             : catalogPage([]),
       );
     });
-    const { sidebar } = await mountDiscovery(request);
+    const { sidebar, gatewayHarness } = await mountDiscovery(request);
     added = true;
-    await vi.advanceTimersByTimeAsync(5_000);
-    await settle(sidebar);
+    await vi.advanceTimersByTimeAsync(300_000);
     expect(sidebar.textContent).not.toContain("Older session now visible");
-    await vi.advanceTimersByTimeAsync(30_000);
+    expect(request).toHaveBeenCalledTimes(3);
+    gatewayHarness.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    await vi.advanceTimersByTimeAsync(200);
     await settle(sidebar);
     expect(sidebar.textContent).toContain("Older session now visible");
     expect(
       request.mock.calls.map(([, params]) => catalogParams(params).cursors?.["gateway:local"]),
-    ).toEqual([undefined, "page-2", undefined, "page-3", undefined, "page-2"]);
+    ).toEqual([undefined, "page-2", "page-3", undefined, "page-2"]);
   });
 
   it("restarts empty discovery after an explicit catalog invalidation", async () => {
@@ -242,7 +226,7 @@ describe("AppSidebar hidden catalog discovery", () => {
           ? catalogPage([], "page-2")
           : added
             ? catalogPage([{ threadId: "restored", name: "Restored native session" }])
-            : catalogPage([], "page-3"),
+            : catalogPage([]),
       ),
     );
     const { sidebar } = await mountDiscovery(request);
@@ -312,7 +296,7 @@ describe("AppSidebar hidden catalog discovery", () => {
   it.each(["request", "catalog", "host", "missing host", "missing catalog"] as const)(
     "preserves discovery progress and retries a %s page failure",
     async (failure) => {
-      let failing = false;
+      let failing = true;
       const request = createGatewayRequestMock((_method, params) => {
         const cursor = catalogParams(params).cursors?.["gateway:local"];
         if (!cursor) {
@@ -343,7 +327,6 @@ describe("AppSidebar hidden catalog discovery", () => {
       expect(sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!.nextCursor).toBe("page-3");
       expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
 
-      failing = true;
       await sidebar.sessionData.refreshSessionCatalogs();
       await sidebar.updateComplete;
       const catalog = sidebar.sessionData.sessionCatalogs[0]!;
@@ -435,7 +418,7 @@ describe("AppSidebar hidden catalog discovery", () => {
       expect(sidebar.sessionData.sessionCatalogs[0]!.hosts[0]!.nextCursor).toBe("page-3");
       visibility = "visible";
       document.dispatchEvent(new Event("visibilitychange"));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await settle(sidebar);
       expect(sidebar.textContent).toContain("Visible again");
       expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {

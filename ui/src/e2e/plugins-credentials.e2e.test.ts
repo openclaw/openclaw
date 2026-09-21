@@ -3,7 +3,7 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, type ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   configMocks,
@@ -328,9 +328,21 @@ suite.define(() => {
             await dialog.getByRole("button", { name: "Cancel", exact: true }).isEnabled(),
           ).toBe(true);
           if (width === 1174) {
-            const readsBeforeCancel = (await gateway.getRequests("config.get")).length;
-            await gateway.deferNext("config.get");
-            await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+            // Arm the failure and click in one task so a poll cannot consume Cancel's deferral.
+            const readsBeforeCancel = await dialog
+              .getByRole("button", { name: "Cancel", exact: true })
+              .evaluate((button: HTMLButtonElement) => {
+                const mock = (
+                  window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
+                ).openclawControlUiE2eGateway;
+                if (!mock) {
+                  throw new Error("Mock Gateway is not installed");
+                }
+                const reads = mock.findRequests("config.get").length;
+                mock.deferNext("config.get");
+                button.click();
+                return reads;
+              });
             await gateway.waitForRequest("config.get", { after: readsBeforeCancel });
             await gateway.rejectDeferred("config.get", {
               code: "UNAVAILABLE",

@@ -159,7 +159,10 @@ function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
 
 export function renderChatQueue(props: ChatQueueProps) {
   const visibleQueue = (props.displayQueue ?? props.queue).filter(
-    (item) => item.sendState !== "sending" && !isQueuedSendInlineState(item),
+    (item) =>
+      item.sendState !== "submitting" &&
+      item.sendState !== "sending" &&
+      !isQueuedSendInlineState(item),
   );
   // A peer can retire the source while this pane is away. Render its retained
   // correction for recovery/cancel; this never recreates a row in the outbox.

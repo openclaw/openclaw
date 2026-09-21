@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 const packageManager = process.argv[2];
 const imageVersion = "12.3.4";
@@ -28,10 +28,13 @@ const version = current ? currentVersion : imageVersion;
 const wrapperHash = current ? currentWrapperHash : imageWrapperHash;
 const nativeHash = (current ? currentNativeHashes : imageNativeHashes)[process.arch];
 const archiveRoot = "/opt/crabbox/toolchain-archives";
+const cachedArchives = process.env.PNPM_CONFIG_STORE_DIR
+  ? join(process.env.PNPM_CONFIG_STORE_DIR, "toolchain")
+  : undefined;
 const registry = "https://registry.npmjs.org";
 const registryConfigured = (process.env.COREPACK_NPM_REGISTRY || registry).replace(/\/$/u, "");
-// These approved native archives are glibc builds. Other platforms/registries
-// retain ordinary Corepack/pnpm selection rather than receiving the wrong binary.
+// These native archives are glibc builds. Windows seeds only the authenticated
+// wrapper; pnpm owns its native binary selection and signature verification.
 let supportedCurrentHost = !current;
 if (current && process.platform === "linux") {
   try {
@@ -46,38 +49,43 @@ const canDownload =
   process.env.COREPACK_ENABLE_NETWORK !== "0" &&
   process.env.COREPACK_INTEGRITY_KEYS === undefined;
 
+const seedNative = process.platform === "linux" && supportedCurrentHost && nativeHash;
 if (
-  process.platform === "linux" &&
-  supportedCurrentHost &&
-  nativeHash &&
+  (seedNative || (current && process.platform === "win32")) &&
   packageManager === `pnpm@${version}+sha512.${wrapperHash}`
 ) {
   const staging = await mkdtemp(join(process.env.RUNNER_TEMP || tmpdir(), "pnpm-image-"));
   let corepackHome;
   try {
-    const archives = [
-      [`pnpm-${version}.tgz`, wrapperHash],
-      [`exe.linux-${process.arch}-${version}.tgz`, nativeHash],
-    ];
+    const archives = [[`pnpm-${version}.tgz`, wrapperHash]];
+    if (seedNative) {
+      archives.push([`exe.linux-${process.arch}-${version}.tgz`, nativeHash]);
+    }
     let valid = true;
     for (const [name, hash] of archives) {
       const destination = join(staging, name);
-      let copied = true;
-      try {
-        // Hash the private bytes we will extract, not a mutable image marker.
-        await copyFile(join(archiveRoot, name), destination);
-      } catch (error) {
-        if (["ENOENT", "EACCES", "EISDIR"].includes(error.code)) {
-          copied = false;
-        } else {
-          throw error;
-        }
-      }
       const authentic = () =>
         readFile(destination).then(
           (bytes) => createHash("sha512").update(bytes).digest("hex") === hash,
         );
-      if (!copied || !(await authentic())) {
+      let restored = false;
+      for (const root of [cachedArchives, archiveRoot].filter(Boolean)) {
+        try {
+          // Authenticate the private bytes we will extract, never a cache marker.
+          await copyFile(join(root, name), destination);
+        } catch (error) {
+          if (["ENOENT", "EACCES", "EISDIR", "ENOTDIR"].includes(error.code)) {
+            continue;
+          }
+          throw error;
+        }
+        if (await authentic()) {
+          console.error(`Restored pinned pnpm archive ${name} from ${root}`);
+          restored = true;
+          break;
+        }
+      }
+      if (!restored) {
         if (!canDownload) {
           valid = false;
           break;
@@ -85,6 +93,7 @@ if (
         const url = name.startsWith("pnpm-")
           ? `${registry}/pnpm/-/${name}`
           : `${registry}/@pnpm/exe.linux-${process.arch}/-/${name}`;
+        console.error(`Downloading pinned pnpm archive ${name}`);
         const fetched = spawnSync(
           "curl",
           [
@@ -123,8 +132,12 @@ if (
         await mkdir(roots[index], { recursive: true });
         const result = spawnSync(
           "tar",
-          ["-xzf", join(staging, name), "-C", roots[index], "--strip-components=1"],
-          { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
+          [
+            "-xzf",
+            relative(roots[index], join(staging, name)).split(sep).join("/"),
+            "--strip-components=1",
+          ],
+          { cwd: roots[index], stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
         );
         if (result.error || result.status !== 0) {
           throw new Error(`Cannot extract authenticated pnpm image archive: ${result.stderr}`, {
@@ -141,6 +154,16 @@ if (
           hash: `sha512.${wrapperHash}`,
         }),
       );
+      if (cachedArchives) {
+        try {
+          await mkdir(cachedArchives, { recursive: true });
+          for (const [name] of archives) {
+            await copyFile(join(staging, name), join(cachedArchives, name));
+          }
+        } catch (error) {
+          console.error(`::warning::Cannot cache authenticated pnpm archives: ${error.code}`);
+        }
+      }
       process.stdout.write(`${corepackHome}\n`);
       corepackHome = undefined;
     }

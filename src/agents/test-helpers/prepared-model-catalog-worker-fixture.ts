@@ -6,12 +6,16 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { isPreparedModelCatalogFull } from "../prepared-model-runtime.full-catalog.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
-import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeOwner,
+  PreparedModelRuntimeSnapshot,
+} from "../prepared-model-runtime.types.js";
 
 const waitTimeoutMs = 30_000;
 
@@ -137,6 +141,50 @@ export function readCatalogDiscoveryCaptures(root: string) {
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as { threadId: number; filename: string });
+}
+
+export async function refreshNativeCatalogDuringBoundedRead(params: {
+  snapshot: PreparedModelRuntimeSnapshot;
+  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory">;
+  harnessId: string;
+}): Promise<ModelCatalogSnapshot> {
+  const { snapshot, inventoryOwner } = params;
+  const previous = await snapshot.loadFullModelCatalog!({ refresh: true });
+  const previousInventory = inventoryOwner.catalogInventory;
+  const previousModels = snapshot.readPublishedModels?.();
+  const nativeHarness = snapshot.pluginRegistry?.agentHarnesses.find(
+    ({ harness }) => harness.id === params.harnessId,
+  )?.harness;
+  if (!nativeHarness?.loadModelCatalog) {
+    throw new Error("expected native catalog fixture harness");
+  }
+  const started = createDeferredCore();
+  const release = createDeferredCore();
+  const loadNative = nativeHarness.loadModelCatalog.bind(nativeHarness);
+  nativeHarness.loadModelCatalog = async (context) => {
+    started.resolve();
+    await release.promise;
+    return loadNative(context);
+  };
+  const refresh = snapshot.loadFullModelCatalog!({ refresh: true });
+  try {
+    await started.promise;
+    // A bounded read must keep one published generation while its native source is held.
+    expect(await snapshot.loadFullModelCatalog!()).toBe(previous);
+    expect(snapshot.readFullModelCatalog!()).toBe(previous);
+    expect(snapshot.readPublishedModels?.()).toBe(previousModels);
+    expect(inventoryOwner.catalogInventory).toBe(previousInventory);
+  } finally {
+    release.resolve();
+    try {
+      await refresh;
+    } finally {
+      nativeHarness.loadModelCatalog = loadNative;
+    }
+  }
+  const completed = await refresh;
+  expect(completed).not.toBe(previous);
+  return completed;
 }
 
 /** Full-result assertions follow publication after the bounded foreground read returns. */

@@ -21,6 +21,7 @@ struct DeviceSettingsBridgeTests {
         ("app.debugPaneEnabled", .debugPaneEnabled),
         ("capabilities.canvasEnabled", .canvasEnabled),
         ("capabilities.cameraEnabled", .cameraEnabled),
+        ("capabilities.desktopSharingEnabled", .desktopSharingEnabled),
         ("capabilities.computerControlEnabled", .computerControlEnabled),
         ("capabilities.unattendedDesktopEnabled", .unattendedDesktopEnabled),
         ("capabilities.peekabooBridgeEnabled", .peekabooBridgeEnabled),
@@ -160,7 +161,6 @@ struct DeviceSettingsBridgeTests {
             ("camera", .camera, .camera),
             ("speechRecognition", .speechRecognition, .speechRecognition),
             ("location", .location, .location),
-            ("automation", .automation, .appleScript),
         ]
         #expect(DeviceSettingsPermission.macOSPermissions.map(\.rawValue) == permissions.map(\.0))
         for permission in [DeviceSettingsPermission.contacts, .calendars, .reminders, .photos] {
@@ -202,10 +202,12 @@ struct DeviceSettingsBridgeTests {
             #expect(try String(decoding: JSONEncoder().encode(mapped), as: UTF8.self) == "\"\(wire)\"")
         }
         #expect(DeviceSettingsPermissionStatus(.granted) == .granted)
-        #expect(DeviceSettingsPermissionStatus(.notGranted) == .denied)
+        #expect(DeviceSettingsPermissionStatus(.notGranted).rawValue == "notDetermined")
         #expect(DeviceSettingsPermissionStatus(.unknown) == .unavailable)
         #expect(DeviceSettingsPermissionStatus(nil) == .unavailable)
-        let statuses: [DeviceSettingsPermissionStatus] = [.granted, .denied, .notDetermined, .unavailable, .limited]
+        let statuses: [DeviceSettingsPermissionStatus] = [
+            .granted, .denied, .notDetermined, .unavailable, .limited,
+        ]
         let data = try JSONEncoder().encode(statuses)
         #expect(try JSONSerialization.jsonObject(with: data) as? [String] ==
             ["granted", "denied", "notDetermined", "unavailable", "limited"])

@@ -1,3 +1,5 @@
+import type { TemplateResult } from "lit";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
@@ -13,6 +15,7 @@ type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
   messageId: string;
+  maxChars?: number;
 };
 
 export type SidebarFullMessageLoader = (
@@ -57,8 +60,8 @@ type AttachmentSidebarSource = {
 export type AttachmentSidebarState =
   | { status: "pending" }
   | ({ status: "ready" } & AttachmentSidebarSource)
-  | { status: "unavailable" }
-  | { status: "error"; reason: string };
+  | { status: "unavailable"; onRetry?: () => void }
+  | { status: "error"; reason: string; onRetry?: () => void };
 
 export type AttachmentSidebarRuntime = {
   sessionKey?: string;
@@ -85,6 +88,8 @@ type AttachmentSidebarContent = {
   width?: number;
   height?: number;
   voiceNote?: boolean;
+  plainText?: boolean;
+  renderActions?: () => TemplateResult;
   resolveSource?: (
     onRequestUpdate: () => void,
     runtime: AttachmentSidebarRuntime,
@@ -132,14 +137,23 @@ type FileSidebarContent = {
   edit?: FileSidebarEdit;
 };
 
+export type ToolOutputSidebarContent = {
+  kind: "tool-output";
+  card: ToolCard;
+  sessionKey?: string;
+  agentId?: string;
+};
+
 export type SidebarContent =
+  | ToolOutputSidebarContent
   | MarkdownSidebarContent
   | CanvasSidebarContent
   | ImageSidebarContent
   | AttachmentSidebarContent
   | FileSidebarContent
-  | SessionDiffSidebarContent
-  | { kind: "task"; taskId: string };
+  | SessionDiffSidebarContent;
+
+export type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "tool-output" }>;
 
 export type SidebarSelection = (
   | SidebarContent

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { shouldSkipLegacyUpdateDoctorConfigWrite } from "../commands/doctor/shared/update-phase.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveIsConfigReadOnly, resolveIsNixMode } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { recordUpdateModelRetirement } from "../infra/update-deferred-model-retirement.js";
@@ -33,14 +34,18 @@ export async function runRetiredAuthProfileCleanup(ctx: DoctorHealthFlowContext)
   delete ctx.configResult.retiredAuthProfileCleanupPlans;
 }
 
+/** Returns false when persistence was refused or skipped, without authorizing dependent work. */
 export async function runWriteConfigHealth(
   ctx: DoctorHealthFlowContext,
   options: { runPostWriteRepairs?: boolean } = {},
-): Promise<void> {
+): Promise<boolean> {
+  if (ctx.configWriteError) {
+    throw ctx.configWriteError;
+  }
   if (ctx.configWriteRefusal) {
     // The initial write already reported the refusal; retrying the
     // same candidate would fail identically and duplicate the warning.
-    return;
+    return false;
   }
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
   const { ConfigMutationConflictError, readConfigFileSnapshot, transformConfigFile } =
@@ -73,7 +78,7 @@ export async function runWriteConfigHealth(
     }
     if (shouldSkipLegacyUpdateDoctorConfigWrite(ctx.env ?? process.env)) {
       ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
-      return;
+      return false;
     }
     const legacyParentVersionOverride =
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
@@ -179,6 +184,11 @@ export async function runWriteConfigHealth(
         committed = await writeConfig();
       }
     } catch (error) {
+      if (error instanceof ConfigWritePostCommitError) {
+        // Preserve terminal publication failure before a diagnostic can replace it. No later contribution may replay this committed candidate.
+        ctx.configWriteError = error;
+        throw error;
+      }
       recordUpdateDoctorConfigWriteRefusal({
         reason: "config-write-refused",
         message: formatErrorMessage(error),
@@ -194,7 +204,7 @@ export async function runWriteConfigHealth(
           "Doctor warnings",
         );
         ctx.configWriteRefusal = "config-conflict";
-        return;
+        return false;
       }
       const { isConfigIncludeOwnershipError, isConfigValidationFailedError } =
         await import("../config/io.write-errors.js");
@@ -224,7 +234,7 @@ export async function runWriteConfigHealth(
           "Doctor warnings",
         );
         ctx.configWriteRefusal = "include-ownership";
-        return;
+        return false;
       }
       if (isConfigValidationFailedError(error)) {
         const { note } = await import("../../packages/terminal-core/src/note.js");
@@ -241,7 +251,7 @@ export async function runWriteConfigHealth(
           "Doctor warnings",
         );
         ctx.configWriteRefusal = "validation";
-        return;
+        return false;
       }
       const { isCronOwnerWriteRefusalError } = await import("../config/io.cron-owner-refusal.js");
       if (!isCronOwnerWriteRefusalError(error)) {
@@ -257,7 +267,7 @@ export async function runWriteConfigHealth(
         "Doctor warnings",
       );
       ctx.configWriteRefusal = "cron-owner-safety";
-      return;
+      return false;
     }
     // The atomic write committed: repair panels queued by the config flow are now
     // true statements about disk state, so print them exactly once.
@@ -311,7 +321,7 @@ export async function runWriteConfigHealth(
     delete ctx.configResult.modelBillingRouteWarnings;
   }
   if (options.runPostWriteRepairs === false) {
-    return;
+    return true;
   }
   await runRetiredAuthProfileCleanup(ctx);
   if (ctx.configResult.retiredPhoneControlStateCleanupPending === true) {
@@ -332,7 +342,7 @@ export async function runWriteConfigHealth(
       ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite !== true) ||
     ctx.postConfigWriteRepairsCommitted === true
   ) {
-    return;
+    return true;
   }
   // The config write above must finish before cron rows are rewritten against
   // the now-durable model policy; otherwise a failed write could corrupt them.
@@ -360,6 +370,7 @@ export async function runWriteConfigHealth(
   if (result.warnings.length > 0) {
     note(result.warnings.join("\n"), "Doctor warnings");
   }
+  return true;
 }
 
 /** Commits the finalized config-flow candidate before fallible health diagnostics start. */

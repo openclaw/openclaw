@@ -25,6 +25,7 @@ import type {
 import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginConversationBindingResolvedEvent } from "./conversation-binding.types.js";
+import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
 import type {
   PluginHookHandlerMap,
   PluginHookName,
@@ -211,7 +212,7 @@ export type OpenClawPluginApi = {
   /** Grouped facade for plugin-owned lifecycle cleanup hooks. */
   lifecycle: OpenClawPluginLifecycleApi;
   registerTool: (
-    tool: AnyAgentTool | OpenClawPluginToolFactory,
+    tool: AnyAgentTool | OpenClawPluginToolFactory | OpenClawPluginToolFactory<2>,
     opts?: OpenClawPluginToolOptions,
   ) => void;
   registerHook: (
@@ -244,6 +245,8 @@ export type OpenClawPluginApi = {
       profileAccess?: "independent" | "required";
     },
   ) => void;
+  /** Add a plugin-owned lifetime requirement to authenticated person admission. */
+  registerGatewayAccessPolicy: (policy: PluginGatewayAccessPolicy) => void;
   /** Register a sandboxed board widget source kind owned by this plugin. */
   registerBoardWidgetContentKind: (definition: PluginBoardWidgetContentKind) => void;
   /** Register a read-only external-session catalog with optional native adoption actions. */
@@ -333,6 +336,8 @@ export type OpenClawPluginApi = {
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   /** Register a context engine implementation (exclusive slot - only one active at a time). */
   registerContextEngine: (id: string, factory: ContextEngineFactory) => void;
+  /** Register one version 1 typed decision provider declared in the manifest. */
+  registerDecisionProvider: (provider: import("../decisions/types.js").DecisionProviderV1) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (
     provider: import("./compaction-provider.js").CompactionProvider,

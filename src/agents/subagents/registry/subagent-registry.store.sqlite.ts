@@ -2,16 +2,9 @@
  * Persists subagent run records in the shared sqlite state database, with
  * query-bearing identity columns indexing canonical normalized payload JSON.
  */
-import { safeParseJson } from "@openclaw/normalization-core";
+import type { DatabaseSync } from "node:sqlite";
 import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  sql,
-  type ExpressionBuilder,
-  type Insertable,
-  type Selectable,
-  type Updateable,
-} from "kysely";
+import { sql, type ExpressionBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -24,24 +17,32 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
-import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
-import {
-  normalizeSubagentRunState,
-  projectSubagentRunForMaintenance,
-} from "./subagent-delivery-state.js";
+import { projectSubagentRunForMaintenance } from "./subagent-delivery-state.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import {
+  bindSubagentRunRecord,
+  DELIVERY_STATUSES,
+  rowToSubagentRunRecord,
+  type SubagentRunSqliteRow,
+} from "./subagent-registry.store.codec.js";
+import {
+  hasParentStoreColumns,
+  writeSubagentRunValuesInDatabase,
+  type BoundSubagentRunRecord,
+} from "./subagent-registry.store.kernel.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
-type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
-type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
-type BoundSubagentRunRecord = Insertable<SubagentRunsTable>;
-type SubagentRunSqliteInsert = BoundSubagentRunRecord;
-type SubagentRunSqliteUpdate = Updateable<SubagentRunsTable>;
 type SubagentRunReadSqliteRow = Pick<
   SubagentRunSqliteRow,
-  "run_id" | "child_session_key" | "controller_session_key" | "requester_session_key" | "created_at"
+  | "run_id"
+  | "child_session_key"
+  | "controller_session_key"
+  | "requester_session_key"
+  | "controller_store_path"
+  | "requester_store_path"
+  | "created_at"
 > & {
   model: string | null;
   swarm_run_id: string | null;
@@ -63,121 +64,13 @@ type SubagentRunReadSqliteRow = Pick<
   swarm_requester_session_key: string | null;
   collector_status: NonNullable<SubagentRunRecord["collectorCompletion"]>["status"] | null;
 };
-type CanonicalSubagentRunRecord = SubagentRunRecord &
-  Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
-const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
-const DELIVERY_STATUSES = new Set(
-  "not_required pending in_progress delivered failed suspended discarded".split(" "),
-);
-
-function hasStateStatus(
-  value: unknown,
-  statuses: ReadonlySet<string>,
-): value is Record<string, unknown> {
-  return isRecord(value) && typeof value.status === "string" && statuses.has(value.status);
-}
-
-function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagentRunRecord {
-  return (
-    isRecord(value) &&
-    hasStateStatus(value.execution, EXECUTION_STATUSES) &&
-    isRecord(value.completion) &&
-    typeof value.completion.required === "boolean" &&
-    hasStateStatus(value.delivery, DELIVERY_STATUSES) &&
-    !(
-      "handoffLeaseId" in value.delivery ||
-      "handoffLeasedAt" in value.delivery ||
-      "handoffInjectedAt" in value.delivery
-    )
-  );
-}
-
-function parseJson(raw: string | null): unknown {
-  return raw ? safeParseJson(raw) : undefined;
-}
-
-/** Rehydrates one sqlite row into the normalized subagent run record shape. */
-function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | null {
-  const stored = parseJson(row.payload_json);
-  const payload =
-    isRecord(stored) &&
-    isRecord(stored.parentCompletion) &&
-    stored.parentCompletion.completionTarget === "parent"
-      ? stored.parentCompletion
-      : stored;
-  if (!isCanonicalSubagentRunRecord(payload)) {
-    return null;
-  }
-  // This module owns every production write and commits indexed columns with
-  // this complete payload atomically; rehydrating both created competing state.
-  payload.runId = row.run_id;
-  payload.childSessionKey = row.child_session_key;
-  payload.requesterSessionKey = row.requester_session_key;
-  const controllerSessionKey = row.controller_session_key?.trim();
-  if (controllerSessionKey) {
-    payload.controllerSessionKey = controllerSessionKey;
-  } else {
-    delete payload.controllerSessionKey;
-  }
-  if (payload.requesterOrigin) {
-    payload.requesterOrigin = normalizeDeliveryContext(payload.requesterOrigin);
-  }
-  if (payload.expectsCompletionMessage === false) {
-    payload.delivery.status = "not_required";
-  }
-  const record = normalizeSubagentRunState(payload);
-  return record.runId && record.childSessionKey && record.requesterSessionKey ? record : null;
-}
-
-/** Canonically serializes a run before an outer transaction acquires the write lock. */
-export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRunRecord {
-  const normalized = normalizeSubagentRunState(structuredClone(entry));
-  if (!isCanonicalSubagentRunRecord(normalized)) {
-    throw new Error("subagent run is missing canonical nested state");
-  }
-  return {
-    run_id: normalized.runId,
-    child_session_key: normalized.childSessionKey,
-    controller_session_key: normalized.controllerSessionKey?.trim() || null,
-    requester_session_key: normalized.requesterSessionKey,
-    created_at: normalized.createdAt,
-    // Released readers require root execution/completion/delivery state. Hiding
-    // the whole private record also excludes it from legacy mixed/nested summaries.
-    // Downgrades may discard these rows, but cannot reinterpret them as public.
-    payload_json: JSON.stringify(
-      normalized.completionTarget === "parent" ? { parentCompletion: normalized } : normalized,
-    ),
-  };
-}
-
-/** Upserts a prebound run on the exact supplied shared-state handle. */
-export function upsertSubagentRunRowInDatabase(
-  database: OpenClawStateDatabase,
-  row: BoundSubagentRunRecord,
-): void {
-  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    stateDb
-      .insertInto("subagent_runs")
-      .values(row)
-      .onConflict((conflict) =>
-        conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(row)),
-      ),
-  );
-}
-
-/** Deletes one run on the exact supplied shared-state handle. */
-export function deleteSubagentRunRowInDatabase(
-  database: OpenClawStateDatabase,
-  runId: string,
-): void {
-  executeSqliteQuerySync(
-    database.db,
-    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
-      .deleteFrom("subagent_runs")
-      .where("run_id", "=", runId),
-  );
+function parentStoreColumns(db: DatabaseSync) {
+  return hasParentStoreColumns(db)
+    ? (["requester_store_path", "controller_store_path"] as const)
+    : [
+        sql.val<string | null>(null).as("requester_store_path"),
+        sql.val<string | null>(null).as("controller_store_path"),
+      ];
 }
 
 export function readSubagentRun(
@@ -194,40 +87,17 @@ export function readSubagentRun(
   return row ? rowToSubagentRunRecord(row) : null;
 }
 
-function subagentRunRecordToSqliteUpdate(values: SubagentRunSqliteInsert): SubagentRunSqliteUpdate {
-  const { run_id: _runId, ...update } = values;
-  return update;
-}
-
 function writeSubagentRunValues(
-  values: readonly SubagentRunSqliteInsert[],
+  values: readonly BoundSubagentRunRecord[],
   deleteRunIds?: readonly string[],
   retainedRunIds?: readonly string[],
 ): void {
   if (values.length === 0 && deleteRunIds?.length === 0 && retainedRunIds === undefined) {
     return;
   }
-  runOpenClawStateWriteTransaction((database) => {
-    const { db } = database;
-    const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
-    for (const row of values) {
-      upsertSubagentRunRowInDatabase(database, row);
-    }
-    if (retainedRunIds !== undefined) {
-      const deleteQuery =
-        retainedRunIds.length === 0
-          ? stateDb.deleteFrom("subagent_runs")
-          : stateDb.deleteFrom("subagent_runs").where("run_id", "not in", retainedRunIds);
-      executeSqliteQuerySync(db, deleteQuery);
-      return;
-    }
-    if (deleteRunIds && deleteRunIds.length > 0) {
-      executeSqliteQuerySync(
-        db,
-        stateDb.deleteFrom("subagent_runs").where("run_id", "in", deleteRunIds),
-      );
-    }
-  });
+  runOpenClawStateWriteTransaction((database) =>
+    writeSubagentRunValuesInDatabase(database, values, deleteRunIds, retainedRunIds),
+  );
 }
 
 type SubagentRegistryReadScope =
@@ -262,6 +132,7 @@ function readSubagentRegistryRows(
       "child_session_key",
       "controller_session_key",
       "requester_session_key",
+      ...parentStoreColumns(db),
       "created_at",
     ])
     .select(projection === "full" ? "payload_json" : subagentMaintenancePayload.as("payload_json"));
@@ -360,6 +231,7 @@ function readSubagentSessionListRows(
             "child_session_key",
             "controller_session_key",
             "requester_session_key",
+            ...parentStoreColumns(db),
             "created_at",
             // Materialize compact metadata once; an inline CTE repeats retained JSON work per field.
             subagentMetadataPayload.as("payload_json"),
@@ -378,6 +250,8 @@ function readSubagentSessionListRows(
         "child_session_key",
         "controller_session_key",
         "requester_session_key",
+        "requester_store_path",
+        "controller_store_path",
         "created_at",
         subagentPayloadJsonValue<string | null>("$.swarmRunId").as("swarm_run_id"),
         subagentPayloadJsonValue<string | null>("$.model").as("model"),
@@ -443,6 +317,8 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       childSessionKey,
       controllerSessionKey: row.controller_session_key?.trim() || undefined,
       requesterSessionKey,
+      requesterStorePath: row.requester_store_path ?? undefined,
+      controllerStorePath: row.controller_store_path ?? undefined,
       requesterAgentId: row.requester_agent_id?.trim() || undefined,
       collect: row.collect === 1 ? true : undefined,
       groupId: row.group_id || undefined,
@@ -652,7 +528,7 @@ export function saveSubagentRegistryChangesToSqlite(
   changedRunIds: readonly string[],
 ): void {
   const runIds = [...new Set(changedRunIds.map((runId) => runId.trim()).filter(Boolean))];
-  const values: SubagentRunSqliteInsert[] = [];
+  const values: BoundSubagentRunRecord[] = [];
   const deleteRunIds: string[] = [];
   for (const runId of runIds) {
     const entry = runs.get(runId);

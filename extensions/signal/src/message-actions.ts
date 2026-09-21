@@ -43,6 +43,7 @@ async function mutateSignalReaction(params: {
   remove?: boolean;
   targetAuthor?: string;
   targetAuthorUuid?: string;
+  assertDirectAdapterHandoff?: () => void;
 }) {
   const options = {
     cfg: params.cfg,
@@ -50,6 +51,9 @@ async function mutateSignalReaction(params: {
     groupId: params.target.groupId,
     targetAuthor: params.targetAuthor,
     targetAuthorUuid: params.targetAuthorUuid,
+    ...(params.assertDirectAdapterHandoff
+      ? { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff }
+      : {}),
   };
   const mutateReaction = params.remove ? removeReactionSignal : sendReactionSignal;
   await mutateReaction(params.target.recipient ?? "", params.timestamp, params.emoji, options);
@@ -91,7 +95,14 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       : { ...payload, replyToId: normalizedReplyToId };
   },
 
-  handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    toolContext,
+    assertDirectAdapterHandoff,
+  }) => {
     if (action === "send") {
       throw new Error("Send should be handled by outbound, not actions handler.");
     }
@@ -163,6 +174,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         remove: Boolean(remove),
         targetAuthor,
         targetAuthorUuid,
+        assertDirectAdapterHandoff,
       });
     }
 

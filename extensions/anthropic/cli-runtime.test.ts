@@ -238,6 +238,114 @@ describe("Claude native stdio boundary", () => {
   });
 
   it.each([
+    {
+      scenario: "background-bash-success",
+      decision: { behavior: "allow" as const, updatedInput: { file_path: "approved.txt" } },
+    },
+    {
+      scenario: "background-bash-success",
+      decision: { behavior: "deny" as const, message: "Fixture denied." },
+    },
+    {
+      scenario: "background-bash-batched",
+      decision: { behavior: "allow" as const, updatedInput: { file_path: "approved.txt" } },
+    },
+    {
+      scenario: "background-bash-early",
+      decision: { behavior: "allow" as const, updatedInput: { file_path: "approved.txt" } },
+    },
+    {
+      scenario: "background-bash-inline",
+      decision: { behavior: "allow" as const, updatedInput: { file_path: "approved.txt" } },
+    },
+  ])(
+    "retains host policy's $decision.behavior decision for $scenario",
+    async ({ scenario, decision }) => {
+      const context = await createContext(scenario, {
+        liveSession: createLiveSession(),
+        requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
+          async () => decision,
+        ),
+      });
+      let settled = false;
+      const running = collect(context).then((records) => {
+        settled = true;
+        return records;
+      });
+      await vi.waitFor(async () => {
+        expect(await readFile(path.join(context.cwd, "background.ready"), "utf8")).toBe("ready");
+      });
+      expect(settled).toBe(false);
+      await writeFile(path.join(context.cwd, "background.release"), "release");
+      const detail = resultDetail(await running);
+      expect(detail.finalBackgroundAnswer).toBe(true);
+      // Host policy, not the stale-run guard, answered the notification turn's hook.
+      expect(context.requestToolPermission).toHaveBeenCalledWith(
+        expect.objectContaining({ toolName: "Read", toolCallId: "tool-bg-read" }),
+      );
+      expect(detail.notificationDecision).toMatchObject({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: decision.behavior,
+          ...(decision.behavior === "allow"
+            ? { updatedInput: decision.updatedInput }
+            : { permissionDecisionReason: decision.message }),
+        },
+      });
+    },
+  );
+
+  it("does not hold the turn for a Bash call started in the background", async () => {
+    // run_in_background work may never finish; holding it would block the next input.
+    const liveSession = createLiveSession();
+    const context = await createContext("background-bash-explicit", { liveSession });
+    const first = resultDetail(await collect(context));
+    const handle = liveSession.current();
+    expect(first.explicitBackground).toBe(true);
+    expect(handle?.isIdle()).toBe(true);
+    const second = resultDetail(await collect({ ...context, useResume: true }));
+    expect(second).toMatchObject({ explicitBackground: true, turn: 2, pid: first.pid });
+    expect(liveSession.current()).toBe(handle);
+  });
+
+  it.each(["abort", "process exit"])(
+    "rejects a pending Bash continuation on %s and starts the next turn in a fresh process",
+    async (termination) => {
+      const liveSession = createLiveSession();
+      const controller = new AbortController();
+      const context = await createContext("background-bash-success", {
+        liveSession,
+        abortSignal: controller.signal,
+      });
+      const running = collect(context);
+      const outcome = running.catch((error: unknown) => error);
+      await vi.waitFor(async () => {
+        expect(await readFile(path.join(context.cwd, "background.ready"), "utf8")).toBe("ready");
+      });
+      const firstPid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
+      expect(liveSession.current()?.isIdle()).toBe(false);
+      if (termination === "abort") {
+        controller.abort(new Error("Synthetic background turn cancelled."));
+      } else {
+        process.kill(firstPid, "SIGTERM");
+      }
+      expect(await outcome).toBeInstanceOf(Error);
+      expect(liveSession.current()).toBeUndefined();
+      expect(() => process.kill(firstPid, 0)).toThrow();
+      const next = resultDetail(
+        await collect({
+          ...context,
+          useResume: true,
+          env: { ...context.env, CLAUDE_FIXTURE_SCENARIO: "normal" },
+          abortSignal: AbortSignal.timeout(10_000),
+        }),
+      );
+      expect(next.turn).toBe(1);
+      expect(next.pid).not.toBe(firstPid);
+    },
+  );
+
+  it.each([
     { type: "token" as const, descriptor: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR" },
     { type: "api_key" as const, descriptor: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" },
   ])(
@@ -349,7 +457,12 @@ describe("Claude native stdio boundary", () => {
       "/tmp/synthetic-b",
       "--cache-system-prompt",
     ];
-    context.args = [...context.args, ...nativeArgs, "--exclude-dynamic-system-prompt-sections"];
+    context.args = [
+      ...context.args,
+      ...nativeArgs,
+      "--exclude-dynamic-system-prompt-sections",
+      "--replay-user-messages",
+    ];
     const detail = resultDetail(await collect(context));
     const args = detail.argv as string[];
 
@@ -357,6 +470,7 @@ describe("Claude native stdio boundary", () => {
     expect(args).toEqual(expect.arrayContaining(["--resume", context.sessionId]));
     expect(args).not.toContain("--session-id");
     expect(args).not.toContain(context.systemPrompt);
+    expect(args.filter((arg) => arg === "--replay-user-messages")).toHaveLength(1);
     expect(detail.initialize).toMatchObject({
       appendSystemPrompt: context.systemPrompt,
       excludeDynamicSections: true,
@@ -665,6 +779,18 @@ describe("Claude native stdio boundary", () => {
     {
       scenario: "background-raw-result",
       expected: { result: expect.stringContaining('<invoke name="Read">') },
+    },
+    {
+      scenario: "background-bash-error",
+      expected: { is_error: true, errors: ["fixture background turn failed"] },
+    },
+    {
+      scenario: "background-bash-raw-result",
+      expected: { result: expect.stringContaining('<invoke name="Read">') },
+    },
+    {
+      scenario: "background-bash-queued-error",
+      expected: { is_error: true, errors: ["fixture background turn failed"] },
     },
   ])(
     "ends $scenario immediately while native background work remains listed",

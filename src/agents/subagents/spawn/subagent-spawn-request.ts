@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { listAgentIds } from "../../agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
+import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
 import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
@@ -17,11 +17,11 @@ import type {
   SpawnSubagentParams,
   SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
-import { loadSubagentConfig } from "./subagent-spawn-session-patch.js";
 import {
+  getGlobalHookRunner,
+  getRuntimeConfig,
   loadSessionEntry,
   resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
@@ -29,57 +29,14 @@ import {
 } from "./subagent-spawn.runtime.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
 
-type ResolvedSubagentSpawnRequest = {
-  request: {
-    taskName?: string;
-    spawnMode: ReturnType<typeof resolveSpawnMode>;
-    cleanup: "delete" | "keep";
-    expectsCompletionMessage: boolean;
-    completionRequesterSessionId?: string;
-  };
-  runtime: {
-    hookRunner: SubagentLifecycleHookRunner | null;
-    cfg: OpenClawConfig;
-    runTimeoutSeconds: number;
-    contextMode: ReturnType<typeof resolveSubagentContextMode>;
-    requesterInternalKey: string;
-    ownership: ReturnType<typeof resolveSubagentSpawnOwnership>;
-    requesterAgentId: string;
-    targetAgentId: string;
-  };
-  swarm: {
-    config: ReturnType<typeof resolveSwarmConfig>;
-    groupId?: string;
-    schedulerGroupKey?: string;
-    launchReplayKey?: string;
-    soleImplicitMember: boolean;
-    reservationPending: boolean;
-  };
-  admission: {
-    resolve: (pendingChildren?: number) => ReturnType<typeof resolveSpawnAdmission>;
-    initial: ReturnType<typeof resolveSpawnAdmission> & { ok: true };
-    reservation?: { release: () => void };
-    childDepth: number;
-    maxSpawnDepth: number;
-  };
-  childIdem: string;
-};
-
-type ResolveSubagentSpawnRequestResult =
-  | { ok: false; result: SpawnSubagentResult }
-  | { ok: true; resolved: ResolvedSubagentSpawnRequest };
-
-function rejectSubagentSpawnRequest(
-  status: "error" | "forbidden",
-  error: string,
-): ResolveSubagentSpawnRequestResult {
-  return { ok: false, result: { status, error } };
+function rejectSubagentSpawnRequest(status: "error" | "forbidden", error: string) {
+  return { ok: false as const, result: { status, error } satisfies SpawnSubagentResult };
 }
 
 export function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
-): ResolveSubagentSpawnRequestResult {
+) {
   const requestedAgentId = params.agentId?.trim();
   const taskNameResult = normalizeSubagentTaskName(params.taskName);
   if (taskNameResult.error) {
@@ -127,7 +84,7 @@ export function resolveSubagentSpawnRequest(
         'Retry with { mode: "session", thread: true } on a channel that supports threads, or use mode="run" for one-shot work.',
     );
   }
-  const cleanup =
+  const cleanup: "delete" | "keep" =
     spawnMode === "session"
       ? "keep"
       : params.cleanup === "keep" || params.cleanup === "delete"
@@ -136,8 +93,8 @@ export function resolveSubagentSpawnRequest(
   const expectsCompletionMessage = params.collect
     ? false
     : params.expectsCompletionMessage !== false;
-  const hookRunner = getSubagentSpawnDeps().getGlobalHookRunner();
-  const cfg = loadSubagentConfig();
+  const hookRunner: SubagentLifecycleHookRunner | null = getGlobalHookRunner();
+  const cfg = getRuntimeConfig();
 
   // When agent omits runTimeoutSeconds, use the config default.
   // Falls back to 0 (no timeout) if config key is also unset,
@@ -170,25 +127,31 @@ export function resolveSubagentSpawnRequest(
     completionOwnerKey: ctx.completionOwnerKey,
   });
 
-  // Bind private results to the admitted parent incarnation; a reset must not
-  // transfer a retained child result to a replacement session at the same key.
+  // Capture the requester window before launch; a reset must not move child
+  // progress receipts or private results to a replacement session at the same key.
   let completionRequesterSessionId: string | undefined;
-  if (params.completionTarget === "parent") {
+  try {
     const target = resolveGatewaySessionStoreTarget({
       cfg,
       key: ownership.completionRequesterSessionKey,
+      agentId: ctx.requesterAgentIdOverride,
     });
     completionRequesterSessionId = loadSessionEntry({
       storePath: target.storePath,
       sessionKey: target.canonicalKey,
       clone: false,
     })?.sessionId;
-    if (!completionRequesterSessionId) {
-      return rejectSubagentSpawnRequest(
-        "error",
-        "Private completion requires an existing requester session. Retry from an active session.",
-      );
-    }
+  } catch (error) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      `sessions_spawn could not read the requester session: ${summarizeSpawnError(error)}`,
+    );
+  }
+  if (params.completionTarget === "parent" && !completionRequesterSessionId) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      "Private completion requires an existing requester session. Retry from an active session.",
+    );
   }
 
   const requesterAgentId = resolveSessionAgentId({
@@ -337,7 +300,7 @@ export function resolveSubagentSpawnRequest(
     reservationPending = true;
   }
   return {
-    ok: true,
+    ok: true as const,
     resolved: {
       request: {
         taskName,

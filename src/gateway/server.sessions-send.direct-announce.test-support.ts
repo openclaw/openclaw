@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
@@ -8,11 +6,11 @@ import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/chan
 import { setTestPluginRegistry, testState, writeSessionStore } from "./test-helpers.js";
 
 export async function runDirectSessionAnnounceScenario(params: {
+  dir: string;
   sessionKey: string;
   expectedAccountId: string | undefined;
 }): Promise<void> {
-  const { sessionKey, expectedAccountId } = params;
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-announce-"));
+  const { dir, sessionKey, expectedAccountId } = params;
   const sendCalls: Array<{
     to?: string;
     text?: string;
@@ -93,7 +91,5 @@ export async function runDirectSessionAnnounceScenario(params: {
     );
   } finally {
     agentStepTesting.setDepsForTest();
-    testState.sessionStorePath = undefined;
-    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 }

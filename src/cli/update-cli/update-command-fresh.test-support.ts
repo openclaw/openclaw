@@ -14,6 +14,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
+import * as packageDestination from "./update-command-package-destination.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
@@ -41,6 +42,7 @@ export function installFreshUpdateFixture() {
       JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
     );
     vi.stubEnv("HOME", home);
+    vi.stubEnv("OPENCLAW_PROFILE", undefined);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "profile"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(home, "profile", "openclaw.json"));
     vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
@@ -81,6 +83,10 @@ export function installFreshUpdateFixture() {
     vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue("npm");
     vi.spyOn(shared, "resolveTargetVersion").mockResolvedValue("2026.9.2");
     vi.spyOn(updateGlobal, "createGlobalInstallEnv").mockResolvedValue({ ...process.env });
+    vi.spyOn(packageDestination, "inspectNpmGlobalDestination").mockResolvedValue({
+      kind: "empty",
+      prefix: home,
+    });
     vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockResolvedValue({
       manager: "npm",
       command: "npm",

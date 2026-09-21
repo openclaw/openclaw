@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { feishuDedupeState } from "./dedup-state.js";
 import {
@@ -22,8 +23,9 @@ beforeEach(() => {
   feishuDedupeState.reset();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   if (previousStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -36,9 +38,9 @@ afterEach(() => {
   tempDir = undefined;
 });
 
-// Simulates a process restart: a fresh guard has empty memory and no in-flight
-// claims, so any duplicate verdict must come from the persisted SQLite rows.
+// Reopen SQLite with an empty guard so replay detection must read committed rows.
 async function restartFeishuDedup(): Promise<void> {
+  await closeOpenClawStateDatabaseAsync();
   feishuDedupeState.reset();
 }
 

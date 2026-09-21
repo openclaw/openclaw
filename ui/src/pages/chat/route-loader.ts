@@ -654,11 +654,15 @@ export async function loadSessionPage(
       : undefined,
   );
   const creation = context.chatSubmissions.creation;
-  if ("kind" in result && result.kind === "session" && creation?.sessionKey === result.sessionKey) {
-    result.creation = creation;
-    // Admission alone needs the submitted-draft display; ordinary chat stays independent.
-    await import("./pending-session-create.ts");
-    signal.throwIfAborted();
+  if ("kind" in result && result.kind === "session") {
+    if (creation?.sessionKey === result.sessionKey) {
+      result.creation = creation;
+    }
+    if (result.creation || context.placementStartup.get(result.sessionKey)?.initialTurn) {
+      // Startup owns a display-only view even if an interrupted temporary session is cleaned up.
+      await import("./pending-session-create.ts");
+      signal.throwIfAborted();
+    }
   }
   return result;
 }

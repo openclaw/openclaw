@@ -232,7 +232,7 @@ async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) 
     password: params.password,
     recoveryKeyPath: storage.recoveryKeyPath,
     ssrfPolicy: { allowPrivateNetwork: true },
-    storageRootDir: path.dirname(storage.storagePath),
+    syncStore: await runtime.SqliteBackedMatrixSyncStore.create(path.dirname(storage.storagePath)),
     syncFilter: MATRIX_QA_E2EE_SYNC_FILTER,
     userId: params.userId,
   });

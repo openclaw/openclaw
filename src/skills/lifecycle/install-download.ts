@@ -17,7 +17,7 @@ import { withTempDownloadPath } from "../../infra/temp-download.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { ensureDir, resolveUserPath } from "../../utils.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
-import type { SkillEntry, SkillInstallSpec } from "../types.js";
+import type { SkillInstallSpec } from "../types.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
 
@@ -46,8 +46,8 @@ async function cancelIgnoredResponseBody(response: Response): Promise<void> {
   await Promise.resolve(cancel.call(body)).catch(() => undefined);
 }
 
-function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
-  const root = resolveSkillToolsRootDir(entry);
+function resolveDownloadTargetDir(skillKey: string, spec: SkillInstallSpec): string {
+  const root = resolveSkillToolsRootDir(skillKey);
   const raw = spec.targetDir?.trim();
   if (!raw) {
     return root;
@@ -201,12 +201,12 @@ async function publishExtractedTree(params: {
 }
 
 export async function installDownloadSpec(params: {
-  entry: SkillEntry;
+  skillKey: string;
   spec: SkillInstallSpec;
   timeoutMs: number;
 }): Promise<SkillInstallResult> {
-  const { entry, spec, timeoutMs } = params;
-  const root = resolveSkillToolsRootDir(entry);
+  const { skillKey, spec, timeoutMs } = params;
+  const root = resolveSkillToolsRootDir(skillKey);
   const url = spec.url?.trim();
   if (!url) {
     return {
@@ -243,7 +243,7 @@ export async function installDownloadSpec(params: {
     // Bind root identity before fetching so a concurrent replacement cannot redirect publication.
     pinnedRoot = await fsRoot(canonicalRoot);
 
-    const requestedTargetDir = resolveDownloadTargetDir(entry, spec);
+    const requestedTargetDir = resolveDownloadTargetDir(skillKey, spec);
     const targetRelativePath = path.relative(root, requestedTargetDir);
     targetDir = path.join(canonicalRoot, targetRelativePath);
   } catch (err) {

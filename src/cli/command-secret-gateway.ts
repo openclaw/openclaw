@@ -1,4 +1,3 @@
-// Command-time secret resolution through gateway/local secret stores for configured targets.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
@@ -70,46 +69,6 @@ type CommandSecretResolutionPolicy = {
 const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = ["plugins.entries."] as const;
 const WEB_RUNTIME_SECRET_PATH_PREFIXES = ["plugins.entries."] as const;
 
-type CommandSecretGatewayDeps = {
-  analyzeCommandSecretAssignmentsFromSnapshot: typeof analyzeCommandSecretAssignmentsFromSnapshot;
-  collectConfigAssignments: typeof collectConfigAssignments;
-  discoverConfigSecretTargetsByIds: typeof discoverConfigSecretTargetsByIds;
-  resolveManifestContractOwnerPluginId: typeof resolveManifestContractOwnerPluginId;
-  resolveRuntimeWebTools: typeof resolveRuntimeWebTools;
-};
-
-const commandSecretGatewayDeps: CommandSecretGatewayDeps = {
-  analyzeCommandSecretAssignmentsFromSnapshot,
-  collectConfigAssignments,
-  discoverConfigSecretTargetsByIds,
-  resolveManifestContractOwnerPluginId,
-  resolveRuntimeWebTools,
-};
-
-const testing = {
-  setDepsForTest(overrides: Partial<CommandSecretGatewayDeps>): () => void {
-    const previous = { ...commandSecretGatewayDeps };
-    Object.assign(commandSecretGatewayDeps, overrides);
-    return () => {
-      Object.assign(commandSecretGatewayDeps, previous);
-    };
-  },
-  resetDepsForTest(): void {
-    Object.assign(commandSecretGatewayDeps, {
-      analyzeCommandSecretAssignmentsFromSnapshot,
-      collectConfigAssignments,
-      discoverConfigSecretTargetsByIds,
-      resolveManifestContractOwnerPluginId,
-      resolveRuntimeWebTools,
-    });
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commandSecretGatewayTestApi")] =
-    testing;
-}
-
 function pluginIdFromRuntimeWebPath(path: string): string | undefined {
   const match = /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path);
   return match?.[1];
@@ -164,7 +123,7 @@ function classifyRuntimeWebTargetPathState(params: {
       if (!configuredProvider) {
         return "active";
       }
-      const configuredPluginId = commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
+      const configuredPluginId = resolveManifestContractOwnerPluginId({
         contract: "webFetchProviders",
         value: configuredProvider,
         origin: "bundled",
@@ -183,7 +142,7 @@ function classifyRuntimeWebTargetPathState(params: {
     if (!configuredProvider) {
       return "active";
     }
-    const configuredPluginId = commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
+    const configuredPluginId = resolveManifestContractOwnerPluginId({
       contract: "webSearchProviders",
       value: configuredProvider,
       origin: "bundled",
@@ -221,7 +180,7 @@ function describeInactiveRuntimeWebTargetPath(params: {
     }
     const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
     const configuredPluginId = configuredProvider
-      ? commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
+      ? resolveManifestContractOwnerPluginId({
           contract: "webSearchProviders",
           value: configuredProvider,
           origin: "bundled",
@@ -264,10 +223,7 @@ function collectConfiguredTargetRefPaths(params: {
 }): Set<string> {
   const defaults = params.config.secrets?.defaults;
   const configuredTargetRefPaths = new Set<string>();
-  for (const target of commandSecretGatewayDeps.discoverConfigSecretTargetsByIds(
-    params.config,
-    params.targetIds,
-  )) {
+  for (const target of discoverConfigSecretTargetsByIds(params.config, params.targetIds)) {
     if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
       continue;
     }
@@ -310,7 +266,7 @@ function classifyConfiguredTargetRefs(params: {
     sourceConfig: params.config,
     env: process.env,
   });
-  commandSecretGatewayDeps.collectConfigAssignments({
+  collectConfigAssignments({
     config: cloneConfigWithResolutionFacts(params.config),
     context,
     agentId: params.agentId,
@@ -558,13 +514,13 @@ async function resolveCommandSecretRefsLocally(params: {
     env: process.env,
   });
   const localResolutionDiagnostics: string[] = [];
-  const discoveredTargets = commandSecretGatewayDeps
-    .discoverConfigSecretTargetsByIds(sourceConfig, params.targetIds)
-    .filter((target) => !params.allowedPaths || params.allowedPaths.has(target.path));
+  const discoveredTargets = discoverConfigSecretTargetsByIds(sourceConfig, params.targetIds).filter(
+    (target) => !params.allowedPaths || params.allowedPaths.has(target.path),
+  );
   const runtimeWebTargets = discoveredTargets.filter((target) =>
     targetsRuntimeWebPath(target.path),
   );
-  commandSecretGatewayDeps.collectConfigAssignments({
+  collectConfigAssignments({
     config: cloneConfigWithResolutionFacts(params.config),
     context,
     agentId: params.agentId,
@@ -577,7 +533,7 @@ async function resolveCommandSecretRefsLocally(params: {
     !runtimeWebTargets.every((target) => isDirectRuntimeWebTargetPath(target.path))
   ) {
     try {
-      await commandSecretGatewayDeps.resolveRuntimeWebTools({
+      await resolveRuntimeWebTools({
         sourceConfig,
         resolvedConfig,
         context,
@@ -653,7 +609,7 @@ async function resolveCommandSecretRefsLocally(params: {
       resolutionPolicy: params.resolutionPolicy,
     });
   }
-  let analyzed = commandSecretGatewayDeps.analyzeCommandSecretAssignmentsFromSnapshot({
+  let analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
     sourceConfig,
     resolvedConfig,
     targetIds: params.targetIds,
@@ -667,7 +623,7 @@ async function resolveCommandSecretRefsLocally(params: {
     for (const path of optionalUnresolvedPaths) {
       inactiveRefPaths.add(path);
     }
-    analyzed = commandSecretGatewayDeps.analyzeCommandSecretAssignmentsFromSnapshot({
+    analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
       sourceConfig,
       resolvedConfig,
       targetIds: params.targetIds,
@@ -1025,7 +981,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   for (const path of params.optionalActivePaths ?? []) {
     inactiveRefPaths.delete(path);
   }
-  let analyzed = commandSecretGatewayDeps.analyzeCommandSecretAssignmentsFromSnapshot({
+  let analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
     sourceConfig: params.config,
     resolvedConfig,
     targetIds: params.targetIds,
@@ -1039,7 +995,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     for (const path of optionalUnresolvedPaths) {
       inactiveRefPaths.add(path);
     }
-    analyzed = commandSecretGatewayDeps.analyzeCommandSecretAssignmentsFromSnapshot({
+    analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
       sourceConfig: params.config,
       resolvedConfig,
       targetIds: params.targetIds,

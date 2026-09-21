@@ -307,7 +307,7 @@ on_exit 0
 
   it.each([
     ["custom-plugin-siblings", "openclaw@2026.9.4"],
-    ["abandoned-update", "openclaw@2026.9.2"],
+    ["abandoned-update", "openclaw@2026.9.4"],
     ["workshop-doctor-recovery", "openclaw@2026.9.4"],
   ])("follows the planner's no-registry decision for %s", (scenario, baseline) => {
     const { captureDir, result } = runSurvivor({
@@ -574,7 +574,7 @@ printf '%s\\n' "$baseline_version" >"$CAPTURE_DIR/core-version"
         `scripts/e2e/lib/upgrade-survivor/assertions.mjs\nassert-baseline-plugin\n${pluginVersion}\ndiscord\n${tag}\n`,
       );
       expect(readFileSync(join(root, "install-args"), "utf8")).toBe(
-        `openclaw\n--\nplugins\ninstall\n@openclaw/discord@${tag}\n`,
+        `openclaw\n--\nplugins\ninstall\n@openclaw/discord@${tag}\n--force\n`,
       );
       expect(readFileSync(join(root, "core-version"), "utf8")).toBe(`${baseline}\n`);
     },

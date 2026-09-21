@@ -26,19 +26,20 @@ import {
 import {
   canPushToolProgress,
   handleApprovalEvent,
-  handleCommandOutput,
   handleCompactionEnd,
   handleCompactionStart,
   handleItemEvent,
-  handlePatchSummary,
   handlePlanUpdate,
   handleToolStart,
+  markFinalDelivered,
+  markFinalStarted,
   pushReasoningProgress,
   pushThinkingTokenProgress,
   pushToolProgress,
 } from "./bot-message-dispatch-progress.js";
 import {
   deliverReply,
+  deliverPreparedReply,
   formatTelegramGroupThreadReply,
   handleBeforeDeliverCancelled,
   handleReplyError,
@@ -145,6 +146,8 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           delivery: {
             deliverWithProviderMessageSending: async (payload, info) =>
               await deliverReply(turn, payload, info),
+            deliverPreparedWithProviderMessageSending: async (plan, info) =>
+              await deliverPreparedReply(turn, plan, info),
             // The shipped SDK declaration stays void; core still awaits the runtime promise.
             onError: handleDeliveryError as NonNullable<
               ChannelInboundTurnPlan["delivery"]["onError"]
@@ -189,6 +192,13 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               ? [{ begin: beginDeliveryCorrelation }]
               : undefined,
             suppressTyping: isRoomEvent,
+            onObservedReplyDelivery: async () => {
+              markFinalStarted(turn);
+              await waitForDraftEvents(turn);
+              markFinalDelivered(turn);
+              turn.deliveryState.markDelivered();
+              await cleanupDrafts(turn, turn.isSuperseded());
+            },
             onPartialReply:
               turn.answerLane.stream || turn.reasoningLane.stream
                 ? (payload) => {
@@ -323,8 +333,6 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               }
               return false;
             },
-            onCommandOutput: (payload) => handleCommandOutput(turn, payload),
-            onPatchSummary: (payload) => handlePatchSummary(turn, payload),
             // Ambient room events are intentionally invisible, including reactions.
             // User requests in group chats are not room_event turns and retain these callbacks.
             onCompactionStart: isRoomEvent

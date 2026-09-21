@@ -4,8 +4,10 @@ import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/i
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
 import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
+import { BOARD_GRID_COLUMNS } from "../../lib/board/grid.ts";
 import {
   acquireBoardProviderForSession,
   boardProviderCacheKey,
@@ -39,6 +41,7 @@ import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   fitSidebarLayout,
+  initializeBrowserSidebarWidth,
   isSidebarSlotVisible,
   openDashboardPresentation,
   resizeSidebarPanel,
@@ -80,18 +83,25 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     layout: SidebarLayout | undefined,
   ) {
     const presentation = layout ? sidebarDashboardPresentation(layout) : undefined;
-    if (
-      !row ||
-      !presentation ||
-      !this.canSaveDashboardDefault(row) ||
-      presentation === (row.boardPresentation ?? "split")
-    ) {
+    if (!row?.sessionId || !this.state?.connected || !presentation) {
+      return undefined;
+    }
+    const description = t("chat.sidePanel.defaultViewDescription");
+    if (presentation === (row.boardPresentation ?? "split")) {
+      return {
+        kind: "status" as const,
+        label: t("chat.sidePanel.currentViewIsDefault"),
+        description,
+      };
+    }
+    if (!this.canSaveDashboardDefault(row)) {
       return undefined;
     }
     const saving = this.dashboardDefaultWrite?.owner === this.dashboardDefaultWriteOwner;
     const agentId = this.resolveBoardConversation().agentId;
     return {
       label: t(saving ? "chat.sidePanel.savingDefault" : "chat.sidePanel.useViewAsDefault"),
+      description,
       disabled: saving,
       onActivate: () => void this.saveDashboardDefault(row, agentId),
     };
@@ -170,11 +180,30 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!state) {
       return;
     }
+    const initialized = this.initializeBrowserSidebarLayout(layout);
     const fitted =
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(layout, this.paneWidth) ?? layout)
-        : layout;
+        ? (fitSidebarLayout(initialized, this.paneWidth) ?? initialized)
+        : initialized;
     state.updateSidebarLayout(fitted, options);
+  }
+
+  protected initializeBrowserSidebarLayout(layout: SidebarLayout): SidebarLayout {
+    if (!layout.columns[0]?.browserWidthPending || !isSidebarSlotVisible(layout, "browser")) {
+      return layout;
+    }
+    const composer = this.querySelector<HTMLElement>(".agent-chat__composer-shell");
+    if (!composer) {
+      return layout;
+    }
+    const inset = Number.parseFloat(
+      getComputedStyle(composer).getPropertyValue("--chat-composer-side-inset"),
+    );
+    return initializeBrowserSidebarWidth(
+      layout,
+      this.querySelector(".sidebar-region")?.getBoundingClientRect().width ?? this.paneWidth,
+      composer.getBoundingClientRect().width + (Number.isFinite(inset) ? inset : 0),
+    );
   }
 
   protected commitSidebarPanelResize(
@@ -318,18 +347,30 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           key: activationKey,
           expanded: this.dashboardExpanded,
         };
+        const presentation =
+          savedLayout?.dashboardPresentationOverride ?? row?.boardPresentation ?? "split";
+        const savedPresentation =
+          savedLayout &&
+          (sidebarDashboardPresentation(savedLayout) ??
+            (savedLayout.columns.some((column) =>
+              column.panels.some((panel) => panel.slot === "dashboard"),
+            )
+              ? "split"
+              : undefined));
         if (this.dashboardExpanded) {
           this.showDashboard(true);
-        } else if (savedLayout && savedLayout.dashboardPresentationOverride === undefined) {
+        } else if (
+          savedLayout &&
+          (savedLayout.dashboardPresentationOverride === undefined ||
+            savedPresentation === presentation)
+        ) {
+          // Reapplying an unchanged default must not replace the saved side tab.
+          // A retained but hidden Dashboard is split, even when another panel is focused.
+          // Legacy layouts also retain their complete presentation without provenance.
           this.commitSidebarLayout(this.restorePaneSidebarLayout(savedLayout), { persist: false });
         } else {
-          this.showDashboard(
-            (savedLayout?.dashboardPresentationOverride ?? row?.boardPresentation ?? "split") ===
-              "expanded",
-          );
+          this.showDashboard(presentation === "expanded");
         }
-        // Unmarked legacy layouts retain their complete saved presentation. They
-        // cannot tell us whether an old open was inherited or chosen by a person.
       }
     }
     if (sessionKey && board.provider.hasLoadedSnapshot) {
@@ -511,6 +552,58 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     return board.available && Boolean(this.resolveBoardSessionKey(board.snapshot.sessionKey));
   }
 
+  private fullscreenBoardWidget(layout: SidebarLayout | undefined, board: ResolvedBoardView) {
+    if (
+      !layout ||
+      !this.state ||
+      !selectedChatSessionRow(this.state) ||
+      !this.visuallyPresented ||
+      !board.provider.hasLoadedSnapshot ||
+      !customElements.get("openclaw-board-view") ||
+      sidebarDashboardPresentation(layout) !== "expanded"
+    ) {
+      return undefined;
+    }
+    const widgets = board.snapshot.widgets.filter((widget) => widget.tabId === board.activeTabId);
+    const widget = widgets.length === 1 ? widgets[0] : undefined;
+    return widget?.sizeW === BOARD_GRID_COLUMNS ? widget : undefined;
+  }
+
+  protected fullscreenBoardWidgetMenu(
+    layout: SidebarLayout | undefined,
+    board = this.resolveBoardView(),
+  ): BoardWidgetPageMenu | undefined {
+    const widget = this.fullscreenBoardWidget(layout, board);
+    if (!widget) {
+      return undefined;
+    }
+    const session = this.resolveBoardConversation();
+    session.agentId ??= parseAgentSessionKey(board.snapshot.sessionKey)?.agentId;
+    return {
+      widget,
+      tabs: board.snapshot.tabs,
+      canMutate: board.provider.canMutate,
+      onSelect: (value) => {
+        const current = this.resolveBoardView();
+        if (
+          current.provider !== board.provider ||
+          this.fullscreenBoardWidget(this.state?.sidebarLayout, current) !== widget
+        ) {
+          return;
+        }
+        // The retained board owns actions and errors; the header only relocates its menu.
+        const view = this.querySelector("openclaw-board-view");
+        if (
+          view?.snapshot?.sessionKey === board.snapshot.sessionKey &&
+          view.session.agentId === session.agentId &&
+          view.session.sessionKey === session.sessionKey
+        ) {
+          view.selectPageWidgetMenuItem(widget.name, widget.revision, value);
+        }
+      },
+    };
+  }
+
   protected renderBoardPanel(board: ResolvedBoardView, layout: SidebarLayout) {
     const session = this.resolveBoardConversation();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
@@ -538,6 +631,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         session,
         snapshot: board.snapshot,
         activeTabId: board.activeTabId,
+        pageWidgetName: this.fullscreenBoardWidget(layout, board)?.name,
         canMutate: board.provider.canMutate,
         canGrant: board.provider.canGrant,
         callbacks: {

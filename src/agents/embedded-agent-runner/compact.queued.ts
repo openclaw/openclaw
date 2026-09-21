@@ -485,6 +485,7 @@ async function compactResolvedContextEngine(
   });
   assertQueuedCompactionPreparationActive(params, host);
   const { resolution: modelResolution } = await resolveTieredModel({
+    abortSignal: params.abortSignal,
     provider: ceRuntimeProvider,
     modelId: ceModelId,
     agentDir,
@@ -545,6 +546,7 @@ async function compactResolvedContextEngine(
       providerUsesProfileScopedModelMetadata && Boolean(runtimeAuthPlan.selectedAuthMode),
     resolveModel: async ({ config, authProfileId, authProfileMode }) => {
       const resolved = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, config, {
+        abortSignal: params.abortSignal,
         authStorage,
         modelRegistry,
         preparedModelRuntime,

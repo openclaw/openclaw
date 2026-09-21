@@ -177,19 +177,25 @@ describe("node desktop stream tickets", () => {
     },
   );
 
-  it("is single-use and resolves one ticket-bound binary stream", async () => {
-    const broker = createNodeDesktopStreamBroker();
-    const session = { connId: "conn-1", pairingGeneration: "generation-1" };
-    const baseUrl = await startBrokerServer({ broker, session });
-    const minted = broker.mint({ nodeId: "node-1", ...session });
+  it.each(["vnc-password", "ard-account"] as const)(
+    "is single-use and resolves one ticket-bound %s stream",
+    async (auth) => {
+      const broker = createNodeDesktopStreamBroker();
+      const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+      const baseUrl = await startBrokerServer({ broker, session });
+      const minted = broker.mint({ nodeId: "node-1", ...session });
 
-    await connectAndSend(`${baseUrl}${minted.attachPath}`, { auth: "vnc-password" });
-    const attached = await minted.attached;
-    expect(attached.auth).toBe("vnc-password");
-    attached.stream.destroy();
+      await connectAndSend(`${baseUrl}${minted.attachPath}`, {
+        auth,
+        vncPassword: "synthetic-desktop-password",
+      });
+      const attached = await minted.attached;
+      expect(attached).toMatchObject({ auth, vncPassword: "synthetic-desktop-password" });
+      attached.stream.destroy();
 
-    await expectUnauthorized(`${baseUrl}${minted.attachPath}`);
-  });
+      await expectUnauthorized(`${baseUrl}${minted.attachPath}`);
+    },
+  );
 
   it("buffers early RFB bytes while the pairing binding is rechecked", async () => {
     let pairingChecks = 0;

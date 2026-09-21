@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { TasksHistoryResult } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -12,21 +12,26 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { markTaskTerminalById } from "../../tasks/runtime-internal.js";
+import { markTaskTerminalById, recordTaskProgressByRunId } from "../../tasks/runtime-internal.js";
+import { createRunningTaskRunCoreWithReceiptAsync } from "../../tasks/task-executor-create.async.js";
+import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
 import {
   createTaskFixture,
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.test-support.js";
+import { resetTaskFlowRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { identifiedClient, runTaskHandler } from "./tasks.test-helpers.js";
 
 type ReadTaskHistory = NonNullable<AgentHarness["taskHistory"]>["read"];
@@ -94,13 +99,132 @@ async function createRequester(actorId: string, incognito = false) {
 }
 
 describe("tasks.history", () => {
+  it.each(["progress", "history identity"] as const)(
+    "checks current history while a committed %s result is held",
+    async (change) => {
+      await withHistoryState(async () => {
+        const entered = createDeferred();
+        const history = createDeferred();
+        const committed = createDeferred();
+        const release = createDeferred();
+        registerHistoryReader(async ({ assertCurrent }) => {
+          entered.resolve();
+          await history.promise;
+          assertCurrent();
+          return { messages: [{ role: "assistant", content: "Held task output" }] };
+        });
+        const task = createNativeTask(`history-held-${change}`);
+        const pending = runTaskHandler("tasks.history", { taskId: task.taskId });
+        const store = getTaskRegistryStore();
+        let mutation: Promise<unknown> | undefined;
+        try {
+          await entered.promise;
+          if (change === "progress") {
+            const mutate = store.runAgentEventMutationAsync.bind(store);
+            vi.spyOn(store, "runAgentEventMutationAsync").mockImplementation(async (...args) => {
+              const result = await mutate(...args);
+              committed.resolve();
+              await release.promise;
+              return result;
+            });
+            emitAgentEvent({
+              runId: task.runId!,
+              stream: "tool",
+              data: { phase: "start", name: "progress" },
+            });
+          } else {
+            const read = store.loadMutationSnapshotAsync.bind(store);
+            let held = false;
+            vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
+              const result = await read(...args);
+              if (!held && args[1] && "taskId" in args[1] && args[1].runId === task.runId) {
+                held = true;
+                committed.resolve();
+                await release.promise;
+              }
+              return result;
+            });
+            mutation = createRunningTaskRunCoreWithReceiptAsync({
+              runtime: task.runtime,
+              runId: task.runId!,
+              task: task.task,
+              taskKind: task.taskKind,
+              ownerKey: task.ownerKey,
+              scopeKind: task.scopeKind,
+              requesterSessionKey: task.requesterSessionKey,
+              requesterAgentId: task.requesterAgentId,
+              agentId: task.agentId,
+              deliveryStatus: task.deliveryStatus,
+              notifyPolicy: "silent",
+              detail: { historyGeneration: "replacement" },
+            });
+          }
+          await withTestTimeout(
+            committed.promise,
+            5_000,
+            "Task mutation did not reach its held result",
+          );
+          history.resolve();
+          const result = await withTestTimeout(pending, 5_000, "History joined a later mutation");
+          if (change === "progress") {
+            expect(result.calls[0]?.[0]).toBe(true);
+            expect(result.payload?.messages).toEqual([
+              { role: "assistant", content: "Held task output" },
+            ]);
+          } else {
+            expect(result.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+            expect(result.payload?.messages).toBeUndefined();
+          }
+        } finally {
+          history.resolve();
+          release.resolve();
+          await pending;
+          await mutation;
+          await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+          resetTaskFlowRegistryForTests({ persist: false });
+        }
+      });
+    },
+  );
+
+  it("keeps live history authority across ordinary task progress", async () => {
+    await withHistoryState(async () => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      registerHistoryReader(async ({ assertCurrent }) => {
+        entered.resolve();
+        await release.promise;
+        assertCurrent();
+        return { messages: [{ role: "assistant", content: "Current task output" }] };
+      });
+      const task = createNativeTask("history-progress");
+      const request = runTaskHandler("tasks.history", { taskId: task.taskId });
+      try {
+        await entered.promise;
+        recordTaskProgressByRunId({ runId: task.runId!, progressSummary: "Ordinary progress" });
+      } finally {
+        release.resolve();
+      }
+      const result = await request;
+      expect(result.calls[0]?.[0]).toBe(true);
+      expect(result.payload?.messages).toEqual([
+        { role: "assistant", content: "Current task output" },
+      ]);
+    });
+  });
+
   it("reads and pages a registered harness transcript without a child session", async () => {
     await withHistoryState(async () => {
       const older = { role: "user", content: "Inspect the files" };
-      const latest = { role: "assistant", content: "The files are consistent" };
+      const latest = {
+        role: "toolResult",
+        messageId: "latest",
+        content: "The files are consistent",
+      };
+      const activity = [{ messageId: "latest", items: [] }];
       const read = vi.fn<ReadTaskHistory>(async ({ cursor }) =>
         cursor === undefined
-          ? { messages: [latest], nextCursor: "older-page" }
+          ? { messages: [latest], activity, nextCursor: "older-page" }
           : { messages: [older] },
       );
       registerHistoryReader(read);
@@ -111,6 +235,7 @@ describe("tasks.history", () => {
       const first = await runTaskHandler("tasks.history", { taskId: task.taskId, limit: 1 });
       expect(first.calls[0]?.[0]).toBe(true);
       expect(first.payload?.messages).toEqual([latest]);
+      expect(first.payload?.activity).toEqual(activity);
       const cursor = expectDefined(first.payload?.nextCursor, "older task history cursor");
       const second = await runTaskHandler("tasks.history", {
         taskId: task.taskId,
@@ -145,7 +270,24 @@ describe("tasks.history", () => {
         "Second child message",
         "Latest child message",
       ]) {
-        await appendTranscriptMessage(scope, { message: { role: "assistant", content } });
+        await appendTranscriptMessage(scope, {
+          message:
+            content === "Latest child message"
+              ? {
+                  role: "toolResult",
+                  toolCallId: "poll",
+                  toolName: "process",
+                  isError: false,
+                  content,
+                  details: {
+                    status: "completed",
+                    sessionId: "job",
+                    aggregated: "done",
+                    exitCode: 0,
+                  },
+                }
+              : { role: "assistant", content },
+        });
       }
       const task = createTaskFixture("subagent", {
         requesterSessionKey,
@@ -154,7 +296,7 @@ describe("tasks.history", () => {
         runId: "openclaw-child",
         task: "Inspect synthetic files",
       });
-      const context = createDirectChatContext();
+      const context = await createHistoryReadContext();
       const first = await runTaskHandler(
         "tasks.history",
         { taskId: task.taskId, limit: 2 },
@@ -167,6 +309,7 @@ describe("tasks.history", () => {
         { content: "Second child message" },
         { content: "Latest child message" },
       ]);
+      expect(first.payload?.activity).toEqual([{ messageId: expect.any(String), items: [] }]);
       const cursor = expectDefined(first.payload?.nextCursor, "older child transcript cursor");
       const second = await runTaskHandler(
         "tasks.history",
@@ -221,7 +364,7 @@ describe("tasks.history", () => {
         task: "History job",
         detail: { kind: "cron-run", sessionId: oldScope.sessionId },
       });
-      const context = createDirectChatContext();
+      const context = await createHistoryReadContext();
       const first = await runTaskHandler(
         "tasks.history",
         { taskId: task.taskId, limit: 2 },
@@ -244,7 +387,7 @@ describe("tasks.history", () => {
       );
       expect(second.payload?.messages).toMatchObject([{ content: "Old first" }]);
       expect(second.payload?.nextCursor).toBeUndefined();
-      const rotationContext = createDirectChatContext({
+      const rotationContext = await createHistoryReadContext({
         readChatStartupProjection: async () => {
           await upsertSessionEntryCore(oldScope, { sessionId: "concurrent-new-run", updatedAt: 3 });
           return undefined;
@@ -269,7 +412,7 @@ describe("tasks.history", () => {
         visibility: "shared",
         createdActor: { type: "human", source: "profile", id: "another-owner" },
       });
-      const revokedContext = createDirectChatContext({
+      const revokedContext = await createHistoryReadContext({
         readChatStartupProjection: async () => {
           await upsertSessionEntryCore(baseScope, {
             sessionId: "private-new-run",
@@ -292,7 +435,7 @@ describe("tasks.history", () => {
       });
       expect(revoked.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
       expect(revoked.payload?.messages).toBeUndefined();
-      const changedContext = createDirectChatContext({
+      const changedContext = await createHistoryReadContext({
         readChatStartupProjection: async () => {
           markTaskTerminalById({
             taskId: task.taskId,
@@ -358,7 +501,7 @@ describe("tasks.history", () => {
           { taskId: task.taskId },
           {},
           null,
-          createDirectChatContext(),
+          await createHistoryReadContext(),
         );
         expect(result.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
         expect(result.payload?.messages).toBeUndefined();
@@ -409,7 +552,7 @@ describe("tasks.history", () => {
         if (change === "requester access") {
           config.gateway!.roles!.definitions.reader!.sessions = { others: "view" };
         }
-        const context = createDirectChatContext({ getRuntimeConfig: () => config });
+        const context = await createHistoryReadContext({ getRuntimeConfig: () => config });
         const task = createNativeTask();
         const entered = createDeferred();
         const history = createDeferred<TasksHistoryResult>();

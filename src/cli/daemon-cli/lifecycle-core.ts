@@ -4,7 +4,6 @@ import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
-import { assertGatewayServiceUpdateCurrent } from "../../daemon/service-update-authority.js";
 import type {
   GatewayServiceStartRepairIssue,
   GatewayServiceState,
@@ -19,11 +18,7 @@ import {
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
-import {
-  clearGatewayRestartIntentSync,
-  type GatewayRestartIntent,
-  writeGatewayRestartIntentSync,
-} from "../../infra/restart-intent.js";
+import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -34,6 +29,7 @@ import {
   appendServiceLifecycleRepairAudit,
   createServiceLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
+import { createServiceRestartIntent } from "./lifecycle-restart-intent.js";
 import {
   buildDaemonServiceSnapshot,
   createDaemonActionContext,
@@ -498,26 +494,12 @@ export async function runServiceRestart(params: {
   let handledRecovery: ServiceRecoveryResult<"restarted"> | null = null;
   let handledRepair: ServiceRecoveryResult<"restarted"> | null = null;
   let recoveredLoadedState: boolean | null = null;
-  let wroteRestartIntent = false;
-  const prepareGatewayRestartIntent = async () => {
-    if (params.serviceNoun !== "Gateway" || wroteRestartIntent) {
-      return;
-    }
-    const runtime = await params.service.readRuntime(process.env).catch(() => null);
-    assertGatewayServiceUpdateCurrent();
-    wroteRestartIntent = writeGatewayRestartIntentSync({
-      targetPid: runtime?.pid,
-      reason: "gateway.restart",
-      ...(restartIntent ? { intent: restartIntent } : {}),
+  const { prepare: prepareGatewayRestartIntent, clear: clearPreparedRestartIntent } =
+    createServiceRestartIntent({
+      serviceNoun: params.serviceNoun,
+      service: params.service,
+      intent: restartIntent,
     });
-  };
-  const clearPreparedRestartIntent = () => {
-    if (wroteRestartIntent) {
-      assertGatewayServiceUpdateCurrent();
-      clearGatewayRestartIntentSync();
-      wroteRestartIntent = false;
-    }
-  };
   const emitScheduledRestart = (
     restartStatus: ReturnType<typeof describeGatewayServiceRestart>,
     serviceLoaded: boolean,
@@ -544,7 +526,7 @@ export async function runServiceRestart(params: {
   }
 
   // Pre-flight config validation: check before any restart action (including
-  // onNotLoaded which may send SIGUSR1 to an unmanaged process). (#35862)
+  // onNotLoaded which may request an unmanaged process restart). (#35862)
   {
     const preflight = await getServiceActionPreflightFailure("restart");
     if (preflight) {

@@ -248,10 +248,13 @@ describe.each([
   });
 });
 
-it.each(["changed-facts", "running", "succeeded"] as const)(
+it.each(["changed-facts", "running", "succeeded", "reconciled"] as const)(
   "invalidates report consent when authoritative run becomes %s",
   async (change) => {
-    let run = FAILED_RUN;
+    let run =
+      change === "reconciled"
+        ? createUpdateRunFixture({ ...FAILED_RUN, reason: "abandoned" })
+        : FAILED_RUN;
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "update.status") {
         return { lastRun: run, sentinel: FAILURE };
@@ -276,7 +279,14 @@ it.each(["changed-facts", "running", "succeeded"] as const)(
         updatedAtMs: run.updatedAtMs + 1,
         ...(change === "changed-facts"
           ? { after: { version: "2026.9.3" } }
-          : { status: change, phase: change === "running" ? "staging" : "finished" }),
+          : change === "reconciled"
+            ? {
+                steps: [
+                  ...run.steps,
+                  { step: "reconcile:acknowledged", status: "completed" as const },
+                ],
+              }
+            : { status: change, phase: change === "running" ? "staging" : "finished" }),
       });
       harness.emitEvent("update.run.changed", { runId: run.runId, updatedAtMs: run.updatedAtMs });
       expect(admission?.isCurrent?.()).toBe(false);
@@ -284,6 +294,12 @@ it.each(["changed-facts", "running", "succeeded"] as const)(
       expect(overlays.snapshot.reportableUpdateFailureId).toBe(
         change === "changed-facts" ? run.runId : null,
       );
+      if (change === "reconciled") {
+        expect(overlays.snapshot.updateStatusBanner).toBeNull();
+        expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+        expect(overlays.snapshot.updateRunAcknowledged).toBe(true);
+        expect(overlays.snapshot.updateRun?.status).toBe("failed");
+      }
       pending.resolve(null);
       await reporting;
       expect(overlays.snapshot.updateFailureReportNotice).toBeNull();

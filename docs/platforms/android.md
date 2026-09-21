@@ -59,6 +59,19 @@ media imports or pending send admission finish before using the quick picker.
 The composer stays protected during handoff, but a committed offline Gateway
 remains usable without waiting for a network connection.
 
+## Dictation and attachments
+
+Tap the composer microphone to dictate. The composer shows when recognition is
+starting, listening, or transcribing, with an interim transcript while you speak.
+Only the final transcript is added to your draft. Tap Stop to finish listening,
+or Cancel while starting or transcribing to discard that attempt. Recognition
+errors leave your existing draft intact and explain how to retry.
+
+After picking or sharing photos and files, **Preparing attachments…** stays visible
+until they are ready. Send remains disabled during preparation. **Queuing message…**
+covers local send admission; the message's outbox status then shows delivery or
+any failure. Offline messages still use the durable queue.
+
 ## Wear OS companion
 
 The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.
@@ -424,15 +437,22 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - Navigate through the sidebar's **Pages** menu. Voice input belongs to the Chat
   composer; there is no separate Voice tab.
 - Tap the composer microphone for on-device speech recognition that inserts a
-  transcript into the draft. Long-press the microphone to record a voice-note
-  attachment. The UI reports unavailable recognition, missing permission,
+  transcript into the draft. While listening, a Stop icon replaces the microphone;
+  tap it to finish listening. While starting or transcribing, a Close icon cancels
+  that attempt. Long-press the microphone to open **Voice options**,
+  then choose **Record voice note** to create an attachment. The UI reports
+  unavailable recognition, missing permission,
   busy/network failures, and no-speech outcomes instead of silently dropping
   the attempt. If dictation is unavailable and a Gateway is selected,
   **Record voice note** offers a new recording while keeping the draft. It does
   not recover speech from the failed dictation attempt or send anything
   automatically.
-- Start continuous **Talk** from the Chat waveform. Dictation, voice-note
-  recording, and Talk are mutually exclusive microphone paths.
+- To start continuous **Talk**, long-press the microphone and choose **Start Talk**.
+  Dictation, voice-note recording, and Talk are mutually exclusive microphone paths.
+- Your selected agent stays bound to Talk and the main chat when the same Gateway
+  reconnects, including while its agent list refreshes. Removing that agent falls
+  back to the Gateway default. Switching Gateways or restarting the app clears
+  this in-memory choice.
 - Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured Gateway Talk provider. It inherits the session's thinking setting. Local system TTS is used only when `talk.speak` is unavailable.
 - Gateway config changes refresh Android's cached Talk settings on the next use, without reconnecting or interrupting an active capture.

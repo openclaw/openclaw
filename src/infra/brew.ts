@@ -80,3 +80,35 @@ export function resolveBrewExecutable(opts?: BrewResolutionOptions): string | un
 
   return undefined;
 }
+
+/** Recognize formula-owned OpenClaw files and keep service paths independent of the keg version. */
+export async function resolveBrewOpenClawPath(inputPath: string): Promise<string | null> {
+  const match =
+    /^(.*)\/(?:Cellar\/openclaw-cli\/[^/]+|opt\/openclaw-cli)(\/libexec(?:\/.*)?)$/u.exec(
+      inputPath,
+    );
+  if (!match || process.platform === "win32") {
+    return null;
+  }
+  const [, prefix, suffix] = match;
+  const prefixes = [
+    process.env.HOMEBREW_PREFIX,
+    ...resolveBrewPathDirs().map((dir) => path.dirname(dir)),
+  ];
+  if (
+    !prefixes.some((value) => value && path.isAbsolute(value) && path.resolve(value) === prefix)
+  ) {
+    const brew = resolveBrewExecutable();
+    if (!brew) {
+      return null;
+    }
+    const { runCommandWithTimeout } = await import("../process/exec.js");
+    const result = await runCommandWithTimeout([brew, "--prefix"], { timeoutMs: 5_000 }).catch(
+      () => null,
+    );
+    if (result?.code !== 0 || result.stdout.trim() !== prefix) {
+      return null;
+    }
+  }
+  return path.join(prefix!, "opt", "openclaw-cli", suffix!);
+}

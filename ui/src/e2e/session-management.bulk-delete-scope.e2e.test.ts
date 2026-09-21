@@ -89,11 +89,47 @@ suite.define(() => {
       await rowFor(lastResearch.key).scrollIntoViewIfNeeded();
       await rowFor(lastResearch.key).waitFor({ state: "visible" });
     };
-    const observations: Array<{ stage: string; visibleRows: string[] }> = [];
+    const sidebarState = () =>
+      page.evaluate(() => {
+        const sidebarElement =
+          document.querySelector<AppSidebarSessionNavigationElement>("openclaw-app-sidebar");
+        const data = sidebarElement?.sessionData;
+        const sessions = data?.context?.sessions;
+        const filtered =
+          data && sessions ? sessions.listSnapshot(data.sessionListQuery("research")) : undefined;
+        const button = sidebarElement?.querySelector<HTMLButtonElement>(
+          ".sidebar-session-pagination--roster > button",
+        );
+        return {
+          selectedAgentId: sidebarElement?.expandedAgentId() ?? null,
+          canonicalAgentId: sessions?.state.agentId ?? null,
+          canonicalLoading: sessions?.state.loading ?? null,
+          canonicalRevision: sessions?.canonicalListRevision ?? null,
+          filteredAgentId: filtered?.agentId ?? null,
+          filteredLoading: filtered?.loading ?? null,
+          filteredNextOffset: filtered?.result?.nextOffset ?? null,
+          sidebarAgentId: data?.sessionsAgentId ?? null,
+          sidebarLoading: data?.sessionsLoading ?? null,
+          nextOffset: data?.sessionsResult?.nextOffset ?? null,
+          hasMore: data?.sessionsResult?.hasMore ?? null,
+          disabled: button?.disabled ?? null,
+          ariaBusy: button?.getAttribute("aria-busy") ?? null,
+        };
+      });
+    const observations: Array<{
+      stage: string;
+      visibleRows: string[];
+      state: Awaited<ReturnType<typeof sidebarState>>;
+      paginationRequests: number;
+    }> = [];
     const capture = async (stage: string) => {
       observations.push({
         stage,
         visibleRows: await sidebar.locator(".sidebar-recent-session").allTextContents(),
+        state: await sidebarState(),
+        paginationRequests: (
+          await gateway.getRequests("sessions.list", { agentId: "research", offset: pageSize })
+        ).length,
       });
       await page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
     };
@@ -150,21 +186,44 @@ suite.define(() => {
       const loadMore = sidebar.getByRole("button", { name: "Load more sessions", exact: true });
       await loadMore.waitFor({ state: "visible" });
       await expect.poll(settledResearchRevision).toBeGreaterThan(0);
+      const settledResearch = {
+        selectedAgentId: "research",
+        canonicalAgentId: "research",
+        canonicalLoading: false,
+        filteredAgentId: "research",
+        filteredLoading: false,
+        filteredNextOffset: pageSize,
+        sidebarAgentId: "research",
+        sidebarLoading: false,
+        nextOffset: pageSize,
+        hasMore: true,
+      };
+      await expect.poll(sidebarState).toMatchObject(settledResearch);
       const revision = await settledResearchRevision();
       await capture("before-delete-response");
       // Both deletes settle before the mutation owner reconciles the current
       // roster. Wait for its accepted publication before testing pagination.
       const researchQuery = { agentId: "research", includeGlobal: true };
       const previous = (await gateway.getRequests("sessions.list", researchQuery)).length;
-      await gateway.deferNext("sessions.list", researchQuery);
+      const filteredQuery = { agentId: "research", archived: true };
+      const previousFiltered = (await gateway.getRequests("sessions.list", filteredQuery)).length;
+      await gateway.deferNext("sessions.list", filteredQuery);
       await gateway.resolveDeferred("sessions.delete");
       await gateway.waitForRequest("sessions.delete", { match: { key: targets[1]!.key } });
       await gateway.waitForRequest("sessions.list", {
         after: previous,
         match: researchQuery,
       });
-      await gateway.resolveDeferred("sessions.list");
+      await gateway.waitForRequest("sessions.list", {
+        after: previousFiltered,
+        match: filteredQuery,
+      });
       await expect.poll(settledResearchRevision).toBeGreaterThan(revision);
+      await expect.poll(sidebarState).toMatchObject({
+        ...settledResearch,
+        filteredLoading: true,
+        sidebarLoading: true,
+      });
       expect((await gateway.getRequests("sessions.delete")).map(({ params }) => params)).toEqual(
         targets.map((target) =>
           expect.objectContaining({
@@ -175,26 +234,23 @@ suite.define(() => {
           }),
         ),
       );
+      await loadMore.scrollIntoViewIfNeeded();
       await capture("after-delete-response");
-      // Background refresh keeps the rows visible, but pagination must wait for
-      // its current cursor instead of offering a click the owner will discard.
-      const researchReads = (
-        await gateway.getRequests("sessions.list", { agentId: "research", archived: true })
-      ).length;
-      await gateway.deferNext("sessions.list", { agentId: "research", archived: true });
-      await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey: research[0]!.key,
-        agentId: "research",
-        reason: "archive",
-      });
-      await gateway.waitForRequest("sessions.list", {
-        after: researchReads,
-        match: { agentId: "research", archived: true },
-      });
-      await capture("pending-research-refresh");
+      const bounds = await loadMore.boundingBox();
+      if (!bounds) {
+        throw new Error("Expected the roster pagination button to be visible");
+      }
+      await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      await capture("during-filtered-refresh-click");
+      expect(
+        await gateway.getRequests("sessions.list", { agentId: "research", offset: pageSize }),
+      ).toHaveLength(0);
       await expect.poll(() => loadMore.isDisabled()).toBe(true);
+      await expect.poll(() => loadMore.getAttribute("aria-busy")).toBe("true");
       await gateway.resolveDeferred("sessions.list");
-      await expect.poll(() => loadMore.isEnabled()).toBe(true);
+      await expect.poll(sidebarState).toMatchObject(settledResearch);
+      await expect.poll(() => loadMore.isDisabled()).toBe(false);
+      await expect.poll(() => loadMore.getAttribute("aria-busy")).toBe("false");
       await loadMore.click();
       // Preserve the original assertion failure after exercising the recovery control.
       let paginationFailure: Error | undefined;

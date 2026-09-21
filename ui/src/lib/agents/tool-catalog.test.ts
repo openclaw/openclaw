@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  listCoreToolSections,
+  resolveCoreToolProfiles,
+} from "../../../../src/agents/tool-catalog.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { resolveToolProfileOptions, resolveToolSections } from "./tool-catalog.ts";
@@ -58,6 +62,32 @@ const TOOLS_CATALOG_RESULT: ToolsCatalogResult = {
 };
 
 describe("resolveToolSections", () => {
+  it("shares canonical core ids with the fetched catalog without assuming session capabilities", () => {
+    const groups = listCoreToolSections().map((section) => ({
+      id: section.id,
+      label: section.label,
+      source: "core" as const,
+      tools: section.tools.map((tool) => ({
+        ...tool,
+        source: "core" as const,
+        defaultProfiles: resolveCoreToolProfiles(tool.id),
+      })),
+    }));
+    const fallback = resolveToolSections(null);
+    const fetched = resolveToolSections({ agentId: "main", profiles: [], groups });
+    const ids = (sections: typeof fallback) =>
+      sections.flatMap((section) => section.tools.map((tool) => tool.id));
+    expect(ids(fallback)).toEqual(ids(fetched));
+    expect(ids(fallback)).toContain("openclaw");
+    expect(ids(fallback)).not.toContain("agents_wait");
+    expect(ids(fallback)).not.toContain("github_publish");
+    expect(ids(fallback)).not.toContain("github_identity_status");
+    expect(
+      fallback.flatMap((section) => section.tools).find((tool) => tool.id === "openclaw")
+        ?.description,
+    ).toBe("Delegate OpenClaw setup and repair");
+  });
+
   it("derives fallback labels and descriptions from canonical tool ids", () => {
     const sections = resolveToolSections(null);
     const tools = sections.flatMap((section) => section.tools);
@@ -92,6 +122,13 @@ describe("resolveToolSections", () => {
       ]);
       expect(sections[0]?.label).not.toBe("Files");
       expect(sections[1]?.label).not.toBe("Runtime");
+      const fallbackTools = resolveToolSections(null).flatMap((section) => section.tools);
+      expect(fallbackTools.find((tool) => tool.id === "read")?.description).toBe(
+        t("agents.toolCatalog.descriptions.read"),
+      );
+      expect(fallbackTools.find((tool) => tool.id === "openclaw")?.description).toBe(
+        "Delegate OpenClaw setup and repair",
+      );
     } finally {
       await i18n.setLocale("en");
     }

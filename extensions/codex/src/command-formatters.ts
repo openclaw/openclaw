@@ -123,7 +123,7 @@ export function formatAccount(
   limits: SafeValue<JsonValue | undefined>,
   authOverview?: CodexAccountAuthOverview,
 ): string {
-  if (authOverview) {
+  if (authOverview?.rows.some((row) => row.active)) {
     return formatAccountAuthOverview(authOverview);
   }
   const formattedLimits = limits.ok
@@ -137,6 +137,7 @@ export function formatAccount(
   return [
     `Account: ${account.ok ? formatCodexAccountSummary(account.value) : formatCodexDisplayText(account.error)}`,
     rateLimitBlock,
+    ...(authOverview ? [formatAccountAuthOverview(authOverview)] : []),
   ].join("\n\n");
 }
 

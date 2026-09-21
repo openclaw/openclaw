@@ -25,7 +25,7 @@ import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModel,
-  acquireSimpleCompletionModel,
+  acquireSimpleCompletionModelWithSelection,
   acquireSimpleCompletionModelForAgent,
 } from "./simple-completion-runtime.js";
 import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
@@ -108,7 +108,7 @@ afterEach(async () => {
 describe("simple completion prepared plugin scope", () => {
   it.each([
     {
-      name: "direct provider and model",
+      name: "caller-selected provider and model",
       expectedModelId: "selected-model",
       mode: "direct",
     },
@@ -202,13 +202,10 @@ module.exports = {
           }
           return acquired;
         }
-        const acquired = await acquireSimpleCompletionModel({
-          cfg: config,
-          agentId: "main",
-          modelResolver,
-          provider: selected.providerId,
-          modelId: expectedModelId,
-        });
+        const acquired = await acquireSimpleCompletionModelWithSelection(
+          { cfg: config, agentId: "main", modelResolver },
+          () => ({ selection: { provider: selected.providerId, modelId: expectedModelId } }),
+        );
         if (!("error" in acquired)) {
           acquiredResource = acquired;
         }
@@ -378,7 +375,12 @@ module.exports = {
                 preparedModelRuntime: lease.snapshot,
               });
             } else {
-              const acquired = await acquireSimpleCompletionModel(modelParams);
+              const acquired = await acquireSimpleCompletionModelForAgent({
+                cfg,
+                agentId: "main",
+                agentDir: input.agentDir,
+                modelRef: `${selected.providerId}/selected-model`,
+              });
               if (!("error" in acquired)) {
                 preparedResource = acquired;
               }
@@ -388,7 +390,12 @@ module.exports = {
               throw new Error(prepared.error);
             }
             if (mode === "acquired") {
-              const repeatedPreparation = await acquireSimpleCompletionModel(modelParams);
+              const repeatedPreparation = await acquireSimpleCompletionModelForAgent({
+                cfg,
+                agentId: "main",
+                agentDir: input.agentDir,
+                modelRef: `${selected.providerId}/selected-model`,
+              });
               if ("error" in repeatedPreparation) {
                 throw new Error(repeatedPreparation.error);
               }
@@ -525,13 +532,11 @@ module.exports = {
         OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
       };
       await withEnvAsync(env, async () => {
-        const prepared = await acquireSimpleCompletionModel({
+        const prepared = await acquireSimpleCompletionModelForAgent({
           cfg,
           agentId: "main",
           agentDir: path.join(tempRoot, "agent"),
-          workspaceDir: selected.rootDir,
-          provider: selected.providerId,
-          modelId: "selected-model",
+          modelRef: `${selected.providerId}/selected-model`,
         });
         if ("error" in prepared) {
           throw new Error(prepared.error);

@@ -1,4 +1,3 @@
-// Discord plugin module implements reply context behavior.
 import type { Guild, Message, User } from "../internal/discord.js";
 import { resolveTimestampMs } from "./format.js";
 import { resolveDiscordMessageStickers } from "./message-forwarded.js";

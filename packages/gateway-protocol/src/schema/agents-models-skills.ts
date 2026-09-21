@@ -1,16 +1,30 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { AgentDatabaseAdmissionRefusalSchema } from "./agent-database-admission.js";
 import { closedObject } from "./closed-object.js";
-import { ChatAccountSelectionSchema, ModelAuthProfileIdSchema } from "./model-account-selection.js";
 import {
   GatewayAgentRuntimeSchema,
-  GatewayContextWindowOptionSchema,
   GatewayThinkingLevelOptionSchema,
 } from "./model-runtime-options.js";
 import { NonEmptyString } from "./primitives.js";
 import { GitHubSetupHandleSchema } from "./secrets.js";
 import { SessionPermissionModeSchema } from "./sessions-row.js";
+
+export {
+  ModelChoiceSchema,
+  ModelRuntimeChoiceSchema,
+  ModelCatalogProviderOutcomeSchema,
+  ModelsListParamsSchema,
+  ModelsListResultSchema,
+} from "./model-catalog.js";
+export type {
+  ModelChoice,
+  ModelRuntimeChoice,
+  ModelCatalogProviderOutcome,
+  ModelsListParams,
+  ModelsListResult,
+} from "./model-catalog.js";
 
 /**
  * Agent, model, skill, and effective tool schemas.
@@ -20,65 +34,6 @@ import { SessionPermissionModeSchema } from "./sessions-row.js";
  * discovery. Keep public request/result schemas documented because they are
  * shared by gateway RPC, CLI, and UI clients.
  */
-
-const ModelUnavailableReasonSchema = Type.Union([
-  Type.Literal("missing-auth"),
-  Type.Literal("auth-failed"),
-  Type.Literal("cooldown"),
-]);
-
-const ModelRuntimeProperties = {
-  available: Type.Optional(Type.Boolean()),
-  /** Scoped manual-choice permission; separate from runtime readiness and automatic selection. */
-  manualSelectionAllowed: Type.Optional(Type.Boolean()),
-  unavailableReason: Type.Optional(ModelUnavailableReasonSchema),
-  /** Earliest known retry time in epoch milliseconds, only for unavailable models. */
-  unavailableUntil: Type.Optional(Type.Integer({ minimum: 0 })),
-  contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
-  contextTokens: Type.Optional(Type.Integer({ minimum: 1 })),
-  local: Type.Optional(Type.Boolean()),
-  contextWindows: Type.Optional(Type.Array(GatewayContextWindowOptionSchema)),
-  contextWindowDefault: Type.Optional(NonEmptyString),
-  reasoning: Type.Optional(Type.Boolean()),
-  thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
-  thinkingDefault: Type.Optional(NonEmptyString),
-  effectiveFastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
-  /** Local selected-request applicability, not preference or upstream fulfillment. */
-  supportsFastMode: Type.Optional(Type.Boolean()),
-  supportsTools: Type.Optional(Type.Boolean()),
-  input: Type.Optional(
-    Type.Array(
-      Type.Union([
-        Type.Literal("text"),
-        Type.Literal("image"),
-        Type.Literal("audio"),
-        Type.Literal("video"),
-        Type.Literal("document"),
-      ]),
-    ),
-  ),
-};
-
-/** Runtime-specific capabilities for an additional choice of the same canonical model. */
-export const ModelRuntimeChoiceSchema = closedObject({
-  agentRuntime: GatewayAgentRuntimeSchema,
-  ...ModelRuntimeProperties,
-  unavailableReason: Type.Optional(
-    Type.Union([ModelUnavailableReasonSchema, Type.Literal("unsupported-runtime")]),
-  ),
-});
-
-export const ModelChoiceSchema = closedObject({
-  id: NonEmptyString,
-  name: NonEmptyString,
-  provider: NonEmptyString,
-  alias: Type.Optional(NonEmptyString),
-  tags: Type.Optional(Type.Array(NonEmptyString)),
-  ...ModelRuntimeProperties,
-  agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),
-  apiKeySupported: Type.Optional(Type.Boolean()),
-  runtimeChoices: Type.Optional(Type.Array(ModelRuntimeChoiceSchema, { maxItems: 8 })),
-});
 
 /** Semantic owner of an agent roster entry. */
 export const AgentKindSchema = Type.Union([Type.Literal("agent"), Type.Literal("system")]);
@@ -95,16 +50,7 @@ export const AgentSummarySchema = closedObject({
   /** Effective explicit utility model; absent for automatic or disabled utility routing. */
   utilityModel: Type.Optional(NonEmptyString),
   status: Type.Optional(Type.Literal("degraded")),
-  admissionRefusal: Type.Optional(
-    closedObject({
-      agentId: NonEmptyString,
-      paths: Type.Array(NonEmptyString),
-      embeddedOwnerId: NonEmptyString,
-      code: Type.Literal("agent-database-ownership-mismatch"),
-      reason: NonEmptyString,
-      repairHint: NonEmptyString,
-    }),
-  ),
+  admissionRefusal: Type.Optional(AgentDatabaseAdmissionRefusalSchema),
   kind: Type.Optional(AgentKindSchema),
   createdVia: Type.Optional(AgentCreatedViaSchema),
   creatorAgentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -177,6 +123,8 @@ export const AgentsUpdateParamsSchema = closedObject({
   name: Type.Optional(NonEmptyString),
   workspace: Type.Optional(NonEmptyString),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  /** Exact catalog runtime for a model-only selection; native authentication stays with it. */
+  agentRuntime: Type.Optional(NonEmptyString),
   emoji: Type.Optional(Type.String()),
   avatar: Type.Optional(Type.String()),
 });
@@ -279,44 +227,6 @@ export const AgentsFilesSetResultSchema = closedObject({
   file: AgentsFileEntrySchema,
 });
 
-/** Model catalog request with optional visibility scope. */
-export const ModelsListParamsSchema = Type.Object(
-  {
-    agentId: Type.Optional(NonEmptyString),
-    sessionKey: Type.Optional(NonEmptyString),
-    authProfileId: Type.Optional(ModelAuthProfileIdSchema),
-    provider: Type.Optional(NonEmptyString),
-    includeDetails: Type.Optional(Type.Boolean()),
-    includeProviderCapabilities: Type.Optional(Type.Boolean()),
-    /** Include global default-model previews, independent of agent/session overrides. */
-    includeDefaultModels: Type.Optional(Type.Boolean()),
-    /** Reuse prepared/cached facts without starting provider discovery. */
-    preparedOnly: Type.Optional(Type.Boolean()),
-    /** Force replacement of a completed full-catalog generation. */
-    refresh: Type.Optional(Type.Boolean()),
-    view: Type.Optional(
-      Type.Union([
-        Type.Literal("default"),
-        Type.Literal("configured"),
-        Type.Literal("provider-config"),
-        Type.Literal("all"),
-      ]),
-    ),
-  },
-  {
-    additionalProperties: false,
-    allOf: [
-      {
-        not: {
-          properties: { preparedOnly: { const: true }, refresh: { const: true } },
-          required: ["preparedOnly", "refresh"],
-        },
-      },
-      { not: { required: ["sessionKey", "authProfileId"] } },
-    ],
-  },
-);
-
 /** Reads model-provider credential health for one configured agent. */
 export const ModelsAuthStatusParamsSchema = closedObject({
   refresh: Type.Optional(Type.Boolean()),
@@ -359,31 +269,6 @@ export const ModelsAuthOrderSetParamsSchema = closedObject({
   provider: NonEmptyString,
   profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, uniqueItems: true })),
   agentId: Type.Optional(Type.String()),
-});
-
-/** Model catalog result. */
-export const ModelCatalogProviderOutcomeSchema = closedObject({
-  provider: NonEmptyString,
-  profileId: Type.Optional(NonEmptyString),
-  status: Type.Union([
-    Type.Literal("ready"),
-    Type.Literal("auth-rejected"),
-    Type.Literal("unavailable"),
-  ]),
-});
-
-export const ModelsListResultSchema = closedObject({
-  models: Type.Array(ModelChoiceSchema),
-  defaultModels: Type.Optional(
-    closedObject({
-      /** Auto preview from agents.defaults.model, even when utility routing is explicit or disabled. */
-      automaticUtilityModel: Type.Union([NonEmptyString, Type.Null()]),
-    }),
-  ),
-  refreshFailed: Type.Optional(Type.Boolean()),
-  pendingProviders: Type.Optional(Type.Array(NonEmptyString)),
-  accountSelection: Type.Optional(ChatAccountSelectionSchema),
-  providerOutcomes: Type.Optional(Type.Array(ModelCatalogProviderOutcomeSchema)),
 });
 
 /** Runs a bounded live credential probe for one model provider. */
@@ -1066,79 +951,14 @@ export const SkillsProposalApplyResultSchema = closedObject({
 /** Proposal record result returned after non-apply proposal actions. */
 export const SkillsProposalRecordResultSchema = SkillProposalRecordSchema;
 
-const SkillLifecycleStateSchema = Type.Union([
-  Type.Literal("active"),
-  Type.Literal("stale"),
-  Type.Literal("archived"),
-]);
-
-const SkillCuratorEntrySchema = closedObject({
-  skillFile: NonEmptyString,
-  skillKey: NonEmptyString,
-  skillName: NonEmptyString,
-  state: SkillLifecycleStateSchema,
-  pinned: Type.Boolean(),
-  createdAtMs: Type.Number(),
-  stateChangedAtMs: Type.Number(),
-  lastUsedAtMs: Type.Union([Type.Number(), Type.Null()]),
-  useCount: Type.Number(),
-  archivedReason: Type.Union([Type.String(), Type.Null()]),
-});
-
-const SkillOverlapCandidateSchema = closedObject({
-  left: NonEmptyString,
-  right: NonEmptyString,
-  score: Type.Number(),
-});
-
-const SkillCollectionReviewStatusSchema = closedObject({
-  attemptedAtMs: Type.Number(),
-  succeededAtMs: Type.Optional(Type.Number()),
-  error: Type.Optional(Type.String()),
-});
-
-const SkillExperienceReviewStatusSchema = closedObject({
-  attemptedAtMs: Type.Number(),
-  outcome: Type.Union([
-    Type.Literal("completed"),
-    Type.Literal("applied"),
-    Type.Literal("proposed"),
-    Type.Literal("nothing"),
-    Type.Literal("failed"),
-  ]),
-  proposalId: Type.Optional(Type.String()),
-  error: Type.Optional(Type.String()),
-  usage: Type.Optional(
-    closedObject({
-      inputTokens: Type.Number(),
-      cachedInputTokens: Type.Number(),
-      outputTokens: Type.Number(),
-    }),
-  ),
-});
-
-/** Reads persisted skill usage and collection review state. */
-export const SkillsCuratorStatusParamsSchema = closedObject({});
-
-export const SkillsCuratorStatusResultSchema = closedObject({
-  lastAttemptAtMs: Type.Union([Type.Number(), Type.Null()]),
-  lastSuccessAtMs: Type.Union([Type.Number(), Type.Null()]),
-  lastError: Type.Union([Type.String(), Type.Null()]),
-  collectionReview: Type.Optional(Type.Record(NonEmptyString, SkillCollectionReviewStatusSchema)),
-  experienceReview: Type.Optional(Type.Record(NonEmptyString, SkillExperienceReviewStatusSchema)),
-  counts: closedObject({
-    active: Type.Number(),
-    stale: Type.Number(),
-    archived: Type.Number(),
-  }),
-  skills: Type.Array(SkillCuratorEntrySchema),
-  overlaps: Type.Array(SkillOverlapCandidateSchema),
-});
-
-/** Preserves retired curator action methods so clients receive an actionable error. */
-export const SkillsCuratorActionParamsSchema = closedObject({ skill: NonEmptyString });
-
-export const SkillsCuratorActionResultSchema = SkillCuratorEntrySchema;
+export {
+  SkillsCuratorStatusParamsSchema,
+  SkillsCuratorStatusResultSchema,
+  SkillsCuratorActionParamsSchema,
+  SkillsCuratorActionResultSchema,
+  SkillCuratorLiveEntrySchema,
+  SkillsCuratorLiveStatusResultSchema,
+} from "./skill-curator.js";
 
 export const GitHubIdentityScopeSchema = Type.Union([
   Type.Literal("system"),
@@ -1440,11 +1260,6 @@ export type AgentsFilesSetParams = Static<typeof AgentsFilesSetParamsSchema>;
 export type AgentsFilesSetResult = Static<typeof AgentsFilesSetResultSchema>;
 export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
-export type ModelChoice = Static<typeof ModelChoiceSchema>;
-export type ModelRuntimeChoice = Static<typeof ModelRuntimeChoiceSchema>;
-export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
-export type ModelCatalogProviderOutcome = Static<typeof ModelCatalogProviderOutcomeSchema>;
-export type ModelsListResult = Static<typeof ModelsListResultSchema>;
 export type ModelsAuthSetApiKeyParams = Static<typeof ModelsAuthSetApiKeyParamsSchema>;
 export type ModelsAuthSetApiKeyResult = Static<typeof ModelsAuthSetApiKeyResultSchema>;
 export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
@@ -1513,10 +1328,14 @@ export type SkillsProposalEventsListParams = Static<typeof SkillsProposalEventsL
 export type SkillsProposalEventsListResult = Static<typeof SkillsProposalEventsListResultSchema>;
 export type SkillsProposalApplyResult = Static<typeof SkillsProposalApplyResultSchema>;
 export type SkillsProposalRecordResult = Static<typeof SkillsProposalRecordResultSchema>;
-export type SkillsCuratorStatusParams = Static<typeof SkillsCuratorStatusParamsSchema>;
-export type SkillsCuratorStatusResult = Static<typeof SkillsCuratorStatusResultSchema>;
-export type SkillsCuratorActionParams = Static<typeof SkillsCuratorActionParamsSchema>;
-export type SkillsCuratorActionResult = Static<typeof SkillsCuratorActionResultSchema>;
+export type {
+  SkillsCuratorStatusParams,
+  SkillsCuratorStatusResult,
+  SkillsCuratorLiveStatusResult,
+  SkillsCuratorCompatibleStatusResult,
+  SkillsCuratorActionParams,
+  SkillsCuratorActionResult,
+} from "./skill-curator.js";
 export type SkillsSecurityVerdictsParams = Static<typeof SkillsSecurityVerdictsParamsSchema>;
 export type SkillsSecurityVerdictsResult = Static<typeof SkillsSecurityVerdictsResultSchema>;
 export type SkillsSkillCardParams = Static<typeof SkillsSkillCardParamsSchema>;

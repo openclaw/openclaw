@@ -19,11 +19,11 @@ import {
   setManagedPluginEnabled,
 } from "../../plugins/management-mutations.js";
 import { uninstallManagedPlugin } from "../../plugins/management-uninstall.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   captureGatewayPluginRuntimeApplications,
   pluginLifecycleError,
-  withGatewayPluginLifecycleLease,
 } from "./plugins-lifecycle-error.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
@@ -59,6 +59,7 @@ function lifecycleHandler<T>(
       return;
     }
     let captured: ReturnType<typeof captureGatewayPluginRuntimeApplications> | undefined;
+    let entered = false;
     try {
       const applyRuntime = context.applyPluginLifecycleChange;
       if (!applyRuntime) {
@@ -84,8 +85,12 @@ function lifecycleHandler<T>(
         beforePersistentApply,
         ...(signal ? { signal } : {}),
       };
+      // A request must not wait on a config reload that is draining that request.
       const { application, plugin, pluginId, pluginIds, removed, warnings } =
-        await withGatewayPluginLifecycleLease(signal, () => run(params, lifecycle, client));
+        await withPluginLifecycleLease({ signal, waitMs: 0 }, () => {
+          entered = true;
+          return run(params, lifecycle, client);
+        });
       if (!application) {
         throw new Error("Plugin lifecycle did not return a runtime application receipt.");
       }
@@ -106,7 +111,11 @@ function lifecycleHandler<T>(
         undefined,
       );
     } catch (error) {
-      respond(false, undefined, pluginLifecycleError(error, captured?.application));
+      respond(
+        false,
+        undefined,
+        pluginLifecycleError(error, { application: captured?.application, entered, signal }),
+      );
     }
   };
 }

@@ -876,4 +876,29 @@ describe("legacy agent directory migration", () => {
       await expect(fs.stat(state.statePath("agent"))).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
+
+  it("refuses when recoverable archive warnings mix with non-recoverable database migration failures", () => {
+    const result: MigrationMessages = {
+      changes: [],
+      warnings: [
+        "Skipped archived transcript media migration for /path/corrupt.jsonl.deleted: Error: all-NUL",
+        "Skipped agent database migration for /path/agent.db: Error: schema mismatch",
+      ],
+    };
+    const receipt = migrationReceipt("media-persistence", result);
+    expect(receipt.outcome).toBe("refused");
+  });
+
+  it("marks archive-only failures as recoverable through the receipt path", () => {
+    const result: MigrationMessages = {
+      changes: [],
+      warnings: [
+        "Skipped archived transcript media migration for /path/corrupt.jsonl.deleted: Error: all-NUL",
+      ],
+      warningDisposition: "recoverable",
+    };
+    const receipt = migrationReceipt("media-persistence", result);
+    expect(receipt.outcome).toBe("warning");
+    expect(receipt.outcome).not.toBe("refused");
+  });
 });

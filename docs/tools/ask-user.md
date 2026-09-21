@@ -22,7 +22,10 @@ You can answer from any supported conversation surface:
 - The web Control UI docks a question panel directly above the composer. For
   multi-question prompts, the panel shows one question at a time and advances
   through a short stepper. After resolution, the panel closes and the chat
-  keeps only a compact answer summary.
+  keeps the full question alongside your answer in a compact summary. Skipped
+  or expired questions keep their wording alongside the outcome.
+  Switching between pending questions preserves both selected choices and typed
+  answers, even when typed text matches an option label.
 - The TUI shows a question prompt in both Gateway and local modes. Use arrow
   keys or number keys to choose an option, **Other…** to type an answer, or
   **Skip**. Multi-select prompts let you toggle choices before confirming;
@@ -67,6 +70,30 @@ channels. The Control UI and TUI keep the full structured stepper. The TUI shows
 the time remaining, dismisses expired prompts, and restores pending questions
 for the selected session after reconnecting or switching sessions. Local mode
 keeps questions in the running process; they do not survive exiting the TUI.
+
+## Async questions
+
+Codex async questions use the same panel above the Control UI composer. They open
+without taking keyboard focus and leave the message box available while the agent
+continues working. Collapse the panel to keep a compact unanswered-question count
+and the current question visible. New messages, the question's own completed
+turn, and collapsed work history do not dismiss the question or reopen a minimized
+panel. When a later run completes successfully, older reminders leave the dock.
+Overlapping runs, commentary, interruptions, and failed runs do not retire a
+question. Successful restart recovery also moves older reminders into history;
+restarting alone does not.
+The transcript keeps the question with **No longer pending** and an **Answer**
+button to reopen it. Reopening preserves the draft until you submit, skip, or a
+later run completes. Moving a reminder into history never answers it, grants
+permission, or marks its underlying task complete.
+The question dock also stays available when a plugin replaces the composer.
+
+Use the panel's request arrows to switch between pending requests without losing
+answer drafts. A new blocking question takes priority; async questions remain
+available through the same navigation. Submitting an async answer sends an ordinary
+chat message, using the existing outbox and retry controls. Skipping removes that
+request from the dock without sending an answer. The transcript retains a summary.
+Minimizing alone neither answers nor skips a question.
 
 ## Timeout and no answer
 

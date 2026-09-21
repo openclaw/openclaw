@@ -204,6 +204,9 @@ describe("completed requester delivery replay fence", () => {
         terminalReply: { disposition: "visible", text: "canonical result" },
         triggerCleanup: false,
       });
+      // Admission must start from a real pending obligation, not a marker-less row.
+      input.subagent.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      saveSubagentRegistryToSqlite(subagentRuns);
       driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
       await admitted.promise;
       expect(

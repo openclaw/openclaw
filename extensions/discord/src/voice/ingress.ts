@@ -1,4 +1,3 @@
-// Discord plugin module implements ingress behavior.
 import { randomUUID } from "node:crypto";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
@@ -150,7 +149,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   }
   params.signal?.throwIfAborted();
   const voiceModel = normalizeOptionalString(params.discordConfig.voice?.model);
-  const runId = params.voiceSelection && context.senderIsOwner ? randomUUID() : undefined;
+  const runId = params.voiceSelection ? randomUUID() : undefined;
   const unbind = runId
     ? params.voiceSelection?.bindRun({
         runId,
@@ -158,10 +157,9 @@ export async function runDiscordVoiceAgentTurn(params: {
           params.signal?.throwIfAborted();
           if (
             params.entry.sessionLifecycle.status !== "active" ||
-            context.isCurrent?.() === false ||
-            !context.senderIsOwner
+            context.isCurrent?.() === false
           ) {
-            throw new Error("Discord voice speaker no longer owns this call");
+            throw new Error("Discord voice access is no longer valid for this call");
           }
         },
       })

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { isThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import { lobsterHonorific } from "./lobster-dex.ts";
 import type {
   LobsterPasserKind,
@@ -20,6 +21,14 @@ import {
   type LobsterSceneTravel,
 } from "./lobster-pet-scene.ts";
 import { BALLOON, PASSER_SPRITES, PASSER_TITLES, renderBottleSvg } from "./lobster-pet-sprites.ts";
+import {
+  THEME_CRITTER_SPRITES,
+  THEME_CRITTER_TITLES,
+  themeCritterBaseStyle,
+} from "./theme-flair-sprites.ts";
+
+const PASSER_RENDERERS = { ...PASSER_SPRITES, ...THEME_CRITTER_SPRITES };
+const PASSER_LABELS = { ...PASSER_TITLES, ...THEME_CRITTER_TITLES };
 
 function strangerLookFor(seed: number, own: LobsterPetPaletteId): LobsterPetLook {
   for (let offset = 1; offset <= 24; offset++) {
@@ -51,6 +60,7 @@ export function renderLobsterPetScene(args: {
   presence: "out" | "in" | "leaving";
   shellVisible: boolean;
   visitsEnabled: boolean;
+  residentEnabled: boolean;
   dismissed: boolean;
   passer: {
     kind: LobsterPasserKind;
@@ -202,13 +212,15 @@ export function renderLobsterPetScene(args: {
       </div>
     `;
   };
-  const showSprites = args.presence !== "out";
+  const showSprites = args.residentEnabled && args.presence !== "out";
   // The shell may outlive the visit while it fades, but dismissal and the
   // visits setting silence it like everything else.
-  const showShell = args.shellVisible && args.visitsEnabled && !args.dismissed;
+  const showShell =
+    args.residentEnabled && args.shellVisible && args.visitsEnabled && !args.dismissed;
   const showPasser =
     args.passer !== null &&
     args.visitsEnabled &&
+    (args.residentEnabled || args.passer.kind !== "stranger") &&
     !args.dismissed &&
     (args.passer.anchor === "top" || (args.floorEnabled && args.scene.floor !== null));
   // The bottle washes ashore whether or not the pet is around; it belongs to
@@ -296,13 +308,13 @@ export function renderLobsterPetScene(args: {
               class=${passerClasses}
               style=${passerStyle}
               aria-hidden="true"
-              title=${PASSER_TITLES[args.passer.kind]}
+              title=${PASSER_LABELS[args.passer.kind]}
             >
               <div class="lobster-pet__body">
                 ${
                   args.passer.kind === "stranger"
                     ? renderLobsterSvg(passerLook, { standalone: true })
-                    : PASSER_SPRITES[args.passer.kind]()
+                    : PASSER_RENDERERS[args.passer.kind]()
                 }
               </div>
             </div>
@@ -323,7 +335,10 @@ function passerBaseStyle(
   if (kind === "stranger") {
     return lobsterPetSpriteStyle(passerLook, Math.min(passerLook.scale, 2), 0, direction);
   }
-  const fixed: Record<Exclude<LobsterPasserKind, "stranger">, string> = {
+  if (isThemeCritterId(kind)) {
+    return themeCritterBaseStyle(kind, direction);
+  }
+  const fixed = {
     crab: "--lob-scale:2;--lob-w:1;--lob-h:0.82;--lob-face:1",
     snail: `--lob-scale:1.7;--lob-w:1;--lob-h:0.9;--lob-face:${direction}`,
     duck: `--lob-scale:1.9;--lob-w:1;--lob-h:1;--lob-face:${direction}`,

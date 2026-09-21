@@ -70,10 +70,14 @@ export function applyLegacyCompatibilityStep(params: {
     config: migrated,
     sourceConfig: migratedSource,
     changes,
+    warnings,
     partiallyValid,
   } = migrateLegacyConfig(params.snapshot.sourceConfig, {
-    authoredRaw: params.snapshot.parsed,
-    resolvedRaw: params.snapshot.sourceConfig,
+    sourceConfigBeforeMigrations: params.snapshot.sourceConfigBeforeMigrations,
+    context: {
+      authoredRaw: params.snapshot.parsed,
+      resolvedRaw: params.snapshot.sourceConfig,
+    },
   });
   const migrationCandidate = migratedSource ?? migrated;
   // Read-time normalization still needs persistence; unresolved advice alone does not.
@@ -100,7 +104,7 @@ export function applyLegacyCompatibilityStep(params: {
               `Run "${params.doctorFixCommand}" to ${partiallyValid ? "finish fixing" : "migrate"} legacy config keys.`,
             ],
     },
-    issueLines,
+    issueLines: [...issueLines, ...(warnings ?? [])],
     changeLines: changes,
     partiallyValid: partiallyValid === true ? true : undefined,
   };
@@ -157,8 +161,8 @@ export function restoreDoctorConfigEnvRefs(
     sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
   });
   const migrated = applyLegacyDoctorMigrations(canonicalAuthored, {
-    authoredRaw: snapshot.parsed,
-    resolvedRaw: snapshot.sourceConfig,
+    sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+    context: { authoredRaw: snapshot.parsed, resolvedRaw: snapshot.sourceConfig },
   });
   // The root writer preserves unchanged roster refs after checking include ownership.
   // Single-file and include-file writers still need references moved with their roster.

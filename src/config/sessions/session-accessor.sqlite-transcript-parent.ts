@@ -22,6 +22,9 @@ import {
   resolveVisibleTranscriptAppendParentId,
 } from "./transcript-visible-events.js";
 
+// Stamped by the Talk voice writer in src/talk/client-voice-session.ts.
+const REALTIME_VOICE_PROVENANCE = { kind: "realtime_voice", sourceChannel: "talk" } as const;
+
 const PREPARED_ASSISTANT_MAX_NEWER_MESSAGES = 256;
 const PREPARED_ASSISTANT_MAX_NEWER_BYTES = 1024 * 1024;
 const PREPARED_ASSISTANT_MAX_ANCESTORS = 4096;
@@ -136,6 +139,21 @@ export function canRebasePreparedAssistantInTransaction(
           "rewrite.generation",
           /* kysely-allow-raw: validate the canonical message role without hydrating content. */
           sql<string>`json_extract(event.event_json, '$.message.role')`.as("message_role"),
+          /* kysely-allow-raw: only exact canonical booleans exempt a command from model context. */
+          sql<number | null>`json_type(event.event_json, '$.message.excludeFromContext') = 'true'
+            AND json_type(event.event_json, '$.message.__openclaw.contextFreeCommand') = 'true'`.as(
+            "context_free_command",
+          ),
+          /* kysely-allow-raw: classify realtime voice records without hydrating content. */
+          sql<string | null>`json_extract(event.event_json, '$.message.provenance.kind')`.as(
+            "provenance_kind",
+          ),
+          /* kysely-allow-raw: pair the kind with its channel so a partial marker cannot match. */
+          sql<
+            string | null
+          >`json_extract(event.event_json, '$.message.provenance.sourceChannel')`.as(
+            "provenance_source_channel",
+          ),
         ])
         .where("identity.session_id", "=", sessionId)
         .where("identity.seq", ">=", newerMessageMetadata[0]!.seq)
@@ -146,7 +164,19 @@ export function canRebasePreparedAssistantInTransaction(
     ),
   );
   return newerRoles.every((row) => {
-    if (row.message_role !== "user" || row.event_id === admittedUserId) {
+    if (
+      row.message_role !== "user" ||
+      row.event_id === admittedUserId ||
+      row.context_free_command === 1
+    ) {
+      return true;
+    }
+    // Final Talk speech records history without admitting another agent turn.
+    // Both writer markers must match; other provenance still faces the fence.
+    if (
+      row.provenance_kind === REALTIME_VOICE_PROVENANCE.kind &&
+      row.provenance_source_channel === REALTIME_VOICE_PROVENANCE.sourceChannel
+    ) {
       return true;
     }
     const answer = resolveSessionTranscriptQuestionAnswer(

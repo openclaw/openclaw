@@ -293,6 +293,14 @@
       }
     },
     {
+      "files": ["src/cli/cli-process-diagnostics.test-support.cjs"],
+      "rules": {
+        // The saved emitter is always invoked with the caller's receiver via Reflect.apply.
+        // CJS semantic discovery varies by lint target set; an inline disable can appear unused.
+        "typescript/unbound-method": "off"
+      }
+    },
+    {
       "files": ["src/agents/subagents/registry/subagent-registry.ts"],
       "rules": {
         // Preserve the explicit maintenance side-effect import's module-request order.

@@ -1,7 +1,11 @@
 import path from "node:path";
 import { isPathStrictlyInside, root } from "openclaw/plugin-sdk/file-access-runtime";
 import { getMediaDir } from "openclaw/plugin-sdk/media-runtime";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import {
+  normalizeMediaReferenceForComparison,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-store";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
 import {
   isCodexPassThroughMediaSource,
@@ -74,6 +78,37 @@ const MESSAGE_MEDIA_KEYS = [
 ] as const;
 const MESSAGE_MEDIA_ARRAY_KEYS = ["mediaUrls", "media_urls", "imageUrls", "image_urls"] as const;
 const ATTACHMENT_MEDIA_KEYS = ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"] as const;
+
+export function collectCodexMessageMediaUrls(record: Record<string, unknown>): string[] {
+  const urls: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value === "string" && value.trim()) {
+      urls.push(value.trim());
+    }
+  };
+  for (const key of MESSAGE_MEDIA_KEYS) {
+    push(record[key]);
+  }
+  for (const key of MESSAGE_MEDIA_ARRAY_KEYS) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        push(entry);
+      }
+    }
+  }
+  if (Array.isArray(record.attachments)) {
+    for (const attachment of record.attachments) {
+      if (!isRecord(attachment)) {
+        continue;
+      }
+      for (const key of ATTACHMENT_MEDIA_KEYS) {
+        push(attachment[key]);
+      }
+    }
+  }
+  return urls;
+}
 
 type CodexRemoteWorkspaceFileResponse = {
   dataBase64: string;
@@ -222,13 +257,20 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
   signal?: AbortSignal;
   timeoutMs?: number;
   maxBytes?: number;
-}): Promise<Record<string, unknown>> {
+}): Promise<{
+  args: Record<string, unknown>;
+  sourcePathsByStagedPath: ReadonlyMap<string, readonly string[]>;
+}> {
   const { localWorkspaceRoot, remoteWorkspaceRoot } = params;
+  const sourcePathsByStagedPath = new Map<string, readonly string[]>();
   if (!localWorkspaceRoot || !remoteWorkspaceRoot) {
-    return params.args;
+    return { args: params.args, sourcePathsByStagedPath };
   }
 
-  const remotePathsByLocalPath = new Map<string, string>();
+  const remotePathsByLocalPath = new Map<
+    string,
+    { remotePath: string; sourcePaths: Set<string> }
+  >();
   const gatewayManagedPaths = new Set<string>();
   const gatewayMediaRoot = getMediaDir();
   let attachmentEntries = 0;
@@ -248,14 +290,15 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
     });
     if (value.trim() && !isCodexPassThroughMediaSource(value)) {
       attachmentEntries += 1;
-      remotePathsByLocalPath.set(
-        mapped,
-        mapCodexAppServerRemoteWorkspacePath({
-          value: mapped,
-          localWorkspaceRoot,
-          remoteWorkspaceRoot,
-        }),
-      );
+      const remotePath = mapCodexAppServerRemoteWorkspacePath({
+        value: mapped,
+        localWorkspaceRoot,
+        remoteWorkspaceRoot,
+      });
+      const sourcePaths = remotePathsByLocalPath.get(mapped)?.sourcePaths ?? new Set<string>();
+      sourcePaths.add(value);
+      sourcePaths.add(remotePath);
+      remotePathsByLocalPath.set(mapped, { remotePath, sourcePaths });
     }
     return mapped;
   };
@@ -316,7 +359,7 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
     await assertGatewayManagedMediaPath(managedPath, gatewayMediaRoot);
   }
   if (remotePathsByLocalPath.size === 0) {
-    return mappedArgs;
+    return { args: mappedArgs, sourcePathsByStagedPath };
   }
   const readRemoteFile = params.readRemoteFile;
   if (!readRemoteFile) {
@@ -330,7 +373,7 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
   let totalBytes = 0;
   // Read the authoritative remote descriptor, not an unverified synchronized
   // path. The native command caps allocation and output before bytes travel.
-  for (const [localPath, remotePath] of remotePathsByLocalPath) {
+  for (const [localPath, { remotePath, sourcePaths }] of remotePathsByLocalPath) {
     params.signal?.throwIfAborted();
     const remainingBytes = maxBytes - totalBytes;
     const remainingMs = deadline - Date.now();
@@ -370,8 +413,26 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
       path.basename(remotePath),
     );
     stagedPaths.set(localPath, saved.path);
+    sourcePathsByStagedPath.set(normalizeMediaReferenceForComparison(saved.path), [...sourcePaths]);
   }
-  return mapMessageMediaValues(mappedArgs, (value) => stagedPaths.get(value) ?? value);
+  return {
+    args: mapMessageMediaValues(mappedArgs, (value) => stagedPaths.get(value) ?? value),
+    sourcePathsByStagedPath,
+  };
+}
+
+export function resolveCodexMediaSourceUrls(
+  mediaUrls: readonly string[],
+  sourcePathsByStagedPath: ReadonlyMap<string, readonly string[]> | undefined,
+): string[] {
+  return [
+    ...new Set(
+      mediaUrls.flatMap((url) => [
+        url,
+        ...(sourcePathsByStagedPath?.get(normalizeMediaReferenceForComparison(url)) ?? []),
+      ]),
+    ),
+  ];
 }
 
 async function assertGatewayManagedMediaPath(value: string, mediaRoot: string): Promise<void> {

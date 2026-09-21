@@ -119,6 +119,25 @@ dispatchers that keep platform delivery in the delivery adapter. New send
 paths should use message adapters and durable message helpers from
 `channel-outbound` instead.
 
+## Platform-selected history windows
+
+When the platform owns recent history, pass the selected entries as
+`message.inboundHistory` and set
+`sessionTranscript: { historyLimit, historyKind: "recent" }`. The host renders that
+configured window without merging canonical transcript rows back into it.
+Without `"recent"`, existing transcript enrichment and the legacy defensive
+20-entry prompt cap remain unchanged.
+
+The channel owns bounded fetching, current account/conversation permissions,
+reset boundaries, and current-message exclusion. A history failure must not
+silently restore stale cached content. Keep the selected snapshot consistent
+between formatted context and structured history.
+
+For plaintext context, `buildHistoryContext(...)` and
+`buildHistoryContextFromEntries(...)` from `openclaw/plugin-sdk/reply-history`
+also accept `historyKind: "recent"`. Their default `"pending"` framing is
+unchanged; use these helpers instead of inventing command-sensitive markers.
+
 ## Agent group dispatch
 
 The shared inbound dispatcher coordinates qualified `broadcast` entries before

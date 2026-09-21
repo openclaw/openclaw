@@ -1,4 +1,3 @@
-// Line plugin module implements template messages behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import {
   messageAction,

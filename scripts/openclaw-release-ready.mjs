@@ -45,6 +45,7 @@ const INPUTS = new Set([
   "plugin_sdk_api_acknowledgement",
   "full_release_validation_run_id",
   "full_release_validation_run_attempt",
+  "stable_soak_waiver",
   "windows_node_tag",
   "windows_node_installer_digests",
   "npm_telegram_run_id",

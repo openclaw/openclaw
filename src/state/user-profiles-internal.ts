@@ -1,6 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import { expressionBuilder, type SelectQueryBuilder } from "kysely";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
+import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
@@ -8,16 +15,25 @@ import {
 import {
   ensureUserProfilesSchema,
   hasEnsuredUserProfileRoleSchema,
-  type UserProfilesDatabase,
   UserProfileNotFoundError,
 } from "./user-profiles-schema.js";
-import {
-  USER_PROFILE_AVATAR_MIME_TYPES,
-  type UserProfileAvatarMime,
-} from "./user-profiles-tailscale-avatar.js";
+import type { UserProfileAvatarMime, UserProfilesDatabase } from "./user-profiles.types.js";
 
 export type UserProfileRow = UserProfilesDatabase["user_profiles"];
 export type UserProfileMetadataRow = Omit<UserProfileRow, "avatar">;
+export type UserProfile = Omit<UserProfileListItem, "emails" | "githubIdentity" | "hasAvatar">;
+
+export function toUserProfile(row: Omit<UserProfileMetadataRow, "avatar_sha256">): UserProfile {
+  return {
+    id: row.id,
+    displayName: row.display_name,
+    avatarMime: normalizeUserProfileAvatarMime(row.avatar_mime),
+    mergedInto: row.merged_into,
+    ...(row.role ? { role: row.role } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
 // Selection metadata is immutable and carries no database handle or profile state.
 export const userProfileAvatarPresence = expressionBuilder<UserProfilesDatabase, "user_profiles">()(
@@ -34,6 +50,30 @@ type UserProfileAvatar = {
 
 export function userProfilesDb(db: DatabaseSync) {
   return getNodeSqliteKysely<UserProfilesDatabase>(db);
+}
+
+export const userProfileDisplaySelection = [
+  "id",
+  "display_name",
+  "avatar_mime",
+  "avatar_sha256",
+  "merged_into",
+  "updated_at",
+  userProfileAvatarPresence,
+] as const;
+
+export function selectProfileDisplayEntries(db: DatabaseSync, ids?: string[]) {
+  const query = userProfilesDb(db)
+    .selectFrom("user_profiles")
+    .select([
+      ...userProfileDisplaySelection,
+      ...(hasEnsuredUserProfileRoleSchema(db) || tableHasColumn(db, "user_profiles", "role")
+        ? (["role"] as const)
+        : []),
+    ]);
+  const rows = executeSqliteQuerySync(db, ids ? query.where("id", "in", ids) : query).rows;
+  // Worker transfer removes SQLite rows' null prototype; compare plain descriptors on both sides.
+  return rows.map((row): [string, typeof row] => [row.id, { ...row }]);
 }
 
 export function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatarMime | null {
@@ -56,7 +96,7 @@ export function selectResolvedUserProfile<T extends Pick<UserProfileRow, "merged
   );
 }
 
-function selectResolvedUserProfileById(
+export function selectResolvedUserProfileById(
   db: DatabaseSync,
   profileId: string,
 ): UserProfileRow | undefined {

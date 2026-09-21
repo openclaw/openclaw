@@ -11,7 +11,7 @@ import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
-import { resetConfigRuntimeState } from "../config/config.js";
+import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -21,6 +21,7 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import {
   expectDeclaredHttpOwnerIdentity,
@@ -39,6 +40,10 @@ import {
   emitCompatibleAssistantReplacement,
   emitBufferedAssistantReplacement,
   createOpenAiHttpTestClient,
+  parseSseEvents,
+  collectSseEventTypes,
+  findSseEvent,
+  parseSseData,
 } from "./http-stream.test-support.js";
 import type { ResponseResource } from "./open-responses.schema.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
@@ -49,6 +54,7 @@ import {
   startGatewayServerWithRetries,
   testState,
 } from "./test-helpers.js";
+import { startClaimedGateway } from "./test-helpers.listener.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -110,41 +116,16 @@ beforeEach(() => {
   fetchWithSsrFGuardMock.mockClear();
 });
 
-async function startServer(port: number, opts?: { openResponsesEnabled?: boolean }) {
-  const { startGatewayServer } = await import("./server.js");
-  const serverOpts = {
-    host: "127.0.0.1",
-    auth: { mode: "none" as const },
-    controlUiEnabled: false,
-  } as const;
-  return await startGatewayServer(
-    port,
-    opts?.openResponsesEnabled === undefined
-      ? serverOpts
-      : { ...serverOpts, openResponsesEnabled: opts.openResponsesEnabled },
-  );
-}
-
-async function startSharedSecretServer(
-  port: number,
-  mode: "token" | "password",
-  opts?: { openResponsesEnabled?: boolean },
-) {
-  const { startGatewayServer } = await import("./server.js");
-  const serverOpts = {
-    host: "127.0.0.1",
-    auth:
-      mode === "token"
-        ? { mode: "token" as const, token: "secret" }
-        : { mode: "password" as const, password: "secret" },
-    controlUiEnabled: false,
-  } as const;
-  return await startGatewayServer(
-    port,
-    opts?.openResponsesEnabled === undefined
-      ? { ...serverOpts, openResponsesEnabled: true }
-      : { ...serverOpts, openResponsesEnabled: opts.openResponsesEnabled },
-  );
+async function startServer(port: TestPortClaim, auth: GatewayAuthConfig = { mode: "none" }) {
+  return await startClaimedGateway(port, async () => {
+    const { startGatewayServer } = await import("./server.js");
+    return await startGatewayServer(port.port, {
+      host: "127.0.0.1",
+      auth,
+      controlUiEnabled: false,
+      openResponsesEnabled: true,
+    });
+  });
 }
 
 async function writeGatewayConfig(config: Record<string, unknown>) {
@@ -173,51 +154,6 @@ async function postResponses(
     ...(signal ? { signal } : {}),
   });
   return res;
-}
-
-type SseEvent = { event?: string; data: string };
-
-function parseSseEvents(text: string): SseEvent[] {
-  const events: SseEvent[] = [];
-  const lines = text.split("\n");
-  let currentEvent: string | undefined;
-  let currentData: string[] = [];
-
-  for (const line of lines) {
-    if (line.startsWith("event: ")) {
-      currentEvent = line.slice("event: ".length);
-    } else if (line.startsWith("data: ")) {
-      currentData.push(line.slice("data: ".length));
-    } else if (line.trim() === "" && currentData.length > 0) {
-      events.push({ event: currentEvent, data: currentData.join("\n") });
-      currentEvent = undefined;
-      currentData = [];
-    }
-  }
-
-  return events;
-}
-
-function collectSseEventTypes(events: readonly SseEvent[]): string[] {
-  const eventTypes: string[] = [];
-  for (const event of events) {
-    if (event.event) {
-      eventTypes.push(event.event);
-    }
-  }
-  return eventTypes;
-}
-
-function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
-  const event = events.find((candidate) => candidate.event === eventName);
-  if (!event) {
-    throw new Error(`expected SSE event ${eventName}`);
-  }
-  return event;
-}
-
-function parseSseData(event: SseEvent): unknown {
-  return JSON.parse(event.data) as unknown;
 }
 
 function requireSessionKey(value: string | undefined, label: string): string {
@@ -403,17 +339,29 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it.each([
-    [false, "SDK plain-text response", "SDK plain-text response"],
-    [true, "SDK plain-text response", "SDK plain-text response"],
-    [false, "", "No response from OpenClaw."],
-    [true, "", "No response from OpenClaw."],
+    [false, [{ text: "SDK plain-text response", mediaUrl: null }], "SDK plain-text response"],
+    [true, [{ text: "SDK plain-text response", mediaUrl: null }], "SDK plain-text response"],
+    [false, [{ text: "", mediaUrl: null }], "No response from OpenClaw."],
+    [true, [{ text: "", mediaUrl: null }], "No response from OpenClaw."],
+    [
+      false,
+      [
+        { text: "", mediaUrl: "/tmp/image.png" },
+        { text: "First caption.", mediaUrl: null },
+        { text: "", mediaUrl: null },
+        { text: "", mediaUrl: "/tmp/voice.ogg", audioAsVoice: true },
+        { text: "Second caption.", mediaUrl: null },
+      ],
+      "First caption.\n\nSecond caption.",
+    ],
   ])(
-    "returns visible official SDK response text (stream: %s, text: %s)",
-    async (stream, text, expected) => {
+    "returns visible official SDK response text (stream: %s, payloads: %j)",
+    async (stream, payloads, expected) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text }],
-      } as never);
+        payloads,
+        meta: { durationMs: 0 },
+      });
 
       const client = createOpenAiHttpTestClient(enabledPort);
       const request = {
@@ -2110,7 +2058,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await withEnvAsync(
       { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
       async () => {
-        const port = await getGatewayTestPort();
         const { startGatewayServer } = await import("./server.js");
         let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
         const previousGatewayAuth = testState.gatewayAuth;
@@ -2131,12 +2078,16 @@ describe("OpenResponses HTTP API (e2e)", () => {
             },
           });
           resetConfigRuntimeState();
-          server = await startGatewayServer(port, {
-            host: "127.0.0.1",
-            auth: trustedProxyAuth,
-            controlUiEnabled: false,
-            openResponsesEnabled: true,
-          });
+          const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+          const port = portClaim.port;
+          server = await startClaimedGateway(portClaim, () =>
+            startGatewayServer(port, {
+              host: "127.0.0.1",
+              auth: trustedProxyAuth,
+              controlUiEnabled: false,
+              openResponsesEnabled: true,
+            }),
+          );
 
           const incognitoSessionKey = "agent:main:dashboard:incognito-openresponses-http";
           await upsertSessionEntryCore(
@@ -2292,8 +2243,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it.each(["token", "password"] as const)(
     "preserves owner identity for streaming and non-streaming %s-authenticated callers",
     async (mode) => {
-      const port = await getGatewayTestPort();
-      const server = await startSharedSecretServer(port, mode);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const port = portClaim.port;
+      const server = await startServer(
+        portClaim,
+        mode === "token" ? { mode, token: "secret" } : { mode, password: "secret" },
+      );
       try {
         await expectSharedSecretHttpOwnerIdentity({
           post: (stream, headers) =>
@@ -2341,46 +2296,58 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
   });
 
-  it("preserves assistant text alongside non-stream function_call output", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Let me check that." }],
-      meta: {
-        stopReason: "tool_calls",
-        pendingToolCalls: [
-          {
-            id: "call_1",
-            name: "get_weather",
-            arguments: '{"city":"Taipei"}',
-          },
-        ],
-      },
-    } as never);
+  it.each([true, false])(
+    "preserves non-stream function_call output (commentary: %s)",
+    async (commentary) => {
+      const port = enabledPort;
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: commentary
+          ? [{ text: "Let me check that.", mediaUrl: null }]
+          : [{ text: "", mediaUrl: "/tmp/image.png" }],
+        meta: {
+          durationMs: 0,
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "get_weather",
+              arguments: '{"city":"Taipei"}',
+            },
+          ],
+        },
+      });
 
-    const res = await postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      input: "check the weather",
-      tools: WEATHER_TOOL,
-    });
+      const res = await postResponses(port, {
+        stream: false,
+        model: "openclaw",
+        input: "check the weather",
+        tools: WEATHER_TOOL,
+      });
 
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as {
-      status?: string;
-      output?: Array<Record<string, unknown>>;
-    };
-    expect(json.status).toBe("completed");
-    expect(json.output?.map((item) => item.type)).toEqual(["message", "function_call"]);
-    expect(json.output?.[0]?.phase).toBe("commentary");
-    expect(
-      ((json.output?.[0]?.content as Array<Record<string, unknown>> | undefined)?.[0]?.text as
-        | string
-        | undefined) ?? "",
-    ).toBe("Let me check that.");
-    expect(json.output?.[1]?.name).toBe("get_weather");
-    await ensureResponseConsumed(res);
-  });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        status?: string;
+        output?: Array<Record<string, unknown>>;
+      };
+      expect(json.status).toBe("completed");
+      expect(json.output?.map((item) => item.type)).toEqual(
+        commentary ? ["message", "function_call"] : ["function_call"],
+      );
+      if (commentary) {
+        expect(json.output?.[0]).toMatchObject({
+          phase: "commentary",
+          content: [{ type: "output_text", text: "Let me check that." }],
+        });
+      }
+      expect(json.output?.at(-1)).toMatchObject({
+        name: "get_weather",
+        call_id: "call_1",
+        arguments: '{"city":"Taipei"}',
+      });
+      await ensureResponseConsumed(res);
+    },
+  );
 
   it("rejects an unsatisfied required tool_choice on the non-streaming path", async () => {
     const port = enabledPort;
@@ -3468,8 +3435,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const allowlistConfig = buildResponsesUrlPolicyConfig(1);
     await writeGatewayConfig(allowlistConfig);
 
-    const allowlistPort = await getGatewayTestPort();
-    const allowlistServer = await startServer(allowlistPort, { openResponsesEnabled: true });
+    const allowlistClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const allowlistPort = allowlistClaim.port;
+    const allowlistServer = await startServer(allowlistClaim);
     try {
       agentCommandMock.mockClear();
 
@@ -3489,8 +3457,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const capConfig = buildResponsesUrlPolicyConfig(0);
     await writeGatewayConfig(capConfig);
 
-    const capPort = await getGatewayTestPort();
-    const capServer = await startServer(capPort, { openResponsesEnabled: true });
+    const capClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const capPort = capClaim.port;
+    const capServer = await startServer(capClaim);
     try {
       agentCommandMock.mockClear();
       const maxUrlBlocked = await postResponses(capPort, {

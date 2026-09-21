@@ -1,4 +1,3 @@
-// Matrix plugin module implements create client behavior.
 import fs from "node:fs";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -17,10 +16,13 @@ import {
 } from "./storage.js";
 
 const loadMatrixCreateClientRuntimeDeps = createLazyRuntimeModule(() =>
-  Promise.all([import("../sdk.js"), import("./logging.js")]).then(([sdkModule, loggingModule]) => ({
-    MatrixClient: sdkModule.MatrixClient,
-    ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
-  })),
+  Promise.all([import("../sdk.js"), import("./logging.js"), import("./file-sync-store.js")]).then(
+    ([sdkModule, loggingModule, syncStoreModule]) => ({
+      MatrixClient: sdkModule.MatrixClient,
+      SqliteBackedMatrixSyncStore: syncStoreModule.SqliteBackedMatrixSyncStore,
+      ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
+    }),
+  ),
 );
 
 export async function createMatrixClient(params: {
@@ -39,7 +41,7 @@ export async function createMatrixClient(params: {
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<MatrixClient> {
-  const { MatrixClient, ensureMatrixSdkLoggingConfigured } =
+  const { MatrixClient, SqliteBackedMatrixSyncStore, ensureMatrixSdkLoggingConfigured } =
     await loadMatrixCreateClientRuntimeDeps();
   ensureMatrixSdkLoggingConfigured();
   const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
@@ -49,7 +51,7 @@ export async function createMatrixClient(params: {
   const userId = matrixClientUserId ?? "unknown";
   const persistStorage = params.persistStorage !== false;
   const storagePaths = persistStorage
-    ? resolveMatrixStoragePaths({
+    ? await resolveMatrixStoragePaths({
         homeserver,
         userId,
         accessToken: params.accessToken,
@@ -65,7 +67,7 @@ export async function createMatrixClient(params: {
       env: process.env,
     });
     fs.mkdirSync(storagePaths.rootDir, { recursive: true });
-    writeStorageMeta({
+    await writeStorageMeta({
       storagePaths,
       homeserver,
       userId,
@@ -78,6 +80,10 @@ export async function createMatrixClient(params: {
     ? `openclaw-matrix-${storagePaths.accountKey}-${storagePaths.tokenHash}`
     : undefined;
 
+  const syncStore = storagePaths
+    ? await SqliteBackedMatrixSyncStore.create(storagePaths.rootDir)
+    : undefined;
+
   return new MatrixClient(homeserver, params.accessToken, {
     userId: matrixClientUserId,
     password: params.password,
@@ -85,7 +91,7 @@ export async function createMatrixClient(params: {
     encryption: params.encryption,
     localTimeoutMs: params.localTimeoutMs,
     initialSyncLimit: params.initialSyncLimit,
-    storageRootDir: storagePaths?.rootDir,
+    syncStore,
     recoveryKeyPath: storagePaths?.recoveryKeyPath,
     idbSnapshotPath: storagePaths?.idbSnapshotPath,
     cryptoDatabasePrefix,

@@ -56,6 +56,7 @@ import { page as pluginPage } from "./pages/plugin/route.ts";
 import { pages as pluginsPages } from "./pages/plugins/route.ts";
 import { page as portalsPage } from "./pages/portals/route.ts";
 import { page as profilePage } from "./pages/profile/route.ts";
+import { page as searchPage } from "./pages/search/route.ts";
 import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
@@ -79,13 +80,8 @@ type AppRouteModule = {
   ) => string | undefined;
 };
 
-export type ApplicationRouter = Router<
-  RouteId,
-  ApplicationContext<RouteId>,
-  AppRouteModule,
-  unknown
->;
-type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
+export type ApplicationRouter = Router<RouteId, ApplicationContext, AppRouteModule, unknown>;
+type AppRoute = PageDefinition<RouteId, ApplicationContext, AppRouteModule>;
 
 const APP_ROUTE_TREE = [
   ...chatPages,
@@ -116,6 +112,7 @@ const APP_ROUTE_TREE = [
   sessionsPage,
   systemsPage,
   secretsPage,
+  searchPage,
   usagePage,
   debugPage,
   logsPage,
@@ -159,7 +156,7 @@ function canonicalRouteLocation(
 }
 
 export function createApplicationRouter(): ApplicationRouter {
-  const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
+  const router = createRouter<RouteId, ApplicationContext, AppRouteModule>({
     routes: appRoutes,
   });
   // The shared router intentionally matches exact paths only. People, Workboard
@@ -213,7 +210,7 @@ export async function startApplicationRouter(
   router: ApplicationRouter,
   history: RouterHistory,
   basePath: string,
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
 ): Promise<void> {
   setPluginTabSlugs(context.gateway.snapshot.hello?.controlUiTabs);
   let location = history.location();

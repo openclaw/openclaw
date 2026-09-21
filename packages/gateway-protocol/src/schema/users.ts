@@ -233,9 +233,14 @@ export const UsersPrefsGetResultSchema = Type.Union([
   closedObject({ status: Type.Literal("ok"), entries: UserPreferenceEntriesSchema }),
   closedObject({ status: Type.Literal("no_durable_identity") }),
 ]);
-export const UsersPrefsSetParamsSchema = closedObject({ entries: UserPreferenceSetEntriesSchema });
+export const UsersPrefsSetParamsSchema = closedObject({
+  entries: UserPreferenceSetEntriesSchema,
+  // JSON null expects an absent key, matching the null-as-removal write contract.
+  expectedEntries: Type.Optional(UserPreferenceSetEntriesSchema),
+});
 export const UsersPrefsSetResultSchema = Type.Union([
   closedObject({ status: Type.Literal("ok") }),
+  closedObject({ status: Type.Literal("conflict") }),
   closedObject({ status: Type.Literal("no_durable_identity") }),
 ]);
 export const UsersPrefsChangedEventSchema = closedObject({

@@ -18,6 +18,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { resolveQuarantineStorePath } from "../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -107,11 +108,17 @@ describe("backup SQLite ownership", () => {
           });
         try {
           const runtime = createTestRuntime();
+          const onSqliteSnapshots = vi.fn();
           const archive = await backupCreateCommand(runtime, {
             output,
             includeWorkspace: false,
             verify: true,
+            onSqliteSnapshots,
           });
+          expect(onSqliteSnapshots).toHaveBeenCalledExactlyOnceWith([
+            expect.objectContaining({ role: "global", sourcePath: globalPath }),
+            expect.objectContaining({ role: "agent", agentId: "main", sourcePath: agentPath }),
+          ]);
           expect(registered).toBe(true);
           expect(archive.verified).toBe(true);
           expect(archive.warnings ?? []).toEqual([]);
@@ -146,6 +153,20 @@ describe("backup SQLite ownership", () => {
             ]);
           } finally {
             restoredAgent.close();
+          }
+          const restoredQuarantine = new sqlite.DatabaseSync(
+            path.join(
+              restored.targetPath,
+              buildBackupArchivePath(archive.archiveRoot, resolveQuarantineStorePath(state.env)),
+            ),
+            { readOnly: true },
+          );
+          try {
+            expect(
+              restoredQuarantine.prepare("SELECT path FROM agent_integrity_verifications").all(),
+            ).toEqual([{ path: await fs.realpath(agentPath) }]);
+          } finally {
+            restoredQuarantine.close();
           }
         } finally {
           snapshot.mockRestore();

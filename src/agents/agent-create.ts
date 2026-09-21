@@ -83,6 +83,7 @@ type ConfigCommitReceipt = {
 type CreateAgentParams = {
   name?: string;
   role?: string;
+  purpose?: string;
   entry?: CreateAgentEntry;
   /** Internal authorization for onboarding to materialize the sole implicit `main` agent. */
   bootstrapMain?: boolean;
@@ -269,7 +270,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   const template = params.role ? await loadAgentRole(params.role) : undefined;
   const safeName = sanitizeAgentIdentityLine(rawName);
   const model = normalizeOptionalString(params.model);
-  const identity = template?.identity ??
+  const identity = (template ? { ...template.identity, ...params.entry?.identity } : undefined) ??
     params.entry?.identity ??
     createAgentIdentityConfig({
       name: safeName,
@@ -465,7 +466,20 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             dir: workspaceDir,
             beforePersistentApply: params.beforePersistentApply,
             ensureBootstrapFiles: !skipBootstrap,
-            ...(template ? { templates: template.files } : {}),
+            purpose: params.purpose,
+            ...(template
+              ? {
+                  templates: params.entry?.identity
+                    ? {
+                        ...template.files,
+                        [DEFAULT_IDENTITY_FILENAME]: mergeIdentityMarkdownContent(
+                          template.files[DEFAULT_IDENTITY_FILENAME],
+                          identity,
+                        ),
+                      }
+                    : template.files,
+                }
+              : {}),
             skipOptionalBootstrapFiles: template
               ? []
               : (params.skipOptionalBootstrapFiles ??

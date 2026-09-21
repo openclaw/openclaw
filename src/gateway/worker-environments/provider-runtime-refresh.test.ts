@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -18,7 +19,10 @@ describe("worker environment runtime upgrades", () => {
     ...support.BOOTSTRAP_RECEIPT,
     bundleHash: "b".repeat(64),
     openclawVersion: "2026.7.3",
-    protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+    protocolFeatures: [
+      WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+    ],
   };
 
   function setupUpgrade(
@@ -215,7 +219,10 @@ describe("worker environment runtime upgrades", () => {
   it("keeps an idle SSH machine through startup recovery when its runtime upgrade must retry", async () => {
     const h = setupUpgrade("ssh", "attached", {
       ...support.BOOTSTRAP_RECEIPT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+      ],
     });
     const recovery = createRecoveryService(h.placements, h.service);
     h.install.mockRejectedValueOnce(new Error("runtime download interrupted"));

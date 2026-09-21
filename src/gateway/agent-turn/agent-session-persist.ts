@@ -30,10 +30,10 @@ import {
 } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { recordSessionCreated } from "../../sessions/session-state-events.js";
+import { recordSessionCreated } from "../../sessions/session-created.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import {
@@ -534,7 +534,7 @@ export async function persistAgentSessionPhase(params: {
   const usableRequestedSessionId = patchBuild.usableRequestedSessionId;
   const freshness = patchBuild.freshness;
   if (createdNewEntry && sessionEntry) {
-    recordSessionCreated({
+    recordSessionCreated(params.cfg, {
       sessionKey: params.canonicalSessionKey,
       agentId: params.sessionAgentId,
       entry: sessionEntry,

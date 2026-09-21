@@ -1,3 +1,6 @@
+# shellcheck source=scripts/pr-lib/github.sh
+source "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/github.sh" || return 1
+
 resolve_head_push_url() {
   # shellcheck disable=SC1091
   source .local/pr-meta.env
@@ -28,11 +31,11 @@ resolve_head_push_url() {
 verify_prep_head_extends_hosted_head() {
   local expected_oid="$1"
   local prepared_head="${2:-HEAD}"
-  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${expected_oid}^{commit}" 2>/dev/null; then
+  if ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "${expected_oid}^{commit}" 2>/dev/null; then
     echo "Prep sync cannot resolve hosted head $expected_oid locally; re-run prepare-init." >&2
     return 1
   fi
-  if ! git merge-base --is-ancestor "$expected_oid" "$prepared_head"; then
+  if ! pr_git merge-base --is-ancestor "$expected_oid" "$prepared_head"; then
     echo "Prep sync refused rewritten history: hosted head $expected_oid is not an ancestor of prepared head $prepared_head." >&2
     echo "Recreate the prep branch from the hosted PR head and replay only reviewed fixup commits." >&2
     return 1
@@ -42,12 +45,12 @@ verify_prep_head_extends_hosted_head() {
 classify_replaced_hosted_ancestry() {
   local hosted_head="$1"
   local prepared_head="$2"
-  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${hosted_head}^{commit}" 2>/dev/null ||
-    ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${prepared_head}^{commit}" 2>/dev/null; then
+  if ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "${hosted_head}^{commit}" 2>/dev/null ||
+    ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "${prepared_head}^{commit}" 2>/dev/null; then
     echo "Cannot inspect hosted and prepared commits; re-run prepare-init." >&2
     return 1
   fi
-  if git merge-base --is-ancestor "$hosted_head" "$prepared_head"; then
+  if pr_git merge-base --is-ancestor "$hosted_head" "$prepared_head"; then
     printf 'false\n'
   else
     printf 'true\n'
@@ -63,7 +66,7 @@ graphql_push_to_fork() {
   verify_prep_head_extends_hosted_head "$expected_oid" || return 1
 
   local merge_commit
-  merge_commit=$(git rev-list --min-parents=2 --max-count=1 "$expected_oid"..HEAD)
+  merge_commit=$(pr_git rev-list --min-parents=2 --max-count=1 "$expected_oid"..HEAD)
   if [ -n "$merge_commit" ]; then
     echo "GraphQL push cannot preserve merge ancestry; publish the verified signed merge with git transport." >&2
     return 1
@@ -73,7 +76,7 @@ graphql_push_to_fork() {
   local deletions="[]"
 
   local added_files
-  added_files=$(git diff --no-renames --name-only --diff-filter=AM "$expected_oid" HEAD)
+  added_files=$(pr_git diff --no-renames --name-only --diff-filter=AM "$expected_oid" HEAD)
   if [ -n "$added_files" ]; then
     additions="["
     local first=true
@@ -81,7 +84,7 @@ graphql_push_to_fork() {
       [ -n "$fpath" ] || continue
 
       local tree_entry
-      tree_entry=$(git ls-tree HEAD -- "$fpath")
+      tree_entry=$(pr_git ls-tree HEAD -- "$fpath")
       if [ -z "$tree_entry" ]; then
         echo "GraphQL push could not resolve path in HEAD tree: $fpath" >&2
         return 1
@@ -100,14 +103,14 @@ graphql_push_to_fork() {
       fi
 
       local blob_size
-      blob_size=$(git cat-file -s "$file_oid")
+      blob_size=$(pr_git cat-file -s "$file_oid")
       if [ "$blob_size" -gt "$max_blob_bytes" ]; then
         echo "GraphQL push refused large file $fpath (${blob_size} bytes > ${max_blob_bytes})" >&2
         return 1
       fi
 
       local b64
-      b64=$(git cat-file -p "$file_oid" | base64 | tr -d '\n')
+      b64=$(pr_git cat-file -p "$file_oid" | base64 | tr -d '\n')
       if [ "$first" = true ]; then first=false; else additions+=","; fi
       additions+="{\"path\":$(printf '%s' "$fpath" | jq -Rs .),\"contents\":$(printf '%s' "$b64" | jq -Rs .)}"
     done <<< "$added_files"
@@ -115,7 +118,7 @@ graphql_push_to_fork() {
   fi
 
   local deleted_files
-  deleted_files=$(git diff --no-renames --name-only --diff-filter=D "$expected_oid" HEAD)
+  deleted_files=$(pr_git diff --no-renames --name-only --diff-filter=D "$expected_oid" HEAD)
   if [ -n "$deleted_files" ]; then
     deletions="["
     local first=true
@@ -128,9 +131,9 @@ graphql_push_to_fork() {
   fi
 
   local commit_headline
-  commit_headline=$(git log -1 --format=%s HEAD)
+  commit_headline=$(pr_git log -1 --format=%s HEAD)
   local commit_body
-  commit_body=$(git log -1 --format=%b HEAD)
+  commit_body=$(pr_git log -1 --format=%b HEAD)
 
   local query
   query=$(cat <<'GRAPHQL'
@@ -178,7 +181,7 @@ GRAPHQL
   payload_file=$(mktemp) || return 1
   printf '%s\n' "$payload" > "$payload_file"
   local result
-  result=$(gh_plain api graphql --input "$payload_file" 2>&1) || {
+  result=$(pr_gh_plain api graphql --input "$payload_file" 2>&1) || {
     rm -f "$payload_file"
     echo "GraphQL push failed: $result" >&2
     return 1
@@ -228,7 +231,7 @@ resolve_prhead_remote_sha() {
   local pr_head="$1"
 
   local remote_sha
-  remote_sha=$(git ls-remote "$PRHEAD_REMOTE_URL" "refs/heads/$pr_head" 2>/dev/null | awk '{print $1}' || true)
+  remote_sha=$(pr_git ls-remote "$PRHEAD_REMOTE_URL" "refs/heads/$pr_head" 2>/dev/null | awk '{print $1}' || true)
   if [ -z "$remote_sha" ]; then
     echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
     exit 1
@@ -241,14 +244,14 @@ verify_prep_first_parent_range_signed() {
   local base_sha="$1"
   local prep_head_sha="$2"
 
-  git merge-base --is-ancestor "$base_sha" "$prep_head_sha" || return 1
+  pr_git merge-base --is-ancestor "$base_sha" "$prep_head_sha" || return 1
 
   local commits
-  commits=$(git rev-list --first-parent "$base_sha..$prep_head_sha") || return 1
+  commits=$(pr_git rev-list --first-parent "$base_sha..$prep_head_sha") || return 1
   local commit
   while IFS= read -r commit; do
     [ -n "$commit" ] || continue
-    git verify-commit "$commit" >/dev/null 2>&1 || return 1
+    pr_git verify-commit "$commit" >/dev/null 2>&1 || return 1
   done <<< "$commits"
 }
 
@@ -277,7 +280,7 @@ push_prep_head_once() {
   fi
 
   local push_output push_status
-  if push_output=$(git push "--force-with-lease=refs/heads/$pr_head:$lease_sha" "$PRHEAD_REMOTE_URL" "$prep_head_sha:refs/heads/$pr_head" 2>&1); then
+  if push_output=$(pr_git push "--force-with-lease=refs/heads/$pr_head:$lease_sha" "$PRHEAD_REMOTE_URL" "$prep_head_sha:refs/heads/$pr_head" 2>&1); then
     printf '%s\n' "$push_output" >&2
   else
     push_status=$?
@@ -302,7 +305,7 @@ push_prep_head_to_pr_branch() {
   local lease_sha="$4"
   local result_env_path="${5:-.local/push-result.env}"
   local local_prep_head_sha
-  local_prep_head_sha=$(git rev-parse HEAD) || return 1
+  local_prep_head_sha=$(pr_git rev-parse HEAD) || return 1
 
   verify_prep_head_extends_hosted_head "$lease_sha" "$prep_head_sha" || return 1
   setup_prhead_remote
@@ -331,13 +334,13 @@ push_prep_head_to_pr_branch() {
 
   if ! wait_for_pr_head_sha "$pr" "$prep_head_sha" 8 3; then
     local observed_sha
-    observed_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+    observed_sha=$(pr_gh pr view "$pr" --json headRefOid --jq .headRefOid) || return 1
     echo "Pushed head SHA propagation timed out. expected=$prep_head_sha observed=$observed_sha"
     exit 1
   fi
 
   local pr_head_sha_after
-  pr_head_sha_after=$(gh pr view "$pr" --json headRefOid --jq .headRefOid) || return 1
+  pr_head_sha_after=$(pr_gh pr view "$pr" --json headRefOid --jq .headRefOid) || return 1
   if [ "$pr_head_sha_after" != "$prep_head_sha" ]; then
     echo "PR head changed after publication (expected $prep_head_sha, observed $pr_head_sha_after)."
     return 1
@@ -346,9 +349,9 @@ push_prep_head_to_pr_branch() {
   fetch_pr_head "$pr" "$prep_head_sha" "refs/heads/pr-$pr-verify" || return 1
   local local_prep_tree
   local remote_prep_tree
-  local_prep_tree=$(git rev-parse "${local_prep_head_sha}^{tree}")
-  remote_prep_tree=$(git rev-parse "pr-$pr-verify^{tree}")
-  git branch -D "pr-$pr-verify" 2>/dev/null || true
+  local_prep_tree=$(pr_git rev-parse "${local_prep_head_sha}^{tree}")
+  remote_prep_tree=$(pr_git rev-parse "pr-$pr-verify^{tree}")
+  pr_git branch -D "pr-$pr-verify" 2>/dev/null || true
   if [ "$local_prep_tree" != "$remote_prep_tree" ]; then
     echo "Pushed PR head tree differs from the prepared local tree."
     exit 1

@@ -3,6 +3,7 @@
 // homage parts, ledge visitors, and the bottle. Pure presentation; all
 // selection logic stays in lobster-pet-look.ts.
 import { svg, type TemplateResult } from "lit";
+import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import type {
   LobsterPasserKind,
   LobsterPetAccessory,
@@ -611,7 +612,7 @@ function renderJellyfishSvg() {
 }
 
 export const PASSER_SPRITES: Record<
-  Exclude<LobsterPasserKind, "stranger">,
+  Exclude<LobsterPasserKind, "stranger" | ThemeCritterId>,
   () => TemplateResult
 > = {
   crab: renderCrabSvg,
@@ -655,7 +656,7 @@ export const BALLOON = svg`
   </svg>
 `;
 
-export const PASSER_TITLES: Record<LobsterPasserKind, string> = {
+export const PASSER_TITLES: Record<Exclude<LobsterPasserKind, ThemeCritterId>, string> = {
   stranger: "a stranger",
   crab: "definitely a lobster",
   snail: "in no particular hurry",

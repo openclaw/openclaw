@@ -48,19 +48,47 @@ do not clear site data while drafts or queued messages still need recovery.
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
-stays visible with a floating amber "Gateway connection lost — Reconnecting…" pill under the top
-bar while the client retries automatically with backoff (800 ms up to 15 s). Live updates and
-realtime/session actions pause until the connection returns; **Retry now** in the pill forces an
-immediate attempt. Chat remains editable: ordinary text and attachment sends are kept in the
-current tab's gateway/session-scoped browser storage, shown as waiting for reconnect, and sent
-automatically when the Gateway returns. Live controls and slash commands remain unavailable while
-offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
-is not replayed because newer work may start in that session before the connection returns.
+stays visible, and one connection status in its sidebar footer explains whether the Gateway is
+suspending, suspended, restarting, reconnecting, or finishing recovery. Planned transitions and
+automatic reconnect use a calm presentation; authentication and other failures that need your
+attention keep their explanation and recovery action. The same status appears in the macOS app's
+embedded dashboard. Connection status does not replace the Gateway name in the account menu.
+
+The client retries ordinary connection loss automatically with backoff (800 ms up to 15 s).
+Open the account menu and use **Retry now** to request an immediate attempt when offered.
+Sign-in failures use the sign-in flow, and a required dashboard refresh uses its reload flow;
+retrying the connection does not replace either action. Live updates and realtime/session actions pause until the connection
+returns. Chat remains editable, with a conversation-specific outbox notice instead of another
+global connection warning.
+
+Ordinary text and attachment sends require successful admission to the current tab's
+Gateway/session-scoped browser outbox. Eligible messages resume automatically after connection
+and account recovery, but an active run, an open queued-message edit, or uncertain previous
+delivery can keep them waiting. **Inbox → System** shows local submissions that failed or
+need delivery review, with **Review** opening their conversation and its existing recovery
+controls. Ordinary queued messages stay in the chat queue; they do not raise Inbox attention.
+The account and connection indicators describe identity and connectivity, not message delivery.
+The composer count covers only its conversation and does not promise automatic sending.
+Draft text and saved messages awaiting destination recovery are separate.
+
+These Inbox entries are a read-only view of the existing browser-tab/Gateway outbox, not a new
+per-person or cross-device inbox. They show available conversation labels, not message text,
+attachment names, or private error details. Review does not retry or discard anything, and
+entries cannot be dismissed independently of their pending copy. Local review remains available
+while disconnected; server-dependent Inbox actions remain unavailable. Return from Settings
+to the workspace to open Inbox.
+If storage fails, the composer keeps the unsent input and shows recovery guidance.
+
+Controls that need a live connection stay unavailable while offline. **Stop** can queue an exact
+local run ID for replay. A session-only stop is not replayed because newer work may start in that
+session before the connection returns.
 
 Queued messages follow the order shown in the queue, including moves made while
 attachment bytes are loading after reconnect. A message already being sent keeps its place.
 If another pane is editing a message, finish or cancel that edit before moving
 messages across it. A successful retry clears that edit-conflict notice.
+Opening a queued-message editor after the other pane releases its edit clears the earlier
+edit-conflict notice.
 
 Editing an unsent queued message remains safe if the connection drops mid-edit.
 Open queued-message edits stay available when you switch conversations, even after
@@ -103,7 +131,16 @@ reload, follow the displayed save or cancel guidance, then try again.
 If chat history times out, its **Retry** action reloads the saved conversation and restores
 its live session subscription, including approval updates.
 
+When the Gateway confirms that it holds the same pending input, the Control UI clears the
+uncertain-delivery warning without sending the message again. The browser keeps its retry
+payload until consumption or cancellation is confirmed. If delivery is still unknown,
+the review warning remains.
+
 Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Loading older history shows the saved message in its original position without adding a second copy.
+
+Retiring a delivered attachment does not discard the run's completion. If the browser misses
+that completion, a queue recovery read that confirms the same session and run have finished
+clears the stale running indicator and resumes queued input.
 
 Queued attachments use binary Blobs in the browser's IndexedDB; the outbox keeps only delivery
 metadata and payload references in session storage. Attachment bytes stay with the queued input;
@@ -147,6 +184,11 @@ undo or cancel work the Gateway already accepted. Later queued messages stay pau
 unconfirmed message is resolved or discarded, and the queue explains that blockage. Discarding the
 earlier message lets the next queued message proceed when the session is ready. Unconfirmed local
 commands keep their retry/discard queue controls.
+
+An ordinary message rejected by the Gateway stays in the conversation with a **Not sent**
+footer. Use **Retry** to try again or **Discard** to remove its pending browser copy.
+Discard stays effective after reloading the tab; it does not cancel Gateway work or
+remove messages already in the conversation history.
 
 If the Gateway reports that a `/steer` or `/redirect` message failed to start, the Control UI
 restores the submitted draft when the composer is still empty. It preserves newer text and

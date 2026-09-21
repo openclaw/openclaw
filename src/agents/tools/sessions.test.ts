@@ -23,7 +23,6 @@ import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js
 import { extractStoredAssistantText } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
-const inProcessGatewayRequestMock = vi.fn((opts: unknown) => callGatewayMock(opts));
 const inProcessCreationMock = vi.fn(
   async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
 );
@@ -51,10 +50,12 @@ vi.mock("../../gateway/call.js", async (importOriginal) => {
   };
 });
 vi.mock("./in-process-gateway.js", () => ({
-  callAgentToolGatewayRequest: (opts: unknown) => inProcessGatewayRequestMock(opts),
+  callAgentToolGatewayRequest: (opts: unknown) => callGatewayMock(opts),
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),
   hasInProcessGatewayToolContext: () => inProcessGatewayContextAvailable,
+  getInProcessGatewayToolContext: () => undefined,
+  hasGatewayToolRoutingContext: () => false,
   runWithGatewayToolCleanupContext: <T>(run: () => T): T => run(),
 }));
 vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
@@ -437,8 +438,6 @@ describe("extractStoredAssistantText sanitization", () => {
 beforeEach(() => {
   recordParticipantMock.mockClear();
   facadeRuntimeMock.sessionKeyResolvers.clear();
-  inProcessGatewayRequestMock.mockReset();
-  inProcessGatewayRequestMock.mockImplementation((opts: unknown) => callGatewayMock(opts));
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
@@ -1910,7 +1909,6 @@ describe("sessions_send gating", () => {
     { label: "cron with direct token", key: "agent:main:cron:direct:peer-1" },
     { label: "hook with direct token", key: "agent:main:hook:direct:peer-1" },
     { label: "hook with dm token", key: "agent:main:hook:dm:peer-1" },
-    { label: "subagent with direct token", key: "agent:main:subagent:direct:peer-1" },
     { label: "nested agent owner", key: "agent:main:agent:worker:feishu:direct:peer-1" },
     {
       label: "thread-scoped direct conversation",

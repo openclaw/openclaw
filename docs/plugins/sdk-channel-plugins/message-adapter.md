@@ -94,6 +94,13 @@ explicit output until the next breaking SDK release. New callers should omit
 them and use `streaming.progress.toolProgress` to control tool rows with the
 standard progress markers.
 
+When consuming prepared agent items, create the compositor with `preparedItems: true`.
+`pushItemEvent` then owns visible tool progress; raw tool, command-output, and
+patch callbacks retain diagnostic bookkeeping without adding duplicate rows.
+Omit this option for existing plugins that use raw callbacks. Their arguments,
+detail mode, custom line builder, and terminal command/patch rendering remain
+supported. This is an adapter capability, not a user configuration setting.
+
 ### Quiet acknowledgement and coalesced progress
 
 `createStatusReactionController({ presentation: "acknowledgement", ... })`

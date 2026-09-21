@@ -2,7 +2,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   createFailureMessage,
-  createInterruptedTurnMessage,
+  appendInterruptedTurnMessage,
 } from "../../../../packages/agent-core/src/turn-interruption.js";
 import {
   loadTranscriptEventsSync,
@@ -20,7 +20,10 @@ import {
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -167,18 +170,24 @@ async function withInterruptedTurn(
       original.appendMessage(
         createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
       );
-      const interrupted = createInterruptedTurnMessage();
-      if (interrupted.role !== "custom") {
-        throw new Error("expected interruption context");
-      }
-      original.appendCustomMessageEntry(
-        interrupted.customType,
-        interrupted.content,
-        interrupted.display,
-      );
+      await appendInterruptedTurnMessage([], (event) => {
+        if (event.type !== "message_end") {
+          return;
+        }
+        const interrupted = event.message;
+        if (interrupted.role !== "custom") {
+          throw new Error("expected interruption context");
+        }
+        original.appendCustomMessageEntry(
+          interrupted.customType,
+          interrupted.content,
+          interrupted.display,
+        );
+      });
     }
     previous.finishPendingInput!("interrupted");
     rotateAgentEventLifecycleGeneration();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const recorder = makeRecorder();
     await recorder.stageApproved!({ runId, assertCurrent: () => {} });

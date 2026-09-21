@@ -26,7 +26,6 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramMessageThreadSpec,
-  resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import {
@@ -92,7 +91,6 @@ export type TelegramCommandDispatch = TelegramCommandExecutorParams &
     runtimeCfg: OpenClawConfig;
     runtimeTelegramCfg: TelegramAccountConfig;
     turnSettings: ReturnType<typeof resolveTelegramMessageTurnSettings>;
-    threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     threadParams: ReturnType<typeof buildTelegramThreadParams>;
     route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
     mediaLocalRoots: readonly string[] | undefined;
@@ -392,10 +390,7 @@ export async function prepareTelegramCommandDispatch(
     dmThreadId: auth.threadSpec.scope === "dm" ? auth.threadSpec.id : undefined,
     botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(params.botUser),
   });
-  const buildDeliveryBaseOptions = (keys?: {
-    sessionKeyForInternalHooks?: string;
-    policySessionKey?: string;
-  }): DeliveryBaseOptions => ({
+  const buildDeliveryBaseOptions: TelegramCommandDispatch["buildDeliveryBaseOptions"] = (keys) => ({
     cfg: runtimeCfg,
     ownerAgentId: params.opts.ownerAgentId,
     chatId: String(auth.chatId),
@@ -424,7 +419,6 @@ export async function prepareTelegramCommandDispatch(
     runtimeTelegramCfg,
     turnSettings,
     ...auth,
-    threadSpec: auth.threadSpec,
     threadParams: buildTelegramThreadParams(auth.threadSpec),
     route,
     mediaLocalRoots,

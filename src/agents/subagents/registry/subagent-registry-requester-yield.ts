@@ -1,3 +1,5 @@
+import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
+import { captureTaskProgressContinuationForRequesterTurn } from "../../../tasks/task-progress-requester.js";
 import { scheduleYieldedSubagentRunProgress } from "../../../tasks/task-registry-progress.js";
 /** Settles durable child ownership when the spawning requester turn ends. */
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
@@ -6,6 +8,7 @@ import {
   promoteRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
+import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
@@ -63,6 +66,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   requesterTurnRunId: string;
   requesterYielded: boolean;
   acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
+  progressPresentation?: ProgressContinuationState;
   runs: Map<string, SubagentRunRecord>;
   persistOrThrow(...runIds: string[]): void;
   schedule(runId: string, entry: SubagentRunRecord, kind: "completion" | "settle"): void;
@@ -155,6 +159,14 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   if (params.requesterYielded && !requesterAlreadyDeliveredFinal) {
     rearmGeneration =
       Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
+    const progressOperationId = (
+      params.progressPresentation ??
+      captureTaskProgressContinuationForRequesterTurn({
+        requesterSessionKey,
+        requesterAgentId: params.requesterAgentId,
+        requesterTurnRunId,
+      })
+    )?.operationId;
     for (const entry of entries) {
       const existing = entry.requesterSettleWake;
       const completionEnded = typeof entry.execution.endedAt === "number";
@@ -175,6 +187,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
         requesterYieldBatch: true,
         ...(completionEnded ? { afterRequesterYield: true } : {}),
         rearmGeneration,
+        progressOperationId,
         ...(existing?.retireAfterSettle === true || entry.retireAfterRequesterTurn === true
           ? { retireAfterSettle: true }
           : {}),
@@ -195,6 +208,16 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       }
       entry.requesterTurnRunId = undefined;
       entry.requesterTurnYielded = undefined;
+      if (
+        entry.completionTarget === "parent" &&
+        typeof entry.execution.endedAt === "number" &&
+        entry.delivery?.status === "pending"
+      ) {
+        // Private delivery becomes eligible only when its spawning turn releases it.
+        entry.delivery.windowStartedAt ??= Date.now();
+        entry.delivery.deadlineAt ??=
+          entry.delivery.windowStartedAt + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
+      }
       if (entry.retireAfterRequesterTurn === true) {
         if (entry.requesterSettleWake) {
           entry.requesterSettleWake.retireAfterSettle = true;

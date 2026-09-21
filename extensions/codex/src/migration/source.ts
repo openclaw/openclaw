@@ -464,7 +464,7 @@ type SourcePluginRuntimeAppFact = CodexPluginMigrationAppFact & {
 
 function sourcePluginAppFactWithInventory(
   app: CodexPluginMigrationAppFact,
-  info: v2.AppInfo | undefined,
+  info: CodexAppServerRequestResult<"app/read">["apps"][number] | undefined,
   installedApp?: v2.InstalledApp,
 ): SourcePluginRuntimeAppFact {
   if (!installedApp) {
@@ -476,14 +476,14 @@ function sourcePluginAppFactWithInventory(
       : { ...app, isEnabled: false };
   }
   if (!installedApp.enabled) {
-    return { ...app, isAccessible: info.isAccessible, isEnabled: false };
+    return { ...app, isAccessible: true, isEnabled: false };
   }
   return {
     ...app,
     // Metadata proves authorization, but only the committed runtime proves
     // that this enabled app actually exposes a model-callable tool.
-    isAccessible: info.isAccessible && installedApp.callable,
-    isEnabled: info.isEnabled,
+    isAccessible: installedApp.callable,
+    isEnabled: installedApp.enabled,
     ...(!installedApp.callable ? { isCallable: false as const } : {}),
   };
 }

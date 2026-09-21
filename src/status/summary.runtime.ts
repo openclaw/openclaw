@@ -6,10 +6,8 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  readAcpSessionMetaForEntry,
-  resolveSessionStorePathForAcp,
-} from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import {
@@ -223,7 +221,7 @@ function resolveSessionRuntime(params: {
   });
   const runtime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
-    agentId: params.agentId ?? "",
+    agentId: params.agentId ?? acpAgentId,
     provider: params.provider,
     model: params.model,
     sessionKey: acpSessionKey,

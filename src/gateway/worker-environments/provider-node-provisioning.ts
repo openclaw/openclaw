@@ -333,6 +333,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         // Remote execution uses its harness runtime; unspecified mode retains worker prewarming.
         prewarm: record.profileSnapshot.executionMode !== "remote-exec",
         signal: cancellation?.signal,
+        assertCurrent,
       });
       assertCurrent();
       if (preparation) {

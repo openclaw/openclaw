@@ -398,6 +398,12 @@ describe("google gemini cli backend auth bridge", () => {
           await stageGeminiPreparedExecution(prepared);
           const systemSettingsPath = prepared?.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
           expect(systemSettingsPath).toBeTruthy();
+          if (process.platform !== "win32") {
+            const workspaceStat = await fs.stat(path.dirname(systemSettingsPath ?? ""));
+            const settingsStat = await fs.stat(systemSettingsPath ?? "");
+            expect(workspaceStat.mode & 0o777).toBe(0o700);
+            expect(settingsStat.mode & 0o777).toBe(0o600);
+          }
           const settings = JSON.parse(await fs.readFile(systemSettingsPath ?? "", "utf8")) as {
             tools?: {
               core?: string[];
@@ -576,7 +582,10 @@ describe("google gemini cli backend auth bridge", () => {
       expect(systemSettingsPath).not.toBe(inheritedSettingsPath);
       expect(path.dirname(systemSettingsPath ?? "")).not.toBe(home);
       expect(
-        path.relative(resolvePreferredOpenClawTmpDir(), path.dirname(systemSettingsPath ?? "")),
+        path.relative(
+          await fs.realpath(resolvePreferredOpenClawTmpDir()),
+          path.dirname(systemSettingsPath ?? ""),
+        ),
       ).toMatch(/^openclaw-gemini-cli-/);
       expect(prepared?.env?.GEMINI_FORCE_FILE_STORAGE).toBe("true");
       expect(prepared?.env?.GOOGLE_CLOUD_PROJECT).toBe("profile-project");
@@ -631,6 +640,13 @@ describe("google gemini cli backend auth bridge", () => {
       expect(preparedAgain?.env?.GEMINI_CLI_HOME).toBe(home);
       await expect(fs.access(sessionMarker)).resolves.toBeUndefined();
       await expect(fs.access(cachedCredentialsPath)).rejects.toThrow();
+      await prepared?.cleanup?.();
+      await preparedAgain?.cleanup?.();
+      await expect(fs.access(sessionMarker)).resolves.toBeUndefined();
+      await expect(fs.access(path.dirname(systemSettingsPath ?? ""))).rejects.toThrow();
+      await expect(
+        fs.access(path.dirname(preparedAgain?.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? "")),
+      ).rejects.toThrow();
     } finally {
       for (const cleanup of cleanups.toReversed()) {
         await cleanup();

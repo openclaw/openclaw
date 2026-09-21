@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type Static, type TSchema, Type } from "typebox";
 import { Compile } from "typebox/compile";
+import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeHostCommandAvailabilityContext,
@@ -85,8 +86,8 @@ const optionalReferenceFields = {
   deliveryMode: Type.Optional(Type.Enum(DELIVERY_MODES, { type: "string" })),
 };
 
-function actionObject<const Properties extends object>(
-  actions: readonly string[],
+function actionObject<const Actions extends string[], const Properties extends object>(
+  actions: readonly [...Actions],
   properties: Properties,
 ) {
   return Type.Object(
@@ -465,13 +466,11 @@ export function compileComputerUseValidator<const Schema extends TSchema>(
   return (value: unknown): value is Static<Schema> => validator.Check(value);
 }
 
-const validateComputerActParams = compileComputerUseValidator(ComputerActParamsSchema);
-const validateComputerActResult = compileComputerUseValidator(ComputerActResultSchema);
-const validateComputerUseCapabilityDescriptor = compileComputerUseValidator(
-  ComputerUseCapabilityDescriptorSchema,
-);
-const validateScreenSnapshotParams = compileComputerUseValidator(ScreenSnapshotParamsSchema);
-const validateScreenSnapshotResult = compileComputerUseValidator(ScreenSnapshotResultSchema);
+const validateComputerActParams = lazyCompile(ComputerActParamsSchema);
+const validateComputerActResult = lazyCompile(ComputerActResultSchema);
+const validateComputerUseCapabilityDescriptor = lazyCompile(ComputerUseCapabilityDescriptorSchema);
+const validateScreenSnapshotParams = lazyCompile(ScreenSnapshotParamsSchema);
+const validateScreenSnapshotResult = lazyCompile(ScreenSnapshotResultSchema);
 
 function parseParamsJSON<Value>(
   paramsJSON: string | null | undefined,
@@ -572,6 +571,8 @@ export function registerComputerUseProvider(
   let execution: { id: string; promise: Promise<ComputerUseExecution> } | undefined;
   let closingPromise: Promise<void> | undefined;
   let pendingClose: Promise<void> | undefined;
+  const hasActiveWork = () =>
+    execution !== undefined || closingPromise !== undefined || pendingClose !== undefined;
 
   const executionEnvelopeFromParams = (paramsJSON: string | null | undefined) => {
     let value: unknown;
@@ -688,6 +689,7 @@ export function registerComputerUseProvider(
     dangerous: false,
     prepare: (context) => provider.prepare?.(context),
     isAvailable: () => provider.isAvailable(),
+    hasActiveWork,
     watchAvailability: (context, onChange) => {
       const stopWatching = provider.watchAvailability?.(context, onChange);
       return () => {
@@ -720,6 +722,7 @@ export function registerComputerUseProvider(
     dangerous: true,
     computerUse: () => provider.capabilities(),
     isAvailable: () => provider.isAvailable(),
+    hasActiveWork,
     handle: async (paramsJSON, _io, context) => {
       const envelope = executionEnvelopeFromParams(paramsJSON);
       if (!envelope.executionId) {

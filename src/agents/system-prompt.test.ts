@@ -826,7 +826,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "- exec: Run JavaScript/TypeScript Code Mode; call exact catalog tools from code, never shell/Python/imports",
+      "- exec: Run JavaScript Code Mode; call exact catalog tools from code, never shell/Python/imports",
     );
     expect(prompt).toContain("- wait: Resume a suspended Code Mode exec");
     expect(prompt).not.toContain("- exec: Run shell");
@@ -1685,17 +1685,6 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("adds USER guidance when a user-model file is present", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      contextFiles: [{ path: "USER.md", content: "- Prefer concise answers." }],
-    });
-
-    expect(prompt).toContain(
-      "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
-    );
-  });
-
   it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1836,9 +1825,9 @@ describe("buildAgentSystemPrompt", () => {
     const minimal = buildPreferPrompt(["sessions_spawn", "sessions_send"], "minimal");
 
     expect(withSend).toContain(
-      "later turns in a kept session do not report back; follow up via `sessions_send`.",
+      "later turns in a kept OpenClaw session do not report back; follow up via `sessions_send`.",
     );
-    expect(withoutSend).toContain("later turns in a kept session do not report back.");
+    expect(withoutSend).toContain("later turns in a kept OpenClaw session do not report back.");
     expect(withoutSend).not.toContain("follow up via `sessions_send`");
     expect(minimal).not.toContain("## Delegation");
   });

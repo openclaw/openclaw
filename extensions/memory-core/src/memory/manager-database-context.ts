@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
+  borrowOpenClawAgentDatabase,
   openSqliteWorkerStore,
   openOpenClawAgentSqliteWorkerStore,
   runSqliteWorkerStoreWrite,
@@ -19,10 +20,11 @@ import {
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
+import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import {
-  MemoryIndexRevisionConflictError,
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
+  openMemoryDatabaseReadOnlyAtPath,
 } from "./manager-db.js";
 import type {
   MemoryPublicationConnection,
@@ -52,6 +54,32 @@ export class MemoryIndexDatabase {
   private shadowClose?: Promise<void>;
   private releaseInProgress = false;
   shadowReleased = false;
+
+  static openPublished(params: {
+    agentId: string;
+    writeOptions: Parameters<typeof withOpenClawAgentDatabaseWrite>[0] & { path: string };
+    readOnly: boolean;
+    allowExtension: boolean;
+    maintenanceSource?: MemoryIndexDatabase;
+  }): MemoryIndexDatabase {
+    const connection = params.readOnly
+      ? openMemoryDatabaseReadOnlyAtPath(
+          params.writeOptions.path,
+          params.allowExtension,
+          params.agentId,
+        )
+      : borrowOpenClawAgentDatabase(params.writeOptions);
+    if (params.maintenanceSource && connection.db !== params.maintenanceSource.db) {
+      connection.release();
+      throw new Error("Memory maintenance source connection changed");
+    }
+    return new MemoryIndexDatabase(
+      connection.db,
+      connection.release,
+      params.readOnly,
+      params.writeOptions,
+    );
+  }
 
   static openShadow(filename: string, allowExtension: boolean): MemoryIndexDatabase {
     let database: MemoryIndexDatabase | undefined;

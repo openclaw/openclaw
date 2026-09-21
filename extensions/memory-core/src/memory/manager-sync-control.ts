@@ -1,4 +1,3 @@
-// Memory Core plugin module implements manager sync control behavior.
 import type {
   MemorySessionSyncTarget,
   MemorySyncParams,

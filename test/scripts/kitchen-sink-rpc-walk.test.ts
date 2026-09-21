@@ -70,6 +70,7 @@ import {
   resolveWindowsTaskkillPath,
 } from "../../scripts/lib/windows-taskkill.mjs";
 import { formatGatewayClientRequestErrorJson } from "../../src/gateway/call.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { waitForChildClose } from "../helpers/process-wait.js";
 import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -200,7 +201,7 @@ describe("kitchen-sink RPC isolated state", () => {
     { runtime: "Bun", entry: "", files: ["dist/index.js"], selected: "dist/index.js" },
     { runtime: "Node", entry: "missing.mjs", files: ["dist/index.mjs"], selected: null },
   ])("preserves $runtime entry selection for $entry with $files", async (row, context) => {
-    let executable = process.execPath;
+    let executable = row.runtime === "Node" ? resolveTestNodeExecPath() : process.execPath;
     if (row.runtime === "Bun") {
       try {
         executable = (await runCommand("bun", ["-p", "process.execPath"])).stdout.trim();

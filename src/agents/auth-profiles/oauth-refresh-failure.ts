@@ -321,7 +321,7 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
 /** Build the login command operators should run after OAuth refresh failure. */
 export function buildOAuthRefreshFailureLoginCommand(
   provider: string | null | undefined,
-  options?: { profileId?: string | null; surface?: "cli" | "chat" },
+  options?: { profileId?: string | null; agentId?: string; surface?: "cli" | "chat" },
 ): string {
   const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
   if (options?.surface === "chat") {
@@ -330,6 +330,8 @@ export function buildOAuthRefreshFailureLoginCommand(
     );
   }
   const sanitizedProfileId = sanitizeOAuthRefreshFailureProfileId(options?.profileId);
+  const agentId = options?.agentId ? sanitizeForLog(options.agentId).trim() : undefined;
+  const agentOption = agentId ? ` --agent ${quoteShellArg(agentId)}` : "";
   if (sanitizedProvider === "claude-cli") {
     // claude-cli is not a standalone provider id; it is the Anthropic provider
     // accessed via the CLI auth method. Refresh the local Claude CLI session
@@ -337,18 +339,18 @@ export function buildOAuthRefreshFailureLoginCommand(
     const claudeLoginCommand = formatCliCommand("claude auth login");
     const openclawLoginCommand = formatCliCommand(
       sanitizedProfileId
-        ? `openclaw models auth login --provider anthropic --method cli --profile-id ${quoteShellArg(sanitizedProfileId)}`
-        : "openclaw models auth login --provider anthropic --method cli",
+        ? `openclaw models auth login --provider anthropic --method cli --profile-id ${quoteShellArg(sanitizedProfileId)}${agentOption}`
+        : `openclaw models auth login --provider anthropic --method cli${agentOption}`,
     );
     return `${claudeLoginCommand} && ${openclawLoginCommand}`;
   }
   return sanitizedProvider
     ? formatCliCommand(
         sanitizedProfileId
-          ? `openclaw models auth login --provider ${sanitizedProvider} --profile-id ${quoteShellArg(sanitizedProfileId)}`
-          : `openclaw models auth login --provider ${sanitizedProvider}`,
+          ? `openclaw models auth login --provider ${sanitizedProvider} --profile-id ${quoteShellArg(sanitizedProfileId)}${agentOption}`
+          : `openclaw models auth login --provider ${sanitizedProvider}${agentOption}`,
       )
-    : formatCliCommand("openclaw models auth login");
+    : formatCliCommand(`openclaw models auth login${agentOption}`);
 }
 
 /** Build operator guidance for an active profile cooldown or disable window. */

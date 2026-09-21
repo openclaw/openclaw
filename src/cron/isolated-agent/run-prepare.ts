@@ -1,6 +1,7 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { isDeepStrictEqual } from "node:util";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
+import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -19,6 +20,7 @@ import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
@@ -88,7 +90,7 @@ import {
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
-import { loadCronSessionEntryLatest, resolveCronSession } from "./session.js";
+import { loadCronSessionEntryLatest, prepareCronSession } from "./session.js";
 
 export type PreparedCronRunContext = {
   input: RunCronAgentTurnParams;
@@ -106,6 +108,7 @@ export type PreparedCronRunContext = {
   workspaceDir: string;
   executionRoot?: RunCronAgentTurnParams["executionRoot"];
   commandBody: string;
+  inputProvenance?: InputProvenance;
   cronSession: MutableCronSession;
   sessionWorkAdmission: SessionWorkAdmissionLease;
   persistSessionEntry: PersistCronSessionEntry;
@@ -226,7 +229,7 @@ export async function prepareCronRunContext(params: {
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
   const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
-  const cronSession = resolveCronSession({
+  const cronSession = await prepareCronSession({
     cfg: runtimeCfg,
     sessionKey: agentSessionKey,
     sourceSessionKey,
@@ -287,6 +290,11 @@ export async function prepareCronRunContext(params: {
         throw new CronSessionLifecycleClaimError(agentSessionKey, archivedSessionError);
       }
     },
+  });
+
+  clearBootstrapSnapshotOnSessionRollover({
+    sessionKey: agentSessionKey,
+    previousSessionId: cronSession.previousSessionId,
   });
 
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
@@ -523,7 +531,8 @@ export async function prepareCronRunContext(params: {
     const message = currentConversationContext
       ? `${currentConversationContext}\n\n${resolveCronAgentTurnMessage(input)}`
       : resolveCronAgentTurnMessage(input);
-    const base = `[cron:${input.job.id} ${input.job.name}] ${message}`.trim();
+    const sourcePromptPrefix = `[cron:${input.job.id} ${input.job.name}]`;
+    const base = `${sourcePromptPrefix} ${message}`.trim();
     const isExternalHook =
       hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
     const allowUnsafeExternalContent =
@@ -662,6 +671,17 @@ export async function prepareCronRunContext(params: {
         workspaceDir,
         executionRoot: input.executionRoot,
         commandBody,
+        inputProvenance:
+          agentPayload && !isExternalHook
+            ? {
+                kind: "internal_system",
+                sourceTool: "cron",
+                sourcePromptPrefix,
+                jobId: input.job.id,
+                runId: runSessionId,
+                sourceSessionKey: runSessionKey,
+              }
+            : undefined,
         cronSession,
         sessionWorkAdmission,
         persistSessionEntry,

@@ -1,4 +1,3 @@
-// Telegram plugin module implements outbound params behavior.
 import {
   parseStrictInteger,
   parseStrictNonNegativeInteger,

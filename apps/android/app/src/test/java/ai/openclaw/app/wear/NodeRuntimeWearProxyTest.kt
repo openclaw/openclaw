@@ -79,10 +79,22 @@ class NodeRuntimeWearProxyTest {
 
       try {
         gateway.holdNodeHellos()
+        gateway.rejectOperatorProtocol = true
         runtime.connect(gateway.endpoint)
+        withTimeout(WEAR_GATEWAY_READY_TIMEOUT_MS) {
+          while (runtime.gatewayConnectionProblem.value?.code != "PROTOCOL_MISMATCH") delay(10)
+        }
+        repeat(2) {
+          val incompatible = checkNotNull(runtime.handleWearProxyRequest("watch-1", request(WearRpcMethod.ProxyStatus)).result).jsonObject
+          assertEquals("incompatible", incompatible.getValue("failure").jsonPrimitive.content)
+          assertEquals("false", incompatible.getValue("connected").jsonPrimitive.content)
+        }
+        gateway.rejectOperatorProtocol = false
+        runtime.refreshGatewayConnection()
         awaitOperatorReady(runtime, gateway.endpoint)
         assertTrue(runtime.handleWearProxyRequest("watch-1", sessionsRequest()).ok)
         val status = runtime.handleWearProxyRequest("watch-1", request(WearRpcMethod.ProxyStatus))
+        assertFalse("failure" in checkNotNull(status.result).jsonObject)
         assertTrue(
           checkNotNull(status.result).jsonObject.getValue("capabilities").jsonArray.any {
             it.jsonPrimitive.content == WearProxyCapability.SessionScopedModelCatalog.wireValue
@@ -128,6 +140,13 @@ class NodeRuntimeWearProxyTest {
             .getValue("connected")
             .jsonPrimitive.content
             .toBoolean(),
+        )
+        assertEquals(
+          "gateway_offline",
+          checkNotNull(disconnected.result)
+            .jsonObject
+            .getValue("failure")
+            .jsonPrimitive.content,
         )
         assertUnavailable(runtime.handleWearProxyRequest("watch-1", sessionsRequest()))
 
@@ -232,6 +251,8 @@ private class NodeRuntimeWearGateway : AutoCloseable {
   private val server = MockWebServer()
   private val operatorHelloGate = GatewayHelloGate()
   private val nodeHelloGate = GatewayHelloGate()
+
+  @Volatile var rejectOperatorProtocol = false
   val wearSessionsRequests = AtomicInteger()
   val wearModelRequest = AtomicReference<JsonObject?>()
   val endpoint: GatewayEndpoint
@@ -318,6 +339,10 @@ private class NodeRuntimeWearGateway : AutoCloseable {
     id: String,
     role: String,
   ) {
+    if (role == "operator" && rejectOperatorProtocol) {
+      webSocket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"Versions differ","details":{"code":"PROTOCOL_MISMATCH","clientMinProtocol":4,"clientMaxProtocol":4,"expectedProtocol":5,"minimumProbeProtocol":4}}}""")
+      return
+    }
     val scopes = if (role == "operator") """["operator.read","operator.write","operator.admin"]""" else "[]"
     webSocket.send(
       """{"type":"res","id":"$id","ok":true,"payload":{"type":"hello-ok","protocol":3,"server":{"host":"wear-runtime","version":"proof"},"features":{"methods":["sessions.list","models.list"],"events":[],"capabilities":["session-scoped-model-catalog"]},"auth":{"role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}}""",

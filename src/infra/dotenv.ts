@@ -1,7 +1,7 @@
 // Loads dotenv files while blocking unsafe workspace env keys.
 import path from "node:path";
 import {
-  listKnownProviderAuthEnvVarNames,
+  listKnownProviderAuthEnvVarNamesCore,
   listKnownProviderAuthEnvVarNamesAsync,
 } from "../secrets/provider-env-vars.js";
 import {
@@ -293,7 +293,7 @@ export function loadWorkspaceDotEnvFile(
   let providerAuthBlockedKeys: ReadonlySet<string> | undefined;
   const getProviderAuthBlockedKeys = () => {
     providerAuthBlockedKeys ??= buildProviderAuthWorkspaceDotEnvBlocklist(
-      listKnownProviderAuthEnvVarNames({ env, includeUntrustedWorkspacePlugins: false }),
+      listKnownProviderAuthEnvVarNamesCore({ env, includeUntrustedWorkspacePlugins: false }),
     );
     return providerAuthBlockedKeys;
   };

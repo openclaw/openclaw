@@ -345,7 +345,6 @@ describe("OpenClaw shell source initialization", () => {
       agentsListClient: null,
       agentsListSource: null,
       context: undefined,
-      criticalNoticeRuntime: null,
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: vi.fn(async () => undefined) },
       previousGatewayPhase: null,
@@ -469,12 +468,14 @@ describe("OpenClaw shell route session commits", () => {
     shell.routeState = { routeId: "chat" };
     shell.navigate("dashboard");
     expect(navigate).toHaveBeenLastCalledWith("dashboard", {
-      pathname: "/dashboard/main/12345678",
+      pathname: "/dashboard/main/1234567890abcdef1234567890abcdef",
     });
 
     shell.routeState = { routeId: "dashboard" };
     shell.navigate("chat");
-    expect(navigate).toHaveBeenLastCalledWith("chat", { pathname: "/chat/main/12345678" });
+    expect(navigate).toHaveBeenLastCalledWith("chat", {
+      pathname: "/chat/main/1234567890abcdef1234567890abcdef",
+    });
   });
 
   it("preserves catalog identity when routing a slash-command draft", () => {
@@ -520,6 +521,7 @@ describe("OpenClaw shell route session commits", () => {
         gateway: { setSessionKey: vi.fn(), snapshot },
         sessions: createRouteSessions(),
         chatSubmissions: createChatSubmissions(),
+        placementStartup: { get: vi.fn(() => null) },
         replace,
       } as unknown as ApplicationContext,
     };
@@ -996,7 +998,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     // and the navigation is marked for the chat loader to re-derive from the gateway.
     expect(setAgent).toHaveBeenCalledWith("main");
     expect(navigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/12345678",
+      pathname: "/chat/main/1234567890abcdef1234567890abcdef",
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
     expect(uiCommandEvent).toHaveBeenLastCalledWith(

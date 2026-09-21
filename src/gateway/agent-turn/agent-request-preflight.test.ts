@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as acpSessionMeta from "../../acp/runtime/session-meta-readonly.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import * as sessionStoreLookup from "../session-utils-store-lookup.js";
 import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 import { createAgentTurnIo } from "./io.js";
@@ -114,7 +116,68 @@ describe("agent request Swarm preflight", () => {
   beforeEach(() => {
     subagentRuns.clear();
     vi.spyOn(sessionAccessor, "loadSessionEntry").mockReturnValue(undefined);
+    vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntry").mockReturnValue(undefined);
   });
+
+  it.each([
+    {
+      entry: { sessionId: "source", updatedAt: 1, spawnDepth: 1 },
+      sourceAcp: undefined,
+      expectedRole: "subagent",
+    },
+    {
+      entry: { sessionId: "source", updatedAt: 1, parentSessionKey: "agent:main:root" },
+      sourceAcp: undefined,
+      expectedRole: undefined,
+    },
+    {
+      entry: {
+        sessionId: "source",
+        updatedAt: 1,
+        parentSessionKey: "agent:main:root",
+        spawnDepth: 0,
+      },
+      sourceAcp: {
+        backend: "acpx",
+        agent: "worker",
+        runtimeSessionName: "worker",
+        mode: "persistent" as const,
+        state: "idle" as const,
+        lastActivityAt: 1,
+      },
+      expectedRole: "subagent",
+    },
+  ])(
+    "derives coordination source role from canonical spawn lineage ($expectedRole)",
+    ({ entry, sourceAcp, expectedRole }) => {
+      const sourceKey = "agent:main:visible-worker";
+      vi.spyOn(sessionStoreLookup, "resolveGatewaySessionStoreTargetWithStore").mockReturnValue({
+        agentId: "main",
+        canonicalKey: sourceKey,
+        storePath: "/source-store",
+        storeKeys: [sourceKey],
+        store: { [sourceKey]: entry },
+      });
+      vi.mocked(acpSessionMeta.readAcpSessionMetaForEntry).mockReturnValue(sourceAcp);
+      const result = prepareAgentRequestPreflight({
+        request: {
+          message: "Worker progress",
+          sessionKey: "agent:main:root",
+          idempotencyKey: "coordination-run",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: sourceKey,
+            sourceTool: "sessions_send",
+            sourceRole: "subagent",
+          },
+        },
+        context: { getRuntimeConfig: () => ({}), dedupe: new Map() },
+        client: null,
+        io: createAgentTurnIo(vi.fn()),
+      } as never);
+      expect(result?.inputProvenance?.sourceRole).toBe(expectedRole);
+    },
+  );
 
   it("rejects malformed and non-object structured output schemas", () => {
     for (const schema of [

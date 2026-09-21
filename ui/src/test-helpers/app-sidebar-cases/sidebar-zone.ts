@@ -47,7 +47,7 @@ async function mountZone() {
 }
 
 function pluginNavigation(
-  context: import("../../app/context.ts").ApplicationContext<import("../../app-routes.ts").RouteId>,
+  context: import("../../app/context.ts").ApplicationContext,
   sidebar: SidebarLifecycleState,
   ids: string[],
   defaultVisible = false,

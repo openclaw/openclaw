@@ -176,13 +176,13 @@ export function createAgentHarnessTaskRuntime(
       });
     },
     listTaskRecords() {
-      return listTaskRecords().filter(
+      return listTaskRecords(
         (task) =>
           task.runtime === runtime &&
           (!taskKind || task.taskKind === taskKind) &&
           task.scopeKind === "session" &&
           task.ownerKey === requesterSessionKey &&
-          (!runIdPrefix || task.runId?.startsWith(runIdPrefix)),
+          (!runIdPrefix || task.runId?.startsWith(runIdPrefix) === true),
       );
     },
   };
@@ -200,6 +200,8 @@ export async function deliverAgentHarnessTaskCompletion(params: {
   taskLabel?: string;
   announceType?: string;
   replyInstruction?: string;
+  /** Current source owner may admit new delivery work; accepted work keeps its own lifecycle. */
+  isSourceSessionAdmissionAllowed?: () => boolean;
   signal?: AbortSignal;
   /** Plugin-owned historical locator can narrow admission, never grant ownership. */
   expectedRequester?: { sessionId: string; lifecycleRevision?: string };
@@ -214,10 +216,10 @@ export async function deliverAgentHarnessTaskCompletion(params: {
   const eventStatus = mapHarnessCompletionStatus(params.status);
   // Capture completion ownership before origin resolution can yield to a new task.
   const readOwnedTasks = () =>
-    listTaskRecords().filter(
+    listTaskRecords(
       (task) =>
         task.runtime === "subagent" &&
-        task.taskKind &&
+        Boolean(task.taskKind) &&
         task.requesterSessionKey === requesterSessionKey &&
         task.runId === childSessionKey,
     );
@@ -344,6 +346,7 @@ export async function deliverAgentHarnessTaskCompletion(params: {
       directOrigin,
       sourceSessionKey: childSessionKey,
       sourceTool: AGENT_HARNESS_COMPLETION_SOURCE_TOOL,
+      isSourceSessionAdmissionAllowed: params.isSourceSessionAdmissionAllowed,
       targetRequesterSessionKey: requesterSessionKey,
       requesterIsSubagent,
       expectsCompletionMessage: true,

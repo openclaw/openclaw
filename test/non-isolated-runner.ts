@@ -14,12 +14,19 @@ import {
   resetGatewayWorkAdmission,
 } from "../src/process/gateway-work-admission.js";
 import { drainGlobalSingletonLifecycleState } from "../src/shared/global-singleton.js";
+import { hasOpenClawAgentDatabaseAsyncResources } from "../src/state/openclaw-agent-db-resources.js";
 import {
   type CustomElementTracking,
   dropRepoOwnedCustomElements,
   trackCustomElementRegistry,
 } from "./jsdom-custom-elements.ts";
 import { repositoryTestApiPublications } from "./repository-test-api-publications.ts";
+import {
+  drainSqliteTestAgentOwner,
+  rememberSqliteTestAgentOwner,
+  retireSqliteTestSingleton,
+  sqliteTestSingletonPublications,
+} from "./sqlite-test-lifecycle.ts";
 
 type EvaluatedModuleNode = ViteEvaluatedModuleNode & {
   mockedExports?: unknown;
@@ -55,6 +62,8 @@ const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
   "openclaw.diagnosticEventListenerPresence.v1",
 );
 const SESSION_SUSPENSION_TEST_API = Symbol.for("openclaw.sessionSuspensionTestApi");
+const SECRET_REDACTION_TEST_API = Symbol.for("openclaw.secretRedactionRegistryTestApi");
+const TASK_REGISTRY_TEST_API = Symbol.for("openclaw.taskRegistryTestApi");
 // Shared-worker scoped: the registry lives on the worker global, not in the module graph.
 const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
 const nativeConsoleMethods = {
@@ -85,7 +94,11 @@ function getSharedTestHome(): string | undefined {
   return globalState[SHARED_TEST_SETUP]?.tempHome ?? process.env.OPENCLAW_TEST_HOME;
 }
 
-function resetEvaluatedModules(modules: EvaluatedModules, executions: ModuleExecutionInfo) {
+function resetEvaluatedModules(
+  modules: EvaluatedModules,
+  executions: ModuleExecutionInfo,
+  testFiles: string,
+) {
   const skipPaths = [/\/vitest\/dist\//, /vitest-virtual-\w+\/dist/u, /@vitest\/dist/u];
   // Vitest reuses the graph across runner instances. Weak marks prevent a past
   // execution from owning a later mock-only slot without retaining any records
@@ -100,13 +113,23 @@ function resetEvaluatedModules(modules: EvaluatedModules, executions: ModuleExec
     // Vitest's evaluator records each execution independently (including native ones),
     // using the unprefixed id for automocks. Module resets preserve those records.
     const key = repositoryTestApiPublications.get(node.file);
+    const sqliteKey = sqliteTestSingletonPublications.get(node.file);
     const executionId = node.id.startsWith("mock:") ? node.id.slice(5) : node.id;
     const execution = executions.get(executionId);
-    if (key && execution && !execution.external && !retiredExecutions.has(execution)) {
+    if (
+      (key || sqliteKey) &&
+      execution &&
+      !execution.external &&
+      !retiredExecutions.has(execution)
+    ) {
       retiredExecutions.add(execution);
-      const publication = Object.getOwnPropertyDescriptor(globalThis, key);
-      if (publication?.configurable && "value" in publication) {
+      const publication =
+        key === undefined ? undefined : Object.getOwnPropertyDescriptor(globalThis, key);
+      if (key && publication?.configurable && "value" in publication) {
         Reflect.deleteProperty(globalThis, key);
+      }
+      if (sqliteKey) {
+        retireSqliteTestSingleton(sqliteKey, testFiles);
       }
     }
     // Mock metadata owns factories and cached exports after the registry resets.
@@ -183,9 +206,10 @@ function resetSharedDocumentBody(): void {
     body.removeAttribute(attribute);
   }
   // jsdom can retain detached shadow focus even after the fixture removes its DOM.
-  // Native body focus clears that state; blur cannot reach an already-detached target.
+  // Focus body to clear it, then blur while focusable to restore fresh-document state.
   body.tabIndex = -1;
   body.focus();
+  body.blur();
   body.removeAttribute("tabindex");
 }
 
@@ -269,6 +293,14 @@ type DiagnosticEventsStateForTest = {
 
 type SessionSuspensionTestApi = {
   resetSessionSuspensionStateForTest?: () => void;
+};
+
+type SecretRedactionTestApi = {
+  resetSecretRedactionRegistryForTest?: () => void;
+};
+
+type TaskRegistryTestApi = {
+  resetTaskRegistryForTests?: () => void;
 };
 
 function runCleanupActions(actions: CleanupAction[]): unknown {
@@ -373,6 +405,18 @@ function resetOpenClawSessionSuspensionState(): void {
   api?.resetSessionSuspensionStateForTest?.();
 }
 
+function resetOpenClawSecretRedactionState(): void {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const api = globalStore[SECRET_REDACTION_TEST_API] as SecretRedactionTestApi | undefined;
+  api?.resetSecretRedactionRegistryForTest?.();
+}
+
+function resetOpenClawTaskRegistryState(): void {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const api = globalStore[TASK_REGISTRY_TEST_API] as TaskRegistryTestApi | undefined;
+  api?.resetTaskRegistryForTests?.();
+}
+
 // Join the native owner's latest pass, including imports queued while cleanup waits.
 async function drainMockerResolveMocks(mocker: ModuleMocker | undefined): Promise<void> {
   if (!mocker) {
@@ -402,6 +446,22 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     restoreRealTimers();
     restoreNativeTimerGlobals();
     await super.onBeforeRunTask(test);
+    this.rememberSqliteAgentOwner();
+  }
+
+  onTaskFinished() {
+    this.rememberSqliteAgentOwner();
+  }
+
+  private rememberSqliteAgentOwner() {
+    if (this.config.isolate) {
+      return;
+    }
+    const internals = this as unknown as TestRunnerInternals;
+    rememberSqliteTestAgentOwner(
+      (internals.workerState.evaluatedModules as EvaluatedModules).idToModuleMap.values(),
+      internals.workerState.moduleExecutionInfo,
+    );
   }
 
   override onBeforeTryTask(test: RunnerTask, options: TestTryOptions) {
@@ -420,6 +480,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
   // oxlint-disable-next-line typescript/no-misused-promises -- Vitest awaits this hook; its concrete TestRunner declaration narrows the return to void.
   override async onAfterRunFiles(files: RunnerTestFile[]) {
     super.onAfterRunFiles(files);
+    const testFiles = files
+      .map((file) => path.relative(this.config.root, file.filepath))
+      .join(", ");
     const internals = this as unknown as TestRunnerInternals;
     await drainMockerResolveMocks(internals.moduleRunner?.mocker);
 
@@ -442,9 +505,27 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     resetAgentEventsForTest();
     resetOpenClawGlobalDiagnosticState();
     resetOpenClawSessionSuspensionState();
+    if (hasOpenClawAgentDatabaseAsyncResources()) {
+      // Lease release can reopen shared state; close agents first, bypassing suite mocks.
+      const { closeOpenClawAgentDatabasesAsync } = await vi.importActual<
+        typeof import("../src/state/openclaw-agent-db-lifecycle.js")
+      >("../src/state/openclaw-agent-db-lifecycle.js");
+      await closeOpenClawAgentDatabasesAsync();
+    }
+    if (!this.config.isolate) {
+      await drainSqliteTestAgentOwner(
+        (internals.workerState.evaluatedModules as EvaluatedModules).idToModuleMap.values(),
+        internals.workerState.moduleExecutionInfo,
+        testFiles,
+      );
+    }
     // Lifecycle-owned singletons survive module resets; close them before the next file
     // can observe a previous file's sessions, caches, or registered resources.
     await drainGlobalSingletonLifecycleState();
+    // Retire the cleared event listener's registration after accepted writes settle.
+    resetOpenClawTaskRegistryState();
+    // Teardown can still register or log secrets; retire them only after its writers settle.
+    resetOpenClawSecretRedactionState();
     if (this.config.isolate) {
       return;
     }
@@ -461,6 +542,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     resetEvaluatedModules(
       internals.workerState.evaluatedModules as EvaluatedModules,
       internals.workerState.moduleExecutionInfo,
+      testFiles,
     );
   }
 }

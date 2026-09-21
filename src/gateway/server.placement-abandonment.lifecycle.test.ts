@@ -116,7 +116,11 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
         createNodeWorkerTunnelManager: createTunnel,
       }));
       vi.doMock("./worker-environments/node-worker-tunnel.test-support.js", () => ({
-        transport: () => ({ listCurrentNodes: async () => [], invoke: async () => ({ ok: true }) }),
+        transport: () => ({
+          getCurrentNode: async () => undefined,
+          listCurrentNodes: async () => [],
+          invoke: async () => ({ ok: true }),
+        }),
       }));
       vi.doMock("./test-openai-responses-model.js", () => ({
         buildMockOpenAiResponsesProvider: () => ({

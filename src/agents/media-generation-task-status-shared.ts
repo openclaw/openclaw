@@ -507,19 +507,16 @@ function buildMediaGenerationTaskStatusListText(params: {
 }
 
 /** Builds bounded current-turn facts without instructions or elapsed-time fields. */
-async function buildActiveMediaGenerationTaskPromptContextForSession(params: {
-  sessionKey?: string;
+export function buildActiveMediaGenerationTaskPromptContext(params: {
+  tasks: readonly TaskRecord[];
   agentId?: string;
   taskKind: string;
   sourcePrefix: string;
-}): Promise<string | undefined> {
-  const tasks = await listActiveMediaGenerationTasksForSession({
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    taskKind: params.taskKind,
-    sourcePrefix: params.sourcePrefix,
-    excludeDeliveringCompletion: true,
-  });
+}): string | undefined {
+  const tasks = selectActiveMediaGenerationTasks(
+    { ...params, excludeDeliveringCompletion: true },
+    params.tasks,
+  );
   if (tasks.length === 0) {
     return undefined;
   }
@@ -609,13 +606,6 @@ export function createMediaGenerationTaskStatusOwner(params: {
         ...taskPresentation,
         tasks,
         completionLabel: params.promptCompletionLabel,
-      });
-    },
-    buildActiveTaskPromptContextForSession(this: void, sessionKey?: string, agentId?: string) {
-      return buildActiveMediaGenerationTaskPromptContextForSession({
-        ...taskIdentity,
-        sessionKey,
-        agentId,
       });
     },
   };

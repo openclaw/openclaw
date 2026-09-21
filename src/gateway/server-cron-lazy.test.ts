@@ -1,13 +1,16 @@
 /**
  * Tests lazy cron startup behavior in the gateway server.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createMockCronStateForJobs } from "../cron/service.test-harness.js";
 import { listPage } from "../cron/service/ops-read.js";
 import type { CronJob } from "../cron/types.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayCronState } from "./server-cron.js";
 
@@ -28,6 +31,7 @@ vi.mock("./server-cron.js", () => ({
 const { createLazyGatewayCronState } = await import("./server-cron-lazy.js");
 
 describe("createLazyGatewayCronState", () => {
+  const createBroker = useSpawnBrokerTestFixture(afterEach);
   beforeEach(() => {
     vi.unstubAllEnvs();
     hoisted.buildGatewayCronService.mockClear();
@@ -56,20 +60,27 @@ describe("createLazyGatewayCronState", () => {
   });
 
   it("does not build the heavy cron service until an async cron operation needs it", async () => {
+    const broker = await createBroker();
     const cron = createCronService();
     const state = createCronState(cron);
     hoisted.setState(state);
+    let observedBroker: unknown = "not-built";
+    hoisted.buildGatewayCronService.mockImplementationOnce(() => {
+      observedBroker = getSpawnBroker();
+      return state;
+    });
 
-    const lazy = createLazyGatewayCronState(createParams());
+    const lazy = runWithSpawnBroker(broker, () => createLazyGatewayCronState(createParams()));
 
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
     expect(lazy.cron.getJob("demo")).toBeUndefined();
     expect(lazy.cron.getDefaultAgentId()).toBeUndefined();
 
-    await lazy.cron.status();
+    await runInDetachedAsyncContext(() => lazy.cron.status());
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
     expect(cron["status"]).toHaveBeenCalledTimes(1);
+    expect(observedBroker === broker).toBe(true);
   });
 
   it("loads the cron service for direct job reads", async () => {

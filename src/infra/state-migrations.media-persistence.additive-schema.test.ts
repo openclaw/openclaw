@@ -93,6 +93,7 @@ describe("legacy media persistence additive schema repair", () => {
       DROP TRIGGER session_nodes_entry_valid_after_entry_update;
       DROP TRIGGER session_nodes_entry_valid_after_identity_update;
       DROP INDEX idx_agent_session_nodes_entry_valid_pending;
+      DROP INDEX idx_agent_session_nodes_entry_not_valid;
       DROP TABLE session_key_contract;
       ALTER TABLE session_nodes DROP COLUMN entry_valid;
     `);

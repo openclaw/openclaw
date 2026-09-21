@@ -1,6 +1,8 @@
 import { sql } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
 import {
   resolveHistoryAnchorPageRange,
   resolveTranscriptPageEnd,
@@ -52,6 +54,16 @@ import {
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
+import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+
+const recentHistoryWindows = new Map<
+  string,
+  {
+    database: CurrentTranscriptProjection["database"]["db"];
+    revision: string;
+    page: SessionTranscriptMessageEventPage;
+  }
+>();
 
 function readBoundaryEvents(
   projection: CurrentTranscriptProjection,
@@ -136,7 +148,7 @@ function resolveRecentHistoryStart(
   maxBytes: number,
   maxMessages: number,
   allowOversizedFirst = true,
-): number {
+): { start: number; bytes: number } {
   const { boundedEnd, boundedStart, boundaries, messageEnd, messageStart } =
     resolveVisibleHistoryRange(history, start, endExclusive);
   // No result can include more than maxMessages events, so older metadata would
@@ -180,7 +192,7 @@ function resolveRecentHistoryStart(
   } finally {
     metadata.return?.();
   }
-  return selectedStart;
+  return { start: selectedStart, bytes };
 }
 
 type SessionTranscriptMessageById = SessionTranscriptMessageEvent & {
@@ -317,6 +329,7 @@ function readRecentHistoryInSnapshot(
   projection: CurrentTranscriptProjection,
   history: VisibleHistoryProjection,
   options: TranscriptRecentReadLimits & TranscriptReadWindowOptions,
+  remember?: (page: SessionTranscriptMessageEventPage, bytes: number) => void,
 ): SessionTranscriptMessageEventPage {
   assertHistoryReadWindow(projection, history, options.expectedReadWindow);
   const generation = projection.generation;
@@ -350,7 +363,7 @@ function readRecentHistoryInSnapshot(
     1024,
     Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 8 * 1024 * 1024),
   );
-  const selectedStart = resolveRecentHistoryStart(
+  const { start: selectedStart, bytes } = resolveRecentHistoryStart(
     projection,
     Math.max(0, history.total - maxLines),
     history.total,
@@ -359,7 +372,7 @@ function readRecentHistoryInSnapshot(
     maxMessages,
   );
   const events = readVisibleHistoryRange(projection, selectedStart, history.total, history);
-  return {
+  const page: SessionTranscriptMessageEventPage = {
     activeLeafEntryId: projection.state.leafEventId,
     ...(deltaCursor ? { deltaCursor } : {}),
     events,
@@ -367,17 +380,64 @@ function readRecentHistoryInSnapshot(
     totalMessages: history.total,
     ...(options.captureReadWindow ? { readWindow: captureHistoryReadWindow(history, events) } : {}),
   };
+  remember?.(page, bytes);
+  return page;
 }
 
 export function readRecentSessionTranscriptHistoryEventsFromProjection(
   projection: CurrentTranscriptProjection,
   options: TranscriptRecentReadLimits & TranscriptReadWindowOptions,
 ): SessionTranscriptMessageEventPage {
-  return readRecentHistoryInSnapshot(
-    projection,
-    resolveVisibleHistoryProjection(projection),
-    options,
-  );
+  const read = (remember?: Parameters<typeof readRecentHistoryInSnapshot>[3]) =>
+    readRecentHistoryInSnapshot(
+      projection,
+      resolveVisibleHistoryProjection(projection),
+      options,
+      remember,
+    );
+  if (
+    !projection.generation ||
+    hasSqlitePostCommitScope(projection.database.db) ||
+    projection.database.db.location() === null ||
+    options.expectedReadWindow ||
+    resolveSessionTranscriptReadFence(projection.resolved)
+  ) {
+    return read();
+  }
+  const key = JSON.stringify([
+    projection.database.path,
+    projection.resolved.agentId,
+    projection.resolved.sessionId,
+  ]);
+  const revision = JSON.stringify([
+    projection.generation,
+    projection.state.indexedSeq,
+    options.maxMessages,
+    options.maxLines,
+    options.maxBytes,
+    Boolean(options.captureReadWindow),
+  ]);
+  const cached = recentHistoryWindows.get(key);
+  if (cached?.database === projection.database.db && cached.revision === revision) {
+    return structuredClone(cached.page);
+  }
+  recentHistoryWindows.delete(key);
+  return read((page, bytes) => {
+    // Reuse the window's byte count, including a lone oversized event, without serializing again.
+    if (bytes > 1024 * 1024) {
+      return;
+    }
+    try {
+      recentHistoryWindows.set(key, {
+        database: projection.database.db,
+        revision,
+        page: structuredClone(page),
+      });
+      pruneMapToMaxSize(recentHistoryWindows, 16);
+    } catch {
+      // Deep legacy JSON can be readable even when cloning exceeds the stack.
+    }
+  });
 }
 
 export function readSessionTranscriptHistoryEventPageFromProjection(
@@ -419,7 +479,7 @@ export function readSessionTranscriptHistoryEventPageFromProjection(
           ),
           maxMessages,
           false,
-        );
+        ).start;
   // A single oversized event must not defeat the hard limit or trap pagination.
   // Skip its source position explicitly; callers disclose the omission to readers.
   const omittedOversized = maxMessages > 0 && endExclusive > 0 && boundedStart === endExclusive;

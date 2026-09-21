@@ -5,6 +5,7 @@ export function createWorkerInferenceDrainService(
   service: object = {},
 ) {
   const registered = {
+    get: () => undefined,
     ...service,
     cancelInferenceForSession: () => [],
     hasInferenceForSession: () => false,

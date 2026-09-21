@@ -54,9 +54,9 @@ import {
 } from "./legacy-runtime-model-providers.js";
 import {
   createRetiredModelRefRepairResolver,
-  repairRetiredSessionModelRef,
   type ModelRefRepairResolver,
 } from "./retired-model-ref-repair.js";
+import { repairRetiredSessionModelRef } from "./retired-session-model-repair.js";
 
 type SessionModelRetirement = {
   agentId: string;

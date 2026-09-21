@@ -1,4 +1,5 @@
 // Real workspace contract for memory engine storage/index helpers.
+export type { MemoryWorkspaceFiles, MemoryWorkspaceWatchRequest } from "./host/workspace-files.js";
 
 export {
   buildFileEntry,
@@ -90,7 +91,7 @@ export {
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "./host/memory-schema.js";
-export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
+export { loadSqliteVecExtension, loadSqliteVecExtensionFromPath } from "./host/sqlite-vec.js";
 export {
   readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,

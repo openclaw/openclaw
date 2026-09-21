@@ -110,7 +110,7 @@ describe("plugin approval signed agent runtime", () => {
 
     await requestHandler(manager)(opts);
 
-    expect(manager.listPendingRecords()).toHaveLength(0);
+    expect(await manager.listPendingRecords()).toHaveLength(0);
     expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
       message: expect.stringContaining("no longer active"),
     });
@@ -131,13 +131,13 @@ describe("plugin approval signed agent runtime", () => {
       validateAuthority: () => active,
     });
     const pending = requestHandler(manager)(opts);
-    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
-    const record = manager.listPendingRecords()[0]!;
+    await vi.waitFor(async () => expect(await manager.listPendingRecords()).toHaveLength(1));
+    const record = (await manager.listPendingRecords())[0]!;
     active = false;
 
     await expect(manager.awaitDecision(record.id)).resolves.toBeNull();
     await pending;
-    expect(manager.getSnapshot(record.id)).toMatchObject({ status: "cancelled" });
+    expect(await manager.getSnapshot(record.id)).toMatchObject({ status: "cancelled" });
   });
 
   it("rejects a signed runtime without a host-resolved approval owner", async (testContext) => {
@@ -212,7 +212,7 @@ describe("plugin approval signed agent runtime", () => {
       | { id?: unknown }
       | undefined;
     const approvalId = String(broadcastPayload?.id);
-    expect(manager.getSnapshot(approvalId)?.request).toMatchObject({
+    expect((await manager.getSnapshot(approvalId))?.request).toMatchObject({
       pluginId: "codex",
       agentId: "main",
       sessionKey: "agent:main:session-1",
@@ -232,7 +232,7 @@ describe("plugin approval signed agent runtime", () => {
       source_context_id: "context-1",
       source_execution_id: "execution-1",
     });
-    manager.resolve(approvalId, "deny");
+    await manager.resolve(approvalId, "deny");
     await pending;
   });
 
@@ -272,7 +272,7 @@ describe("plugin approval signed agent runtime", () => {
         )
         .get(),
     ).toBeUndefined();
-    manager.resolve(approvalId, "deny");
+    await manager.resolve(approvalId, "deny");
     await pending;
   });
 });

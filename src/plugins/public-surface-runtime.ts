@@ -1,9 +1,9 @@
 // Loads plugin public runtime surfaces through documented entrypoints.
 import path from "node:path";
-import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
 import { isTypeScriptPackageEntry } from "./package-entrypoints.js";
+import { isPathInside } from "./path-safety.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";

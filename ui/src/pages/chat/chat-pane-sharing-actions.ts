@@ -15,8 +15,8 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { ChatPaneBase } from "./chat-pane-base.ts";
 import type { ChatPaneConnectionScope } from "./chat-pane-shared.ts";
+import { ChatPaneSidePanels } from "./chat-pane-side-panels.ts";
 import { resetSessionCompanion } from "./chat-session-companion.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import {
@@ -27,7 +27,7 @@ import {
 type HeaderScope = ChatPaneConnectionScope;
 const SESSION_MEMBERS_LIST_METHOD = "session.members.listEvidence";
 
-export abstract class ChatPaneSharingActions extends ChatPaneBase {
+export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
   protected readonly clearSessionCompanion = async () => {
     const scope = this.captureConnectionScope();
     const key = scope?.state.sessionKey;

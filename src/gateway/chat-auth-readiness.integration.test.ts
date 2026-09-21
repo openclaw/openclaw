@@ -19,6 +19,7 @@ import { applySessionModelSelection } from "../model-picker/apply-session-model-
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 it("refreshes a retained pane from a persisted profile-only selection through the Gateway lifecycle broadcaster", async () => {
@@ -86,17 +87,21 @@ it("refreshes a retained pane from a persisted profile-only selection through th
     await refreshChatMetadata(sibling);
     expect(retained.chatModelCatalog[0]?.available).toBe(false);
     const transcript = retained.chatMessages;
-    const unsubscribe = onSessionLifecycleEvent(
-      createLifecycleEventBroadcastHandler({
-        sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
-        chatAbortControllers: new Map(),
-        broadcastToConnIds: (event, payload) => {
-          shell.handleGatewayEvent({ event, payload });
-          handlePageGatewayEvent(retained, { type: "event", event, payload });
-          handlePageGatewayEvent(sibling, { type: "event", event, payload });
-        },
-      }),
-    );
+    const rowProjection = await createSessionRowProjection({ cfg: getRuntimeConfig() });
+    const publications: Promise<void>[] = [];
+    const publishLifecycle = createLifecycleEventBroadcastHandler({
+      getSessionRowProjection: () => rowProjection,
+      sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
+      chatAbortControllers: new Map(),
+      broadcastToConnIds: (event, payload) => {
+        shell.handleGatewayEvent({ event, payload });
+        handlePageGatewayEvent(retained, { type: "event", event, payload });
+        handlePageGatewayEvent(sibling, { type: "event", event, payload });
+      },
+    });
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      publications.push(publishLifecycle(event));
+    });
     try {
       await expect(
         applySessionModelSelection({
@@ -122,6 +127,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
           },
         }),
       ).resolves.toMatchObject({ status: "applied", changed: true });
+      await Promise.all(publications);
       await waitForFast(() => expect(retained.chatModelCatalog[0]?.available).toBe(true));
       expect(sibling.chatModelCatalog[0]?.available).toBe(false);
       expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(3);
@@ -129,8 +135,13 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       expect(retained.chatMessages).toBe(transcript);
     } finally {
       unsubscribe();
-      retireChatMetadataRequests(retained);
-      retireChatMetadataRequests(sibling);
+      try {
+        await Promise.all(publications);
+      } finally {
+        rowProjection.dispose();
+        retireChatMetadataRequests(retained);
+        retireChatMetadataRequests(sibling);
+      }
     }
   });
 });

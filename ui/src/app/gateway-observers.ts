@@ -18,6 +18,7 @@ import {
   type UiSessionDefaultsHost,
 } from "../lib/sessions/session-key.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 export function createGatewayEventObserver(options: {
   isAttached: () => boolean;
@@ -124,6 +125,7 @@ export function createGatewayMetadataObserver(
           previous.selfUser?.id !== next.selfUser?.id ||
           (previous.phase === "connected" && next.phase !== "connected"))
       ) {
+        invalidateUserPreferences(previous.client);
         invalidateModelAuthStatusRequests(previous.client);
         clearModelCatalogCache(previous.client);
         invalidateChatMetadataStore(previous.client);

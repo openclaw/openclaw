@@ -317,7 +317,7 @@ export async function createRepositoryPublicationFixture(
           {
             agentId: "main",
             sessionKey: session.sessionKey,
-            storePath: path.join(root, "sessions.json"),
+            storePath: sessionOwner.storePath,
           },
           () => ({ archivedAt: Date.now() }),
         );

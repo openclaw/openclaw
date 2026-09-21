@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import {
   validateUpdateHoldParams,
   validateUpdateHoldResult,
@@ -6,21 +7,23 @@ import {
   validateUpdateStatusParams,
   validateUpdateStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import {
   getUpdateRunWithReconciliationAsync,
+  getUpdateRunStatusAsync,
   listUpdateRunsAsync,
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
 import {
-  getUpdateAvailable,
   getUpdateEffectiveChannel,
-  getUpdateSchedule,
   refreshGatewayUpdateStatus,
 } from "../../infra/update-startup.js";
+import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
+import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   getLatestUpdateRestartSentinel,
@@ -34,62 +37,94 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUpdateStatusParams, "update.status", respond)) {
       return;
     }
-    let sentinel: RestartSentinelPayload | null;
-    try {
-      sentinel = await refreshLatestUpdateRestartSentinel();
-    } catch (err) {
-      context?.logGateway?.warn(
-        `update.status sentinel refresh failed: ${formatErrorMessage(err)}`,
-      );
-      sentinel = getLatestUpdateRestartSentinel();
-    }
-    const config = context?.getRuntimeConfig?.();
-    const configChannel = normalizeUpdateChannel(config?.update?.channel);
-    if (params.refreshCheckout === true && config) {
-      try {
-        await refreshGatewayUpdateStatus(config);
-      } catch (err) {
-        context?.logGateway?.warn(
-          `update.status checkout refresh failed: ${formatErrorMessage(err)}`,
-        );
-      }
-    }
-    const schedule = getUpdateSchedule();
-    let effectiveChannel = configChannel ?? normalizeUpdateChannel(schedule?.channel);
-    if (!effectiveChannel) {
-      try {
-        effectiveChannel = await getUpdateEffectiveChannel();
-      } catch (err) {
-        context?.logGateway?.warn(
-          `update.status install identity failed: ${formatErrorMessage(err)}`,
-        );
-      }
-    }
-    try {
-      await reconcileAbandonedUpdateRunsAsync();
-    } catch (error) {
-      context?.logGateway?.warn(
-        `update.status reconciliation failed: ${formatErrorMessage(error)}`,
-      );
-    }
-    const [activeRun] = await listUpdateRunsAsync({ active: true, limit: 1 });
-    const [lastRun] = await listUpdateRunsAsync({ limit: 1 });
-    const result = {
-      sentinel,
-      ...(activeRun ? { activeRun } : {}),
-      ...(lastRun ? { lastRun } : {}),
-      updateAvailable: getUpdateAvailable(),
-      ...(effectiveChannel ? { effectiveChannel } : {}),
-      ...(schedule ? { schedule } : {}),
+    const startedAt = areDiagnosticsEnabledForProcess() ? performance.now() : undefined;
+    const timing =
+      startedAt === undefined ? undefined : createStageTimingTracker(() => performance.now());
+    let phase = "sentinel";
+    const mark = (next: string) => {
+      timing?.mark(phase);
+      phase = next;
     };
-    if (!validateUpdateStatusResult(result)) {
-      respond(false, undefined, {
-        code: "UNAVAILABLE",
-        message: "update status is temporarily unavailable",
-      });
-      return;
+    try {
+      let sentinel: RestartSentinelPayload | null;
+      try {
+        sentinel = await refreshLatestUpdateRestartSentinel();
+      } catch (err) {
+        context?.logGateway?.warn(
+          `update.status sentinel refresh failed: ${formatErrorMessage(err)}`,
+        );
+        sentinel = getLatestUpdateRestartSentinel();
+      }
+      mark("checkout");
+      const config = context?.getRuntimeConfig?.();
+      const configChannel = normalizeUpdateChannel(config?.update?.channel);
+      if (params.refreshCheckout === true && config) {
+        try {
+          await refreshGatewayUpdateStatus(config);
+        } catch (err) {
+          context?.logGateway?.warn(
+            `update.status checkout refresh failed: ${formatErrorMessage(err)}`,
+          );
+        }
+      }
+      mark("identity");
+      const schedule = getUpdateSchedule();
+      let effectiveChannel = configChannel ?? normalizeUpdateChannel(schedule?.channel);
+      if (!effectiveChannel) {
+        try {
+          effectiveChannel = await getUpdateEffectiveChannel();
+        } catch (err) {
+          context?.logGateway?.warn(
+            `update.status install identity failed: ${formatErrorMessage(err)}`,
+          );
+        }
+      }
+      mark("reconciliation");
+      try {
+        await reconcileAbandonedUpdateRunsAsync();
+      } catch (error) {
+        context?.logGateway?.warn(
+          `update.status reconciliation failed: ${formatErrorMessage(error)}`,
+        );
+      }
+      mark("history");
+      const { activeRun, lastRun } = await getUpdateRunStatusAsync();
+      mark("response");
+      const result = {
+        sentinel,
+        ...(activeRun ? { activeRun } : {}),
+        ...(lastRun ? { lastRun } : {}),
+        updateAvailable: getUpdateAvailable(),
+        ...(effectiveChannel ? { effectiveChannel } : {}),
+        ...(schedule ? { schedule } : {}),
+      };
+      if (!validateUpdateStatusResult(result)) {
+        respond(false, undefined, {
+          code: "UNAVAILABLE",
+          message: "update status is temporarily unavailable",
+        });
+        return;
+      }
+      respond(true, result);
+    } finally {
+      if (timing && startedAt !== undefined && areDiagnosticsEnabledForProcess()) {
+        timing.mark(phase);
+        const { totalMs, stages } = timing.snapshot();
+        if (performance.now() - startedAt >= 1_000) {
+          try {
+            context?.logGateway?.warn("update.status: slow request", {
+              operation: "update.status",
+              elapsedMs: totalMs,
+              phaseDurationsMs: Object.fromEntries(
+                stages.map(({ name, durationMs }) => [name, durationMs]),
+              ),
+            });
+          } catch {
+            // Diagnostics must not replace the response or the original error.
+          }
+        }
+      }
     }
-    respond(true, result);
   },
   "update.hold": ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateUpdateHoldParams, "update.hold", respond)) {

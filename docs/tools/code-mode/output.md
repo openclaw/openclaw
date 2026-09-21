@@ -114,7 +114,7 @@ admission rejects an oversized reply rather than substituting a successful
 truncation marker. Declarations have
 independent size, depth, and traversal bounds; use `describe()` for the original
 schema when those bounds require an unknown type. Reading declarations does not
-execute tools or automatically enable typechecking of cells.
+execute tools or typecheck cells; they guide the agent's JavaScript composition.
 
 The contract rules are strict:
 
@@ -144,7 +144,7 @@ globals, `catalog.all()`, and the trusted quick index. TypeScript-style declarat
 files are available through the read-only `API` virtual file surface, so agents
 can inspect MCP signatures without adding MCP schemas to the prompt:
 
-```typescript
+```javascript
 const files = await API.list("mcp");
 const githubApi = await API.read("mcp/github.d.ts");
 
@@ -241,6 +241,11 @@ single-tool schema response inside the program.
 The guest runtime never sees host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
 
+Tool arguments and values passed to `results.save` must serialize to JSON.
+BigInts, cycles, and throwing serialization hooks fail the affected call instead
+of silently replacing its data. Catch the error and convert the value explicitly;
+existing saved results remain unchanged.
+
 ## Input-dependent outputs
 
 Tools whose output depends on a string input property can annotate their existing
@@ -320,6 +325,16 @@ enumerable custom fields in `text(...)`, `json(...)`, and returned arrays or
 plain objects. Error-specific `toJSON` methods are not invoked. This includes
 rejected reasons from `Promise.allSettled(...)`. Handling an error does not fail
 the cell; uncaught errors still produce a failed result.
+
+Returned values and `json(...)` output preserve literal JSON keys such as
+`__proto__`. Number-valued typed arrays preserve their numeric elements in
+indexed JSON objects; use `Array.from(...)` when you want a JSON array. Final
+returned values do not invoke custom `toJSON` methods. Convert special values
+explicitly, such as returning `date.toISOString()` for a date string.
+
+Final value conversion runs within the cell. Output and tool calls created by
+property getters follow the ordinary settlement and suspension rules before
+the cell completes.
 
 Nested tool data and model-visible output have separate limits. A successful
 bridge reply reaches the guest as its complete normalized JSON value, or its

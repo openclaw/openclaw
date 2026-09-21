@@ -158,6 +158,13 @@ export function getSandboxBackendWorkdirResolver(id: string): SandboxBackendWork
   return resolveSandboxBackendRegistration(id)?.resolveWorkdir ?? null;
 }
 
+/** Read static backend capabilities without provisioning a sandbox runtime. */
+export function getSandboxBackendCapabilities(
+  id: string,
+): RegisteredSandboxBackend["capabilities"] | undefined {
+  return resolveSandboxBackendRegistration(id)?.capabilities;
+}
+
 /** Resolve a backend factory or throw the user-facing configuration error. */
 export function requireSandboxBackendFactory(id: string): SandboxBackendFactory {
   const factory = getSandboxBackendFactory(id);
@@ -248,11 +255,13 @@ builtinSandboxBackends.set("docker", {
   factory: createDockerSandboxBackend,
   manager: dockerSandboxBackendManager,
   resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
+  capabilities: { readOnlyResourceMounts: true },
 });
 builtinSandboxBackends.set("podman", {
   factory: createPodmanSandboxBackend,
   manager: podmanSandboxBackendManager,
   resolveWorkdir: ({ cfg }) => cfg.docker.workdir,
+  capabilities: { readOnlyResourceMounts: true },
 });
 builtinSandboxBackends.set("ssh", {
   factory: createSshSandboxBackend,

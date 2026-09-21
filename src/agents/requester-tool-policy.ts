@@ -22,6 +22,7 @@ import {
   isSubagentEnvelopeSession,
   resolvePersistedSubagentToolPolicyEnvelope,
   resolveSubagentCapabilityStore,
+  type PreparedSessionCapabilityEntry,
   type SessionCapabilityStore,
 } from "./subagents/spawn/subagent-capabilities.js";
 
@@ -47,6 +48,7 @@ type RequesterToolPolicyParams = {
   agentId?: string;
   sessionKey?: string;
   subagentSessionKey?: string;
+  preparedSessionEntry?: PreparedSessionCapabilityEntry;
   spawnedBy?: string | null;
   messageProvider?: string | null;
   groupId?: string | null;
@@ -191,6 +193,7 @@ export function resolveRequesterToolPolicies(
   const subagentSessionKey = params.subagentSessionKey ?? params.sessionKey;
   const subagentStore = resolveSubagentCapabilityStore(subagentSessionKey, {
     cfg: params.config,
+    preparedSessionEntry: params.preparedSessionEntry,
   });
   const delegatedPolicy = resolveDelegatedPolicy({ ...params, subagentSessionKey }, subagentStore);
   const subagentPolicy =

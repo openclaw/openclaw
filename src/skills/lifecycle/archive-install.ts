@@ -1,26 +1,39 @@
 // Archive install helpers extract and validate skill archives during installation.
 import path from "node:path";
+import {
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ArchiveLogger } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { installPackageDir } from "../../infra/install-package-dir.js";
-import { resolveSafeInstallDir } from "../../infra/install-safe-path.js";
 import {
   evaluateSkillInstallPolicy,
   type InstallSecurityScanResult,
 } from "../../plugins/install-security-scan.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import type { InstallPolicyOrigin, InstallPolicySource } from "../../security/install-policy.js";
+import { resolveWorkspaceSkillInstallDir } from "./install-paths.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
   hasCommittedSkillChangeHooks,
   resolveCommittedSkillChangeSource,
   snapshotCommittedSkillArtifactBestEffort,
 } from "./skill-change-hook.js";
+import { checkClawHubSkillPlanAtPath } from "./skill-tree-digest.js";
+import type {
+  WorkspaceSkillLifecycle,
+  SkillArchiveInstallResult,
+  SkillArchiveInstallFailureKind,
+  SkillRootInstallFiles,
+  SkillRootApplyResult,
+} from "./workspace-types.js";
 
-const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
+export type { SkillArchiveInstallFailureKind } from "./workspace-types.js";
+
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
 /** Accepted root marker names for ClawHub skill archive uploads. */
 export const CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS = [
@@ -29,15 +42,6 @@ export const CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS = [
   "skills.md",
   "SKILL.MD",
 ] as const;
-
-function hasNonAscii(value: string): boolean {
-  for (const char of value) {
-    if (char.charCodeAt(0) > 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
 
 type SkillArchiveInstallPolicy = {
   config?: OpenClawConfig;
@@ -48,47 +52,10 @@ type SkillArchiveInstallPolicy = {
   source?: InstallPolicySource;
 };
 
-/** Result shape for installing a skill archive into a workspace skills dir. */
-type SkillArchiveInstallResult =
-  | { ok: true; targetDir: string }
-  | { ok: false; error: string; failureKind: SkillArchiveInstallFailureKind };
-
-export type SkillArchiveInstallFailureKind = "invalid-request" | "unavailable";
-
-/** Normalizes a tracked slug without accepting traversal or path separators. */
-export function normalizeTrackedSkillSlug(raw: string): string {
-  const slug = raw.trim();
-  if (!slug || slug.includes("/") || slug.includes("\\") || slug.includes("..")) {
-    throw new Error(`Invalid skill slug: ${raw}`);
-  }
-  return slug;
-}
-
-export function validateRequestedSkillSlug(raw: string): string {
-  const slug = normalizeTrackedSkillSlug(raw);
-  if (hasNonAscii(slug) || !VALID_SLUG_PATTERN.test(slug)) {
-    throw new Error(`Invalid skill slug: ${raw}`);
-  }
-  return slug;
-}
-
-export function resolveWorkspaceSkillInstallDir(workspaceDir: string, slug: string): string {
-  const skillsDir = path.join(path.resolve(workspaceDir), "skills");
-  const target = resolveSafeInstallDir({
-    baseDir: skillsDir,
-    id: slug,
-    invalidNameMessage: "invalid skill target path",
-  });
-  if (!target.ok) {
-    throw new Error(target.error);
-  }
-  return target.path;
-}
-
 function installFailure(
   error: string,
   failureKind: SkillArchiveInstallFailureKind,
-): SkillArchiveInstallResult {
+): Extract<SkillArchiveInstallResult, { ok: false }> {
   return { ok: false, error, failureKind };
 }
 
@@ -136,17 +103,76 @@ function archiveFailureKind(error: string): SkillArchiveInstallFailureKind {
   return "invalid-request";
 }
 
-export async function installExtractedSkillRoot(params: {
-  workspaceDir: string;
-  slug: string;
-  extractedRoot: string;
-  mode: "install" | "update";
-  timeoutMs?: number;
-  logger?: ArchiveLogger;
-  policy?: SkillArchiveInstallPolicy;
-  rootMarkers?: readonly string[];
-  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
-}): Promise<SkillArchiveInstallResult> {
+export async function installExtractedSkillRoot(
+  params: SkillRootInstallFiles & { policy?: SkillArchiveInstallPolicy },
+): Promise<SkillArchiveInstallResult> {
+  try {
+    const changeSource = resolveCommittedSkillChangeSource(params.policy?.origin.type);
+    const sourceVersionValue = params.policy?.origin.version ?? params.policy?.origin.commit;
+    const sourceVersion =
+      typeof sourceVersionValue === "string" || typeof sourceVersionValue === "number"
+        ? String(sourceVersionValue)
+        : undefined;
+    const captureChanges = hasCommittedSkillChangeHooks();
+    const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
+    const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+    if (access && !access.applySkillRoot) {
+      throw new WorkspaceAccessUnavailableError(
+        "Remote workspace skill installation is unavailable",
+      );
+    }
+    const applyRoot = access?.applySkillRoot ?? applyExtractedSkillRoot;
+    const { policy: _policy, ...files } = params;
+    const result = await applyRoot({
+      ...files,
+      ...(captureChanges ? { changes: { source: changeSource, sourceVersion } } : {}),
+      beforeInstall: async (mode) => {
+        if (!params.policy) {
+          return undefined;
+        }
+        const scanResult = await evaluateSkillInstallPolicy({
+          config: params.policy.config,
+          onInstallPolicyWarning: params.policy.onInstallPolicyWarning,
+          installId: params.policy.installId ?? "archive",
+          logger: params.logger ?? {},
+          origin: params.policy.origin,
+          requestedSpecifier: params.policy.requestedSpecifier,
+          source: params.policy.source,
+          mode,
+          skillName: params.slug,
+          sourceDir: params.extractedRoot,
+        });
+        return scanResult?.blocked
+          ? {
+              error: scanResult.blocked.reason,
+              failureKind: scanBlockedFailureKind(scanResult.blocked),
+            }
+          : undefined;
+      },
+    });
+    if (!result.ok) {
+      return result;
+    }
+    if (captureChanges) {
+      await dispatchCommittedSkillChangeBestEffort({
+        action: result.mode === "update" ? "updated" : "created",
+        source: changeSource,
+        workspaceDir: params.workspaceDir,
+        before: result.before,
+        after: result.after,
+        logger: params.logger,
+      });
+    }
+    return { ok: true, targetDir: result.targetDir };
+  } catch (err) {
+    return installFailure(formatErrorMessage(err), "unavailable");
+  }
+}
+
+/** Native file replacement on the workspace host; policy and hook dispatch stay with the caller. */
+export async function applyExtractedSkillRoot(
+  params: Parameters<WorkspaceSkillLifecycle["applyExtractedSkillRoot"]>[0],
+): Promise<SkillRootApplyResult> {
   try {
     if (
       !(await hasSkillArchiveRoot(
@@ -170,47 +196,22 @@ export async function installExtractedSkillRoot(params: {
         "invalid-request",
       );
     }
-    const changeSource = resolveCommittedSkillChangeSource(params.policy?.origin.type);
-    const sourceVersionValue =
-      params.policy?.origin.version ?? params.policy?.origin.commit ?? undefined;
-    const sourceVersion =
-      typeof sourceVersionValue === "string" || typeof sourceVersionValue === "number"
-        ? String(sourceVersionValue)
-        : undefined;
-    const shouldDispatchChange = hasCommittedSkillChangeHooks();
     const before =
-      shouldDispatchChange && effectiveMode === "update"
+      params.changes && effectiveMode === "update"
         ? await snapshotCommittedSkillArtifactBestEffort({
             skillDir: targetDir,
             skillKey: params.slug,
-            source: changeSource,
+            source: params.changes.source,
             logger: params.logger,
           })
         : undefined;
-
-    if (params.policy) {
-      const scanResult = await evaluateSkillInstallPolicy({
-        config: params.policy.config,
-        onInstallPolicyWarning: params.policy.onInstallPolicyWarning,
-        installId: params.policy.installId ?? "archive",
-        logger: params.logger ?? {},
-        origin: params.policy.origin,
-        requestedSpecifier: params.policy.requestedSpecifier,
-        source: params.policy.source,
-        mode: effectiveMode,
-        skillName: params.slug,
-        sourceDir: params.extractedRoot,
-      });
-      if (scanResult?.blocked) {
-        return installFailure(
-          scanResult.blocked.reason,
-          scanBlockedFailureKind(scanResult.blocked),
-        );
-      }
+    const policyFailure = await params.beforeInstall?.(effectiveMode);
+    if (policyFailure) {
+      return installFailure(policyFailure.error, policyFailure.failureKind);
     }
 
-    const onAfterBackup = params.onAfterBackup;
-    let backupBlocked = false;
+    const expectedClawHubState = params.expectedClawHubState;
+    let replacementBlocked: string | undefined;
     const install = await installPackageDir({
       sourceDir: params.extractedRoot,
       targetDir,
@@ -220,37 +221,41 @@ export async function installExtractedSkillRoot(params: {
       copyErrorPrefix: "failed to install skill",
       hasDeps: false,
       depsLogMessage: "",
-      ...(onAfterBackup
+      ...(expectedClawHubState !== undefined
         ? {
             afterBackup: async (backupDir: string) => {
-              const blocked = await onAfterBackup(backupDir);
-              backupBlocked = Boolean(blocked);
-              return blocked ? { ok: false as const, error: blocked } : { ok: true as const };
+              const current = expectedClawHubState
+                ? await checkClawHubSkillPlanAtPath(expectedClawHubState, backupDir)
+                : {
+                    ok: false as const,
+                    error: `Skill ${JSON.stringify(params.slug)} appeared during update.`,
+                  };
+              replacementBlocked = current.ok
+                ? undefined
+                : `${current.error} Updating replaces the installed skill directory.`;
+              return replacementBlocked
+                ? { ok: false as const, error: replacementBlocked }
+                : { ok: true as const };
             },
           }
         : {}),
     });
     if (!install.ok) {
-      return installFailure(install.error, backupBlocked ? "invalid-request" : "unavailable");
+      return {
+        ...installFailure(install.error, replacementBlocked ? "invalid-request" : "unavailable"),
+        ...(replacementBlocked ? { replacementBlocked } : {}),
+      };
     }
-    if (shouldDispatchChange) {
-      const after = await snapshotCommittedSkillArtifactBestEffort({
-        skillDir: targetDir,
-        skillKey: params.slug,
-        source: changeSource,
-        sourceVersion,
-        logger: params.logger,
-      });
-      await dispatchCommittedSkillChangeBestEffort({
-        action: effectiveMode === "update" ? "updated" : "created",
-        source: changeSource,
-        workspaceDir: params.workspaceDir,
-        before,
-        after,
-        logger: params.logger,
-      });
-    }
-    return { ok: true, targetDir };
+    const after = params.changes
+      ? await snapshotCommittedSkillArtifactBestEffort({
+          skillDir: targetDir,
+          skillKey: params.slug,
+          source: params.changes.source,
+          sourceVersion: params.changes.sourceVersion,
+          logger: params.logger,
+        })
+      : undefined;
+    return { ok: true, targetDir, mode: effectiveMode, before, after };
   } catch (err) {
     return installFailure(formatErrorMessage(err), "unavailable");
   }

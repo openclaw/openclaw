@@ -1,8 +1,12 @@
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -146,6 +150,79 @@ const isolated = {
 } as const;
 
 describe("direct session model catalogs", () => {
+  it("keeps a scoped models.list result across only a committed read acknowledgment", async () => {
+    await withOpenClawTestState(isolated, async (state) => {
+      const f = fixture();
+      await state.writeConfig(f.config);
+      const scope = { agentId: "main", sessionKey: "agent:main:catalog-read-marker" };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "catalog-read-marker-session",
+        lifecycleRevision: "catalog-read-marker-lifecycle",
+        updatedAt: 1,
+        lastReadAt: 1,
+        label: "catalog-read-marker-label",
+        authProfileOverride: f.authProfileId,
+        authProfileOverrideSource: "user",
+        toolOverrides: { webSearch: false },
+      });
+      const before = expectDefined(loadSessionEntry(scope), "saved entry");
+      const database = openOpenClawAgentDatabase(scope);
+      const readRow = () =>
+        expectDefined(
+          database.db
+            .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
+            .get(scope.sessionKey),
+          "saved row",
+        );
+      const beforeRow = readRow();
+      const beforePayload = expectDefined(
+        safeParseJsonRecord(String(beforeRow.entry_json)),
+        "saved payload",
+      );
+      const params = { sessionKey: scope.sessionKey, view: "configured" };
+      const control = await f.request(params);
+      expect(control).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining({
+          models: [expect.objectContaining({ id: "gpt-5.6-luna", available: true })],
+        }),
+        undefined,
+      );
+      const entered = createDeferred();
+      const release = createDeferred();
+      f.readPrepared.mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return f.snapshot;
+      });
+      const pending = f.request(params);
+      void pending.catch(() => {});
+      try {
+        await Promise.race([
+          entered.promise,
+          pending.then(() => {
+            throw new Error("Model catalog completed before the preparation hold");
+          }),
+        ]);
+        await patchSessionEntryCore(scope, () => ({ lastReadAt: 2 }), { preserveActivity: true });
+        expect(loadSessionEntry(scope)).toEqual({ ...before, lastReadAt: 2 });
+        expect(readRow()).toEqual({
+          ...beforeRow,
+          entry_json: JSON.stringify({ ...beforePayload, lastReadAt: 2 }),
+          last_read_at: 2,
+        });
+      } finally {
+        release.resolve();
+        await pending.catch(() => {});
+      }
+      const changed = await pending;
+      const fresh = await f.request(params);
+      expect(fresh.mock.calls).toEqual(control.mock.calls);
+      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+      expect(changed.mock.calls).toEqual(control.mock.calls);
+    });
+  });
+
   it.each([
     "selected patch",
     "selected reset",

@@ -1,4 +1,3 @@
-// Slack plugin module implements client behavior.
 import { hash } from "node:crypto";
 import { type WebClientOptions, WebClient } from "@slack/web-api";
 import type { SlackLookupClientOptions, SlackProxyDispatcher } from "./client-options.js";
@@ -30,18 +29,29 @@ export {
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
 
-export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
+export function createSlackWebClient(
+  token: string,
+  options: WebClientOptions = {},
+  assertDirectAdapterHandoff?: () => void,
+) {
   // Shared or mixed-operation clients stay timeout-free unless the caller opts in.
   // Slack can commit a mutation before a late response, so a default deadline is unsafe here.
-  return new WebClient(token, resolveSlackWebClientOptions(options));
+  return new WebClient(
+    token,
+    resolveSlackWebClientOptions(options, undefined, assertDirectAdapterHandoff),
+  );
 }
 
 export function createSlackReadClient(
   token: string,
   options: WebClientOptions = {},
   dispatcher?: SlackProxyDispatcher,
+  assertDirectAdapterHandoff?: () => void,
 ) {
-  return new WebClient(token, resolveSlackReadClientOptions(options, dispatcher));
+  return new WebClient(
+    token,
+    resolveSlackReadClientOptions(options, dispatcher, assertDirectAdapterHandoff),
+  );
 }
 
 function createSlackStartupAuthFetch(baseFetch: SlackFetch): SlackFetch {
@@ -82,12 +92,26 @@ export function createSlackStartupAuthClient(token: string, options: WebClientOp
   });
 }
 
-export function createSlackLookupClient(token: string, options: SlackLookupClientOptions = {}) {
-  return new WebClient(token, resolveSlackLookupClientOptions(options));
+export function createSlackLookupClient(
+  token: string,
+  options: SlackLookupClientOptions = {},
+  assertDirectAdapterHandoff?: () => void,
+) {
+  return new WebClient(
+    token,
+    resolveSlackLookupClientOptions(options, undefined, assertDirectAdapterHandoff),
+  );
 }
 
-export function createSlackWriteClient(token: string, options: WebClientOptions = {}) {
-  return new WebClient(token, resolveSlackWriteClientOptions(options));
+export function createSlackWriteClient(
+  token: string,
+  options: WebClientOptions = {},
+  assertDirectAdapterHandoff?: () => void,
+) {
+  return new WebClient(
+    token,
+    resolveSlackWriteClientOptions(options, undefined, assertDirectAdapterHandoff),
+  );
 }
 
 export function createSlackTokenCacheKey(token: string): string {

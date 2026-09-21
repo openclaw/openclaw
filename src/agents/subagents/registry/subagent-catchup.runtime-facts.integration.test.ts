@@ -8,6 +8,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -50,11 +51,14 @@ describe("parent runtime facts from retained completion obligations", () => {
       const controller = "agent:main:controller";
       const sessionId = "private-parent-incarnation";
       const result = 'PRIVATE_RETAINED_RESULT\n"quoted" ' + "x".repeat(2_100);
+      const storePath = resolvePhysicalSessionStorePath({ sessionKey: PARENT });
       const child = makeRestartRecoveryRun({
         runId: "private-catchup",
         childSessionKey: CHILD,
         requesterSessionKey: PARENT,
         controllerSessionKey: controller,
+        requesterStorePath: storePath,
+        controllerStorePath: storePath,
         requesterAgentId: "main",
         completionTarget: "parent",
         completionRequesterSessionId: sessionId,
@@ -267,6 +271,7 @@ describe("parent runtime facts from retained completion obligations", () => {
         runId: "catchup-other-writer",
         childSessionKey: CHILD,
         requesterSessionKey: PARENT,
+        requesterStorePath: resolvePhysicalSessionStorePath({ sessionKey: PARENT }),
         requesterAgentId: "main",
         execution: {
           status: "terminal",
@@ -386,11 +391,14 @@ describe("parent runtime facts from retained completion obligations", () => {
   it("keeps requester and controller reads scoped while live ownership overrides disk", async () => {
     setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
     const controller = "agent:main:controller";
+    const storePath = resolvePhysicalSessionStorePath({ sessionKey: PARENT });
     const child = makeRestartRecoveryRun({
       runId: "redirected-result",
       childSessionKey: CHILD,
       requesterSessionKey: PARENT,
       controllerSessionKey: controller,
+      requesterStorePath: storePath,
+      controllerStorePath: storePath,
       requesterAgentId: "main",
       execution: { status: "terminal", endedAt: Date.now() - 7_200_000, outcome: { status: "ok" } },
       completion: { required: true, resultText: RESULT },
@@ -425,12 +433,14 @@ describe("parent runtime facts from retained completion obligations", () => {
     async (canSpawn) => {
       setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
       const marker = "UNRELATED_RETAINED_PAYLOAD_CANARY";
+      const storePath = resolvePhysicalSessionStorePath({ sessionKey: PARENT });
       const rows = new Map<string, ReturnType<typeof makeRestartRecoveryRun>>();
       for (let index = 0; index < 128; index++) {
         const row = makeRestartRecoveryRun({
           runId: `unrelated-${index}`,
           childSessionKey: `agent:main:subagent:unrelated-${index}`,
           requesterSessionKey: "agent:main:other-parent",
+          requesterStorePath: storePath,
           requesterAgentId: "main",
           task: marker + "x".repeat(32_768),
           execution: {
@@ -447,6 +457,7 @@ describe("parent runtime facts from retained completion obligations", () => {
         runId: "scope-owned",
         childSessionKey: CHILD,
         requesterSessionKey: PARENT,
+        requesterStorePath: storePath,
         requesterAgentId: "main",
         execution: {
           status: "terminal",

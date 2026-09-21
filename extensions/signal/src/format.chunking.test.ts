@@ -316,16 +316,34 @@ describe("markdownToSignalTextChunks", () => {
   });
 
   it("treats Infinity as unbounded for media captions", () => {
-    const markdown = "Here's **another** photo from today's walk.";
+    const markdown = "𐐀 [example.com#Install](https://example.com#install) **read**";
 
     const chunks = markdownToSignalTextChunks(markdown, Number.POSITIVE_INFINITY);
 
-    expect(chunks).toHaveLength(1);
-    expect(requireFirstChunk(chunks)?.text).toBe("Here's another photo from today's walk.");
-    expect(requireFirstChunk(chunks)?.styles.map((style) => style.style)).toContain("BOLD");
+    const text = "𐐀 example.com#Install (https://example.com#install) read";
+    expect(chunks).toEqual([
+      { text, styles: [{ start: text.indexOf("read"), length: 4, style: "BOLD" }] },
+    ]);
   });
 
   describe("link expansion chunk limit", () => {
+    it("preserves case-distinct destinations and chunk-local UTF-16 styles", () => {
+      const chunks = markdownToSignalTextChunks(
+        "𐐀 [example.com/Report](https://example.com/report) **one**\n\n[example.com?id=AbC](https://example.com?id=abc) **two**",
+        80,
+      );
+      const texts = [
+        "𐐀 example.com/Report (https://example.com/report) one",
+        "example.com?id=AbC (https://example.com?id=abc) two",
+      ];
+      expect(chunks).toEqual(
+        texts.map((text) => ({
+          text,
+          styles: [{ start: text.length - 3, length: 3, style: "BOLD" }],
+        })),
+      );
+    });
+
     it("does not exceed chunk limit after link expansion", () => {
       // Create text that is close to limit, with a link that will expand
       const limit = 100;

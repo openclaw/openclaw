@@ -24,6 +24,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
@@ -110,7 +111,7 @@ describe("chat history model selection defaults", () => {
         { agentId: "research", sessionKey: "agent:research:main" },
         { sessionId: "main-research", updatedAt: 1 },
       );
-      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
       const client = identifiedClient("literal-global-operator");
       client.connect.scopes = ["operator.admin"];
       for (const [sessionKey, sessionId] of [
@@ -165,7 +166,7 @@ describe("chat history model selection defaults", () => {
           "history handler",
         )({
           params: { agentId: scope.agentId, sessionKey: scope.sessionKey },
-          context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+          context: await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
           req: { type: "req", id: "model-target", method },
           client: { connect: { scopes: ["operator.admin"] } } as never,
           isWebchatConnect: () => false,
@@ -207,7 +208,7 @@ describe("chat history sharing projection", () => {
           )({
             params: scope,
             client,
-            context: createDirectChatContext(),
+            context: await createHistoryReadContext(),
             respond,
             req: { type: "req", id: "sharing-history", method },
             isWebchatConnect: () => false,
@@ -245,7 +246,7 @@ describe("chat history sharing projection", () => {
           await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
           return undefined;
         });
-        const context = createDirectChatContext({ readChatStartupProjection });
+        const context = await createHistoryReadContext({ readChatStartupProjection });
         const call = async () => {
           const respond = vi.fn<RespondFn>();
           await expectDefined(
@@ -325,7 +326,7 @@ describe("chat history delta publication", () => {
           message: { role: "user", content: "before cursor", timestamp: 1 },
         });
         const client = identifiedClient("viewer");
-        const context = createDirectChatContext();
+        const context = await createHistoryReadContext();
         const handler = expectDefined(chatHistoryHandlers[method], "history handler");
         const call = async (cursor?: string) => {
           const respond = vi.fn<RespondFn>();
@@ -404,7 +405,7 @@ describe("chat history consumption receipts", () => {
           sessionId: "collected",
         };
         await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-        const context = createDirectChatContext();
+        const context = await createHistoryReadContext();
         const handler = expectDefined(chatHistoryHandlers[method], "history handler");
         const call = async (params: Record<string, unknown> = {}) => {
           let result: unknown;
@@ -567,7 +568,7 @@ describe("chat history exact-entry snapshots", () => {
           status: "running",
           skillsSnapshot,
         });
-        const context = createDirectChatContext();
+        const context = await createHistoryReadContext();
         const handler = expectDefined(chatHistoryHandlers[method], "history handler");
         const call = async () => {
           const respond = vi.fn();
@@ -660,7 +661,7 @@ describe("chat history recovery byte budget", () => {
             },
           });
         }
-        const context = createDirectChatContext();
+        const context = await createHistoryReadContext();
         const handler = expectDefined(chatHistoryHandlers[method], "history handler");
         const call = async (params: Record<string, unknown> = {}) => {
           const respond = vi.fn<RespondFn>();

@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
@@ -37,6 +38,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -44,9 +47,11 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -386,6 +391,136 @@ class ChatCompletedWorkLayoutTest {
     }
     capture("session-disclosure-reset")
   }
+
+  @Test
+  fun chatErrorNoticeShowsTheRecoveryInstructionWithoutEllipsis() {
+    val error =
+      "The requested operation could not finish because the selected resource is unavailable. " +
+        "Open the resource settings, select an available resource, then retry your message."
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent(
+        "chat",
+        buildJsonObject {
+          put("sessionKey", SESSION)
+          put("state", "error")
+          put("errorMessage", error)
+        }.toString(),
+      )
+    }
+    composeRule.waitUntil { composeRule.runOnIdle { model.chatError.value == error } }
+    capture("recovery-notice")
+    val notice = composeRule.onNodeWithText(error, useUnmergedTree = true).assertIsDisplayed()
+    val layouts = mutableListOf<TextLayoutResult>()
+    notice.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
+    val layout = layouts.single()
+    assertTrue("Recovery instructions must wrap, not disappear after the first line", layout.lineCount > 1)
+    assertTrue("Every recovery line must be laid out", !layout.hasVisualOverflow)
+    assertEquals(error.length, layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
+    assertTrue((0 until layout.lineCount).none(layout::isLineEllipsized))
+  }
+
+  @Test
+  fun collapsedCommandFailureIsVisibleWithoutOpeningItsOutput() {
+    showToolResults(listOf(toolResult("command-error", "exec", "Command could not finish.", isError = true)))
+    val row = composeRule.onNode(hasClickAction() and hasText(nativeString("Failed")))
+    capture("failed-command-collapsed")
+    row.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText("Command could not finish.", useUnmergedTree = true).assertDoesNotExist()
+    row.performClick()
+    composeRule.onNodeWithText("Command could not finish.").assertIsDisplayed()
+    row.performClick()
+    row.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText("Command could not finish.", useUnmergedTree = true).assertDoesNotExist()
+  }
+
+  @Test
+  fun collapsedBlankReadFailureRemainsInspectable() {
+    showToolResults(listOf(toolResult("read-error", "read", "", isError = true)))
+    val row = composeRule.onNode(hasClickAction() and hasText(nativeString("Failed")) and hasText("Read"))
+    capture("failed-read-collapsed")
+    row.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(nativeString("No output — tool failed."), useUnmergedTree = true).assertDoesNotExist()
+    row.performClick()
+    composeRule.onNodeWithText(nativeString("No output — tool failed.")).assertIsDisplayed()
+  }
+
+  @Test
+  fun collapsedMixedToolGroupExposesFailureAndKeepsSuccessfulRowsNeutral() {
+    showToolResults(
+      listOf(
+        toolResult("read-ok", "read", "Read succeeded.", isError = false),
+        toolResult("command-error", "exec", "Command could not finish.", isError = true),
+      ),
+    )
+    val group = composeRule.onNode(hasClickAction() and hasText(nativeString("Tool error")))
+    capture("failed-group-collapsed")
+    group.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(nativeString("Failed"), useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNodeWithText("Command could not finish.", useUnmergedTree = true).assertDoesNotExist()
+    group.performClick()
+    val failed = composeRule.onNode(hasClickAction() and hasText(nativeString("Failed")))
+    failed.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNode(hasClickAction() and hasText("Read")).assert(hasText(nativeString("Failed")).not())
+    failed.performClick()
+    composeRule.onNodeWithText("Command could not finish.").assertIsDisplayed()
+    failed.performClick()
+    group.performClick()
+    group.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(nativeString("Failed"), useUnmergedTree = true).assertDoesNotExist()
+  }
+
+  @Test
+  fun successfulToolGroupDoesNotClaimFailure() {
+    showToolResults(
+      listOf(
+        toolResult("read-ok", "read", "Read succeeded.", isError = false),
+        toolResult("command-ok", "exec", "Command succeeded.", isError = false),
+      ),
+    )
+    val group = composeRule.onNode(hasClickAction() and hasText(nativeString("Tool details")))
+    group.assertIsDisplayed().assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Collapsed")))
+    composeRule.onNodeWithText(nativeString("Tool error"), useUnmergedTree = true).assertDoesNotExist()
+    group.performClick()
+    composeRule.onNodeWithText(nativeString("Failed"), useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNode(hasClickAction() and hasText("Read")).performClick()
+    composeRule.onNodeWithText("Read succeeded.").assertIsDisplayed()
+  }
+
+  private fun showToolResults(results: List<JsonObject>) {
+    val history = Json.parseToJsonElement(HISTORY).jsonObject
+    // No later answer: exercise the retained failure rows through the real timeline owner.
+    historyResponse = JsonObject(history + ("messages" to JsonArray(results))).toString()
+    composeRule.runOnIdle { model.refreshChat() }
+    composeRule.waitUntil {
+      composeRule.runOnIdle {
+        !model.chatHistoryLoading.value && model.chatMessages.value.map { it.entryId } ==
+          results.map {
+            it
+              .getValue("__openclaw")
+              .jsonObject
+              .getValue("id")
+              .jsonPrimitive
+              .content
+          }
+      }
+    }
+  }
+
+  private fun toolResult(
+    id: String,
+    name: String,
+    output: String,
+    isError: Boolean,
+  ): JsonObject =
+    buildJsonObject {
+      put("role", "toolResult")
+      put("toolCallId", id)
+      put("toolName", name)
+      put("content", output)
+      put("isError", isError)
+      put("timestamp", 1783555002500L)
+      put("__openclaw", buildJsonObject { put("id", id) })
+    }
 
   private fun capture(name: String) {
     val directory = System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR") ?: return

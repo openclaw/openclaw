@@ -12,6 +12,7 @@ import {
   validateMessageBody,
   type Envelope,
   type MessageBody,
+  type ReplayStore,
 } from "./envelope.js";
 import {
   admitVerdict,
@@ -22,7 +23,6 @@ import {
 } from "./guard.js";
 import { parseHandleEpoch } from "./identity.js";
 import { signReceipt, type SignedReceipt } from "./receipts.js";
-import type { ReplayStore } from "./replay.js";
 
 export interface ReviewRequest {
   id: string;

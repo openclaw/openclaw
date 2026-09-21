@@ -1,7 +1,9 @@
 import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
-/** Result types returned by isolated cron agent runs. */
+/** Execution and result contracts for isolated cron agent runs. */
 import type {
+  CronJob,
   CronDeliveryTrace,
   CronResolvedDeliveryState,
   CronNextCheckProposal,
@@ -38,3 +40,28 @@ export type RunCronAgentTurnResult = {
   nextCheck?: CronNextCheckProposal;
 } & CronRunOutcome &
   CronRunTelemetry;
+
+/** Agent payload accepted by an isolated cron execution. */
+export type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
+
+/** Runner-start metadata delivered to the outer execution owner. */
+export type CronRunnerStartedInfo = {
+  lifecycleGeneration?: string;
+  isFallback?: boolean;
+  provider?: string;
+  model?: string;
+};
+
+/** Completed prompt result recorded by the outer execution owner. */
+export type CronCompletedPromptRun = {
+  runResult: EmbeddedAgentRunResult;
+  fallbackProvider: string;
+  fallbackModel: string;
+  runStartedAt: number;
+  runEndedAt: number;
+};
+
+/** Result envelope returned after an isolated cron prompt completes. */
+export type CronExecutionResult = CronCompletedPromptRun & {
+  completedPromptRuns: readonly CronCompletedPromptRun[];
+};

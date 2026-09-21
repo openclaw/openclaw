@@ -12,7 +12,7 @@ import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayCliClient,

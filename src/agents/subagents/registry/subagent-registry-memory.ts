@@ -4,6 +4,7 @@
  * Shared by registry read/write helpers for active in-memory run state.
  */
 import { isDeepStrictEqual } from "node:util";
+import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
@@ -101,7 +102,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     };
   }
 
-  /** Publish only accepted ownership, after synchronous registration/recovery rollback decisions. */
+  /** Publish only accepted ownership, after synchronous registration/replacement rollback decisions. */
   commitOwnership(entry: SubagentRunRecord): void {
     if (this.get(entry.runId) !== entry) {
       return;
@@ -114,22 +115,12 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         previous.childSessionKey === entry.childSessionKey &&
         scope.isSuccessor(entry)
       ) {
-        const receipt = previous.execution.restartRecovery;
-        // Follow only the committed receipt handoff. An ordinary displacement closes
-        // this operation permanently, even if its row disappears before Stop resumes.
-        scope.observation =
-          receipt?.phase === "accepted" &&
-          receipt.idempotencyKey === entry.runId &&
-          entry.execution.restartRecovery === receipt
-            ? {
-                entry,
-                generation: entry.generation,
-                createdAt: entry.createdAt,
-                state: "selected",
-              }
-            : { state: "superseded" };
+        // New work supersedes the selected execution, even if the replacement
+        // is retired before the pending Stop resumes.
+        scope.observation = { state: "superseded" };
       }
     }
+    publishSubagentRunChanges([entry.childSessionKey]);
   }
 
   /** Normal cleanup calls this only after its deletion commits; raw map deletion is not evidence. */
@@ -144,6 +135,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         observed.state = "retired";
       }
     }
+    publishSubagentRunChanges([entry.childSessionKey]);
   }
 
   override set(runId: string, entry: SubagentRunRecord): this {
@@ -193,6 +185,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     runsByChildSessionKey.clear();
     runsByRequesterSessionKey.clear();
     runsByCollectorGroupKey.clear();
+    publishSubagentRunChanges();
   }
 }
 

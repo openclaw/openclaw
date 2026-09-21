@@ -39,8 +39,10 @@ it.each(["session", "connection", "agent", "drafts"] as const)(
   async (changed) => {
     const originalSend = vi.fn(async () => true);
     const nextSend = vi.fn(async () => true);
+    const requestUpdate = vi.fn();
     const state: Parameters<typeof createAsyncQuestionPresentation>[0] = {
       asyncQuestionDrafts: new Map(),
+      asyncQuestionRevision: 0,
       transcriptRenderContext: { onAsyncQuestionSubmit: originalSend },
     };
     const props = {
@@ -48,6 +50,7 @@ it.each(["session", "connection", "agent", "drafts"] as const)(
       currentAgentId: "main",
       connectionEpoch: 1,
       onAsyncQuestionSubmit: originalSend,
+      onRequestUpdate: requestUpdate,
     };
     const retained = createAsyncQuestionPresentation(state, props);
     if (changed === "session") {
@@ -61,6 +64,10 @@ it.each(["session", "connection", "agent", "drafts"] as const)(
     }
     state.transcriptRenderContext.onAsyncQuestionSubmit = nextSend;
     const current = createAsyncQuestionPresentation(state, props);
+    retained.onChange();
+    expect(requestUpdate).not.toHaveBeenCalled();
+    current.onChange();
+    expect(requestUpdate).toHaveBeenCalledOnce();
     expect(await retained.submit?.("> Which audience?\n\nEveryone")).toBe(false);
     expect(originalSend).not.toHaveBeenCalled();
     expect(nextSend).not.toHaveBeenCalled();

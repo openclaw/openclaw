@@ -26,6 +26,7 @@ export type ExpectedRestartRecoveryTarget = {
   canonicalSessionKey?: string;
   sessionId: string;
   sessionKey: string;
+  claim?: { runId: string; sourceRunId: string };
 };
 
 export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {

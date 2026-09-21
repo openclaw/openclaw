@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Page } from "playwright";
 import { expect } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 import {
   controlUiSessionPath,

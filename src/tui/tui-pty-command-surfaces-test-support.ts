@@ -49,6 +49,12 @@ export async function exerciseTuiCommandSurface(
       await fixture.waitForLogEntry((entry) => entry.method === "listModels");
       const pickerRows = await waitForRows((rows) => rows.some((row) => row.includes("Fixture 2")));
       expect(pickerRows.some((row) => row.includes("loading models..."))).toBe(false);
+      await fixture.run.write("fixture m", { delay: false });
+      await waitForRows(
+        (rows) =>
+          rowsInclude(rows, "search:", "fixture m") &&
+          rows.some((row) => row.includes("fixture-provider/fixture-model-2")),
+      );
       await fixture.run.write("\x1b[B\r", { delay: false });
       await fixture.waitForLogEntry(
         (entry) =>

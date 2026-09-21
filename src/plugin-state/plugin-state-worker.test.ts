@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { serialize } from "node:v8";
+import { deserialize, serialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
+import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import {
   appendMemoryHostEvent,
   readMemoryHostEventRecords,
@@ -18,6 +24,7 @@ import {
   createPluginStateSyncKeyedStore,
   pluginStateEntriesInKeyRange,
   registerPluginStateSequencedJournalEntry,
+  sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
@@ -28,6 +35,139 @@ afterEach(async () => {
 });
 
 describe("worker plugin state", () => {
+  it("opens cold state and sweeps reopened state without host data SQL", async () => {
+    await withOpenClawTestState({ label: "plugin-state-worker-sweep" }, async (state) => {
+      const databasePath = resolveOpenClawStateSqlitePath(state.env);
+      const observation = observeHostDataSql(state.env);
+      try {
+        expect(existsSync(databasePath)).toBe(false);
+        expect(await sweepExpiredPluginStateEntries({ env: state.env })).toBe(0);
+        expect(existsSync(databasePath)).toBe(true);
+        for (const method of observation.calls) {
+          expect(method).not.toHaveBeenCalled();
+        }
+
+        const now = Date.now();
+        seedPluginStateEntriesForTests([
+          {
+            pluginId: "fixture-plugin",
+            namespace: "sweep",
+            key: "expired",
+            value: { expired: true },
+            expiresAt: now - 1,
+          },
+          {
+            pluginId: "fixture-plugin",
+            namespace: "sweep",
+            key: "live",
+            value: { live: true },
+            expiresAt: now + 86_400_000,
+          },
+        ]);
+        await closeOpenClawStateDatabaseAsync();
+        for (const method of observation.calls) {
+          method.mockClear();
+        }
+        expect(await sweepExpiredPluginStateEntries({ env: state.env })).toBe(1);
+        expect(await sweepExpiredPluginStateEntries({ env: state.env })).toBe(0);
+        for (const method of observation.calls) {
+          expect(method).not.toHaveBeenCalled();
+        }
+      } finally {
+        observation.restore();
+      }
+      const persisted = createPluginStateSyncKeyedStore("fixture-plugin", {
+        namespace: "sweep",
+        maxEntries: 10,
+        env: state.env,
+      });
+      expect(persisted.lookup("expired")).toBeUndefined();
+      expect(persisted.lookup("live")).toEqual({ live: true });
+    });
+  });
+
+  it.each(["observe", "compareDelete"] as const)(
+    "waits for an overlapping host owner before worker lifecycle acquisition during %s",
+    async (operation) => {
+      await withOpenClawTestState({ label: "plugin-state-lock-custody" }, async (state) => {
+        const assertActive = vi.fn();
+        const store = createPluginStateKeyedStore<string>(
+          "memory-core",
+          {
+            namespace: "lock-custody",
+            retention: "retained",
+            env: state.env,
+          },
+          assertActive,
+        );
+        const messages = vi.spyOn(Worker.prototype, "postMessage");
+        await store.register("workspace", "owner");
+        const worker = messages.mock.contexts[0];
+        messages.mockRestore();
+        if (!(worker instanceof Worker)) {
+          throw new Error("Expected the shared-state worker");
+        }
+        const observation = await store.observe("workspace");
+        let held: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
+        const nativePost = worker.postMessage.bind(worker);
+        const dispatch = vi
+          .spyOn(worker, "postMessage")
+          .mockImplementation((message, transferList) => {
+            const request = asOptionalRecord(message);
+            if (
+              request?.type === "execute" &&
+              request.input instanceof Uint8Array &&
+              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
+            ) {
+              // This owner arrives too late to be delegated. Fresh worker acquisition
+              // must wait for its release while the host keeps servicing authority checks.
+              held = acquireStateDatabaseCoordinator({
+                databasePath: resolveOpenClawStateSqlitePath(state.env),
+                busyTimeoutMs: 0,
+              });
+              assertActive.mockClear();
+            }
+            return nativePost(message, transferList);
+          });
+        let completed = false;
+        const pending = (
+          operation === "observe"
+            ? store.observe("workspace")
+            : store.compareAndApply("workspace", observation.comparison, {
+                operation: "delete",
+                action: "delete",
+              })
+        ).then(
+          (value) => {
+            completed = true;
+            return { ok: true, value } as const;
+          },
+          (error: unknown) => {
+            completed = true;
+            return { ok: false, error } as const;
+          },
+        );
+        try {
+          await vi.waitFor(() => expect(held).toBeDefined());
+          await vi.waitFor(() => expect(assertActive.mock.calls.length).toBeGreaterThan(4));
+          expect(completed).toBe(false);
+          held?.release();
+          held = undefined;
+          if (operation === "observe") {
+            await expect(pending).resolves.toMatchObject({ ok: true, value: { value: "owner" } });
+          } else {
+            await expect(pending).resolves.toEqual({ ok: true, value: { status: "applied" } });
+          }
+        } finally {
+          dispatch.mockRestore();
+          held?.release();
+          await pending;
+        }
+        expect(await store.lookup("workspace")).toBe(operation === "observe" ? "owner" : undefined);
+      });
+    },
+  );
+
   it("appends and reads the memory journal off-thread with unchanged persisted bytes", async () => {
     await withOpenClawTestState({ label: "memory-journal-worker" }, async (state) => {
       const workspaceDir = state.workspaceDir;
@@ -38,14 +178,8 @@ describe("worker plugin state", () => {
         resultCount: 0,
         results: [],
       };
-      const native = requireNodeSqlite();
-      const sql = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((method) =>
-          vi.spyOn(native.StatementSync.prototype, method),
-        ),
-      ];
+      const observation = observeHostDataSql(state.env);
+      const sql = observation.calls;
       const timings: Record<string, number> = {};
       try {
         expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([]);
@@ -76,7 +210,7 @@ describe("worker plugin state", () => {
           expect(method).not.toHaveBeenCalled();
         }
       } finally {
-        sql.forEach((method) => method.mockRestore());
+        observation.restore();
       }
       const { db } = openOpenClawStateDatabase({ env: state.env });
       const rows = db
@@ -152,13 +286,8 @@ describe("worker plugin state", () => {
         maxEntries: 10,
         overflowPolicy: "reject-new" as const,
       };
-      const native = requireNodeSqlite();
-      const prepare = vi.spyOn(native.DatabaseSync.prototype, "prepare");
-      const exec = vi.spyOn(native.DatabaseSync.prototype, "exec");
-      const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      );
-      const sql = [prepare, exec, ...statements];
+      const observation = observeHostDataSql();
+      const sql = observation.calls;
       try {
         const store = createPluginStateKeyedStore<number>("slack", options);
         const legacy = createPluginStateSyncKeyedStore<number>("slack", options);
@@ -218,7 +347,7 @@ describe("worker plugin state", () => {
           expect(method).not.toHaveBeenCalled();
         }
       } finally {
-        sql.forEach((method) => method.mockRestore());
+        observation.restore();
       }
       const persisted = createPluginStateSyncKeyedStore<number>("slack", options);
       expect(persisted.lookup("legacy")).toBe(1);

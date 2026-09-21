@@ -102,6 +102,14 @@ export async function resolveChatArtifactDownload(
     params,
     { timeoutMs: CHAT_ARTIFACT_DOWNLOAD_TIMEOUT_MS },
   );
+  if (
+    result?.encoding === "base64" &&
+    result.artifact.type === "image" &&
+    /^image\/(?:png|jpeg|gif|webp|avif)$/u.test(result.artifact.mimeType ?? "") &&
+    result.data
+  ) {
+    return { url: `data:${result.artifact.mimeType};base64,${result.data}` };
+  }
   const url = typeof result?.url === "string" ? result.url.trim() : "";
   if (!url) {
     return null;

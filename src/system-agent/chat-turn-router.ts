@@ -587,15 +587,11 @@ export class ChatTurnRouter {
     return [result.text, verify].filter(Boolean).join("\n");
   }
 
-  private startModelSetup(): SystemAgentChatReply {
+  private async startModelSetup(): Promise<SystemAgentChatReply> {
     this.clearPendingProposals();
-    return {
-      text: [
-        "Changing provider credentials would replace the inference route powering this session.",
-        "Stop the OpenClaw host through whatever started it. Run `openclaw onboard` on the machine running OpenClaw: it stages credentials, live-tests the new route, and saves only a passing setup. Then restart the host and return to OpenClaw.",
-      ].join("\n"),
-      action: "none",
-    };
+    const capture = createCaptureRuntime();
+    await executeSystemAgentOperation({ kind: "model-setup" }, capture);
+    return { text: capture.read(), action: "none" };
   }
 
   private commandDeps(): SystemAgentCommandDeps {

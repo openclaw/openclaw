@@ -15,12 +15,10 @@ vi.mock("./gateway.js", () => ({
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
-vi.mock("../../gateway/server-plugins.js", () => ({
+vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcess: dispatchMock,
   getInProcessGatewayRequestContext: (resolve?: () => GatewayRequestContext | undefined) =>
     resolve ? resolve() : host.context,
-  hasInProcessGatewayContext: (resolve?: () => GatewayRequestContext | undefined) =>
-    Boolean(resolve ? resolve() : host.context),
 }));
 
 describe("gateway tool", () => {

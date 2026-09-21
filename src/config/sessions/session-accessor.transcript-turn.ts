@@ -320,8 +320,8 @@ async function persistExpectedSessionTranscriptTurn(
       sessionKey: target.sessionKey,
       sessionTarget: target,
     },
-    async () => {
-      const committed = await appendExpectedSessionTranscriptTurn(
+    () =>
+      appendExpectedSessionTranscriptTurn(
         {
           agentId,
           // Incognito database identity needs env even with a concrete store locator.
@@ -347,18 +347,13 @@ async function persistExpectedSessionTranscriptTurn(
             ...append,
             message: attachSessionTranscriptRunId(append.message, options.runId),
           })),
+          onMessageCommitted: options.onMessageCommitted,
           sessionLifecyclePatch: options.sessionLifecyclePatch,
           sessionTurnMutation: options.sessionTurnMutation,
           sessionFile: target.sessionKey!,
           touchSessionEntry: options.touchSessionEntry,
         },
-      );
-      // Owned-write teardown can reject after commit; complete custody before that drain.
-      for (const message of committed.appendedMessages) {
-        options.onMessageCommitted?.(message);
-      }
-      return committed;
-    },
+      ),
   );
 
   if (turn.rejectedReason === "session-rebound") {

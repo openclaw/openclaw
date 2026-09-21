@@ -68,6 +68,10 @@ The baseline list should stay broad enough to cover:
   protocol, fixture, record/replay, and chaos coverage. It is additive and
   does not replace the `mock-openai` scenario dispatcher.
 
+The scenario-aware mock answers Activity recap requests separately from agent
+turns. Recaps quote conversation text as data, so they cannot trigger scenario
+tools or enter the scenario request evidence returned by `/debug/requests`.
+
 For an IPv6 loopback server, run `pnpm openclaw qa mock-openai --host ::1`.
 The printed URL includes brackets, such as `http://[::1]:<port>`; use that URL
 when configuring a client. QA Lab also brackets IPv6 hosts in its listen and
@@ -126,6 +130,7 @@ Runner plugins own the transport contract:
 - how outbound messages are observed
 - how transcripts and normalized transport state are exposed
 - how transport-backed actions are executed
+- which trusted module preloads the Gateway runtime needs
 - how transport-specific reset or cleanup is handled
 
 The minimum adoption bar for a new channel:

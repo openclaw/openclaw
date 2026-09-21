@@ -219,6 +219,7 @@ export function createPluginValueView(
     hasToken: (token: object) => boolean;
   },
   admit: <T>(run: () => T) => T,
+  admitCallback: <T>(run: () => T) => T,
 ) {
   const wrapped = new WeakMap<object, unknown>();
   const derivedReceivers = new WeakSet<object>();
@@ -228,7 +229,7 @@ export function createPluginValueView(
     originalValues: bindings.originalValues,
     wrapped,
     wrap: (value) => wrap(value),
-    invoke: (callback) => admit(() => bindings.invoke(callback)),
+    invoke: admitCallback,
   });
   const wrapResult = <T>(result: T, callerData?: unknown[]): T => {
     const completion = resolvePluginReturnPromise(result);
@@ -292,17 +293,16 @@ export function createPluginValueView(
       const invoke = <R>(run: () => R): R =>
         iteration?.active ? iteration.invoke(run) : admit(run);
       let resolvedReceiver = receiver;
-      const property = (() => {
-        try {
-          resolvedReceiver = resolveReceiver(key, receiver);
-          return readPluginMember(object, key, invoke, resolvedReceiver);
-        } catch (error) {
-          if (key === "return" && iteration?.active) {
-            iteration.close();
-          }
-          throw error;
+      let property: unknown;
+      try {
+        resolvedReceiver = resolveReceiver(key, receiver);
+        property = readPluginMember(object, key, invoke, resolvedReceiver);
+      } catch (error) {
+        if (key === "return" && iteration?.active) {
+          iteration.close();
         }
-      })();
+        throw error;
+      }
       if (key === "return" && iteration && typeof property !== "function") {
         if (property == null) {
           return (...args: unknown[]) => iteration.call(key, undefined, args);

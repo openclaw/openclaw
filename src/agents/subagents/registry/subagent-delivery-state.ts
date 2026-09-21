@@ -17,6 +17,8 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
     childSessionKey: entry.childSessionKey,
     ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
     requesterSessionKey: entry.requesterSessionKey,
+    requesterStorePath: entry.requesterStorePath,
+    controllerStorePath: entry.controllerStorePath,
     ...(entry.collect
       ? {
           collect: true,

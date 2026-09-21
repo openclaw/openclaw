@@ -313,9 +313,8 @@ system Node packages.
   </Step>
 </Steps>
 
-On FreeBSD, use the default npm method (`--install-method npm`). The current
-checkout pins pnpm 12.3.4, which has no FreeBSD executable; some native source
-dependencies also lack FreeBSD support, so `--install-method git` is unsupported.
+On FreeBSD, use the default npm method (`--install-method npm`) with a published
+version or compatible built `.tgz` package. Source/git installation is unsupported.
 If OpenClaw is managed by pkg or Ports, keep using that package owner instead of
 installing over it.
 
@@ -420,7 +419,7 @@ With `--node-only`, `install-cli.sh` stops after provisioning Node into `<prefix
     Requires PowerShell 5+.
   </Step>
   <Step title="Ensure a supported Node.js runtime">
-    If missing, attempts install via winget, then Chocolatey, then Scoop. If no package manager is available, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
+    If missing, attempts install via winget, then Chocolatey, then Scoop. If those methods are unavailable, fail, or leave an unsupported runtime, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using the selected `-Tag`, launched from a writable installer temp directory so shells opened in protected folders such as `C:\` still work

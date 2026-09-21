@@ -17,7 +17,10 @@ import {
   detectLegacyDeviceAuth,
   migrateLegacyDeviceAuth,
 } from "../infra/state-migrations.device-auth.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -106,7 +109,13 @@ describe("noteDevicePairingHealth", () => {
             callerScopes: ["operator.read"],
           });
 
-          await run({ stateDir, identity, publicKey, initial });
+          try {
+            await run({ stateDir, identity, publicKey, initial });
+          } finally {
+            await closeOpenClawStateDatabaseByPathAsync(
+              path.join(stateDir, "state", "openclaw.sqlite"),
+            );
+          }
         },
       );
     });
@@ -195,13 +204,13 @@ describe("noteDevicePairingHealth", () => {
   });
 
   it.each([
-    {
-      file: "devices/paired.json",
-      mode: "local",
+    ...(["devices/paired.json", "nodes/paired.json"] as const).map((file) => ({
+      file,
+      mode: "local" as const,
       findingPath: "devices.legacy-store",
       requirement: "pairing-store-legacy-file",
-      fixHint: "Restart the gateway",
-    },
+      fixHint: "openclaw doctor --fix",
+    })),
     ...(["local", "remote"] as const).map((mode) => ({
       file: "identity/device-auth.json",
       mode,
@@ -216,7 +225,9 @@ describe("noteDevicePairingHealth", () => {
         { prefix: "openclaw-doctor-device-pairing-", env: { OPENCLAW_TEST_FAST: "1" } },
         async (state) => {
           const content =
-            testCase.file === "devices/paired.json" ? "{not-json}" : legacyDeviceAuthContents;
+            testCase.requirement === "pairing-store-legacy-file"
+              ? "{not-json}"
+              : legacyDeviceAuthContents;
           const sourcePath = await state.writeText(testCase.file, content);
           const params = { cfg: { gateway: { mode: testCase.mode } }, healthOk: false };
 
@@ -228,7 +239,7 @@ describe("noteDevicePairingHealth", () => {
               path: testCase.findingPath,
               requirement: testCase.requirement,
               message: expect.stringContaining(
-                testCase.file === "devices/paired.json"
+                testCase.requirement === "pairing-store-legacy-file"
                   ? "has not been imported"
                   : "is still present",
               ),
@@ -308,9 +319,9 @@ describe("noteDevicePairingHealth", () => {
           }
           expect(readTokenRow()).toEqual({ token: expectedToken });
           // Existing rows do not release the legacy-file access guard.
-          expect(() =>
+          await expect(
             loadDeviceAuthToken({ deviceId: "synthetic-device", role: "operator", env: state.env }),
-          ).toThrow("Legacy device auth requires migration");
+          ).rejects.toThrow("Legacy device auth requires migration");
           const params = { cfg: { gateway: { mode: "remote" as const } }, healthOk: false };
           const findings = await collectDevicePairingHealthFindings(params);
           expect(findings).toEqual([
@@ -359,6 +370,22 @@ describe("noteDevicePairingHealth", () => {
       const message = requireNoteMessage();
       expect(message).toContain("stale device-token pattern");
       expect(message).toContain("openclaw devices rotate");
+    });
+  });
+
+  it("preserves pairing diagnostics when the token inventory read rejects", async () => {
+    await withApprovedOperatorPairing(async () => {
+      const inventory = vi
+        .spyOn(await import("../infra/device-auth-store.js"), "loadDeviceAuthTokens")
+        .mockRejectedValueOnce(new Error("synthetic inventory failure"));
+      try {
+        await expect(
+          collectDevicePairingHealthFindings({ cfg: { gateway: { mode: "local" } } }),
+        ).resolves.toEqual([]);
+        expect(inventory).toHaveBeenCalledOnce();
+      } finally {
+        inventory.mockRestore();
+      }
     });
   });
 

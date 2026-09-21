@@ -11,6 +11,7 @@ import {
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { repairJson } from "@openclaw/ai/internal/runtime";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
@@ -150,10 +151,11 @@ function prepareEditArguments(input: unknown): EditToolInput {
 
   const args = { ...(input as Record<string, unknown>) };
 
-  // Some models (Opus 4.6, GLM-5.1) send edits as a JSON string instead of an array
+  // Serialized replacements contain literal file text, so valid JSON escapes must
+  // survive rather than being reinterpreted by the repair owner's path heuristic.
   if (typeof args.edits === "string") {
     try {
-      const parsed = JSON.parse(args.edits);
+      const parsed = JSON.parse(repairJson(args.edits, { preserveValidControlEscapes: true }));
       if (Array.isArray(parsed)) {
         args.edits = parsed;
       }

@@ -5,22 +5,26 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
-import { invalidateModelCatalogCache } from "../model-catalog-cache.ts";
+import {
+  invalidateModelCatalogCache,
+  modelCatalogKey,
+  modelCatalogParams,
+} from "../model-catalog-cache.ts";
 import { readSessionChangedEvent } from "../sessions/reconcile.ts";
 import type { UiSessionDefaultsHost } from "../sessions/session-key.ts";
 
 export type ChatMetadataResult = CommandsListResult;
+export type ChatMetadataResponse = ChatMetadataResult &
+  Partial<Pick<ModelCatalogResult, "models" | "accountSelection">>;
 
 export type ChatMetadataUpdate =
-  | { type: "invalidated"; refreshSessionFacts: boolean }
+  | { type: "invalidated"; scope: "session" | "full"; refreshSessionFacts: boolean }
   | { type: "loading" }
-  | { type: "result"; result: ChatMetadataResult }
+  | { type: "result"; result: ChatMetadataResult; catalogChanged?: boolean }
   | { type: "error"; error: unknown };
 export type ChatMetadataPublication = {
   isCurrent: () => boolean;
-  publish: (
-    result: ChatMetadataResult & { models?: unknown; accountSelection?: unknown },
-  ) => ChatMetadataResult;
+  publish: (result: ChatMetadataResponse) => ChatMetadataResult;
   fail: (error: unknown) => void;
 };
 export type ChatMetadataRequest = {
@@ -50,6 +54,8 @@ export type ChatMetadataEntry = {
   queuedRequest?: ChatMetadataRequest;
   writer?: object;
   refreshRevision: number;
+  refreshAfter?: number;
+  validateCatalog?: boolean;
   catalogRevision: number;
   refresh?: ChatMetadataRefreshRecord;
   listeners: Map<(update: ChatMetadataUpdate) => void, () => boolean>;
@@ -87,7 +93,29 @@ export function invalidateChatMetadataForSessionEvent(
   const changed = readSessionChangedEvent(source);
   const agentId = typeof source?.agentId === "string" ? source.agentId : undefined;
   const scope = changed ? { agentId, sessionKey: changed.key } : undefined;
-  // Coalesced events can replace a mutation's reason with later activity.
-  invalidateModelCatalogCache(client, scope ?? { agentId, sessionsOnly: true }, sessionDefaults);
+  const retainedKeys =
+    scope && isSessionMetadataInvalidation(source)
+      ? new Set(
+          Array.from(chatMetadataCache.get(client)?.entries.values() ?? [])
+            .filter((entry) => entry.listeners.size > 0)
+            .map((entry) => modelCatalogKey(modelCatalogParams(entry.scope))),
+        )
+      : undefined;
+  // Only subscribed exact projections can wait for metadata validation. Other
+  // aliases/views and coalesced activity reasons retain ordinary invalidation.
+  invalidateModelCatalogCache(
+    client,
+    scope ?? { agentId, sessionsOnly: true },
+    sessionDefaults,
+    retainedKeys,
+  );
   chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, source);
+}
+
+export function isSessionMetadataInvalidation(event?: Record<string, unknown> | null): boolean {
+  return (
+    event?.catalogChanged !== true &&
+    event?.phase !== "reset" &&
+    (event?.reason === "patch" || event?.reason === "command-metadata")
+  );
 }

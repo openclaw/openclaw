@@ -673,11 +673,6 @@ async function runSubagentAnnounceFlowBound(
       delivery.reason === "requester_turn_pending"
         ? "requester_turn_pending"
         : (delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable"));
-    if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
-      defaultRuntime.log(
-        `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
-      );
-    }
   } catch (err) {
     shouldDeleteChildSession = false;
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);

@@ -1,4 +1,3 @@
-// Line plugin module implements auto reply delivery behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

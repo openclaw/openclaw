@@ -289,9 +289,7 @@ describe("paired node desktop observe integration", () => {
       gatewayUrl = await startDesktopGateway({ desktopRegistry, nodeRegistry, streamBroker });
 
       const service = createNodeDesktopService({
-        getConfig: () => ({
-          gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } },
-        }),
+        getConfig: () => ({}),
         nodeRegistry,
         desktopRegistry,
         streamBroker,

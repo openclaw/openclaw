@@ -1,7 +1,5 @@
 // Read-only session queries.
-import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -12,25 +10,16 @@ import {
   validateSessionsResolveParams,
   validateSessionsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
-  listSessionMembershipKeys,
   resolveExistingAgentSessionStoreTargetsSync,
   resolveSessionStorePathCore,
-  type SessionEntry,
 } from "../../config/sessions.js";
 import {
   listSessionEntriesReadOnly,
-  loadExactSessionEntryCandidatesReadOnlyBatch,
   withSessionEntryReadOnlyScope,
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptColdError } from "../../config/sessions/session-cold-storage-state.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
-import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
-import {
-  measureDiagnosticsTimelineSpan,
-  measureDiagnosticsTimelineSpanSync,
-} from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   isIncognitoSessionKey,
@@ -38,45 +27,31 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import type { SessionRowReadView } from "../session-row-prepared-read.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
+import type { MaterializedRow } from "../session-row-projection-record.js";
 import {
-  resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
-  tryResolveSessionCompatibilityOwnerAgentId,
-} from "../session-request-agent.js";
-import {
-  authorizeIncognitoSessionTarget,
-  authorizeSessionSharingTarget,
   canAccessIncognitoSession,
   createSessionListEntryFilter,
   isGatewayAdmin,
-  prepareSessionSharing,
+  prepareSessionSharingTargets,
   resolveSessionSharingTarget,
-  resolveSessionVisibility,
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
-import { readSessionPreviewItemsFromTranscript } from "../session-transcript-preview.js";
-import type { SessionListActiveRunProjector } from "../session-utils-contracts.js";
-import { projectGatewaySessionActiveRun } from "../session-utils-display.js";
-import { resolveGatewaySessionActiveModel } from "../session-utils-row.js";
+import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
 import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
 import {
-  listSessionsFromStoreAsync,
-  loadCombinedSessionStoreForGatewayCore,
-  resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
+  listProjectedSessions,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { readPreparedServerMethodModelCatalogs } from "./optional-model-catalog.js";
-import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
-import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
-import { createSessionPlacementBatchProjector } from "./session-placement-read-projection.js";
-import { listBoardSessionKeys } from "./sessions-board-inventory.js";
-import { respondWithCachedSessionList } from "./sessions-list-cache.js";
 import { withSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
+import { searchProjectedSessionTranscripts } from "./sessions-search-projected.js";
 import { resolveSessionSearchScope } from "./sessions-search-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -91,72 +66,89 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "query must not be empty"));
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const scope = resolveSessionSearchScope(cfg, params);
-    if (!scope.ok) {
-      respond(false, undefined, scope.error);
-      return;
-    }
-    const { agentId, configured, requestedAgentId, sessionKeys } = scope;
-    const restrictIncognito =
-      Boolean(gatewayClientSessionCreator(client)) && !isGatewayAdmin(client);
-    const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
-      ? createSessionListEntryFilter({ client, cfg })
-      : undefined;
-    const restrictVisibility = restrictIncognito || Boolean(roleVisibilityFilter);
-    const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-    const canSearchSessionKey = (sessionKey: string) => {
-      if (
-        isIncognitoSessionKey(sessionKey) &&
-        !canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey, agentId })
-      ) {
-        return false;
+    if (params.scope !== undefined) {
+      try {
+        await searchProjectedSessionTranscripts({
+          query,
+          limit: params.limit,
+          scope: params.scope,
+          context,
+          client: client ?? null,
+          onResult: (result) => respond(true, result),
+        });
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
       }
-      if (!roleVisibilityFilter) {
-        return true;
+      return;
+    }
+    const prepareSearch = () => {
+      const cfg = context.getRuntimeConfig();
+      const scope = resolveSessionSearchScope(cfg, params);
+      if (!scope.ok) {
+        respond(false, undefined, scope.error);
+        return undefined;
       }
-      const target = resolveSessionSharingTarget({
-        cfg,
-        sessionKey,
-        agentId,
-        targetDiscoveryCache,
-      });
-      return Boolean(target && roleVisibilityFilter(target.storeKey, target.entry));
-    };
-    if (requestedAgentId && !params.sessionKeys && configured) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "agentId requires sessionKeys"),
-      );
-      return;
-    }
-    const scopedSessionKeys = (
-      configured
-        ? sessionKeys
-        : sessionKeys?.filter((sessionKey) => {
-            const sessionAgentId =
-              requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
-                ? requestedAgentId
-                : resolveSessionStoreAgentId(cfg, sessionKey);
-            return sessionAgentId === agentId;
-          })
-    )?.filter(canSearchSessionKey);
-    const searchTargets = configured
-      ? [{ agentId, storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }) }]
-      : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId);
-    if (!configured && (searchTargets.length === 0 || scopedSessionKeys?.length === 0)) {
-      respond(true, { results: [] }, undefined);
-      return;
-    }
-    try {
-      let archivedTranscriptsExcluded = 0;
-      const targetResults = searchTargets.flatMap((target) => {
+      const { agentId, configured, requestedAgentId, sessionKeys } = scope;
+      const restrictIncognito =
+        Boolean(gatewayClientSessionCreator(client)) && !isGatewayAdmin(client);
+      const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
+        ? createSessionListEntryFilter({ client, cfg })
+        : undefined;
+      const restrictVisibility = restrictIncognito || Boolean(roleVisibilityFilter);
+      const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+      const canSearchSessionKey = (
+        sessionKey: string,
+        prepared?: ReturnType<typeof prepareSessionSharingTargets>[number],
+      ) => {
+        if (
+          isIncognitoSessionKey(sessionKey) &&
+          !canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey, agentId })
+        ) {
+          return false;
+        }
+        if (!roleVisibilityFilter) {
+          return true;
+        }
+        if (prepared && !prepared.ok) {
+          throw prepared.error;
+        }
+        const target = prepared
+          ? prepared.value
+          : resolveSessionSharingTarget({ cfg, sessionKey, agentId, targetDiscoveryCache });
+        return Boolean(target && roleVisibilityFilter(target.storeKey, target.entry));
+      };
+      if (requestedAgentId && !params.sessionKeys && configured) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "agentId requires sessionKeys"),
+        );
+        return undefined;
+      }
+      const scopedSessionKeys = (
+        configured
+          ? sessionKeys
+          : sessionKeys?.filter((sessionKey) => {
+              const sessionAgentId =
+                requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
+                  ? requestedAgentId
+                  : resolveSessionStoreAgentId(cfg, sessionKey);
+              return sessionAgentId === agentId;
+            })
+      )?.filter((sessionKey) => canSearchSessionKey(sessionKey));
+      const searchTargets = configured
+        ? [{ agentId, storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }) }]
+        : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId);
+      if (!configured && (searchTargets.length === 0 || scopedSessionKeys?.length === 0)) {
+        respond(true, { results: [] }, undefined);
+        return undefined;
+      }
+      return searchTargets.flatMap((target) => {
         const targetSessionKeys =
           scopedSessionKeys ??
           (restrictVisibility
-            ? withSessionEntryReadOnlyScope(target, () =>
-                listSessionEntriesReadOnly({
+            ? withSessionEntryReadOnlyScope(target, () => {
+                const keys = listSessionEntriesReadOnly({
                   agentId: target.agentId,
                   storePath: target.storePath,
                   projection: "list",
@@ -166,53 +158,92 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   .filter((sessionKey) => {
                     // A shared physical store can include rows owned by another agent.
                     const parsed = parseAgentSessionKey(sessionKey);
-                    if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
-                      return false;
-                    }
-                    return canSearchSessionKey(sessionKey);
-                  }),
-              )
+                    return !parsed || normalizeAgentId(parsed.agentId) === agentId;
+                  });
+                const prepared = roleVisibilityFilter
+                  ? prepareSessionSharingTargets({
+                      cfg,
+                      targets: keys
+                        .filter((sessionKey) => !isIncognitoSessionKey(sessionKey))
+                        .map((sessionKey) => ({ sessionKey, agentId })),
+                    })
+                  : [];
+                let ordinal = 0;
+                return keys.filter((sessionKey) => {
+                  // Incognito checks retain their scalar lookup and place in the error order.
+                  const sharing =
+                    roleVisibilityFilter && !isIncognitoSessionKey(sessionKey)
+                      ? prepared[ordinal++]
+                      : undefined;
+                  return canSearchSessionKey(sessionKey, sharing);
+                });
+              })
             : undefined);
         if (targetSessionKeys?.length === 0) {
           return [];
         }
-        const result = searchSessionTranscripts({
-          ...target,
-          query,
-          // Over-fetch retired multi-store searches so deduplication can still fill the caller's
-          // requested page when the same transcript was copied during a store migration.
-          limit: configured ? params.limit : 25,
-          ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
-        });
-        archivedTranscriptsExcluded += result.archivedTranscriptsExcluded ?? 0;
-        return [result];
+        return [
+          {
+            ...target,
+            query,
+            // Over-fetch retired multi-store searches so deduplication can still fill the caller's
+            // requested page when the same transcript was copied during a store migration.
+            limit: configured ? params.limit : 25,
+            ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
+          },
+        ];
       });
-      const limit = params.limit ?? 10;
-      const sortedHits = targetResults
-        .flatMap((result) => result.hits)
-        .toSorted(
-          (left, right) =>
-            right.score - left.score ||
-            right.timestamp - left.timestamp ||
-            left.messageId.localeCompare(right.messageId),
-        );
-      const seenHits = new Set<string>();
-      const hits = sortedHits.filter((hit) => {
-        const identity = `${hit.sessionKey}\u0000${hit.sessionId}\u0000${hit.messageId}`;
-        if (seenHits.has(identity)) {
-          return false;
+    };
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const requests = prepareSearch();
+        if (!requests) {
+          return;
         }
-        seenHits.add(identity);
-        return true;
-      });
-      respond(true, {
-        results: hits.slice(0, limit),
-        ...(archivedTranscriptsExcluded ? { archivedTranscriptsExcluded } : {}),
-        ...(targetResults.some((result) => result.indexing) ? { indexing: true } : {}),
-        ...(targetResults.some((result) => result.truncated) || hits.length > limit
-          ? { truncated: true }
-          : {}),
-      });
+        const targetResults = await Promise.all(
+          requests.map((request) => searchSessionTranscripts(request)),
+        );
+        // Current configuration, identity, and sharing must authorize the whole result page.
+        const current = prepareSearch();
+        if (!current) {
+          return;
+        }
+        if (JSON.stringify(current) !== JSON.stringify(requests)) {
+          continue;
+        }
+        const archivedTranscriptsExcluded = targetResults.reduce(
+          (count, result) => count + (result.archivedTranscriptsExcluded ?? 0),
+          0,
+        );
+        const limit = params.limit ?? 10;
+        const sortedHits = targetResults
+          .flatMap((result) => result.hits)
+          .toSorted(
+            (left, right) =>
+              right.score - left.score ||
+              right.timestamp - left.timestamp ||
+              left.messageId.localeCompare(right.messageId),
+          );
+        const seenHits = new Set<string>();
+        const hits = sortedHits.filter((hit) => {
+          const identity = `${hit.sessionKey}\u0000${hit.sessionId}\u0000${hit.messageId}`;
+          if (seenHits.has(identity)) {
+            return false;
+          }
+          seenHits.add(identity);
+          return true;
+        });
+        respond(true, {
+          results: hits.slice(0, limit),
+          ...(archivedTranscriptsExcluded ? { archivedTranscriptsExcluded } : {}),
+          ...(targetResults.some((result) => result.indexing) ? { indexing: true } : {}),
+          ...(targetResults.some((result) => result.truncated) || hits.length > limit
+            ? { truncated: true }
+            : {}),
+        });
+        return;
+      }
+      throw new Error("Session search scope changed while reading; retry the request");
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
@@ -222,406 +253,17 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
-    const p = params as SessionsListParams;
-    const cfg = context.getRuntimeConfig();
-    const configuredAgentsOnly = p.configuredAgentsOnly === true;
-    const identityId = gatewayClientSessionCreator(client)?.id;
-    const modelSelectionTarget = resolveGatewayModelSelectionPolicy({
-      callerScopes: client?.connect?.scopes ?? [],
-      cfg,
-    }).target;
-    diagnostics?.mark("modelCatalog");
-    const preparedModelCatalogByAgent = await measureDiagnosticsTimelineSpan(
-      "gateway.sessions.list.model_catalog",
-      async () => {
-        // Scoped listings use exactly the requested agent's completed catalog.
-        // Unscoped listings must not apply one agent's catalog to rows owned by
-        // another agent; resolve each configured agent's completed snapshot
-        // (read-only, never starts discovery) so row projections stay
-        // owner-scoped while cache reuse stays fenced per agent.
-        const agentIds = p.agentId ? [normalizeAgentId(p.agentId)] : listAgentIds(cfg);
-        return readPreparedServerMethodModelCatalogs(context, agentIds);
-      },
-      {
-        config: cfg,
-        phase: "sessions.list",
-      },
-    );
-    const run = () =>
-      measureDiagnosticsTimelineSpan(
-        "gateway.sessions.list",
-        async function listVisibleSessions(
-          options: {
-            allowFullReload?: boolean;
-            excludedKeys?: ReadonlySet<string>;
-            loaded?: ReturnType<typeof loadCombinedSessionStoreForGatewayCore> & {
-              modelCatalogByAgent: Awaited<
-                ReturnType<typeof readPreparedServerMethodModelCatalogs>
-              >;
-            };
-            rowRepairAttempted?: boolean;
-          } = {},
-        ): Promise<Awaited<ReturnType<typeof listSessionsFromStoreAsync>>> {
-          const workStartedAt = performance.now();
-          const projectionTiming = diagnostics?.projection;
-          if (projectionTiming) {
-            projectionTiming.projectionPasses++;
-          }
-          diagnostics?.mark("storeLoad");
-          let loaded = options.loaded;
-          if (!loaded) {
-            const loadedStore = measureDiagnosticsTimelineSpanSync(
-              "gateway.sessions.list.store_load",
-              () =>
-                loadCombinedSessionStoreForGatewayCore(cfg, {
-                  agentId: p.agentId,
-                  configuredAgentsOnly,
-                  projection: "list",
-                  ...(p.activeOnly === true ? { preserveSentinelOwners: true } : {}),
-                }),
-              {
-                config: cfg,
-                phase: "sessions.list",
-                attributes: {
-                  agentId: p.agentId ?? null,
-                  configuredAgentsOnly,
-                },
-              },
-            );
-            loaded = { ...loadedStore, modelCatalogByAgent: preparedModelCatalogByAgent };
-          }
-          const { targetsBySessionKey, durableStorePath, modelCatalogByAgent, storePath } = loaded;
-          diagnostics?.mark("filterSetup");
-          const boardSessionKeys =
-            p.hasBoard === undefined ? undefined : await listBoardSessionKeys(targetsBySessionKey);
-          const visibilityFilter = prepareSessionSharing({ client, cfg }).entryFilter;
-          const excludedSessionKeys = options.excludedKeys;
-          const visibleEntryFilter =
-            !visibilityFilter && !boardSessionKeys && !excludedSessionKeys?.size
-              ? undefined
-              : (key: string, entry: SessionEntry) =>
-                  !excludedSessionKeys?.has(key) &&
-                  (visibilityFilter?.(key, entry) ?? true) &&
-                  (p.hasBoard === undefined || boardSessionKeys?.has(key) === p.hasBoard);
-          const selectionRuns =
-            p.activeOnly === true || p.search?.trim()
-              ? createVisibleActiveSessionRunProjector(context)
-              : undefined;
-          const projectSelectionRun: SessionListActiveRunProjector | undefined = selectionRuns
-            ? (key, entry, agentId) => {
-                const storeKey = targetsBySessionKey.get(key)?.storeKey ?? key;
-                return selectionRuns({
-                  requestedKey: storeKey,
-                  canonicalKey: storeKey,
-                  sessionId: entry.sessionId,
-                  agentId,
-                  defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, storeKey),
-                });
-              }
-            : undefined;
-          const entryFilter =
-            p.activeOnly === true && projectSelectionRun
-              ? (key: string, entry: SessionEntry) =>
-                  (visibleEntryFilter?.(key, entry) ?? true) &&
-                  projectSelectionRun(
-                    key,
-                    entry,
-                    expectDefined(targetsBySessionKey.get(key), "active row owner").agentId,
-                  ).active
-              : visibleEntryFilter;
-          diagnostics?.mark("rows");
-          const result = await measureDiagnosticsTimelineSpan(
-            "gateway.sessions.list.rows",
-            () =>
-              listSessionsFromStoreAsync({
-                cfg,
-                workStartedAt,
-                projectionTiming,
-                durableStorePath,
-                ...(entryFilter ? { entryFilter } : {}),
-                storePath,
-                store: loaded.store,
-                targetsBySessionKey,
-                modelCatalog: modelCatalogByAgent,
-                opts: p,
-                ...(projectSelectionRun ? { projectActiveRun: projectSelectionRun } : {}),
-                ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
-                ...(p.ownerFirst === true && identityId ? { ownerFirstActorId: identityId } : {}),
-              }),
-            {
-              config: cfg,
-              phase: "sessions.list",
-            },
-          );
-          result.defaults = { ...result.defaults, modelSelectionTarget };
-          diagnostics?.mark("sharing");
-          const { sharingTargets, membershipKeys } = await measureDiagnosticsTimelineSpan(
-            "gateway.sessions.list.sharing",
-            () => {
-              // Recheck only this page after row projection yields; unrelated sessions
-              // must not be materialized again to refresh visibility and membership.
-              const targets = result.sessions.map(({ key }) => ({
-                key,
-                ...expectDefined(targetsBySessionKey.get(key), "sharing row target"),
-              }));
-              // Logical owners can share a physical database. Keep that exact store
-              // through the fresh read; public aliases may reject or redirect these rows.
-              const entries = loadExactSessionEntryCandidatesReadOnlyBatch(
-                targets.map(({ key, storeKey, storeTarget }) => ({
-                  ...storeTarget,
-                  sessionKeys: [storeKey ?? key],
-                  projection: "list",
-                  clone: false,
-                })),
-              );
-              const resolvedSharingTargets = targets.map(
-                ({ key, agentId, storeKey, storeTarget }, index) => {
-                  const current = expectDefined(entries[index], "sharing row read");
-                  const entry = current.ok ? current.value[0]?.entry : undefined;
-                  return entry
-                    ? {
-                        agentId,
-                        canonicalKey: storeKey ?? key,
-                        entry,
-                        storeKey: storeKey ?? key,
-                        storeKeys: [storeKey ?? key],
-                        storePath: storeTarget.storePath,
-                        storeTarget,
-                      }
-                    : null;
-                },
-              );
-              const resolvedMembershipKeys = new Set<string>();
-              if (identityId && !isGatewayAdmin(client)) {
-                const groups = new Map<
-                  string,
-                  {
-                    agentId: string;
-                    sessionKeys: string[];
-                    storePath: string;
-                  }
-                >();
-                for (const target of resolvedSharingTargets) {
-                  if (!target) {
-                    continue;
-                  }
-                  const groupKey = `${target.storeTarget.agentId}\0${target.storePath}`;
-                  const group = groups.get(groupKey) ?? {
-                    agentId: target.storeTarget.agentId,
-                    sessionKeys: [],
-                    storePath: target.storePath,
-                  };
-                  group.sessionKeys.push(target.storeKey);
-                  groups.set(groupKey, group);
-                }
-                for (const group of groups.values()) {
-                  const firstSessionKey = group.sessionKeys[0];
-                  if (!firstSessionKey) {
-                    continue;
-                  }
-                  for (const sessionKey of listSessionMembershipKeys(
-                    {
-                      agentId: group.agentId,
-                      sessionKey: firstSessionKey,
-                      storePath: group.storePath,
-                    },
-                    group.sessionKeys,
-                    identityId,
-                  )) {
-                    resolvedMembershipKeys.add(
-                      `${group.agentId}\0${group.storePath}\0${sessionKey}`,
-                    );
-                  }
-                }
-              }
-              return {
-                sharingTargets: resolvedSharingTargets,
-                membershipKeys: resolvedMembershipKeys,
-              };
-            },
-            {
-              config: cfg,
-              phase: "sessions.list",
-              attributes: {
-                sessions: result.sessions.length,
-              },
-            },
-          );
-          diagnostics?.mark("decoration");
-          const projectPlacement = createSessionPlacementBatchProjector(context, result.sessions);
-          const projectedAgentRuns = buildProjectedAgentRunIndex();
-          const projectActiveRun = createVisibleActiveSessionRunProjector(
-            context,
-            projectedAgentRuns,
-          );
-          // These rows are unpublished; decorate them with fresh caller facts after the yields.
-          const sharing = prepareSessionSharing({ client, cfg });
-          measureDiagnosticsTimelineSpanSync(
-            "gateway.sessions.list.active_run_flags",
-            () =>
-              result.sessions.forEach((session, index) => {
-                const sharingTarget = sharingTargets[index];
-                const isMember = sharingTarget
-                  ? membershipKeys.has(
-                      `${sharingTarget.storeTarget.agentId}\0${sharingTarget.storePath}\0${sharingTarget.storeKey}`,
-                    )
-                  : false;
-                if (session.activitySummary) {
-                  session.activitySummary.canEnsure = Boolean(
-                    sharingTarget &&
-                    !authorizeIncognitoSessionTarget({
-                      client,
-                      sessionKey: session.key,
-                      target: sharingTarget,
-                    }) &&
-                    !authorizeSessionSharingTarget({
-                      cfg,
-                      client,
-                      target: sharingTarget,
-                      isMember,
-                    }),
-                  );
-                }
-                const visibility = sharingTarget
-                  ? resolveSessionVisibility(sharingTarget.entry)
-                  : "shared";
-                const storeKey = targetsBySessionKey.get(session.key)?.storeKey ?? session.key;
-                const activeRunState = projectActiveRun({
-                  requestedKey: storeKey,
-                  canonicalKey: storeKey,
-                  sessionId: session.sessionId,
-                  agentId: session.agentId,
-                  defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, storeKey),
-                });
-                const target = targetsBySessionKey.get(session.key);
-                const activeModel = resolveGatewaySessionActiveModel({
-                  cfg,
-                  active: activeRunState.active,
-                  agentId:
-                    session.agentId ?? tryResolveSessionCompatibilityOwnerAgentId(cfg, storeKey),
-                  sessionId: session.sessionId,
-                  sessionKey: storeKey,
-                  projectedAgentRuns,
-                  modelSource: target
-                    ? { entry: sharingTarget?.entry, readSourceEntry: target.readSourceEntry }
-                    : undefined,
-                  entry: sharingTarget?.entry,
-                  storePath: sharingTarget?.storePath,
-                });
-                session.activeModelProvider = activeModel?.provider;
-                session.activeModel = activeModel?.model;
-                Object.assign(session, {
-                  visibility,
-                  ...(sharingTarget
-                    ? {
-                        sharingRole: sharing.roleForTarget(sharingTarget, isMember),
-                      }
-                    : {}),
-                  ...projectGatewaySessionActiveRun(activeRunState, session.status),
-                  ...projectPlacement(session.sessionId),
-                  ...(activeRunState.runIds !== undefined
-                    ? { activeRunIds: activeRunState.runIds }
-                    : {}),
-                });
-              }),
-            {
-              config: cfg,
-              phase: "sessions.list",
-              attributes: {
-                sessions: result.sessions.length,
-              },
-            },
-          );
-          // Reapply current visibility and activity after awaits; selected work may
-          // settle or change ownership while its row is projected.
-          diagnostics?.mark("visibilityRepair");
-          const currentVisibilityFilter = sharing.entryFilter;
-          const visibleSessions =
-            currentVisibilityFilter || p.activeOnly === true
-              ? result.sessions.filter((session, index) => {
-                  const target = sharingTargets[index];
-                  if (
-                    p.activeOnly === true &&
-                    (session.hasActiveRun !== true ||
-                      !target ||
-                      target.entry.sessionId !== session.sessionId)
-                  ) {
-                    return false;
-                  }
-                  if (!currentVisibilityFilter) {
-                    return true;
-                  }
-                  return target ? currentVisibilityFilter(target.storeKey, target.entry) : false;
-                })
-              : result.sessions;
-          if (visibleSessions.length !== result.sessions.length) {
-            const visibleKeys = new Set(visibleSessions.map((session) => session.key));
-            const excludedKeys = new Set(options.excludedKeys);
-            for (const session of result.sessions) {
-              if (!visibleKeys.has(session.key)) {
-                excludedKeys.add(session.key);
-              }
-            }
-            if (!options.rowRepairAttempted) {
-              if (projectionTiming) {
-                projectionTiming.rowRepairCount++;
-              }
-              // Excluding only freshly rejected rows refills this page from the already-loaded
-              // store, preserving cursor continuity without multiplying catalog/store work.
-              return await listVisibleSessions({
-                ...options,
-                excludedKeys,
-                loaded,
-                rowRepairAttempted: true,
-              });
-            }
-            if (options.allowFullReload !== false) {
-              if (projectionTiming) {
-                projectionTiming.fullReloadCount++;
-              }
-              // A second visibility drift means the loaded snapshot cannot restore a coherent
-              // page. One full reload is the last resort; repeated drift below fails closed.
-              return await listVisibleSessions({ allowFullReload: false });
-            }
-          }
-          return {
-            ...result,
-            count: visibleSessions.length,
-            // Sentinel rows stay distinct during filtering and repair. Their public
-            // identity is the actual session key together with the captured agent.
-            sessions: visibleSessions.map((session) => {
-              const storeKey = targetsBySessionKey.get(session.key)?.storeKey;
-              if (!storeKey) {
-                return session;
-              }
-              session.key = storeKey;
-              // Legacy child links omit the parent agent. Keep only direct activity
-              // and requester-agent-scoped swarm facts on these new owner-specific rows.
-              delete session.childSessions;
-              delete session.hasActiveSubagentRun;
-              return session;
-            }),
-          };
-        },
-        {
-          config: cfg,
-          phase: "sessions.list",
-          attributes: {
-            agentId: p.agentId ?? null,
-            configuredAgentsOnly,
-          },
-        },
-      );
-    diagnostics?.mark("cacheSelectionOrWait");
-    await respondWithCachedSessionList({
-      client,
-      config: cfg,
+    const projection = getSessionRowProjection(context);
+    if (!projection) {
+      throw new Error("Session projection is unavailable before Gateway startup completes");
+    }
+    await listProjectedSessions({
+      projection,
+      opts: params as SessionsListParams,
       context,
-      modelCatalog: preparedModelCatalogByAgent,
-      request: p,
-      respond,
-      run,
+      client,
       diagnostics,
+      onResult: (result) => respond(true, result),
     });
   }),
   "sessions.preview": async ({ params, respond, context, client }) => {
@@ -640,65 +282,136 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const cfg = context.getRuntimeConfig();
-    const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
-      ? createSessionListEntryFilter({ client, cfg })
-      : undefined;
+    const projection = getSessionRowProjection(context);
+    if (!projection) {
+      throw new Error("Session projection is unavailable before Gateway startup completes");
+    }
+    const withPreviewRows = async <T>(
+      requestedKeys: readonly string[],
+      consume: (read: SessionRowReadView) => T,
+    ): Promise<T> => {
+      while (true) {
+        const prepared = await projection.withPreparedExactRows(
+          (cfg) =>
+            requestedKeys.flatMap((key) => {
+              const agent = resolveRequestedGlobalAgentId(cfg, key);
+              return agent.ok ? [{ key, agentId: agent.agentId }] : [];
+            }),
+          consume,
+        );
+        if (prepared.kind === "complete") {
+          return prepared.value;
+        }
+        const { certifySessionCanonicalValidationPending } =
+          await import("../../config/sessions/session-canonical-validation-readiness.js");
+        await certifySessionCanonicalValidationPending(prepared.database);
+      }
+    };
     const previews: SessionsPreviewEntry[] = [];
+    const buffered: Array<{
+      preview: SessionsPreviewEntry;
+      record: MaterializedRow;
+      generation: MaterializedRow["generation"];
+      sessionId: string;
+      lifecycleRevision?: string;
+    }> = [];
 
     for (const key of keys) {
       if (previews.length > 0) {
         await yieldToEventLoop();
       }
-      const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
+      const requestedAgent = resolveRequestedGlobalAgentId(context.getRuntimeConfig(), key);
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
         return;
       }
+      const preview: SessionsPreviewEntry = { key, status: "missing", items: [] };
+      previews.push(preview);
       try {
-        // Each preview resumes after a yield; read its canonical row from the current store.
-        const target = resolveGatewaySessionStoreTargetWithStore({
-          cfg,
-          key,
-          agentId: requestedAgent.agentId,
-          exactRead: true,
-          readOnly: true,
-          projection: "list",
+        const record = await withPreviewRows([key], (read) => {
+          const cfg = context.getRuntimeConfig();
+          const currentAgent = resolveRequestedGlobalAgentId(cfg, key);
+          if (!currentAgent.ok) {
+            return undefined;
+          }
+          const current = read.describe({ key, agentId: currentAgent.agentId });
+          const visibilityFilter = hasOperatorBoundary(client, cfg)
+            ? createSessionListEntryFilter({ client, cfg })
+            : undefined;
+          return current?.entry.sessionId &&
+            visibilityFilter?.(current.key, current.entry) !== false
+            ? current
+            : undefined;
         });
-        const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
-        if (!entry?.sessionId || roleVisibilityFilter?.(target.canonicalKey, entry) === false) {
-          previews.push({ key, status: "missing", items: [] });
+        if (!record) {
           continue;
         }
-        const items = readSessionPreviewItemsFromTranscript(
+        buffered.push({
+          preview,
+          record,
+          generation: record.generation,
+          sessionId: record.entry.sessionId,
+          lifecycleRevision: record.entry.lifecycleRevision,
+        });
+        preview.items = await readSessionPreviewItemsFromTranscriptAsync(
           {
-            agentId: target.agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: target.canonicalKey,
-            storePath: target.storePath,
+            agentId: record.agentId,
+            sessionEntry: record.entry,
+            sessionId: record.entry.sessionId,
+            sessionKey: record.key,
+            storePath: record.storeTarget.storePath,
           },
           limit,
           maxChars,
         );
-        previews.push({ key, status: items.length > 0 ? "ok" : "empty", items });
+        preview.status = preview.items.length > 0 ? "ok" : "empty";
       } catch (error) {
-        previews.push({
-          key,
-          status: error instanceof SessionTranscriptColdError ? "cold" : "error",
-          items: [],
-        });
+        preview.status = error instanceof SessionTranscriptColdError ? "cold" : "error";
       }
     }
 
-    respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
+    // Later keys yield after earlier previews are buffered. Reauthorize the exact
+    // incarnations together, without another await before publishing their content.
+    await withPreviewRows(
+      buffered.map(({ preview }) => preview.key),
+      (read) => {
+        const cfg = context.getRuntimeConfig();
+        const visibilityFilter = hasOperatorBoundary(client, cfg)
+          ? createSessionListEntryFilter({ client, cfg })
+          : undefined;
+        for (const previous of buffered) {
+          const agent = resolveRequestedGlobalAgentId(cfg, previous.preview.key);
+          const current = agent.ok
+            ? read.describe({ key: previous.preview.key, agentId: agent.agentId }, previous.record)
+            : undefined;
+          if (
+            !current ||
+            current.agentId !== previous.record.agentId ||
+            current.key !== previous.record.key ||
+            current.storeTarget.storePath !== previous.record.storeTarget.storePath ||
+            current.generation !== previous.generation ||
+            current.entry.sessionId !== previous.sessionId ||
+            current.entry.lifecycleRevision !== previous.lifecycleRevision ||
+            visibilityFilter?.(current.key, current.entry) === false
+          ) {
+            previous.preview.status = "missing";
+            previous.preview.items = [];
+          }
+        }
+        respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
+      },
+    );
   },
-  "sessions.resolve": async ({ params, respond, context, client }) => {
+  "sessions.resolve": ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
-    const resolved = await resolveSessionKeyFromResolveParams({
-      cfg: context.getRuntimeConfig(),
+    const projection = getSessionRowProjection(context);
+    if (!projection) {
+      throw new Error("Session projection is unavailable before Gateway startup completes");
+    }
+    const resolved = resolveSessionKeyFromResolveParams({
+      projection,
       client,
       p: params,
     });

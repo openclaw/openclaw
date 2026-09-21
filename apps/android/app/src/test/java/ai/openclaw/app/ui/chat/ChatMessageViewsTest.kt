@@ -2,31 +2,46 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatOutboxAttachment
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.parseChatMessageContent
 import ai.openclaw.app.ui.design.ClawDesignTheme
+import ai.openclaw.app.ui.design.ClawTheme
 import android.graphics.Rect
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.view.inspector.WindowInspector
 import android.widget.TextView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -39,6 +54,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
@@ -310,6 +326,183 @@ class ChatMessageViewsTest {
     repeatCurrentAction("Close")
     composeRule.onNodeWithText("Close").assertDoesNotExist()
     composeRule.onNodeWithText("View all").assertExists()
+  }
+
+  @Test
+  @Config(sdk = [36], qualifiers = "en-rUS-w360dp-h800dp-420dpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun outboxDeliveryStatesKeepConfirmedUserBubbleGeometry() {
+    val text = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
+    val attachment = ChatOutboxAttachment("document", "file", "application/pdf", "notes.pdf", null, 12L)
+    val queued =
+      ChatOutboxItem(
+        id = "geometry-outbox",
+        sessionKey = "main",
+        text = text,
+        thinkingLevel = "low",
+        createdAtMs = 0L,
+        status = ChatOutboxStatus.Queued,
+        retryCount = 0,
+        lastError = null,
+        ownerAgentId = "main",
+        attachments = listOf(attachment),
+      )
+    val pending = mutableStateOf<ChatOutboxItem?>(queued)
+    val retryEnabled = mutableStateOf(true)
+    var retries = 0
+    var deletes = 0
+    var userSurface = Color.Unspecified
+    var canvas = Color.Unspecified
+    composeRule.setContent {
+      ClawDesignTheme {
+        userSurface = ClawTheme.colors.userMessageSurface
+        canvas = ClawTheme.colors.canvas
+        Column(Modifier.size(360.dp, 800.dp).background(ClawTheme.colors.canvas)) {
+          Box(Modifier.testTag("confirmed-reference")) {
+            GeometryTranscriptBubble("reference", "user", text)
+          }
+          Box(Modifier.testTag("delivery")) {
+            val item = pending.value
+            if (item == null) {
+              GeometryTranscriptBubble("delivered", "user", text)
+            } else {
+              ChatOutboxBubble(item, retryEnabled.value, onRetry = { retries += 1 }, onDelete = { deletes += 1 })
+            }
+          }
+        }
+      }
+    }
+    val reference = composeRule.onNode(hasContentDescription("You") and hasAnyAncestor(hasTestTag("confirmed-reference")))
+    val expectedBounds = reference.fetchSemanticsNode().boundsInRoot
+    val rowBounds = composeRule.onNodeWithTag("confirmed-reference").fetchSemanticsNode().boundsInRoot
+    assertEquals(rowBounds.width * 0.78f, expectedBounds.width, 1f)
+    assertEquals(rowBounds.right, expectedBounds.right, 1f)
+    val expectedPixels = reference.captureToImage().toPixelMap()
+    val topBand = with(composeRule.density) { 6.dp.roundToPx() }
+    assertEquals(userSurface.toArgb(), expectedPixels[expectedPixels.width / 2, topBand / 2].toArgb())
+    val cornerX = with(composeRule.density) { 5.dp.roundToPx() }
+    val cornerY = with(composeRule.density) { 4.dp.roundToPx() }
+    assertEquals("The 24dp corner leaves this point outside the bubble", canvas.toArgb(), expectedPixels[cornerX, cornerY].toArgb())
+
+    val states =
+      listOf(
+        queued to "Queued — sends when reconnected",
+        queued.copy(status = ChatOutboxStatus.Sending) to "Sending…",
+        queued.copy(status = ChatOutboxStatus.Accepted) to "Sent — confirming delivery…",
+        queued.copy(status = ChatOutboxStatus.Failed, lastError = "Synthetic delivery failure") to "Failed — Synthetic delivery failure",
+      )
+    // The last failed pass is a recovery row: its delete action survives, but retry is suppressed.
+    (states + states.last() + (null to null)).forEachIndexed { index, (item, status) ->
+      composeRule.runOnIdle {
+        pending.value = item
+        retryEnabled.value = index != states.size
+      }
+      val actual = composeRule.onNode(hasContentDescription("You") and hasAnyAncestor(hasTestTag("delivery")))
+      val bounds = actual.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+      assertEquals("$status: width", expectedBounds.width, bounds.width, 1f)
+      assertEquals("$status: leading edge", expectedBounds.left, bounds.left, 1f)
+      assertEquals("$status: trailing edge", expectedBounds.right, bounds.right, 1f)
+      val pixels = actual.captureToImage().toPixelMap()
+      // Above the text: compare the painted corners, fill, and top border, not a style helper.
+      for (y in 0 until topBand) {
+        for (x in 0 until expectedPixels.width) {
+          assertEquals("$status: shell pixel $x,$y", expectedPixels[x, y], pixels[x, y])
+        }
+      }
+      val sideY = with(composeRule.density) { 30.dp.roundToPx() }
+      assertEquals("$status: no leading border", userSurface.toArgb(), pixels[0, sideY].toArgb())
+      assertEquals("$status: no trailing border", userSurface.toArgb(), pixels[pixels.width - 1, sideY].toArgb())
+      if (status != null) {
+        composeRule.onNodeWithText(status).assertIsDisplayed()
+        composeRule.onNodeWithText("📎 notes.pdf", useUnmergedTree = true).assertIsDisplayed()
+      }
+      if (item?.status == ChatOutboxStatus.Failed && retryEnabled.value) {
+        composeRule.onNodeWithText("Retry").performClick()
+      } else {
+        composeRule.onNodeWithText("Retry").assertDoesNotExist()
+      }
+      if (item?.status == ChatOutboxStatus.Queued || item?.status == ChatOutboxStatus.Failed) {
+        composeRule.onNodeWithText("Delete").performClick()
+      } else {
+        composeRule.onNodeWithText("Delete").assertDoesNotExist()
+      }
+    }
+    assertEquals(1, retries)
+    assertEquals(3, deletes)
+  }
+
+  @Test
+  @Config(sdk = [36], qualifiers = "en-rUS-w360dp-h800dp-420dpi")
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun typingStreamingAndConfirmedAssistantKeepFullWidthTransparentGeometry() {
+    val resolver = RuntimeEnvironment.getApplication().contentResolver
+    val originalScale = Settings.Global.getString(resolver, Settings.Global.ANIMATOR_DURATION_SCALE)
+    Settings.Global.putFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+    val phase = mutableStateOf(0)
+    var canvas = Color.Unspecified
+    try {
+      composeRule.setContent {
+        ClawDesignTheme {
+          canvas = ClawTheme.colors.canvas
+          Column(Modifier.size(360.dp, 800.dp).background(canvas)) {
+            Box(Modifier.testTag("assistant-row")) {
+              if (phase.value == 0) {
+                ChatTypingIndicatorBubble("geometry-run", observedAtElapsedMs = 0L)
+              } else {
+                GeometryTranscriptBubble("assistant", "assistant", "Assistant reply", live = phase.value == 1)
+              }
+            }
+          }
+        }
+      }
+      for (nextPhase in 0..2) {
+        composeRule.runOnIdle { phase.value = nextPhase }
+        val row = composeRule.onNodeWithTag("assistant-row").fetchSemanticsNode().boundsInRoot
+        val bubble = composeRule.onNode(hasContentDescription("OpenClaw"))
+        val bounds = bubble.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertEquals("Phase $nextPhase: full width", row.width, bounds.width, 1f)
+        assertEquals("Phase $nextPhase: leading edge", row.left, bounds.left, 1f)
+        val pixels = bubble.captureToImage().toPixelMap()
+        // The top padding and trailing edge must expose the canvas, not a raised panel or border.
+        assertEquals(canvas.toArgb(), pixels[pixels.width / 2, 0].toArgb())
+        assertEquals(canvas.toArgb(), pixels[pixels.width - 1, pixels.height / 2].toArgb())
+        if (nextPhase == 0) {
+          composeRule.onNode(hasContentDescription("Working"), useUnmergedTree = true).assertIsDisplayed()
+        } else {
+          composeRule.onNodeWithText("Assistant reply", useUnmergedTree = true).assertIsDisplayed()
+        }
+      }
+    } finally {
+      Settings.Global.putString(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalScale)
+    }
+  }
+
+  @Composable
+  private fun GeometryTranscriptBubble(
+    messageId: String,
+    role: String,
+    text: String,
+    live: Boolean = false,
+  ) {
+    ChatBubble(
+      messageId = messageId,
+      entryId = null,
+      role = role,
+      live = live,
+      content = listOf(ChatMessageContent(type = "text", text = text)),
+      timestampMs = null,
+      onReplyMessage = {},
+      sessionActionsEnabled = false,
+      onRewindMessage = {},
+      onForkMessage = {},
+      speechState = null,
+      onToggleListen = { _, _ -> },
+      inlineMediaPlaybackBlocked = false,
+      inlineWidgetResolverReady = false,
+      resolveInlineWidgetResource = { _, _ -> null },
+      loadImageArtifact = { null },
+      loadMediaArtifact = { _, _, _ -> null },
+    )
   }
 
   @Test

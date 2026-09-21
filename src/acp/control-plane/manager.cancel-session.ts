@@ -79,7 +79,7 @@ export async function runManagerCancelSession(params: {
   }
   requireExpectedTurn(undefined);
 
-  await params.withSessionActor(params, async () => {
+  await params.withSessionActor(params, async (isCurrentActor) => {
     // The actor wait may admit queued work. Recheck exact authority only after
     // that wait, immediately before the idle-handle cancellation boundary.
     requireExpectedTurn(params.activeTurnBySession.get(actorKey));
@@ -95,6 +95,7 @@ export async function runManagerCancelSession(params: {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       meta: resolvedMeta,
+      isCurrentActor,
     });
     try {
       requireExpectedOwner();
@@ -102,12 +103,16 @@ export async function runManagerCancelSession(params: {
         handle,
         reason: params.reason,
       });
+      if (!isCurrentActor()) {
+        return;
+      }
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         state: "idle",
         clearLastError: true,
+        isCurrentActor,
       });
     } catch (error) {
       const acpError = toAcpRuntimeError({
@@ -115,12 +120,16 @@ export async function runManagerCancelSession(params: {
         fallbackCode: "ACP_TURN_FAILED",
         fallbackMessage: "ACP cancel failed before completion.",
       });
+      if (!isCurrentActor()) {
+        throw acpError;
+      }
       await params.setSessionState({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         state: "error",
         lastError: acpError.message,
+        isCurrentActor,
       });
       throw acpError;
     }

@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   resolveEffectiveToolPolicy,
@@ -9,6 +6,7 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../../agents/agent-tools.policy.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -22,17 +20,13 @@ import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { toPluginConversationBinding } from "../../plugins/conversation-binding.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { resolveCommandTurnContext } from "../command-turn-context.js";
 import { isActiveRunSafeCommandTurn } from "../commands-registry.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
-import {
-  resolveRoutedPolicyConversationType,
-  resolveSessionStoreLookup,
-} from "./dispatch-from-config.context.js";
+import { resolveSessionStoreLookup } from "./dispatch-from-config.context.js";
 import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events.js";
 import {
   resolveTurnModelOverride,
@@ -49,7 +43,7 @@ import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveStableMessageToolAvailability } from "./session-stable-reply-mode.js";
 import {
-  isDirectedSourceReplyTurn,
+  resolveSourceReplyExpectation,
   isExplicitSourceReplyCommand,
   isUnauthorizedTextSlashCommand,
   resolveSourceReplyVisibilityPolicy,
@@ -210,21 +204,10 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     agentId: sessionAgentId,
   });
   const chatType = normalizeChatType(ctx.ChatType);
-  const silentReplyConversationType = resolveRoutedPolicyConversationType(ctx);
-  const silentReplySurface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
-  // Group silent-reply policy sanctions silence for ambient chatter only. A turn
-  // that explicitly addressed the bot (mention) must never end silently, matching
-  // the hard-coded direct-chat rule in resolveSilentReplyPolicyFromPolicies.
-  const emptyFinalAllowedAsSilent =
-    ctx.WasMentioned !== true &&
-    silentReplyConversationType !== undefined &&
-    resolveSilentReplyPolicyFromPolicies({
-      conversationType: silentReplyConversationType,
-      defaultPolicy: cfg.agents?.defaults?.silentReply,
-      surfacePolicy: silentReplySurface
-        ? cfg.surfaces?.[silentReplySurface]?.silentReply
-        : undefined,
-    }) === "allow";
+  state.replyOperationRunState.replyCompletion = resolveReplyCompletion(
+    resolveSourceReplyExpectation({ ctx, cfg, isHeartbeat: params.replyOptions?.isHeartbeat }),
+    "empty",
+  );
   const { configuredVisibleReplies, harnessDefaultVisibleReplies } = resolveVisibleRepliesPolicy({
     cfg,
     chatType,
@@ -387,7 +370,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     });
   const unauthorizedTextSlashSourceReplyCtx =
     (chatType === "group" || chatType === "channel") && isUnauthorizedTextSlashCommand(ctx);
-  const noVisibleReplyFallbackDirected = isDirectedSourceReplyTurn(ctx, cfg, chatType === "direct");
   const shouldDeliverPluginBindingReply =
     !suppressAutomaticSourceDelivery ||
     explicitCommandTurnCtx ||
@@ -563,8 +545,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     persistPluginBindingUserTurn,
     sendPolicy,
     chatType,
-    emptyFinalAllowedAsSilent,
-    noVisibleReplyFallbackDirected,
     sourceReplyPolicy,
     sourceReplyDeliveryRuntimeOptions,
     sourceReplyDeliveryMode,

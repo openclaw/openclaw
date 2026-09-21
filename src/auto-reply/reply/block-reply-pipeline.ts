@@ -27,7 +27,7 @@ export type BlockReplyPipeline = {
   hasBuffered: () => boolean;
   didStream: () => boolean;
   /** True only after a final-answer lane payload is sent. */
-  didStreamTerminalReply?: () => boolean;
+  didStreamTerminalReply?: (minimumAssistantMessageIndex?: number) => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
   getSourceRecovery?: (payload: ReplyPayload) => readonly BlockReplySource[] | undefined;
@@ -35,7 +35,7 @@ export type BlockReplyPipeline = {
   isFinalPayloadRetryBlocked?: (payload: ReplyPayload) => boolean;
   getSentMediaUrls: () => readonly string[];
   getRetryBlockedMediaUrls?: () => readonly string[];
-  hasRetryBlockedTerminalDelivery?: () => boolean;
+  hasRetryBlockedTerminalDelivery?: (minimumAssistantMessageIndex?: number) => boolean;
   hasRetryBlockedDelivery: () => boolean;
 };
 
@@ -134,6 +134,7 @@ export function createBlockReplyPipeline(params: {
     contentKey: string;
     mediaUrls: readonly string[];
     terminal: boolean;
+    terminalDeliveryConfirmed?: true;
   };
   const blockAttemptsByMessage = new Map<number | undefined, BlockAttempt[]>();
   let bufferedAssistantMessageIndex: number | undefined;
@@ -218,6 +219,9 @@ export function createBlockReplyPipeline(params: {
           sentKeys.add(payloadKey);
         }
         if (isTerminalContent && delivery.source?.complete !== false) {
+          if (attempt.terminal) {
+            attempt.terminalDeliveryConfirmed = true;
+          }
           sentContentKeys.add(contentKey);
           sentContentKeys.add(createIndexedBlockReplyContentKey(payload));
         }
@@ -375,16 +379,17 @@ export function createBlockReplyPipeline(params: {
     stop,
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
-    didStreamTerminalReply: () =>
-      Array.from(blockAttemptsByMessage.values()).some((attempts) =>
-        attempts.some(
-          (attempt) =>
-            attempt.terminal &&
-            attempt.outcome === "delivered" &&
-            !attempt.pending &&
-            attempt.source?.complete !== false,
-        ),
-      ),
+    didStreamTerminalReply: (minimumAssistantMessageIndex = 0) => {
+      for (const [index, attempts] of blockAttemptsByMessage) {
+        if (
+          (index ?? 0) >= minimumAssistantMessageIndex &&
+          attempts.some((attempt) => attempt.terminalDeliveryConfirmed === true)
+        ) {
+          return true;
+        }
+      }
+      return false;
+    },
     isAborted: () => aborted,
     hasSentExactPayload: (payload) =>
       sentContentKeys.has(createIndexedBlockReplyContentKey(payload)),
@@ -456,10 +461,17 @@ export function createBlockReplyPipeline(params: {
       Array.from(blockAttemptsByMessage.values()).some((attempts) =>
         attempts.some(hasBlockReplyDeliveryCustody),
       ),
-    hasRetryBlockedTerminalDelivery: () =>
-      Array.from(blockAttemptsByMessage.values()).some((attempts) =>
-        attempts.some((attempt) => attempt.terminal && hasBlockReplyDeliveryCustody(attempt)),
-      ),
+    hasRetryBlockedTerminalDelivery: (minimumAssistantMessageIndex = 0) => {
+      for (const [index, attempts] of blockAttemptsByMessage) {
+        if (
+          (index ?? 0) >= minimumAssistantMessageIndex &&
+          attempts.some((attempt) => attempt.terminal && hasBlockReplyDeliveryCustody(attempt))
+        ) {
+          return true;
+        }
+      }
+      return false;
+    },
     getRetryBlockedMediaUrls: () =>
       Array.from(
         new Set(

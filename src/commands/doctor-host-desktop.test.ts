@@ -36,7 +36,7 @@ describe("host desktop doctor section", () => {
   it("reports the disabled Labs toggle", async () => {
     await noteHostDesktopHealth({});
     expect(note).toHaveBeenCalledWith(
-      "disabled; enable the Desktop lab with desktop.host.enabled=true, then restart the gateway",
+      "disabled; enable the Desktop lab with desktop.host.enabled=true",
       "Host desktop",
     );
   });

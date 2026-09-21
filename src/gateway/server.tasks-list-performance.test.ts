@@ -3,13 +3,17 @@ import {
   TASKS_LIST_CURSOR_MAX_LENGTH,
   type TasksListResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import * as taskRegistryRead from "../tasks/task-registry-read.js";
 import {
   createTaskRecord,
   deleteTaskRecordById,
-  listTaskRecordsUnsorted,
+  listTaskRecords,
   markTaskTerminalById,
-} from "../tasks/runtime-internal.js";
-import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
+} from "../tasks/task-registry.js";
+import {
+  configureTaskRegistryRuntime,
+  getTaskRegistryStore,
+} from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { installGatewayTestHooks } from "./server.auth.test-helpers.js";
@@ -62,13 +66,16 @@ describe("tasks.list Gateway performance", () => {
       // Keep real authorization and RPCs, but make each prepared access slice
       // consume a deterministic work budget regardless of host speed.
       let workMs = performance.now();
+      let accessSliceWorkMs = 20;
       const workClock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
       const prepareAccess = taskSessionAccess.prepareTaskSessionReadFilter;
+      let onAccessSlice: ((batch: Parameters<typeof prepareAccess>[1]) => void) | undefined;
       const accessWork = vi
         .spyOn(taskSessionAccess, "prepareTaskSessionReadFilter")
         .mockImplementation((...args) => {
           const filter = prepareAccess(...args);
-          workMs += 20;
+          onAccessSlice?.(args[1]);
+          workMs += accessSliceWorkMs;
           return filter;
         });
       const sortedInputLengths: number[] = [];
@@ -115,7 +122,7 @@ describe("tasks.list Gateway performance", () => {
         const list = await listPromise;
 
         const listMaxSortedInput = Math.max(0, ...sortedInputLengths);
-        const currentTasks = listTaskRecordsUnsorted();
+        const currentTasks = listTaskRecords();
         const adminExpected = expectedTaskIds(currentTasks, 0, 7);
         expect(mutationsApplied).toBe(true);
         expect(list.ok, JSON.stringify(list.error)).toBe(true);
@@ -175,9 +182,7 @@ describe("tasks.list Gateway performance", () => {
         });
 
         const viewerExpected = expectedTaskIds(
-          listTaskRecordsUnsorted().filter(
-            (task) => task.requesterSessionKey === OWNED_SESSION_KEY,
-          ),
+          listTaskRecords().filter((task) => task.requesterSessionKey === OWNED_SESSION_KEY),
           0,
           25,
         );
@@ -277,59 +282,141 @@ describe("tasks.list Gateway performance", () => {
         expect(convergedRegistry.ok, JSON.stringify(convergedRegistry.error)).toBe(true);
         expect(convergedRegistry.payload?.tasks).toHaveLength(1);
 
+        for (const { sliceWorkMs, expectedQueuedWork } of [
+          { sliceWorkMs: 1, expectedQueuedWork: [false, false, false] },
+          { sliceWorkMs: 3, expectedQueuedWork: [false, true, true] },
+        ]) {
+          const retryTasks = new Map([...createTaskSnapshot()].slice(0, 65));
+          resetTaskRegistryForTests({ persist: false });
+          configureTaskRegistryRuntime({
+            store: createInMemoryTaskRegistryStore({
+              tasks: retryTasks,
+              deliveryStates: new Map(),
+            }),
+          });
+          let preparations = 0;
+          let mutations = 0;
+          let retryCandidates = 0;
+          let queuedWorkRan = false;
+          let queuedWork: ReturnType<typeof setImmediate> | undefined;
+          const queuedWorkDuringRetry: boolean[] = [];
+          const createPreparation = taskRegistryRead.createTaskRegistryReadPreparation;
+          const preparation = vi
+            .spyOn(taskRegistryRead, "createTaskRegistryReadPreparation")
+            .mockImplementation(() => {
+              const prepareRead = createPreparation();
+              return async () => {
+                const read = await prepareRead();
+                preparations += 1;
+                if (preparations === 2) {
+                  // Preparation elapsed time must not consume the scan's work budget.
+                  workMs += 100;
+                  queuedWork = setImmediate(() => {
+                    queuedWorkRan = true;
+                  });
+                }
+                return read;
+              };
+            });
+          accessSliceWorkMs = sliceWorkMs;
+          onAccessSlice = (batch) => {
+            if (preparations === 1 && mutations === 0) {
+              const updated = markTaskTerminalById({
+                taskId: "task-00064",
+                status: "succeeded",
+                endedAt: TASK_COUNT + 1,
+                lastEventAt: TASK_COUNT + 1,
+              });
+              if (!updated) {
+                throw new Error("expected a task completion during page selection");
+              }
+              retryTasks.set(updated.taskId, updated);
+              mutations += 1;
+            }
+            if (preparations === 2 && retryCandidates < retryTasks.size) {
+              queuedWorkDuringRetry.push(queuedWorkRan);
+              retryCandidates += batch.length;
+            }
+          };
+          const sortedBeforeRetry = sortedInputLengths.length;
+          try {
+            const retriedPage = await sendRpc<TasksListResult>(
+              viewer,
+              `tasks-retry-budget-${sliceWorkMs}`,
+              "tasks.list",
+              { limit: 7 },
+            );
+            expect(retriedPage.ok, JSON.stringify(retriedPage.error)).toBe(true);
+            expect(preparations).toBe(2);
+            expect(mutations).toBe(1);
+            expect(queuedWorkDuringRetry).toEqual(expectedQueuedWork);
+            expect(sortedInputLengths.slice(sortedBeforeRetry).every((size) => size <= 7)).toBe(
+              true,
+            );
+            const visibleTasks = [...retryTasks.values()].filter(
+              (task) => task.requesterSessionKey === OWNED_SESSION_KEY,
+            );
+            expect(retriedPage.payload?.tasks.map((task) => task.id)).toEqual(
+              expectedTaskIds(visibleTasks, 0, 7),
+            );
+            expect(retriedPage.payload?.tasks[0]?.id).toBe("task-00064");
+            expect(retriedPage.payload?.nextCursor).toBeDefined();
+          } finally {
+            clearImmediate(queuedWork);
+            onAccessSlice = undefined;
+            accessSliceWorkMs = 20;
+            preparation.mockRestore();
+          }
+        }
+
         const churnTasks = createTaskSnapshot();
         const churnTaskId = churnTasks.keys().next().value;
         if (!churnTaskId) {
           throw new Error("expected a task churn fixture");
         }
         resetTaskRegistryForTests({ persist: false });
-        let taskChurnActive = true;
-        let taskChurnStarted = false;
+        configureTaskRegistryRuntime({
+          store: createInMemoryTaskRegistryStore({
+            tasks: churnTasks,
+            deliveryStates: new Map(),
+          }),
+        });
         let taskChurnRevision = 0;
-        const churnTask = () => {
-          if (!taskChurnActive) {
+        const registrySelections = vi.spyOn(taskRuntime, "listTaskRecordPage");
+        // Invalidate each scan when it reads the fixture task. Counting free-running
+        // callbacks does not prove that any mutation invalidated the selected page.
+        onAccessSlice = (batch) => {
+          if (!batch.some((task) => task.taskId === churnTaskId)) {
             return;
           }
           taskChurnRevision += 1;
-          markTaskTerminalById({
-            taskId: churnTaskId,
-            status: "succeeded",
-            endedAt: TASK_COUNT + 100 + taskChurnRevision,
-          });
-          setImmediate(churnTask);
+          const endedAt = TASK_COUNT + 100 + taskChurnRevision;
+          expect(
+            markTaskTerminalById({ taskId: churnTaskId, status: "succeeded", endedAt })?.endedAt,
+          ).toBe(endedAt);
         };
-        configureTaskRegistryRuntime({
-          store: {
-            ...createInMemoryTaskRegistryStore(),
-            loadSnapshot: () => {
-              if (!taskChurnStarted) {
-                taskChurnStarted = true;
-                setImmediate(churnTask);
-              }
-              return { tasks: churnTasks, deliveryStates: new Map() };
+        try {
+          const unstableRegistry = await sendRpc<Record<string, unknown>>(
+            admin,
+            "tasks-unstable-registry",
+            "tasks.list",
+            { limit: 1 },
+          );
+          expect(taskChurnRevision).toBeGreaterThanOrEqual(3);
+          expect(registrySelections).toHaveBeenCalledTimes(3);
+          expect(unstableRegistry).toMatchObject({
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
+              retryable: true,
+              retryAfterMs: 250,
             },
-          },
-        });
-        const unstableRegistry = await sendRpc<Record<string, unknown>>(
-          admin,
-          "tasks-unstable-registry",
-          "tasks.list",
-          { limit: 1 },
-        );
-        taskChurnActive = false;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(taskChurnRevision).toBeGreaterThanOrEqual(3);
-        expect(unstableRegistry).toMatchObject({
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
-            retryable: true,
-            retryAfterMs: 250,
-          },
-        });
+          });
+        } finally {
+          onAccessSlice = undefined;
+          registrySelections.mockRestore();
+        }
 
         const scopedTasks = new Map(
           [...createTaskSnapshot()].slice(0, 65).map(([taskId, task], index) => {
@@ -338,27 +425,38 @@ describe("tasks.list Gateway performance", () => {
           }),
         );
         let scopedRevision = 0;
-        let scopedChurn: ReturnType<typeof setImmediate> | undefined;
-        const mutateUnrelatedTask = () => {
-          scopedRevision += 1;
-          markTaskTerminalById({
-            taskId: "task-00064",
-            status: "succeeded",
-            endedAt: TASK_COUNT + scopedRevision,
-          });
-          scopedChurn = setImmediate(mutateUnrelatedTask);
+        let scopedRevisionAtStop = 0;
+        let scopedChurn: Promise<void> | undefined;
+        let scopedChurnStopped = false;
+        const mutateUnrelatedTask = async () => {
+          for (;;) {
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+            if (scopedChurnStopped) {
+              return;
+            }
+            scopedRevision += 1;
+            markTaskTerminalById({
+              taskId: "task-00064",
+              status: "succeeded",
+              endedAt: TASK_COUNT + scopedRevision,
+            });
+          }
         };
         resetTaskRegistryForTests({ persist: false });
         configureTaskRegistryRuntime({
           store: {
             ...createInMemoryTaskRegistryStore(),
             loadSnapshot: () => {
-              scopedChurn = setImmediate(mutateUnrelatedTask);
+              scopedChurn ??= mutateUnrelatedTask();
               return { tasks: scopedTasks, deliveryStates: new Map() };
             },
           },
         });
         try {
+          // Repeated snapshot reads must share the fixture's one owned churn loop.
+          getTaskRegistryStore().loadSnapshot();
           const scopedPage = await sendRpc<TasksListResult>(viewer, "tasks-scoped", "tasks.list", {
             sessionKey: OWNED_SESSION_KEY,
             agentId: "main",
@@ -368,7 +466,9 @@ describe("tasks.list Gateway performance", () => {
           expect(scopedPage.payload?.tasks.map((task) => task.id)).toEqual(["task-00000"]);
           expect(scopedPage.payload?.nextCursor).toBeUndefined();
         } finally {
-          clearImmediate(scopedChurn);
+          scopedChurnStopped = true;
+          scopedRevisionAtStop = scopedRevision;
+          await scopedChurn;
         }
 
         const accessTasks = new Map([...createTaskSnapshot()].slice(0, 1_000));
@@ -420,6 +520,9 @@ describe("tasks.list Gateway performance", () => {
         } finally {
           accessChurn.mockRestore();
         }
+        expect(scopedRevision, "scoped task fixture must stop before later task fixtures").toBe(
+          scopedRevisionAtStop,
+        );
       } finally {
         sortSpy.mockRestore();
         accessWork.mockRestore();

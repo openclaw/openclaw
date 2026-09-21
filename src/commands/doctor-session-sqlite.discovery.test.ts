@@ -4,7 +4,8 @@ import { expect, it, vi } from "vitest";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
-import { searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
+import * as sessionTargets from "../config/sessions/targets.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -21,6 +22,7 @@ import {
 } from "./doctor-session-sqlite-migration-run.js";
 import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
 function transcript(id: string, phrase: string) {
@@ -45,6 +47,114 @@ function transcript(id: string, phrase: string) {
       .join("\n") + "\n"
   );
 }
+
+it("retains growing duplicate archives and the restore refusal without leaking its descriptor", async () => {
+  await withOpenClawTestState({ label: "doctor-restore-growing-archive" }, async (state) => {
+    fs.mkdirSync(state.sessionsDir(), { recursive: true });
+    const sessions = fs.realpathSync(state.sessionsDir());
+    const storePath = path.join(sessions, "sessions.json");
+    const target = {
+      agentId: "main",
+      storePath,
+      sqlitePath: resolveTargetSqlitePath({ agentId: "main", storePath }, state.env),
+    };
+    const archiveDir = path.join(path.dirname(sessions), "session-sqlite-import-archive");
+    fs.mkdirSync(archiveDir);
+    const sourcePath = path.join(sessions, "session.jsonl");
+    const archivePath = path.join(archiveDir, "session.jsonl.imported-1");
+    const duplicatePath = `${archivePath}.duplicate`;
+    const original = transcript("session", "x".repeat(128 * 1024));
+    fs.writeFileSync(archivePath, original);
+    fs.copyFileSync(archivePath, duplicatePath);
+    const run = createSessionSqliteMigrationRun(state.env, [target]);
+    recordPlannedMigrationMoves(run, target, [
+      { kind: "transcript", sourcePath, archivePath },
+      { kind: "transcript", sourcePath, archivePath: duplicatePath },
+    ]);
+    const identity = fs.statSync(archivePath);
+    const read = fs.readSync;
+    let descriptor: number | undefined;
+    const reads = vi
+      .spyOn(fs, "readSync")
+      .mockImplementation(
+        (
+          fd: number,
+          buffer: NodeJS.ArrayBufferView,
+          offsetOrOptions: number | fs.ReadOptions = {},
+          length?: number,
+          position?: fs.ReadPosition | null,
+        ) => {
+          const opened = fs.fstatSync(fd);
+          if (
+            descriptor === undefined &&
+            opened.dev === identity.dev &&
+            opened.ino === identity.ino
+          ) {
+            descriptor = fd;
+            fs.appendFileSync(archivePath, "\n");
+          }
+          return read(
+            fd,
+            buffer,
+            typeof offsetOrOptions === "number"
+              ? { offset: offsetOrOptions, length, position }
+              : offsetOrOptions,
+          );
+        },
+      );
+    let report: Awaited<ReturnType<typeof restoreSessionSqliteMigrationRun>>;
+    try {
+      report = await restoreSessionSqliteMigrationRun({
+        env: state.env,
+        manifestPath: run.manifestPath,
+        trustedTargets: [target],
+      });
+    } finally {
+      reads.mockRestore();
+    }
+    expect(descriptor).toBeTypeOf("number");
+    expect(() => fs.fstatSync(descriptor!)).toThrow(expect.objectContaining({ code: "EBADF" }));
+    expect(report.conflicts).toContainEqual({
+      sourcePath,
+      archivePath,
+      reason: "archive changed while it was inspected; refusing restore",
+    });
+    expect(report.restoredFiles).toEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.readFileSync(archivePath, "utf8")).toBe(`${original}\n`);
+    expect(fs.readFileSync(duplicatePath, "utf8")).toBe(original);
+    const recorded = migrationRun.readSessionSqliteMigrationManifest(run.manifestPath);
+    expect(recorded?.restore?.consumedArchives ?? []).not.toContain(archivePath);
+    expect(recorded?.restore?.restoredFiles).toEqual([]);
+  });
+});
+
+it.each(["dry-run", "import", "validate"] as const)(
+  "%s carries one fleet discovery into legacy archive coverage",
+  async (mode) => {
+    await withOpenClawTestState({ label: "doctor-fleet-discovery" }, async (state) => {
+      const agentIds = ["first", "second", "third"];
+      for (const agentId of agentIds) {
+        const sessions = state.sessionsDir(agentId);
+        fs.mkdirSync(sessions, { recursive: true });
+        fs.writeFileSync(path.join(sessions, "sessions.json"), "{}");
+      }
+      const discovery = vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreCandidateTargetsSync");
+      try {
+        const report = await runDoctorSessionSqlite({
+          mode,
+          allAgents: true,
+          cfg: {},
+          env: state.env,
+        });
+        expect(report.targets.map((target) => target.agentId).toSorted()).toEqual(agentIds);
+        expect(discovery).toHaveBeenCalledTimes(1);
+      } finally {
+        discovery.mockRestore();
+      }
+    });
+  },
+);
 
 it.each([{ allAgents: true }, { agent: "retired" }])(
   "admits transcript-only retired agents through the public selector %j",

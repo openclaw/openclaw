@@ -21,13 +21,16 @@ import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstallSources,
 } from "../plugins/official-external-plugin-catalog.js";
-import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { formatRawChannelConfigIssueMessage } from "./validation-channel-rules.js";
+import {
+  validatePreparedPluginSchemaValue,
+  type PreparedPluginSchemaValidations,
+} from "./validation-prepared.js";
 
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
@@ -88,6 +91,7 @@ export function validateExplicitPluginConfig(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   applyDefaults: boolean;
+  schemaValidations?: PreparedPluginSchemaValidations;
   registry: PluginManifestRegistry;
   knownIds: Set<string>;
   normalizedPlugins: ReturnType<typeof normalizePluginsConfig>;
@@ -371,14 +375,17 @@ export function validateExplicitPluginConfig(params: {
     const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
-        const result = validatePluginSchemaValue({
-          origin: record.origin,
-          schema: record.configSchema,
-          cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
-          value: entry?.config ?? {},
-          applyDefaults: true, // Always apply defaults for AJV schema validation;
-          // writeConfigFile persists persistCandidate, not validated.config (#61841)
-        });
+        const result = validatePreparedPluginSchemaValue(
+          {
+            origin: record.origin,
+            schema: record.configSchema,
+            cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
+            value: entry?.config ?? {},
+            applyDefaults: true, // Always apply defaults for AJV schema validation;
+            // writeConfigFile persists persistCandidate, not validated.config (#61841)
+          },
+          params.schemaValidations,
+        );
         if (!result.ok) {
           for (const error of result.errors) {
             const base = `plugins.entries.${pluginId}.config`;

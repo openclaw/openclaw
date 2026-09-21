@@ -7,6 +7,7 @@ import {
   listGitHubDeviceAuthorizationRecords,
   listGitHubOAuthRecords,
   readGitHubDeviceAuthorizationRecord,
+  writeGitHubDeviceAuthorizationRecord,
 } from "../../agents/github-oauth-records.js";
 import {
   prepareGitHubToolEnvironment,
@@ -29,6 +30,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   readUserGitHubConnection,
   resolvePersonalGitHubOwner,
+  updateUserGitHubConnection,
 } from "../../state/user-github-connections.js";
 import {
   ensureGatewayOwnerProfile,
@@ -125,24 +127,60 @@ async function start(client = alice): Promise<UsersGitHubAuthorizeStartResult> {
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return respond.mock.calls[0]![1] as UsersGitHubAuthorizeStartResult;
 }
-function advance(client = alice) {
-  const pending = readUserGitHubConnection(owner(client))?.pending;
-  if (pending?.kind !== "device") {
-    throw new Error("Expected pending device authorization");
-  }
-  vi.setSystemTime(pending.nextPollAtMs);
+function preparePoll(client = alice) {
+  updateUserGitHubConnection(
+    owner(client),
+    (current) => {
+      if (current?.pending?.kind !== "device") {
+        throw new Error("Expected pending device authorization");
+      }
+      return { ...current, pending: { ...current.pending, nextPollAtMs: Date.now() } };
+    },
+    () => {},
+  );
+}
+function expireAuthorization() {
+  updateUserGitHubConnection(
+    owner(),
+    (current) => {
+      if (current?.pending?.kind !== "device") {
+        throw new Error("Expected pending device authorization");
+      }
+      const expiresAtMs = Date.now() - 1;
+      return {
+        ...current,
+        pending: {
+          ...current.pending,
+          createdAtMs: expiresAtMs - 900000,
+          expiresAtMs,
+          nextPollAtMs: expiresAtMs,
+        },
+      };
+    },
+    () => {},
+  );
+}
+function expireAccessToken() {
+  updateUserGitHubConnection(
+    owner(),
+    (current) => {
+      if (current?.selection.kind !== "connected") {
+        throw new Error("Expected connection");
+      }
+      return { ...current, selection: { ...current.selection, accessExpiresAtMs: Date.now() - 1 } };
+    },
+    () => {},
+  );
 }
 async function connect(client = alice) {
   const started = await start(client);
-  advance(client);
+  preparePoll(client);
   const result = await rpc(client, "users.github.authorize.poll", { requestId: started.requestId });
   expect(result.mock.calls[0]?.[1]).toMatchObject({ status: "success" });
   return readUserGitHubConnection(owner(client))!;
 }
 
 beforeEach(async () => {
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(new Date("2026-08-20T12:00:00Z"));
   state = await createOpenClawTestState({ scenario: "minimal", applyEnv: true });
   config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
   clients = new Set();
@@ -215,7 +253,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await lifecycle.stop();
   await state.cleanup();
-  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -444,7 +481,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         if (!pending) {
           throw new Error("Expected shared device authorization");
         }
-        vi.setSystemTime(pending.nextPollAtMs);
+        writeGitHubDeviceAuthorizationRecord({ ...pending, nextPollAtMs: Date.now() });
         const polled = await rpc(alice, "tools.github.authorize.poll", { requestId });
         expect(polled.mock.calls[0]?.[1]).toMatchObject({ status: "success" });
       }
@@ -550,7 +587,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("rejects copied pending IDs before lookup, deduplication, or cancellation", async () => {
     const started = await start();
-    advance();
+    preparePoll();
     const waiting = createDeferredCore<{ status: "authorized"; tokens: typeof tokens }>();
     network.poll.mockReturnValueOnce(waiting.promise);
     const pending = rpc(alice, "users.github.authorize.poll", { requestId: started.requestId });
@@ -631,7 +668,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     "fences installation when %s wins the awaited poll",
     async (race) => {
       const started = await start();
-      advance();
+      preparePoll();
       const waiting = createDeferredCore<{ status: "authorized"; tokens: typeof tokens }>();
       network.poll.mockReturnValueOnce(waiting.promise);
       const pending = rpc(alice, "users.github.authorize.poll", { requestId: started.requestId });
@@ -659,7 +696,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         invalidateOperatorRolePolicy(owner());
       }
       if (race === "expiry") {
-        vi.setSystemTime(Date.now() + 900000);
+        expireAuthorization();
       }
       waiting.resolve({ status: "authorized", tokens });
       const response = await pending;
@@ -693,7 +730,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     "rechecks %s after credential verification before the final connection commit",
     async (race) => {
       const started = await start();
-      advance();
+      preparePoll();
       const fallback = network.verify.getMockImplementation()!;
       network.verify.mockImplementation(async (token, options) => {
         const result = await fallback(token, options);
@@ -705,7 +742,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
             await rpc(alice, "users.github.disconnect");
           }
           if (race === "expiry") {
-            vi.setSystemTime(Date.now() + 900000);
+            expireAuthorization();
           }
         }
         return result;
@@ -832,7 +869,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     if (connection.selection.kind !== "connected") {
       throw new Error("Expected connection");
     }
-    vi.setSystemTime(connection.selection.accessExpiresAtMs - 1);
+    expireAccessToken();
     const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
     network.refresh.mockReturnValueOnce(refresh.promise);
     const pending = lifecycle.personal.refresh(owner());
@@ -863,7 +900,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     if (connection.selection.kind !== "connected") {
       throw new Error("Expected connection");
     }
-    vi.setSystemTime(connection.selection.accessExpiresAtMs - 1);
+    expireAccessToken();
     const refresh = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
     network.refresh.mockReturnValueOnce(refresh.promise);
     const pending = lifecycle.personal.refresh(owner());
@@ -886,7 +923,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       if (connection.selection.kind !== "connected") {
         throw new Error("Expected connection");
       }
-      vi.setSystemTime(connection.selection.accessExpiresAtMs - 1);
+      expireAccessToken();
       const db = openOpenClawStateDatabase().db;
       db.exec(
         "CREATE TEMP TRIGGER reject_rotation BEFORE UPDATE ON secret_store_entries WHEN NEW.value LIKE '%synthetic-rotated-refresh%' BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END",
@@ -911,7 +948,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     if (connection.selection.kind !== "connected") {
       throw new Error("Expected connection");
     }
-    vi.setSystemTime(connection.selection.accessExpiresAtMs - 1);
+    expireAccessToken();
     const refreshed = createDeferredCore<{ status: "refreshed"; tokens: typeof tokens }>();
     network.refresh.mockReturnValueOnce(refreshed.promise);
     const pending = lifecycle.personal.refresh(owner());

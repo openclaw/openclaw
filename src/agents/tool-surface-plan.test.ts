@@ -8,6 +8,7 @@ import {
   createToolSearchCatalogRef,
   clearToolSearchCatalog,
   TOOL_SEARCH_RAW_TOOL_NAME,
+  createToolSearchTools,
   type ToolSearchCatalogToolExecutor,
 } from "./tool-search.js";
 import { applyAgentToolSurfaceCatalog, resolveAgentToolSurfacePlan } from "./tool-surface-plan.js";
@@ -82,7 +83,7 @@ describe("resolveAgentToolSurfacePlan", () => {
     },
   );
 
-  it("reevaluates derived Tool Search for sibling agents and fallback models without changing config", () => {
+  it("keeps structured search across sibling agents and fallback models without changing config", () => {
     const config: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { local: {}, hosted: {} } },
     };
@@ -94,11 +95,11 @@ describe("resolveAgentToolSurfacePlan", () => {
     expect(
       resolveAgentToolSurfacePlan({ ...params, model: { toolSearchMode: false } })
         .toolSearchControlsEnabled,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       resolveAgentToolSurfacePlan({ ...params, agentId: "hosted", model: {} })
         .toolSearchControlsEnabled,
-    ).toBe(false);
+    ).toBe(true);
     expect(config.tools).toBeUndefined();
     expect(config.agents?.defaults).toBeUndefined();
   });
@@ -304,6 +305,36 @@ describe("resolveAgentToolSurfacePlan", () => {
 
 describe("applyAgentToolSurfaceCatalog", () => {
   const executeTool: ToolSearchCatalogToolExecutor = async () => ({ content: [], details: {} });
+
+  it("compacts an unconfigured hosted run behind structured controls", () => {
+    const config: OpenClawConfig = {};
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config,
+      codeModeOverride: false,
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    const result = applyAgentToolSurfaceCatalog({
+      tools: [
+        ...createToolSearchTools({ config, catalogRef, executeTool }),
+        createStubTool("hidden_target"),
+      ],
+      config,
+      ...plan,
+      forceDirectMessageTool: false,
+      catalogRef,
+    });
+
+    expect(plan.toolSearchControlsEnabled).toBe(true);
+    expect(plan.toolSearchConfig.mode).toBe("tools");
+    expect(result.tools.map((tool) => tool.name)).toEqual([
+      "tool_search",
+      "tool_describe",
+      "tool_call",
+    ]);
+    expect(result.catalogToolCount).toBe(1);
+    expect(config.tools).toBeUndefined();
+  });
 
   it("uses the code-mode catalog when code-mode controls are enabled", () => {
     const config: OpenClawConfig = {

@@ -314,7 +314,8 @@ export function configFormForSubmit(state: RuntimeConfigState): Record<string, u
   return sanitizeRedactedFormForSubmit(
     form,
     state.configFormOriginal,
-    state.configRawOriginalParsed,
+    // The draft original is include-resolved source; raw only describes the root file.
+    state.configFormOriginal,
   );
 }
 

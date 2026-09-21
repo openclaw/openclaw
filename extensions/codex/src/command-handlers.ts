@@ -200,7 +200,6 @@ export async function handleCodexSubcommand(
             appServerVersion: client.getServerVersion(),
             runtimeIdentity: client.getRuntimeIdentity(),
           });
-          defaultCodexPluginMetadataCache.invalidate(appCacheKey);
           return await refreshCodexPluginRuntimeState({
             configCwd: workspaceDir,
             appCache: defaultCodexAppInventoryCache,
@@ -277,11 +276,11 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex stop" };
     }
-    return { text: await stopConversationTurn(deps, ctx, options.pluginConfig) };
+    return { text: await stopConversationTurn(deps, ctx) };
   }
   if (normalized === "steer") {
     return {
-      text: await steerConversationTurn(deps, ctx, options.pluginConfig, rest.join(" ")),
+      text: await steerConversationTurn(deps, ctx, rest.join(" ")),
     };
   }
   if (normalized === "model") {
@@ -386,6 +385,7 @@ export async function handleCodexSubcommand(
         await readCodexAccountAuthOverview({
           ctx,
           agentDir: scope.agentDir,
+          authProfileId: scope.authProfileId,
           pluginConfig: options.pluginConfig,
           safeCodexControlRequest: deps.safeCodexControlRequest,
           account,
@@ -400,11 +400,7 @@ export async function handleCodexSubcommand(
 function resolvePluginRuntimeRefreshMethod(method: string) {
   const supported = [
     CODEX_CONTROL_METHODS.listPlugins,
-    CODEX_CONTROL_METHODS.listSkills,
-    CODEX_CONTROL_METHODS.listHooks,
-    CODEX_CONTROL_METHODS.reloadMcpServers,
     CODEX_CONTROL_METHODS.installedApps,
-    CODEX_CONTROL_METHODS.listApps,
     CODEX_CONTROL_METHODS.readApps,
   ] as const;
   const recognized = supported.find((candidate) => candidate === method);

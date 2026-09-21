@@ -1,3 +1,4 @@
+import type { AgentRuntimeRestrictionErrorDetails } from "../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import {
   ErrorCodes,
   errorShape,
@@ -5,9 +6,10 @@ import {
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentHarnessSessionExecutionRestriction } from "../../agents/harness/execution-environment.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { preparePublishedModelRuntimeChoice } from "../../agents/model-runtime-choice.js";
 import {
   getModelRefStatus,
   resolveAllowedModelRef,
@@ -16,6 +18,8 @@ import {
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
+import { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "../../auto-reply/reply/queue.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -32,7 +36,14 @@ export function persistSessionPatchModelSelection(params: {
   sessionKey: string;
   targetAgentId: string;
 }): void {
-  if (typeof params.patch.model !== "string") {
+  // Combined execution-policy recovery is explicitly scoped to this chat, even
+  // when ordinary model selections normally update agent/global defaults.
+  if (
+    typeof params.patch.model !== "string" ||
+    params.patch.sandboxMode !== undefined ||
+    params.patch.nativeRuntimeConsent !== undefined ||
+    params.entry.nativeRuntimeConsent !== undefined
+  ) {
     return;
   }
   const policy = resolveGatewayModelSelectionPolicy({
@@ -64,7 +75,7 @@ export function refreshSessionPatchQueuedSelection(params: {
   agentId: string;
   catalog?: ModelCatalogEntry[];
 }): void {
-  if (!("agentRuntime" in params.patch)) {
+  if (!("agentRuntime" in params.patch) && typeof params.patch.model !== "string") {
     return;
   }
   const { cfg, entry, sessionKey, agentId } = params;
@@ -151,6 +162,55 @@ export function resolveSessionPatchModelSelection(params: {
   };
 }
 
+/** Model selection and send admission expose the same per-chat recovery contract. */
+export function resolveSessionNativeRuntimeRestriction(params: {
+  operation: "selection" | "send";
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  entry: Parameters<typeof resolveAgentHarnessSessionExecutionRestriction>[0]["entry"];
+  persistedEntry: SessionEntry | undefined;
+  harness: AgentHarness;
+  provider: string;
+  modelId: string;
+  callerCanConsent: boolean;
+}): ErrorShape | undefined {
+  const { harness } = params;
+  const restriction = resolveAgentHarnessSessionExecutionRestriction(params);
+  if (!restriction) {
+    return undefined;
+  }
+  const optional =
+    restriction.reason !== "sandbox-required" && restriction.reason !== "remote-execution";
+  // Creation has no persisted chat to authorize; its first send owns optional recovery.
+  const persisted = params.persistedEntry;
+  if (params.operation === "selection" && !persisted && optional) {
+    return undefined;
+  }
+  const canRecover = params.callerCanConsent && optional && persisted;
+  const details: AgentRuntimeRestrictionErrorDetails = {
+    code: "AGENT_RUNTIME_RESTRICTED",
+    runtimeId: harness.id,
+    runtimeLabel: harness.label,
+    reason: restriction.reason,
+    ...(canRecover
+      ? {
+          recovery: {
+            action: "use-native-permissions" as const,
+            sessionId: persisted.sessionId,
+            ...(persisted.lifecycleRevision
+              ? { lifecycleRevision: persisted.lifecycleRevision }
+              : {}),
+            expectedPermissionMode: persisted.permissionMode ?? null,
+            expectedSandboxMode: persisted.sandboxMode ?? null,
+            expectedNativeRuntimeConsent: persisted.nativeRuntimeConsent ?? null,
+          },
+        }
+      : {}),
+  };
+  return errorShape(ErrorCodes.INVALID_REQUEST, restriction.message, { details });
+}
+
 /** Bind runtime availability and placement checks to the selection's commit guard. */
 export async function prepareSessionPatchRuntimeSelection(params: {
   cfg: OpenClawConfig;
@@ -158,6 +218,9 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   patch: SessionsPatchParams;
   entry: SessionEntry;
   placement?: { context: SessionWorkerPlacementContext; sessionKey: string };
+  catalog?: readonly ModelCatalogEntry[];
+  callerCanConsent?: boolean;
+  expectedEntry?: SessionEntry;
 }): Promise<
   { ok: true; validate?: () => ErrorShape | undefined } | { ok: false; error: ErrorShape }
 > {
@@ -166,25 +229,64 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     error: errorShape(ErrorCodes.INVALID_REQUEST, message),
   });
   let validateRuntime: (() => string | undefined) | undefined;
-  if (typeof params.patch.agentRuntime === "string") {
+  let validateEnvironment: (() => ErrorShape | undefined) | undefined;
+  const grantingConsent = typeof params.patch.nativeRuntimeConsent === "string";
+  if (
+    typeof params.patch.agentRuntime === "string" ||
+    typeof params.patch.model === "string" ||
+    grantingConsent
+  ) {
     const model = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
-    const choice = await preparePublishedModelRuntimeChoice({
+    const choice = await prepareModelSelectionRuntime({
       cfg: params.cfg,
       agentId: params.agentId,
       workspaceDir: params.entry.spawnedWorkspaceDir,
       ...model,
-      runtimeId: params.patch.agentRuntime,
+      catalog: params.catalog ?? [],
+      rawRuntime:
+        typeof params.patch.agentRuntime === "string" ? params.patch.agentRuntime : undefined,
       sessionEntry: {
         ...params.entry,
         authProfileOverrideSource: resolveCollapsedSessionAuthPinSource(params.entry),
       },
     });
-    if (choice.kind === "unavailable") {
+    if (choice.status === "rejected") {
       return invalid(choice.message);
     }
-    validateRuntime = choice.validate;
+    applyModelRuntimeDirective(params.entry, choice.runtime);
+    validateRuntime = choice.validateRuntimeSelection;
+    const harness = choice.harness;
+    if (grantingConsent) {
+      if (
+        !harness ||
+        harness.executionEnvironment !== "host-only" ||
+        harness.id !== params.patch.nativeRuntimeConsent
+      ) {
+        return invalid("Native runtime consent does not match the selected external runtime.");
+      }
+      params.entry.nativeRuntimeConsent = harness.id;
+    }
+    if (harness) {
+      validateEnvironment = () =>
+        resolveSessionNativeRuntimeRestriction({
+          operation: "selection",
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.placement?.sessionKey ?? params.patch.key,
+          entry: params.entry,
+          persistedEntry: params.expectedEntry,
+          harness,
+          provider: model.provider,
+          modelId: model.model,
+          callerCanConsent: params.callerCanConsent === true,
+        });
+    }
   }
   const validate = () => {
+    const environmentError = validateEnvironment?.();
+    if (environmentError) {
+      return environmentError;
+    }
     const message =
       validateRuntime?.() ??
       (params.placement
@@ -204,5 +306,12 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   const error = validate();
   return error
     ? { ok: false, error }
-    : { ok: true, ...(params.patch.agentRuntime !== undefined ? { validate } : {}) };
+    : {
+        ok: true,
+        ...(params.patch.agentRuntime !== undefined ||
+        params.patch.model !== undefined ||
+        grantingConsent
+          ? { validate }
+          : {}),
+      };
 }

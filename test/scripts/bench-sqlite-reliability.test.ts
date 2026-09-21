@@ -2,6 +2,7 @@
 import { fork, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseSqliteReliabilityCli } from "../../scripts/lib/sqlite-reliability-cli.js";
 import {
@@ -14,14 +15,18 @@ import {
   canonicalPathWithExistingParent,
   isPendingPathInRepository,
 } from "../../scripts/lib/sqlite-reliability-worker-paths.js";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../src/state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const nodeExecutable = resolveTestNodeExecPath();
+const nodeArgs = resolveVitestNodeArgs();
 // Windows repeats ACL checks and crash/restore copies throughout the full proof.
 const RELIABILITY_PROOF_TIMEOUT_MS = process.platform === "win32" ? 480_000 : 240_000;
 const RELIABILITY_SMOKE_TEST_TIMEOUT_MS = process.platform === "win32" ? 1_200_000 : 300_000;
@@ -34,12 +39,13 @@ function reliabilitySmokeTest(name: string, test: () => void): void {
   it(name, test, RELIABILITY_SMOKE_TEST_TIMEOUT_MS);
 }
 
-function runProof(args: string[]) {
+function runProof(args: string[], env: NodeJS.ProcessEnv = {}) {
   const result = spawnSync(
-    process.execPath,
-    ["--import", "tsx", "scripts/bench-sqlite-reliability.ts", ...args],
+    nodeExecutable,
+    [...nodeArgs, "--import", "tsx", "scripts/bench-sqlite-reliability.ts", ...args],
     {
       cwd: process.cwd(),
+      env: { ...process.env, ...env },
       encoding: "utf8",
       timeout: RELIABILITY_PROOF_TIMEOUT_MS,
     },
@@ -197,7 +203,23 @@ describe("scripts/bench-sqlite-reliability", () => {
     }
 
     const output = path.join(stateDir, "report.json");
-    const result = runProof(["--profile", "smoke", "--state-dir", stateDir, "--output", output]);
+    const compilerPolicyProbe = path.join(stateDir, "compiler-policy-probe.mjs");
+    fs.writeFileSync(
+      compilerPolicyProbe,
+      `import { isMainThread } from "node:worker_threads";
+if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
+  throw new Error("SQLite proof subprocess discarded the selected Node compiler policy");
+}
+`,
+    );
+    const result = runProof(["--profile", "smoke", "--state-dir", stateDir, "--output", output], {
+      NODE_OPTIONS: [
+        process.env.NODE_OPTIONS,
+        `--import=${pathToFileURL(compilerPolicyProbe).href}`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    });
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
@@ -476,7 +498,8 @@ describe("scripts/bench-sqlite-reliability", () => {
       [databasePath, "8", "64", "4", "256", String(64 * 1024 * 1024), "1"],
       {
         cwd: process.cwd(),
-        execArgv: ["--import", "tsx"],
+        execPath: nodeExecutable,
+        execArgv: [...nodeArgs, "--import", "tsx"],
         serialization: "json",
         stdio: ["ignore", "ignore", "pipe", "ipc"],
       },

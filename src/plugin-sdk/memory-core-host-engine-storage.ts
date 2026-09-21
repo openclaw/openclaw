@@ -35,6 +35,7 @@ export {
   isTransientMemoryReadError,
   listMemoryFiles,
   loadSqliteVecExtension,
+  loadSqliteVecExtensionFromPath,
   matchesExtraMemoryPathEntry,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   MEMORY_CHUNKING_VERSION,
@@ -73,6 +74,8 @@ export {
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
 export type {
+  MemoryWorkspaceFiles,
+  MemoryWorkspaceWatchRequest,
   CuratedMarkdownEntry,
   CuratedProjectAnnotations,
   MemoryEntryProvenance,

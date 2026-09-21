@@ -9,8 +9,8 @@ import {
   getActiveSessionWorkAdmissionCount,
   runExclusiveSessionLifecycleMutation,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { onTaskRegistryChange } from "../../../tasks/task-registry-state.js";
 import { findTaskByRunId } from "../../../tasks/task-registry.js";
+import { onTaskRegistryChange } from "../../../tasks/task-registry.store.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";

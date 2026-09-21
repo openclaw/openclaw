@@ -667,6 +667,11 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   }
 
   const replyLike = reply ?? externalReply;
+  const externalOrigin = reply ? undefined : msg.external_reply?.origin;
+  const senderMessage =
+    replyLike && externalOrigin?.type === "user"
+      ? { ...replyLike, from: externalOrigin.sender_user }
+      : replyLike;
   const replyMedia = resolveTelegramPrimaryMedia(replyLike);
   const rawReplyText =
     replyLike && typeof replyLike.text === "string"
@@ -694,7 +699,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   if (!body && !replyMedia && !filteredQuoteText && !filteredReplyText) {
     return null;
   }
-  const sender = replyLike ? buildSenderName(replyLike) : undefined;
+  const sender = senderMessage ? buildSenderName(senderMessage) : undefined;
   const senderLabel = sender ?? "unknown sender";
   const source = reply ? "reply_to_message" : "external_reply";
   const quotePosition =
@@ -710,8 +715,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   return {
     id: replyLike?.message_id ? String(replyLike.message_id) : undefined,
     sender: senderLabel,
-    senderId: replyLike?.from?.id != null ? String(replyLike.from.id) : undefined,
-    senderUsername: replyLike?.from?.username ?? undefined,
+    senderId: senderMessage?.from?.id != null ? String(senderMessage.from.id) : undefined,
+    senderUsername: senderMessage?.from?.username ?? undefined,
     body: body || undefined,
     mediaType: replyMedia?.kind,
     kind,

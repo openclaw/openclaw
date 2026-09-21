@@ -31,6 +31,29 @@ describe("draftCloudProfileSupportsExecutionMode", () => {
 });
 
 describe("readDraftCloudProfiles", () => {
+  it("projects only bounded display identity and never guesses from a profile name", () => {
+    expect(
+      readDraftCloudProfiles([
+        {
+          id: "production",
+          providerId: "crabbox",
+          providerDisplayId: "aws",
+          settings: { provider: "azure" },
+        },
+        { id: "aws", providerId: "crabbox", providerDisplayId: "azure" },
+      ]),
+    ).toEqual([
+      { id: "aws", providerId: "crabbox", providerDisplayId: "azure", trust: undefined },
+      { id: "production", providerId: "crabbox", providerDisplayId: "aws", trust: undefined },
+    ]);
+    for (const providerDisplayId of [undefined, "", " aws", "aws\n", "a".repeat(65), {}, 42]) {
+      const [profile] = readDraftCloudProfiles([
+        { id: "aws", providerId: "crabbox", providerDisplayId },
+      ]);
+      expect(profile).not.toHaveProperty("providerDisplayId");
+    }
+  });
+
   it("keeps same-class choices distinct per OS and bounds catalogs", () => {
     const [profile] = readDraftCloudProfiles([
       {

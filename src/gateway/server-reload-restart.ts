@@ -3,12 +3,12 @@ import { isRestartEnabled } from "../config/commands.flags.js";
 import { getConfigValueAtPath } from "../config/config-paths.js";
 import { setRuntimeConfigAppliedHash } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../infra/restart-intent.js";
 import {
   deferGatewayRestartUntilIdle,
   type RestartDeferralHandle,
-  resolveGatewayRestartDeferralTimeoutMs,
-  setGatewaySigusr1RestartPolicy,
+  setGatewayRestartPolicy,
 } from "../infra/restart.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createAppliedConfigHashPublisher } from "./applied-config-hash-publisher.js";
@@ -419,7 +419,7 @@ class GatewayRestartTransaction {
           return false;
         }
         emissionPrepared = true;
-        setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(preparedConfig) });
+        setGatewayRestartPolicy({ allowExternal: isRestartEnabled(preparedConfig) });
         return this.isCurrentRequest(requestGeneration);
       } catch (err) {
         emissionPrepared = false;
@@ -455,6 +455,8 @@ class GatewayRestartTransaction {
       }
 
       let failedEmission: { reason: string; intent?: GatewayRestartIntent } | undefined;
+      // Timeout and failed checks leave a live deferral owned by this request.
+      this.restartDeferral?.cancel();
       this.restartDeferral = deferGatewayRestartUntilIdle({
         getPendingCount: () => this.options.getActiveCounts().totalActive,
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(undefined),
@@ -509,22 +511,20 @@ class GatewayRestartTransaction {
             );
           },
           onTimeout: (_pending, elapsedMs) => {
+            // Keep the handle until delivery or cancellation; forced attempts may retry.
             this.restartPending = false;
-            this.restartDeferral = null;
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${this.options.formatDeferredWorkStatus("still active")}; forcing restart`,
             );
           },
           onCheckError: (err) => {
-            this.restartPending = false;
-            this.restartDeferral = null;
             params.logReload.warn(
-              `restart deferral check failed (${String(err)}); restarting gateway now`,
+              `restart deferral check failed (${String(err)}); pending work is unknown, deferring and retrying`,
             );
           },
         },
       });
-      setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
+      setGatewayRestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
       return true;
     }
     // No active operations or pending replies, restart immediately
@@ -550,7 +550,7 @@ class GatewayRestartTransaction {
     if (emitResult.status === "coalesced") {
       params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
     }
-    setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
+    setGatewayRestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     return true;
   }
 }

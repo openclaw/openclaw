@@ -55,7 +55,7 @@ describe("memory manager status state", () => {
         provider: null,
         providerInitialized: false,
         requestedProvider: "openai",
-        configuredModel: "mock-embed",
+        resolveConfiguredModel: () => "mock-embed",
       },
       expected: {
         provider: "openai",
@@ -69,12 +69,30 @@ describe("memory manager status state", () => {
         provider: null,
         providerInitialized: true,
         requestedProvider: "openai",
-        configuredModel: "mock-embed",
+        resolveConfiguredModel: () => {
+          throw new Error("Configured model must not resolve after provider initialization");
+        },
       },
       expected: {
         provider: "none",
         model: undefined,
         searchMode: "fts-only" as const,
+      },
+    },
+    {
+      name: "effective fallback provider without resolving the configured model",
+      params: {
+        provider: { id: "local", model: "fallback-model" },
+        providerInitialized: true,
+        requestedProvider: "openai",
+        resolveConfiguredModel: () => {
+          throw new Error("Configured model must not override an effective provider");
+        },
+      },
+      expected: {
+        provider: "local",
+        model: "fallback-model",
+        searchMode: "hybrid" as const,
       },
     },
   ])("reports $name", ({ params, expected }) => {

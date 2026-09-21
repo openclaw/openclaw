@@ -1,27 +1,27 @@
 // Regression: restart control-flow deadlines must follow the monotonic clock.
 // A wall-clock step (NTP correction, VM suspend/resume) must not extend the
-// SIGUSR1 authorization grace, fire deferral timeouts early, or collapse the
+// SIGUSR2 authorization grace, fire deferral timeouts early, or collapse the
 // restart cooldown. setSystemTime moves only the wall clock; the faked
 // performance clock stays monotonic, which models the real failure mode.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
-  consumeGatewaySigusr1RestartAuthorization,
+  consumeGatewayRestartAuthorization,
   deferGatewayRestartUntilIdle,
-  markGatewaySigusr1RestartHandled,
+  markGatewayRestartHandled,
   requestGatewayRestartWithSignalAdmission,
   resetGatewayRestartStateForInProcessRestart,
-  scheduleGatewaySigusr1Restart,
+  scheduleGatewayRestart,
 } from "./restart.js";
 
-const sigusr1Handler = () => {};
+const restartSignalHandler = () => {};
 
 describe("restart control-flow deadlines use the monotonic clock", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     resetGatewayRestartStateForInProcessRestart();
     resetGatewayWorkAdmission();
-    process.on("SIGUSR1", sigusr1Handler);
+    process.on("SIGUSR2", restartSignalHandler);
   });
 
   afterEach(() => {
@@ -29,22 +29,22 @@ describe("restart control-flow deadlines use the monotonic clock", () => {
     vi.restoreAllMocks();
     resetGatewayRestartStateForInProcessRestart();
     resetGatewayWorkAdmission();
-    process.removeListener("SIGUSR1", sigusr1Handler);
+    process.removeListener("SIGUSR2", restartSignalHandler);
   });
 
-  it("expires SIGUSR1 authorization grace on monotonic time despite wall-clock rollback", () => {
+  it("expires SIGUSR2 authorization grace on monotonic time despite wall-clock rollback", () => {
     expect(requestGatewayRestartWithSignalAdmission("probe")).toEqual({ status: "emitted" });
     vi.advanceTimersByTime(4_000);
     vi.setSystemTime(Date.now() - 10_000);
     vi.advanceTimersByTime(4_000); // monotonic 8s > 5s grace
-    expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
+    expect(consumeGatewayRestartAuthorization()).toBe(false);
   });
 
-  it("keeps SIGUSR1 authorization grace when monotonic time is inside the window", () => {
+  it("keeps SIGUSR2 authorization grace when monotonic time is inside the window", () => {
     expect(requestGatewayRestartWithSignalAdmission("probe")).toEqual({ status: "emitted" });
     vi.advanceTimersByTime(4_000);
     vi.setSystemTime(Date.now() - 10_000); // wall-clock rollback only
-    expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
+    expect(consumeGatewayRestartAuthorization()).toBe(true);
   });
 
   it("does not fire the deferral timeout early on a wall-clock forward jump", () => {
@@ -77,11 +77,11 @@ describe("restart control-flow deadlines use the monotonic clock", () => {
 
   it("keeps the restart cooldown across a wall-clock forward jump", () => {
     expect(requestGatewayRestartWithSignalAdmission("first")).toEqual({ status: "emitted" });
-    expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
-    markGatewaySigusr1RestartHandled();
+    expect(consumeGatewayRestartAuthorization()).toBe(true);
+    markGatewayRestartHandled();
 
     vi.setSystemTime(Date.now() + 60_000);
-    const second = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "second" });
+    const second = scheduleGatewayRestart({ delayMs: 0, reason: "second" });
     expect(second.cooldownMsApplied).toBe(30_000);
     expect(second.delayMs).toBe(30_000);
   });

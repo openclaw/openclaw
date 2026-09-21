@@ -9,13 +9,32 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import * as transcriptTail from "../config/sessions/session-accessor.sqlite-active-events.js";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import {
+  SessionTranscriptProjectionUnavailableError,
+  SessionTranscriptStorageUnavailableError,
+} from "../config/sessions/session-transcript-projection-error.js";
 import type { InternalSessionEntry, SessionContextBudgetStatus } from "../config/sessions/types.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { buildStatusReplyParts } from "./status-text.js";
+
+vi.mock(import("../infra/session-cost-usage.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    loadSessionCostSummariesFromCache: async () => ({
+      summaries: [null],
+      cacheStatus: {
+        status: "partial",
+        cachedFiles: 0,
+        pendingFiles: 1,
+        staleFiles: 0,
+      },
+    }),
+  };
+});
 
 type StatusTextParams = Parameters<typeof buildStatusReplyParts>[0];
 
@@ -557,41 +576,39 @@ describe("buildStatusText prepared context windows", () => {
     expect(sessionEntry).toEqual(original);
   });
 
-  it.each([false, true])(
-    "catches only unavailable terminal projections (unavailable=%s)",
-    async (unavailable) => {
-      const error = unavailable
-        ? new SessionTranscriptProjectionUnavailableError("projection")
-        : new Error("unexpected reader failure");
-      const readTail = vi
-        .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage")
-        .mockImplementation(() => {
-          throw error;
-        });
-      try {
-        const sessionEntry: InternalSessionEntry = {
-          sessionId: "projection",
-          updatedAt: 1,
-          status: "done",
-          lastRunId: "settled-run",
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "deepseek/deepseek-v4-flash",
-            activeModel: "fallback/small-model",
-          },
-        };
-        const result = renderPreparedStatus({ sessionEntry });
-        if (unavailable) {
-          expect((await result).text).not.toContain("Fallback:");
-        } else {
-          await expect(result).rejects.toBe(error);
-        }
-        expect(readTail).toHaveBeenCalledOnce();
-      } finally {
-        readTail.mockRestore();
+  it.each([
+    { error: new SessionTranscriptProjectionUnavailableError("projection"), unavailable: true },
+    { error: new SessionTranscriptStorageUnavailableError(), unavailable: true },
+    { error: new Error("unexpected reader failure"), unavailable: false },
+  ])("catches only unavailable terminal data ($error.name)", async ({ error, unavailable }) => {
+    const readTail = vi
+      .spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPage")
+      .mockImplementation(() => {
+        throw error;
+      });
+    try {
+      const sessionEntry: InternalSessionEntry = {
+        sessionId: "projection",
+        updatedAt: 1,
+        status: "done",
+        lastRunId: "settled-run",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "deepseek/deepseek-v4-flash",
+          activeModel: "fallback/small-model",
+        },
+      };
+      const result = renderPreparedStatus({ sessionEntry });
+      if (unavailable) {
+        expect((await result).text).not.toContain("Fallback:");
+      } else {
+        await expect(result).rejects.toBe(error);
       }
-    },
-  );
+      expect(readTail).toHaveBeenCalledOnce();
+    } finally {
+      readTail.mockRestore();
+    }
+  });
 
   it("renders a cold-cache prepared window in plain and rich status", async () => {
     const parts = await renderPreparedStatus();

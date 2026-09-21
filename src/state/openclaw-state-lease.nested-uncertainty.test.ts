@@ -20,13 +20,13 @@ vi.mock("./openclaw-state-db-readonly.js", () => ({
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly: fixture.forbiddenNative,
 }));
 vi.mock("./openclaw-state-lease-storage.js", () => ({
+  acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
   prepareLeaseDatabase: fixture.forbiddenNative,
   resolveLeaseDatabasePath: () => "/synthetic-state/lease.sqlite",
   readLeaseDatabase: (_database: unknown, run: () => unknown) => run(),
   withLeaseWriteTransaction: (_database: unknown, _label: string, run: () => unknown) => run(),
 }));
 vi.mock("./openclaw-state-lease-store.js", () => ({
-  acquireOpenClawStateLeaseInTransaction: () => fixture.expiresAt,
   readOpenClawStateLeaseExpiry: () =>
     Date.now() < fixture.expiresAt ? fixture.expiresAt : undefined,
   renewOpenClawStateLeaseInTransaction: () => {
@@ -177,12 +177,16 @@ it.each(["none", "loss", "abort"] as const)(
       }
       throw failure;
     }, caller.signal);
+    const [outcome] = await Promise.allSettled([operation]);
+    if (outcome.status !== "rejected") {
+      throw new Error("Known failure unexpectedly succeeded");
+    }
     if (authority === "none") {
-      await expect(operation).rejects.toBe(failure);
+      expect(outcome.reason).toBe(failure);
     } else if (authority === "loss") {
-      await expect(operation).rejects.toBe(loss);
+      expect(outcome.reason).toBe(loss);
     } else {
-      await expect(operation).rejects.toMatchObject({
+      expect(outcome.reason).toMatchObject({
         code: "OPENCLAW_STATE_LEASE_ABORTED",
         cause: abortCause,
       });

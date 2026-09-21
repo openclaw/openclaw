@@ -31,6 +31,10 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "channel-pairing": () =>
     import("./channel-pairing.js").then((module) => module.channelPairingHandlers),
   chat: () => import("./chat.js").then((module) => module.chatHandlers),
+  "chat-send": () =>
+    import("./chat-send-external-entry.js").then((module) => ({
+      "chat.send": module.handleDirectExternalChatSend,
+    })),
   // Cancellation must not wait for unrelated chat history and send workflows to load.
   "chat-abort": () =>
     import("./chat-abort-handler.js").then((module) => ({
@@ -62,14 +66,18 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   terminal: () => import("./terminal.js").then((module) => module.terminalHandlers),
   transcripts: () => import("./transcripts.js").then((module) => module.transcriptsHandlers),
   "ui-command": () => import("./ui-command.js").then((module) => module.uiCommandHandlers),
+  themes: () => import("./themes.js").then((module) => module.themeHandlers),
   "models-auth-status": () =>
     import("./models-auth-status.js").then((module) => module.modelsAuthStatusHandlers),
   "models-auth-login": () =>
     import("./models-auth-login.js").then((module) => module.modelsAuthLoginHandlers),
+  "mcp-auth-login": () =>
+    import("./mcp-auth-login.js").then((module) => module.mcpAuthLoginHandlers),
   "models-auth-order": () =>
     import("./models-auth-order.js").then((module) => module.modelsAuthOrderHandlers),
   models: () => import("./models.js").then((module) => module.modelsHandlers),
   "models-probe": () => import("./models-probe.js").then((module) => module.modelsProbeHandlers),
+  "web-search": () => import("./web-search.js").then((module) => module.webSearchHandlers),
   "native-hook-relay": () =>
     import("./native-hook-relay.js").then((module) => module.nativeHookRelayHandlers),
   "nodes-pending": () =>
@@ -97,14 +105,6 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-abort.js").then((module) => module.sessionAbortHandlers),
   "sessions-compact": () =>
     import("./sessions-compact.js").then((module) => module.sessionCompactHandlers),
-  "sessions-compaction-checkpoints": () =>
-    import("./sessions-compaction-checkpoints.js").then(
-      (module) => module.sessionCheckpointHandlers,
-    ),
-  "sessions-compaction-queries": () =>
-    import("./sessions-compaction-queries.js").then(
-      (module) => module.sessionCheckpointQueryHandlers,
-    ),
   "sessions-create": () =>
     import("./sessions-create.js").then((module) => module.sessionCreateHandlers),
   "sessions-title": () =>

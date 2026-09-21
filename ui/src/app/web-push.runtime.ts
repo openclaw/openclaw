@@ -224,8 +224,7 @@ export function startWebPushReconciliation(params: {
       !client ||
       !payload ||
       typeof payload !== "object" ||
-      !("profileId" in payload) ||
-      payload.profileId !== params.gateway.snapshot.selfUser?.id ||
+      !params.gateway.snapshot.selfUser?.id ||
       !("keys" in payload) ||
       !Array.isArray(payload.keys) ||
       !payload.keys.includes(WEB_PUSH_USER_PREFERENCES_KEY)

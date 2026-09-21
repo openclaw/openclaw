@@ -10,6 +10,21 @@ title: "Managed worktrees"
 
 Managed worktrees give an agent task its own git branch and checkout without placing temporary directories inside the source repository. OpenClaw records them in the shared state database and snapshots their tracked and non-ignored untracked contents before removal.
 
+## Sandboxed sessions
+
+Sandboxed project sessions use a private source-only Git checkout for execution,
+while the managed worktree remains the canonical owner of accepted changes.
+Docker and Podman support this local projection. The host repository's shared Git
+metadata and ignored-file provisioning are not mounted or copied into it.
+See [Workspace access](/gateway/sandboxing/workspace-access#managed-project-workspaces)
+for write policy, reconciliation, and conflict recovery.
+
+The projection binding and pending reconciliation journal are additive SQLite
+state. They do not change the database version. Before downgrading, let pending
+workspace operations settle. Older versions do not reconcile these projections;
+they leave their additive state and private files intact. Return to a supporting
+version to recover pending changes rather than deleting a projection directory.
+
 ## Choose where worktrees are stored
 
 By default, OpenClaw stores managed checkouts under `<openclaw-state-dir>/worktrees`. Set the global `worktreeRoot` option in `openclaw.json` to use another folder or disk:
@@ -133,7 +148,7 @@ OpenClaw uses 100 live managed worktrees per state directory as a cleanup target
 
 Before allocating a checkout, OpenClaw checks its destination, Git metadata, source checkout, and state volumes. It keeps 10% of each volume free, with a minimum reserve of 4 GiB and a maximum of 16 GiB, plus twice the estimated Git checkout and provisioned-file size. A validated reusable source template replaces the full Git checkout allowance with an estimate for clone metadata and Git index writes. Btrfs snapshots share directory metadata; APFS and ReFS clones budget metadata per tracked entry, with the ReFS volume allocation size included. Cold templates and every native Git fallback require the full checkout allowance again immediately before allocation. Provisioned files retain their separate full-copy allowance. An executable setup script requires additional room equal to the larger of 4 GiB or the current source checkout footprint excluding Git metadata. Space is checked again before provisioning/setup and after setup. An unavailable capacity reading stops allocation with an actionable error.
 
-For partial clones, OpenClaw inventories missing objects before estimating checkout size and fetches them from the clone's promisor remote in one batch. The size inventory cannot trigger per-object lazy fetches. Partial clones are supported, but full clones are recommended for registry-owned projects to keep checkout and restore independent of missing remote objects. If objects are missing without a promisor remote, fetch or repair the clone before retrying. A Git timeout reports its budget and suggests checking remote reachability, repository locks, and partial-clone behavior.
+For partial clones, OpenClaw inventories missing objects before estimating checkout size and fetches them from the clone's promisor remote in one batch. The batch requests only the missing objects without treating shared commits as proof that their contents are available locally. The size inventory cannot trigger per-object lazy fetches. Partial clones are supported, but full clones are recommended for registry-owned projects to keep checkout and restore independent of missing remote objects. If objects are missing without a promisor remote, fetch or repair the clone before retrying. A Git timeout reports its budget and suggests checking remote reachability, repository locks, and partial-clone behavior.
 
 Transient fetch failures, including an incomplete object transfer, retry once after one second within the original fetch timeout. Cancellation and expired workspace authority stop recovery; a second failure surfaces the Git error. See [Retry policy](/concepts/retry#managed-git-operations).
 
@@ -211,7 +226,7 @@ Unarchiving, or an authorized human message that reopens the archived session, r
 
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. For a Gateway source, New Session dispatches the completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation. The separate `repository: { url, ref? }` create input starts a remote-owned repository session without a Gateway path or `worktree: true`.
 
-`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a crustacean-themed fallback. For a new session with an initial message or task, creation returns the admitted session and run before worktree preparation finishes. The chat shows the submitted message and naming, checkout, and setup progress; failures remain visible and retryable in the same session. The agent starts only after the finalized worktree is bound. Creation without an initial turn still waits for preparation and returns the worktree in the create result. The bound checkout is persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show its checkout and branch. When session deletion cannot finish that cleanup, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
+`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a two-word, crustacean-themed fallback if naming fails or exceeds the 30-second wait. Raw first-message text is never a branch-name fallback. A title that arrives later updates the session without renaming its existing branch. For a new session with an initial message or task, creation returns the admitted session and run before worktree preparation finishes. The chat shows the submitted message and naming, checkout, and setup progress; failures remain visible and retryable in the same session. The agent starts only after the finalized worktree is bound. Creation without an initial turn still waits for preparation and returns the worktree in the create result. The bound checkout is persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show its checkout and branch. When session deletion cannot finish that cleanup, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
 
 An explicit session base must resolve to a commit. Local refs are checked before the session is saved; remote-project refs are checked after cloning. A missing remote ref is refreshed from the recorded project URL and retried only in a Gateway-managed clone, never an operator-registered checkout. Once accepted, the commit stays pinned across setup failures and retries while the original ref remains publication metadata. Invalid explicit refs never silently switch to the repository default. Managed-clone refresh uses an isolated Git repository for network transport, so checkout-local URL rewrites and hooks cannot redirect or execute during the fetch.
 
@@ -233,7 +248,9 @@ If a checkout's `.git` link points to missing administrative files, OpenClaw pre
 
 ## Snapshots, cleanup, and restore
 
-Removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Ignored files never enter the repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Automatic cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, removal stops unless `--force` explicitly permits snapshot loss.
+Removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Host-provisioned ignored files do not enter the Git snapshot or repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Automatic cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, removal stops unless `--force` explicitly permits snapshot loss.
+
+Sandbox-created ignored files (including symlinks) and empty directories already accepted by reconciliation remain in the existing projection owner’s custody. Before removal, OpenClaw retains their missing snapshot delta in its pending-result receipt and private recovery refs. Restore replays that receipt before another turn can synchronize the workspace. This does not force ignored paths into publication or import unrelated ignored host files. The receipt follows the same snapshot retention period, and unaccepted private edits defer cleanup. The legacy provisioned-file ledger remains regular-file-only. Older versions can restore that ledger and the Git snapshot, but do not apply the projection receipt; return to a supporting version to recover accepted guest data.
 
 Ordinary removal is archival: after a successful snapshot it uses Git's forced checkout removal so dirty files can be restored later. The CLI's `--force` option permits snapshot loss; omitting it does **not** select non-force Git removal. Use `openclaw worktrees remove <id> --if-lossless` when deletion must be non-force. This uses the same owner as run-end cleanup, retains dirty or unpublished work, and never retries a Git refusal with force. It cannot be combined with `--force`.
 
@@ -250,6 +267,8 @@ OpenClaw applies these cleanup rules:
 - A live OpenClaw process lock and any foreign or unrecognized git worktree lock protect a worktree from garbage collection.
 
 Each collection shares one preliminary lock inventory per repository across idle and limit checks. Removal rereads the current lock and verifies that the worktree's activity has not changed under its allocation lease before changing the checkout; preliminary inventories never authorize removal or stale-lock recovery. If cleanup cannot acquire the lease, it preserves orphan candidates and expired snapshots for a later pass.
+
+Listing and cleanup mark a missing checkout as removed only if its recorded path, activity, and repository identity still match the earlier check. A restore or repository repair that completes during that check preserves the newer live record.
 
 Run-end cleanup records its outcome on the worktree record: lossless removal, retention because the checkout is busy, dirty, unpushed, or has provisioned-file drift, or failure with an error reason. Inspect the recorded outcome with `openclaw worktrees list --json` or `worktrees.list`.
 
@@ -270,6 +289,8 @@ openclaw worktrees gc [--json]
 ```
 
 The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
+
+Leave **Base branch** empty to fetch and use the remote default branch. Branch suggestions do not select a base; choosing or entering a branch or commit uses that exact ref without fetching. Clearing the field restores automatic selection. Fetching updates remote-tracking refs, not the source checkout's local `main`; the local-`HEAD` fallback described above still applies when the remote default is unavailable.
 
 `--if-lossless --json` returns `removed` plus the recorded `cleanup` outcome. A retained checkout returns `removed: false`; it is not a successful deletion. The explicit `--if-lossless` option is CLI-only; Gateway removal retains its archival behavior and result format.
 

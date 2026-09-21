@@ -5,10 +5,8 @@ import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigMigrationContext } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.js";
-import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
-import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy-config-migrations.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 
@@ -80,101 +78,6 @@ describe("legacy session typing config migrate", () => {
 });
 
 describe("compatibility binding repair migrate", () => {
-  it("migrates route and ACP dm peer kinds through validation and is idempotent", () => {
-    const raw = {
-      agents: { entries: { main: {} } },
-      bindings: [
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: "dm", id: "123" } },
-        },
-        {
-          type: "acp",
-          agentId: "main",
-          match: { channel: "discord", peer: { kind: "dm", id: "456" } },
-          acp: { mode: "persistent" },
-        },
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: "direct", id: "789" } },
-        },
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "discord", peer: { kind: "group", id: "abc" } },
-        },
-      ],
-    };
-
-    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "bindings" })]);
-
-    const res = migrateLegacyConfig(raw);
-    const bindings = res.config?.bindings as Array<{ match?: { peer?: { kind?: unknown } } }>;
-    expect(bindings.map((binding) => binding.match?.peer?.kind)).toEqual([
-      "direct",
-      "direct",
-      "direct",
-      "group",
-    ]);
-    expect(res.changes).toContain(
-      'Moved deprecated bindings[].match.peer.kind "dm" → "direct" for 2 bindings.',
-    );
-    expect(res.partiallyValid).toBeUndefined();
-    const validation = validateConfigObjectRaw(res.config);
-    expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
-    expect(migrateLegacyConfig(res.config)).toEqual({ config: null, changes: [] });
-  });
-
-  it("rewrites only exact dm values and leaves malformed peer kinds visible to validation", () => {
-    const raw = {
-      bindings: [
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: "dm", id: "exact" } },
-        },
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: "DM", id: "uppercase" } },
-        },
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: " dm ", id: "spaced" } },
-        },
-        {
-          type: "route",
-          agentId: "main",
-          match: { channel: "telegram", peer: { kind: 42, id: "number" } },
-        },
-      ],
-    };
-
-    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "bindings" })]);
-
-    const res = migrateLegacyConfig(raw);
-    const bindings =
-      (
-        res.config as {
-          bindings?: Array<{ match?: { peer?: { kind?: unknown } } }>;
-        }
-      )?.bindings ?? [];
-    expect(bindings.map((binding) => binding.match?.peer?.kind)).toEqual([
-      "direct",
-      "DM",
-      " dm ",
-      42,
-    ]);
-    expect(res.changes).toContain(
-      'Moved deprecated bindings[].match.peer.kind "dm" → "direct" for 1 binding.',
-    );
-    expect(res.partiallyValid).toBe(true);
-    expect(validateConfigObjectRaw(res.config).ok).toBe(false);
-  });
-
   it("prunes bindings for missing agents when agents.list is valid", () => {
     const res = repairBindingsForTest({
       agents: {
@@ -4955,7 +4858,7 @@ describe("legacy flat memory search field migrate", () => {
         "Moved memory.search.chunkSize → memory.search.chunking.tokens.",
         "Moved memory.search.chunkOverlap → memory.search.chunking.overlap.",
         "Moved memory.search.maxResults → memory.search.query.maxResults.",
-        "Removed retired runtime tuning knobs; built-in defaults now apply.",
+        "Removed retired runtime tuning knobs: memory.search.chunking; built-in defaults now apply.",
       ]),
     );
   });
@@ -4989,7 +4892,7 @@ describe("legacy flat memory search field migrate", () => {
         "Removed memory.search.chunkSize (memory.search.chunking.tokens already set).",
         "Moved memory.search.chunkOverlap → memory.search.chunking.overlap.",
         "Removed memory.search.maxResults (memory.search.query.maxResults already set).",
-        "Removed retired runtime tuning knobs; built-in defaults now apply.",
+        "Removed retired runtime tuning knobs: memory.search.chunking; built-in defaults now apply.",
       ]),
     );
   });
@@ -5009,7 +4912,7 @@ describe("legacy flat memory search field migrate", () => {
       query: { maxResults: 10 },
     });
     expect(res.changes).toContain(
-      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+      "Removed retired runtime tuning knobs: agents.list[0].memory.search.chunking, agents.list[1].memory.search.chunking; built-in defaults now apply.",
     );
   });
 
@@ -5033,7 +4936,7 @@ describe("legacy flat memory search field migrate", () => {
       query: { maxResults: 5 },
     });
     expect(res.changes).toContain(
-      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+      "Removed retired runtime tuning knobs: memory.search.chunking; built-in defaults now apply.",
     );
   });
 });

@@ -45,11 +45,11 @@ import {
 } from "../../tasks/task-status.js";
 import {
   deliveryContextFromSession,
-  normalizeDeliveryContext,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
   type DeliveryContext,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,

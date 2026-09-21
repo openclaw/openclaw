@@ -2,6 +2,7 @@
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createPluginManifestRecordFixture,
@@ -89,6 +90,7 @@ function metadataOwners(
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: [],
     modelIdNormalizationPolicies: new Map(),
     ...overrides,
   };
@@ -756,6 +758,21 @@ describe("resolveImplicitProviders startup discovery scope", () => {
   it("reuses prepared static results while preserving the requesting provider scope", async () => {
     const openai = { ...createStaticOnlyProvider("openai"), pluginId: "openai" };
     const anthropic = { ...createStaticOnlyProvider("anthropic"), pluginId: "anthropic" };
+    const openaiConfigs: Record<string, ModelProviderConfig> = {
+      openai: { baseUrl: "https://api.openai.com/v1", api: "openai-responses", models: [] },
+      unrelated: {
+        baseUrl: "https://unrelated.example.test",
+        api: "openai-completions",
+        models: [],
+      },
+    };
+    const anthropicConfigs: Record<string, ModelProviderConfig> = {
+      anthropic: {
+        baseUrl: "https://api.anthropic.com",
+        api: "anthropic-messages",
+        models: [],
+      },
+    };
     const providers = await resolveImplicitProviders({
       agentDir: state.agentDir(),
       config: {},
@@ -776,32 +793,13 @@ describe("resolveImplicitProviders startup discovery scope", () => {
         entries: [
           {
             provider: openai,
-            result: {
-              providers: {
-                openai: {
-                  baseUrl: "https://api.openai.com/v1",
-                  api: "openai-responses",
-                  models: [],
-                },
-                unrelated: {
-                  baseUrl: "https://unrelated.example.test",
-                  api: "openai-completions",
-                  models: [],
-                },
-              },
-            },
+            result: { providers: openaiConfigs },
+            providerConfigs: openaiConfigs,
           },
           {
             provider: anthropic,
-            result: {
-              providers: {
-                anthropic: {
-                  baseUrl: "https://api.anthropic.com",
-                  api: "anthropic-messages",
-                  models: [],
-                },
-              },
-            },
+            result: { providers: anthropicConfigs },
+            providerConfigs: anthropicConfigs,
           },
         ],
       },

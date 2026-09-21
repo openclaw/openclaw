@@ -878,7 +878,33 @@ describe("plugins cli uninstall", () => {
       diagnostics: [],
     });
 
-    await runPluginsCommand(["plugins", "uninstall", pluginId, "--force", "--keep-files"]);
+    const installedIndex = await import("../plugins/installed-plugin-index.js");
+    const indexSpy = vi.spyOn(installedIndex, "loadInstalledPluginIndex").mockReturnValue(
+      createTestInstalledPluginIndex({
+        policyHash: "manifest-channel-ownership",
+        installRecords,
+        plugins: [
+          recordInstalledPluginIndexInstallOwner(
+            {
+              pluginId,
+              rootDir: installRecords[pluginId].installPath,
+              manifestPath: path.join(installRecords[pluginId].installPath, "openclaw.plugin.json"),
+              manifestHash: "custom-plugin",
+              origin: "global" as const,
+              enabled: status === "loaded",
+              startup: { sidecar: false, memory: false, agentHarnesses: [] },
+              compat: [],
+            },
+            pluginId,
+          ),
+        ],
+      }),
+    );
+    try {
+      await runPluginsCommand(["plugins", "uninstall", pluginId, "--force", "--keep-files"]);
+    } finally {
+      indexSpy.mockRestore();
+    }
 
     expectInstallRecordsWrittenWithLease(
       {},

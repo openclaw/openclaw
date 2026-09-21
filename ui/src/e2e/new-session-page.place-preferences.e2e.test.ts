@@ -195,7 +195,9 @@ suite.define(() => {
       await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
       await checkout.click();
       const checkoutPopover = page.locator("wa-popover.new-session-page__checkout-popover");
-      await expect.poll(() => checkoutPopover.getByLabel("From").inputValue()).toBe("release/next");
+      await expect
+        .poll(() => checkoutPopover.getByLabel("From", { exact: true }).inputValue())
+        .toBe("release/next");
       await expect
         .poll(() => checkoutPopover.getByLabel("Name", { exact: true }).inputValue())
         .toBe("identity-task");

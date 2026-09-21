@@ -7,7 +7,10 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -45,7 +48,9 @@ describe("worker environment service provision replay", () => {
       throw new Error("enrollment must not run");
     };
     const first = support.createService(provider, { prepareNodeEnrollment: enrollment });
-    await expect(first.create("development", "preflight-replay")).rejects.toMatchObject({
+    await expect(
+      first.createWithRequest({ profileId: "development", idempotencyKey: "preflight-replay" }),
+    ).rejects.toMatchObject({
       code: "provider_failure",
     });
     const original = support.testState.store.list()[0]!;
@@ -108,15 +113,12 @@ describe("worker environment service provision replay", () => {
     const first = support.createService(provider());
 
     await expect(
-      first.create(
-        "development",
-        "request-restart-replay",
-        "large",
-        undefined,
-        undefined,
-        undefined,
-        "os-a",
-      ),
+      first.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-restart-replay",
+        machineClass: "large",
+        os: "os-a",
+      }),
     ).rejects.toMatchObject({
       code: "provider_failure",
     } satisfies Partial<WorkerEnvironmentServiceError>);
@@ -214,7 +216,10 @@ describe("worker environment service provision replay", () => {
     });
     support.testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     }));
     let placements = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
@@ -233,7 +238,10 @@ describe("worker environment service provision replay", () => {
     const first = support.createService(provider, {
       ensureNodeWorkerBundle: async () => ({
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
       }),
       prepareNodeEnrollment: async () => {
         throw new Error("first provision reply was lost before node enrollment");
@@ -241,7 +249,11 @@ describe("worker environment service provision replay", () => {
     });
 
     await expect(
-      first.create("development", idempotencyKey, undefined, REQUEST.executionMode),
+      first.createWithRequest({
+        profileId: "development",
+        idempotencyKey,
+        executionMode: REQUEST.executionMode,
+      }),
     ).rejects.toMatchObject({ code: "provider_failure" });
     events.push("first:failed");
     expect(support.testState.store.get(intent.environmentId)).toMatchObject({
@@ -289,7 +301,10 @@ describe("worker environment service provision replay", () => {
     const restarted = support.createService(provider, {
       ensureNodeWorkerBundle: async () => ({
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
       }),
       prepareNodeEnrollment: async (record) => {
         const enrolled = support.testState.store.ensureNodeEnrollment(record.environmentId);
@@ -315,7 +330,11 @@ describe("worker environment service provision replay", () => {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
+        workerHost: {
+          enabled: true,
+          capacity: { total: 1, available: 1 },
+          capturedExecPolicy: true,
+        },
         commands: [],
       },
     }));
@@ -456,7 +475,10 @@ describe("worker environment service provision replay", () => {
       const workerService = support.createService(provider);
 
       const failure = await workerService
-        .create("development", "request-provision-cleanup")
+        .createWithRequest({
+          profileId: "development",
+          idempotencyKey: "request-provision-cleanup",
+        })
         .catch((error: unknown) => error);
       expect(failure).toMatchObject({
         code: "provider_failure",
@@ -539,7 +561,10 @@ describe("worker environment service provision replay", () => {
     );
 
     await expect(
-      workerService.create("development", "request-provider-timeout-override"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-provider-timeout-override",
+      }),
     ).resolves.toMatchObject({ state: "ready" });
     expect(resolveProvisionTimeoutMs).not.toHaveBeenCalled();
   });
@@ -563,7 +588,10 @@ describe("worker environment service provision replay", () => {
     );
 
     await expect(
-      workerService.create("development", `request-invalid-provider-timeout-${String(timeoutMs)}`),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: `request-invalid-provider-timeout-${String(timeoutMs)}`,
+      }),
     ).rejects.toMatchObject({
       code: "provider_failure",
       message: expect.stringContaining("Worker provider provision timeout must be an integer"),
@@ -613,7 +641,10 @@ describe("worker environment service provision replay", () => {
       resolveProvisionTimeoutMs: () => 20,
     });
     const workerService = support.createService(provider);
-    const creation = workerService.create("development", "request-provider-timeout-race");
+    const creation = workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-provider-timeout-race",
+    });
     const creationResult = expect(creation).rejects.toMatchObject({
       code: "provider_failure",
     } satisfies Partial<WorkerEnvironmentServiceError>);
@@ -683,7 +714,10 @@ describe("worker environment service provision replay", () => {
     const workerService = support.createService(provider);
 
     await expect(
-      workerService.create("development", "request-lost-provision"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-lost-provision",
+      }),
     ).rejects.toMatchObject({
       code: "provider_failure",
     } satisfies Partial<WorkerEnvironmentServiceError>);
@@ -787,7 +821,12 @@ describe("worker environment service provision replay", () => {
       support.createProvider({ provision: async () => result as never }),
     );
 
-    await expect(workerService.create("development", "request-malformed")).rejects.toMatchObject({
+    await expect(
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-malformed",
+      }),
+    ).rejects.toMatchObject({
       code: "provider_failure",
       message: expect.stringContaining(error),
     } satisfies Partial<WorkerEnvironmentServiceError>);

@@ -63,6 +63,42 @@ function createDraftStreamHarness(
 }
 
 describe("createSlackDraftStream", () => {
+  it("still edits an existing preview with partial preamble text", async () => {
+    const { stream, send, edit } = createDraftStreamHarness();
+    stream.update("_I’ll check the report._");
+    await stream.flush();
+    stream.update({ text: "_I found_", allowNewMessage: false });
+    await stream.flush();
+    expect(send).toHaveBeenCalledOnce();
+    expect(edit).toHaveBeenCalledWith("C123", "111.222", "_I found_", expect.any(Object));
+  });
+
+  it("waits for a complete preamble when a human reply rotates the draft", async () => {
+    const { stream, send, edit } = createDraftStreamHarness({ threadTs: "100.000" });
+    stream.update("_I’ll check the report._");
+    await stream.flush();
+
+    // The partial was admitted while a preview existed. A human can retire
+    // that preview before the throttled transport gets to publish the edit.
+    noteSlackDraftConversationMessage({
+      channelId: "C123",
+      threadTs: "100.000",
+      messageTs: "112.000",
+      userId: "U_HUMAN",
+    });
+    stream.update({ text: "_the_", allowNewMessage: false });
+    await stream.flush();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(edit).not.toHaveBeenCalled();
+
+    stream.update({ text: "_then I’ll check the key releases._", allowNewMessage: true });
+    await stream.flush();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(mockCalls<Parameters<DraftSendFn>>(send).at(-1)?.[1]).toBe(
+      "_then I’ll check the key releases._",
+    );
+  });
+
   it("sends the first update and edits subsequent updates", async () => {
     const { stream, send, edit } = createDraftStreamHarness();
 

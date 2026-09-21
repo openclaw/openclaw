@@ -1,4 +1,3 @@
-// Slack plugin module implements prepare dm history behavior.
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";

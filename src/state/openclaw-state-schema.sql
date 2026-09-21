@@ -346,6 +346,7 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
 -- identity is agent-scoped end-to-end.
 CREATE TABLE IF NOT EXISTS session_watch_cursors (
   watcher_session_key TEXT NOT NULL,
+  watcher_store_path TEXT,
   target_session_key TEXT NOT NULL,
   last_seen_sequence INTEGER NOT NULL DEFAULT 0,
   notified_sequence INTEGER NOT NULL DEFAULT 0,
@@ -972,6 +973,13 @@ CREATE INDEX IF NOT EXISTS idx_node_worker_launches_terminal_completed
 CREATE TABLE IF NOT EXISTS node_worker_launch_containers (
   launch_id TEXT PRIMARY KEY,
   container_json TEXT
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS node_worker_launch_cleanup (
+  launch_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES node_worker_launches(launch_id) ON DELETE CASCADE,
+  cleanup_mode TEXT NOT NULL CHECK (cleanup_mode IN ('process-group', 'owned-anchor')),
+  lineage_settled INTEGER CHECK (lineage_settled IS NULL OR lineage_settled = 1)
 ) STRICT;
 
 -- Turn receipts have a shorter lifetime than their physical worker owner.
@@ -1617,6 +1625,7 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_a
 CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);
+CREATE INDEX IF NOT EXISTS idx_task_runs_requester_session_key ON task_runs(requester_session_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_source_ended
   ON task_runs(runtime, source_id, ended_at, created_at, task_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_ended
@@ -1626,7 +1635,9 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,
   child_session_key TEXT NOT NULL,
   controller_session_key TEXT,
+  controller_store_path TEXT,
   requester_session_key TEXT NOT NULL,
+  requester_store_path TEXT,
   created_at INTEGER NOT NULL,
   payload_json TEXT NOT NULL DEFAULT '{}'
 ) STRICT;
@@ -2225,6 +2236,10 @@ CREATE INDEX IF NOT EXISTS idx_worker_session_placements_session_key
 CREATE INDEX IF NOT EXISTS idx_worker_session_placements_reconcile
   ON worker_session_placements(updated_at_ms, session_id);
 
+CREATE INDEX IF NOT EXISTS idx_worker_session_placements_environment
+  ON worker_session_placements(environment_id)
+  WHERE environment_id IS NOT NULL;
+
 -- Planned placement moves retain their exact source CAS and bounded target
 -- without widening the stable placement-state vocabulary. The opaque operation
 -- id fences stale asynchronous completion; it is correlation, never authority.
@@ -2295,6 +2310,30 @@ CREATE TABLE IF NOT EXISTS worker_session_tool_operations (
   PRIMARY KEY (source_session_id, source_claim_id, tool_call_id),
   FOREIGN KEY (source_session_id)
     REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
+) STRICT;
+
+-- Local sandbox execution is a projection of a session-owned managed worktree.
+-- No cascade: an older binary must not discard pending edits with a session row.
+CREATE TABLE IF NOT EXISTS local_workspace_projections (
+  worktree_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  lifecycle_revision TEXT,
+  projection_path TEXT NOT NULL UNIQUE,
+  base_commit TEXT NOT NULL,
+  source_paths_json TEXT NOT NULL,
+  baseline_json TEXT,
+  baseline_ref TEXT,
+  pending_ref TEXT,
+  pending_target TEXT CHECK (pending_target IN ('canonical', 'projection')),
+  paused_runtimes_json TEXT,
+  journal_json TEXT,
+  journal_pack BLOB CHECK (journal_pack IS NULL OR length(journal_pack) <= 268435456),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  created_at_ms INTEGER NOT NULL,
+  CHECK ((baseline_json IS NULL) = (baseline_ref IS NULL)),
+  CHECK ((journal_json IS NULL) = (journal_pack IS NULL))
 ) STRICT;
 
 -- A reconciliation journal is written before managed-worktree mutation. The

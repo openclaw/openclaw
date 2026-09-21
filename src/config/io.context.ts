@@ -53,8 +53,8 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import {
   validateConfigObjectWithPlugins,
   validateConfigObjectWithPluginsAsync,
-  type PreparedConfigValidationPluginMetadata,
 } from "./validation.js";
+import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
 type ValidateConfigWithPluginsResult = ReturnType<typeof validateConfigObjectWithPlugins>;
 
@@ -120,7 +120,10 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       options.deferredPluginMigrations ??
       (options.pluginValidation === "core-only"
         ? []
-        : readDeferredPluginMigrations({ env: deps.env }))
+        : readDeferredPluginMigrations({
+            env: deps.env,
+            artifactPreservingReadOnly: !deps.observe,
+          }))
     );
   }
 
@@ -131,7 +134,10 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       options.deferredPluginMigrations ??
       (options.pluginValidation === "core-only"
         ? []
-        : readDeferredPluginMigrationsAsync({ env: deps.env }))
+        : readDeferredPluginMigrationsAsync({
+            env: deps.env,
+            artifactPreservingReadOnly: !deps.observe,
+          }))
     );
   }
 
@@ -320,8 +326,11 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       // registry owns historical shapes before current-schema validation and any disk write.
       const prepareValidation = (pending: readonly DeferredPluginMigration[]) => {
         const migration = applyLegacyDoctorMigrations(candidate.parsed, {
-          authoredRaw: candidate.parsed,
-          resolvedRaw: originalResolution.resolvedConfigRaw,
+          sourceConfigBeforeMigrations: originalResolution.resolvedConfigRaw,
+          context: {
+            authoredRaw: candidate.parsed,
+            resolvedRaw: originalResolution.resolvedConfigRaw,
+          },
         });
         const authoredCandidate = migration.next
           ? preserveDeferredPluginMigrationConfig({

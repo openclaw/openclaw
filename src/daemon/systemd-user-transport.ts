@@ -4,6 +4,7 @@ import path from "node:path";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { execFileUtf8 } from "./exec-file.js";
 import {
+  findServiceOwnershipRefusal,
   ServiceInspectionError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
@@ -12,6 +13,7 @@ import type { GatewayServiceEnv } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { decodeLegacyBusctlOutput } from "./systemd-busctl-legacy.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
+import { resolveUnavailableSystemdInspectionReason } from "./systemd-unavailable.js";
 
 // Reachability is a process-local routing fact, never a connection or mutation grant.
 type Selection = { transport: SystemdUserTransport; timedOut: boolean };
@@ -25,7 +27,7 @@ const versionArgs = [
   "Version",
 ];
 export const SYSTEMD_TRANSPORT_DEADLINE = new ServiceInspectionError(
-  "systemd-user-bus-unavailable",
+  "systemd-inspection-deadline-exceeded",
 );
 const addressFor = (socket: string) =>
   `unix:path=${encodeURIComponent(socket).replaceAll("%2F", "/")}`;
@@ -93,6 +95,10 @@ export async function resolveSystemdUserTransport(
     );
   } catch (error) {
     check();
+    const refusal = findServiceOwnershipRefusal(error);
+    if (refusal) {
+      throw refusal;
+    }
     // A failed shared discovery does not consume this caller's independent custody/budget.
     if (joined) {
       return await resolveSystemdUserTransport(env, deadline, assertCurrent, purpose);
@@ -177,6 +183,10 @@ export async function resolveSystemdUserTransport(
         }
       } catch (error) {
         check();
+        const refusal = findServiceOwnershipRefusal(error);
+        if (refusal) {
+          throw refusal;
+        }
         if (error === SYSTEMD_TRANSPORT_DEADLINE) {
           throw error;
         }
@@ -186,6 +196,10 @@ export async function resolveSystemdUserTransport(
       }
     }
     check();
+    if (!timedOut && reason !== "service-manager-access-denied") {
+      reason = await resolveUnavailableSystemdInspectionReason(reason, source, deadline);
+      check();
+    }
     throw timedOut ? SYSTEMD_TRANSPORT_DEADLINE : new ServiceInspectionError(reason);
   }
 }

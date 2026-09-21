@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { SqliteWorkerBackend } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { SqliteWorkerBackend } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LogbookOperations } from "./store-contract.js";
@@ -14,8 +14,8 @@ const reads = vi.hoisted(() => ({
   frameTextBytes: 0,
 }));
 const preparations = vi.hoisted(() => new Map<string, number>());
-vi.mock("openclaw/plugin-sdk/sqlite-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-runtime")>();
+vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-worker-runtime")>();
   return {
     ...actual,
     openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
@@ -326,7 +326,7 @@ describe("Logbook native statement and read budgets", () => {
     });
   }
 
-  it("selects ordered pending frames without decoding unused text or narrowing full readers", () => {
+  it("selects ordered pending and range metadata without decoding unused text or narrowing full readers", () => {
     const { backend } = openBackend();
     insertCandidate(backend, 3000);
     insertCandidate(backend, 1000);
@@ -353,6 +353,19 @@ describe("Logbook native statement and read budgets", () => {
       expect(pending).toEqual(expected.slice(0, limit));
     }
 
+    reads.frameRows = 0;
+    reads.frameTextBytes = 0;
+    const range = backend.execute({ type: "framesInRange", input: { startMs: 500, endMs: 3000 } });
+    expect(reads.frameRows).toBe(5);
+    expect.soft(reads.frameTextBytes).toBe(0);
+    expect(range).toEqual([
+      { id: 5, capturedAtMs: 500, idle: true },
+      { id: 6, capturedAtMs: 750, idle: false },
+      { id: 2, capturedAtMs: 1000, idle: false },
+      { id: 3, capturedAtMs: 1000, idle: false },
+      { id: 4, capturedAtMs: 2000, idle: false },
+    ]);
+
     const fullFrame = {
       id: 6,
       capturedAtMs: 750,
@@ -365,9 +378,6 @@ describe("Logbook native statement and read budgets", () => {
       idle: false,
     };
     expect(backend.execute({ type: "frameById", input: { id: 6 } })).toEqual(fullFrame);
-    expect(backend.execute({ type: "framesInRange", input: { startMs: 750, endMs: 751 } })).toEqual(
-      [fullFrame],
-    );
     expect(backend.execute({ type: "batchFrames", input: { batchId: 1 } })).toEqual([fullFrame]);
     expect(backend.execute({ type: "sampledBatchFrames", input: { batchId: 1 } })).toEqual([
       fullFrame,
@@ -404,20 +414,18 @@ describe("Logbook native statement and read budgets", () => {
       });
       expect(frames).toHaveLength(count);
       if (count > 0) {
-        expect(frames).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              id: 1,
-              capturedAtMs: 0,
-              day,
-              path: `captures/${"nested/".repeat(12)}0.jpg`,
-              width: 640,
-              height: 480,
-              byteSize: 10,
-              screenIndex: 0,
-              idle: false,
-            }),
-          ]),
+        expect(backend.execute({ type: "frameById", input: { id: 1 } })).toEqual(
+          expect.objectContaining({
+            id: 1,
+            capturedAtMs: 0,
+            day,
+            path: `captures/${"nested/".repeat(12)}0.jpg`,
+            width: 640,
+            height: 480,
+            byteSize: 10,
+            screenIndex: 0,
+            idle: false,
+          }),
         );
       }
     },
@@ -446,7 +454,7 @@ describe("Logbook native statement and read budgets", () => {
       }
       let originalError: unknown;
       try {
-        backend.execute({ type: "framesInRange", input: { startMs: 0, endMs: 120_000 } });
+        backend.execute({ type: "frameById", input: { id: 1 } });
       } catch (error) {
         originalError = error;
       }
@@ -454,6 +462,17 @@ describe("Logbook native statement and read budgets", () => {
         throw new Error("Expected the full frame reader to reject the unsafe integer fixture");
       }
       expect(originalError).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+      let rangeError: unknown;
+      try {
+        backend.execute({ type: "framesInRange", input: { startMs: 0, endMs: 120_000 } });
+      } catch (error) {
+        rangeError = error;
+      }
+      expect(rangeError).toMatchObject({
+        code: "ERR_OUT_OF_RANGE",
+        name: originalError.name,
+        message: originalError.message,
+      });
       let pendingError: unknown;
       try {
         backend.execute({ type: "unbatchedActiveFrames", input: { limit: 1 } });

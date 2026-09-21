@@ -1,16 +1,22 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createTestBoardStore, readBoardHtml } from "./board-store.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -148,7 +154,9 @@ describe("SqliteBoardStore native widgets", () => {
     const expectedLegacy = { ...initial.widgets[0]! };
     delete expectedLegacy.instanceId;
 
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const reopened = createTestBoardStore({ stateDir });
     expect((await reopened.getSnapshot(target)).widgets).toEqual([expectedLegacy]);
@@ -169,7 +177,9 @@ describe("SqliteBoardStore native widgets", () => {
     expect(instanceId).not.toBe(initial.widgets[0]?.instanceId);
     expect(adopted.widgets).toEqual([{ ...resized.widgets[0], revision: 2, instanceId }]);
 
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     expect((await createTestBoardStore({ stateDir }).getSnapshot(target)).widgets).toEqual(
       adopted.widgets,
@@ -197,7 +207,9 @@ describe("SqliteBoardStore native widgets", () => {
     expect(edited.widgets[0]).toMatchObject({ title: "Updated status", instanceId });
     await store.applyOps(target, [{ kind: "widget_resize", name: "status", sizeW: 8, sizeH: 6 }]);
 
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const reopened = createTestBoardStore({ stateDir });
     expect((await reopened.getSnapshot(target)).widgets[0]).toMatchObject({

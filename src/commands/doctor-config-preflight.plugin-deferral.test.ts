@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -155,6 +156,51 @@ async function installStatelessFixture(
 }
 
 describe("configured plugin migration deferral", () => {
+  it("keeps a present config-path Doctor contract available during an update rehearsal", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const rehearsalRoot = path.join(home, ".openclaw");
+      const pluginRoot = path.join(rehearsalRoot, "copied-custom-plugin");
+      const pluginId = "copied-custom-fixture";
+      await installStatelessFixture(pluginRoot, pluginId, "config-only");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          gateway: { mode: "local" },
+          plugins: {
+            allow: [pluginId],
+            entries: { [pluginId]: { enabled: true } },
+            load: { paths: [pluginRoot] },
+          },
+        }),
+      );
+
+      await withEnvAsync(
+        {
+          ...buildUpdateRehearsalPathEnv(rehearsalRoot),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+          OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+          OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+          OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: "0",
+          OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
+        },
+        async () => {
+          const result = await runDoctorConfigPreflight({
+            migrateLegacyConfig: false,
+            invalidConfigNote: false,
+            doctorOnlyStateMigrations: true,
+            repairPrefixedConfig: true,
+          });
+          expect(result.deferredPluginMigrations).toBeUndefined();
+          expect(readDeferredPluginMigrations()).toEqual([]);
+        },
+      );
+    });
+  });
+
   it("preserves a newer migration obligation after an ordinary Doctor observed a stateless plugin", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");

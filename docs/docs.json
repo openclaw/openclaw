@@ -1807,6 +1807,8 @@
                     "group": "Meetings and calls",
                     "pages": [
                       "plugins/meeting-plugins",
+                      "plugins/facetime",
+                      "plugins/facetime-recovery",
                       "plugins/google-meet",
                       {
                         "group": "Google Meet",
@@ -1839,7 +1841,9 @@
                       "plugins/apple-fm",
                       "plugins/llama-cpp",
                       "plugins/memory-lancedb",
-                      "plugins/memory-wiki"
+                      "plugins/memory-wiki",
+                      "plugins/onnx",
+                      "plugins/typesafe"
                     ]
                   },
                   {
@@ -2052,7 +2056,8 @@
                       "tools/progress-card",
                       "tools/reactions",
                       "tools/screen",
-                      "tools/show-widget"
+                      "tools/show-widget",
+                      "tools/theme"
                     ]
                   },
                   {
@@ -2189,6 +2194,7 @@
                 "group": "Concepts and configuration",
                 "pages": [
                   "concepts/models",
+                  "concepts/decision-models",
                   "concepts/model-providers",
                   {
                     "group": "Model providers",
@@ -3200,6 +3206,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.5",
                   "releases/2026.9.4",
                   "releases/2026.9.3",
                   "releases/2026.9.2",

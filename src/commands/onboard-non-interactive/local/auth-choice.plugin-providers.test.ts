@@ -225,7 +225,10 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         expect(runNonInteractive).not.toHaveBeenCalled();
         expect(ensureModelSelectionRuntimePlugins).not.toHaveBeenCalled();
         expect(baseConfig).toEqual(original);
-        baseConfig = expectDefined(migrateLegacyConfig(baseConfig).config, "migrated config");
+        baseConfig = expectDefined(
+          migrateLegacyConfig(baseConfig, { sourceConfigBeforeMigrations: baseConfig }).config,
+          "migrated config",
+        );
       }
       const before = structuredClone(baseConfig);
       const result = await apply();

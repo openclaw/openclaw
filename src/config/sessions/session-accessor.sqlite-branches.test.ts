@@ -436,6 +436,39 @@ describe("SQLite session branches", () => {
     },
   );
 
+  it("reuses unchanged summaries across fifty active sessions without repeating worker reads", async () => {
+    const { env } = await createSession();
+    const scopes = [];
+    for (let index = 0; index < 50; index++) {
+      scopes.push(
+        await createSiblingSession({
+          env,
+          sessionId: `viewer-${index}`,
+          sessionKey: `agent:main:viewer-${index}`,
+          headline: `Conversation ${index}`,
+        }),
+      );
+    }
+    const branchReads = trackBranchSummaryReads();
+    for (let round = 0; round < 2; round++) {
+      for (const scope of scopes) {
+        await expect(listSessionBranches(scope)).resolves.toEqual({
+          status: "ok",
+          branches: [
+            {
+              active: true,
+              leafEntryId: `${scope.sessionId}-user`,
+              headline: scope.headline,
+              messageCount: 1,
+              updatedAt: "2026-07-18T01:00:01.000Z",
+            },
+          ],
+        });
+      }
+      expect(branchReads()).toBe(scopes.length);
+    }
+  });
+
   it("recomputes summaries after physical database replacement with identical watermarks", async () => {
     const { env } = await createSession();
     const database = openOpenClawAgentDatabase({ agentId, env });

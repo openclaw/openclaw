@@ -2,22 +2,20 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import {
-  appendTranscriptMessage,
-  deleteSessionEntryLifecycle,
   listSessionParticipantsReadOnly,
   loadSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntryCore,
-  replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   getSessionWorkAdmissionRelease,
@@ -28,12 +26,19 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { handleChatSend } from "./server-methods/chat-send-handler.js";
+import * as sessionChangeEvents from "./server-methods/session-change-event.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
   RespondFn,
 } from "./server-methods/types.js";
+import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 import {
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
@@ -44,11 +49,12 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
 
 installGatewayTestHooks({ scope: "suite" });
-const temporaryDirs = useAutoCleanupTempDirTracker(afterEach);
+const temporaryDirs = createTempDirTracker();
 const sessionKey = "agent:main:main";
 const sessionId = "goal-chat-session";
 const client: GatewayClient = {
@@ -83,6 +89,12 @@ beforeEach(async () => {
   });
   await prepareGatewayReplyRuntimeForTest({ force: true });
   context = createDirectChatContext({ getRuntimeConfig });
+  const projection = await createSessionRowProjection({
+    cfg: getRuntimeConfig(),
+    getConfig: getRuntimeConfig,
+    context,
+  });
+  bindSessionRowProjection(context, () => projection);
   // Keep reply admission and its cleanup real; only the embedded model execution is mocked.
   gatewayReplyMock.mockImplementation(getReplyFromConfig);
   dispatchInboundMessageMock.mockReset();
@@ -107,12 +119,18 @@ beforeEach(async () => {
   });
 });
 
-afterEach(() => {
-  testState.sessionStorePath = undefined;
+afterEach(async () => {
+  const released = await waitForGatewayActiveWork(30_000);
+  expect(released.drained, JSON.stringify(released.snapshot.blockers)).toBe(true);
+  getSessionRowProjection(context)?.dispose();
+  for (const dir of temporaryDirs.dirs) {
+    await releaseGatewaySessionStoreFixture(dir);
+  }
+  temporaryDirs.cleanup();
   gatewayReplyMock.mockReset();
   runEmbeddedAgent.mockReset();
   clearConfigCache();
-});
+}, 31_000);
 
 function scope() {
   return { agentId: "main", sessionKey, sessionId, storePath };
@@ -150,6 +168,7 @@ function freshGoalStart(message: string, idempotencyKey?: string) {
 }
 
 async function useFreshSessionStore() {
+  await releaseGatewaySessionStoreFixture(path.dirname(storePath));
   storePath = path.join(temporaryDirs.make("openclaw-fresh-goal-chat-"), "sessions.json");
   testState.sessionStorePath = storePath;
   await writeSessionStore({ entries: {} });
@@ -302,19 +321,10 @@ describe("Goal chat admission and continuation", () => {
       sessionKey: "agent:main:retained-goal-history",
       sessionId: randomUUID(),
     };
-    await replaceSessionEntry(retainedScope, {
-      sessionId: retainedScope.sessionId,
-      updatedAt: Date.now(),
-    });
-    await appendTranscriptMessage(retainedScope, {
-      message: { role: "user", content: "Keep this deleted conversation's history unchanged." },
-    });
-    await deleteSessionEntryLifecycle({
-      agentId: retainedScope.agentId,
-      storePath,
-      target: { canonicalKey: retainedScope.sessionKey, storeKeys: [retainedScope.sessionKey] },
-      archiveTranscript: false,
-    });
+    await seedDeletedSessionTranscript(
+      { ...retainedScope, storePath },
+      "Keep this deleted conversation's history unchanged.",
+    );
     expect(loadSessionEntry(retainedScope)).toBeUndefined();
     const retainedEvents = loadTranscriptEventsSync(retainedScope);
     expect(retainedEvents.length).toBeGreaterThan(0);
@@ -593,7 +603,39 @@ describe("Goal chat admission and continuation", () => {
     }
   });
 
-  it("resumes through the real reply pipeline without a visible synthetic user row", async () => {
+  it("reports a completed Goal Resume as definitively rejected without dispatch", async () => {
+    const started = await rpc("chat.send", goalStart("A completed checklist"));
+    expect(started.mock.calls[0]?.[0]).toBe(true);
+    await waitForModelRun();
+    await waitForDispatchEnd();
+    await patchSessionEntryCore(scope(), (entry) => ({
+      status: "done",
+      agentHarnessId: "openclaw",
+      goal: entry.goal ? { ...entry.goal, status: "complete" } : undefined,
+    }));
+    const goal = loadSessionEntry(scope())?.goal;
+    const rejected = await rpc("sessions.goal.update", {
+      sessionKey,
+      sessionId,
+      goalId: goal?.id,
+      action: "resume",
+      operationId: "completed-resume",
+      issuedAtMs: Date.now(),
+    });
+    expect(rejected).toHaveBeenCalledWith(
+      false,
+      expect.anything(),
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        details: { code: "GOAL_OPERATION_REJECTED", reason: "invalid" },
+      }),
+      expect.anything(),
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(loadSessionEntry(scope())?.goal?.status).toBe("complete");
+  });
+
+  it("resumes once through the real reply pipeline despite failed postcommit notification", async () => {
     const objective = "Finish the release checklist";
     const profile = ensureProfileForEmail("goal-participant@example.test");
     const requestClient: GatewayClient = {
@@ -648,7 +690,21 @@ describe("Goal chat admission and continuation", () => {
       issuedAtMs: Date.now(),
     };
     modelStarted = createDeferred();
-    const resumed = await rpc("sessions.goal.update", request, undefined, requestClient);
+    const emit = sessionChangeEvents.emitSessionsChanged;
+    const notification = vi
+      .spyOn(sessionChangeEvents, "emitSessionsChanged")
+      .mockImplementation((ctx, payload, options) => {
+        emit(ctx, payload, options);
+        if (payload.reason === "goal") {
+          throw new Error("Synthetic Goal notification failure after commit");
+        }
+      });
+    let resumed: Awaited<ReturnType<typeof rpc>>;
+    try {
+      resumed = await rpc("sessions.goal.update", request, undefined, requestClient);
+    } finally {
+      notification.mockRestore();
+    }
     expect(resumed).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ status: "started", runId: "goal-resume", goalId: goal?.id }),

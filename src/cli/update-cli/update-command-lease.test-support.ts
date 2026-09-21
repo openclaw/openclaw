@@ -19,6 +19,7 @@ export type LeaseScenario = {
   writerRecords?: Record<string, PluginInstallRecord>;
   runtimeRoot?: string;
   verifyRepairOwner?: boolean;
+  verifyServiceCustody?: boolean;
 };
 
 // A narrow child substitutes for the CLI, not for its cross-process lease.
@@ -106,7 +107,10 @@ export async function runUpdateLeaseChild(): Promise<void> {
     assert.ok(resultPath && scenario.pluginUpdate);
     assert.deepEqual(
       JSON.parse(await fs.readFile(path.join(path.dirname(resultPath), "handoff.json"), "utf8")),
-      { completionOwner: "parent" },
+      {
+        completionOwner: "parent",
+        timeout: { version: 1, serialized: "15", operator: null },
+      },
     );
     await withPluginLifecycleLease({ waitMs: 0 }, async () => record("packages-acquired"));
     await record("packages-released");
@@ -134,11 +138,18 @@ export async function runUpdateLeaseChild(): Promise<void> {
       assert.equal(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION, scenario.hostVersion);
     }
     await record(`${phase}-attempt`);
+    if (scenario.verifyServiceCustody) {
+      assert.equal(
+        await fs.readFile(path.join(stateDir, "managed-service-state"), "utf8"),
+        "stopped",
+        "The update parent must park the service before its Doctor child runs",
+      );
+    }
     if (scenario.verifyRepairOwner) {
       const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
       assert.ok(runId, "Doctor did not inherit its invoking repair run ID");
       const { DatabaseSync } = await import("node:sqlite");
-      const { readUpdateRunRecord } = await import("../../infra/update-run-reader.js");
+      const { readUpdateRunRecord } = await import("../../infra/update-run-read.kernel.js");
       const { resolveOpenClawStateSqlitePath } =
         await import("../../state/openclaw-state-db.paths.js");
       const { inspectUpdateRepairDriverAdmission } =
@@ -190,7 +201,7 @@ export async function runUpdateLeaseChild(): Promise<void> {
       if (!(error instanceof Error) || !("code" in error)) {
         throw error;
       }
-      assert.equal(error.code, "OPENCLAW_STATE_LEASE_TIMEOUT");
+      assert.equal(error.code, "OPENCLAW_STATE_LEASE_HELD");
       process.stdout.write("excluded");
     }
     return;

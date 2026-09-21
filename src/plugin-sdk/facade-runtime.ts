@@ -1,5 +1,4 @@
 // Facade runtime helpers load plugin API facades from installed plugin packages.
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
@@ -79,12 +78,6 @@ function resolveFacadeModuleLocation(
 
 type FacadeActivationCheckRuntimeModule = typeof import("./facade-activation-check.runtime.js");
 
-const nodeRequire = createRequire(import.meta.url);
-const FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES = [
-  "./facade-activation-check.runtime.js",
-  "./facade-activation-check.runtime.ts",
-] as const;
-
 function getFacadeActivationCheckRuntimeModule(): FacadeActivationCheckRuntimeModule | undefined {
   const cached =
     getPluginCacheSource(CURRENT_MODULE_PATH).variants.get("activation-runtime")?.exports?.value;
@@ -98,8 +91,8 @@ function setFacadeActivationCheckRuntimeModule(module: FacadeActivationCheckRunt
   });
 }
 
-function throwFacadeActivationCheckRuntimeUnavailable(): never {
-  throw new Error("Unable to load facade activation check runtime");
+function throwFacadeActivationCheckRuntimeUnavailable(cause?: unknown): never {
+  throw new Error("Unable to load facade activation check runtime", { cause });
 }
 
 function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {
@@ -107,37 +100,25 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
   if (cached) {
     return cached;
   }
-  for (const native of [true, false]) {
-    for (const candidate of FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES) {
-      let loaded: FacadeActivationCheckRuntimeModule;
-      try {
-        loaded = (
-          native
-            ? nodeRequire(candidate)
-            : getCachedPluginModuleLoader({
-                modulePath: candidate,
-                importerUrl: import.meta.url,
-                loaderFilename: import.meta.url,
-                tryNative: false,
-              })(candidate)
-        ) as FacadeActivationCheckRuntimeModule;
-      } catch {
-        continue;
-      }
-      if (loaded) {
-        setFacadeActivationCheckRuntimeModule(loaded);
-        return loaded;
-      }
-      // A successful but falsy export ends this loader's candidate search.
-      break;
-    }
+  try {
+    const modulePath = fileURLToPath(
+      new URL("./facade-activation-check.runtime.js", import.meta.url),
+    );
+    const loaded = getCachedPluginModuleLoader({
+      modulePath,
+      importerUrl: import.meta.url,
+      loaderFilename: import.meta.url,
+      transformOpenClawDependencies: false,
+    })(modulePath) as FacadeActivationCheckRuntimeModule;
+    setFacadeActivationCheckRuntimeModule(loaded);
+    return loaded;
+  } catch (error) {
+    return throwFacadeActivationCheckRuntimeUnavailable(error);
   }
-  return throwFacadeActivationCheckRuntimeUnavailable();
 }
 
-// Async twin of loadFacadeActivationCheckRuntime for async call sites: dynamic
-// import resolves the source graph under vitest where the sync createRequire/jiti
-// candidates cannot, and warms the shared memo so subsequent sync loads reuse it.
+// Dynamic import resolves the source graph under Vitest and warms the same memo
+// for subsequent synchronous calls.
 async function loadFacadeActivationCheckRuntimeAsync(): Promise<FacadeActivationCheckRuntimeModule> {
   const module =
     getFacadeActivationCheckRuntimeModule() ??

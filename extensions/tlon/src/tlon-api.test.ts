@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Tlon tests cover tlon api plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./urbit/auth.js";
@@ -33,7 +34,7 @@ vi.mock("./urbit/channel-ops.js", () => ({
 }));
 
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { configureClient, uploadFile } from "./tlon-api.js";
+import { type ClientConfig, uploadFile } from "./tlon-api.js";
 
 const mockAuthenticate = vi.mocked(authenticate);
 const mockScryUrbitPath = vi.mocked(scryUrbitPath);
@@ -75,6 +76,8 @@ const CUSTOM_STORAGE = {
     secretAccessKey: "fake-secret",
   },
 };
+
+let testClientConfig: ClientConfig;
 
 function createMemexResponse(
   uploadUrl: string,
@@ -125,13 +128,13 @@ function guardedFetchCall(index: number): Parameters<typeof fetchWithSsrFGuard>[
 }
 
 function configureTestClient(shipUrl: string, dangerouslyAllowPrivateNetwork?: boolean): void {
-  configureClient({
+  testClientConfig = {
     shipUrl,
     shipName: "~zod",
     verbose: false,
     getCode: async () => "123456",
     dangerouslyAllowPrivateNetwork,
-  });
+  };
 }
 
 function mockStorageScry(params: {
@@ -166,8 +169,8 @@ function mockGuardedResponse(
   mockGuardedFetch.mockResolvedValueOnce(createGuardedResult(response, finalUrl));
 }
 
-function uploadAvatar() {
-  return uploadFile(AVATAR_UPLOAD);
+function uploadAvatar(clientConfig: ClientConfig = testClientConfig) {
+  return uploadFile(AVATAR_UPLOAD, clientConfig);
 }
 
 beforeEach(() => {
@@ -521,4 +524,74 @@ describe("uploadFile custom S3 upload hardening", () => {
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("uploadFile send authority", () => {
+  it("blocks the S3 upload when authority closes during signing", async () => {
+    configureTestClient("https://ship.example.com");
+    mockStorageScry(CUSTOM_STORAGE);
+    const signingStarted = createDeferred<void>();
+    const signedUrl = createDeferred<string>();
+    const authorityError = new Error("Tlon send authority revoked");
+    let revoked = false;
+    const assertDirectAdapterHandoff = () => {
+      if (revoked) {
+        throw authorityError;
+      }
+    };
+    mockGetSignedUrl.mockImplementationOnce(() => {
+      signingStarted.resolve();
+      return signedUrl.promise;
+    });
+    const dispatch = vi.fn();
+    mockGuardedFetch.mockImplementationOnce(async (request) => {
+      request.beforeRequest?.();
+      dispatch();
+      return createGuardedResult(new Response(null, { status: 200 }), S3_UPLOAD_URL);
+    });
+
+    const upload = uploadAvatar({ ...testClientConfig, assertDirectAdapterHandoff });
+    const rejected = expect(upload).rejects.toBe(authorityError);
+    await signingStarted.promise;
+    revoked = true;
+    signedUrl.resolve(S3_UPLOAD_URL);
+    await rejected;
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(mockRelease).not.toHaveBeenCalled();
+  });
+
+  it.each(["memex", "custom S3"])(
+    "retains an accepted %s upload when authority closes during its response",
+    async (storage) => {
+      const useMemex = storage === "memex";
+      configureTestClient(useMemex ? "https://groups.tlon.network" : "https://ship.example.com");
+      mockStorageScry(useMemex ? MEMEX_STORAGE : CUSTOM_STORAGE);
+      const uploadUrl = useMemex ? MEMEX_UPLOAD_URL : S3_UPLOAD_URL;
+      if (useMemex) {
+        mockMemexLookup();
+      } else {
+        mockGetSignedUrl.mockResolvedValueOnce(uploadUrl);
+      }
+      const assertDirectAdapterHandoff = vi.fn();
+      const cancelBody = vi.fn();
+      mockGuardedFetch.mockImplementationOnce(async (request) => {
+        request.beforeRequest?.();
+        assertDirectAdapterHandoff.mockImplementation(() => {
+          throw new Error("Tlon send authority revoked");
+        });
+        return createGuardedResult(responseWithCancelableBody(200, cancelBody), uploadUrl);
+      });
+
+      const result = await uploadAvatar({ ...testClientConfig, assertDirectAdapterHandoff });
+
+      if (useMemex) {
+        expect(result).toEqual({ url: "https://memex.tlon.network/files/uploaded.png" });
+      } else {
+        expect(result.url.startsWith("https://files.example.com/")).toBe(true);
+      }
+      expect(cancelBody).toHaveBeenCalledTimes(1);
+      expect(mockRelease).toHaveBeenCalledTimes(useMemex ? 2 : 1);
+    },
+  );
 });

@@ -40,8 +40,11 @@ export type CreateSandboxBackendParams = {
   /** Synchronously recheck this generation immediately before runtime side effects. */
   assertRuntimeCurrent?: () => void;
   workspaceDir: string;
+  /** Prepared managed projection; retain its exact mount owner before allocation. */
+  workspaceSource?: "managed-worktree";
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
+  readOnlyResourceMounts?: Array<{ hostPath: string; containerPath: string }>;
   cfg: SandboxConfig;
   requireCurrentConfig?: boolean;
 };
@@ -71,6 +74,11 @@ export type SandboxBackendRegistration = SandboxBackendFactory | RegisteredSandb
 export type RegisteredSandboxBackend = {
   manager?: SandboxBackendManager;
   resolveWorkdir?: SandboxBackendWorkdirResolver;
+  /** Static backend features available before a runtime is provisioned. */
+  capabilities?: {
+    /** Can project host-owned directories read-only into the execution environment. */
+    readOnlyResourceMounts?: boolean;
+  };
 } & (
   | { factory: SandboxBackendFactory; reserveRuntimeId?: undefined }
   | {

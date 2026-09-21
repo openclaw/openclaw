@@ -1,4 +1,5 @@
 // Doctor repair sequencing tests cover ordered repair execution and dependency handling.
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
@@ -16,7 +17,6 @@ const mocks = vi.hoisted(() => ({
   collectOpenAICodexAuthProfileStoreIdMap: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
-  getInstalledPluginRecord: vi.fn(),
   isInstalledPluginEnabled: vi.fn(),
   loadInstalledPluginIndex: vi.fn(),
   loadPluginMetadataSnapshot: vi.fn(),
@@ -104,7 +104,6 @@ vi.mock("../../agents/auth-profiles/credential-state.js", () => ({
 
 vi.mock("../../plugins/installed-plugin-index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/installed-plugin-index.js")>()),
-  getInstalledPluginRecord: mocks.getInstalledPluginRecord,
   isInstalledPluginEnabled: mocks.isInstalledPluginEnabled,
   loadInstalledPluginIndex: mocks.loadInstalledPluginIndex,
 }));
@@ -271,7 +270,6 @@ describe("doctor repair sequencing", () => {
       eligible: true,
       reasonCode: "ok",
     });
-    mocks.getInstalledPluginRecord.mockReturnValue(undefined);
     mocks.isInstalledPluginEnabled.mockReturnValue(false);
     mocks.loadInstalledPluginIndex.mockReturnValue({ plugins: [] });
     mocks.loadPluginMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshotFixture());
@@ -499,6 +497,13 @@ describe("doctor repair sequencing", () => {
   });
 
   it("repairs managed npm plugin drift before missing plugin install repair", async () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "google-meet": { enabled: true },
+        },
+      },
+    };
     const events: string[] = [];
     const refreshedSnapshot = createPluginMetadataSnapshotFixture();
     mocks.loadPluginMetadataSnapshot.mockReturnValueOnce(refreshedSnapshot);
@@ -517,20 +522,8 @@ describe("doctor repair sequencing", () => {
 
     const result = await runDoctorRepairSequence({
       state: {
-        cfg: {
-          plugins: {
-            entries: {
-              "google-meet": { enabled: true },
-            },
-          },
-        } as OpenClawConfig,
-        candidate: {
-          plugins: {
-            entries: {
-              "google-meet": { enabled: true },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: structuredClone(config),
+        candidate: structuredClone(config),
         pendingChanges: false,
         fixHints: [],
       },
@@ -544,28 +537,17 @@ describe("doctor repair sequencing", () => {
     expect(cleanupCall?.prompter).toEqual({ shouldRepair: true });
     expect(mocks.maybeRepairPluginOpenClawHostLinks).toHaveBeenCalledOnce();
     expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
-      cfg: {
-        plugins: {
-          entries: {
-            "google-meet": { enabled: true },
-          },
-        },
-      },
+      cfg: config,
       env: process.env,
       baselineRecords: {},
+      repairVersionDrift: true,
     });
     const peerLinkCall = mocks.maybeRepairPluginOpenClawHostLinks.mock.calls[0]?.[0];
     expect(peerLinkCall?.prompter).toEqual({ shouldRepair: true });
     expect(peerLinkCall?.env).toBe(process.env);
     expect(mocks.loadInstalledPluginIndex).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: {
-          plugins: {
-            entries: {
-              "google-meet": { enabled: true },
-            },
-          },
-        },
+        config,
         env: process.env,
         installRecords: {},
       }),
@@ -1042,7 +1024,7 @@ describe("doctor repair sequencing", () => {
   });
 
   it("refreshes retained default-workspace metadata after cleanup-only inventory repairs", async () => {
-    const workspaceDir = "/tmp/openclaw-doctor-workspace";
+    const workspaceDir = path.resolve("/tmp/openclaw-doctor-workspace");
     const workspaceProvider = "workspace-provider";
     const staleSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [{ id: "google-meet" }],
@@ -1051,8 +1033,10 @@ describe("doctor repair sequencing", () => {
       plugins: [
         createPluginManifestRecordFixture({
           id: "workspace-plugin",
-          source:
-            "/tmp/openclaw-doctor-workspace/.openclaw/extensions/workspace-plugin/openclaw.plugin.json",
+          source: path.join(
+            workspaceDir,
+            ".openclaw/extensions/workspace-plugin/openclaw.plugin.json",
+          ),
           providers: [workspaceProvider],
         }),
       ],

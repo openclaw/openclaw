@@ -1,8 +1,9 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { openOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import { serveWorkerTasks } from "openclaw/plugin-sdk/process-runtime";
+import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
 import { searchChunksByEmbedding, searchKeyword, searchPathKeyword } from "./manager-search.js";
+import { inspectMemoryIndexPresenceInWorker } from "./manager-status-presence.js";
 
 type KeywordParameters = Omit<
   Parameters<typeof searchKeyword>[0],
@@ -17,15 +18,15 @@ export type MemoryVectorWorkerQuery = Omit<
   Parameters<typeof searchChunksByEmbedding>[0],
   "db" | "signal"
 >;
-export type MemorySearchWorkerInput = {
-  databasePath: string;
-  agentId: string;
-} & (
-  | { kind: "keyword"; query: MemoryKeywordWorkerQuery }
-  | { kind: "vector"; query: MemoryVectorWorkerQuery }
-);
+export type MemorySearchWorkerInput =
+  | { kind: "presence"; databasePath: string }
+  | ({ databasePath: string; agentId: string } & (
+      | { kind: "keyword"; query: MemoryKeywordWorkerQuery }
+      | { kind: "vector"; query: MemoryVectorWorkerQuery }
+    ));
 type QueryResult<T> = { rows: T; error?: string };
 export type MemorySearchWorkerOutput =
+  | { kind: "presence"; present: boolean }
   | {
       kind: "keyword";
       body: QueryResult<Awaited<ReturnType<typeof searchKeyword>>>;
@@ -34,8 +35,12 @@ export type MemorySearchWorkerOutput =
   | { kind: "vector"; rows: Awaited<ReturnType<typeof searchChunksByEmbedding>> };
 
 serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
-  // SAFETY: The paired runtime constructs the request; the canonical reader validates the database owner.
+  // SAFETY: The paired runtime constructs the private request union.
   const request = input as MemorySearchWorkerInput;
+  if (request.kind === "presence") {
+    // This pre-manager probe also recognizes shipped memory-only databases.
+    return { kind: "presence", present: inspectMemoryIndexPresenceInWorker(request.databasePath) };
+  }
   const opened = openOpenClawAgentDatabaseReadOnly({
     agentId: request.agentId,
     path: request.databasePath,

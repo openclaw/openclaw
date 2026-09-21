@@ -14,6 +14,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
 import {
   getAdmittedRunDelegatedAuthority,
   type PreparedAgentRunAdmission,
@@ -74,13 +75,15 @@ export async function runAcpAgentCommand(params: {
   const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
   const acpToolTracker = attemptExecutionRuntime.createAcpToolLifecycleTracker();
   const startedAt = Date.now();
+  const coordination = isSubagentCoordinationInputProvenance(params.opts.inputProvenance);
   registerAgentRunContext(params.runId, {
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     agentId: params.sessionAgentId,
     lifecycleGeneration: params.lifecycleGeneration,
-    projectSessionActive: !params.suppressVisibleSessionEffects,
-    ...(params.suppressVisibleSessionEffects ? { isControlUiVisible: false } : {}),
+    projectSessionActive: !params.suppressVisibleSessionEffects && !coordination,
+    ...(params.suppressVisibleSessionEffects || coordination ? { isControlUiVisible: false } : {}),
+    ...(coordination ? { projectSessionMessages: false } : {}),
   });
   attemptExecutionRuntime.emitAcpLifecycleStart({
     runId: params.runId,
@@ -176,7 +179,12 @@ export async function runAcpAgentCommand(params: {
         if (recorder && !recorder.hasPersisted() && !(await recorder.persistApproved())) {
           throw new Error("ACP input could not enter the session transcript");
         }
-        params.opts.onExecutionStarted?.();
+        await params.opts.onExecutionStarted?.();
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        params.opts.abortSignal?.throwIfAborted();
+        if (!getAdmittedRunDelegatedAuthority(admittedRunContext)) {
+          throw new Error("ACP run authority is no longer active");
+        }
       },
       onLifecycle: (event) => {
         if (event.type === "prompt_submitted") {
@@ -276,6 +284,7 @@ export async function runAcpAgentCommand(params: {
     const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
       body: params.body,
       transcriptBody: params.transcriptBody,
+      inputProvenance: params.opts.inputProvenance,
       userTurnTranscriptRecorder: params.opts.userTurnTranscriptRecorder,
       ...(!params.opts.userTurnTranscriptRecorder &&
       params.opts.suppressPromptPersistence !== true &&

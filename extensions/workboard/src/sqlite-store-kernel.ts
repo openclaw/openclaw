@@ -9,9 +9,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
+  runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
   sqliteStringSet,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   PersistedWorkboardAttachment,
@@ -19,6 +20,7 @@ import type {
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
   WorkboardCardStore,
+  WorkboardCardReadScope,
   WorkboardCardStatsAggregate,
   WorkboardKeyedStore,
   WorkboardOwnerClaimResult,
@@ -41,7 +43,12 @@ import {
 } from "./sqlite-store-records.js";
 import { createWorkboardDatabase } from "./sqlite-store-schema.js";
 import { bindNull, insertCard } from "./sqlite-store-write.js";
-import { workboardCardConsumesOwnerSlot, workboardCardSlotOwner } from "./store-constants.js";
+import {
+  MAX_WORKER_CONTEXT_PARENTS,
+  MAX_WORKER_CONTEXT_RECENT_CARDS,
+  workboardCardConsumesOwnerSlot,
+  workboardCardSlotOwner,
+} from "./store-constants.js";
 
 type SyncStore<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => Promise<infer R> ? (...args: A) => R : never;
@@ -205,23 +212,96 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
     return this.db.prepare("DELETE FROM workboard_cards WHERE id = ?").run(key);
   }
 
-  entries(boardId?: string): Array<{ key: string; value: PersistedWorkboardCard }> {
+  private workerContextCardIds(
+    scope: Extract<WorkboardCardReadScope, { kind: "worker-context" }>,
+  ): string[] {
+    const query = getNodeSqliteKysely<WorkboardCardDatabase>(this.db);
+    const doneParents = new Set(
+      scope.parentIds.length === 0
+        ? []
+        : Array.from(
+            iterateSqliteQuerySync(
+              this.db,
+              query
+                .selectFrom("workboard_cards")
+                .select("id")
+                .where("id", "in", sqliteStringSet(scope.parentIds))
+                .where("status", "=", "done"),
+            ),
+            (row) => requiredString(row, "id"),
+          ),
+    );
+    const parents = scope.parentIds
+      .filter((id) => doneParents.has(id))
+      .slice(-MAX_WORKER_CONTEXT_PARENTS);
+    const recent = scope.agentId
+      ? Array.from(
+          iterateSqliteQuerySync(
+            this.db,
+            query
+              .selectFrom("workboard_cards")
+              .select("id")
+              .where("board_id", "=", scope.boardId)
+              .where("agent_id", "=", scope.agentId)
+              .where("status", "=", "done")
+              .where("id", "!=", scope.cardId)
+              // Match the stable updated-time sort after the normal card order.
+              .orderBy("updated_at", "desc")
+              .orderBy("position", "asc")
+              .orderBy("created_at", "asc")
+              .orderBy("id", "asc")
+              .limit(MAX_WORKER_CONTEXT_RECENT_CARDS),
+          ),
+          (row) => requiredString(row, "id"),
+        )
+      : [];
+    return [...new Set([...parents, ...recent])];
+  }
+
+  entries(scope?: WorkboardCardReadScope): Array<{ key: string; value: PersistedWorkboardCard }> {
+    // Selection and hydration must agree if another connection changes a parent or sibling.
+    return scope?.kind === "worker-context"
+      ? runSqliteDeferredTransactionSync(this.db, () => this.readEntries(scope))
+      : this.readEntries(scope);
+  }
+
+  private readEntries(
+    scope?: WorkboardCardReadScope,
+  ): Array<{ key: string; value: PersistedWorkboardCard }> {
     let query = getNodeSqliteKysely<WorkboardCardDatabase>(this.db)
       .selectFrom("workboard_cards")
       .selectAll()
       .orderBy("created_at", "asc")
       .orderBy("id", "asc");
-    if (boardId !== undefined) {
-      query = query.where("board_id", "=", boardId);
+    if (scope?.kind === "board") {
+      query = query.where("board_id", "=", scope.boardId);
+    } else if (scope?.kind === "session") {
+      // Empty direct keys decode as absent; execution keys require an execution record.
+      query = query.where((eb) =>
+        eb.or([
+          eb("session_key", "=", scope.sessionKey),
+          eb.and([
+            eb.or([eb("session_key", "is", null), eb("session_key", "=", "")]),
+            eb("execution_id", "!=", ""),
+            eb("execution_session_key", "=", scope.sessionKey),
+          ]),
+        ]),
+      );
+    } else if (scope?.kind === "worker-context") {
+      const ids = this.workerContextCardIds(scope);
+      if (ids.length === 0) {
+        return [];
+      }
+      query = query.where("id", "in", sqliteStringSet(ids));
     }
     const rows = Array.from(iterateSqliteQuerySync(this.db, query));
-    if (boardId !== undefined && rows.length === 0) {
+    if (scope !== undefined && rows.length === 0) {
       return [];
     }
     // One query per child table for the selected cards instead of one per table per card.
     const preloaded = loadCardChildRows(
       this.db,
-      boardId === undefined ? undefined : rows.map((row) => requiredString(row, "id")),
+      scope === undefined ? undefined : rows.map((row) => requiredString(row, "id")),
     );
     return rows.map((row) => ({
       key: requiredString(row, "id"),

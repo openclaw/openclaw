@@ -29,7 +29,6 @@ import {
   PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS,
   PACKED_CLI_SMOKE_COMMANDS,
   PACKED_COMPLETION_SMOKE_ARGS,
-  packedPluginSdkSupportsSetupSurface,
   resolvePackedTarballPath,
   resolveReleaseNpmCommand,
   runReleaseCheckCommand,
@@ -53,6 +52,9 @@ function withProcessEnv<T>(env: Record<string, string>, callback: () => T): T {
 }
 
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+
+// Prepare the public SDK graph through the test runner before the consumer test deadline.
+await import("openclaw/plugin-sdk/channel-outbound");
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -162,6 +164,32 @@ describe("packed CLI smoke", () => {
       OPENCLAW_SUPPRESS_NOTES: "1",
       OPENCLAW_STATE_DIR: "/tmp/smoke-state",
     });
+  });
+
+  it("does not inherit provider credentials from the base environment", () => {
+    const env = createPackedCliSmokeEnv({
+      HOME: "/tmp/original-home",
+      OPENAI_API_KEY: "base-openai-secret",
+    });
+
+    expect(env).not.toHaveProperty("OPENAI_API_KEY");
+  });
+
+  it("does not admit provider credentials through smoke overrides", () => {
+    const env = createPackedCliSmokeEnv(
+      { HOME: "/tmp/original-home" },
+      {
+        HOME: "/tmp/smoke-home",
+        OPENCLAW_STATE_DIR: "/tmp/smoke-state",
+        OPENAI_API_KEY: "override-openai-secret",
+      },
+    );
+
+    expect(env).toMatchObject({
+      HOME: "/tmp/smoke-home",
+      OPENCLAW_STATE_DIR: "/tmp/smoke-state",
+    });
+    expect(env).not.toHaveProperty("OPENAI_API_KEY");
   });
 
   it("skips plugin command discovery during packed completion cache smoke", () => {
@@ -621,30 +649,47 @@ describe("packed install verification", () => {
 });
 
 describe("createPackedPluginSdkTypescriptSmokeProject", () => {
-  it("limits setupSurface omission to the recorded frozen target", async () => {
-    const { packedPluginSdkMayOmitSetupSurface } = await import("../scripts/release-check.js");
-    expect(packedPluginSdkMayOmitSetupSurface("2026.7.33")).toBe(true);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.9.4")).toBe(false);
-    expect(packedPluginSdkMayOmitSetupSurface("2026.10.1")).toBe(false);
+  it("preserves the unchanged released progress consumer behavior", async () => {
+    await import("../scripts/fixtures/packed-plugin-sdk-progress-consumer.js");
   });
 
-  it("detects whether both packed setup declarations expose setupSurface", () => {
-    const root = mkdtempSync(join(tmpdir(), "release-check-plugin-sdk-setup-surface-"));
+  it("creates a focused strict-declaration progress consumer without source aliases", () => {
+    const consumerDir = mkdtempSync(join(tmpdir(), "release-check-progress-consumer-"));
     try {
-      for (const relativePath of [
-        "dist/plugin-sdk/setup.d.ts",
-        "dist/plugin-sdk/setup-runtime.d.ts",
-      ]) {
-        const declarationPath = join(root, relativePath);
-        mkdirSync(dirname(declarationPath), { recursive: true });
-        writeFileSync(declarationPath, "export type Options = { setupSurface?: unknown };\n");
-      }
-      expect(packedPluginSdkSupportsSetupSurface(root)).toBe(true);
-      writeFileSync(join(root, "dist/plugin-sdk/setup-runtime.d.ts"), "export {};\n");
-      expect(packedPluginSdkSupportsSetupSurface(root)).toBe(false);
+      createPackedPluginSdkTypescriptSmokeProject({
+        consumerDir,
+        packageSpec: "2026.9.4",
+        progressConsumerOnly: true,
+      });
+      expect(JSON.parse(readFileSync(join(consumerDir, "tsconfig.json"), "utf8"))).toEqual({
+        compilerOptions: {
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          noEmit: true,
+          strict: true,
+          skipLibCheck: false,
+          types: ["node"],
+          target: "ES2022",
+        },
+        include: ["src/packed-plugin-sdk-progress-consumer.ts"],
+      });
+      expect(
+        readFileSync(join(consumerDir, "src/packed-plugin-sdk-progress-consumer.ts"), "utf8"),
+      ).toBe(readFileSync("scripts/fixtures/packed-plugin-sdk-progress-consumer.ts", "utf8"));
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(consumerDir, { recursive: true, force: true });
     }
+  });
+
+  it("limits setupSurface omission to the recorded frozen targets", async () => {
+    const { packedPluginSdkMayOmitSetupSurface } = await import("../scripts/release-check.js");
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.33")).toBe(true);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.34")).toBe(true);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35")).toBe(true);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.36")).toBe(false);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.7.35-beta.1")).toBe(false);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.9.4")).toBe(false);
+    expect(packedPluginSdkMayOmitSetupSurface("2026.10.1")).toBe(false);
   });
 
   it("writes a consumer project that imports representative public SDK subpaths", () => {

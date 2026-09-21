@@ -6,7 +6,6 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
-import android.location.LocationManager
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -70,7 +69,12 @@ class LocationHandler private constructor(
   private val backgroundLocationEnabled: () -> Boolean,
   private val locationPreciseEnabled: () -> Boolean,
 ) {
-  private val coarsener by lazy { LocationCoarsener() }
+  private val disclosure =
+    LocationDisclosure(
+      preciseEnabled = locationPreciseEnabled,
+      hasFinePermission = { dataSource.hasFinePermission(appContext) },
+      capture = dataSource::fetchLocation,
+    )
 
   constructor(
     appContext: Context,
@@ -135,21 +139,8 @@ class LocationHandler private constructor(
       )
     }
     val (maxAgeMs, timeoutMs, desiredAccuracy) = parseLocationParams(paramsJson)
-    // A request may ask for less precision, but cannot override the user's limits.
-    val initiallyPrecise =
-      desiredAccuracy != "coarse" && locationPreciseEnabled() && dataSource.hasFinePermission(appContext)
-    val providers =
-      if (initiallyPrecise) {
-        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-      } else {
-        listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
-      }
     try {
-      val fix = dataSource.fetchLocation(providers, maxAgeMs, timeoutMs)
-      // Capture can suspend and switch dispatchers. Recheck at the response producer,
-      // without another suspension, and never upgrade a request that began approximate.
-      val isPrecise = initiallyPrecise && locationPreciseEnabled() && dataSource.hasFinePermission(appContext)
-      val location = if (isPrecise) fix else coarsener.coarsen(fix)
+      val (location, isPrecise) = disclosure.getLocation(maxAgeMs, timeoutMs, allowPrecise = desiredAccuracy != "coarse")
       val payload =
         buildJsonObject {
           put("lat", location.latitude)

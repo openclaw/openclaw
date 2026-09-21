@@ -1,4 +1,4 @@
-/** Reads model context separately from full-fidelity Codex mirror evidence. */
+/** Reads bounded model context from the Codex transcript mirror. */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -17,7 +17,6 @@ import {
   type ResolvedCodexHistoryTarget,
 } from "./session-history-read.js";
 
-type CodexHistoryView = "native-evidence" | "model-context";
 export type CodexMirroredSessionHistoryTarget = {
   agentId?: string;
   sessionFile: string;
@@ -91,53 +90,44 @@ export function resolveCodexHistoryTarget(
 export async function readCodexMirroredSessionHistoryMessages(
   target: CodexMirroredSessionHistoryTarget,
   admission?: TranscriptTurnAdmission,
-  view: CodexHistoryView = "native-evidence",
   signal?: AbortSignal,
   contextTokenBudget?: number,
 ): Promise<AgentMessage[] | undefined> {
   signal?.throwIfAborted();
   try {
     let result: AgentMessage[] | undefined;
-    if (view === "native-evidence") {
-      const { readCodexHistoryMessagesInWorker } =
-        await import("../../session-history-worker-runtime.js");
-      result = await readCodexHistoryMessagesInWorker(target, admission, signal);
+    const resolved = resolveCodexHistoryTarget(target, admission);
+    const read = (messages: Iterable<AgentMessage>) => Array.from(messages);
+    if (resolved.kind === "sqlite") {
+      const loaded = await SessionManager.openModelContextAsync(resolved.target, {
+        admission,
+        signal,
+        limits: {
+          maxBytes: Math.min(
+            64 * 1024 * 1024,
+            Math.max(1024, Math.floor((contextTokenBudget ?? 128_000) * 8)),
+          ),
+          maxEvents: 10_000,
+          toolResultOverflow: "omit",
+        },
+      });
+      result = consumeCodexHistory(
+        loaded.buildSessionContext().messages,
+        loaded.getHeader(),
+        target.sessionId,
+        read,
+        "codex mirrored model context",
+      );
     } else {
-      const resolved = resolveCodexHistoryTarget(target, admission);
-      const read = (messages: Iterable<AgentMessage>) => Array.from(messages);
-      if (resolved.kind === "sqlite") {
-        const loaded = await SessionManager.openModelContextAsync(resolved.target, {
-          admission,
-          signal,
-          limits: {
-            maxBytes: Math.min(
-              64 * 1024 * 1024,
-              Math.max(1024, Math.floor((contextTokenBudget ?? 128_000) * 8)),
-            ),
-            maxEvents: 10_000,
-          },
-        });
-        result = consumeCodexHistory(
-          loaded.buildSessionContext().messages,
-          loaded.getHeader(),
-          target.sessionId,
-          read,
-          "codex mirrored model context",
-        );
-      } else {
-        const history = await readCodexNativeHistory(resolved, target.sessionId, read, admission);
-        result = history.status === "ok" ? history.value : undefined;
-      }
+      const history = await readCodexNativeHistory(resolved, target.sessionId, read, admission);
+      result = history.status === "ok" ? history.value : undefined;
     }
     signal?.throwIfAborted();
     return result;
   } catch (error) {
     signal?.throwIfAborted();
     // A rejected bounded read is not an empty transcript: preserve the existing session.
-    if (view === "model-context") {
-      throw error;
-    }
-    return undefined;
+    throw error;
   }
 }
 

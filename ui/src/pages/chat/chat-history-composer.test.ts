@@ -6,7 +6,7 @@ import { rewindChatHistory } from "./chat-history-actions.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
+import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
   ChatComposerPersistence,
   loadChatComposerSnapshot,

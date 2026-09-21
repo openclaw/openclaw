@@ -324,10 +324,7 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     case "model-setup":
       runtime.log(
-        [
-          "Changing model providers must happen outside the inference session that powers OpenClaw.",
-          "Stop the OpenClaw host through whatever started it. Run `openclaw onboard` on the machine running OpenClaw: it stages credentials, live-tests the candidate route, and saves only a passing setup. Then restart the host.",
-        ].join("\n"),
+        "Open Settings → Models → Connect provider. Check the connected Gateway and the selected System or agent scope in Settings before signing in. Enter credentials only in the protected sign-in controls, never in chat. Connecting another provider does not select it as the active model or require stopping the host. Model selection is separate; replacing credentials for a provider already in use can affect current work. Nothing has changed.",
       );
       return { applied: false };
     case "model-accounts":
@@ -461,10 +458,20 @@ export async function executeSystemAgentOperation(
         run: async (ctx) => {
           const createAgentForOperation =
             ctx.deps?.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
+          const { createAgentIdentityConfig } = await import("../agents/identity-file.js");
           const result = await ctx.commit(() =>
             createAgentForOperation({
-              name: operation.agentId,
+              entry: {
+                id: operation.agentId,
+                ...(operation.name
+                  ? {
+                      name: operation.name,
+                      identity: createAgentIdentityConfig({ name: operation.name }),
+                    }
+                  : {}),
+              },
               ...(operation.role ? { role: operation.role } : {}),
+              ...(operation.purpose ? { purpose: operation.purpose } : {}),
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
               ...(ctx.assertPersistentApply
                 ? { beforePersistentApply: ctx.assertPersistentApply }

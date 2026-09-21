@@ -279,6 +279,7 @@ export function buildOpenAIResponsesParams(
     const tools = context.tools;
     const strict = resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
       transport: "stream",
+      supportsStrictMode: compat.supportsStrictMode,
     });
     const { projection, tools: converted } = prepareResponsesTools(tools, strict, model);
     if (

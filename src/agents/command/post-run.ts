@@ -299,6 +299,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
         const transcriptResult = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,
           transcriptBody,
+          inputProvenance: params.opts.inputProvenance,
           result,
           sessionId: effectiveSessionId,
           sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? effectiveSessionId,

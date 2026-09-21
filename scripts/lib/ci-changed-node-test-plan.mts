@@ -1,12 +1,12 @@
 import { existsSync, lstatSync } from "node:fs";
 import path from "node:path";
 import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
-import { isDatabaseWorkerExtensionRoot } from "../../test/vitest/vitest.extension-database-workers-paths.mjs";
 import {
   isPluginControlUiPath,
   isUiBrowserTestFile,
   isUiTestTarget,
 } from "../../test/vitest/vitest.ui-paths.mjs";
+import { isBoundaryTestFile } from "../../test/vitest/vitest.unit-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
@@ -22,15 +22,17 @@ import {
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import { isTestOnlyPath } from "./changed-path-facts.mjs";
 import {
-  createNodeTestShards,
   createSelectedNodeTestShardBundles,
   isPolicyTestOwnedPath,
+  nodeTestConfigRequiresCanonicalMetadata,
   packNodeTestGroups,
   resolvePolicyTestTargets,
   type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
+import { isCiProofTestFile } from "./ci-proof-test-inventory.mts";
 import {
-  NATIVE_DATABASE_WORKER_TEST_JOB_FILE_LIMIT,
+  DATABASE_WORKER_CONFIG,
+  DATABASE_WORKER_TEST_JOB_FILE_LIMIT,
   estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
@@ -39,6 +41,7 @@ import {
 } from "./extension-test-plan.mts";
 import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
 import {
+  mergeVitestPretestBuildModes,
   resolveVitestPretestBuildMode,
   type VitestPretestBuildMode,
 } from "./vitest-build-prerequisites.mts";
@@ -103,18 +106,6 @@ const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
-);
-
-const fullNodeTestShards = createNodeTestShards({
-  includeReleaseOnlyPluginShards: false,
-});
-const configsRequiringCanonicalMetadata = new Set(
-  fullNodeTestShards
-    .filter((shard) => shard.env || shard.shardName.startsWith("core-tooling"))
-    .flatMap((shard) => shard.configs),
-);
-const splitNodeTestConfigs = new Set(
-  fullNodeTestShards.filter((shard) => shard.includePatterns).flatMap((shard) => shard.configs),
 );
 
 // Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus
@@ -337,11 +328,6 @@ function resolvePreciseChangedTargets(
     targets.length > MAX_CHANGED_NODE_TEST_TARGETS ||
     targets.some(
       (target) =>
-        /^test\/vitest\/vitest\.full-.*\.config\.ts$/u.test(target) ||
-        splitNodeTestConfigs.has(target),
-    ) ||
-    targets.some(
-      (target) =>
         !isTestFileTarget(target) || findUnmatchedExplicitTestTargets([target], cwd).length > 0,
     )
   ) {
@@ -354,7 +340,11 @@ function resolvePreciseChangedTargets(
   }));
   if (
     targetPlans.some(
-      ({ plans }) => plans.length === 0 || plans.some((targetPlan) => !targetPlan.includePatterns),
+      ({ target, plans }) =>
+        plans.length === 0 ||
+        // E2E's canonical owner uses CLI filters instead of include files.
+        // Named deferred proofs need resolution, but no PR execution envelope.
+        (!isCiProofTestFile(target) && plans.some((targetPlan) => !targetPlan.includePatterns)),
     )
   ) {
     return null;
@@ -428,25 +418,55 @@ function createChangedExtensionConfigShards(
     config: string;
     env?: Record<string, string>;
     includePatterns?: string[];
+    pretestBuildMode?: VitestPretestBuildMode;
     predictedSeconds: number;
   }> = [...rootsByConfig].flatMap(([config, roots]) => {
     const splitProcesses = shouldSplitExtensionTestProcesses(config);
     const testFiles = (filesByConfig.get(config) ?? []).filter(
       (file) =>
-        !splitProcesses ||
-        options.fullConfigInventory ||
-        roots.some((root) => file.startsWith(`${root}/`)),
+        !isCiProofTestFile(file) &&
+        (!splitProcesses ||
+          options.fullConfigInventory ||
+          roots.some((root) => file.startsWith(`${root}/`))),
     );
-    const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
+    const buildModes = new Map(
+      (splitProcesses ? testFiles : []).map((file) => [
+        file,
+        resolveVitestPretestBuildMode([{ includePatterns: [file] }]),
+      ]),
+    );
+    const configBuildMode = splitProcesses
+      ? undefined
+      : resolveVitestPretestBuildMode([{ configs: [config] }]);
+    let chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
+    if (
+      splitProcesses &&
+      chunks.filter((files) => files.some((file) => buildModes.get(file))).length > 1
+    ) {
+      // Explicit scopes follow the prerequisite owner even after files migrate configs.
+      // Keep build consumers together before reapplying every job/process file bound.
+      const runtimeFiles: string[] = [];
+      const otherFiles: string[] = [];
+      for (const file of testFiles) {
+        const target = buildModes.get(file) ? runtimeFiles : otherFiles;
+        target.push(file);
+      }
+      chunks = [runtimeFiles, otherFiles]
+        .filter((files) => files.length > 0)
+        .flatMap((files) => splitExtensionTestJobTargets(config, files));
+    }
     const partitionSeconds = Math.ceil(
-      estimateExtensionTestCost(config, testFiles.length) / chunks.length,
+      estimateExtensionTestCost(config, testFiles.length, testFiles) / chunks.length,
     );
     return chunks.map((includePatterns, index) =>
       Object.assign(
         {
           config,
+          pretestBuildMode: splitProcesses
+            ? mergeVitestPretestBuildModes(includePatterns.map((file) => buildModes.get(file)))
+            : configBuildMode,
           predictedSeconds: splitProcesses
-            ? estimateExtensionTestCost(config, includePatterns.length)
+            ? estimateExtensionTestCost(config, includePatterns.length, includePatterns)
             : partitionSeconds,
         },
         splitProcesses
@@ -465,33 +485,32 @@ function createChangedExtensionConfigShards(
       ),
     );
   });
-  return plans.map(({ config, env, includePatterns, predictedSeconds }, index) => {
-    const suffix = plans.length === 1 ? "" : `-${index + 1}`;
-    const shard: ChangedExtensionConfigShard = {
-      checkName: `checks-node-changed-extensions-config${suffix}`,
-      configs: [config],
-      // No plans overlap in this row, so CI can scale the single process's worker budget.
-      planConcurrency: 1,
-      predictedSeconds,
-      requiresDist: false,
-      runner: DEFAULT_NODE_TEST_RUNNER,
-      shardName: `changed-extensions-config${suffix}`,
-    };
-    const pretestBuildMode = resolveVitestPretestBuildMode([
-      { configs: [config], includePatterns },
-    ]);
-    if (pretestBuildMode) {
-      shard.pretestBuildMode = pretestBuildMode;
-      shard.predictedSeconds = predictedSeconds + VITEST_PRETEST_BUILD_SECONDS[pretestBuildMode];
-    }
-    if (includePatterns) {
-      shard.includePatterns = includePatterns;
-    }
-    if (env) {
-      shard.env = env;
-    }
-    return shard;
-  });
+  return plans.map(
+    ({ config, env, includePatterns, pretestBuildMode, predictedSeconds }, index) => {
+      const suffix = plans.length === 1 ? "" : `-${index + 1}`;
+      const shard: ChangedExtensionConfigShard = {
+        checkName: `checks-node-changed-extensions-config${suffix}`,
+        configs: [config],
+        // No plans overlap in this row, so CI can scale the single process's worker budget.
+        planConcurrency: 1,
+        predictedSeconds,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: `changed-extensions-config${suffix}`,
+      };
+      if (pretestBuildMode) {
+        shard.pretestBuildMode = pretestBuildMode;
+        shard.predictedSeconds = predictedSeconds + VITEST_PRETEST_BUILD_SECONDS[pretestBuildMode];
+      }
+      if (includePatterns) {
+        shard.includePatterns = includePatterns;
+      }
+      if (env) {
+        shard.env = env;
+      }
+      return shard;
+    },
+  );
 }
 
 function createChangedExtensionConfigShardsForPaths(changedPaths: string[], cwd: string) {
@@ -553,12 +572,10 @@ export function createChangedExtensionFallbackShards(
 function packChangedExtensionConfigShards(
   shards: ChangedExtensionConfigShard[],
 ): ChangedNodeTestShard[] {
-  const nativeWorkerFileCounts = new Map(
+  const workerFileCounts = new Map(
     shards.map((shard) => [
       shard,
-      shard.includePatterns?.filter((file) =>
-        isDatabaseWorkerExtensionRoot(file.split("/").slice(0, 2).join("/")),
-      ).length ?? 0,
+      shard.configs.includes(DATABASE_WORKER_CONFIG) ? (shard.includePatterns?.length ?? 0) : 0,
     ]),
   );
   const bins = packNodeTestGroups(
@@ -568,11 +585,11 @@ function packChangedExtensionConfigShards(
     // Each envelope retains its own child process. Share only the checkout;
     // runtime preparation stays separate from other configs' readers.
     (bin, shard) =>
-      // Cost packing must not recreate the oversized native worker envelope.
+      // Count the effective config, including files migrated from other plugins.
       bin.reduce(
-        (count, entry) => count + (nativeWorkerFileCounts.get(entry) ?? 0),
-        nativeWorkerFileCounts.get(shard) ?? 0,
-      ) <= NATIVE_DATABASE_WORKER_TEST_JOB_FILE_LIMIT &&
+        (count, entry) => count + (workerFileCounts.get(entry) ?? 0),
+        workerFileCounts.get(shard) ?? 0,
+      ) <= DATABASE_WORKER_TEST_JOB_FILE_LIMIT &&
       !shard.pretestBuildMode &&
       bin.every(
         (entry) =>
@@ -628,13 +645,15 @@ export function createChangedNodeTestShards(
     return null;
   }
 
-  // Packing changes can move every compact child. Observe the complete plan on
+  // Packing changes and their policy guard need the complete compact plan on
   // Blacksmith while preserving hosted targeting and its registration footprint.
   if (
     options.runnerBackend !== "github" &&
     changedPaths.some(
       (file) =>
-        file === "config/ci-test-timings.json" || file === "scripts/lib/ci-node-test-plan.mts",
+        file === "config/ci-test-timings.json" ||
+        file === "scripts/lib/ci-node-test-plan.mts" ||
+        file === "test/scripts/ci-node-test-plan.test.ts",
     )
   ) {
     return null;
@@ -707,9 +726,13 @@ export function createChangedNodeTestShards(
   if (targetPlans === null) {
     return null;
   }
-  const canonicalTargets = targetPlans
+  // Resolve every changed source first, then defer only named complete proofs.
+  // Filtering inputs earlier would hide an unresolved companion or helper.
+  const prTargetPlans = targetPlans.filter(({ target }) => !isCiProofTestFile(target));
+  const onlyDeferredProofTargets = targetPlans.length > 0 && prTargetPlans.length === 0;
+  const canonicalTargets = prTargetPlans
     .filter(({ plans }) =>
-      plans.some(({ config }) => configsRequiringCanonicalMetadata.has(config)),
+      plans.some(({ config }) => nodeTestConfigRequiresCanonicalMetadata(config)),
     )
     .map(({ target }) => target);
   // Canonical shard inventories describe this checkout, never a caller's
@@ -724,9 +747,15 @@ export function createChangedNodeTestShards(
   if (canonicalShards === null) {
     return null;
   }
+  const boundaryShards =
+    !onlyDeferredProofTargets &&
+    (hasBuildArtifactAffectingChange(changedPaths) ||
+      canonicalShards.some((shard) => shard.requiresDist))
+      ? []
+      : [createBoundaryShard()];
   // CI supplies the suite owners it emits. Validate every changed path first,
   // then subtract covered plans; local runs and unselected owners keep their targets.
-  const targets = targetPlans
+  const targets = prTargetPlans
     .filter(({ target }) => !canonicalTargets.includes(target))
     .filter(
       ({ plans }) =>
@@ -743,21 +772,25 @@ export function createChangedNodeTestShards(
             !plan.watchMode &&
             plan.forwardedArgs.length === 0 &&
             plan.includePatterns?.every((pattern) => pattern === target) &&
-            patterns?.some((pattern) => path.matchesGlob(target, pattern)) &&
-            options.dedicatedContractShards?.some(
-              (shard) =>
-                shard.task === (plugin ? "contracts-plugins" : "contracts-channels") &&
-                shard.includePatterns.includes(target),
-            )
+            // Only this plan's full boundary suite owns these targets; a build
+            // elsewhere must not suppress their explicit execution here.
+            ((boundaryShards.length > 0 &&
+              plan.config === BOUNDARY_NODE_TEST_CONFIG &&
+              plan.includePatterns.length > 0 &&
+              isBoundaryTestFile(target)) ||
+              (patterns?.some((pattern) => path.matchesGlob(target, pattern)) &&
+                options.dedicatedContractShards?.some(
+                  (shard) =>
+                    shard.task === (plugin ? "contracts-plugins" : "contracts-channels") &&
+                    shard.includePatterns.includes(target),
+                )))
           );
         }),
     )
     .map(({ target }) => target);
 
-  // Boundary-config targets run as regular nondist targets: the boundary
-  // suite scans the checked-out tree and never consumes the built dist.
   const shards = [
-    ...canonicalShards.map((shard) => ({ ...shard, configs: [] })),
+    ...canonicalShards.map((shard) => Object.assign({}, shard, { configs: [] })),
     ...packChangedExtensionConfigShards(createChangedExtensionConfigShardsForPaths(livePaths, cwd)),
     // Native browser files run in checks-ui, including precise changed-file plans.
     ...createChangedTargetShards(
@@ -767,10 +800,7 @@ export function createChangedNodeTestShards(
         shardName: "changed",
       },
     ),
-    ...(hasBuildArtifactAffectingChange(changedPaths) ||
-    canonicalShards.some((shard) => shard.requiresDist)
-      ? []
-      : [createBoundaryShard()]),
+    ...boundaryShards,
   ];
   // Covered source targets keep build-artifacts ownership even with no Node rows.
   return shards.length > 0 || targets.length < targetPlans.length ? shards : null;

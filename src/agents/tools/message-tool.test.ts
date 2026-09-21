@@ -1316,7 +1316,7 @@ describe("message tool secret scoping", () => {
       toolOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
         currentChannelProvider: "webchat",
-        agentSessionKey: "agent:main",
+        agentSessionKey: "agent:main:main",
       },
     });
 
@@ -4189,7 +4189,7 @@ describe("message tool description", () => {
 
   it("describes userId as required directly for member-info, not via target", () => {
     const tool = createMessageTool({
-      config: {} as never,
+      config: { tools: { message: { actions: { allow: ["member-info"] } } } },
     });
     const properties = getToolProperties(tool);
     const userId = properties.userId as { description?: string } | undefined;
@@ -4790,7 +4790,7 @@ describe("message tool boot-echo guard", () => {
   });
 
   afterEach(() => {
-    clearBootEchoContextForSession("agent:main");
+    clearBootEchoContextForSession("agent:main:main");
   });
 
   it("delivers a distinct surrogate collision once and suppresses an identical boot echo", async () => {
@@ -4837,7 +4837,7 @@ describe("message tool boot-echo guard", () => {
   ] as const)(
     "preserves %s after sanitizing boot echo in %s: %j",
     async (mediaField, textField, media) => {
-      setBootEchoContextForSession("agent:main", longBootPrompt);
+      setBootEchoContextForSession("agent:main:main", longBootPrompt);
       mockSendResult({ channel: "telegram", to: "telegram:123" });
 
       const echoedText =
@@ -4848,7 +4848,7 @@ describe("message tool boot-echo guard", () => {
           [textField]: echoedText,
           [mediaField]: structuredClone(media),
         },
-        toolOptions: { agentSessionKey: "agent:main" },
+        toolOptions: { agentSessionKey: "agent:main:main" },
       });
       expect(call?.params?.[textField]).toBe("");
       expect(call?.params?.[mediaField]).toEqual(media);
@@ -4856,7 +4856,7 @@ describe("message tool boot-echo guard", () => {
   );
 
   it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "telegram", to: "telegram:123" });
 
     const call = await executeSend({
@@ -4864,7 +4864,7 @@ describe("message tool boot-echo guard", () => {
         target: "telegram:123",
         text: "Good morning! Project status looks healthy today.",
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
     expect(call?.params?.text).toBe("Good morning! Project status looks healthy today.");
   });
@@ -4877,13 +4877,13 @@ describe("message tool boot-echo guard", () => {
         target: "telegram:123",
         text: "Any message goes through unchanged.",
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
     expect(call?.params?.text).toBe("Any message goes through unchanged.");
   });
 
   it("collapses presentation fields that echo a substantial chunk of the registered boot prompt (#53732)", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "slack", to: "slack:C123" });
 
     const echoedBootText =
@@ -4908,7 +4908,7 @@ describe("message tool boot-echo guard", () => {
           ],
         },
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
 
     expect(call?.params?.presentation).toEqual({
@@ -4929,7 +4929,7 @@ describe("message tool boot-echo guard", () => {
   });
 
   it("sanitizes boot echo text from presentation button links before dispatch", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
     mockSendResult({ channel: "slack", to: "slack:C123" });
 
     const echoedText =
@@ -4968,7 +4968,7 @@ describe("message tool boot-echo guard", () => {
           ],
         },
       },
-      toolOptions: { agentSessionKey: "agent:main" },
+      toolOptions: { agentSessionKey: "agent:main:main" },
     });
 
     expect(call?.params?.message).toBe("Visible");

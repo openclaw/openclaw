@@ -1,10 +1,8 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it } from "vitest";
 import {
   commandRpcMocks,
   config,
   createCodexSessionCatalogControlFactory,
-  createCodexSessionCatalogControl,
   createCodexTestBindingStore,
   createGatewayApi,
   createRuntime,
@@ -12,54 +10,11 @@ import {
   registerCodexSessionCatalog,
 } from "./session-catalog.test-helpers.js";
 
-describe("Codex catalog discovery cache", () => {
-  it.each(["pending", "settled"])(
-    "favors a discovery page after a head reader joins it (%s)",
-    async (state) => {
-      const held = createDeferred<unknown>();
-      const started = createDeferred<void>();
-      const response = { data: [idleThread({ id: "retained", source: "cli" })] };
-      commandRpcMocks.codexControlRequest.mockImplementation(
-        (_config: unknown, _method: string, request: { cursor?: string }) => {
-          if (request.cursor === "shared") {
-            started.resolve();
-            return held.promise;
-          }
-          return { data: [] };
-        },
-      );
-      const control = createCodexSessionCatalogControl({
-        getPluginConfig: () => ({ supervision: { enabled: true } }),
-        getRuntimeConfig: () => config,
-        now: () => 1_000,
-      });
-      const query = { cursor: "shared", limit: 1 };
-      const first = control.listPage(query);
-      const pending = [first];
-      try {
-        await started.promise;
-        if (state === "settled") {
-          held.resolve(response);
-          await first;
-        }
-        pending.push(control.listPage(query, undefined, true));
-        held.resolve(response);
-        const pages = await Promise.all(pending);
-        expect(pages[0]).toEqual(pages[1]);
-        for (let index = 0; index < 64; index++) {
-          await control.listPage({ cursor: `discovery-${index}`, limit: 1 });
-        }
-        const before = commandRpcMocks.codexControlRequest.mock.calls.length;
-        await expect(control.listPage(query, undefined, true)).resolves.toEqual(pages[0]);
-        expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(before);
-      } finally {
-        held.resolve(response);
-        await Promise.allSettled(pending);
-      }
-    },
-  );
-
-  it("reuses the recent exclusion walk while discovery visits older pages", async () => {
+describe("resident Codex catalog discovery", () => {
+  it("keeps recent results resident while discovering older entries beyond a large hidden prefix", async () => {
+    const hiddenCount = 4_300;
+    const visibleCount = 1_360;
+    const total = hiddenCount + visibleCount;
     commandRpcMocks.codexControlRequest.mockImplementation(
       async (
         _pluginConfig: unknown,
@@ -67,18 +22,20 @@ describe("Codex catalog discovery cache", () => {
         request: { cursor?: string; limit: number },
       ) => {
         const offset = Number(request.cursor ?? 0);
+        const count = Math.min(request.limit, total - offset);
         return {
-          data: Array.from({ length: request.limit }, (_, index) =>
-            idleThread({
-              id: `thread-${offset + index}`,
+          data: Array.from({ length: count }, (_, index) => {
+            const position = offset + index;
+            return idleThread({
+              id: `thread-${position}`,
               source: "cli",
-              originator: offset + index === 4300 ? "codex" : "openclaw",
-              path: `/synthetic/sessions/thread-${offset + index}.jsonl`,
-              recencyAt: 10_000 - offset - index,
-              updatedAt: 10_000 - offset - index,
-            }),
-          ),
-          nextCursor: String(offset + request.limit),
+              originator: position >= hiddenCount ? "codex" : "openclaw",
+              path: `/synthetic/sessions/thread-${position}.jsonl`,
+              recencyAt: 10_000 - position,
+              updatedAt: 10_000 - position,
+            });
+          }),
+          ...(offset + count < total ? { nextCursor: String(offset + count) } : {}),
         };
       },
     );
@@ -102,24 +59,28 @@ describe("Codex catalog discovery cache", () => {
       provider.list({
         agentId: "main",
         hostIds: [home.hostId],
-        ...(cursor ? { cursors: { [home.hostId]: cursor } } : { limitPerHost: 40 }),
+        limitPerHost: 40,
+        ...(cursor ? { cursors: { [home.hostId]: cursor } } : {}),
       });
 
+    await factory.forRequest("main", home).initialize();
+    const nativeCalls = commandRpcMocks.codexControlRequest.mock.calls.length;
+    expect(nativeCalls).toBeGreaterThan(1);
     const first = await list();
-    expect(first[0]).toMatchObject({ sessions: [], nextCursor: "800" });
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(20);
-    let cursor = first[0]!.nextCursor!;
-    for (let sweep = 0; sweep < 3; sweep++) {
+    expect(first[0]?.sessions).toHaveLength(40);
+    const ids = first[0]!.sessions.map((session) => session.threadId);
+    let cursor = first[0]!.nextCursor;
+    expect(cursor).toBeDefined();
+    while (cursor) {
       const older = await list(cursor);
-      expect(older[0]).toMatchObject({ sessions: [], nextCursor: String(1800 + sweep * 1000) });
-      cursor = older[0]!.nextCursor!;
-      const before = commandRpcMocks.codexControlRequest.mock.calls.length;
-      const refreshed = await list();
-      expect(refreshed).toEqual(first);
-      expect(commandRpcMocks.codexControlRequest.mock.calls.length - before).toBe(0);
+      ids.push(...older[0]!.sessions.map((session) => session.threadId));
+      cursor = older[0]!.nextCursor;
+      expect(await list()).toEqual(first);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(nativeCalls);
     }
-    const discovered = await list(cursor);
-    expect(discovered[0]?.sessions.map((session) => session.threadId)).toEqual(["thread-4300"]);
-    expect(Number(discovered[0]?.nextCursor)).toBeGreaterThan(4300);
+    expect(ids).toEqual(
+      Array.from({ length: visibleCount }, (_, index) => `thread-${hiddenCount + index}`),
+    );
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(nativeCalls);
   });
 });

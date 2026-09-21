@@ -2,14 +2,12 @@
 // lookup, and stale-row handling for in-memory run snapshots.
 import { describe, expect, it } from "vitest";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
-import { runSynchronousWork } from "../../../shared/synchronous-work.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   buildSubagentRunReadIndexFromRuns,
-  buildSubagentRunReadIndexWork,
   countActiveRunsForSessionFromRuns,
   countPendingDescendantRunsFromRuns,
   hasDescendantRunAwaitingSettleFromRuns,
@@ -43,7 +41,7 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
 }
 
 describe("subagent registry query regressions", () => {
-  it("exposes complete snapshot inputs and exact memory winners captured before yielding", () => {
+  it("preserves complete snapshot inputs and exact memory winners after the source changes", () => {
     const ungrouped = makeRun({ runId: "ungrouped", requesterSessionKey: "", endedAt: 50 });
     const older = makeRun({ runId: "older", createdAt: 10, endedAt: 15 });
     const winner = makeRun({
@@ -53,25 +51,30 @@ describe("subagent registry query regressions", () => {
       endedAt: 30,
     });
     const runs = toRunMap([ungrouped, structuredClone(winner)]);
-    const memory = toRunMap([older, winner]);
-    const work = buildSubagentRunReadIndexWork(
-      { runs, inMemoryRuns: memory.values(), now: 100 },
-      () => true,
-    );
-    expect(work.next().done).toBe(false);
+    const memory = toRunMap([older, winner, ungrouped]);
+    const index = buildSubagentRunReadIndexFromRuns({
+      runs,
+      inMemoryRuns: memory.values(),
+      now: 100,
+    });
     memory.clear();
-    const index = runSynchronousWork(work);
     expect(index.inputs).toBeDefined();
     expect(index.inputs.runs).toBe(runs);
     expect(index.inputs.runs.get(ungrouped.runId)).toBe(ungrouped);
-    expect(index.inputs.inMemoryRuns).toHaveLength(1);
+    expect(index.inputs.inMemoryRuns).toHaveLength(2);
     expect(index.inputs.inMemoryRuns[0]).toBe(winner);
+    const candidates = index.runsByChildSessionKey.get(winner.childSessionKey);
+    expect(candidates).toHaveLength(2);
+    expect(candidates?.[0]).toBe(runs.get(winner.runId));
+    expect(candidates?.[1]).toBe(winner);
+    expect(index.runsByChildSessionKey.get(ungrouped.childSessionKey)).toEqual([ungrouped]);
+    expect(index.atTime(200).runsByChildSessionKey).toBe(index.runsByChildSessionKey);
     const replay = buildSubagentRunReadIndexFromRuns({ ...index.inputs, now: 200 });
     expect(replay.getDisplaySubagentRun(winner.childSessionKey)).toBe(winner);
     expect(replay.getDisplaySubagentRun(ungrouped.childSessionKey)).toBe(ungrouped);
   });
 
-  it("preserves captured display classification while owner liveness changes across a yield", () => {
+  it("preserves captured display classification while descendant queries see released owners", () => {
     const now = Date.now();
     const root = "agent:main:captured-index";
     const running = makeRun({
@@ -106,23 +109,14 @@ describe("subagent registry query regressions", () => {
     );
     try {
       const params = { runs: toRunMap([running, ended, sibling]), now };
-      const synchronous = buildSubagentRunReadIndexFromRuns(params);
-      const work = buildSubagentRunReadIndexWork(params, () => true);
-      expect(work.next().done).toBe(false);
+      const index = buildSubagentRunReadIndexFromRuns(params);
       for (const [id, claim] of claims) {
         releaseAgentRunContext(id, claim);
       }
-      const cooperative = runSynchronousWork(work);
-      expect(cooperative.getDisplaySubagentRun(running.childSessionKey)?.runId).toBe(running.runId);
-      expect(cooperative.getDisplaySubagentRun(running.childSessionKey)).toBe(
-        synchronous.getDisplaySubagentRun(running.childSessionKey),
-      );
-      expect(cooperative.countActiveDescendantRuns(root)).toBe(0);
-      expect(cooperative.countActiveDescendantRuns(root)).toBe(
-        synchronous.countActiveDescendantRuns(root),
-      );
-      expect(cooperative.atTime(now).getDisplaySubagentRun(running.childSessionKey)).toBe(ended);
-      expect(cooperative.getDisplaySubagentRun(running.childSessionKey)).toBe(running);
+      expect(index.getDisplaySubagentRun(running.childSessionKey)).toBe(running);
+      expect(index.countActiveDescendantRuns(root)).toBe(0);
+      expect(index.atTime(now).getDisplaySubagentRun(running.childSessionKey)).toBe(ended);
+      expect(index.getDisplaySubagentRun(running.childSessionKey)).toBe(running);
     } finally {
       for (const [id, claim] of claims) {
         releaseAgentRunContext(id, claim);
@@ -736,6 +730,43 @@ describe("subagent registry query regressions", () => {
 
 describe("hasDescendantRunAwaitingSettleFromRuns", () => {
   const requester = "agent:main:main";
+
+  it.each([
+    { name: "ended before the batch", endOffset: -1, pending: false },
+    { name: "ended at the batch boundary", endOffset: 0, pending: true },
+    { name: "ended during the batch", endOffset: 1, pending: true },
+    { name: "still executing", endOffset: undefined, pending: true },
+  ])("scopes $name without pruning descendants of an old parent", ({ endOffset, pending }) => {
+    const batchCreatedAt = Date.now() - 1_000;
+    const parent = makeRun({
+      runId: "old-parent",
+      requesterSessionKey: requester,
+      createdAt: batchCreatedAt - 3_000,
+      endedAt: batchCreatedAt - 2_000,
+    });
+    const descendant = makeRun({
+      runId: "descendant",
+      requesterSessionKey: parent.childSessionKey,
+      createdAt: batchCreatedAt - 2_500,
+      startedAt: batchCreatedAt - 2_500,
+      ...(endOffset !== undefined ? { endedAt: batchCreatedAt + endOffset } : {}),
+      expectsCompletionMessage: true,
+      delivery: { status: "pending" },
+    });
+    const runs = toRunMap([parent, descendant]);
+
+    expect(
+      hasDescendantRunAwaitingSettleFromRuns(
+        runs,
+        requester,
+        undefined,
+        undefined,
+        undefined,
+        batchCreatedAt,
+      ),
+    ).toBe(pending);
+    expect(countPendingDescendantRunsFromRuns(runs, requester)).toBe(2);
+  });
 
   it("reports live runs and ended runs whose cleanup has not completed, but not cleaned runs", () => {
     const now = Date.now();

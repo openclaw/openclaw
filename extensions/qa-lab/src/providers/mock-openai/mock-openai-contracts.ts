@@ -7,7 +7,11 @@ import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
-export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+export type MockOpenAiRequestKind =
+  | "agent-initial"
+  | "compaction-summary"
+  | "tool-continuation"
+  | "activity-summary";
 export type MockCompactionSummaryFaultMode =
   | "none"
   | "empty-output-once"

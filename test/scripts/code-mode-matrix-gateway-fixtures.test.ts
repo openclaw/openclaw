@@ -218,14 +218,46 @@ describe("Gateway code-mode matrix fixtures", () => {
     expect(fs.existsSync(path.join(path.dirname(entry), "receipts.jsonl"))).toBe(false);
   });
 
-  it.each(["automation-contracts", "process-contracts", "checked-cell-cache"] as const)(
-    "%s relies on actual built-ins instead of synthetic replacements",
-    (task) => {
-      const { fixture, entry } = prepare(task);
-      expect(invoke(entry, []).tools).toEqual([]);
-      expect(fixture.requiredTools).toEqual([]);
-    },
-  );
+  it("records every return-value effect in the fixture receipt owner", () => {
+    const { fixture, root, entry } = prepare("return-value-effects");
+    const input = { nonce: fixture.expected.nonce };
+    const run = invoke<{ nonce: string }>(entry, [
+      { name: "matrix_return_effect", input },
+      { name: "matrix_return_effect", input },
+    ]);
+    expect(run.results.map((result) => result.details)).toEqual([input, input]);
+    const receipts = fs
+      .readFileSync(path.join(root, "receipts.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(receipts).toEqual([
+      { sequence: 1, kind: "call", tool: "matrix_return_effect", ...input },
+      { sequence: 2, kind: "effect", tool: "matrix_return_effect", ...input },
+      { sequence: 3, kind: "call", tool: "matrix_return_effect", ...input },
+      { sequence: 4, kind: "effect", tool: "matrix_return_effect", ...input },
+    ]);
+  });
+
+  it("declares the serialization seed used by the prescribed guest program", () => {
+    const { fixture, entry } = prepare("result-save-invalid-json");
+    const run = invoke<{ nonce: string }>(entry, [{ name: "matrix_serialization_seed" }]);
+    const schema = expectDefined(run.tools[0]?.outputSchema, "serialization seed schema");
+    const seed = expectDefined(run.results[0], "serialization seed").details;
+    expect(Value.Check(schema, seed)).toBe(true);
+    expect(seed).toEqual({ nonce: fixture.expected.nonce });
+  });
+
+  it.each([
+    "automation-contracts",
+    "process-contracts",
+    "javascript-contracts",
+    "gateway-config-read",
+  ] as const)("%s relies on actual built-ins instead of synthetic replacements", (task) => {
+    const { fixture, entry } = prepare(task);
+    expect(invoke(entry, []).tools).toEqual([]);
+    expect(fixture.requiredTools).toEqual([]);
+  });
 
   it("keeps each repetition reproducible across runtime/model consumers", () => {
     for (const task of GATEWAY_MATRIX_TASKS) {

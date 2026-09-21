@@ -121,11 +121,11 @@ function planConfigRepair(
     return withPluginMetadataSnapshotScope(metadata, () => invoke(metadata), { config });
   };
   const migration = withMetadata(projected, () =>
-    applyLegacyDoctorMigrations(
-      projected,
-      { authoredRaw: snapshot.parsed, resolvedRaw: snapshot.sourceConfig },
-      { pluginContracts },
-    ),
+    applyLegacyDoctorMigrations(projected, {
+      sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+      context: { authoredRaw: snapshot.parsed, resolvedRaw: snapshot.sourceConfig },
+      pluginContracts,
+    }),
   );
   const config = preserveDeferredPluginMigrationConfig({
     sourceConfig: snapshot.sourceConfig,
@@ -166,6 +166,7 @@ function planConfigRepair(
     config,
     changes: [
       ...migration.changes,
+      ...(migration.warnings ?? []),
       ...(sourceRecords.status === "valid"
         ? ["Removed retired plugins.installs after preserving plugin install records."]
         : []),

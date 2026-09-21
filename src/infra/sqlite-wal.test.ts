@@ -28,7 +28,9 @@ function createMockDb(checkpointResult = { busy: 0, log: 0, checkpointed: 0 }): 
       get: vi.fn(() =>
         sql.includes("wal_checkpoint")
           ? checkpointResult
-          : { journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" },
+          : sql === "PRAGMA freelist_count"
+            ? { freelist_count: 1024 }
+            : { journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" },
       ),
     })),
   } as unknown as DatabaseSync;

@@ -87,7 +87,9 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       };
     }
     return params.modelSetupRequired
-      ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
+      ? createChatModelSetupBanner(() =>
+          this.context.navigate("model-providers", { search: "?connect=1" }),
+        )
       : undefined;
   }
 

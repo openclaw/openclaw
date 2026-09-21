@@ -215,11 +215,13 @@ describe("plugin lifecycle invoker ownership", () => {
       "rejects retained $method $checkpoint work after an await",
       async ({ method, params, operation, checkpoint }) => {
         const owner = createInvocation();
+        const entered = createDeferred();
         const paused = createDeferred();
         const persist = vi.fn();
         if (checkpoint === "publication") {
           applyRuntime.mockImplementation(
             async (change: Parameters<NonNullable<ManagedMutationOptions["applyRuntime"]>>[0]) => {
+              entered.resolve();
               await paused.promise;
               change.assertInvokerOwned?.();
               persist();
@@ -229,6 +231,7 @@ describe("plugin lifecycle invoker ownership", () => {
         }
         operation.mockImplementation(async (options: ManagedMutationOptions) => {
           if (checkpoint !== "publication") {
+            entered.resolve();
             await paused.promise;
           }
           if (checkpoint === "persistence") {
@@ -249,6 +252,12 @@ describe("plugin lifecycle invoker ownership", () => {
         });
         const pending = callHandler(method, params, owner.invocation);
         try {
+          await Promise.race([
+            entered.promise,
+            pending.then(() => {
+              throw new Error(`${method} completed before queued ${checkpoint}`);
+            }),
+          ]);
           expect(operation).toHaveBeenCalledOnce();
           owner.close();
           paused.resolve();

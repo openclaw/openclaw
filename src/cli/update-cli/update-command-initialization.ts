@@ -53,6 +53,7 @@ export async function confirmFreshUpdateDowngrade(params: {
   throw new UnreportedUpdateAdmissionOutcome(
     {
       root: target.root,
+      mode: target.mode,
       installKind: target.updateInstallKind,
       opts,
       controlPlaneUpdateSentinelMeta: params.controlPlaneUpdateSentinelMeta,

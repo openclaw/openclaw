@@ -113,7 +113,7 @@ openclaw gateway stability --json
 <AccordionGroup>
   <Accordion title="Privacy and bundle behavior">
     - Records keep operational metadata: event names, counts, byte sizes, memory readings, queue/session state, approval ids, channel/plugin names, and redacted session summaries. They exclude chat text, webhook bodies, tool outputs, raw request/response bodies, tokens, cookies, secret values, hostnames, and raw session ids. Set `diagnostics.enabled: false` to disable the recorder entirely.
-    - Fatal Gateway exits, shutdown timeouts, and restart startup failures write a diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json`, even when the recorder has no events. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` apply to bundle output too.
+    - Fatal Gateway exits, shutdown timeouts, and restart startup failures write a diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json`, even when the recorder has no events. When the error has a stack, `error.stack` retains it with secrets redacted and a limit of 8,000 UTF-16 code units. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` apply to bundle output too.
     - Failed shutdown steps include `evidence.shutdown`: the step and redacted error names, messages, codes, and stacks, including nested causes and aggregate errors. Use `openclaw gateway stability --bundle latest --json` to inspect these details. Capture is bounded to 32 errors and 8,000 UTF-16 code units per stack. `gateway.restart_close_failed` identifies a thrown close failure; `gateway.restart_shutdown_timeout` identifies the overall shutdown deadline. A timeout also retains any shutdown error already observed. Restart and stop failures flush the existing file logger before exit, within its shutdown budget.
 
   </Accordion>
@@ -210,6 +210,7 @@ openclaw gateway status --port 19001
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
     - On Linux, status reports the effective service currently loaded by systemd, including loaded drop-ins. If the unit or a drop-in changed on disk, `Systemd reload: pending` means you must run `systemctl --user daemon-reload` (or `sudo systemctl daemon-reload` for a system service) before those changes take effect.
     - Human output includes the resolved file log path plus CLI-vs-service config paths/validity to help diagnose profile or state-dir drift.
+    - If the Gateway reports no version, human output still shows the locally inspected service package version and path when readable. A version mismatch suggests reinstalling only when that service is the probe target; installation restrictions appear as the existing refusal message.
     - A missing native service is informational when that service is diagnostic-only, such as a Gateway using a non-default state directory. The connectivity probe still reports the selected Gateway's result.
     - Install and reinstall guidance follows the invoking shell's installation rules, not the stored service environment or probe target. Nix mode, external supervision, noncanonical installation identity, and Linux sudo/user-manager mismatches show the install refusal instead of an unusable command. A diagnostic-only target is not itself a refusal. Nix mode blocks installation, not starting an existing service.
     - Human output includes `Gateway heap:` with configured service heap controls and a separate install-time recommendation based on memory visible to the CLI. JSON output exposes the same report as `service.gatewayHeap`. Neither is a measurement of the running Gateway's V8 heap ceiling; use runtime memory diagnostics for that.
@@ -326,6 +327,9 @@ openclaw gateway call health --port 18999
 openclaw gateway call logs.tail --params '{"limit": 200}'
 ```
 
+To add an existing checkout to the Control UI's Place picker, use the
+[project registration and listing examples](/web/control-ui/sessions-and-sidebar#register-an-existing-repository).
+
 For `sessions.send` and `chat.send`, JSON `timeoutMs` is the receiving agent's
 execution budget, not an acknowledgment timeout. Omit it for ordinary
 coordination; `--timeout` independently limits how long this CLI waits:
@@ -340,6 +344,10 @@ are for operators and external automation. Agents use their exposed
 never a shell or direct RPC substitute. An unavailable messaging tool is not
 permission to use the CLI. Subagents return results through their accepted task
 completion path; the parent relays any necessary coordination with other sessions.
+
+In an agent's `exec` subprocess (`OPENCLAW_SHELL=exec`), message RPCs are
+refused before connecting so worker reports cannot appear as fresh human input.
+Ordinary operator terminals and non-message Gateway diagnostics are unchanged.
 
 <ParamField path="--params <json>" type="string" default="{}">
   JSON object string for params.

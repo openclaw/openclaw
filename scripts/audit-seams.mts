@@ -651,7 +651,7 @@ function describeCronSeamKinds(relativePath: string, source: string) {
 
   if (
     importsSchedulerModules &&
-    /\bensureLoaded\b|\bpersist\b|\barmTimer\b|\brunMissedJobs\b|\bcomputeJobNextRunAtMs\b|\brecomputeNextRuns\b|\bnextWakeAtMs\b/.test(
+    /\bensureLoaded\b|\bpersist\b|\barmTimer\b|\brunMissedJobs\b|\bcomputeJobNextRunAtMs\b|\brecomputeNextRunsForMaintenance\b|\bnextWakeAtMs\b/.test(
       source,
     )
   ) {
@@ -827,7 +827,7 @@ export function describeSeamKinds(relativePath: string, source: string) {
   }
   if (
     isReplyDeliveryPath &&
-    /blockStreamingEnabled|directlySentBlockKeys|resolveSendableOutboundReplyParts/.test(source) &&
+    /blockStreamingEnabled|directBlockDeliveries|resolveSendableOutboundReplyParts/.test(source) &&
     /\bmediaUrl\b|\bmediaUrls\b/.test(source)
   ) {
     seamKinds.push("streaming-media-handoff");

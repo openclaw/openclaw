@@ -191,7 +191,7 @@ describe("agent exec command composition", () => {
   it("writes plain final text to stdout when diagnostics are routed to stderr", async () => {
     const source = `
       import { agentExecCommand } from "./src/commands/agent-exec.ts";
-      import { enableConsoleCapture, routeLogsToStderr } from "./src/logging.ts";
+      import { enableConsoleCapture, routeLogsToStderr } from "./src/logging/console.ts";
       import { defaultRuntime } from "./src/runtime.ts";
 
       routeLogsToStderr();

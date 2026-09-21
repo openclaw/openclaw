@@ -53,6 +53,16 @@ this Mac** runs the same local setup. This always prepares Chrome on this Mac,
 even when the app is connected to a remote Gateway. A browser-based dashboard
 provides Store and setup-guide links instead of installing software locally.
 
+The **This Mac** page checks installation when opened and when you return from
+Chrome. An existing extension shows **Installed**, including when Chrome still
+needs you to enable it. If its local helper is missing, **Repair Mac connection**
+repairs automatic pairing without treating the extension as absent. **Check
+again** refreshes this status without installing anything. Installation status
+does not prove a live connection; open the extension to check that separately.
+Older Mac app versions keep their setup action when automatic status checks are
+unavailable. Update the Mac app to detect an existing installation without
+running setup.
+
 On Linux and in other supported Chromium browsers, add
 [OpenClaw from the Chrome Web Store](https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig)
 after native-host registration succeeds. Linux does not support this per-user
@@ -299,6 +309,35 @@ either target or verify that its code will run successfully. If an upgrade remov
 either target, rerun `openclaw browser extension install` to repair the owned
 registration. Ownership checks still refuse foreign or malformed manifests and
 launchers.
+
+Managed deployment owners can inspect registered entrypoints without reading
+Chrome profiles or Store requests:
+
+```bash
+openclaw browser extension repair --dry-run --json
+```
+
+The report includes `retainedNativeHostPaths` and `retentionSafe`. Keep referenced
+package releases until their registrations move. If inspection is incomplete
+(`retentionSafe: false`), leave releases in place and report the warning; this
+must not turn a browser repair failure into a Gateway update failure.
+
+To refresh only registrations belonging to one retired package, run the command
+from its replacement installation with the exact old entrypoint:
+
+```bash
+openclaw browser extension repair --from /path/to/old/package/dist/extensions/browser/native-host-entry.js --json
+```
+
+Repair keeps unrelated installations, missing registrations, the stable extension
+copy, browser profiles, Store requests, and pairing credentials unchanged. It
+retains the launcher's saved state and configuration selection even when the
+repair command runs with different environment settings. It
+uses the same ownership and origin checks as explicit installation. It does not
+restart Chrome or prove a relay connection. Replacement launchers are immutable;
+the native manifest switches only after its launcher is complete, so a failed
+manifest write leaves the prior registration available for retry. General Doctor still skips personal
+browser profile discovery; use `extension install` for first-time setup.
 
 Remove only OpenClaw's macOS Chrome Store installation request:
 

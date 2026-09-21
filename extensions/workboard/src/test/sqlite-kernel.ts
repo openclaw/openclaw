@@ -25,7 +25,7 @@ export function createKernelStores(dbPath: string): ReturnType<typeof createWork
     close: async () => kernel.close(),
     cards: {
       ...asyncKeyedStore(kernel.cards),
-      entries: async (boardId) => kernel.cards.entries(boardId),
+      entries: async (scope) => kernel.cards.entries(scope),
       registerIfAbsent: async (...args) => kernel.cards.registerIfAbsent(...args),
       registerIfUpdatedAt: async (...args) => kernel.cards.registerIfUpdatedAt(...args),
       claimIfOwnerAvailable: async (...args) => kernel.cards.claimIfOwnerAvailable(...args),

@@ -18,15 +18,15 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
   ["plugins.sessionAction", ["sessionKey"]],
   ["progressCard.get", ["sessionKey"]],
   ["progressCard.put", ["sessionKey"]],
+  ["progressCard.refresh", ["sessionKey"]],
   ["send", ["sessionKey"]],
   ["session.discussion.open", ["sessionKey"]],
   ["sessions.abort", ["key"]],
   ["sessions.assignOwner", ["key"]],
+  ["sessions.setInvolvement", ["key"]],
   ["sessions.companion.ask", ["sessionKey"]],
   ["sessions.companion.reset", ["sessionKey"]],
   ["sessions.companion.state", ["sessionKey"]],
-  ["sessions.compaction.branch", ["key"]],
-  ["sessions.compaction.restore", ["key"]],
   ["sessions.compact", ["key"]],
   ["sessions.create", ["key", "parentSessionKey"]],
   ["sessions.delete", ["key"]],
@@ -77,14 +77,13 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "mcp.app.updateModelContext",
   "progressCard.get",
   "progressCard.put",
+  "progressCard.refresh",
   "session.discussion.open",
   "sessions.abort",
   "sessions.assignOwner",
   "sessions.branches.switch",
   "sessions.compact",
   "sessions.companion.reset",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
   "sessions.delete",
   "sessions.dispatch",
   "sessions.files.set",
@@ -119,6 +118,8 @@ const APPROVAL_SESSION_TARGET_METHODS = new Set([
 ]);
 
 const READ_ONLY_SESSION_TARGET_METHODS = new Set([
+  // This changes a personal list preference, not the shared session.
+  "sessions.setInvolvement",
   "sessions.companion.ask",
   "sessions.companion.state",
 ]);
@@ -157,5 +158,33 @@ export function isSessionProfileDependentMethod(method: string): boolean {
     REQUIRED_SESSION_TARGET_METHODS.has(method) ||
     APPROVAL_SESSION_TARGET_METHODS.has(method) ||
     method === "sessions.patchMany"
+  );
+}
+
+const AGENT_RUN_START_METHODS = new Set([
+  "progressCard.refresh",
+  "agent",
+  "chat.send",
+  "message.action",
+  "send",
+  "sessions.dispatch",
+  "sessions.send",
+  "sessions.steer",
+  "talk.client.create",
+  "talk.client.toolCall",
+  "talk.session.create",
+  "tools.invoke",
+  "wake",
+]);
+
+/** Run starts require participation even when the operator has admin scope. */
+export function isAgentRunStartMethod(method: string, requestParams: unknown): boolean {
+  return (
+    AGENT_RUN_START_METHODS.has(method) ||
+    (method === "sessions.goal.update" &&
+      typeof requestParams === "object" &&
+      requestParams !== null &&
+      "action" in requestParams &&
+      requestParams.action === "resume")
   );
 }

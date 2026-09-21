@@ -1,4 +1,3 @@
-// Slack plugin module implements allow list behavior.
 import {
   compileAllowlist,
   resolveCompiledAllowlistMatch,

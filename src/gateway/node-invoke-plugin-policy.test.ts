@@ -83,11 +83,23 @@ describe("applyPluginNodeInvokePolicy", () => {
 
   it("uses a matching plugin policy when one is registered", async () => {
     setDangerousDemoCommandRegistry([
-      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => {
+        expect(ctx.node?.caps).toEqual(["demo.allowed"]);
+        return ctx.invokeNode();
+      }),
     ]);
-    const { context, invoke } = createContext();
+    const nodeSession = createNodeSession();
+    nodeSession.declaredCaps = ["demo.allowed", "demo.unapproved"];
+    nodeSession.caps = ["demo.allowed"];
+    const { context, invoke } = createContext({ nodeSession });
 
-    const result = await invokeDemoPolicy(context);
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client: null,
+      nodeSession,
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+    });
 
     expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
     expect(invoke).toHaveBeenCalledWith({
@@ -198,7 +210,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     const approval = await expectSinglePendingApproval(manager);
     expect(approval.request.sessionKey).toBe("agent:main:paired");
     expect(invoke).not.toHaveBeenCalled();
-    expect(manager.resolve(approval.id, "allow-once")).toBe(true);
+    expect(await manager.resolve(approval.id, "allow-once")).toBe(true);
 
     await expect(resultPromise).resolves.toMatchObject({ ok: true });
     expect(stream.onDispatchReady.mock.calls).toEqual([
@@ -207,8 +219,8 @@ describe("applyPluginNodeInvokePolicy", () => {
     ]);
     expect(stream.onProgress.mock.calls).toEqual([["approved-duplex-progress"]]);
     expect(invoke).toHaveBeenCalledTimes(2);
-    expect(manager.listPendingRecords()).toHaveLength(0);
-    expect(manager.getSnapshot(approval.id)?.consumedDecision).toBe("allow-once");
+    expect(await manager.listPendingRecords()).toHaveLength(0);
+    expect((await manager.getSnapshot(approval.id))?.consumedDecision).toBe("allow-once");
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedConnId: "conn-1",
@@ -249,7 +261,7 @@ describe("applyPluginNodeInvokePolicy", () => {
 
     const approval = await expectSinglePendingApproval(manager);
     expect(approval.request.sessionKey).toBeNull();
-    expect(manager.resolve(approval.id, "deny")).toBe(true);
+    expect(await manager.resolve(approval.id, "deny")).toBe(true);
     await expect(resultPromise).resolves.toMatchObject({ ok: true });
   });
 
@@ -732,8 +744,8 @@ describe("applyPluginNodeInvokePolicy", () => {
 
     const record = await expectSinglePendingApproval(manager);
     expect(record.request.allowedDecisions).toEqual(["allow-once", "deny"]);
-    expect(manager.resolve(record.id, "allow-always")).toBe(false);
-    expect(manager.listPendingRecords()).toHaveLength(1);
+    expect(await manager.resolve(record.id, "allow-always")).toBe(false);
+    expect(await manager.listPendingRecords()).toHaveLength(1);
 
     await expectApprovalResolution(resultPromise, manager, record);
   });
@@ -875,7 +887,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     const record = await expectSinglePendingApproval(manager);
     const replacementExpired = vi.fn(async () => {});
     context.pluginApprovalIosPushDelivery = { handleExpired: replacementExpired };
-    manager.expire(record.id, "timeout");
+    await manager.expire(record.id, "timeout");
 
     await expect(resultPromise).resolves.toStrictEqual({
       ok: true,
@@ -954,7 +966,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
       approvalKind: "plugin",
     });
-    vi.spyOn(manager, "consumeAllowOnce").mockReturnValue(false);
+    vi.spyOn(manager, "consumeAllowOnce").mockResolvedValue(false);
     setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
     const { context } = createContext({
       pluginApprovalManager: manager,
@@ -965,7 +977,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     const resultPromise = invokeDemoPolicy(context, createOperatorClient());
 
     const record = await expectSinglePendingApproval(manager);
-    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    expect(await manager.resolve(record.id, "allow-once")).toBe(true);
 
     await expect(resultPromise).resolves.toStrictEqual({
       ok: true,
@@ -995,8 +1007,8 @@ describe("applyPluginNodeInvokePolicy", () => {
     await expect(invokeDemoPolicy(context, createOperatorClient())).rejects.toThrow(
       "approval cannot be persisted without a valid reviewer presentation",
     );
-    expect(manager.listPendingRecords()).toEqual([]);
-    expect(listPendingOperatorApprovals({ databaseOptions })).toEqual([]);
+    expect(await manager.listPendingRecords()).toEqual([]);
+    expect(await listPendingOperatorApprovals({ databaseOptions })).toEqual([]);
     expect(context.broadcast).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();

@@ -1,4 +1,3 @@
-// Slack plugin module implements auth behavior.
 import {
   type ChannelIngressEventInput,
   type ChannelIngressContextBinding,

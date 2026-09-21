@@ -50,12 +50,15 @@ import {
   extractTranscriptIndexEntry,
   hasTranscriptMessage,
   transcriptEventContextEligibility,
-} from "./session-transcript-projection-rebuild.js";
+} from "./session-transcript-projection-append.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 type TranscriptAppendOptions = {
+  /** Exact event bytes, including canonical media, prepared by the message append owner. */
+  eventJson?: string;
   allowStoredAlias?: boolean;
   idempotencyKeyMode?: "dedupe" | "preserve-owner" | "relocate-owner";
   onProjectionReconcileNeeded?: () => void;
@@ -170,7 +173,8 @@ function appendTranscriptEvent(
   options: TranscriptAppendOptions,
   cursor: TranscriptAppendCursor = {},
 ): string | false {
-  const persistedEvent = canonicalizeTranscriptEventMedia(event);
+  const persistedEvent =
+    options.eventJson === undefined ? canonicalizeTranscriptEventMedia(event) : event;
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(persistedEvent) ?? Date.now();
   if (cursor.initialized) {
@@ -206,7 +210,7 @@ function appendTranscriptEvent(
   }
   const seq = cursor.nextSeq ?? readNextTranscriptSeq(database, scope.sessionId);
   cursor.insertEvent ??= createTranscriptEventInserter(database, scope.sessionId);
-  const eventJson = JSON.stringify(persistedEvent);
+  const eventJson = options.eventJson ?? JSON.stringify(persistedEvent);
   cursor.insertEvent({ seq, eventJson, createdAt });
   cursor.nextSeq = seq + 1;
   if (options.touchMutation !== false) {
@@ -708,14 +712,6 @@ export function canonicalizeTranscriptEventMedia(event: TranscriptEvent): Transc
   }
   const canonical = canonicalizePersistedUserMessageMedia(message);
   return canonical.changed ? { ...event, message: canonical.message } : event;
-}
-
-export function readMessageIdempotencyKey(message: unknown): string | null {
-  if (!isRecord(message)) {
-    return null;
-  }
-  const value = message.idempotencyKey;
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 export function readEventTimestamp(event: unknown): number | undefined {

@@ -19,7 +19,6 @@ import {
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentRunContext,
-  readAgentRunIndexVersion,
   resolveProjectedAgentRunModel,
   registerAgentRunContext,
   releaseAgentRunContext,
@@ -302,7 +301,6 @@ describe("live agent model projection", () => {
     });
     const owner = getAgentRunContext(runId)!;
     const generation = getAgentEventLifecycleGeneration();
-    const version = readAgentRunIndexVersion();
     emitAgentEventForRunContext(
       {
         runId,
@@ -314,7 +312,10 @@ describe("live agent model projection", () => {
     expect(getAgentRunContext(runId)).toMatchObject({
       activeModel: { provider: "primary", model: "first" },
     });
-    expect(readAgentRunIndexVersion()).toBeGreaterThan(version);
+    expect(resolveProjectedAgentRunModel({ agentId: "main", sessionId: "model-session" })).toEqual({
+      provider: "primary",
+      model: "first",
+    });
     emitAgentEventForRunContext(
       {
         runId,

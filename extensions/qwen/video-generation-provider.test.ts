@@ -238,12 +238,7 @@ describe("qwen video generation provider", () => {
     }
   });
 
-  it("submits async Wan generation, polls task status, and downloads the resulting video", async ({
-    onTestFinished,
-  }) => {
-    // This request-shape fixture expects the full budget before any elapsed time.
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    onTestFinished(() => now.mockRestore());
+  it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
     let nowMs = Date.now();
     // Force preparation to cross a clock tick instead of relying on wall-clock timing.

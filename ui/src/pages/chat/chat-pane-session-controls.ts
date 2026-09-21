@@ -2,6 +2,7 @@ import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import {
@@ -29,6 +30,8 @@ import { renderChatModelControls } from "./components/chat-model-controls.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
 import { getChatModelObservedRunId, getChatRunOwnerSessionKey } from "./history-merge.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
+
+registerModelControlsEnglish();
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;

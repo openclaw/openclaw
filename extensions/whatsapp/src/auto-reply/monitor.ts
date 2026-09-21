@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements monitor behavior.
 import type { WAMessageKey } from "baileys";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";

@@ -9,13 +9,17 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 // A namespace `vi.spyOn(fs, ...)` cannot rebind an
 // already-captured named import, so we mock node:fs and route chmodSync
 // (named + default) through a single controllable failure hook.
-const chmodFailHook = vi.hoisted(() => ({
-  error: undefined as Error | undefined,
-  calls: 0,
-  failProbe: true,
-  removeTargetSuffix: undefined as string | undefined,
-  targets: [] as string[],
-}));
+const chmodFailHook = vi.hoisted(() => {
+  // Runtime setup can preload permission helpers before this file's filesystem mock.
+  vi.resetModules();
+  return {
+    error: undefined as Error | undefined,
+    calls: 0,
+    failProbe: true,
+    removeTargetSuffix: undefined as string | undefined,
+    targets: [] as string[],
+  };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();

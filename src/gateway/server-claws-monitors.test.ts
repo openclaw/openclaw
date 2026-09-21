@@ -3,36 +3,16 @@ import { once } from "node:events";
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  withAgentDeletion,
-  isAgentDeletionBlocked,
-  type AgentDeletionOperation,
-} from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
-import { applyClawAddPlan } from "../claws/add.js";
-import type { ClawRemoveApplyOptions } from "../claws/lifecycle-remove-contract.js";
-import {
-  applyClawRemovePlan,
-  buildClawRemovePlan,
-  readClawStatus,
-} from "../claws/lifecycle-state.js";
-import { buildClawAddPlan } from "../claws/lifecycle.js";
+import { buildClawRemovePlan, readClawStatus } from "../claws/lifecycle-state.js";
 import { resolveClawMonitorCleanupBinding } from "../claws/monitor-cleanup-binding.js";
+import type { ClawMonitorCleanupGateway } from "../claws/monitor-cleanup-contract.js";
 import {
-  clawMonitorInventorySchema,
-  type ClawMonitorCleanupGateway,
-} from "../claws/monitor-cleanup-contract.js";
-import { parseClawManifest } from "../claws/schema.js";
-import { registerConfigWriteListener, resetConfigRuntimeState } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { applyHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
-import { cronJobReadView } from "../cron/job-read-view.js";
-import { normalizeCronJobCreate } from "../cron/normalize.js";
-import { CronService } from "../cron/service.js";
-import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
-import type { CronServiceDeps } from "../cron/service/state.js";
+  getSuspensionVisibleCronTaskRunCount,
+  waitForActiveCronTaskRuns,
+} from "../cron/service/active-run-cancellation.js";
 import * as sessionReaper from "../cron/session-reaper.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
 import {
@@ -52,223 +32,13 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod, isGatewayMethodClassified } from "./method-scopes.js";
-import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
-import { clawsMonitorHandlers } from "./server-methods/claws-monitors.js";
-import type { RespondFn } from "./server-methods/types.js";
+import {
+  useClawMonitorFixture,
+  withMonitorDrainClock,
+} from "./server-claws-monitors.test-support.js";
 
-const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    await cleanup();
-  }
-});
-
-async function fixture(
-  enabled: boolean,
-  runner?: CronServiceDeps["runIsolatedAgentJob"],
-  withCron = false,
-) {
-  const state = await createOpenClawTestState({ label: "claw-monitor-removal" });
-  cleanups.push(state.cleanup);
-  await fs.writeFile(state.path("SOUL.md"), "synthetic managed file\n");
-  const parsed = parseClawManifest({
-    schemaVersion: 1,
-    agent: { id: "worker", name: "Worker" },
-    workspace: { bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } } },
-    cronJobs: withCron
-      ? [
-          {
-            id: "daily",
-            schedule: { cron: "0 9 * * *", timezone: "UTC" },
-            session: "isolated",
-            message: "synthetic daily task",
-          },
-        ]
-      : [],
-  });
-  if (!parsed.ok) {
-    throw new Error("Invalid synthetic Claw fixture.");
-  }
-  const workspaceDir = state.path("claw-workspace");
-  const addPlan = await buildClawAddPlan({
-    manifest: parsed.manifest,
-    source: {
-      kind: "package",
-      name: "synthetic-worker",
-      version: "1.0.0",
-      packageRoot: state.root,
-      manifestPath: state.path("openclaw.claw.json"),
-      integrityKind: "artifact",
-      integrity: "sha256:synthetic",
-      byteLength: 100,
-    },
-    context: { workspace: workspaceDir },
-  });
-  expect(addPlan.blockers).toEqual([]);
-  let config: OpenClawConfig = {
-    agents: { defaults: { heartbeat: { every: enabled ? "30m" : "0m" } } },
-    skills: { workshop: { autonomous: { mode: enabled ? "auto" : "off" } } },
-  };
-  const storePath = state.statePath("cron", "jobs.json");
-  const cronDeps: CronServiceDeps = {
-    storePath,
-    cronEnabled: false,
-    log: logger,
-    defaultAgentId: "worker",
-    resolveSessionStorePath: (agentId = "worker") =>
-      state.statePath("agents", agentId, "sessions", "sessions.json"),
-    resolveDefaultAgentId: () => listAgentEntries(config)[0]?.id ?? "main",
-    isAgentAvailable: (agentId) =>
-      !isAgentDeletionBlocked(agentId) &&
-      listAgentEntries(config).some((agent) => agent.id === agentId),
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: runner ?? vi.fn(async () => ({ status: "ok" as const })),
-  };
-  const cron = new CronService(cronDeps);
-  cleanups.push(async () => {
-    cron.stop();
-  });
-  await applyClawAddPlan(addPlan, {
-    consentPlanIntegrity: addPlan.planIntegrity,
-    commitConfig: async (transform) => {
-      config = transform(config);
-      await state.writeConfig(config);
-      resetConfigRuntimeState();
-    },
-    cronGateway: {
-      add: async (input) => {
-        const normalized = normalizeCronJobCreate(input);
-        if (!normalized) {
-          throw new Error("Invalid synthetic cron input");
-        }
-        return { id: (await cron.add(normalized)).id };
-      },
-    },
-  });
-  let reconcilePending = false;
-  const reconcile = async () => {
-    expect((await applyHeartbeatMonitorJobs({ cron, cfg: config })).ok).toBe(true);
-    expect(
-      (await reconcileSkillCollectionReviewJobs({ cron, cfg: config, logger })).ok,
-      JSON.stringify(logger.warn.mock.calls.slice(-3)),
-    ).toBe(true);
-    reconcilePending = false;
-  };
-  await reconcile();
-  const unsubscribe = registerConfigWriteListener((event) => {
-    if (event.configPath === state.configPath) {
-      config = event.runtimeConfig;
-      reconcilePending = true;
-    }
-  });
-  cleanups.push(async () => unsubscribe());
-  let reloadSettled = true;
-  const context = {
-    cron,
-    cronStorePath: storePath,
-    getRuntimeConfig: () => config,
-    isConfigReloadSettled: () => reloadSettled,
-  };
-  const invoke = async (params: Record<string, unknown>) => {
-    let response: unknown;
-    let failure: string | undefined;
-    const respond: RespondFn = (ok, payload, error) => {
-      if (ok) {
-        response = payload;
-      } else {
-        failure = error?.message ?? "Gateway refusal";
-      }
-    };
-    await clawsMonitorHandlers["claws.monitors"]({
-      params: { binding: resolveClawMonitorCleanupBinding(storePath), ...params },
-      context,
-      respond,
-    });
-    if (failure) {
-      throw new Error(failure);
-    }
-    return response;
-  };
-  const gateway: ClawMonitorCleanupGateway = {
-    inspect: async (agentId) =>
-      clawMonitorInventorySchema.parse(await invoke({ phase: "inspect", agentId })).monitors,
-    quiesce: async (agentId, operationId, monitors) => {
-      await invoke({ phase: "quiesce", agentId, operationId, monitors });
-    },
-    drain: async (agentId, operationId) => {
-      if (reconcilePending) {
-        await reconcile();
-      }
-      await invoke({ phase: "drain", agentId, operationId });
-    },
-  };
-  const writeConfig = async (nextConfig: OpenClawConfig) => {
-    config = nextConfig;
-    await state.writeConfig(config);
-    resetConfigRuntimeState();
-    await reconcile();
-  };
-  const plan = () => buildClawRemovePlan("worker", { config, monitorGateway: gateway });
-  const apply = async (
-    removal: Awaited<ReturnType<typeof plan>>,
-    overrides: Partial<ClawRemoveApplyOptions> = {},
-  ) =>
-    applyClawRemovePlan(removal, {
-      config,
-      monitorGateway: gateway,
-      cronGateway: {
-        get: async (id) => {
-          const job = await cron.readJob(id);
-          return job ? cronJobReadView(job) : null;
-        },
-        remove: async (id) => await cron.remove(id),
-      },
-      trashPath: async (pathname) => {
-        await fs.rm(pathname, { recursive: true, force: true });
-        return true;
-      },
-      consentPlanIntegrity: removal.planIntegrity,
-      ...overrides,
-    });
-  return {
-    state,
-    workspaceDir,
-    cron,
-    gateway,
-    plan,
-    apply,
-    invoke,
-    writeConfig,
-    reconcile,
-    replaceCron: () => {
-      const replacement = new CronService(cronDeps);
-      context.cron = replacement;
-      cleanups.push(async () => {
-        replacement.stop();
-      });
-    },
-    getConfig: () => config,
-    withDeletion: <T>(run: (deletion: AgentDeletionOperation) => Promise<T>) =>
-      withAgentDeletion("worker", async (begin) =>
-        run(
-          begin({
-            agentId: "worker",
-            agentDir: state.agentDir("worker"),
-            workspaceDir,
-            sessionsDir: state.sessionsDir("worker"),
-            deleteFiles: false,
-          }),
-        ),
-      ),
-    setReloadSettled: (value: boolean) => {
-      reloadSettled = value;
-    },
-  };
-}
+const fixture = useClawMonitorFixture();
 
 describe("Claw serving monitor cleanup", () => {
   it.each(["quiesce", "drain"])(
@@ -462,7 +232,8 @@ describe("Claw serving monitor cleanup", () => {
         releaseLocalCronRunReceiptOwnership(handle);
         database.db.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run(monitor.id);
         expect(getSuspensionVisibleCronTaskRunCount({ agentId: "worker" })).toBe(0);
-        const result = await current.apply(await current.plan());
+        const plan = await current.plan();
+        const result = await withMonitorDrainClock(() => current.apply(plan));
         expect(result).toMatchObject({ status: "partial", agentRemoved: false });
         await expect(
           fs.access(path.join(current.workspaceDir, "SOUL.md")),
@@ -505,9 +276,9 @@ describe("Claw serving monitor cleanup", () => {
         ),
       ).toEqual([]);
       expect(listAgentEntries(current.getConfig()).map((agent) => agent.id)).toContain("worker");
-      await expect(current.gateway.drain("worker", deletion.entry.operationId)).rejects.toThrow(
-        "config convergence is incomplete",
-      );
+      await expect(
+        withMonitorDrainClock(() => current.gateway.drain("worker", deletion.entry.operationId)),
+      ).rejects.toThrow("config convergence is incomplete");
       await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
     });
     expect(await current.apply(await current.plan())).toMatchObject({ status: "complete" });
@@ -555,7 +326,8 @@ describe("Claw serving monitor cleanup", () => {
         expect(getSuspensionVisibleCronTaskRunCount({ agentId: "worker" })).toBe(0),
       );
       expect(await current.cron.readJob(monitor.id)).toBeUndefined();
-      const result = await current.apply(await current.plan());
+      const plan = await current.plan();
+      const result = await withMonitorDrainClock(() => current.apply(plan));
       expect(result).toMatchObject({ status: "partial", agentRemoved: false });
       await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
       releaseCleanup.resolve();
@@ -595,27 +367,29 @@ describe("Claw serving monitor cleanup", () => {
           : undefined;
       let result: Awaited<ReturnType<typeof current.apply>>;
       try {
-        result = await current.apply(plan, {
-          monitorGateway: {
-            ...current.gateway,
-            ...(failure === "lost-cancellation-response"
-              ? {
-                  quiesce: async (...args: Parameters<ClawMonitorCleanupGateway["quiesce"]>) => {
-                    await current.gateway.quiesce(...args);
-                    throw new Error("synthetic lost cancellation response");
-                  },
-                }
-              : {}),
-            ...(failure === "reload"
-              ? {
-                  drain: async (...args: Parameters<ClawMonitorCleanupGateway["drain"]>) => {
-                    current.setReloadSettled(false);
-                    await current.gateway.drain(...args);
-                  },
-                }
-              : {}),
-          },
-        });
+        const apply = () =>
+          current.apply(plan, {
+            monitorGateway: {
+              ...current.gateway,
+              ...(failure === "lost-cancellation-response"
+                ? {
+                    quiesce: async (...args: Parameters<ClawMonitorCleanupGateway["quiesce"]>) => {
+                      await current.gateway.quiesce(...args);
+                      throw new Error("synthetic lost cancellation response");
+                    },
+                  }
+                : {}),
+              ...(failure === "reload"
+                ? {
+                    drain: async (...args: Parameters<ClawMonitorCleanupGateway["drain"]>) => {
+                      current.setReloadSettled(false);
+                      await current.gateway.drain(...args);
+                    },
+                  }
+                : {}),
+            },
+          });
+        result = failure === "reload" ? await withMonitorDrainClock(apply) : await apply();
       } finally {
         writeFailure?.mockRestore();
         if (failure === "cron-persistence") {
@@ -788,10 +562,9 @@ describe("Claw serving monitor cleanup", () => {
     const signal = await started.promise;
     try {
       const plan = await current.plan();
-      const removal = current.apply(plan);
-      await vi.waitFor(() => expect(signal.aborted).toBe(true));
+      const result = await withMonitorDrainClock(() => current.apply(plan));
+      expect(signal.aborted).toBe(true);
       await run;
-      const result = await removal;
       expect(result).toMatchObject({
         status: "partial",
         agentRemoved: false,
@@ -804,12 +577,12 @@ describe("Claw serving monitor cleanup", () => {
       closeOpenClawStateDatabaseForTest();
       expect(readAgentDeletionJournal("worker")).toBeDefined();
       release.resolve();
-      await vi.waitFor(() => expect(signal.aborted).toBe(true));
       const retry = await current.plan();
       expect(await current.apply(retry)).toMatchObject({ status: "complete" });
     } finally {
       release.resolve();
       await run;
+      expect(await waitForActiveCronTaskRuns(1_000)).toEqual({ drained: true, active: 0 });
     }
   });
 });

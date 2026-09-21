@@ -13,7 +13,10 @@ import {
 } from "../infra/agent-run-registry.js";
 import { loadExecApprovalsReadOnly } from "../infra/exec-approvals-store.js";
 import { registerMcpToolApprovalBinding } from "../infra/mcp-tool-approval-binding.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -65,6 +68,7 @@ afterEach(async () => {
   }
   auxiliaries.length = 0;
   resetAgentRunRegistryForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
   await fixture?.cleanup();
@@ -141,7 +145,7 @@ async function requestGrant(
   ]!(args);
   await vi.waitFor(() => expect(args.respond).toHaveBeenCalled());
   releaseBinding?.();
-  const record = aux.pluginApprovalManager.listPendingRecords()[0];
+  const record = (await aux.pluginApprovalManager.listPendingRecords())[0];
   if (!record) {
     await pending;
     throw new Error("MCP approval request did not register");
@@ -152,7 +156,7 @@ async function requestGrant(
 describe("gateway MCP tool grants", () => {
   it("mints once for the authenticated agent and projects the grant after gateway restart", async () => {
     const { aux, pending, record } = await requestGrant({ agentId: "other" });
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
     await pending;
     const expected = {
       server: "project.docs",
@@ -161,8 +165,9 @@ describe("gateway MCP tool grants", () => {
       addedAt: expect.any(Number),
     };
     expect(loadExecApprovalsReadOnly().agents).toEqual({ main: { mcpTools: [expected] } });
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
     await aux.stopOperatorInteractions();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const restarted = gateway();
     expect(restarted.pluginApprovalManager.runtimeEpoch).not.toBe(
@@ -220,7 +225,7 @@ describe("gateway MCP tool grants", () => {
     if (options.closed) {
       releaseAgentRunDelegatedAuthority(authority);
     }
-    aux.pluginApprovalManager.resolve(record.id, options.decision ?? "allow-always");
+    await aux.pluginApprovalManager.resolve(record.id, options.decision ?? "allow-always");
     await pending;
     expect(loadExecApprovalsReadOnly().agents).toEqual({});
   });
@@ -229,19 +234,21 @@ describe("gateway MCP tool grants", () => {
     let active = true;
     const { aux, pending, record } = await requestGrant({ isActive: () => active });
     active = false;
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(true);
     await pending;
     expect(loadExecApprovalsReadOnly().agents).toEqual({});
-    expect(aux.pluginApprovalManager.getSnapshot(record.id)?.mcpToolApprovalActive).toBeUndefined();
+    expect(
+      (await aux.pluginApprovalManager.getSnapshot(record.id))?.mcpToolApprovalActive,
+    ).toBeUndefined();
   });
 
   it("rejects an unadvertised allow-always without minting", async () => {
     const { aux, pending, record } = await requestGrant({
       allowedDecisions: ["allow-once", "deny"],
     });
-    expect(aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
+    expect(await aux.pluginApprovalManager.resolve(record.id, "allow-always")).toBe(false);
     expect(loadExecApprovalsReadOnly().agents).toEqual({});
-    aux.pluginApprovalManager.resolve(record.id, "deny");
+    await aux.pluginApprovalManager.resolve(record.id, "deny");
     await pending;
   });
 });

@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 
 it.each([false, true])(
   "models.list learns native models after cold Gateway startup (provider credentials: %s)",
@@ -659,7 +660,9 @@ it.each([false, true])(
   120_000,
 );
 
-it("models.list full refresh discovers an enabled provider without configured credentials", async () => {
+it("models.list full refresh discovers an enabled provider without configured credentials", async ({
+  signal,
+}) => {
   const state = await createOpenClawTestState({
     label: "credential-free-catalog",
     layout: "state-only",
@@ -748,7 +751,12 @@ it("models.list full refresh discovers an enabled provider without configured cr
         client.request<ModelsListResult>("models.list", { agentId: "main", view: "all", refresh });
       expect((await list()).models.some((row) => row.id === "public-model")).toBe(false);
       expect(requests).toBe(0);
-      const refreshed = await list(true);
+      const refreshed = await waitForCatalogPublication({
+        signal,
+        start: () => list(true),
+        read: list,
+        ready: (result) => !result.pendingProviders?.includes(provider),
+      });
       console.log("FULL_CATALOG_WITHOUT_CREDENTIALS", JSON.stringify({ requests, refreshed }));
       expect(refreshed.models).toContainEqual(
         expect.objectContaining({ provider, id: "public-model" }),

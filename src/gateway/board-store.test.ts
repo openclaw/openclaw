@@ -6,10 +6,14 @@ import { buildWidgetDocument } from "../canvas/wrap.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { boardStore } from "./board-store.js";
 import { progressCardStore } from "./progress-card-store.js";
 import { createBoardHarness } from "./server-methods/board.test-support.js";
@@ -17,8 +21,10 @@ import { createProgressCardHandlers } from "./server-methods/progress-card.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
@@ -76,7 +82,9 @@ it("keeps global boards and progress under each owner's canonical row across reo
       expect.objectContaining({ session_key: "global" }),
     ]);
   }
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 
   for (const agentId of ["main", "work"]) {
@@ -164,7 +172,9 @@ it("keeps retained global progress separate from an ordinary qualified global ro
       undefined,
     );
   }
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 
   for (const target of targets) {
@@ -236,7 +246,9 @@ it("reopens separate boards and progress cards in a shared database owned by ano
     });
     await progressCardStore.put(sessionKey, { markdown: `${agentId} progress` });
   }
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 
   for (const agentId of ["alpha", "beta"]) {

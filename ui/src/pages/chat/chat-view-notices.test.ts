@@ -9,6 +9,27 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+it.each([true, false])("refreshes a failed conversation only while connected=%s", (connected) => {
+  const onRefresh = vi.fn();
+  const container = document.body.appendChild(document.createElement("div"));
+  render(
+    renderChatComposerNotices({
+      connected,
+      messages: [],
+      runError: { summary: "The conversation changed before your message could run." },
+      onRefresh,
+    }),
+    container,
+  );
+  const refresh = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(".chat-error button"),
+  ).find((button) => button.textContent?.trim() === "Refresh");
+  expect(refresh).toBeDefined();
+  expect(refresh?.disabled).toBe(!connected);
+  refresh?.click();
+  expect(onRefresh).toHaveBeenCalledTimes(connected ? 1 : 0);
+});
+
 it.each([
   ["buffering", "status", "OpenAI is reviewing this response for cyber safety."],
   ["blocked", "alert", "OpenAI blocked this response under its cyber policy."],

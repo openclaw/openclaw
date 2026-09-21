@@ -266,6 +266,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           const binding = readBinding();
           const selection = codexBindingConnectionSelection(binding);
           const assertCurrent = () => {
+            options.context.assertInvocationCurrent?.();
             const current = currentSession();
             if (
               runtimeConfig() !== base.config ||
@@ -430,10 +431,14 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             await requestOptions(admissionConfig),
           );
           if (archivedBinding?.threadId === threadId) {
-            await options.bindingStore.mutate(identity, {
-              kind: "clear",
-              threadId,
-            });
+            await options.bindingStore.mutate(
+              identity,
+              {
+                kind: "clear",
+                threadId,
+              },
+              options.context.assertInvocationCurrent,
+            );
           }
           return jsonResult({ action, threadId });
         }
@@ -454,6 +459,13 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         if (attach && usesSupervisionConnection) {
           throw new Error("Supervised Codex forks must stay detached; set attach=false.");
         }
+        const forkOptions = await requestOptions(admissionConfig);
+        const {
+          retainCodexAppServerBindingSubscription,
+          rollbackCodexAppServerBindingSubscription,
+        } = await import("./app-server/thread-ownership.js");
+        const { closeCodexStartupClientBestEffort } =
+          await import("./app-server/attempt-client-cleanup.js");
         if (attach) {
           assertCodexBindingMayBeReplaced(binding, "attaching a different native fork");
           // Codex can snapshot an active source as interrupted. Attached forks require a known-safe
@@ -462,7 +474,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             admissionConfig,
             CODEX_CONTROL_METHODS.readThread,
             { threadId, includeTurns: false },
-            await requestOptions(admissionConfig),
+            forkOptions,
           );
           assertThreadMayBeForked(current, threadId);
         }
@@ -470,37 +482,76 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           admissionConfig,
           CODEX_CONTROL_METHODS.forkThread,
           { threadId, threadSource: "user", excludeTurns: true },
-          await requestOptions(admissionConfig),
-        );
-        if (!isJsonObject(response) || !isJsonObject(response.thread)) {
-          throw new Error("Codex app-server returned an invalid thread/fork response");
-        }
-        const forkThreadId =
-          typeof response.thread.id === "string" && response.thread.id.trim()
-            ? response.thread.id
-            : undefined;
-        if (!forkThreadId) {
-          throw new Error("Codex app-server thread/fork response did not include a thread id");
-        }
-        if (attach && session) {
-          const attached = await options.bindingStore.mutate(currentIdentity(session.sessionId), {
-            kind: "set",
-            binding: {
-              threadId: forkThreadId,
-              cwd:
-                typeof response.thread.cwd === "string"
-                  ? response.thread.cwd
-                  : (options.context.workspaceDir ?? ""),
-              model: typeof response.model === "string" ? response.model : undefined,
-              modelProvider:
-                typeof response.modelProvider === "string" ? response.modelProvider : undefined,
-              historyCoveredThrough: new Date().toISOString(),
+          {
+            ...forkOptions,
+            onResponse: async (value, client, { assertCurrent }) => {
+              if (!isJsonObject(value) || !isJsonObject(value.thread)) {
+                await closeCodexStartupClientBestEffort(client);
+                throw new Error("Codex app-server returned an invalid thread/fork response");
+              }
+              const forkThread = value.thread;
+              const forkThreadId =
+                typeof forkThread.id === "string" && forkThread.id.trim()
+                  ? forkThread.id
+                  : undefined;
+              if (!forkThreadId) {
+                await closeCodexStartupClientBestEffort(client);
+                throw new Error(
+                  "Codex app-server thread/fork response did not include a thread id",
+                );
+              }
+              let retained = false;
+              let attached = false;
+              try {
+                assertCurrent();
+                if (attach && session) {
+                  const identity = currentIdentity(session.sessionId);
+                  await options.bindingStore.withLease(identity, async () => {
+                    assertCurrent();
+                    if (currentSession()?.entry?.sessionId !== session.sessionId) {
+                      throw new Error("Codex native thread ownership changed; retry the request.");
+                    }
+                    assertCodexBindingMayBeReplaced(
+                      currentBinding(session),
+                      "attaching a different native fork",
+                    );
+                    retained = await retainCodexAppServerBindingSubscription(client, forkThreadId);
+                    if (!retained) {
+                      throw new Error("Codex fork lost its native subscription owner.");
+                    }
+                    const nextBinding = {
+                      threadId: forkThreadId,
+                      clientId: client.getInstanceId(),
+                      cwd:
+                        typeof forkThread.cwd === "string"
+                          ? forkThread.cwd
+                          : (options.context.workspaceDir ?? ""),
+                      model: typeof value.model === "string" ? value.model : undefined,
+                      modelProvider:
+                        typeof value.modelProvider === "string" ? value.modelProvider : undefined,
+                      historyCoveredThrough: new Date().toISOString(),
+                    };
+                    // The calling turn keeps its claim; only the next-turn binding moves to this fork.
+                    attached = await options.bindingStore.mutate(
+                      identity,
+                      { kind: "set", binding: nextBinding },
+                      assertCurrent,
+                    );
+                    if (!attached) {
+                      throw new Error(
+                        "Codex session binding changed before the fork could be attached",
+                      );
+                    }
+                  });
+                }
+              } finally {
+                if (!attached) {
+                  await rollbackCodexAppServerBindingSubscription(client, forkThreadId, retained);
+                }
+              }
             },
-          });
-          if (!attached) {
-            throw new Error("Codex session binding changed before the fork could be attached");
-          }
-        }
+          },
+        );
         const result = {
           action,
           sourceThreadId: threadId,

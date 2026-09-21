@@ -20,8 +20,13 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
+import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
+import {
+  assertOpenClawStateSchemaRepairAllowed,
+  isExistingOpenClawStateSchema,
+} from "./openclaw-state-db-schema-policy.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery-recovery.js";
 import {
@@ -83,6 +88,10 @@ export function runExistingOpenClawStateWriteTransaction<T>(
   const env = options.env ?? process.env;
   const busyTimeoutMs = contract.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
   const pathname = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(env));
+  const existingSchema = isExistingOpenClawStateSchema(pathname);
+  if (contract.recoverTaskDeliveryOrphans) {
+    assertOpenClawStateSchemaRepairAllowed(pathname);
+  }
   const original = fs.lstatSync(pathname);
   if (!original.isFile()) {
     throw new Error("Existing-state write requires a regular database file.");
@@ -116,6 +125,9 @@ export function runExistingOpenClawStateWriteTransaction<T>(
               () => {
                 assertSameFile();
                 assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+                if (existingSchema) {
+                  assertExistingOpenClawStateRuntimeSchema(db, pathname);
+                }
                 const validate = () =>
                   assertExistingOpenClawStateSchema(
                     db,

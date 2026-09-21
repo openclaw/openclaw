@@ -147,9 +147,14 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             ),
           ).toHaveLength(1);
           const compilers = controlled.read();
+          console.log("Controlled compiler receipts", JSON.stringify(compilers));
           expect(redirectedCompilers).toBe(1);
           expect(compilers).toHaveLength(2);
-          expect(new Set(compilers.map(({ pid }) => pid)).size).toBe(2);
+          // Windows can recycle a PID after exit; process start distinguishes its next owner.
+          expect(
+            new Set(compilers.map(({ pid, processStartTime }) => `${pid}:${processStartTime}`))
+              .size,
+          ).toBe(2);
           expect(new Set(compilers.map(({ directory }) => path.resolve(directory)))).toEqual(
             new Set(
               [...generations].map((generation) =>
@@ -158,9 +163,13 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             ),
           );
           for (const compiler of compilers) {
-            expect(compiler).toMatchObject({ inputs: 2, outputs: 2 });
+            expect(compiler).toMatchObject({
+              inputs: 2,
+              outputs: 2,
+              processStartTime: expect.any(Number),
+              isMainThread: true,
+            });
           }
-          console.log("Controlled compiler receipts", JSON.stringify(compilers));
         } finally {
           try {
             await owner.dispose();

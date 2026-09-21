@@ -24,6 +24,7 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createBoardHandlers } from "./server-methods/board.js";
 import { createProgressCardHandlers } from "./server-methods/progress-card.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
@@ -32,6 +33,8 @@ import { createLifecycleEventBroadcastHandler } from "./server-session-events.js
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 import {
   canReceiveSessionEvent as canReceiveSessionEventForClient,
   invalidateSessionSharingSnapshot,
@@ -280,11 +283,13 @@ describe("board and progress event session ownership", () => {
           });
         }
         invalidateSessionSharingSnapshot();
-        const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
-          clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
-          canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-            canReceiveSessionEventForClient({ cfg, client, sessionKeys, agentId, event, payload }),
-        });
+        const projection = await createSessionRowProjection({ cfg });
+        const connection = createGatewayConnectionState({ bootId: "board-owner-events", cfg });
+        connection.attachSessionRowProjection(projection);
+        for (const { client } of peers) {
+          connection.clients.add(client);
+        }
+        const { broadcast, broadcastToConnIds } = connection;
         const handlers = { ...createProgressCardHandlers(), ...createBoardHandlers(boardStore) };
         const context = {
           broadcast,
@@ -294,6 +299,7 @@ describe("board and progress event session ownership", () => {
           chatAbortControllers: new Map(),
           resolveGatewayContext: (): GatewayRequestContext => context,
         } as unknown as GatewayRequestContext;
+        bindSessionRowProjection(context, connection.getSessionRowProjection);
         const invoke = async (method: string, params: Record<string, unknown>) => {
           const respond = vi.fn<RespondFn>();
           await handlers[method]!({
@@ -304,7 +310,7 @@ describe("board and progress event session ownership", () => {
             respond,
             context,
           });
-          flushPendingSessionsChangedEvents(context);
+          await flushPendingSessionsChangedEvents(context);
           expect(respond.mock.calls[0]?.[0]).toBe(true);
           return peers.map(({ socket }) => {
             const frames = socket.send.mock.calls.map(([frame]) => JSON.parse(String(frame)));
@@ -312,112 +318,120 @@ describe("board and progress event session ownership", () => {
             return frames.map(({ event, payload }) => ({ event, payload }));
           });
         };
-        if (feature === "progress") {
-          const rawWrite = await invoke("progressCard.put", {
-            sessionKey: "global",
-            agentId: "work",
-            plan: [{ step: "Done", status: "completed" }],
+        try {
+          if (feature === "progress") {
+            const rawWrite = await invoke("progressCard.put", {
+              sessionKey: "global",
+              agentId: "work",
+              plan: [{ step: "Done", status: "completed" }],
+            });
+            const rawClear = await invoke("progressCard.put", {
+              sessionKey: "global",
+              agentId: "work",
+              expectedRevision: 1,
+            });
+            const ordinaryWrite = await invoke("progressCard.put", {
+              sessionKey: "agent:work:global",
+              markdown: "Ordinary session",
+            });
+            expect(await progressCardStore.get("global", "work")).toBeNull();
+            expect((await progressCardStore.get("agent:work:global", "work"))?.markdown).toBe(
+              "Ordinary session",
+            );
+            const changed = (revision: number | null) => ({
+              event: "progressCard.changed",
+              payload: { sessionKey: "agent:work:global", revision },
+            });
+            expect({ rawWrite, rawClear, ordinaryWrite }).toEqual({
+              rawWrite: [[changed(1)], [], []],
+              rawClear: [[changed(null)], [], []],
+              ordinaryWrite: [[], [changed(1)], []],
+            });
+            return;
+          }
+
+          const target = { sessionKey: "global", agentId: "work" };
+          const rawUpdate = await invoke("board.update", {
+            ...target,
+            ops: [{ kind: "tab_create", tabId: "notes", title: "Notes" }],
           });
-          const rawClear = await invoke("progressCard.put", {
-            sessionKey: "global",
-            agentId: "work",
-            expectedRevision: 1,
+          const rawPut = await invoke("board.widget.put", {
+            ...target,
+            name: "status",
+            content: { kind: "html", html: "<p>Working</p>" },
+            declared: { tools: ["status.refresh"] },
           });
-          const ordinaryWrite = await invoke("progressCard.put", {
+          const widget = (await boardStore.getSnapshot(target)).widgets[0]!;
+          const rawGrant = await invoke("board.widget.grant", {
+            ...target,
+            name: "status",
+            decision: "granted",
+            revision: widget.revision,
+            instanceId: widget.instanceId,
+          });
+          const emptyUpdate = await invoke("board.update", { ...target, ops: [] });
+          const ordinaryUpdate = await invoke("board.update", {
             sessionKey: "agent:work:global",
-            markdown: "Ordinary session",
+            ops: [{ kind: "tab_create", tabId: "ordinary", title: "Ordinary" }],
           });
-          expect(await progressCardStore.get("global", "work")).toBeNull();
-          expect((await progressCardStore.get("agent:work:global", "work"))?.markdown).toBe(
-            "Ordinary session",
-          );
-          const changed = (revision: number | null) => ({
-            event: "progressCard.changed",
-            payload: { sessionKey: "agent:work:global", revision },
+          const otherAgentUpdate = await invoke("board.update", {
+            sessionKey: "global",
+            agentId: "main",
+            ops: [{ kind: "tab_create", tabId: "main-notes", title: "Main notes" }],
           });
-          expect({ rawWrite, rawClear, ordinaryWrite }).toEqual({
-            rawWrite: [[changed(1)], [], []],
-            rawClear: [[changed(null)], [], []],
-            ordinaryWrite: [[], [changed(1)], []],
+          expect(await boardStore.getSnapshot(target)).toMatchObject({
+            sessionKey: "global",
+            revision: 3,
+            widgets: [{ name: "status", grantState: "granted" }],
           });
-          return;
+          const changed = (agentId: string, revision: number, widgetName?: string) => ({
+            event: "board.changed",
+            payload: {
+              sessionKey: `agent:${agentId}:global`,
+              revision,
+              ...(widgetName ? { widget: widgetName } : {}),
+            },
+          });
+          const sessionChanged = (sessionKey: string, agentId: string, label: string) => ({
+            event: "sessions.changed",
+            payload: expect.objectContaining({
+              sessionKey,
+              agentId,
+              sessionId: label,
+              label,
+              reason: "board",
+              session: expect.objectContaining({ key: sessionKey, agentId, sessionId: label }),
+            }),
+          });
+          const rawSession = sessionChanged("global", "work", "raw-owner");
+          expect({
+            rawUpdate,
+            rawPut,
+            rawGrant,
+            emptyUpdate,
+            ordinaryUpdate,
+            otherAgentUpdate,
+          }).toEqual({
+            rawUpdate: [[changed("work", 1), rawSession], [], []],
+            rawPut: [[changed("work", 2, "status"), rawSession], [], []],
+            rawGrant: [[changed("work", 3)], [], []],
+            emptyUpdate: [[], [], []],
+            ordinaryUpdate: [
+              [],
+              [changed("work", 1), sessionChanged("agent:work:global", "work", "ordinary-owner")],
+              [],
+            ],
+            otherAgentUpdate: [
+              [],
+              [],
+              [changed("main", 1), sessionChanged("global", "main", "other-agent-owner")],
+            ],
+          });
+        } finally {
+          await flushPendingSessionsChangedEvents(context);
+          projection.dispose();
+          connection.mentionInbox.dispose();
         }
-        const target = { sessionKey: "global", agentId: "work" };
-        const rawUpdate = await invoke("board.update", {
-          ...target,
-          ops: [{ kind: "tab_create", tabId: "notes", title: "Notes" }],
-        });
-        const rawPut = await invoke("board.widget.put", {
-          ...target,
-          name: "status",
-          content: { kind: "html", html: "<p>Working</p>" },
-          declared: { tools: ["status.refresh"] },
-        });
-        const widget = (await boardStore.getSnapshot(target)).widgets[0]!;
-        const rawGrant = await invoke("board.widget.grant", {
-          ...target,
-          name: "status",
-          decision: "granted",
-          revision: widget.revision,
-          instanceId: widget.instanceId,
-        });
-        const emptyUpdate = await invoke("board.update", { ...target, ops: [] });
-        const ordinaryUpdate = await invoke("board.update", {
-          sessionKey: "agent:work:global",
-          ops: [{ kind: "tab_create", tabId: "ordinary", title: "Ordinary" }],
-        });
-        const otherAgentUpdate = await invoke("board.update", {
-          sessionKey: "global",
-          agentId: "main",
-          ops: [{ kind: "tab_create", tabId: "main-notes", title: "Main notes" }],
-        });
-        expect(await boardStore.getSnapshot(target)).toMatchObject({
-          sessionKey: "global",
-          revision: 3,
-          widgets: [{ name: "status", grantState: "granted" }],
-        });
-        const changed = (agentId: string, revision: number, widgetName?: string) => ({
-          event: "board.changed",
-          payload: {
-            sessionKey: `agent:${agentId}:global`,
-            revision,
-            ...(widgetName ? { widget: widgetName } : {}),
-          },
-        });
-        const sessionChanged = (sessionKey: string, agentId: string, label: string) => ({
-          event: "sessions.changed",
-          payload: expect.objectContaining({
-            sessionKey,
-            agentId,
-            sessionId: label,
-            label,
-            reason: "board",
-          }),
-        });
-        const rawSession = sessionChanged("global", "work", "raw-owner");
-        expect({
-          rawUpdate,
-          rawPut,
-          rawGrant,
-          emptyUpdate,
-          ordinaryUpdate,
-          otherAgentUpdate,
-        }).toEqual({
-          rawUpdate: [[rawSession, changed("work", 1)], [], []],
-          rawPut: [[rawSession, changed("work", 2, "status")], [], []],
-          rawGrant: [[changed("work", 3)], [], []],
-          emptyUpdate: [[], [], []],
-          ordinaryUpdate: [
-            [],
-            [sessionChanged("agent:work:global", "work", "ordinary-owner"), changed("work", 1)],
-            [],
-          ],
-          otherAgentUpdate: [
-            [],
-            [],
-            [sessionChanged("global", "main", "other-agent-owner"), changed("main", 1)],
-          ],
-        });
       });
     },
   );
@@ -623,7 +637,8 @@ describe("collaboration event scope guards", () => {
         });
         const payload = { sessionKey, state: "delta" };
         broadcast("chat", payload);
-        const frame = { type: "event", event: "chat", payload, seq: 1 };
+        const recipientProfileId = identity.authenticatedUserProfile!.profileId;
+        const frame = { type: "event", event: "chat", payload, seq: 1, recipientProfileId };
         const frames = (peer: (typeof peers)[number]) =>
           peer.socket.send.mock.calls.map(([wire]) => JSON.parse(String(wire)));
         expect(frames(subscribed)).toEqual([frame]);
@@ -643,7 +658,13 @@ describe("collaboration event scope guards", () => {
           const received = peer === subscribed || peer === unscoped;
           expect(frames(peer)).toEqual([
             ...(received ? [frame] : []),
-            { type: "event", event: "tick", payload: {}, seq: received ? 2 : 1 },
+            {
+              type: "event",
+              event: "tick",
+              payload: {},
+              seq: received ? 2 : 1,
+              recipientProfileId,
+            },
           ]);
         }
         expect(filter).toHaveBeenCalledTimes(2);
@@ -935,34 +956,37 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
         event: "sessions.changed",
       }),
     ).toBe(false);
-    const { broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
-      canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-        canReceiveSessionEventForClient({ cfg, client, sessionKeys, agentId, event, payload }),
+    const rowProjection = await createSessionRowProjection({ cfg });
+    const connection = createGatewayConnectionState({ bootId: "collector-events", cfg });
+    connection.attachSessionRowProjection(rowProjection);
+    peers.forEach(({ client }) => connection.clients.add(client));
+    const { broadcastToConnIds } = connection;
+    const publications: Promise<void>[] = [];
+    const publish = createLifecycleEventBroadcastHandler({
+      getSessionRowProjection: () => rowProjection,
+      broadcastToConnIds,
+      sessionEventSubscribers: {
+        getAll: () => new Set(peers.map(({ client }) => client.connId)),
+      },
+      chatAbortControllers: new Map([
+        [
+          "parent-run",
+          {
+            controller: new AbortController(),
+            sessionId: "parent-viewer",
+            sessionKey: parent.sessionKey,
+            agentId: parent.agentId,
+            startedAtMs: 1,
+            expiresAtMs: Date.now() + 60_000,
+            projectSessionActive: true,
+            executionStarted: true,
+          },
+        ],
+      ]),
     });
-    const unsubscribe = onSessionLifecycleEvent(
-      createLifecycleEventBroadcastHandler({
-        broadcastToConnIds,
-        sessionEventSubscribers: {
-          getAll: () => new Set(peers.map(({ client }) => client.connId)),
-        },
-        chatAbortControllers: new Map([
-          [
-            "parent-run",
-            {
-              controller: new AbortController(),
-              sessionId: "parent-viewer",
-              sessionKey: parent.sessionKey,
-              agentId: parent.agentId,
-              startedAtMs: 1,
-              expiresAtMs: Date.now() + 60_000,
-              projectSessionActive: true,
-              executionStarted: true,
-            },
-          ],
-        ]),
-      }),
-    );
+    const unsubscribe = onSessionLifecycleEvent((event) => {
+      publications.push(publish(event));
+    });
     const run: SubagentRunRecord = {
       runId: "collector",
       childSessionKey: child.sessionKey,
@@ -992,6 +1016,7 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
       persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
       runs.clear();
       persistSubagentRunsToDiskOrThrow(runs, [run.runId]);
+      await Promise.all(publications);
       expect(peers[0]!.socket.events).toEqual(Array(4).fill("sessions.changed"));
       expect(peers[1]!.socket.events).toEqual([]);
       for (const [raw] of peers[0]!.socket.send.mock.calls) {
@@ -1010,6 +1035,9 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
       }
     } finally {
       unsubscribe();
+      await Promise.allSettled(publications);
+      rowProjection.dispose();
+      connection.mentionInbox.dispose();
       clearSubagentRunsReadCacheForTest();
       invalidateSessionSharingSnapshot();
     }

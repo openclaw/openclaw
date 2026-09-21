@@ -1,6 +1,13 @@
+import { realpathSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../src/infra/kysely-sync.js";
+import { requireNodeSqlite } from "../../src/infra/node-sqlite.js";
+import {
+  captureStateDatabaseCoordinatorRuntime,
+  resolveStateDatabaseCoordinatorPath,
+} from "../../src/infra/state-database-coordinator.js";
+import { resolveOpenClawStateSqlitePath } from "../../src/state/openclaw-state-db.paths.js";
 
 /**
  * Count SQLite query executions per caller-defined bucket. Prepared-statement
@@ -92,6 +99,82 @@ export function trackSqliteStatementExecutions<Key extends string>(
     restore: () => {
       clearNodeSqliteKyselyCacheForDatabase(db);
       prepareSpy.mockRestore();
+    },
+  };
+}
+
+/** Observe host data SQL while allowing only the captured state's lifecycle control database. */
+export function observeHostDataSql(env?: NodeJS.ProcessEnv): {
+  calls: Mock[];
+  restore: () => void;
+} {
+  // Validate the real runtime once before measurement. The owner's capability
+  // probes are setup, not an exemption for arbitrary in-memory database SQL.
+  const native = requireNodeSqlite();
+  const coordinatorPath = resolveStateDatabaseCoordinatorPath({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    runtimeDirectory: captureStateDatabaseCoordinatorRuntime().directory,
+    uid: process.getuid?.(),
+  });
+  const isControl = (database: DatabaseSync | undefined) => {
+    const location = database?.location();
+    if (!location) {
+      return false;
+    }
+    try {
+      return realpathSync(location) === realpathSync(coordinatorPath);
+    } catch {
+      // Missing or unknown locations must never hide data SQL.
+      return false;
+    }
+  };
+  const databases = new WeakMap<StatementSync, DatabaseSync>();
+  const prepare = vi.fn();
+  const exec = vi.fn();
+  // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted database receiver.
+  const originalPrepare = native.DatabaseSync.prototype.prepare;
+  // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted database receiver.
+  const originalExec = native.DatabaseSync.prototype.exec;
+  const spies = [
+    vi
+      .spyOn(native.DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: DatabaseSync, sql) {
+        if (!isControl(this)) {
+          prepare(sql);
+        }
+        const statement = originalPrepare.call(this, sql);
+        databases.set(statement, this);
+        return statement;
+      }),
+    vi
+      .spyOn(native.DatabaseSync.prototype, "exec")
+      .mockImplementation(function (this: DatabaseSync, sql) {
+        if (!isControl(this)) {
+          exec(sql);
+        }
+        return originalExec.call(this, sql);
+      }),
+  ];
+  const statements = (["get", "all", "run", "iterate"] as const).map((method) => {
+    const called = vi.fn();
+    const original = native.StatementSync.prototype[method];
+    const spy = vi.spyOn(native.StatementSync.prototype, method).mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver: StatementSync, args) {
+          if (!isControl(databases.get(receiver))) {
+            called(...args);
+          }
+          return Reflect.apply(target, receiver, args);
+        },
+      }),
+    );
+    return { called, spy };
+  });
+  return {
+    calls: [prepare, exec, ...statements.map(({ called }) => called)],
+    restore: () => {
+      spies.forEach((spy) => spy.mockRestore());
+      statements.forEach(({ spy }) => spy.mockRestore());
     },
   };
 }

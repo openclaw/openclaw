@@ -760,7 +760,14 @@ describe("node worker transfer client", () => {
           transfer: { direction: "download", token: "download-token", manifestRef: baseRef },
         }),
       ).resolves.toBe(baseRef);
-      await fs.writeFile(workspaceFile, "captured\n");
+      await fs.writeFile(
+        workspaceFile,
+        Buffer.concat([
+          Buffer.alloc(512 * 1024, "a"),
+          Buffer.alloc(512 * 1024, "b"),
+          Buffer.from("captured tail\n"),
+        ]),
+      );
       const currentRef = (
         await readActualWorkspaceManifest({ root: workspaceDir, baseCommit: null })
       ).manifestRef;

@@ -232,10 +232,13 @@ async function resolveConnectAuthDecisionCore(
     };
   }
 
-  // Proxy attribution is an ingress failure, not another credential candidate.
-  // Device and bootstrap fallbacks must not turn an untrusted forwarded chain
-  // into an authenticated request.
-  if (authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+  // Invalid ingress or a redacted configured credential cannot be repaired by
+  // trying another device/bootstrap credential during this handshake.
+  if (
+    authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON ||
+    authResult.reason === "token_redacted_config" ||
+    authResult.reason === "password_redacted_config"
+  ) {
     return await finish();
   }
 

@@ -4,7 +4,6 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
-import { rejectConfigNonFiniteNumbers, visitConfigValueTree } from "../config/io.read-helpers.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -12,6 +11,7 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
+import { rejectConfigNonFiniteNumbers, visitConfigValueTree } from "../config/value-tree.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import {
   formatExecSecretRefIdValidationMessage,

@@ -78,6 +78,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
     let creating = false;
     let preparing = false;
     let captured = false;
+    let captureError: string | undefined;
     const attemptCapture = async () => {
       try {
         await collectImages(context, "teardown");
@@ -324,6 +325,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
           await retireImage(context, key, replacement);
         }
       } catch (error) {
+        captureError = coerceErrorMessage(error);
         const notSubmitted =
           creating && CrabboxCheckpointCreateError.wasNotSubmitted(error, context);
         let recoveryRequired = creating;
@@ -350,9 +352,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
         }
         warnOnce(
           "capture",
-          recoveryRequired
-            ? `${coerceErrorMessage(error)}. ${crabboxWarmImageRecoveryHint(captureId)}`
-            : error,
+          recoveryRequired ? `${captureError}. ${crabboxWarmImageRecoveryHint(captureId)}` : error,
         );
       }
     };
@@ -363,7 +363,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
     // never introduce node credentials into that source until capture has settled.
     if (operation?.type === "capture" && operation.leaseId === context.id) {
       throw new Error(
-        `Crabbox project image capture is unresolved. ${crabboxWarmImageRecoveryHint(operation.id)}`,
+        `${captureError ? `${captureError}. ` : ""}Crabbox project image capture is unresolved. ${crabboxWarmImageRecoveryHint(operation.id)}`,
       );
     }
     assertCurrent(context);

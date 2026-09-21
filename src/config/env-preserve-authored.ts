@@ -1,0 +1,174 @@
+import { isDeepStrictEqual } from "node:util";
+import { isPlainObject } from "../infra/plain-object.js";
+import { containsEnvVarReference } from "./env-substitution.js";
+
+const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
+
+type AuthoredEnvRef = { kind: "escaped" | "unescaped"; name: string };
+
+function collectAuthoredEnvRefs(value: string): AuthoredEnvRef[] {
+  const refs: AuthoredEnvRef[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== "$") {
+      continue;
+    }
+    const isEscaped = value[index + 1] === "$" && value[index + 2] === "{";
+    const nameStart = index + (isEscaped ? 3 : 2);
+    if (!isEscaped && value[index + 1] !== "{") {
+      continue;
+    }
+    const nameEnd = value.indexOf("}", nameStart);
+    if (nameEnd === -1 || !ENV_VAR_NAME_PATTERN.test(value.slice(nameStart, nameEnd))) {
+      continue;
+    }
+    refs.push({
+      kind: isEscaped ? "escaped" : "unescaped",
+      name: value.slice(nameStart, nameEnd),
+    });
+    index = nameEnd;
+  }
+  return refs;
+}
+
+function hasEscapedEnvVarRef(value: string): boolean {
+  return collectAuthoredEnvRefs(value).some((ref) => ref.kind === "escaped");
+}
+
+export function containsAuthoredUnescapedEnvTemplate(value: unknown): boolean {
+  if (typeof value === "string") {
+    return containsEnvVarReference(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => containsAuthoredUnescapedEnvTemplate(item));
+  }
+  if (isPlainObject(value)) {
+    return Object.values(value).some((item) => containsAuthoredUnescapedEnvTemplate(item));
+  }
+  return false;
+}
+
+export function containsAuthoredEscapedEnvTemplate(value: unknown): boolean {
+  if (typeof value === "string") {
+    return hasEscapedEnvVarRef(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => containsAuthoredEscapedEnvTemplate(item));
+  }
+  if (isPlainObject(value)) {
+    return Object.values(value).some((item) => containsAuthoredEscapedEnvTemplate(item));
+  }
+  return false;
+}
+
+function countAuthoredEnvRefsByPath(
+  value: unknown,
+  kind: AuthoredEnvRef["kind"],
+): Map<string, Map<string, number>> {
+  const countsByName = new Map<string, Map<string, number>>();
+  const visit = (item: unknown, path: string[]) => {
+    if (typeof item === "string") {
+      for (const ref of collectAuthoredEnvRefs(item)) {
+        if (ref.kind === kind) {
+          const pathCounts = countsByName.get(ref.name) ?? new Map<string, number>();
+          const pathKey = JSON.stringify(path);
+          pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
+          countsByName.set(ref.name, pathCounts);
+        }
+      }
+      return;
+    }
+    if (Array.isArray(item)) {
+      item.forEach((child, index) => visit(child, [...path, String(index)]));
+      return;
+    }
+    if (isPlainObject(item)) {
+      Object.entries(item).forEach(([key, child]) => visit(child, [...path, key]));
+    }
+  };
+  visit(value, []);
+  return countsByName;
+}
+
+function countResolvedActiveEnvRefsByPath(
+  incoming: unknown,
+  parsed: unknown,
+  resolved: unknown,
+): Map<string, Map<string, number>> {
+  const countsByName = new Map<string, Map<string, number>>();
+  const visit = (
+    incomingItem: unknown,
+    parsedItem: unknown,
+    resolvedItem: unknown,
+    path: string[],
+  ) => {
+    if (typeof incomingItem === "string" && typeof parsedItem === "string") {
+      if (!isDeepStrictEqual(incomingItem, resolvedItem)) {
+        return;
+      }
+      for (const ref of collectAuthoredEnvRefs(parsedItem)) {
+        if (ref.kind === "unescaped") {
+          const pathCounts = countsByName.get(ref.name) ?? new Map<string, number>();
+          const pathKey = JSON.stringify(path);
+          pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
+          countsByName.set(ref.name, pathCounts);
+        }
+      }
+      return;
+    }
+    if (Array.isArray(incomingItem) && Array.isArray(parsedItem) && Array.isArray(resolvedItem)) {
+      parsedItem.forEach((child, index) =>
+        visit(incomingItem[index], child, resolvedItem[index], [...path, String(index)]),
+      );
+      return;
+    }
+    if (isPlainObject(incomingItem) && isPlainObject(parsedItem) && isPlainObject(resolvedItem)) {
+      Object.entries(parsedItem).forEach(([key, child]) =>
+        visit(incomingItem[key], child, resolvedItem[key], [...path, key]),
+      );
+    }
+  };
+  visit(incoming, parsed, resolved, []);
+  return countsByName;
+}
+
+export function containsUnaccountedActiveEscapedEnvRef(
+  incoming: unknown,
+  escapedParsed: unknown,
+  matchedIncoming: unknown,
+  matchedParsed: unknown,
+  matchedResolved: unknown,
+): boolean {
+  const escapedCounts = countAuthoredEnvRefsByPath(escapedParsed, "escaped");
+  const incomingActiveCounts = countAuthoredEnvRefsByPath(incoming, "unescaped");
+  const incomingEscapedCounts = countAuthoredEnvRefsByPath(incoming, "escaped");
+  const matchedActiveCounts = countResolvedActiveEnvRefsByPath(
+    matchedIncoming,
+    matchedParsed,
+    matchedResolved,
+  );
+  const matchedEscapedCounts = countAuthoredEnvRefsByPath(matchedParsed, "escaped");
+  return [...escapedCounts].some(
+    ([name, escapedPathCounts]) =>
+      [...(incomingActiveCounts.get(name) ?? new Map())].some(
+        ([path, count]) => count > (matchedActiveCounts.get(name)?.get(path) ?? 0),
+      ) ||
+      [...escapedPathCounts.keys()].some((path) => {
+        const incomingActiveCount = incomingActiveCounts.get(name)?.get(path) ?? 0;
+        return (
+          incomingActiveCount > 0 &&
+          (incomingEscapedCounts.get(name)?.get(path) ?? 0) <
+            (matchedEscapedCounts.get(name)?.get(path) ?? 0)
+        );
+      }),
+  );
+}
+
+export function preservesAuthoredEscapedEnvRefs(incoming: unknown, parsed: unknown): boolean {
+  const parsedEscapedCounts = countAuthoredEnvRefsByPath(parsed, "escaped");
+  const incomingEscapedCounts = countAuthoredEnvRefsByPath(incoming, "escaped");
+  return [...parsedEscapedCounts].every(([name, parsedPathCounts]) =>
+    [...parsedPathCounts].every(
+      ([path, count]) => (incomingEscapedCounts.get(name)?.get(path) ?? 0) >= count,
+    ),
+  );
+}

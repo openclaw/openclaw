@@ -77,6 +77,9 @@ OpenClaw sends Teams polls as Adaptive Cards (there is no native Teams poll API)
 - The gateway must stay online to record votes.
 - Polls do not auto-post result summaries, and there is no poll-results CLI.
 
+Revoking a scheduled job's message permission stops a poll that has not yet been submitted.
+A poll already submitted to Teams retains its accepted ID and normal vote tracking while the run finishes.
+
 ## Presentation cards
 
 Send semantic presentation payloads to Teams users or conversations using the `message` tool, CLI, or normal reply delivery. OpenClaw renders them as Teams Adaptive Cards from the generic presentation contract.

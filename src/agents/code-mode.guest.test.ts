@@ -147,7 +147,33 @@ describe("Code Mode guest execution", () => {
     expect(testing.resumingRunIds.size).toBe(0);
   });
 
-  it("does not invoke arbitrary toJSON methods while serializing final values", async () => {
+  it.each([
+    { kind: "own", setup: "", value: "result", expected: { invoked: false } },
+    {
+      kind: "object prototype",
+      setup: "Object.prototype.toJSON = result.value.toJSON;",
+      value: "({ kept: true })",
+      expected: { kept: true },
+    },
+    {
+      kind: "array prototype",
+      setup: "Array.prototype.toJSON = result.value.toJSON;",
+      value: "[1, 2]",
+      expected: [1, 2],
+    },
+    {
+      kind: "bigint prototype",
+      setup: "BigInt.prototype.toJSON = result.value.toJSON;",
+      value: "12n",
+      expected: "12",
+    },
+    {
+      kind: "date prototype",
+      setup: "Date.prototype.toJSON = result.value.toJSON;",
+      value: "new Date(0)",
+      expected: {},
+    },
+  ])("does not invoke $kind toJSON while serializing final values", async (scenario) => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const noop = pluginTool("fake_noop", "Noop");
     applyCodeModeCatalog({
@@ -171,13 +197,14 @@ describe("Code Mode guest execution", () => {
             return "changed";
           },
         };
-        return result;
+        ${scenario.setup}
+        return ${scenario.value};
       `,
     });
 
     expect(details).toMatchObject({
       status: "completed",
-      value: { invoked: false },
+      value: scenario.expected,
       telemetry: { searchCount: 0, describeCount: 0, callCount: 0 },
     });
     expect(noop.execute).not.toHaveBeenCalled();
@@ -337,9 +364,9 @@ describe("Code Mode guest execution", () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const privateNames = [
       "__openclawResult",
-      "__openclawSerializeCatalogHandles",
+      "__openclawRunCell",
       "__openclawSettleBridge",
-      "__openclawTakeOutput",
+      "__openclawTakeOutputJson",
       "__openclawFuturePrivateHook",
     ];
     const targets = privateNames.map((name) => pluginTool(name, `Exercise ${name}`));
@@ -711,33 +738,41 @@ describe("Code Mode guest execution", () => {
     expect(testing.activeRuns.size).toBe(beforeRunCount);
   });
 
-  it("surfaces the QuickJS error name and message for guest syntax errors", async () => {
+  it("rejects malformed commands before dispatch and accepts a corrected follow-up", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
+    const command = pluginTool("fake_command", "Run a synthetic command");
+    applyCodeModeCatalog({ tools: [...codeModeTools, command], config, catalogRef });
+    const execTool = expectDefined(codeModeTools[0], "Code Mode exec");
+    const malformed = [
+      'await fake_command({ value: "first" });',
+      'return await fake_command({ value: "jq .["2"]" });',
+    ].join("\n");
+    const details = resultDetails(await execTool.execute("code-call-syntax", { code: malformed }));
+
+    expect(details).toMatchObject({
+      status: "failed",
+      code: "invalid_input",
+      failurePhase: "input",
+      bridgeDispatchStarted: false,
+      replaySafe: false,
+      telemetry: { callCount: 0 },
     });
+    expect(String(details.error)).toMatch(/SyntaxError.*openclaw-code-mode:user\.js:2:\d+/);
+    expect(command.execute).not.toHaveBeenCalled();
+    expect(testing.activeRuns.size).toBe(0);
 
-    const details = resultDetails(
-      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-        "code-call-syntax",
-        { code: "const valid = 1;\nconst x = ;" },
-      ),
-    );
-
-    expect(details.status).toBe("failed");
-    const error = String(details.error);
-    // Regression guard: QuickJS stacks are frames only, so the error used to
-    // collapse to a bare "at openclaw-code-mode:user.js:..." location with the
-    // actual cause dropped. The model now sees the name and message.
-    expect(error).toContain("SyntaxError");
-    expect(error).toContain("unexpected token");
-    expect(error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
-    expect(error.startsWith("at ")).toBe(false);
+    const corrected = await runUntilCompleted({
+      execTool,
+      waitTool: expectDefined(codeModeTools[1], "Code Mode wait"),
+      code: "return await fake_command({ value: " + JSON.stringify('jq .["2"]') + " });",
+    });
+    expect(corrected).toMatchObject({
+      status: "completed",
+      replaySafe: false,
+      value: { name: "fake_command", input: { value: 'jq .["2"]' } },
+    });
+    expect(command.execute).toHaveBeenCalledTimes(1);
+    expect(testing.activeRuns.size).toBe(0);
   });
 
   it.each([
@@ -747,6 +782,11 @@ describe("Code Mode guest execution", () => {
       cause: "missingFn is not defined",
     },
     { name: "TypeError", code: "const value = 1;\nvalue();", cause: "not a function" },
+    {
+      name: "SyntaxError",
+      code: 'const valid = 1;\nthrow new SyntaxError("runtime failure");',
+      cause: "runtime failure",
+    },
   ])("surfaces the QuickJS $name at the submitted source line", async ({ name, code, cause }) => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -767,6 +807,7 @@ describe("Code Mode guest execution", () => {
 
     expect(details.status).toBe("failed");
     const error = String(details.error);
+    expect(details).toMatchObject({ code: "internal_error", failurePhase: "guest" });
     expect(error).toContain(name);
     expect(error).toContain(cause);
     expect(error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);

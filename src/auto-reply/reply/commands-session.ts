@@ -28,7 +28,7 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
+import { scheduleGatewayRestart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import {
@@ -523,11 +523,11 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
 export const handleRestartCommand: CommandHandler = defineGatewayControlCommand(
   "/restart",
   async (params) => {
-    const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
+    const hasRestartListener = process.listenerCount("SIGUSR2") > 0;
     const sentinelPayload = buildRestartCommandSentinel(params);
-    if (hasSigusr1Listener) {
+    if (hasRestartListener) {
       let sentinelWritten = false;
-      scheduleGatewaySigusr1Restart({
+      scheduleGatewayRestart({
         reason: "/restart",
         // The routed restart acknowledgement and scheduler must own the same
         // pending session key to avoid cross-session overwrite (#86742).
@@ -547,7 +547,7 @@ export const handleRestartCommand: CommandHandler = defineGatewayControlCommand(
           : undefined,
       });
       return sessionCommandReply(
-        "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
+        "⚙️ Restarting OpenClaw in-process (SIGUSR2); back in a few seconds.",
       );
     }
     let sentinelWritten = false;

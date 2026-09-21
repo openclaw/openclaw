@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionCatalogHost } from "../../packages/gateway-protocol/src/index.js";
 import { createConfigIO } from "../config/io.factory.js";
@@ -22,6 +21,7 @@ import { createPluginRecord } from "./status.test-fixtures.js";
 const roots: string[] = [];
 const disposals: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(disposals.splice(0).map((dispose) => dispose()));
   vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
@@ -316,7 +316,11 @@ describe("registered native catalog access", () => {
       });
       guardedPublication = state.instance.wrap(published);
       const owner = new AbortController();
-      const lifetime = new SessionCatalogListLifetime(() => true, [owner.signal]);
+      const lifetime = new SessionCatalogListLifetime(
+        () => true,
+        [owner.signal],
+        [state.provider.id],
+      );
       const blocker: SessionCatalogProvider = {
         id: "blocking",
         label: "Blocking",
@@ -356,8 +360,9 @@ describe("registered native catalog access", () => {
           await expect(pending).resolves.toEqual([]);
           expect(close).toHaveBeenCalledOnce();
         }
+        vi.useFakeTimers();
         const disposal = state.dispose();
-        await delay(5_050);
+        await vi.advanceTimersByTimeAsync(5_050);
         expect(cleanup).not.toHaveBeenCalled();
         expect(state.instance.lifecycle.signal.aborted).toBe(false);
         expect(state.instance.hasRetainedConsumers).toBe(true);

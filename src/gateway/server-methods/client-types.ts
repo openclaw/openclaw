@@ -1,13 +1,18 @@
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
+import type { PluginGatewayAccessAuthority } from "../../plugins/gateway-access-policy.types.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.js";
+import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
-import type { GatewayWsBrowserOrigin } from "../server/ws-types.js";
+import type {
+  GatewayWsBrowserOrigin,
+  PreparedSessionProfile,
+} from "../server/client-identity-types.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /** Trusted in-process spawn control plane that already owns this run's task row.
@@ -49,6 +54,8 @@ export type GatewayClient = {
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
+  /** Prepared at identity admission and profile publication, before session reads or events. */
+  preparedSessionProfile?: PreparedSessionProfile;
   authenticatedUserProfile?: {
     profileId: string;
     displayName: string | null;
@@ -63,12 +70,18 @@ export type GatewayClient = {
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Authenticated Control UI operator ingress; never accepted from wire params. */
+    authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */
     controlUiAdmin?: true;
     /** Marks the server-constructed client used by trusted in-process dispatch. */
     syntheticClient?: true;
     /** Host-owned role authority retained separately from an autonomous run principal. */
     operatorRoleActor?: GatewayOperatorRoleActor;
+    /** Original source restriction carried only by trusted in-process run admission. */
+    operatorRunAuthority?: AdmittedRunOperatorAuthority;
+    /** Closure-bound access captured by the authenticated ingress, never wire data. */
+    operatorAccessAuthority?: PluginGatewayAccessAuthority;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
     senderAttribution?: { id: string; name?: string; identity?: TranscriptSenderIdentity };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */

@@ -4,7 +4,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
 
 /** Normalized process warning fields used by the shared warning suppressor. */
-export type ProcessWarning = {
+type ProcessWarning = {
   code?: string;
   name?: string;
   message?: string;
@@ -15,7 +15,7 @@ type ProcessWarningInstallState = {
 };
 
 /** Returns whether a process warning matches a known noisy runtime/dependency warning. */
-export function shouldIgnoreWarning(warning: ProcessWarning): boolean {
+function shouldIgnoreWarning(warning: ProcessWarning): boolean {
   if (warning.code === "DEP0040" && warning.message?.includes("punycode")) {
     return true;
   }

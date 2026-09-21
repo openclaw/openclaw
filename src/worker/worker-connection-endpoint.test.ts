@@ -85,6 +85,30 @@ describe("worker connection endpoint", () => {
     });
 
     expect(parseWorkerConnectionEndpoint(websocketEndpoint)).toBeUndefined();
+
+    for (const cloudflareAccess of [
+      Object.assign(Object.create({ clientId: "fixture-id" }), { clientSecret: "fixture-secret" }),
+      Object.assign(Object.create({ clientSecret: "fixture-secret" }), { clientId: "fixture-id" }),
+    ]) {
+      expect(
+        parseWorkerConnectionEndpoint({
+          kind: "websocket",
+          url: "wss://gateway.example/__openclaw__/worker",
+          cloudflareAccess,
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("omits explicitly undefined optional credentials", () => {
+    const endpoint = { kind: "websocket", url: "ws://127.0.0.1/__openclaw__/worker" };
+    expect(
+      parseWorkerConnectionEndpoint({
+        ...endpoint,
+        tlsFingerprint: undefined,
+        cloudflareAccess: undefined,
+      }),
+    ).toStrictEqual(endpoint);
   });
 
   it.each([

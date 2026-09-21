@@ -53,8 +53,16 @@ export class ChatTranscriptController implements ReactiveController {
     return render(this.sessionVirtualizer);
   }
 
+  get isMaintenanceScroll(): boolean {
+    return this.sessionVirtualizer?.isMaintenanceScroll ?? false;
+  }
+
   get isProgrammaticScroll(): boolean {
     return this.sessionVirtualizer?.isProgrammaticScroll ?? false;
+  }
+
+  get isManualScroll(): boolean {
+    return this.sessionVirtualizer?.isManualScroll ?? false;
   }
 
   scrollToEnd(options: ChatScrollToEndOptions = {}): boolean {

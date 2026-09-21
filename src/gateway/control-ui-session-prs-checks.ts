@@ -6,11 +6,7 @@ import type {
   ControlUiSessionPullRequestCheckDetails,
   ControlUiSessionPullRequestCheckStep,
 } from "./control-ui-contract.js";
-import {
-  ControlUiGitHubError,
-  fetchGitHubJson,
-  GITHUB_API_ORIGIN,
-} from "./control-ui-github-api.js";
+import { gitHubPublicApi, type ControlUiGitHubError } from "./github-public-api.js";
 
 const FAILING_CHECK_CONCLUSIONS = new Set([
   "failure",
@@ -49,11 +45,11 @@ export function sessionPullRequestRepositoryApiUrl(target: {
   owner: string;
   repo: string;
 }): string {
-  return `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
+  return `${gitHubPublicApi.GITHUB_API_ORIGIN}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
 }
 
 function incomplete(): ControlUiGitHubError {
-  return new ControlUiGitHubError(
+  return new gitHubPublicApi.ControlUiGitHubError(
     502,
     "GitHub CI details were incomplete or changed while loading",
   );
@@ -123,7 +119,7 @@ export async function fetchSessionPullRequestCheckRollup(
   }
   const runs = await fetchSessionPullRequestCheckRuns(
     { ...item, headSha: item.headSha },
-    (url, maxBytes) => fetchGitHubJson(url, fetchImpl, token, maxBytes),
+    (url, maxBytes) => gitHubPublicApi.fetchGitHubJson(url, fetchImpl, token, maxBytes),
   );
   if (runs.length === 0) {
     return undefined;
@@ -347,13 +343,13 @@ export async function fetchSessionPullRequestCheckDetails(
     } catch (failure) {
       error = failure;
       // The API boundary owns cooldown. Do not repeatedly enter it for the rest of the suites.
-      if (failure instanceof ControlUiGitHubError && failure.statusCode === 429) {
+      if (failure instanceof gitHubPublicApi.ControlUiGitHubError && failure.statusCode === 429) {
         break;
       }
     }
   }
   if (suites.length > MAX_ACTIONS_SUITES && !error) {
-    error = new ControlUiGitHubError(
+    error = new gitHubPublicApi.ControlUiGitHubError(
       502,
       "Some Actions steps exceeded the CI detail limit; open the job on GitHub",
     );
@@ -366,7 +362,10 @@ export async function fetchSessionPullRequestCheckDetails(
         .toSorted()
         .join(",");
     if (identity(latest) !== identity(rows)) {
-      throw new ControlUiGitHubError(409, "CI jobs were rerun while loading; reopen CI details");
+      throw new gitHubPublicApi.ControlUiGitHubError(
+        409,
+        "CI jobs were rerun while loading; reopen CI details",
+      );
     }
   }
   return {

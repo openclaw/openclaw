@@ -5,6 +5,7 @@ import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import type { ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -52,6 +53,7 @@ suite.define(() => {
     ];
     const session = {
       key: sessionKey,
+      sessionId: "session-a-context-window",
       kind: "direct",
       label: "Session A",
       model: "claude-fable-5",
@@ -93,8 +95,8 @@ suite.define(() => {
         key: sessionKey,
         contextWindow: "200k",
       });
-      await gateway.setMethodResponse(
-        "sessions.list",
+      // Patch acknowledgements and history must see the same committed context window.
+      await gateway.setSessionsListResponse(
         chatSessionListResponse([{ ...session, contextWindow: "200k" }]),
       );
       await gateway.resolveDeferred("sessions.patch");
@@ -547,7 +549,7 @@ suite.define(() => {
       const selectModel = async (value: string) => {
         await activePane.locator('[data-chat-model-select="true"]').click();
         const option = activePane.locator(`[data-chat-model-option="${value}"]`);
-        await option.waitFor({ state: "visible", timeout: 10_000 });
+        await revealChatModelOption(option, { timeout: 10_000 });
         await option.click();
       };
 
@@ -558,10 +560,9 @@ suite.define(() => {
 
       await selectModel("bedrock/claude-opus-4.5");
       const patchRequest = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(patchRequest.params)).toMatchObject({
+      expect(requireRecord(patchRequest.params)).toEqual({
         key: "agent:main:session-a",
         model: "bedrock/claude-opus-4.5",
-        agentRuntime: null,
       });
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
         "bedrock/claude-opus-4.5",
@@ -678,12 +679,11 @@ suite.define(() => {
         .toBe("true");
 
       await modelSelect.click();
-      await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+      await selectChatModelOption(main.locator('[data-chat-model-option="openai/gpt-5.5"]'));
       const firstPatch = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(firstPatch.params)).toMatchObject({
+      expect(requireRecord(firstPatch.params)).toEqual({
         key: "agent:ops:session-a",
         model: "openai/gpt-5.5",
-        agentRuntime: null,
       });
       expect(await modelSelect.textContent()).toContain("GPT-5.5");
 
@@ -693,7 +693,7 @@ suite.define(() => {
       const defaultModel = main.locator(
         '[data-chat-model-option="anthropic/claude-opus-4-5"][data-chat-model-default="true"]',
       );
-      await defaultModel.waitFor({ state: "visible", timeout: 10_000 });
+      await revealChatModelOption(defaultModel, { timeout: 10_000 });
       expect(await defaultModel.textContent()).toContain("Default");
       expect(await main.locator('[data-chat-model-option=""]').count()).toBe(0);
       await defaultModel.click();
@@ -802,6 +802,7 @@ suite.define(() => {
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe(expectedThinkingValues);
       const defaultThinkingValue = await effortSelect.getAttribute("data-chat-thinking-value");
+      await revealChatModelOption(modelOption);
       await capture("default-sol", modelPopup, modelOption);
 
       await page.keyboard.press("Escape");
@@ -824,6 +825,7 @@ suite.define(() => {
       expect(await effortSelect.getAttribute("data-chat-thinking-value")).toBe(
         defaultThinkingValue,
       );
+      await revealChatModelOption(modelOption);
       await capture("explicit-sol", modelPopup, modelOption);
 
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
@@ -930,6 +932,9 @@ suite.define(() => {
 
       const main = page.getByRole("main");
       await main.locator(setting.trigger).click();
+      if (setting.label === "model override") {
+        await revealChatModelOption(main.locator(setting.option));
+      }
       await main.locator(setting.option).click();
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({

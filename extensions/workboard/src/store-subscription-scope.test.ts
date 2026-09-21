@@ -99,4 +99,49 @@ describe("Workboard scoped subscription listing", () => {
       db.close();
     }
   });
+
+  it("deletes board notification subscriptions with empty board metadata", async () => {
+    const { store, dbPath } = createWorkboardSqliteTestHarness();
+    await store.upsertBoard({ id: "ops", name: "Ops" });
+    await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    await expect(store.deleteBoard("default")).rejects.toThrow("default board cannot be deleted");
+    const card = await store.create({ title: "Still on board", boardId: "ops" });
+    await store.archive(card.id, true);
+    await expect(store.deleteBoard("ops")).rejects.toThrow("board still has cards");
+    await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toMatchObject({
+      subscriptions: [expect.objectContaining({ boardId: "ops" })],
+    });
+    await store.delete(card.id);
+    await store.create({ title: "Other board card", boardId: "product" });
+    const unrelated = await store.subscribeNotifications({
+      boardId: "product",
+      target: "session:unrelated",
+    });
+    const raw = new DatabaseSync(dbPath);
+    try {
+      raw
+        .prepare(
+          "UPDATE workboard_notification_subscriptions SET event_kinds_json = ? WHERE id = ?",
+        )
+        .run("{", unrelated.id);
+      const readUnrelated = raw.prepare(
+        "SELECT * FROM workboard_notification_subscriptions WHERE id = ?",
+      );
+      const unrelatedBefore = readUnrelated.get(unrelated.id);
+      expect(unrelatedBefore).toMatchObject({ id: unrelated.id, event_kinds_json: "{" });
+
+      await expect(store.deleteBoard("ops")).resolves.toEqual({ deleted: true });
+      await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toEqual({
+        subscriptions: [],
+      });
+      expect(readUnrelated.get(unrelated.id)).toEqual(unrelatedBefore);
+    } finally {
+      raw.close();
+    }
+  });
 });

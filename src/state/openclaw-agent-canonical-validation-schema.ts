@@ -4,6 +4,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
 import { extractSqliteTableSchema, normalizeSchemaSql } from "../infra/sqlite-schema-sql.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { classifyOpenClawAgentDatabaseReadError } from "./openclaw-agent-db-read-error.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 const definitionsSql = `SELECT name, sql FROM main.sqlite_schema
@@ -72,8 +73,11 @@ export function assertCanonicalSessionValidationSchema(database: DatabaseSync): 
   const actual = readDefinitions(database);
   for (const name of new Set([...expected.keys(), ...actual.keys()])) {
     if (expected.get(name) !== actual.get(name)) {
-      throw new Error(
-        `Session canonical validation schema is missing or drifted: ${name}; run openclaw doctor --fix with the compatible build.`,
+      throw classifyOpenClawAgentDatabaseReadError(
+        database,
+        new Error(
+          `Session canonical validation schema is missing or drifted: ${name}; run openclaw doctor --fix with the compatible build.`,
+        ),
       );
     }
   }

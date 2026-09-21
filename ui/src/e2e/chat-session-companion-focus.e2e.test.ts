@@ -350,13 +350,15 @@ suite.define(() => {
           expect(await mainInput.inputValue()).toBe("");
         } else if (intent === "command palette") {
           await page.keyboard.press("ControlOrMeta+k");
-          foregroundInput = page.getByRole("combobox", { name: "Search chats and commands…" });
+          foregroundInput = page
+            .locator("openclaw-command-palette")
+            .getByRole("textbox", { name: "Search or start a task…" });
           await foregroundInput.fill("Keep typing here");
         } else if (intent === "sidebar menu" || intent === "sidebar menu before mount") {
           await page
-            .getByRole("button", { name: "Open session menu: Sidebar focus", exact: true })
+            .locator('[data-session-key="agent:main:sidebar-focus"] .sidebar-recent-session__link')
             .focus();
-          await page.keyboard.press("Enter");
+          await page.keyboard.press("Shift+F10");
           await openSessionMenuSubmenu(page, "Icon & color");
           await page.getByRole("button", { name: "Custom icon…", exact: true }).click();
           foregroundInput = page.getByRole("textbox", { name: "Custom icon", exact: true });

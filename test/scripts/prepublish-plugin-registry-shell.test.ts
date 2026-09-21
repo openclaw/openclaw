@@ -82,16 +82,22 @@ function registryFixture(root: string, names: string[], version = VERSION) {
   };
 }
 
-async function withPublishedRegistry(root: string, run: (url: string) => void | Promise<void>) {
+async function withPublishedRegistry(
+  root: string,
+  run: (url: string) => void | Promise<void>,
+  version = BASELINE_VERSION,
+) {
   const portFile = join(root, "upstream-port");
-  const args = ["openclaw", "@openclaw/ai", "@openclaw/discord"].flatMap((name, index) => [
-    name,
-    BASELINE_VERSION,
-    createTarball(root, root, name, `baseline-${index}.tgz`, BASELINE_VERSION, {
-      provenance: "published",
-      ...(name === "openclaw" ? { dependencies: { "@openclaw/ai": BASELINE_VERSION } } : {}),
-    }),
-  ]);
+  const args = ["openclaw", "@openclaw/ai", "@openclaw/discord", "fixture-dev-only"].flatMap(
+    (name, index) => [
+      name,
+      version,
+      createTarball(root, root, name, `baseline-${index}.tgz`, version, {
+        provenance: "published",
+        ...(name === "openclaw" ? { dependencies: { "@openclaw/ai": version } } : {}),
+      }),
+    ],
+  );
   const server = spawn(
     process.execPath,
     [resolve("scripts/e2e/lib/plugins/npm-registry-server.mjs"), portFile, ...args],
@@ -123,6 +129,79 @@ async function withPublishedRegistry(root: string, run: (url: string) => void | 
 }
 
 describe("prepublish plugin registry shell helper", () => {
+  it("repairs the published 2026.7.33 baseline without installing its dev dependencies", async () => {
+    const root = tempDirs.make("openclaw-survivor-2026-7-33-ai-");
+    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+    const start = source.indexOf("repair_2026_7_33_ai_runtime() {");
+    const end = source.indexOf("\n}\n", start);
+    if (start < 0 || end < start) {
+      throw new Error("Missing survivor owner repair_2026_7_33_ai_runtime");
+    }
+    const repair = source.slice(start, end + 3);
+    const packageRoot = join(root, "prefix/lib/node_modules/openclaw");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      `${JSON.stringify({
+        name: "openclaw",
+        version: "2026.7.33",
+        dependencies: { "@openclaw/ai": "2026.7.33" },
+        devDependencies: { "fixture-dev-only": "2026.7.33" },
+      })}\n`,
+    );
+
+    await withPublishedRegistry(
+      root,
+      (registry) => {
+        const result = spawnSync(
+          "bash",
+          [
+            "-c",
+            `
+set -euo pipefail
+${repair}
+baseline_version="2026.7.33"
+package_root() { printf '%s/lib/node_modules/openclaw' "$npm_config_prefix"; }
+openclaw_prepublish_plugin_registry_run_published() { "$@"; }
+openclaw_e2e_maybe_timeout() { shift; "$@"; }
+openclaw_e2e_print_log() { cat "$1"; }
+repair_2026_7_33_ai_runtime
+node - <<'NODE'
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const root = process.env.npm_config_prefix + "/lib/node_modules/openclaw/node_modules";
+assert.equal(require(root + "/@openclaw/ai/package.json").version, "2026.7.33");
+assert.equal(fs.existsSync(root + "/fixture-dev-only"), false);
+NODE
+`,
+          ],
+          {
+            cwd: root,
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              NODE_ENV: "",
+              NPM_CONFIG_REGISTRY: registry,
+              npm_config_registry: registry,
+              NPM_CONFIG_USERCONFIG: "/dev/null",
+              npm_config_userconfig: "/dev/null",
+              BASELINE_INSTALL_LOG: join(root, "baseline.log"),
+              npm_config_prefix: join(root, "prefix"),
+              npm_config_cache: join(root, "cache"),
+              OPENCLAW_E2E_NPM_INSTALL_TIMEOUT: "30s",
+            },
+          },
+        );
+
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toContain(
+          "Repairing published 2026.7.33 baseline's omitted @openclaw/ai runtime.",
+        );
+      },
+      "2026.7.33",
+    );
+  });
+
   it("retries failed upstream metadata while preserving published and candidate versions", async () => {
     const root = tempDirs.make("openclaw-prepublish-registry-retry-");
     const fixture = registryFixture(root, ["@openclaw/ai"]);
@@ -255,11 +334,13 @@ exit 17
         BASELINE_VERSION,
       );
       const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-      const functions = ["install_baseline", "start_gateway"]
+      const functions = ["repair_2026_7_33_ai_runtime", "install_baseline", "start_gateway"]
         .map((name) => {
           const start = source.indexOf(`${name}() {`);
           const end = source.indexOf("\n}\n", start);
-          if (start < 0 || end < start) throw new Error(`Missing survivor owner ${name}`);
+          if (start < 0 || end < start) {
+            throw new Error(`Missing survivor owner ${name}`);
+          }
           return source.slice(start, end + 3);
         })
         .join("\n");

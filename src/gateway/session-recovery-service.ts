@@ -8,7 +8,10 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
-import { inspectMainRestartRecoveryRolloverEligibility } from "../agents/main-session-recovery/main-session-recovery-state.js";
+import {
+  inspectMainRestartRecoveryRolloverEligibility,
+  isMainSessionRecoveryReconciliationCandidate,
+} from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { markOrphanedMainSessionForRecovery } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
 import { recoverSessionEntryFromRestartTombstone } from "../config/sessions/session-accessor.js";
@@ -19,13 +22,13 @@ import {
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { recordSessionCreated } from "../sessions/session-created.js";
 import {
   closeSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { normalizeSessionIdentities } from "../sessions/session-lifecycle-identity.js";
-import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
@@ -72,6 +75,74 @@ function recoveryConflictError(reason: string): ErrorShape {
   );
 }
 
+/** Reconcile dead recovery ownership before a new send can replace its delivery claim. */
+export async function reconcileOrphanedGatewaySessionRecovery(params: {
+  cfg: OpenClawConfig;
+  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  entry: InternalSessionEntry;
+  authorizedPluginId?: string;
+  commitGuard?: () => void;
+  workerPlacementContext: SessionWorkerPlacementContext;
+}): Promise<InternalSessionEntry | undefined> {
+  const { entry: initialSource, target } = params;
+  const identities = [...target.storeKeys, initialSource.sessionId];
+  if (
+    !isMainSessionRecoveryReconciliationCandidate(initialSource) ||
+    isSessionWorkAdmissionActive(target.storePath, identities)
+  ) {
+    return undefined;
+  }
+  const readSource = () =>
+    loadGatewaySessionEntryReadOnly(target.canonicalKey, { agentId: target.agentId }).entry;
+  return await runExclusiveSessionLifecycleMutation({
+    scope: target.storePath,
+    identities,
+    run: async () => {
+      if (isSessionWorkAdmissionActive(target.storePath, identities)) {
+        return undefined;
+      }
+      const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
+        context: params.workerPlacementContext,
+        sessionId: initialSource.sessionId,
+      });
+      const assertCurrent = () => {
+        params.commitGuard?.();
+        assertPlacementCurrent();
+        const current = readSource();
+        const ownershipError = resolvePluginSessionOwnershipError({
+          action: "recover",
+          entry: current,
+          key: target.canonicalKey,
+          pluginOwnerId: params.authorizedPluginId,
+        });
+        if (ownershipError) {
+          throw new Error(ownershipError.message);
+        }
+        if (
+          current?.sessionId !== initialSource.sessionId ||
+          current.status !== initialSource.status ||
+          current.abortedLastRun !== initialSource.abortedLastRun ||
+          current.lifecycleRevision !== initialSource.lifecycleRevision ||
+          current.activeWriterRunId !== initialSource.activeWriterRunId ||
+          current.mainRestartRecovery?.cycleId !== initialSource.mainRestartRecovery?.cycleId ||
+          current.mainRestartRecovery?.revision !== initialSource.mainRestartRecovery?.revision ||
+          isSessionWorkAdmissionActive(target.storePath, identities)
+        ) {
+          throw new Error("Session changed before recovery; refresh and retry.");
+        }
+      };
+      const result = await markOrphanedMainSessionForRecovery({
+        target: { ...target, sessionKey: target.canonicalKey },
+        expectedSessionId: initialSource.sessionId,
+        expectedLifecycleRevision: initialSource.lifecycleRevision,
+        cfg: params.cfg,
+        assertCommitAllowed: assertCurrent,
+      });
+      return result.marked > 0 ? readSource() : undefined;
+    },
+  });
+}
+
 /** Owns explicit restart recovery from authorization through continuation launch. */
 export async function recoverGatewaySession(params: {
   actor?: SessionCreatedActor;
@@ -106,54 +177,11 @@ export async function recoverGatewaySession(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, "Session recovery source was not found."),
     };
   }
-  if (
-    initialSource.status === "running" &&
-    initialSource.abortedLastRun !== true &&
-    initialSource.mainRestartRecovery &&
-    !initialSource.mainRestartRecovery.tombstone
-  ) {
-    const identities = [...sourceTarget.storeKeys, initialSource.sessionId];
-    const repaired = await runExclusiveSessionLifecycleMutation({
-      scope: sourceTarget.storePath,
-      identities,
-      run: async () => {
-        const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
-          context: params.workerPlacementContext,
-          sessionId: initialSource.sessionId,
-        });
-        const assertCurrent = () => {
-          params.commitGuard?.();
-          assertPlacementCurrent();
-          const current = readSource();
-          const ownershipError = resolvePluginSessionOwnershipError({
-            action: "recover",
-            entry: current,
-            key: sourceTarget.canonicalKey,
-            pluginOwnerId: params.authorizedPluginId,
-          });
-          if (ownershipError) {
-            throw new Error(ownershipError.message);
-          }
-          if (
-            current?.sessionId !== initialSource.sessionId ||
-            current.lifecycleRevision !== initialSource.lifecycleRevision ||
-            current.activeWriterRunId !== initialSource.activeWriterRunId ||
-            current.mainRestartRecovery?.cycleId !== initialSource.mainRestartRecovery?.cycleId ||
-            current.mainRestartRecovery?.revision !== initialSource.mainRestartRecovery?.revision ||
-            isSessionWorkAdmissionActive(sourceTarget.storePath, identities)
-          ) {
-            throw new Error("Session changed before recovery; refresh and retry.");
-          }
-        };
-        const result = await markOrphanedMainSessionForRecovery({
-          target: { ...sourceTarget, sessionKey: sourceTarget.canonicalKey },
-          expectedSessionId: initialSource.sessionId,
-          expectedLifecycleRevision: initialSource.lifecycleRevision,
-          cfg: params.cfg,
-          assertCommitAllowed: assertCurrent,
-        });
-        return result.marked > 0 ? readSource() : undefined;
-      },
+  if (isMainSessionRecoveryReconciliationCandidate(initialSource)) {
+    const repaired = await reconcileOrphanedGatewaySessionRecovery({
+      ...params,
+      target: sourceTarget,
+      entry: initialSource,
     });
     if (!repaired) {
       return {
@@ -405,7 +433,7 @@ export async function recoverGatewaySession(params: {
   }
 
   if (committed.created) {
-    recordSessionCreated({
+    recordSessionCreated(params.cfg, {
       sessionKey: committed.successorKey,
       entry: committed.successorEntry,
       agentId: sourceTarget.agentId,

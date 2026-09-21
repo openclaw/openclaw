@@ -10,6 +10,7 @@ import type { JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
+import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixtures.ts";
 import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
@@ -51,6 +52,12 @@ afterEach(() => {
   if (${detachEarly}) wrapper.remove();
 });
 it("establishes native focus before file cleanup", () => {
+  const previous = document.body.appendChild(document.createElement("input"));
+  // Initialize selector focus tracking before dispatching native focus events.
+  previous.matches(":focus-visible");
+  previous.focus();
+  expect(previous.matches(":focus-visible")).toBe(true);
+  previous.remove();
   wrapper = document.createElement("div");
   document.body.append(wrapper);
   let parent: Element | ShadowRoot = wrapper;
@@ -78,6 +85,12 @@ it("starts with an empty, attribute-free body and native default focus", () => {
   expect(document.body.childNodes).toHaveLength(0);
   expect(document.body.getAttributeNames()).toEqual([]);
   expect(document.activeElement).toBe(document.body);
+  const resetHasFocus = document.hasFocus();
+  const marker = document.body.appendChild(document.createElement("button"));
+  document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  marker.focus();
+  expect(marker.matches(":focus-visible")).toBe(true);
+  expect(resetHasFocus).toBe(false);
   const style = document.getElementById("${prefix}");
   expect(style).not.toBeNull();
   style?.remove();
@@ -88,14 +101,41 @@ it("starts with an empty, attribute-free body and native default focus", () => {
   return files;
 }
 
-function fixtureFiles(): Record<string, string> {
+function fixtureFiles(fixtureRoot: string): Record<string, string> {
   const sourcePath = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
   const payloadImports = `import { createRequire } from "node:module";
 import { queryObjects } from "node:v8";
 const { ManualPayload, AutoPayload } = createRequire(import.meta.url)("./mock-payloads.cjs");`;
 
   return {
-    "runner.ts": `export { default } from ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))};\n`,
+    "runner.ts": `import Runner from ${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))};
+import { expect, vi, type RunnerTestFile } from "vitest";
+const resetModules = vi.resetModules;
+export default class FixtureRunner extends Runner {
+  override async onAfterRunFiles(files: RunnerTestFile[]) {
+    await super.onAfterRunFiles(files);
+    expect(vi.resetModules, "file cleanup restores the native module reset").toBe(resetModules);
+  }
+}
+`,
+    "00-cold-mock.test.ts": `import path from "node:path";
+import { expect, it, vi } from "vitest";
+const root = path.join(path.parse(process.cwd()).root, "__openclaw_runner_cold__");
+const readPackage = (file: string) => {
+  if (file === path.join(root, "package.json")) return '{"name":"openclaw"}';
+  throw new Error("ENOENT");
+};
+vi.mock(${sourcePath("infra/openclaw-root.fs.runtime.ts")}, () => ({
+  openClawRootFsSync: { readFileSync: readPackage },
+  openClawRootFs: { readFile: async (file: string) => readPackage(file) },
+}));
+it("applies the first file's mock before loading its production importer", async () => {
+  const { resolveOpenClawPackageRootSync, resolveOpenClawPackageRoot } =
+    await import(${sourcePath("infra/openclaw-root.ts")});
+  expect(resolveOpenClawPackageRootSync({ cwd: root })).toBe(root);
+  await expect(resolveOpenClawPackageRoot({ cwd: root })).resolves.toBe(root);
+});
+`,
     "01-dep.ts": 'export function flavor(): string {\n  return "real";\n}\n',
     "01-mid.ts": `import { flavor } from "./01-dep.js";
 export function describeFlavor(): string {
@@ -106,6 +146,7 @@ export function describeFlavor(): string {
     // file must still apply its mock after onAfterRunFiles cleanup.
     "01-a-crash.test.ts": `import "./01-mid.js";
 import { expect } from "vitest";
+await import(${sourcePath("logging/secret-redaction-registry.ts")});
 expect(Object.hasOwn(globalThis, Symbol.for("openclaw.secretRedactionRegistryTestApi"))).toBe(true);
 await import(${sourcePath("logging/diagnostic-run-activity.ts")});
 throw new Error("synthetic collect failure");
@@ -391,6 +432,7 @@ it("reloads the redirected mock after a real import", () => {
     ...mockResolutionFixtureFiles,
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
+    ...agentReaderFixtureFiles(repoRoot, fixtureRoot),
   };
 }
 
@@ -436,8 +478,8 @@ async function assertCompletion(
   const report: JsonTestResults = JSON.parse(await fs.readFile(expected.reportPath, "utf8"));
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 48,
-    numPassedTests: 47,
+    numTotalTests: 53,
+    numPassedTests: 52,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
@@ -477,7 +519,7 @@ async function verifyRunnerCleanup(signal: AbortSignal) {
   try {
     const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
     await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
-    const files = fixtureFiles();
+    const files = fixtureFiles(root);
     for (const [name, content] of Object.entries(files)) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
       await fs.writeFile(path.join(root, name), content, "utf8");
@@ -596,15 +638,31 @@ export default defineConfig({
       ["unexpected file", ({ report }) => Object.assign(report.testResults[0]!, { name: "other" })],
       [
         "extra collection error",
-        ({ report }) => Object.assign(report.testResults[1]!, { message: "other" }),
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) => file.status === "passed")!,
+            {
+              message: "other",
+            },
+          ),
       ],
       [
         "extra failed file",
-        ({ report }) => Object.assign(report.testResults[1]!, { status: "failed" }),
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) => file.status === "passed")!,
+            {
+              status: "failed",
+            },
+          ),
       ],
       [
         "wrong collection error",
-        ({ report }) => Object.assign(report.testResults[0]!, { message: "other" }),
+        ({ report }) =>
+          Object.assign(
+            report.testResults.find((file) => file.name.endsWith("/01-a-crash.test.ts"))!,
+            { message: "other" },
+          ),
       ],
       ["inconsistent totals", ({ report }) => Object.assign(report, { numPassedTests: 44 })],
     ];

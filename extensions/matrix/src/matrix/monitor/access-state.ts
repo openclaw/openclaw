@@ -1,4 +1,3 @@
-// Matrix plugin module implements access state behavior.
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,

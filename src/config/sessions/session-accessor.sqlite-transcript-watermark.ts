@@ -2,59 +2,18 @@
 // validates transcript-derived caches (derived titles, branch summaries).
 // Kept apart from the active-events reader so cache validation stays a
 // dependency-light import for gateway callers.
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
-  readSqliteTranscriptStoreBatches,
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import {
+  readSessionTranscriptHotWatermark,
+  type SessionTranscriptWatermark,
+} from "./session-accessor.sqlite-transcript-watermark-read.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
-
-type WatermarkDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  | "session_windows"
-  | "transcript_events"
-  | "transcript_rewrite_watermarks"
-  | "session_transcript_cold_archives"
->;
-
-export type SessionTranscriptWatermark = {
-  generation: string | null;
-  maxSeq: number | null;
-};
-
-/** Reads hot append and rewrite tokens together for transcript-derived caches. */
-export function readSessionTranscriptHotWatermark(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  sessionId: string,
-): SessionTranscriptWatermark {
-  const db = getNodeSqliteKysely<WatermarkDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db.selectNoFrom((eb) => [
-      eb
-        .selectFrom("transcript_events")
-        .select((inner) => inner.fn.max<number>("seq").as("max_seq"))
-        .where("session_id", "=", sessionId)
-        .as("max_seq"),
-      eb
-        .selectFrom("transcript_rewrite_watermarks")
-        .select("generation")
-        .where("session_id", "=", sessionId)
-        .as("generation"),
-    ]),
-  );
-  return { generation: row?.generation ?? null, maxSeq: row?.max_seq ?? null };
-}
 
 /** Reads the append and rewrite tokens that validate transcript-derived caches. */
 export function readSessionTranscriptWatermark(
@@ -73,54 +32,6 @@ export function readSessionTranscriptWatermark(
         { databaseLabel: database.path, operationLabel: "session transcript watermark read" },
       ),
     toDatabaseOptions(resolved),
-    { throwOnMissingTable: true },
   );
   return result.found ? result.value : { generation: null, maxSeq: null };
-}
-
-function readSessionTranscriptWatermarkChunk(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  sessionIds: readonly string[],
-): Map<string, SessionTranscriptWatermark> {
-  const db = getNodeSqliteKysely<WatermarkDatabase>(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_windows as window")
-      .leftJoin(
-        "transcript_rewrite_watermarks as rewrite",
-        "rewrite.session_id",
-        "window.session_id",
-      )
-      .leftJoin("session_transcript_cold_archives as cold", "cold.session_id", "window.session_id")
-      .select((eb) => [
-        "window.session_id",
-        "rewrite.generation",
-        "cold.last_seq as cold_last_seq",
-        eb
-          .selectFrom("transcript_events as event")
-          .select((inner) => inner.fn.max<number>("event.seq").as("max_seq"))
-          .whereRef("event.session_id", "=", "window.session_id")
-          .as("max_seq"),
-      ])
-      .where("window.session_id", "in", sessionIds),
-  ).rows;
-  return new Map(
-    rows.map((row) => [
-      row.session_id,
-      {
-        generation: row.generation ?? null,
-        maxSeq: row.cold_last_seq ?? row.max_seq ?? null,
-      },
-    ]),
-  );
-}
-
-/** Reads cache-validation tokens in one statement per opened store and SQLite-sized chunk. */
-export function readSessionTranscriptWatermarkBatch(
-  scopes: readonly SessionTranscriptReadScope[],
-): SessionTranscriptWatermark[] {
-  return readSqliteTranscriptStoreBatches(scopes, readSessionTranscriptWatermarkChunk).map(
-    (result) => result ?? { generation: null, maxSeq: null },
-  );
 }

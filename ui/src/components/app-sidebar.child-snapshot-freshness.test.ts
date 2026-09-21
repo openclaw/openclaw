@@ -13,7 +13,10 @@ import {
   mountSidebar,
 } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import * as sidebarAgentSessionRows from "./app-sidebar-agent-session-rows.ts";
+import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import "./app-sidebar.ts";
 
 const parentKey = "agent:main:parent";
@@ -296,7 +299,10 @@ describe("sidebar child snapshot freshness", () => {
       const gatewayHarness = createGatewayHarness(createTestGatewayClient(request));
       const sessions = createTestSessionCapability(gatewayHarness.gateway);
       await sessions.refresh({ agentId: "main", force: true });
-      const { sidebar, provider } = await mountSidebar(gatewayHarness.gateway, sessions);
+      const { sidebar, provider, context } = await mountSidebar(gatewayHarness.gateway, sessions);
+      const projectRows = vi.spyOn(sidebarAgentSessionRows, "projectSidebarAgentSessionRows");
+      const projectSections = vi.spyOn(SidebarSessionProjection.prototype, "project");
+      const bootstrapRun = vi.spyOn(context.connectionBootstrap, "run");
       try {
         if (selected) {
           sidebar.activeRouteId = "chat";
@@ -310,12 +316,23 @@ describe("sidebar child snapshot freshness", () => {
         await waitForFast(() => expect(sidebar.textContent).toContain("Original child"));
         const initialReads = Math.ceil(childCount / 100);
         expect(childList).toHaveBeenCalledTimes(initialReads);
+        await settleLitElement(sidebar);
+        const childScope = sidebar.sessionData.childSessionScope;
+        projectRows.mockClear();
+        projectSections.mockClear();
+        bootstrapRun.mockClear();
 
         for (let index = 0; index < 3; index++) {
           await sessions.refresh({ agentId: "main", force: true });
-          await sidebar.updateComplete;
+          await settleLitElement(sidebar);
         }
         expect(childList).toHaveBeenCalledTimes(initialReads);
+        expect(bootstrapRun.mock.calls.filter(([key]) => key === childScope)).toHaveLength(0);
+        // Settled observations need at most the full projection for each render.
+        expect(projectSections.mock.calls.length).toBeGreaterThan(0);
+        expect(projectRows.mock.calls.length).toBeLessThanOrEqual(
+          projectSections.mock.calls.length,
+        );
         expect(
           sidebar.querySelector(`[data-session-key="${queryChildKey}"]`)?.textContent,
         ).toContain("Original child");
@@ -359,6 +376,9 @@ describe("sidebar child snapshot freshness", () => {
       } finally {
         provider.remove();
         sessions.dispose();
+        bootstrapRun.mockRestore();
+        projectSections.mockRestore();
+        projectRows.mockRestore();
       }
     },
   );

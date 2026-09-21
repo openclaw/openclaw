@@ -314,7 +314,8 @@ describe("progress draft plan lifecycle", () => {
   );
 
   it("returns detached structured state for channel-native renderers", async () => {
-    const update = vi.fn<Parameters<typeof createChannelProgressDraftCompositor>[0]["update"]>();
+    const update =
+      vi.fn<NonNullable<Parameters<typeof createChannelProgressDraftCompositor>[0]["update"]>>();
     const progress = createChannelProgressDraftCompositor({
       mode: "progress",
       active: true,

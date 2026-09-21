@@ -23,8 +23,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
@@ -291,7 +289,7 @@ private fun SkillWorkshopActionConfirmDialog(
         nativeString("This will quarantine \"\$proposalTitle\" and refresh Skill Workshop state from the gateway.", action.title)
       }
     }
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(dialogTitle) },
     text = {
@@ -384,7 +382,7 @@ private fun SkillWorkshopAgentMenu(
       modifier = Modifier.fillMaxWidth(),
       enabled = selectableAgents.isNotEmpty(),
     )
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+    AppDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
       DropdownMenuItem(
         text = { Text(nativeString("Default agent")) },
         onClick = {

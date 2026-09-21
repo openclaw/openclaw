@@ -17,7 +17,6 @@ import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
@@ -43,6 +42,7 @@ import {
 } from "./server-worker-placement-session-target.js";
 import { recoverGatewayWorkerPlacementWorkspaces } from "./server-worker-placement-workspace-recovery.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import { createDevicePlacementAuthority } from "./worker-environments/device-placement-eligibility.js";
 import {
   createNodeWorkspaceRetainCoordinator,
   type NodeWorkerBundleRetention,
@@ -219,7 +219,7 @@ export function createGatewayWorkerPlacementRuntime(
     resolveWorkspace,
   });
   const publishPlacementChanges = createGatewayWorkerPlacementChangePublisher(params);
-  const rawDispatchService = coordinateWorkerPlacementDispatch(
+  const dispatchService = coordinateWorkerPlacementDispatch(
     createWorkerPlacementDispatchService({
       placements: params.placements,
       environments: params.environments,
@@ -229,25 +229,7 @@ export function createGatewayWorkerPlacementRuntime(
         stopped || params.environments.isStopping() || getGatewayRestartDrainSignal().aborted,
       runnerAvailability,
       resolveDevicePlacementRequirement,
-      isCurrentNodePlacement: (node, requirement) => {
-        if (
-          nodeWorkerSupervisorTransport?.isCurrent(
-            node,
-            requirement.consumesWorkerSlot,
-            requirement.requiredNodeCommands,
-          ) !== true
-        ) {
-          return false;
-        }
-        const declaredCommands = [...node.commands];
-        const allowlist = resolveNodeCommandAllowlist(getRuntimeConfig(), {
-          commands: declaredCommands,
-          approvedCommands: declaredCommands,
-        });
-        return requirement.requiredNodeCommands.every(
-          (command) => isNodeCommandAllowed({ command, declaredCommands, allowlist }).ok,
-        );
-      },
+      isCurrentNodePlacement: createDevicePlacementAuthority(() => nodeWorkerSupervisorTransport),
       ...workspaceConflictHandlers,
       ...reclaimBarriers,
       runLocalBarrier: async ({
@@ -441,23 +423,17 @@ export function createGatewayWorkerPlacementRuntime(
       isStopping: () =>
         stopped || params.environments.isStopping() || getGatewayRestartDrainSignal().aborted,
     }),
+    publishPlacementChanges,
   );
-  const dispatchService = {
-    ...rawDispatchService,
-    reconcile: (mode: Parameters<typeof rawDispatchService.reconcile>[0]) =>
-      publishPlacementChanges(() => rawDispatchService.reconcile(mode)),
-    reconcileActive: (environmentId?: string) =>
-      publishPlacementChanges(() => rawDispatchService.reconcileActive(environmentId)),
-  };
   const placementIdleSweep = createWorkerPlacementIdleSweep({
     placements: params.placements,
     environments: params.environments,
-    dispatch: rawDispatchService,
+    dispatch: dispatchService,
     getConfig: getRuntimeConfig,
     info: params.info ?? params.warn,
     warn: params.warn,
     isPlacementOperationInFlight: (sessionId) =>
-      rawDispatchService.isPlacementOperationInFlight(sessionId),
+      dispatchService.isPlacementOperationInFlight(sessionId),
     loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
   });
   const sessionRetirement = createPlacementSessionRetirement({
@@ -472,7 +448,7 @@ export function createGatewayWorkerPlacementRuntime(
     placements: params.placements,
     resolveWorkspace,
     reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
-    waitForInitialPlacement: rawDispatchService.waitForInitialPlacement,
+    waitForInitialPlacement: dispatchService.waitForInitialPlacement,
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,
       dispatch: dispatchService.dispatch,
@@ -541,12 +517,12 @@ export function createGatewayWorkerPlacementRuntime(
       }
       return trackOperation(
         placementReconcile,
-        publishPlacementChanges(async () => {
-          await sessionRetirement.reconcile();
-          await rawDispatchService.reconcileActive();
+        (async () => {
+          await publishPlacementChanges(() => sessionRetirement.reconcile());
+          await dispatchService.reconcileActive();
           await reconcilePublications();
           void nodeWorkspaceRetention.schedule();
-        }),
+        })(),
         "Worker placement reconcile sweep failed",
       );
     };
@@ -644,11 +620,10 @@ export function createGatewayWorkerPlacementRuntime(
             placements: params.placements,
             resolveWorkspace,
           }),
-        () =>
-          publishPlacementChanges(async () => {
-            await rawDispatchService.reconcile("startup");
-            await reconcilePublications();
-          }),
+        async () => {
+          await dispatchService.reconcile("startup");
+          await reconcilePublications();
+        },
       ]) {
         const current = reconcile();
         placementReconcile.current = current;

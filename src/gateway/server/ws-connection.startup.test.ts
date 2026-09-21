@@ -30,6 +30,7 @@ import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/device-pairing-node.js";
 import { requestDevicePairing } from "../../infra/device-pairing.js";
 import { createSafeGatewayRestartPreflight } from "../../infra/restart-coordinator.js";
+import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -50,6 +51,7 @@ import {
 } from "../auth-rate-limit.js";
 import * as gatewayAuth from "../auth.js";
 import { buildDeviceAuthPayload } from "../device-auth.js";
+import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../server-constants.js";
 import { createWorkerEnvironmentStore } from "../worker-environments/store.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
@@ -178,36 +180,38 @@ async function attachStartupNodeConnect(params: {
   markGatewayRestartDraining();
   socket.emit(
     "message",
-    JSON.stringify({
-      type: "req",
-      id: "startup-node-connect",
-      method: "connect",
-      params: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: {
-          id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-          version: "dev",
-          platform: "linux",
-          mode: GATEWAY_CLIENT_MODES.NODE,
+    Buffer.from(
+      JSON.stringify({
+        type: "req",
+        id: "startup-node-connect",
+        method: "connect",
+        params: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+            version: "dev",
+            platform: "linux",
+            mode: GATEWAY_CLIENT_MODES.NODE,
+          },
+          role: "node",
+          scopes: [],
+          caps: [],
+          commands: [],
+          auth: {
+            ...(params.bootstrapToken ? { bootstrapToken: params.bootstrapToken } : {}),
+            ...(params.sharedToken ? { token: params.sharedToken } : {}),
+          },
+          device: {
+            id: identity.deviceId,
+            publicKey,
+            signature: signDevicePayload(identity.privateKeyPem, devicePayload),
+            signedAt,
+            nonce,
+          },
         },
-        role: "node",
-        scopes: [],
-        caps: [],
-        commands: [],
-        auth: {
-          ...(params.bootstrapToken ? { bootstrapToken: params.bootstrapToken } : {}),
-          ...(params.sharedToken ? { token: params.sharedToken } : {}),
-        },
-        device: {
-          id: identity.deviceId,
-          publicKey,
-          signature: signDevicePayload(identity.privateKeyPem, devicePayload),
-          signedAt,
-          nonce,
-        },
-      },
-    }),
+      }),
+    ),
   );
   const response = async () => {
     await vi.waitFor(() => {
@@ -261,6 +265,27 @@ function seedProvisioningNodeSetup() {
 }
 
 describe("attachGatewayWsConnectionHandler startup readiness", () => {
+  it("applies the shared preauth queue limit while the message handler loads", async () => {
+    const socket = createGatewayWsTestSocket();
+
+    attachGatewayWsForTest({
+      attach: attachGatewayWsConnectionHandler,
+      socket,
+      options: {
+        getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
+        buildRequestContext: () => createGatewayWsTestRequestContext() as never,
+      },
+    });
+
+    for (let index = 0; index <= MAX_QUEUED_GATEWAY_PREAUTH_FRAMES; index += 1) {
+      socket.emit("message", Buffer.from(`queued-${index}`));
+    }
+
+    expect(socket.close).toHaveBeenCalledWith(1008, "gateway message handler loading");
+    socket.emit("close", 1008, Buffer.from("gateway message handler loading"));
+    await vi.dynamicImportSettled();
+  });
+
   it("admits only one of two connect frames that race during lazy handler loading", async () => {
     const sent: unknown[] = [];
     const clients = new GatewayClientRegistry();
@@ -300,8 +325,8 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         },
       });
 
-    socket.emit("message", connectFrame("connect-1"));
-    socket.emit("message", connectFrame("connect-2"));
+    socket.emit("message", Buffer.from(connectFrame("connect-1")));
+    socket.emit("message", Buffer.from(connectFrame("connect-2")));
     await vi.dynamicImportSettled();
 
     await vi.waitFor(() => {
@@ -362,24 +387,26 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       });
       socket.emit(
         "message",
-        JSON.stringify({
-          type: "req",
-          id: "connect-1",
-          method: "connect",
-          params: {
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-            client: {
-              id: GATEWAY_CLIENT_NAMES.CLI,
-              version: "dev",
-              platform: "test",
-              mode: GATEWAY_CLIENT_MODES.CLI,
+        Buffer.from(
+          JSON.stringify({
+            type: "req",
+            id: "connect-1",
+            method: "connect",
+            params: {
+              minProtocol: PROTOCOL_VERSION,
+              maxProtocol: PROTOCOL_VERSION,
+              client: {
+                id: GATEWAY_CLIENT_NAMES.CLI,
+                version: "dev",
+                platform: "test",
+                mode: GATEWAY_CLIENT_MODES.CLI,
+              },
+              role: "operator",
+              scopes: ["operator.read"],
+              caps: [],
             },
-            role: "operator",
-            scopes: ["operator.read"],
-            caps: [],
-          },
-        }),
+          }),
+        ),
       );
 
       // The handler is lazy-loaded; wait for its actual frame instead of a one-second poll.
@@ -581,6 +608,23 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
           }
           const authenticationStarted = createDeferred();
           const releaseAuthentication = createDeferred();
+          const admissionReleased = createDeferred();
+          const beginAdmission =
+            gatewayWorkAdmission.tryBeginGatewayRestartStartupRootWorkAdmission;
+          const startupAdmission = vi
+            .spyOn(gatewayWorkAdmission, "tryBeginGatewayRestartStartupRootWorkAdmission")
+            .mockImplementation(() => {
+              const admission = beginAdmission();
+              return (
+                admission && {
+                  ...admission,
+                  release: () => {
+                    admission.release();
+                    admissionReleased.resolve();
+                  },
+                }
+              );
+            });
           const registeredRootCounts: number[] = [];
           const authorize = gatewayAuth.authorizeWsControlUiGatewayConnect;
           const authentication = vi
@@ -616,9 +660,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
             if (connectionKind === "paired shared-token") {
               expect(harness.pendingSetup).not.toHaveBeenCalled();
             }
-            await new Promise<void>((resolve) => {
-              setImmediate(resolve);
-            });
+            await admissionReleased.promise;
             expect(getActiveGatewayRootWorkCount()).toBe(0);
             expect(createSafeGatewayRestartPreflight()).toMatchObject({
               safe: true,
@@ -628,6 +670,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
           } finally {
             releaseAuthentication.resolve();
             authentication.mockRestore();
+            startupAdmission.mockRestore();
           }
         },
       );

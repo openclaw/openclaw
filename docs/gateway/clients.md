@@ -272,15 +272,20 @@ The shared page's pagination metadata is unchanged, so use `nextOffset`, not the
 number of returned rows, when loading another page, and merge rows by session
 key. See [Session list bootstrap](/gateway/protocol/rpc-methods#session-list-bootstrap).
 
-Merge subsequent `sessions.changed` events by `sessionKey`. Session change
-payloads can carry live `inputTokens`, `outputTokens`, `totalTokens`,
-`totalTokensFresh`, `contextTokens`, `estimatedCostUsd`, response-usage settings,
-and active-run state.
+Merge subsequent keyed `sessions.changed` events from their nested `session`
+row, using agent, session key, and session ID together to avoid applying an old
+lifecycle to its replacement. Snapshots are presented for the receiving
+connection and carry current row metadata, usage, and active-run state.
 
-Some change notifications are only invalidation signals. If an event omits the
-row fields your view needs, refresh `sessions.list`. Do not poll `usage.cost` or
-`sessions.usage` to keep a live session list current; reserve those methods for
-on-demand aggregate or detailed reports.
+Apply snapshots to existing roster members locally. Refresh `sessions.list`
+when a row is missing or the notification is a broad, keyless invalidation.
+Delete events retain the removed session ID and do not carry a replacement row.
+Notifications for aliases of the same session share publication order. Rapid
+replacement can coalesce intermediate notifications; a broad invalidation follows
+condensed updates so clients refresh the authoritative roster. The same refresh
+notification is sent when row metadata cannot be prepared.
+Do not poll `usage.cost` or `sessions.usage` to keep a live session list current;
+reserve those methods for on-demand aggregate or detailed reports.
 
 ## Backfill exec approvals
 

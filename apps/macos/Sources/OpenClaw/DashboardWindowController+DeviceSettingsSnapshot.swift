@@ -63,6 +63,8 @@ extension DashboardWindowController {
             capabilities: .init(
                 canvasEnabled: state.canvasEnabled,
                 cameraEnabled: defaults.bool(forKey: cameraEnabledKey),
+                desktopSharingEnabled: defaults.object(forKey: desktopSharingEnabledKey) as? Bool ??
+                    MacNodeModeCoordinator.shared.desktopSharingEnabled,
                 computerControlEnabled: isComputerControlEnabled(),
                 computerControlProvider: ComputerControlProvider.current().rawValue,
                 cuaDriverBundled: CuaDriverArtifact.bundledExecutableURL != nil,
@@ -134,7 +136,7 @@ extension DashboardWindowController {
     }
 
     private static func devicePermissionEntries() async -> [DeviceSettingsSnapshot.Permissions.Entry] {
-        let monitored = await PermissionManager.authorizationStatus([.accessibility, .screenRecording, .appleScript])
+        let monitored = await PermissionManager.authorizationStatus([.accessibility, .screenRecording])
         var statuses = Dictionary(uniqueKeysWithValues: DeviceSettingsPermission.macOSPermissions.map {
             ($0, DeviceSettingsPermissionStatus($0.capability.flatMap { monitored[$0] }))
         })

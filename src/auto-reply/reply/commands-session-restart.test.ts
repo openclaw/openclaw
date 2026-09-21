@@ -1,10 +1,10 @@
 // Tests session restart command behavior and runtime reset handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
-import type { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import type { scheduleGatewayRestart } from "../../infra/restart.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewaySigusr1Restart>[0];
+type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewayRestart>[0];
 
 const mocks = vi.hoisted(() => ({
   clearRestartSentinel: vi.fn(async () => undefined),
@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
       "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
   ),
   writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
-  scheduleGatewaySigusr1Restart: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
+  scheduleGatewayRestart: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
     scheduled: true,
   })),
   triggerOpenClawRestart: vi.fn(() => ({ ok: true, method: "launchctl" })),
@@ -68,7 +68,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
 });
 
 vi.mock("../../infra/restart.js", () => ({
-  scheduleGatewaySigusr1Restart: mocks.scheduleGatewaySigusr1Restart,
+  scheduleGatewayRestart: mocks.scheduleGatewayRestart,
   triggerOpenClawRestart: mocks.triggerOpenClawRestart,
 }));
 
@@ -118,7 +118,7 @@ describe("handleRestartCommand", () => {
     mocks.extractDeliveryInfo.mockClear();
     mocks.formatDoctorNonInteractiveHint.mockClear();
     mocks.writeRestartSentinel.mockClear();
-    mocks.scheduleGatewaySigusr1Restart.mockClear();
+    mocks.scheduleGatewayRestart.mockClear();
     mocks.triggerOpenClawRestart.mockReset();
     mocks.triggerOpenClawRestart.mockReturnValue({ ok: true, method: "launchctl" });
   });
@@ -151,17 +151,17 @@ describe("handleRestartCommand", () => {
     expect(mocks.triggerOpenClawRestart).toHaveBeenCalledTimes(1);
   });
 
-  it("prepares the routed sentinel only when SIGUSR1 restart emits", async () => {
+  it("prepares the routed sentinel only when SIGUSR2 restart emits", async () => {
     const handler = () => {};
-    process.on("SIGUSR1", handler);
+    process.on("SIGUSR2", handler);
     try {
       const result = await handleRestartCommand(restartCommandParams(), true);
 
-      expect(result?.reply?.text).toContain("SIGUSR1");
+      expect(result?.reply?.text).toContain("SIGUSR2");
       expect(mocks.writeRestartSentinel).not.toHaveBeenCalled();
       expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
 
-      const scheduledArgs = mocks.scheduleGatewaySigusr1Restart.mock.calls.at(-1)?.[0];
+      const scheduledArgs = mocks.scheduleGatewayRestart.mock.calls.at(-1)?.[0];
       await scheduledArgs?.emitHooks?.beforeEmit?.();
 
       expect(mocks.writeRestartSentinel).toHaveBeenCalledOnce();
@@ -171,30 +171,30 @@ describe("handleRestartCommand", () => {
       expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
       expect(sentinelPayload?.continuation).toBeNull();
     } finally {
-      process.removeListener("SIGUSR1", handler);
+      process.removeListener("SIGUSR2", handler);
     }
   });
 
-  it("threads sessionKey into scheduleGatewaySigusr1Restart so cross-session coalescing is rejected (#86742)", async () => {
+  it("threads sessionKey into scheduleGatewayRestart so cross-session coalescing is rejected (#86742)", async () => {
     const handler = () => {};
-    process.on("SIGUSR1", handler);
+    process.on("SIGUSR2", handler);
     try {
       await handleRestartCommand(restartCommandParams(), true);
-      const scheduledArgs = mocks.scheduleGatewaySigusr1Restart.mock.calls.at(-1)?.[0];
+      const scheduledArgs = mocks.scheduleGatewayRestart.mock.calls.at(-1)?.[0];
       expect(scheduledArgs?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
     } finally {
-      process.removeListener("SIGUSR1", handler);
+      process.removeListener("SIGUSR2", handler);
     }
   });
 
   it("adopts the durable ingress claim before scheduling the restart", async () => {
     const order: string[] = [];
-    mocks.scheduleGatewaySigusr1Restart.mockImplementationOnce((_opts) => {
+    mocks.scheduleGatewayRestart.mockImplementationOnce((_opts) => {
       order.push("schedule");
       return { scheduled: true };
     });
     const handler = () => {};
-    process.on("SIGUSR1", handler);
+    process.on("SIGUSR2", handler);
     try {
       await handleRestartCommand(
         restartCommandParams({
@@ -209,7 +209,7 @@ describe("handleRestartCommand", () => {
         true,
       );
     } finally {
-      process.removeListener("SIGUSR1", handler);
+      process.removeListener("SIGUSR2", handler);
     }
 
     // Unadopted at restart => drain releases with recordAttempt:false and the
@@ -257,7 +257,7 @@ describe("handleRestartCommand", () => {
     ).rejects.toThrow("ingress adoption lost");
 
     expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
-    expect(mocks.scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
+    expect(mocks.scheduleGatewayRestart).not.toHaveBeenCalled();
   });
 
   it.each(["text", "native"] as const)(

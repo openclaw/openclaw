@@ -2,11 +2,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  readAcpSessionMeta,
-  readAcpSessionMetaForEntry,
-  repairAcpSessionMetaKeyForMigration,
-} from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentEntries,
@@ -67,7 +64,7 @@ export function resolveDeletedAgentIdFromSessionKey(
   cfg: OpenClawConfig,
   sessionKey: string,
   entry?: SessionEntry | null,
-  options?: { acpMetadataSessionKey?: string | null },
+  options?: { acpMetadataSessionKey?: string | null; acpMeta?: SessionEntry["acp"] | null },
 ): string | null {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
@@ -81,12 +78,15 @@ export function resolveDeletedAgentIdFromSessionKey(
     // Free ACP runtime keys use agent:<harnessId>:acp:<uuid>, but key shape is
     // not proof: ACP bridge sessions can use ACP-shaped keys without SessionAcpMeta.
     // Configured acp:binding keys stay owner-scoped even when ACP metadata exists.
-    const acpMeta = readAcpMetaForDeletedAgentCheck({
-      cfg,
-      sessionKey,
-      entry,
-      acpMetadataSessionKey: options?.acpMetadataSessionKey,
-    });
+    const acpMeta =
+      options?.acpMeta !== undefined
+        ? options.acpMeta
+        : readAcpMetaForDeletedAgentCheck({
+            cfg,
+            sessionKey,
+            entry,
+            acpMetadataSessionKey: options?.acpMetadataSessionKey,
+          });
     if (acpMeta) {
       return null;
     }
@@ -130,25 +130,13 @@ function readAcpMetaForDeletedAgentCheck(params: {
     }
   }
 
-  repairAcpSessionMetaKeyForMigration({
-    sessionKey: params.sessionKey,
-    candidateSessionKeys: directKeys,
-    entry: params.entry ?? undefined,
-  });
-  const finalAgentId =
-    parseAgentSessionKey(params.sessionKey)?.agentId ??
-    tryResolveSessionCompatibilityOwnerAgentId(params.cfg, params.sessionKey);
-  return readAcpSessionMetaForEntry({
-    sessionKey: params.sessionKey,
-    ...(finalAgentId ? { agentId: finalAgentId } : {}),
-    entry: params.entry ?? undefined,
-  });
+  return undefined;
 }
 
 function loadSessionEntryWithMode(
   sessionKey: string,
   opts:
-    | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection"> & {
+    | (Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env"> & {
         includeStoreChildEntries?: boolean;
         targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
       })
@@ -163,6 +151,7 @@ function loadSessionEntryWithMode(
     exactRead: true,
     readOnly,
     projection: opts?.projection,
+    env: opts?.env,
     targetDiscoveryCache: opts?.targetDiscoveryCache,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
@@ -198,7 +187,7 @@ function loadSessionEntryWithMode(
 
 export function loadGatewaySessionEntry(
   sessionKey: string,
-  opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
+  opts?: Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, false);
 }
@@ -208,7 +197,7 @@ export function loadGatewaySessionEntryReadOnly(
   opts?: {
     includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
-  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection">,
+  } & Pick<SessionEntryListScope, "agentId" | "clone" | "projection" | "env">,
 ) {
   return loadSessionEntryWithMode(sessionKey, opts, true);
 }
@@ -346,7 +335,7 @@ function resolvedPermissionLabel(
     : undefined;
 }
 
-export function listAgentsForGateway(
+export async function listAgentsForGateway(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
   options?: {
@@ -354,15 +343,16 @@ export function listAgentsForGateway(
     includeSystem?: boolean;
     httpAvatarBasePath?: string;
   },
-): {
+): Promise<{
   defaultId: string;
   ownership: GatewayAgentOwnership;
   selectionRequired: boolean;
   mainKey: string;
   scope: SessionScope;
   agents: GatewayAgentRow[];
-} {
+}> {
   const basic = listGatewayAgentsBasic(cfg);
+  const provenanceRecords = await listAgentProvenance();
   const execApprovals = loadExecApprovals();
   const identityById = new Map<string, GatewayAgentRow["identity"]>();
   for (const entry of listAgentEntries(cfg)) {
@@ -395,7 +385,7 @@ export function listAgentsForGateway(
     ? basic.agents
     : basic.agents.filter((entry) => entry.kind !== "system");
   const provenanceById = new Map(
-    listAgentProvenance().map((record) => [record.agentId, record] as const),
+    provenanceRecords.map((record) => [record.agentId, record] as const),
   );
   const agents = roster.map((entry) => {
     const { id } = entry;

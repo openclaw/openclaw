@@ -314,9 +314,16 @@ async function gatherDaemonStatusImpl(
   // native service. Keep that service visible without borrowing its target or auth.
   const useNativeServiceTargetContext =
     localPortOverride === undefined &&
+    serviceState.inspectionReason !== "service-manager-unavailable" &&
     isDefaultInstallIdentity(process.env) &&
     !isGatewayExternallySupervised(process.env);
   const targetServiceCommand = useNativeServiceTargetContext ? command : null;
+  // The RPC handshake can fail while the service still runs another install, so
+  // resolve the locally readable service install facts here and hand them to the
+  // renderer instead of leaving it dependent on Gateway metadata.
+  const serviceLayout = command
+    ? await summarizeGatewayServiceLayout(command).catch(() => undefined)
+    : undefined;
   if (opts.deep && !trimToUndefined(opts.rpc.url)) {
     const { preflightOpenClawDatabaseSchemas, OpenClawDatabaseSchemaPreflightError } =
       await import("../../state/openclaw-database-preflight.js");
@@ -422,6 +429,7 @@ async function gatherDaemonStatusImpl(
       : undefined;
   let daemonProbeAuth: { token?: string; password?: string } | undefined;
   let rpcAuthWarning: string | undefined;
+  let redactedProbeCredential = false;
   let allowRpcConfigCredentials = true;
   let skippedProbeAuthForDisabledExecSecretRef = false;
   if (opts.probe) {
@@ -454,6 +462,7 @@ async function gatherDaemonStatusImpl(
       );
       daemonProbeAuth = probeAuthResolution.auth;
       rpcAuthWarning = probeAuthResolution.warning;
+      redactedProbeCredential = probeAuthResolution.warningCode === "SECRET_REF_REDACTED_VALUE";
     } else {
       allowRpcConfigCredentials = false;
       skippedProbeAuthForDisabledExecSecretRef = true;
@@ -482,7 +491,7 @@ async function gatherDaemonStatusImpl(
         }),
       )
     : undefined;
-  if (rpc?.ok && !skippedProbeAuthForDisabledExecSecretRef) {
+  if (rpc?.ok && !skippedProbeAuthForDisabledExecSecretRef && !redactedProbeCredential) {
     rpcAuthWarning = undefined;
   }
   const health =
@@ -598,6 +607,9 @@ async function gatherDaemonStatusImpl(
   const hostDesktop = await (
     await import("../../gateway/desktop/host-source.js")
   ).inspectHostDesktop({ config: daemonCfg.desktop?.host });
+  const targetRole: "target" | "diagnostic-only" = serviceTargetsProbe
+    ? "target"
+    : "diagnostic-only";
 
   return {
     cli: resolveCliStatusSummary(),
@@ -612,8 +624,9 @@ async function gatherDaemonStatusImpl(
       loadState,
       loadedText: service.loadedText,
       notLoadedText: service.notLoadedText,
-      targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",
+      targetRole,
       command,
+      ...(serviceLayout ? { layout: serviceLayout } : {}),
       runtime: runtime?.inspectionFailure
         ? {
             ...runtime,

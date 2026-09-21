@@ -77,10 +77,13 @@ export function createControlUiChatHistoryMessage(
   };
 }
 
-export function createControlUiSessionFixtures(input: {
-  rows: ControlUiSessionFixture[];
-  mainKey: string;
-}) {
+export function createControlUiSessionFixtures(
+  input: {
+    rows: ControlUiSessionFixture[];
+    mainKey: string;
+  },
+  isRecord: (value: unknown) => value is Record<string, unknown>,
+) {
   const records = new Map<
     string,
     { row: ControlUiSessionFixture; changed: Set<string>; lastRunEventSequence?: number }
@@ -249,6 +252,11 @@ export function createControlUiSessionFixtures(input: {
         ? [...new Set([...activeRunIds, runId])]
         : activeRunIds.filter((id) => id !== runId);
     const fields = {
+      // Like the Gateway projection, a newly started sole run has no execution
+      // model until it publishes one; the previous fallback is not evidence.
+      ...(outcome === "running" && activeRunIds.length === 0
+        ? { activeModel: undefined, activeModelProvider: undefined }
+        : {}),
       activeRunIds: remaining,
       hasActiveRun: remaining.length > 0,
       status: remaining.length > 0 ? "running" : outcome,
@@ -332,6 +340,91 @@ export function createControlUiSessionFixtures(input: {
       ...[...materialized].filter((key) => !keys.has(key)).map(read),
     ];
   };
+  function listResponse(
+    response: unknown,
+    params: unknown,
+    options: {
+      renames: readonly { from: string; to: string | null }[];
+      archiveFiltering: boolean;
+    },
+  ): unknown {
+    if (!isRecord(response) || !Array.isArray(response.sessions)) {
+      return response;
+    }
+    const archivedFilter =
+      isRecord(params) && params.archived === "all"
+        ? "all"
+        : isRecord(params) && params.archived === true
+          ? "archived"
+          : "active";
+    const projectedSessions = list(response.sessions).map((row) => {
+      if (!isRecord(row)) {
+        return row;
+      }
+      const next = Object.assign({}, row);
+      // Replay group renames/deletes over static fixtures: the real gateway
+      // rewrites member categories server-side before the next sessions.list.
+      let category = typeof next.category === "string" ? next.category : undefined;
+      for (const rename of options.renames) {
+        if (category === rename.from) {
+          category = rename.to ?? undefined;
+        }
+      }
+      if (category === undefined) {
+        delete next.category;
+      } else {
+        next.category = category;
+      }
+      return next;
+    });
+    const spawnedBy =
+      isRecord(params) && typeof params.spawnedBy === "string" ? params.spawnedBy.trim() : "";
+    const childSessions = spawnedBy
+      ? projectedSessions.filter((row) => {
+          if (!isRecord(row) || row.key === spawnedBy) {
+            return false;
+          }
+          const controller =
+            typeof row.controlOwnerSessionKey === "string" ? row.controlOwnerSessionKey.trim() : "";
+          // Fixtures declare current control and navigation lineage; they do not run a registry.
+          return [controller || row.spawnedBy, row.parentSessionKey].some(
+            (owner) => typeof owner === "string" && owner.trim() === spawnedBy,
+          );
+        })
+      : projectedSessions;
+    // A complete fixture becomes a complete child window after local projection.
+    // Partial pages retain their explicit server-owned pagination metadata.
+    const completeChildFixture =
+      childSessions.length !== projectedSessions.length &&
+      typeof response.totalCount === "number" &&
+      response.totalCount === response.sessions.length &&
+      (response.offset === undefined || response.offset === 0) &&
+      (!isRecord(params) || params.offset === undefined || params.offset === 0) &&
+      response.hasMore !== true &&
+      response.nextOffset == null;
+    if (!options.archiveFiltering) {
+      return {
+        ...response,
+        ...(completeChildFixture ? { totalCount: childSessions.length } : {}),
+        ...(childSessions.length !== projectedSessions.length || materializedSequence > 0
+          ? { count: childSessions.length }
+          : {}),
+        sessions: childSessions,
+      };
+    }
+    const filteredSessions = childSessions.filter(
+      (row) =>
+        isRecord(row) &&
+        (archivedFilter === "all" || (row.archived === true) === (archivedFilter === "archived")),
+    );
+    return {
+      ...response,
+      ...(completeChildFixture ? { totalCount: filteredSessions.length } : {}),
+      count: filteredSessions.length,
+      sessions: filteredSessions,
+    };
+  }
+
   const resolve = (params: {
     reference?: { key: string };
     key?: string;
@@ -391,6 +484,7 @@ export function createControlUiSessionFixtures(input: {
     trackRun,
     materialize,
     list,
+    listResponse,
     materializedCount: () => materializedSequence,
     replaceCanonicalList(rows: unknown[]) {
       const replacements: ControlUiSessionFixture[] = [];

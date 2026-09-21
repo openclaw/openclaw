@@ -47,6 +47,32 @@ function invalidSnapshot(params: {
 }
 
 describe("automatic startup config repair", () => {
+  it("preserves a resolved legacy channel owner in the same repair as the explicit roster", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-channel-owner-repair-" }, async (state) => {
+      await state.writeConfig({
+        agents: { list: [{ id: "${LEGACY_CHANNEL_AGENT}" }, { id: "main" }] },
+        channels: { telegram: { botToken: "123456:synthetic-owner" } },
+        bindings: [
+          { agentId: "main", match: { channel: "telegram", peer: { kind: "direct", id: "123" } } },
+        ],
+      });
+      const snapshot = await createConfigIO({
+        configPath: state.configPath,
+        env: { ...state.env, LEGACY_CHANNEL_AGENT: "ops" },
+        observe: false,
+      }).readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+      const plan = planAutomaticConfigRepair(snapshot);
+      expect(plan?.snapshot.valid).toBe(true);
+      expect(plan?.config.agents?.ownership).toBe("explicit");
+      expect(plan?.config.bindings).toContainEqual({
+        agentId: "ops",
+        match: { channel: "telegram", accountId: "default" },
+      });
+      expect(plan?.changes.join("\n")).toContain("Preserved telegram:default ownership");
+    });
+  });
+
   it.each([
     { providerId: "partner.east", refPath: 'models.providers["partner.east"].apiKey' },
     { providerId: "partner[blue]", refPath: 'models.providers["partner[blue]"].apiKey' },

@@ -86,7 +86,6 @@ describe("Code Mode configuration", () => {
       tools: {
         codeMode: {
           timeoutMs: 1234,
-          languages: ["typescript"],
         },
       },
     } as never);
@@ -97,7 +96,6 @@ describe("Code Mode configuration", () => {
     expect(resolved.runtime).toBe("quickjs-wasi");
     expect(resolved.mode).toBe("only");
     expect(resolved.timeoutMs).toBe(1234);
-    expect(resolved.languages).toEqual(["typescript"]);
     const limitedSearch = resolveCodeModeConfig({
       tools: {
         codeMode: {

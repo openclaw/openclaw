@@ -1,15 +1,30 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  prepareSystemAgentRunAdmission,
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+} from "../agents/admitted-run-context.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { authorizeScopedGatewayHttpRequestOrReply } from "./http-utils.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
 
 const lifecycle = vi.hoisted(() => ({
   authorize: vi.fn(
     async (_params: {
       req: IncomingMessage;
       res: ServerResponse;
-    }): Promise<{ cfg: Record<string, never>; requestAuth: { ok: true } } | undefined> => ({
+    }): ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply> => ({
       cfg: {},
-      requestAuth: { ok: true },
+      requestAuth: { trustDeclaredOperatorScopes: false },
+      operatorScopes: [],
     }),
   ),
   beforeHook: vi.fn(async (args: { params: unknown; signal?: AbortSignal }) => ({
@@ -48,11 +63,13 @@ const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 
 let server: ReturnType<typeof createServer> | undefined;
 let serverPort = 0;
+let resolveGatewayContext: GatewayContextResolver | undefined;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
     void handleToolsInvokeHttpRequest(req, res, {
       auth: { mode: "none", allowTailscale: false },
+      resolveGatewayContext,
     })
       .then(() => {
         lifecycle.handled();
@@ -88,8 +105,13 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  resolveGatewayContext = undefined;
   lifecycle.authorize.mockReset();
-  lifecycle.authorize.mockResolvedValue({ cfg: {}, requestAuth: { ok: true } });
+  lifecycle.authorize.mockResolvedValue({
+    cfg: {},
+    requestAuth: { trustDeclaredOperatorScopes: false },
+    operatorScopes: [],
+  });
   lifecycle.beforeHook.mockClear();
   lifecycle.handled.mockReset();
   lifecycle.execute.mockReset();
@@ -110,7 +132,7 @@ describe("POST /tools/invoke request cancellation", () => {
     lifecycle.authorize.mockImplementationOnce(async ({ res }) => {
       res.statusCode = 401;
       res.end("unauthorized");
-      return undefined;
+      return null;
     });
 
     const response = await invokeAbortProbe();
@@ -132,7 +154,11 @@ describe("POST /tools/invoke request cancellation", () => {
     lifecycle.authorize.mockImplementationOnce(async ({ req }) => {
       reportAuthorizationStarted?.(req);
       await authorizationReleased;
-      return { cfg: {}, requestAuth: { ok: true } };
+      return {
+        cfg: {},
+        requestAuth: { trustDeclaredOperatorScopes: false },
+        operatorScopes: [],
+      };
     });
 
     const requestController = new AbortController();
@@ -155,6 +181,13 @@ describe("POST /tools/invoke request cancellation", () => {
   });
 
   it("revokes the tool signal after a successful request and releases its disconnect watcher", async () => {
+    const revoked = vi.fn();
+    lifecycle.execute.mockImplementationOnce(async (_toolCallId, _args, signal) => {
+      // Observe while the tool owns the signal: Node 24 composites retain weak
+      // sources until subscribed, so a later getter can lose an aborted source to GC.
+      signal?.addEventListener("abort", revoked, { once: true });
+      return { ok: true };
+    });
     const response = await invokeAbortProbe();
 
     expect(response.status).toBe(200);
@@ -163,10 +196,128 @@ describe("POST /tools/invoke request cancellation", () => {
 
     const toolSignal = lifecycle.execute.mock.calls[0]?.[2];
     expect(toolSignal).toBeInstanceOf(AbortSignal);
+    expect(revoked).toHaveBeenCalledTimes(1);
     expect(toolSignal?.aborted).toBe(true);
     expect(lifecycle.beforeHook).toHaveBeenCalledWith(
       expect.objectContaining({ signal: toolSignal }),
     );
+  });
+
+  it("retains each child's original grant after HTTP completion without adopting a replacement", async () => {
+    await withOpenClawTestState({ label: "http-tool-child-authority" }, async () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "writer",
+            definitions: {
+              writer: {
+                sessions: { others: "write" },
+                agents: ["main"],
+                scopes: ["operator.write"],
+              },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const person = ensureProfileForEmail("http-tool-operator@example.test");
+      const context = createGatewayRequestContext(makeContextParams());
+      resolveGatewayContext = () => context;
+      context.resolveGatewayContext = resolveGatewayContext;
+      const originalGrant = new AbortController();
+      const replacementGrant = new AbortController();
+      const requestEnded = vi.fn();
+      const admissions: ReturnType<typeof prepareSystemAgentRunAdmission>[] = [];
+      const captures: {
+        scope: NonNullable<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>;
+        admitted: AdmittedRunContext;
+      }[] = [];
+      lifecycle.execute.mockImplementation(async () => {
+        const scope = getPluginRuntimeGatewayRequestScope();
+        const authority = scope?.client?.internal?.operatorRunAuthority;
+        if (!scope?.signal || !scope.hasCurrentClientAuthority || !authority) {
+          throw new Error("Tool did not receive the original operator authority");
+        }
+        expect(scope.context).toBe(context);
+        expect(scope.resolveGatewayContext).toBe(resolveGatewayContext);
+        expect(scope.hasCurrentClientAuthority()).toBe(true);
+        scope.signal.addEventListener("abort", requestEnded, { once: true });
+        const admission = prepareSystemAgentRunAdmission(
+          cfg,
+          `http-tool-child-${admissions.length}`,
+          "main",
+          "http-tool-child-test",
+          undefined,
+          authority,
+        );
+        admissions.push(admission);
+        captures.push({ scope, admitted: await admission.admit("embedded") });
+        return { ok: true };
+      });
+
+      try {
+        for (const grant of [originalGrant, replacementGrant]) {
+          lifecycle.authorize.mockResolvedValueOnce({
+            cfg,
+            operatorScopes: ["operator.write"],
+            requestAuth: {
+              authMethod: "trusted-proxy",
+              trustDeclaredOperatorScopes: true,
+              authenticatedUserProfile: {
+                profileId: person.id,
+                displayName: person.displayName,
+                hasAvatar: false,
+                updatedAt: person.updatedAt,
+              },
+              operatorAccessAuthority: {
+                signal: grant.signal,
+                assertCurrent: () => grant.signal.throwIfAborted(),
+              },
+            },
+          });
+          const response = await invokeAbortProbe();
+          expect(response.status).toBe(200);
+          await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
+          const capture = captures.at(-1);
+          if (!capture) {
+            throw new Error("Tool did not admit its child");
+          }
+          expect(capture.scope.signal?.aborted).toBe(true);
+          expect(capture.scope.hasCurrentClientAuthority?.()).toBe(false);
+          const authority = readAdmittedRunOperatorAuthority(capture.admitted);
+          expect(authority).toBe(capture.scope.client?.internal?.operatorRunAuthority);
+          expect(authority?.profileId).toBe(person.id);
+          expect(authority?.scopes).toEqual(["operator.write"]);
+          expect(authority?.signal?.aborted).toBe(false);
+          expect(() => authority?.assertCurrent()).not.toThrow();
+        }
+
+        expect(requestEnded).toHaveBeenCalledTimes(2);
+        const [original, replacement] = captures;
+        if (!original || !replacement) {
+          throw new Error("Expected children admitted by both HTTP requests");
+        }
+        const originalAuthority = readAdmittedRunOperatorAuthority(original.admitted);
+        const replacementAuthority = readAdmittedRunOperatorAuthority(replacement.admitted);
+        expect(originalAuthority?.source).not.toBe(replacementAuthority?.source);
+        originalGrant.abort(new Error("Original guest grant ended"));
+        expect(originalAuthority?.signal?.aborted).toBe(true);
+        expect(() => originalAuthority?.assertCurrent()).toThrow("Original guest grant ended");
+        expect(() => readAdmittedRunOperatorAuthority(original.admitted)).toThrow(
+          "no longer active",
+        );
+        expect(replacementAuthority?.signal?.aborted).toBe(false);
+        expect(() => replacementAuthority?.assertCurrent()).not.toThrow();
+        expect(readAdmittedRunOperatorAuthority(replacement.admitted)).toBe(replacementAuthority);
+      } finally {
+        for (const admission of admissions) {
+          admission.close();
+        }
+        originalGrant.abort();
+        replacementGrant.abort();
+        resolveGatewayContext = undefined;
+      }
+    });
   });
 
   it("aborts the running tool when its HTTP client disconnects", async () => {

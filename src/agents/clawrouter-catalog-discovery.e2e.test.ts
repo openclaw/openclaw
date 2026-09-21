@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildModelsListResult,
@@ -164,11 +165,20 @@ describe("ClawRouter cold prepared catalog", () => {
     const result = await runPreparedModelCatalogWorkerRequest(value, {
       kind: "catalog",
       syntheticAuth: [],
+      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: state.env }),
     });
     expect(result.status).toBe("ok");
     if (result.status !== "ok" || result.kind !== "catalog") {
       throw new Error("catalog worker did not publish a catalog");
     }
+    expect(result.runtimeModels.get("clawrouter")).toContainEqual(
+      expect.objectContaining({
+        provider: "clawrouter",
+        id: "codex-latest",
+        api: "openai-responses",
+        baseUrl: `${baseUrl}/v1`,
+      }),
+    );
     const projector = createGatewayAgentModelCatalogProjector({
       cfg: config,
       agentId,

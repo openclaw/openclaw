@@ -40,7 +40,16 @@ function managedImageSource(): string {
 }
 
 function managedImageResourceKey(source: string): string {
-  return `${source.replace(/\/full$/u, "/thumbnail")}::::`;
+  return JSON.stringify([
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    "",
+    `${source.replace(/\/full$/u, "/thumbnail")}?v=2`,
+    "",
+  ]);
 }
 
 function installManagedImageUrls(prefix = `managed-image-${crypto.randomUUID()}`) {
@@ -122,6 +131,63 @@ function createAvailabilityPane(source: string, authToken: string, policyKey?: s
 }
 
 describe("chat media resource lifecycle", () => {
+  it.each([false, true])(
+    "discards late transcript images and reauthorizes changed sessions or connections with managed URL=%s",
+    async (withManagedUrl) => {
+      const artifactId = `transcript-image-${crypto.randomUUID()}`;
+      const mediaId = crypto.randomUUID();
+      const imageSource = "data:image/png;base64,cG5n";
+      const { blobUrl } = installManagedImageUrls();
+      const oldImage = createDeferred<{ url: string } | null>();
+      const resolveArtifactDownload = vi
+        .fn()
+        .mockReturnValueOnce(oldImage.promise)
+        .mockResolvedValue({ url: imageSource });
+      const fetchMock = vi.fn(async (_url: string) => imageResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      const container = document.createElement("div");
+      const options = { sessionKey: "first-session", connectionEpoch: 1, resolveArtifactDownload };
+      const rerender = observeSubscriber(() =>
+        render(
+          renderMessageImages(
+            [
+              {
+                artifactId,
+                url: withManagedUrl
+                  ? `/api/chat/media/outgoing/${encodeURIComponent(options.sessionKey)}/${mediaId}/full`
+                  : undefined,
+              },
+            ],
+            { ...options, onRequestUpdate: rerender },
+          ),
+          container,
+        ),
+      );
+      rerender();
+      options.sessionKey = "second-session";
+      rerender();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
+      oldImage.resolve({ url: "data:image/png;base64,b2xk" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(imageSource);
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(blobUrl);
+
+      options.connectionEpoch = 2;
+      rerender();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resolveArtifactDownload.mock.calls.map(([params]) => params)).toEqual([
+        { sessionKey: "first-session", artifactId },
+        { sessionKey: "second-session", artifactId },
+        { sessionKey: "second-session", artifactId },
+      ]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[1]?.[0]).toBe(imageSource);
+      render(null, container);
+    },
+  );
+
   it("scopes image approval to its session and renews the approved ticket", async () => {
     const source = "/outside/project/preview.png";
     const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
@@ -1019,7 +1085,7 @@ describe("chat media resource lifecycle", () => {
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     for (const [requestUrl, init] of fetchMock.mock.calls) {
-      expect(requestUrl).toBe(ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail"));
+      expect(requestUrl).toBe(`${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=2`);
       const headers = new Headers(init.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();

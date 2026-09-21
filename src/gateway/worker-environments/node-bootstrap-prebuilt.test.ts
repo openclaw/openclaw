@@ -173,6 +173,36 @@ describe("prebuilt node bootstrap distribution", () => {
     },
   );
 
+  it("rebuilds duplicate image entries for concurrent consumers and cleans up after enrollment", async () => {
+    const current = await fixture();
+    const { built, builtBytes, retainedPath } = await retainArchive(current);
+    const header = Buffer.alloc(512);
+    new tar.Header({ path: "package/duplicate", type: "File", mode: 0o600, size: 0 }).encode(
+      header,
+    );
+    const invalidBytes = gzipSync(Buffer.concat([header, header, Buffer.alloc(1024)]));
+    await fs.writeFile(retainedPath, invalidBytes);
+    const restarted = createProvider(current.options);
+    const enrollment = new AbortController();
+    try {
+      const [artifact, concurrent] = await Promise.all([
+        restarted.prepare(enrollment.signal),
+        restarted.prepare(),
+      ]);
+      expect(concurrent).toBe(artifact);
+      expect(artifact.tarballSha256).toBe(built.tarballSha256);
+      expect(await fs.readFile(artifact.tarballPath)).toEqual(builtBytes);
+      const closing = restarted.close();
+      await expect(fs.access(artifact.tarballPath)).resolves.toBeUndefined();
+      enrollment.abort();
+      await closing;
+      await expect(fs.access(artifact.tarballPath)).rejects.toHaveProperty("code", "ENOENT");
+      expect(await fs.readFile(retainedPath)).toEqual(invalidBytes);
+    } finally {
+      enrollment.abort();
+    }
+  });
+
   it.each(["worker-turn", "remote-exec"] as const)(
     "keeps both execution modes available with an image prepared for %s",
     async (retainedMode) => {

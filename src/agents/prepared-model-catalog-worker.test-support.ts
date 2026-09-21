@@ -37,7 +37,10 @@ import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
-import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
+import {
+  refreshNativeCatalogDuringBoundedRead,
+  writeSyntheticAuthDiscoveryFixture,
+} from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 export const PROVIDER_ID = "worker-catalog-fixture";
 export const HARNESS_ID = "worker-catalog-fixture-harness";
@@ -145,6 +148,9 @@ export function writeFixturePlugin(params: {
   fs.writeFileSync(
     pluginFile,
     `const fs = require("node:fs");
+if (require("node:worker_threads").threadId !== ${threadId}) {
+  fs.appendFileSync(${JSON.stringify(path.join(params.root, "runtime-artifact-paths.txt"))}, __filename + "\\n");
+}
 module.exports = {
   id: ${JSON.stringify(PLUGIN_ID)},
   register(api) {
@@ -453,6 +459,7 @@ async function expectNativeHarnessModelsPublished(params: {
   config: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
   snapshot: PreparedModelRuntimeSnapshot;
+  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory">;
 }): Promise<void> {
   const registry = params.snapshot.pluginRegistry;
   if (!registry) {
@@ -464,7 +471,10 @@ async function expectNativeHarnessModelsPublished(params: {
     expect(params.snapshot.modelCatalog.entries).toContainEqual(
       expect.objectContaining({ provider: PROVIDER_ID, id: "configured-dynamic-model" }),
     );
-    const catalog = await params.snapshot.loadFullModelCatalog?.();
+    const catalog = await refreshNativeCatalogDuringBoundedRead({
+      ...params,
+      harnessId: HARNESS_ID,
+    });
     expect(catalog?.staticEntries).toContainEqual(
       expect.objectContaining({
         provider: PROVIDER_ID,
@@ -558,7 +568,9 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   makeTempDir: (prefix: string) => string;
   retireAfterTest: (retire: () => void) => void;
 }): Promise<void> {
-  const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory"> = {};
+  const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "provenance"> = {
+    provenance: "standalone",
+  };
   const root = params.makeTempDir("openclaw-native-model-catalog-worker-");
   const stateDir = path.join(root, "state");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -635,10 +647,9 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
     config,
     env,
   };
-  let current = true;
-  params.retireAfterTest(() => {
-    current = false;
-  });
+  const retirement = new AbortController();
+  const isCurrent = () => !retirement.signal.aborted;
+  params.retireAfterTest(() => retirement.abort());
   const build = (
     await startSerializedSnapshotBuildBatch(
       [
@@ -646,8 +657,9 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
           input,
           catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
           inventoryOwner,
-          isGenerationCurrent: () => current,
-          isBuildCurrent: () => current,
+          isGenerationCurrent: isCurrent,
+          retirementSignal: retirement.signal,
+          isBuildCurrent: isCurrent,
         },
       ],
       new Map(),
@@ -661,6 +673,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   };
   await expectNativeHarnessModelsPublished({
     config,
+    inventoryOwner,
     metadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
   });

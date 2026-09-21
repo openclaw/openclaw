@@ -228,7 +228,6 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ type: Boolean }) embedded = false;
   @property({ type: Boolean }) presented = false;
   @property({ attribute: false }) focusRequest?: () => boolean;
-  @property({ attribute: false }) canFocus?: () => boolean;
   @state() private now = Date.now();
 
   private readonly railState = new ChatSessionRailState();
@@ -292,16 +291,11 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   }
 
   override updated(changedProperties: PropertyValues<this>) {
-    // Retained tabs stay mounted while hidden. Presentation and explicit commands
-    // own focus; history, ordinary replies, and reconnects must not interrupt it.
+    // The pane owns focus intent across lazy mounting and retained tab presentation.
     const focusRequested = changedProperties.has("focusRequest")
       ? this.focusRequest?.()
       : undefined;
-    if (
-      this.presented &&
-      (this.canFocus?.() ?? true) &&
-      (focusRequested ?? changedProperties.has("presented"))
-    ) {
+    if (this.presented && focusRequested) {
       this.querySelector<HTMLTextAreaElement>(".chat-session-rail__input:not(:disabled)")?.focus({
         preventScroll: true,
       });

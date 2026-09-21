@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
 import { readQaScenarioById, type QaScenarioPack } from "./scenario-catalog.js";
 import * as taxonomyModule from "./scorecard-taxonomy.js";
 
@@ -2579,57 +2580,29 @@ describe("qa cli runtime", () => {
     }
   });
 
-  it("writes a runtime-axis parity report from one summary", async () => {
+  it.each([
+    { status: "pass", runtimeErrorClass: "tool-error" },
+    { status: "skip", details: "known-harness-gap fixture: unavailable" },
+  ])("writes a runtime-axis parity report preserving $status", async (cellOutcome) => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-runtime-parity-"));
     const priorExitCode = process.exitCode;
     process.exitCode = 0;
 
     try {
+      const summary = makeRuntimeParitySummary();
+      const scenario = summary.scenarios[1];
+      if (!scenario?.runtimeParity) {
+        throw new Error("runtime parity fixture missing");
+      }
+      scenario.status = "fail";
+      Object.assign(scenario.runtimeParity.cells.codex, cellOutcome);
       await fs.writeFile(
         path.join(repoRoot, "runtime-summary.json"),
         JSON.stringify({
-          scenarios: [
-            {
-              name: "Approval turn tool followthrough",
-              status: "fail",
-              steps: [],
-              runtimeParity: {
-                scenarioId: "approval-turn-tool-followthrough",
-                drift: "tool-call-shape",
-                driftDetails: "tool call 1 differs",
-                cells: {
-                  openclaw: {
-                    runtime: "openclaw",
-                    status: "pass",
-                    transcriptBytes: '{"role":"assistant"}\n',
-                    toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
-                    finalText: "done",
-                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-                    wallClockMs: 10,
-                    bootStateLines: [],
-                  },
-                  codex: {
-                    runtime: "codex",
-                    status: "pass",
-                    transcriptBytes: '{"role":"assistant"}\n',
-                    toolCalls: [{ tool: "read_file", argsHash: "b", resultHash: "r" }],
-                    finalText: "done",
-                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-                    wallClockMs: 10,
-                    runtimeErrorClass: "tool-error",
-                    bootStateLines: [],
-                  },
-                },
-              },
-            },
-          ],
+          ...summary,
+          scenarios: [scenario],
           counts: { total: 1, passed: 1, failed: 0 },
-          run: {
-            status: "completed",
-            providerMode: "mock-openai",
-            primaryModel: "openai/gpt-5.6-luna",
-            runtimePair: ["openclaw", "codex"],
-          },
+          run: { ...summary.run, status: "completed" },
         }),
         "utf8",
       );
@@ -2638,8 +2611,17 @@ describe("qa cli runtime", () => {
         repoRoot,
         runtimeAxis: true,
         summary: "runtime-summary.json",
+        outputDir: "report",
       });
 
+      const reportDir = path.join(repoRoot, "report");
+      const report = JSON.parse(
+        await fs.readFile(path.join(reportDir, "qa-runtime-parity-summary.json"), "utf8"),
+      );
+      expect(report.scenarios[0].codexStatus).toBe(cellOutcome.status);
+      expect(
+        await fs.readFile(path.join(reportDir, "qa-runtime-parity-report.md"), "utf8"),
+      ).toContain(`- codex: ${cellOutcome.status} (`);
       expect(process.exitCode).toBe(0);
       expect(stdoutWrite).toHaveBeenCalledWith(
         expect.stringContaining("QA runtime parity report:"),

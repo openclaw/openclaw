@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements bundled plugin staging behavior.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

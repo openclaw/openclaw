@@ -1,17 +1,9 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as cryptoDigest from "../infra/crypto-digest.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import {
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
@@ -19,18 +11,10 @@ import {
 import { resolvePreparedModelRuntimeOwnerBySnapshot } from "./prepared-model-runtime.owner.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
-
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "prepared-catalog-sharing" });
-  await resetPreparedModelRuntimeHarness(state);
-});
-
-afterEach(async ({ task }) => {
+const fixture = usePreparedModelRuntimeHarness({ label: "prepared-catalog-sharing" }, () => {
   vi.restoreAllMocks();
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
+const { mocks } = fixture;
 
 async function publishedNativeSource(input: PreparedModelRuntimeInput): Promise<string> {
   const snapshot = await publishPreparedModelRuntimeSnapshot(input, {
@@ -74,7 +58,7 @@ describe("prepared catalog source sharing", () => {
       agents: { entries: { selected: {}, sibling: { name: "before" } } },
       plugins: { entries: { fixture: { config: { revision: 1 } } } },
     };
-    const input = { config, agentId: "selected", agentDir: state.agentDir("selected") };
+    const input = { config, agentId: "selected", agentDir: fixture.state.agentDir("selected") };
     const first = await publishedNativeSource(input);
     config.logging = { level: "debug" };
     expect(await publishedNativeSource(input)).toBe(first);
@@ -91,13 +75,13 @@ describe("prepared catalog source sharing", () => {
         entries: { first: { model: "custom/first" }, second: { model: "custom/second" } },
       },
     };
-    const input = { config, agentId: "first", agentDir: state.agentDir("first") };
+    const input = { config, agentId: "first", agentDir: fixture.state.agentDir("first") };
     const first = await publishedNativeSource(input);
     expect(
       await publishedNativeSource({
         ...input,
         agentId: "second",
-        agentDir: state.agentDir("second"),
+        agentDir: fixture.state.agentDir("second"),
       }),
     ).not.toBe(first);
     expect(

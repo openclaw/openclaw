@@ -81,6 +81,7 @@ import {
   resolveFeishuReplyPolicy,
 } from "./policy.js";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
+import { shouldSendNoVisibleReplyFallback } from "./reply-delivery-result.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
@@ -97,27 +98,6 @@ export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
-
-function shouldSendNoVisibleReplyFallback(dispatchResult: {
-  settledReceipt?: {
-    anyVisibleDelivered: boolean;
-    counts: { final: { failedBeforeSend: number } };
-  };
-  noVisibleReplyFallbackEligible?: boolean;
-  sendPolicyDenied?: boolean;
-  sourceReplyDeliveryMode?: string;
-}): boolean {
-  const emptyEligibleDispatch =
-    dispatchResult.noVisibleReplyFallbackEligible === true &&
-    dispatchResult.settledReceipt?.anyVisibleDelivered !== true;
-  const finalFailedBeforeSend =
-    (dispatchResult.settledReceipt?.counts.final.failedBeforeSend ?? 0) > 0;
-  return (
-    dispatchResult.sendPolicyDenied !== true &&
-    dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" &&
-    (emptyEligibleDispatch || finalFailedBeforeSend)
-  );
-}
 
 function isFeishuTopicSessionScope(
   scope: ReturnType<typeof resolveConfiguredFeishuGroupSessionScope>,
@@ -302,6 +282,7 @@ export async function handleFeishuMessage(params: {
   processingClaim?: FeishuMessageProcessingClaim;
   messageDedupeKey?: string;
   turnAdoptionLifecycle?: FeishuIngressLifecycle;
+  trackTask?: (task: Promise<void>) => void;
 }): Promise<void> {
   const {
     event,
@@ -1564,6 +1545,7 @@ export async function handleFeishuMessage(params: {
         return;
       }
       const broadcastSettlement = createFeishuBroadcastIngressSettlement({
+        trackTask: params.trackTask,
         lifecycle: turnAdoptionLifecycle,
         replayClaim: broadcastClaim.kind === "claimed" ? broadcastClaim.handle : undefined,
         onReplayCommitError: (err) =>

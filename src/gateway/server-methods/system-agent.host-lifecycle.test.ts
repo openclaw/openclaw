@@ -208,15 +208,18 @@ describe("openclaw.chat hosted lifecycle", () => {
       let sameOwnerChat: Promise<RespondCall> | undefined;
       try {
         if (!fullPermission) {
-          await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
+          await vi.waitFor(async () => expect(await manager.listPendingRecords()).toHaveLength(1));
           expect(requestResponses.calls).toHaveLength(0);
           expect(getActiveGatewayRootWorkCount()).toBe(1);
           expect(systemAgentLane()).toMatchObject({ activeCount: 0, queuedCount: 0 });
-          const proposalId = expectDefined(manager.listPendingRecords()[0], "pending approval").id;
-          expect(manager.getSnapshot(proposalId)).toMatchObject({
+          const proposalId = expectDefined(
+            (await manager.listPendingRecords())[0],
+            "pending approval",
+          ).id;
+          expect(await manager.getSnapshot(proposalId)).toMatchObject({
             request: { proposalHash, agentId: "main", sessionKey: "agent:main:main" },
           });
-          expect(manager.getSnapshot(proposalId)?.decision).toBeUndefined();
+          expect((await manager.getSnapshot(proposalId))?.decision).toBeUndefined();
           expect(broadcast).toHaveBeenCalledWith(
             "openclaw.approval.requested",
             expect.objectContaining({ id: proposalId }),
@@ -234,7 +237,7 @@ describe("openclaw.chat hosted lifecycle", () => {
             );
             await vi.waitFor(() => expect(handle).toHaveBeenCalledTimes(2));
           }
-          expect(manager.resolve(proposalId, "allow-once", "operator-ui")).toBe(true);
+          expect(await manager.resolve(proposalId, "allow-once", "operator-ui")).toBe(true);
         }
         await Promise.race([
           preparationStarted.promise,
@@ -250,7 +253,7 @@ describe("openclaw.chat hosted lifecycle", () => {
         expect(nativeEffect).not.toHaveBeenCalled();
         expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
         if (fullPermission) {
-          expect(manager.listPendingRecords()).toEqual([]);
+          expect(await manager.listPendingRecords()).toEqual([]);
           expect(broadcast).not.toHaveBeenCalled();
         }
         if (loss === "run") {
@@ -335,8 +338,8 @@ describe("openclaw.chat hosted lifecycle", () => {
         releasePreparation.resolve();
         releaseAudit.resolve();
         controller.abort();
-        for (const record of manager.listPendingRecords()) {
-          manager.expire(record.id);
+        for (const record of await manager.listPendingRecords()) {
+          await manager.expire(record.id);
         }
         await Promise.allSettled([pendingChat, sameOwnerChat]);
         await host.retire();

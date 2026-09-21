@@ -111,10 +111,10 @@ function resolveApprovalSessionTarget(
       : method === "approval.resolve" && kind === "system-agent"
         ? context.systemAgentApprovalManager
         : context.execApprovalManager;
-  const resolvedId = manager?.lookupApprovalId(id, { includeResolved: true });
+  const resolvedId = manager?.lookupLocalApprovalId(id, { includeResolved: true });
   const recordId =
     resolvedId?.kind === "exact" || resolvedId?.kind === "prefix" ? resolvedId.id : id;
-  const request = manager?.getSnapshot(recordId)?.request;
+  const request = manager?.getLocalSnapshot(recordId)?.request;
   const sessionKey = readSessionSharingStringParam(request, "sessionKey");
   const agentId = readSessionSharingStringParam(request, "agentId");
   return sessionKey

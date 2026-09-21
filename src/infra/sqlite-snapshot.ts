@@ -23,11 +23,8 @@ import {
   type FileMutationFingerprint,
 } from "./file-descriptor.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import {
-  openNodeSqliteDatabase,
-  requireNodeSqlite,
-  resolveSqliteFilesystemPath,
-} from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { withSqliteSnapshotSource } from "./sqlite-snapshot-source.js";
@@ -572,7 +569,6 @@ export async function createVerifiedSqliteSnapshot(
   );
   await fs.chmod(stagingDir, 0o700);
   const stagedPath = path.join(stagingDir, "database.sqlite");
-  const sqlite = requireNodeSqlite();
   let stagedIdentity: Stats | undefined;
   try {
     await withSqliteSnapshotSource(options.sourcePath, async (snapshotSourcePath) => {
@@ -589,7 +585,7 @@ export async function createVerifiedSqliteSnapshot(
           await loadSqliteVecExtension({ db: source });
           assertSqliteIntegrity(source, options.sourcePath);
           options.validate?.(source, options.sourcePath);
-          await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
+          await backupNodeSqliteDatabase(source, stagedPath);
         } finally {
           source.exec("ROLLBACK;");
         }

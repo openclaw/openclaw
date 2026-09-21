@@ -1,4 +1,4 @@
-import { fork } from "node:child_process";
+import { execFile, fork, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -6,9 +6,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
+import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -20,7 +22,18 @@ import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, fork: vi.fn(actual.fork) };
+  const { promisify } = await import("node:util");
+  const execFileSpy = vi.fn(actual.execFile);
+  Object.defineProperty(
+    execFileSpy,
+    promisify.custom,
+    Object.getOwnPropertyDescriptor(actual.execFile, promisify.custom)!,
+  );
+  return { ...actual, execFile: execFileSpy, fork: vi.fn(actual.fork), spawn: vi.fn(actual.spawn) };
+});
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, availableParallelism: () => 2 };
 });
 
 const supportedVersions = {
@@ -37,6 +50,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 beforeEach(() => {
+  vi.mocked(execFile).mockReset();
   vi.stubEnv("XDG_CACHE_HOME", tempDirs.make("openclaw-preflight-lifecycle-cache-"));
 });
 
@@ -55,14 +69,26 @@ it.each([
   ...(["success", "failure", "cancel"] as const).map((outcome) => ({
     source: "direct",
     outcome,
+    owner: "caller" as const,
   })),
   ...(["close-failure", "cancel"] as const).map((outcome) => ({
     source: "snapshot",
     outcome,
+    owner: "caller" as const,
+  })),
+  ...(["direct", "snapshot"] as const).map((source) => ({
+    source,
+    outcome: "cancel" as const,
+    owner: "startup" as const,
+  })),
+  ...(["direct", "snapshot"] as const).map((source) => ({
+    source,
+    outcome: "cancel" as const,
+    owner: "scope" as const,
   })),
 ])(
-  "joins all $source children and releases their leases before $outcome settlement",
-  async ({ source, outcome }) => {
+  "joins all $source children and releases their leases before $outcome settlement (owner=$owner)",
+  async ({ source, outcome, owner }) => {
     const root = tempDirs.make("openclaw-preflight-reader-lifecycle-");
     const initializedEnv = { OPENCLAW_STATE_DIR: path.join(root, "initialized") };
     const paths = [
@@ -164,16 +190,32 @@ it.each([
     const controller = new AbortController();
     const cancellation = new Error("intentional reader cancellation");
     const onAgentInspection = vi.fn();
+    if (owner === "scope") {
+      vi.spyOn(sqliteInspection, "readSqliteInspectionBudget").mockReturnValue({
+        timeoutMs: 10,
+        size: "fixture",
+      });
+    }
     let settled = false;
-    const run = preflightOpenClawDatabaseSchemas({
-      env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
-      supportedVersions,
-      configuredAgentDatabaseCandidatePaths: paths,
-      verifyCurrentSchemaShape: true,
-      requireStartupMigrationReadiness: true,
-      signal: controller.signal,
-      onAgentInspection,
-    });
+    const inspect = () =>
+      preflightOpenClawDatabaseSchemas({
+        env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
+        supportedVersions,
+        configuredAgentDatabaseCandidatePaths: paths,
+        verifyCurrentSchemaShape: true,
+        requireStartupMigrationReadiness: true,
+        signal: owner === "scope" ? undefined : controller.signal,
+        onAgentInspection,
+      });
+    const run =
+      owner === "startup"
+        ? withAgentDatabaseStartupAdmission(inspect)
+        : owner === "scope"
+          ? sqliteInspection.withSqliteReadOnlyWorkerScope(inspect, {
+              signal: controller.signal,
+              deadlineOwnedByCaller: true,
+            })
+          : inspect();
     void run.then(
       () => {
         settled = true;
@@ -223,6 +265,8 @@ it.each([
       );
       if (outcome === "cancel") {
         controller.abort(cancellation);
+        await setImmediate();
+        expect(children.map((child) => child.killed)).toEqual([true, true]);
         await expect(run).rejects.toBe(cancellation);
       } else {
         fs.writeFileSync(marker("release-0"), "resume");
@@ -315,70 +359,86 @@ function createSnapshotCandidates() {
   return { env, paths };
 }
 
-it("reuses two schema readers for closed WAL snapshots without changing source artifacts", async () => {
-  const root = tempDirs.make("openclaw-preflight-closed-wal-");
-  const initializedEnv = { OPENCLAW_STATE_DIR: path.join(root, "initialized") };
-  const paths = ["first", "second", "queued"].map(
-    (agentId) => openOpenClawAgentDatabase({ agentId, env: initializedEnv }).path,
-  );
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  const originalBytes = paths.map((pathname) => fs.readFileSync(pathname));
-  for (const pathname of paths) {
-    expect(fs.existsSync(`${pathname}-wal`)).toBe(false);
-    expect(fs.existsSync(`${pathname}-shm`)).toBe(false);
-    expect(fs.existsSync(`${pathname}-journal`)).toBe(false);
-  }
-  const locations: string[] = [];
-  const prepare = snapshots.prepareSqliteReadOnlyLocation;
-  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
-    async (pathname, options) => {
-      const prepared = await prepare(pathname, options);
-      locations.push(prepared.location);
-      return prepared;
-    },
-  );
-  vi.mocked(fork).mockClear();
-  const onAgentInspection = vi.fn();
-
-  await expect(
-    preflightOpenClawDatabaseSchemas({
-      env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
-      supportedVersions,
-      configuredAgentDatabaseCandidatePaths: paths,
-      verifyCurrentSchemaShape: true,
-      requireStartupMigrationReadiness: true,
-      onAgentInspection,
-    }),
-  ).resolves.toEqual({ incompatible: [], indeterminate: [] });
-
-  expect(fork).toHaveBeenCalledTimes(2);
-  expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith({
-    schemaProcessCount: 2,
-    schemaInspectionCount: 3,
-    schemaSnapshotCount: 3,
-  });
-  const children = vi
-    .mocked(fork)
-    .mock.results.filter((result) => result.type === "return")
-    .map(({ value }) => value);
-  expect(children).toHaveLength(2);
-  for (const child of children) {
-    expect(child.exitCode).toBe(0);
-    expect(child.connected).toBe(false);
-  }
-  expect(locations).toHaveLength(3);
-  for (const location of locations) {
-    expect(fs.existsSync(path.dirname(location))).toBe(false);
-  }
-  for (const [index, pathname] of paths.entries()) {
-    expect(fs.readFileSync(pathname)).toEqual(originalBytes[index]);
-    for (const suffix of ["-wal", "-shm", "-journal"]) {
-      expect(fs.existsSync(pathname + suffix)).toBe(false);
+it.each(["header", "shape", "startup"])(
+  "bounds %s readers for closed WAL fleets without changing source artifacts",
+  async (mode) => {
+    const root = tempDirs.make("openclaw-preflight-closed-wal-");
+    const initializedEnv = { OPENCLAW_STATE_DIR: path.join(root, "initialized") };
+    const targets = Array.from({ length: 6 }, (_, index) => {
+      const agentId = `worker-${index}`;
+      return { agentId, path: openOpenClawAgentDatabase({ agentId, env: initializedEnv }).path };
+    });
+    const paths = targets.map((target) => target.path);
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const originalBytes = paths.map((pathname) => fs.readFileSync(pathname));
+    for (const pathname of paths) {
+      expect(fs.existsSync(`${pathname}-wal`)).toBe(false);
+      expect(fs.existsSync(`${pathname}-shm`)).toBe(false);
+      expect(fs.existsSync(`${pathname}-journal`)).toBe(false);
     }
-    acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
-  }
-});
+    const locations: string[] = [];
+    const prepare = snapshots.prepareSqliteReadOnlyLocation;
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
+      async (pathname, options) => {
+        const prepared = await prepare(pathname, options);
+        locations.push(prepared.location);
+        return prepared;
+      },
+    );
+    vi.mocked(fork).mockClear();
+    vi.mocked(execFile).mockClear();
+    vi.mocked(spawn).mockClear();
+    const onAgentInspection = vi.fn();
+
+    await expect(
+      preflightOpenClawDatabaseSchemas({
+        env: { OPENCLAW_STATE_DIR: path.join(root, "absent-state") },
+        supportedVersions,
+        configuredAgentDatabaseTargets: targets,
+        verifyCurrentSchemaShape: mode !== "header",
+        requireStartupMigrationReadiness: mode === "startup",
+        onAgentInspection,
+      }),
+    ).resolves.toEqual({ incompatible: [], indeterminate: [] });
+
+    expect(fork).toHaveBeenCalledTimes(2);
+    const oneShotReaders = vi
+      .mocked(execFile)
+      .mock.calls.filter(
+        ([, args]) =>
+          Array.isArray(args) &&
+          ["schema-header", "sync", "async"].some((readerMode) => args.includes(readerMode)),
+      );
+    expect(oneShotReaders).toHaveLength(0);
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith({
+      schemaProcessCount: 2,
+      schemaInspectionCount: paths.length,
+      schemaSnapshotCount: paths.length,
+    });
+    const children = vi
+      .mocked(fork)
+      .mock.results.filter((result) => result.type === "return")
+      .map(({ value }) => value);
+    expect(children).toHaveLength(2);
+    for (const child of children) {
+      expect(child.exitCode).toBe(0);
+      expect(child.connected).toBe(false);
+    }
+    expect(locations).toHaveLength(paths.length);
+    for (const location of locations) {
+      expect(fs.existsSync(path.dirname(location))).toBe(false);
+    }
+    for (const [index, pathname] of paths.entries()) {
+      expect(fs.readFileSync(pathname)).toEqual(originalBytes[index]);
+      for (const suffix of ["-wal", "-shm", "-journal"]) {
+        expect(fs.existsSync(pathname + suffix)).toBe(false);
+      }
+      acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
+    }
+  },
+);
 
 it("drains started agent snapshots before rejecting cancellation", async () => {
   const fixture = createSnapshotCandidates();

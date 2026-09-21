@@ -11,7 +11,10 @@ import {
   type OutboundMediaAccess,
 } from "../../media/load-options.js";
 import { loadWebMedia } from "../../media/web-media.js";
-import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
+import {
+  captureDeliveryQueueStateContext,
+  type DeliveryQueueStateContext,
+} from "../delivery-queue-sqlite.js";
 import { fileStore } from "../file-store.js";
 import { generateSecureUuid } from "../secure-random.js";
 import {
@@ -244,22 +247,24 @@ async function pruneDeliveryQueueMedia(params: {
 }
 
 /** Reclaims queue media using the complete pending inventory as the retain set. */
-export async function pruneOrphanedDeliveryQueueMedia(params?: {
-  stateDir?: string;
-  nowMs?: number;
-}): Promise<void> {
+export async function pruneOrphanedDeliveryQueueMedia(
+  params?: { stateDir?: string; nowMs?: number },
+  context?: DeliveryQueueStateContext,
+): Promise<void> {
+  const captured = context ?? captureDeliveryQueueStateContext(params?.stateDir);
+  const stateDir = captured.stateDir;
   const nowMs = params?.nowMs ?? Date.now();
-  const snapshot = loadDeliveryQueueMediaRetentionSnapshot({
-    expireBeforeMs: nowMs - ORPHAN_GRACE_MS,
-    stateDir: params?.stateDir,
-  });
+  const snapshot = await loadDeliveryQueueMediaRetentionSnapshot(
+    { expireBeforeMs: nowMs - ORPHAN_GRACE_MS },
+    captured,
+  );
   await pruneDeliveryQueueMedia({
     retainPaths: new Set(
       snapshot.stagedArtifacts.concat(
-        snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, params?.stateDir)),
+        snapshot.payloads.flatMap((payloads) => collectEntrySpoolPaths(payloads, stateDir)),
       ),
     ),
-    stateDir: params?.stateDir,
+    stateDir,
     nowMs,
   });
 }

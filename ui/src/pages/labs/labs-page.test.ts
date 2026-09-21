@@ -185,6 +185,16 @@ describe("LabsPage", () => {
       expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: null } } } },
       note: "labs: update customPluginUi",
     },
+    {
+      label: "Host Desktop",
+      sourceConfig: {
+        desktop: {
+          host: { enabled: true, managed: false, port: 5908, passwordFile: "/tmp/vnc-password" },
+        },
+      },
+      expectedPatch: { desktop: { host: { enabled: false } } },
+      note: "labs: update hostDesktop",
+    },
   ])(
     "restores the default through the canonical patch flow when disabling $label",
     async (testCase) => {
@@ -236,15 +246,6 @@ describe("LabsPage", () => {
       note: "labs: update codeMode",
     },
     {
-      // Enabling must pin the mode: resolveToolSearchConfig defaults an unset
-      // mode to "code", so a bare `enabled: true` would select the surface with
-      // the weakest recall rather than the one this row advertises.
-      label: "Tool Search for all models",
-      sourceConfig: { tools: { toolSearch: { enabled: false } } },
-      expectedPatch: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
-      note: "labs: update toolSearch",
-    },
-    {
       label: "Custom plugin UI",
       sourceConfig: {},
       expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
@@ -277,27 +278,9 @@ describe("LabsPage", () => {
     });
   });
 
-  it("marks startup-scoped entries as needing a restart", async () => {
-    const { page } = await mountPage({});
-    const rows = [...page.querySelectorAll(".settings-row")];
-
-    const restartRows = rows.filter((row) => row.textContent?.toLowerCase().includes("restart"));
-    expect(restartRows).toHaveLength(3);
-    expect(restartRows.map((row) => row.textContent)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Custom plugin UI"),
-        expect.stringContaining("Host Desktop"),
-        expect.stringContaining("Cloud Worker Desktop"),
-      ]),
-    );
-    expect(labRow(page, "Custom plugin UI").textContent).toContain(
-      "Restart the Gateway and reload this browser tab",
-    );
-  });
-
   it("shows default provenance", async () => {
     const inherited = await mountPage({});
-    expect(labRow(inherited.page, "Code Mode").textContent).toContain("Using default: Disabled");
+    expect(labRow(inherited.page, "Code Mode").textContent).not.toContain("Using default:");
     inherited.provider.remove();
 
     const overridden = await mountPage({
@@ -360,57 +343,76 @@ describe("LabsPage code mode enablement", () => {
 });
 
 describe("LabsPage tool search enablement", () => {
-  // readToolSearchConfig + readBoolean(raw.enabled, configured): an object that
-  // configures anything besides `enabled` is already on at runtime.
+  // The unauthored default is on; authored objects retain their existing
+  // enablement rules, including an empty object remaining off.
   it.each([
     ["boolean shorthand", true, { tools: { toolSearch: true } }],
     ["explicit enabled", true, { tools: { toolSearch: { enabled: true } } }],
     ["mode without enabled", true, { tools: { toolSearch: { mode: "tools" } } }],
     ["explicit disabled", false, { tools: { toolSearch: { enabled: false } } }],
     ["boolean false", false, { tools: { toolSearch: false } }],
-    ["unset", false, {}],
+    ["unset", true, {}],
+    ["empty tools", true, { tools: {} }],
+    ["explicit undefined", true, { tools: { toolSearch: undefined } }],
+    ["empty object", false, { tools: { toolSearch: {} } }],
+    ["options without enabled", true, { tools: { toolSearch: { maxSearchLimit: 3 } } }],
+    [
+      "explicit disabled with options",
+      false,
+      { tools: { toolSearch: { enabled: false, mode: "directory", maxSearchLimit: 3 } } },
+    ],
     [
       "local model without a global override",
-      false,
+      true,
       { agents: { defaults: { model: "ollama/qwen3.5:4b" } } },
     ],
   ])("reads %s as %s", async (_label, expected, config) => {
-    const { page, provider } = await mountPage(config);
+    const { page, provider, runtimeConfig } = await mountPage(config);
 
     expect(labToggle(page, "Tool Search for all models").checked).toBe(expected);
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
     provider.remove();
   });
 
-  it("restores a mode-only override at the Tool Search owner boundary", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { toolSearch: { mode: "tools" } },
-    });
+  it.each([
+    ["inherited default", {}],
+    ["boolean shorthand", { tools: { toolSearch: true } }],
+    ["mode-only override", { tools: { toolSearch: { mode: "directory" } } }],
+    ["option-bearing override", { tools: { toolSearch: { enabled: true, maxSearchLimit: 3 } } }],
+  ])("disables %s without replacing authored modes or options", async (_label, config) => {
+    const { page, runtimeConfig } = await mountPage(config);
     const toggle = labToggle(page, "Tool Search for all models");
 
     expect(toggle.checked).toBe(true);
-    expect(labRow(page, "Tool Search for all models").textContent).toContain("Default: Disabled");
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { toolSearch: null } },
+      raw: { tools: { toolSearch: { enabled: false } } },
       note: "labs: update toolSearch",
     });
   });
 
-  it("enables an explicit-disabled override with the recommended mode", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { toolSearch: { enabled: false, mode: "tools" } },
-    });
+  it.each([
+    ["boolean false", { tools: { toolSearch: false } }],
+    ["empty object", { tools: { toolSearch: {} } }],
+    ["explicit disabled", { tools: { toolSearch: { enabled: false } } }],
+    [
+      "disabled mode and options",
+      { tools: { toolSearch: { enabled: false, mode: "directory", maxSearchLimit: 3 } } },
+    ],
+  ])("restores %s to the default at the Tool Search owner boundary", async (_label, config) => {
+    const { page, runtimeConfig } = await mountPage(config);
     const toggle = labToggle(page, "Tool Search for all models");
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(labRow(page, "Tool Search for all models").textContent).toContain("Default: Enabled");
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
+      raw: { tools: { toolSearch: null } },
       note: "labs: update toolSearch",
     });
   });

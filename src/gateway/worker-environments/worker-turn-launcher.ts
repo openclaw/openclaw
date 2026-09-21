@@ -16,6 +16,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
+import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import {
@@ -74,6 +75,16 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       workspaceDir: string;
     }): Promise<SandboxContext | null>;
   } = {
+    resolveRuntimeOverride(identity) {
+      const placement = options.placements.get(identity.sessionId);
+      return placement &&
+        placement.state !== "local" &&
+        placement.executionMode === "worker-turn" &&
+        (identity.agentId === undefined || placement.agentId === identity.agentId) &&
+        (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
+        ? "openclaw"
+        : undefined;
+    },
     assertCompactionSuccessorAllowed({ currentTarget }) {
       const placement = options.placements.get(currentTarget.sessionId);
       // Remote-exec has a local turn claim but still owns remote workspace state.
@@ -390,7 +401,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             assertRunCurrent: remoteExec ? assertRunCurrent : assertAdmissionCurrent,
           });
         } catch (error) {
-          if (error instanceof StaleWorkerBuildError) {
+          if (
+            error instanceof StaleWorkerBuildError ||
+            error instanceof WorkerRuntimeRefreshPendingError
+          ) {
             const canRecoverBuild =
               !handedOff &&
               options.placements.validateTurnClaim(turnClaim) &&

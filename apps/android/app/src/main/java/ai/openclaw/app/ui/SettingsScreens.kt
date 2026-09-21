@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidLicenseNotice
 import ai.openclaw.app.AppLanguage
+import ai.openclaw.app.AppearanceTextScale
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
@@ -129,6 +130,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
@@ -140,7 +143,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -168,6 +170,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -1032,7 +1035,7 @@ private fun SettingsWaveformPanel(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
     ) {
-      Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(ClawTheme.spacing.icon), tint = ClawTheme.colors.text)
+      Icon(imageVector = Icons.Default.PlayArrow, contentDescription = nativeString("Play audio"), modifier = Modifier.size(ClawTheme.spacing.icon), tint = ClawTheme.colors.text)
       // Thinking is the preview phase: no capture runs on this screen, so the
       // synthetic swell demonstrates the animation without touching the mic.
       TalkWaveform(
@@ -1565,7 +1568,7 @@ private fun PhoneCapabilitiesScreen(
       showBackgroundLocationExplanation = false
     }
 
-    AlertDialog(
+    AppAlertDialog(
       onDismissRequest = ::cancelBackgroundLocationRequest,
       title = { Text(nativeString("Allow background location?")) },
       text = {
@@ -1601,7 +1604,7 @@ private fun InstalledAppsDisclosureDialog(
   onDismiss: () -> Unit,
   onAgree: () -> Unit,
 ) {
-  AlertDialog(
+  AppAlertDialog(
     onDismissRequest = onDismiss,
     title = { Text(nativeString("Share installed app information?")) },
     text = {
@@ -1656,7 +1659,11 @@ private fun GatewaySettingsScreen(
   var tokenInput by remember { mutableStateOf("") }
   var bootstrapTokenInput by remember { mutableStateOf("") }
   var passwordInput by remember { mutableStateOf("") }
-  var validationText by remember { mutableStateOf<String?>(null) }
+  var setupValidationText by remember { mutableStateOf<String?>(null) }
+  var manualValidationText by remember { mutableStateOf<String?>(null) }
+  var showDiagnostics by rememberSaveable { mutableStateOf(false) }
+  var showDiscovery by rememberSaveable { mutableStateOf(false) }
+  var showManual by rememberSaveable { mutableStateOf(false) }
   var showSetupCodeHelp by remember { mutableStateOf(false) }
   var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
   var pendingForgetStableId by remember { mutableStateOf<String?>(null) }
@@ -1669,7 +1676,8 @@ private fun GatewaySettingsScreen(
     }
 
   fun saveAndConnect(plan: GatewayConnectPlan) {
-    validationText = null
+    setupValidationText = null
+    manualValidationText = null
     viewModel.saveGatewayConfigAndConnect(plan)
   }
 
@@ -1730,8 +1738,7 @@ private fun GatewaySettingsScreen(
     )
   }
 
-  // Discovery only runs while a discovery consumer is active; the Add Gateway
-  // panel needs live results just like onboarding does.
+  // Keep discovery available to the disclosed list, as in onboarding.
   LaunchedEffect(Unit) { viewModel.startGatewayDiscovery() }
 
   fun connectSetupCode() {
@@ -1750,7 +1757,7 @@ private fun GatewaySettingsScreen(
         passwordInput = "",
       )
     if (plan == null) {
-      validationText = nativeString("Enter a valid setup code or gateway address.")
+      setupValidationText = nativeString("Enter a valid setup code or gateway address.")
       return
     }
     if (plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_SETUP) {
@@ -1776,25 +1783,9 @@ private fun GatewaySettingsScreen(
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric(nativeString("Connection"), if (gatewayConnectionDisplay.isConnected) nativeString("Connected") else nativeString("Offline")),
-          SettingsMetric(nativeString("Node"), if (isNodeConnected) nativeString("Online") else nativeString("Offline")),
-          SettingsMetric(
-            nativeString("Access"),
-            gatewayAccessLabel(
-              isConnected = gatewayConnectionDisplay.isConnected,
-              operatorAdminScopeAvailable = operatorAdminScopeAvailable,
-            ),
-          ),
           SettingsMetric(nativeString("Gateway"), serverName?.takeIf { it.isNotBlank() } ?: nativeString("Home Gateway")),
-          SettingsMetric(nativeString("Address"), remoteAddress?.takeIf { it.isNotBlank() } ?: nativeString("Not available")),
-          SettingsMetric(
-            nativeString("Status"),
-            gatewayStatusLabel(gatewayConnectionDisplay),
-          ),
-          SettingsMetric(nativeString("Discovered"), discoveredGateways.size.toString()),
-          SettingsMetric(nativeString("Default Agent"), defaultAgentName(gatewayAgents, gatewayDefaultAgentId)),
-          SettingsMetric(nativeString("Agents"), gatewayAgents.size.toString()),
-          SettingsMetric(nativeString("Instance ID"), instanceId, copyable = true),
+          SettingsMetric(nativeString("Connection"), if (gatewayConnectionDisplay.isConnected) nativeString("Connected") else nativeString("Offline")),
+          SettingsMetric(nativeString("Status"), gatewayStatusLabel(gatewayConnectionDisplay)),
         ),
     )
     // First-run hero: no paired gateways yet, so pairing is the primary action.
@@ -1841,63 +1832,6 @@ private fun GatewaySettingsScreen(
     ) {
       ClawPrimaryButton(text = nativeString("Reconnect"), onClick = viewModel::refreshGatewayConnection, modifier = Modifier.weight(1f))
       ClawSecondaryButton(text = nativeString("Disconnect"), onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
-    }
-    ClawSecondaryButton(
-      text = nativeString("Diagnose"),
-      onClick = {
-        copyGatewayDiagnosticsReport(
-          context = context,
-          screen = "gateway settings",
-          gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress, manualHost, manualPort, manualTls),
-          statusText = gatewayStatusLabel(gatewayConnectionDisplay),
-        )
-      },
-      modifier = Modifier.fillMaxWidth(),
-    )
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        Text(text = nativeString("Add Gateway"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Text(
-          text = nativeString("Scan or paste a setup code to add another gateway."),
-          style = ClawTheme.type.body,
-          color = ClawTheme.colors.textMuted,
-        )
-        ClawSecondaryButton(text = nativeString("Scan QR"), onClick = viewModel::openGatewayAddition, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
-        ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = nativeString("Setup code"), secret = true)
-        ClawSecondaryButton(text = nativeString("Connect"), onClick = ::connectSetupCode, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Cloud)
-        TextButton(onClick = { showSetupCodeHelp = !showSetupCodeHelp }) {
-          Text(nativeString("Where do I get a setup code?"))
-        }
-        if (showSetupCodeHelp) {
-          Text(
-            text = nativeString("Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below."),
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
-          )
-        }
-        if (discoveredGateways.isEmpty()) {
-          Text(
-            text = nativeString("No gateways found yet. Use manual setup if discovery is blocked."),
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
-          )
-        } else {
-          discoveredGateways.forEachIndexed { index, endpoint ->
-            if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
-            ClawListItem(
-              title = endpoint.name,
-              subtitle = gatewayDiscoveredRowSubtitle(endpoint),
-              leading = { ClawIconBadge(Icons.Default.Cloud) },
-              trailing = {
-                TextButton(onClick = { viewModel.connect(endpoint) }) {
-                  Text(nativeString("Connect"))
-                }
-              },
-              onClick = null,
-            )
-          }
-        }
-      }
     }
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1946,70 +1880,249 @@ private fun GatewaySettingsScreen(
         }
       }
     }
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(text = nativeString("Manual Gateway"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          ClawTextField(value = hostInput, onValueChange = { hostInput = it }, placeholder = nativeString("Host"), modifier = Modifier.weight(1f))
-          ClawTextField(value = portInput, onValueChange = { portInput = it }, placeholder = nativeString("Port"), modifier = Modifier.weight(0.62f))
+    if (!gatewayShowsScanHero(pairedGateways.size)) {
+      ClawSecondaryButton(
+        text = nativeString("Add Gateway"),
+        onClick = viewModel::openGatewayAddition,
+        modifier = Modifier.fillMaxWidth(),
+        icon = Icons.Default.QrCode2,
+      )
+    }
+    Text(
+      text = nativeString("Scan or paste a setup code to add another gateway."),
+      style = ClawTheme.type.body,
+      color = ClawTheme.colors.textMuted,
+    )
+    TextButton(onClick = { showDiscovery = !showDiscovery }, modifier = Modifier.semantics { stateDescription = if (showDiscovery) nativeString("Expanded") else nativeString("Collapsed") }) {
+      Text(nativeString("Discovered"))
+      Spacer(modifier = Modifier.size(ClawTheme.spacing.xxs))
+      Icon(
+        imageVector = if (showDiscovery) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+        contentDescription = null,
+        modifier = Modifier.size(ClawTheme.spacing.icon),
+      )
+    }
+    if (showDiscovery) {
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+          if (discoveredGateways.isEmpty()) {
+            Text(
+              text = nativeString("No gateways found yet. Use manual setup if discovery is blocked."),
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
+          } else {
+            discoveredGateways.forEachIndexed { index, endpoint ->
+              if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+              ClawListItem(
+                title = endpoint.name,
+                subtitle = gatewayDiscoveredRowSubtitle(endpoint),
+                leading = { ClawIconBadge(Icons.Default.Cloud) },
+                trailing = {
+                  TextButton(onClick = { viewModel.connect(endpoint) }) {
+                    Text(nativeString("Connect"))
+                  }
+                },
+                onClick = null,
+              )
+            }
+          }
         }
-        Text(text = nativeString("Connection security"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-        val securityOptions = listOf(nativeString("Unencrypted"), nativeString("Secure (TLS)"))
-        ClawSegmentedControl(
-          options = securityOptions,
-          selected = if (transport.effectiveTls) nativeString("Secure (TLS)") else nativeString("Unencrypted"),
-          onSelect = { selected -> tlsInput = selected == nativeString("Secure (TLS)") },
-          enabledOptions =
-            if (transport.requiresTls) {
-              setOf(nativeString("Secure (TLS)"))
-            } else {
-              securityOptions.toSet()
+      }
+    }
+    TextButton(onClick = { showDiagnostics = !showDiagnostics }, modifier = Modifier.semantics { stateDescription = if (showDiagnostics) nativeString("Expanded") else nativeString("Collapsed") }) {
+      Text(nativeString("Diagnostics"))
+      Spacer(modifier = Modifier.size(ClawTheme.spacing.xxs))
+      Icon(
+        imageVector = if (showDiagnostics) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+        contentDescription = null,
+        modifier = Modifier.size(ClawTheme.spacing.icon),
+      )
+    }
+    if (showDiagnostics) {
+      SettingsMetricPanel(
+        rows =
+          listOf(
+            SettingsMetric(nativeString("Node"), if (isNodeConnected) nativeString("Online") else nativeString("Offline")),
+            SettingsMetric(
+              nativeString("Access"),
+              gatewayAccessLabel(
+                isConnected = gatewayConnectionDisplay.isConnected,
+                operatorAdminScopeAvailable = operatorAdminScopeAvailable,
+              ),
+            ),
+            SettingsMetric(nativeString("Address"), remoteAddress?.takeIf { it.isNotBlank() } ?: nativeString("Not available")),
+            SettingsMetric(nativeString("Discovered"), discoveredGateways.size.toString()),
+            SettingsMetric(nativeString("Default Agent"), defaultAgentName(gatewayAgents, gatewayDefaultAgentId)),
+            SettingsMetric(nativeString("Agents"), gatewayAgents.size.toString()),
+            SettingsMetric(nativeString("Instance ID"), instanceId, copyable = true),
+          ),
+      )
+      ClawSecondaryButton(
+        text = nativeString("Diagnose"),
+        onClick = {
+          copyGatewayDiagnosticsReport(
+            context = context,
+            screen = "gateway settings",
+            gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress, manualHost, manualPort, manualTls),
+            statusText = gatewayStatusLabel(gatewayConnectionDisplay),
+          )
+        },
+        modifier = Modifier.fillMaxWidth(),
+      )
+    }
+    TextButton(onClick = { showManual = !showManual }, modifier = Modifier.semantics { stateDescription = if (showManual) nativeString("Expanded") else nativeString("Collapsed") }) {
+      Text(nativeString("Manual Gateway"))
+      Spacer(modifier = Modifier.size(ClawTheme.spacing.xxs))
+      Icon(
+        imageVector = if (showManual) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+        contentDescription = null,
+        modifier = Modifier.size(ClawTheme.spacing.icon),
+      )
+    }
+    if (showManual) {
+      // Adding an already saved gateway intentionally retains its credentials.
+      // Manage Gateway keeps the explicit, confirmed setup-replacement path here.
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+          Text(text = nativeString("Replace setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          ClawTextField(
+            value = setupCode,
+            onValueChange = {
+              setupCode = it
+              setupValidationText = null
             },
-        )
-        transport.helperText?.let { helperText ->
-          Text(
-            text = helperText,
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
+            placeholder = "",
+            label = nativeString("Setup code"),
+            secret = true,
+          )
+          setupValidationText?.let {
+            Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+          }
+          ClawSecondaryButton(text = nativeString("Connect"), onClick = ::connectSetupCode, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Cloud)
+          TextButton(onClick = { showSetupCodeHelp = !showSetupCodeHelp }) {
+            Text(nativeString("Where do I get a setup code?"))
+          }
+          if (showSetupCodeHelp) {
+            Text(
+              text = nativeString("Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below."),
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
+          }
+        }
+      }
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ClawTextField(
+              value = hostInput,
+              onValueChange = {
+                hostInput = it
+                manualValidationText = null
+              },
+              placeholder = "",
+              label = nativeString("Host"),
+              modifier = Modifier.weight(1f),
+            )
+            ClawTextField(
+              value = portInput,
+              onValueChange = {
+                portInput = it
+                manualValidationText = null
+              },
+              placeholder = "",
+              label = nativeString("Port"),
+              modifier = Modifier.weight(0.62f),
+            )
+          }
+          Text(text = nativeString("Connection security"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          val securityOptions = listOf(nativeString("Unencrypted"), nativeString("Secure (TLS)"))
+          ClawSegmentedControl(
+            options = securityOptions,
+            selected = if (transport.effectiveTls) nativeString("Secure (TLS)") else nativeString("Unencrypted"),
+            onSelect = { selected -> tlsInput = selected == nativeString("Secure (TLS)") },
+            enabledOptions =
+              if (transport.requiresTls) {
+                setOf(nativeString("Secure (TLS)"))
+              } else {
+                securityOptions.toSet()
+              },
+          )
+          transport.helperText?.let { helperText ->
+            Text(
+              text = helperText,
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
+          }
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ClawTextField(
+              value = tokenInput,
+              onValueChange = {
+                tokenInput = it
+                manualValidationText = null
+              },
+              placeholder = "",
+              label = nativeString("Token"),
+              modifier = Modifier.weight(1f),
+              secret = true,
+            )
+            ClawTextField(
+              value = bootstrapTokenInput,
+              onValueChange = {
+                bootstrapTokenInput = it
+                manualValidationText = null
+              },
+              placeholder = "",
+              label = nativeString("Bootstrap"),
+              modifier = Modifier.weight(1.05f),
+              secret = true,
+            )
+          }
+          ClawTextField(
+            value = passwordInput,
+            onValueChange = {
+              passwordInput = it
+              manualValidationText = null
+            },
+            placeholder = "",
+            label = nativeString("Password"),
+            secret = true,
+          )
+          manualValidationText?.let {
+            Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+          }
+          ClawPrimaryButton(
+            text = nativeString("Save & Connect"),
+            onClick = {
+              val plan =
+                resolveGatewayConnectPlan(
+                  useSetupCode = false,
+                  setupCode = "",
+                  savedManualHost = manualHost,
+                  savedManualPort = manualPort.toString(),
+                  savedManualTls = manualTls,
+                  manualHostInput = hostInput,
+                  manualPortInput = portInput,
+                  manualTlsInput = transport.effectiveTls,
+                  tokenInput = tokenInput,
+                  bootstrapTokenInput = bootstrapTokenInput,
+                  passwordInput = passwordInput,
+                )
+              if (plan == null) {
+                manualValidationText = nativeString("Enter a valid setup code or gateway address.")
+                return@ClawPrimaryButton
+              }
+              if (plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_SETUP) {
+                pendingSetupResetPlan = plan
+              } else {
+                saveAndConnect(plan)
+              }
+            },
+            modifier = Modifier.fillMaxWidth(),
           )
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          ClawTextField(value = tokenInput, onValueChange = { tokenInput = it }, placeholder = nativeString("Token"), modifier = Modifier.weight(1f), secret = true)
-          ClawTextField(value = bootstrapTokenInput, onValueChange = { bootstrapTokenInput = it }, placeholder = nativeString("Bootstrap"), modifier = Modifier.weight(1.05f), secret = true)
-        }
-        ClawTextField(value = passwordInput, onValueChange = { passwordInput = it }, placeholder = nativeString("Password"), secret = true)
-        validationText?.let {
-          Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
-        }
-        ClawPrimaryButton(
-          text = nativeString("Save & Connect"),
-          onClick = {
-            val plan =
-              resolveGatewayConnectPlan(
-                useSetupCode = false,
-                setupCode = "",
-                savedManualHost = manualHost,
-                savedManualPort = manualPort.toString(),
-                savedManualTls = manualTls,
-                manualHostInput = hostInput,
-                manualPortInput = portInput,
-                manualTlsInput = transport.effectiveTls,
-                tokenInput = tokenInput,
-                bootstrapTokenInput = bootstrapTokenInput,
-                passwordInput = passwordInput,
-              )
-            if (plan == null) {
-              validationText = nativeString("Enter a valid setup code or gateway address.")
-              return@ClawPrimaryButton
-            }
-            if (plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_SETUP) {
-              pendingSetupResetPlan = plan
-            } else {
-              saveAndConnect(plan)
-            }
-          },
-          modifier = Modifier.fillMaxWidth(),
-        )
       }
     }
   }
@@ -2035,6 +2148,7 @@ private fun AppearanceSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
+  val textScale by viewModel.appearanceTextScale.collectAsState()
   val themeMode by viewModel.appearanceThemeMode.collectAsState()
   val themeFamily by viewModel.appearanceThemeFamily.collectAsState()
   val accentArgb by viewModel.appearanceAccentArgb.collectAsState()
@@ -2094,6 +2208,19 @@ private fun AppearanceSettingsScreen(
             }
           }
         }
+      }
+    }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+        Text(text = nativeString("Text size"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = nativeString("Default: 100%. Only on this device."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        ClawSegmentedControl(
+          options = AppearanceTextScale.entries,
+          selected = textScale,
+          onSelect = viewModel::setAppearanceTextScale,
+          maxOptionsPerRow = 3,
+          optionLabel = { "${it.percent}%" },
+        )
       }
     }
     ClawPanel {
@@ -2568,7 +2695,7 @@ internal fun SettingsDetailFrame(
             contentDescription = nativeString("Back"),
             onClick = onBack,
           )
-          Text(text = title, style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+          Text(text = title, style = ClawTheme.type.display, color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           trailingAction?.invoke()
           SettingsIconMark(icon = icon)
         }

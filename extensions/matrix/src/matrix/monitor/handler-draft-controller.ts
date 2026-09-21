@@ -73,6 +73,7 @@ export async function createMatrixDraftController(params: {
   const progressConfigEntry = accountConfig ?? cfg.channels?.matrix;
   const progressSeed = `${accountId}:${roomId}`;
   const progressDraft = createChannelProgressDraftCompositor({
+    preparedItems: true,
     entry: progressConfigEntry,
     mode: streaming === "quiet" ? "partial" : streaming,
     active: Boolean(draftStream),
@@ -99,6 +100,8 @@ export async function createMatrixDraftController(params: {
     }
     return {
       suppressDefaultToolProgressMessages: true,
+      progressPreambleEnabled: true,
+      commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
       onToolStart: async (payload) => {
         return await progressDraft.pushToolEvent(payload);
       },
@@ -116,12 +119,6 @@ export async function createMatrixDraftController(params: {
       },
       onApprovalEvent: async (payload) => {
         return await progressDraft.pushApprovalEvent(payload);
-      },
-      onCommandOutput: async (payload) => {
-        return await progressDraft.pushCommandOutputEvent(payload);
-      },
-      onPatchSummary: async (payload) => {
-        return await progressDraft.pushPatchEvent(payload);
       },
     };
   };

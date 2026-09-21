@@ -1,9 +1,16 @@
+import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
+import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
+import type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptReadScope,
+} from "./session-accessor.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type ChatHistoryPage = {
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   messages: unknown[];
+  activity?: AgentHistoryActivity[];
   responseOffset?: number;
   completeCliImport?: true;
   // Absent only for anchored (messageId) reads: the anchor may resolve a
@@ -74,8 +81,15 @@ export type SessionHistoryReadParams = {
 
 export type SessionHistoryWorkerRequest =
   | { kind: "rpc"; params: ChatHistoryPageParams & { sessionId: string; storePath: string } }
+  | { kind: "message-lookup"; params: { target: SessionTranscriptReadScope; messageId: string } }
+  | {
+      kind: "delta";
+      params: { target: SessionTranscriptReadScope; limits: SessionTranscriptRawDeltaLimits };
+    }
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
   | { kind: "rpc"; page: ChatHistoryPage }
+  | { kind: "message-lookup"; messages: unknown[] }
+  | { kind: "delta"; delta: SessionTranscriptDisplayDeltaResult }
   | { kind: "http"; snapshot: SessionHistorySnapshot };

@@ -5,20 +5,10 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function installSlackSocketModeEnvelopeGuard(
-  receiver: SocketModeReceiver,
+  client: SocketModeReceiver["client"],
+  acknowledge: (envelopeId: string) => Promise<void>,
   logger: { warn: (message: string) => void },
 ) {
-  const client = receiver.client;
-  if (!client) {
-    return;
-  }
-  // The SDK exposes ack only inside its already-parsed event, which is too late
-  // for this defect. Reuse that same sender rather than owning another socket.
-  const send = Reflect.get(client, "send");
-  if (typeof send !== "function") {
-    throw new Error("Slack Socket Mode envelope guard requires the SDK acknowledgement sender.");
-  }
-
   // socket-mode 3.0.1 dereferences payload.event.type before Bolt sees an
   // envelope. Slack's app_rate_limited control payload has no event, so that
   // valid notification otherwise becomes a fatal unhandled rejection. Guard
@@ -29,7 +19,7 @@ export function installSlackSocketModeEnvelopeGuard(
   for (const dispatch of dispatchers) {
     client.off("ws_message", dispatch);
   }
-  client.on("ws_message", (data: string | Uint8Array, isBinary: boolean) => {
+  client.on("ws_message", (data: string | ArrayBuffer, isBinary: boolean) => {
     if (!isBinary) {
       let envelope: Record<string, unknown> | undefined;
       try {
@@ -49,7 +39,7 @@ export function installSlackSocketModeEnvelopeGuard(
         );
         const envelopeId = normalizeOptionalString(envelope.envelope_id);
         if (envelopeId) {
-          void Promise.resolve(send.call(client, envelopeId)).catch(() => {
+          void acknowledge(envelopeId).catch(() => {
             // A disconnected socket must not turn acknowledgement failure into
             // another unhandled rejection. Slack can retry on the next socket.
             logger.warn("Could not acknowledge the event-less Slack envelope; Slack may retry.");

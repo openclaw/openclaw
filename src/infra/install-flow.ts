@@ -10,6 +10,7 @@ import {
   resolvePackedRootDir,
 } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
+import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { withInstallWorkspace } from "./install-source-utils.js";
 
 // Install-flow helpers validate local install paths and unpack archives inside
@@ -42,6 +43,7 @@ export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(
   archivePath: string;
   tempDirPrefix: string;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   logger?: ArchiveLogger;
   limits?: ArchiveExtractLimits;
   rootMarkers?: readonly string[];
@@ -56,7 +58,8 @@ export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(
       await extractArchive({
         archivePath: params.archivePath,
         destDir: extractDir,
-        timeoutMs: params.timeoutMs,
+        // fs-safe uses zero for an extraction without an elapsed deadline.
+        timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs) ?? 0,
         logger: params.logger,
         limits: params.limits,
         durable: false,

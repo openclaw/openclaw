@@ -19,6 +19,7 @@ export type GatewayProfileCommand = {
 
 export type GatewayCpuUsageSnapshot = {
   pid: number;
+  cpuEnvironment?: { availableParallelism: number; affinity?: string };
   atMonotonicMicros: number;
   process: NodeJS.CpuUsage;
   mainThread: NodeJS.CpuUsage;
@@ -40,6 +41,7 @@ type CpuUsageMilliseconds = { userMs: number; systemMs: number; totalMs: number 
 
 export type GatewayCpuUsage = {
   pid: number;
+  cpuEnvironment?: { availableParallelism: number; affinity?: string };
   startMonotonicMicros: number;
   endMonotonicMicros: number;
   wallMs: number;
@@ -112,6 +114,12 @@ export function measureGatewayCpuUsage(
   if (before.pid !== after.pid || after.atMonotonicMicros <= before.atMonotonicMicros) {
     throw new Error("Gateway CPU samples must span one process and a positive interval");
   }
+  if (
+    before.cpuEnvironment?.availableParallelism !== after.cpuEnvironment?.availableParallelism ||
+    before.cpuEnvironment?.affinity !== after.cpuEnvironment?.affinity
+  ) {
+    throw new Error("Gateway CPU affinity or available parallelism changed during measurement");
+  }
   const delta = (start: NodeJS.CpuUsage, end: NodeJS.CpuUsage): CpuUsageMilliseconds => {
     const userMs = (end.user - start.user) / 1_000;
     const systemMs = (end.system - start.system) / 1_000;
@@ -122,6 +130,7 @@ export function measureGatewayCpuUsage(
   };
   return {
     pid: after.pid,
+    cpuEnvironment: before.cpuEnvironment,
     startMonotonicMicros: before.atMonotonicMicros,
     endMonotonicMicros: after.atMonotonicMicros,
     wallMs: (after.atMonotonicMicros - before.atMonotonicMicros) / 1_000,

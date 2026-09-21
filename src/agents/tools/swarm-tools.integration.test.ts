@@ -12,6 +12,7 @@ import {
   testing as registryTesting,
 } from "../subagents/registry/subagent-registry.test-helpers.js";
 import "../subagents/registry/subagent-registry.mocks.shared.js";
+import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { testing as spawnTesting } from "../subagents/spawn/subagent-spawn.test-support.js";
 import { testing as swarmSchedulerTesting } from "../subagents/swarm/swarm-scheduler.test-support.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
@@ -123,7 +124,7 @@ describe("swarm tools integration", () => {
       getRuntimeConfig: () => config,
       hasInProcessGatewayContext: () => false,
       ensureContextEnginesInitialized: vi.fn(),
-      readPreparedModelCatalog: vi.fn(async () => []),
+      prepareModelChoice: supportedSpawnModelChoice,
       resolveContextEngine: vi.fn(async () => ({
         info: { id: "test", name: "Test", version: "0.0.1" },
         ingest: vi.fn(async () => ({ ingested: false })),

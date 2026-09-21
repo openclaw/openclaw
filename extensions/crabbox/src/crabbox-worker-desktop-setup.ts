@@ -1,4 +1,5 @@
 import type { WorkerDesktopEndpoint } from "openclaw/plugin-sdk/plugin-entry";
+import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 
 const CRABBOX_WORKER_BROWSER_PATH = "/usr/local/bin/openclaw-worker-browser";
 const CRABBOX_WORKER_TERMINAL_PATH = "/usr/local/bin/openclaw-worker-terminal";
@@ -69,7 +70,8 @@ function browserLauncher(leaseId: string): string[] {
     "fi",
     'launch_log="$CRABBOX_BROWSER_PROFILE/launch.log"',
     ': >"$launch_log"',
-    `nohup /usr/local/bin/crabbox-browser --remote-debugging-address=127.0.0.1 --remote-debugging-port=${CRABBOX_WORKER_BROWSER_CDP_PORT} about:blank >>"$launch_log" 2>&1 </dev/null &`,
+    // The persistent browser and its children must not retain the launcher's readiness lock.
+    `nohup /usr/local/bin/crabbox-browser --remote-debugging-address=127.0.0.1 --remote-debugging-port=${CRABBOX_WORKER_BROWSER_CDP_PORT} about:blank >>"$launch_log" 2>&1 </dev/null 9>&- &`,
     "for _attempt in $(seq 1 40); do",
     '  if curl --fail --silent --show-error --max-time 1 "$cdp_url" >/dev/null; then',
     "    exit 0",
@@ -161,7 +163,41 @@ export function createCrabboxWorkerDesktopSetup(leaseId: string, wallpaperBase64
   ].join("\n");
 }
 
-export function createCrabboxWorkerDesktopEndpoint(): WorkerDesktopEndpoint {
+export function createCrabboxMacDesktopSetup(): string {
+  // Crabbox owns the root-only account password. Give the enrolled user a private
+  // copy on this disposable machine; never return credentials through command output.
+  return [
+    "set -eu",
+    'sudo install -o "$(id -u)" -g "$(id -g)" -m 0600 /var/db/crabbox/vnc.password /var/db/crabbox/openclaw-vnc.password',
+    "test -s /var/db/crabbox/openclaw-vnc.password",
+    "test -r /var/db/crabbox/openclaw-vnc.password",
+  ].join("\n");
+}
+
+export function createCrabboxWorkerDesktopEndpoint(
+  target: CrabboxOperatingSystem = "linux",
+  username?: string,
+): WorkerDesktopEndpoint {
+  if (target === "macos") {
+    if (!username) {
+      throw new Error("Crabbox macOS desktop requires the inspected lease account username");
+    }
+    return {
+      protocol: "rfb",
+      port: 5900,
+      username,
+      passwordFilePath: "/var/db/crabbox/openclaw-vnc.password",
+      allowsResize: false,
+    };
+  }
+  if (target === "windows/normal") {
+    return {
+      protocol: "rfb",
+      port: 5900,
+      passwordFilePath: String.raw`C:\ProgramData\crabbox\vnc.password`,
+      allowsResize: false,
+    };
+  }
   return {
     protocol: "rfb",
     port: 5900,

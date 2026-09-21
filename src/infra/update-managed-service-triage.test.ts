@@ -412,7 +412,31 @@ process.emit=function(kind,message,...args){
   itUnix.each(["active", "inactive"] as const)(
     "keeps the fixer alive during %s primary maintenance",
     async (primary) => {
-      const boundary = await start("startup", undefined, primary);
+      const boundary = await start("startup", undefined, primary, async (root) => {
+        const file = path.join(root, "maintenance.mjs");
+        const source = await fs.readFile(file, "utf8");
+        await fs.writeFile(
+          file,
+          source.replace(
+            "if(process.argv[2]==='inactive'){",
+            `
+const write = fs.writeFileSync;
+fs.writeFileSync = function(file, ...args) {
+  if (typeof file === "string" && file.startsWith(primaryFile)) {
+    // Observe the real controller between truncate and write, not only after publication.
+    write(file, "");
+    const scope = JSON.parse(fs.readFileSync(root + "/scope.json", "utf8")).name;
+    const probe = process.getBuiltinModule("child_process").spawnSync(
+      process.execPath, [root + "/bin/systemctl", "--user", "show", scope], {encoding:"utf8"},
+    );
+    event("primary-snapshot-observed", {status:probe.status});
+  }
+  return write(file, ...args);
+};
+if(process.argv[2]==='inactive'){`,
+          ),
+        );
+      });
       await ready(boundary);
       expect(await boundary.control("commit")).toBe("committed");
       await fixing(boundary);
@@ -432,6 +456,9 @@ process.emit=function(kind,message,...args){
           "outside",
         );
       } else {
+        expect(events.find((event) => event.kind === "primary-snapshot-observed")).toMatchObject({
+          status: 0,
+        });
         expect(events.find((event) => event.kind === "doctor-maintenance")).toMatchObject({
           admitted: true,
         });
@@ -651,3 +678,92 @@ event('branch',{child:branch.pid});`,
     },
   );
 });
+
+itUnix.each([
+  {
+    format: "multiline v2",
+    membership: "5:cpu:/other\n0::$GROUP\n2:memory:/other\n",
+    stopped: true,
+  },
+  {
+    format: "multiline v1",
+    membership: "2:memory:/other\n7:name=systemd:$GROUP\n3:cpu:/other\n",
+    stopped: true,
+  },
+  {
+    format: "hybrid",
+    membership: "0::/other\n7:name=systemd:$GROUP\n3:cpu:/other\n",
+    stopped: true,
+  },
+  { format: "missing", membership: "", stopped: false },
+  { format: "suffix lookalike", membership: "0::/prefix$GROUP\n", stopped: false },
+  { format: "v1 suffix lookalike", membership: "7:name=systemd:/prefix$GROUP\n", stopped: false },
+  { format: "descendant", membership: "0::$GROUP/child\n", stopped: false },
+  { format: "wrong controller", membership: "2:cpu:$GROUP\n", stopped: false },
+  { format: "controller list", membership: "2:cpu,name=systemd:$GROUP\n", stopped: false },
+  { format: "malformed hierarchy", membership: "x:name=systemd:$GROUP\n", stopped: false },
+  { format: "zero v1 hierarchy", membership: "0:name=systemd:$GROUP\n", stopped: false },
+  { format: "nonzero v2 hierarchy", membership: "1::$GROUP\n", stopped: false },
+  { format: "path whitespace", membership: "7:name=systemd:$GROUP \n", stopped: false },
+])(
+  "checks own-placement $format membership before the scope-stop effect",
+  async ({ membership, stopped }) => {
+    const boundary = await start("startup", undefined, undefined, async (root) => {
+      const candidatePath = path.join(root, "candidate.mjs");
+      const candidate = await fs.readFile(candidatePath, "utf8");
+      // Exercise the actual sealed lease owner from its admitted executor. Change
+      // membership only after normal admission; helper placement is untouched.
+      await fs.writeFile(
+        candidatePath,
+        candidate.replace(
+          "event('branch',{child:branch.pid});",
+          `
+event('branch',{child:branch.pid});
+const {createManagedHandoffLeaseStore} = await import('./runtime/managed-handoff-runtime.mjs');
+const params = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(root, "handoff.json"))}, 'utf8'));
+const store = createManagedHandoffLeaseStore({databasePath:params.updateLeaseDatabasePath,serviceManagerEnv:params.serviceManagerEnv});
+const claim = store.read(${JSON.stringify(root)});
+if (claim.kind !== 'current') throw new Error('missing executor claim');
+const cleanupRead = fs.readFileSync;
+fs.readFileSync = function(file, ...args) {
+  const value = cleanupRead.call(this, file, ...args);
+  return file === '/proc/self/cgroup' ? ${JSON.stringify(membership)}.replaceAll('$GROUP', value.trim().slice(3)) : value;
+};
+event('own-placement-probe');
+const stopped = store.stopNative(claim.lease, true);
+event('own-placement-result', {result:stopped});
+`,
+        ),
+      );
+    });
+    await ready(boundary);
+    expect(await boundary.control("commit")).toBe("committed");
+    await vi.waitFor(
+      async () => {
+        const events = await boundary.readEvents();
+        expect(
+          events.some((event) => event.kind === "own-placement-probe"),
+          await boundary.log(),
+        ).toBe(true);
+        if (stopped) {
+          expect(
+            events.some((event) => event.kind === "scope-stopped"),
+            await boundary.log(),
+          ).toBe(true);
+        } else {
+          expect(
+            events.find((event) => event.kind === "own-placement-result"),
+            await boundary.log(),
+          ).toMatchObject({ result: false });
+          expect(events.some((event) => event.kind === "scope-stopped")).toBe(false);
+        }
+      },
+      { timeout: 15_000 },
+    );
+    if (!stopped) {
+      await boundary.native("stop");
+    }
+    await boundary.exit;
+    expect((await boundary.readEvents()).filter((event) => event.kind === "fixer")).toHaveLength(1);
+  },
+);

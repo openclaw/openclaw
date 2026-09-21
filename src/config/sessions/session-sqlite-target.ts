@@ -3,13 +3,17 @@ import path from "node:path";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
-  isSameOpenClawAgentDatabasePath,
+  createOpenClawAgentDatabasePathMatcher,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
 import {
   inspectOpenClawAgentDatabaseOwner,
   isIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import {
+  assertSessionStoreReadCandidate,
+  type SessionStoreReadCandidate,
+} from "./session-store-read-candidates.js";
 
 /** SQLite database target resolved from a legacy session store path. */
 type ResolvedSqliteStoreTarget = {
@@ -30,9 +34,30 @@ type ResolveSqliteStoreTargetOptions = {
   agentId?: string;
   defaultAgentId?: string;
   env?: NodeJS.ProcessEnv;
-  registeredDatabases?: readonly Pick<OpenClawRegisteredAgentDatabase, "agentId" | "path">[];
+  registeredDatabases?: SessionStoreRegistryRead;
   isSameDatabasePath?: (left: string, right: string) => boolean;
+  readCandidates?: readonly SessionStoreReadCandidate[];
 };
+
+export type SessionStoreRegistryRead =
+  | readonly Pick<OpenClawRegisteredAgentDatabase, "agentId" | "path">[]
+  | { status: "deferred" | "unavailable" };
+
+export class SessionStoreRegistryReadRequired extends Error {}
+
+/** Demand registry facts only where target ownership actually consults them. */
+export function readSessionStoreRegistryRows(
+  registry: SessionStoreRegistryRead | undefined,
+  env?: NodeJS.ProcessEnv,
+): readonly Pick<OpenClawRegisteredAgentDatabase, "agentId" | "path">[] {
+  if (registry && "status" in registry) {
+    if (registry.status === "deferred") {
+      throw new SessionStoreRegistryReadRequired("Session target discovery requires registry rows");
+    }
+    throw new Error("Session target registry is unavailable");
+  }
+  return registry ?? listOpenClawRegisteredAgentDatabases({ env });
+}
 
 function resolveRegisteredOwners(
   pathname: string,
@@ -48,11 +73,17 @@ function resolveRegisteredOwners(
   ];
 }
 
-function resolveDatabaseOwner(pathname: string): string | undefined {
+function resolveDatabaseOwner(
+  pathname: string,
+  readCandidates?: readonly SessionStoreReadCandidate[],
+): string | undefined {
   if (!hasFilesystemEntry(pathname)) {
     return undefined;
   }
-  const owner = inspectOpenClawAgentDatabaseOwner(pathname);
+  const physicalPath = readCandidates
+    ? assertSessionStoreReadCandidate(pathname, readCandidates)
+    : pathname;
+  const owner = inspectOpenClawAgentDatabaseOwner(physicalPath);
   return owner.status === "owned" ? normalizeAgentId(owner.agentId) : undefined;
 }
 
@@ -77,10 +108,12 @@ function resolveCustomStoreSqlitePath(params: {
   const sessionsDir = path.dirname(unsuffixedPath);
   const defaultAgentId = normalizeAgentId(params.options.defaultAgentId ?? "main");
   const agentId = normalizeAgentId(params.options.agentId ?? defaultAgentId);
-  const registeredDatabases =
-    params.options.registeredDatabases ??
-    listOpenClawRegisteredAgentDatabases(params.options.env ? { env: params.options.env } : {});
-  const isSameDatabasePath = params.options.isSameDatabasePath ?? isSameOpenClawAgentDatabasePath;
+  const registeredDatabases = readSessionStoreRegistryRows(
+    params.options.registeredDatabases,
+    params.options.env,
+  );
+  const isSameDatabasePath =
+    params.options.isSameDatabasePath ?? createOpenClawAgentDatabasePathMatcher();
   const resolvePersistedOwner = (candidatePath: string) => {
     const registeredOwners = resolveRegisteredOwners(
       candidatePath,
@@ -92,7 +125,7 @@ function resolveCustomStoreSqlitePath(params: {
       // Registry precedence makes inspection redundant, but filesystem errors still propagate.
       hasFilesystemEntry(candidatePath);
     } else {
-      databaseOwner = resolveDatabaseOwner(candidatePath);
+      databaseOwner = resolveDatabaseOwner(candidatePath, params.options.readCandidates);
     }
     return {
       effectiveOwner:
@@ -263,20 +296,21 @@ export function resolveSqliteTargetFromSessionStorePath(
     return unsuffixedTarget;
   }
   if (path.resolve(storePath).endsWith(".sqlite")) {
-    const registeredDatabases =
-      options.registeredDatabases ??
-      listOpenClawRegisteredAgentDatabases(options.env ? { env: options.env } : {});
+    const registeredDatabases = readSessionStoreRegistryRows(
+      options.registeredDatabases,
+      options.env,
+    );
     const registeredOwners = resolveRegisteredOwners(
       unsuffixedTarget.path,
       registeredDatabases,
-      options.isSameDatabasePath ?? isSameOpenClawAgentDatabasePath,
+      options.isSameDatabasePath ?? createOpenClawAgentDatabasePathMatcher(),
     );
     let databaseOwner: string | undefined;
     if (registeredOwners.length === 1) {
       // Registry precedence makes inspection redundant, but filesystem errors still propagate.
       hasFilesystemEntry(unsuffixedTarget.path);
     } else {
-      databaseOwner = resolveDatabaseOwner(unsuffixedTarget.path);
+      databaseOwner = resolveDatabaseOwner(unsuffixedTarget.path, options.readCandidates);
     }
     const configuredDefaultAgentId = normalizeAgentId(
       options.defaultAgentId ?? LEGACY_IMPLICIT_AGENT_ID,

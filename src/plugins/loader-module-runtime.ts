@@ -11,6 +11,10 @@ import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-reso
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRegistrationContext } from "./runtime.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "./runtime/gateway-request-scope.js";
 import { createRuntimeBase } from "./runtime/runtime-base.js";
 import type {
   CreatePluginRuntimeOptions,
@@ -28,6 +32,7 @@ import type { OpenClawPluginDefinition } from "./types.js";
 // Scoped runtime proxies also ask for descriptors after their get trap returns.
 const LAZY_RUNTIME_PROPERTIES = {
   version: true,
+  decisions: true,
   gateway: true,
   config: true,
   agent: true,
@@ -279,7 +284,7 @@ export function createLazyPluginRuntime(params: {
     }
     return descriptor;
   };
-  return new Proxy({} as PluginRuntime, {
+  const runtime = new Proxy({} as PluginRuntime, {
     get: (_target, prop, receiver) => getRuntimeProperty(prop, receiver),
     set(_target, prop, value, receiver) {
       return Reflect.set(resolveRuntime(), prop, value, receiver);
@@ -303,6 +308,15 @@ export function createLazyPluginRuntime(params: {
       return Reflect.getPrototypeOf(resolveRuntime() as object);
     },
   });
+  // Injected accessors remain deferred. A plain host facet can carry its owner
+  // without reading a lazy runtime surface or initializing broad services.
+  const subagent: unknown = params.runtimeOptions
+    ? Object.getOwnPropertyDescriptor(params.runtimeOptions, "subagent")?.value
+    : undefined;
+  if (subagent && typeof subagent === "object") {
+    bindGatewayContextResolver(runtime, getGatewayContextResolver(subagent));
+  }
+  return runtime;
 }
 
 function kindIncludes(kind: unknown, target: string): boolean {

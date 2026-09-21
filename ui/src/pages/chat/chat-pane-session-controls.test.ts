@@ -388,7 +388,7 @@ describe("chat pane composer controls", () => {
       const option = container.querySelector('[data-chat-permission-option="default"]');
       const fullAccess = defaultMode === "full";
       expect(trigger?.textContent?.trim()).toBe(label);
-      expect(trigger?.getAttribute("aria-label")).toBe(`Permissions: ${label}`);
+      expect(trigger?.getAttribute("aria-label")).toBe(`Execution permissions: ${label}`);
       expect(trigger?.getAttribute("data-chat-select-value")).toBe("");
       expect(trigger?.classList.contains("chat-controls__permission-trigger--full")).toBe(
         fullAccess,
@@ -402,7 +402,7 @@ describe("chat pane composer controls", () => {
         option?.querySelector(".chat-controls__permission-option-title")?.textContent?.trim(),
       ).toBe(label);
       expect(option?.getAttribute("aria-checked")).toBe("true");
-      expect(option?.textContent).toContain("Follow the agent's configured policy.");
+      expect(option?.textContent).toContain("Follow the agent's configured execution permissions.");
       expect(onSelect).not.toHaveBeenCalled();
     },
   );
@@ -485,7 +485,9 @@ describe("chat pane composer controls", () => {
       expect(renderedIcon?.getAttribute("fill")).toBe("none");
       expect(renderedIcon?.getAttribute("stroke-width")).toBe("2");
     }
-    expect(defaultOption?.textContent).toContain("Follow the agent's configured policy");
+    expect(defaultOption?.textContent).toContain(
+      "Follow the agent's configured execution permissions.",
+    );
     expect(defaultOption?.textContent).toContain("Default (Guarded)");
     expect(
       container.querySelector('[data-chat-permission-select="true"]')?.textContent?.trim(),

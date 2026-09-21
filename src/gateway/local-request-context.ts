@@ -1,5 +1,6 @@
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalAgentCronJobsRemoved } from "../cron/local-service.js";
@@ -18,6 +19,7 @@ import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { readPreparedServerMethodModelCatalogs } from "./server-methods/optional-model-catalog.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
 import {
@@ -28,6 +30,8 @@ import {
   readPreparedGatewayModelCatalogBatch,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "./server-model-catalog.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
 // methods without starting the full gateway. Unsupported subsystems fail loudly
@@ -73,6 +77,7 @@ function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");
+  const resourceHost = getLegacyPluginSdkResourceHost();
   const cron: GatewayCronServiceContract = {
     ...unavailableCron,
     removeAgentJobsTransactional: async (agentId, commit) =>
@@ -179,6 +184,35 @@ function createLocalGatewayRequestContext(
     broadcastVoiceWakeChanged: () => {},
     broadcastVoiceWakeRoutingChanged: () => {},
     unavailableGatewayMethods: new Set(),
+  };
+  let projection: SessionRowProjection | undefined;
+  let initializing: Promise<void> | undefined;
+  bindSessionRowProjection(context, () => projection);
+  context.ensureSessionRowProjection = () => {
+    if (!initializing) {
+      // The same host retains embedded resources used by admitted work after its caller returns.
+      resourceHost.adopt(context, {
+        release: async () => {
+          await initializing?.catch(() => {});
+          projection?.dispose();
+        },
+      });
+      initializing = import("./session-row-projection.js").then(
+        async ({ createSessionRowProjection }) => {
+          projection = await createSessionRowProjection({
+            cfg: params.getRuntimeConfig(),
+            getConfig: params.getRuntimeConfig,
+            getModelCatalog: () =>
+              readPreparedServerMethodModelCatalogs(
+                context,
+                listAgentIds(params.getRuntimeConfig()),
+              ),
+            context,
+          });
+        },
+      );
+    }
+    return initializing;
   };
   context.createAgentTurnFacade = async (principal) => {
     const { createInternalAgentTurnFacade } =

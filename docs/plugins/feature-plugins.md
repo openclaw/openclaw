@@ -48,9 +48,11 @@ including local development plugins. The equivalent config is:
 }
 ```
 
-Restart the Gateway and reload connected browser tabs after changing this
-setting. Disabling it prevents custom native UI from loading; it does not
-uninstall plugins or disable their backend operations, tools, or services.
+Changes apply without restarting the Gateway, and connected Control UI pages
+refresh their plugin views automatically. Disabling it prevents custom native UI
+from loading and removes its views. Reload browser tabs to clear plugin
+JavaScript that already ran. This does not uninstall plugins or disable their
+backend operations, tools, or services.
 Ordinary plugin APIs, sandboxed dashboard widgets, and MCP Apps are unaffected.
 
 Native UI shipped with OpenClaw remains available for enabled bundled plugins,

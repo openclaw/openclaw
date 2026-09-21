@@ -1,4 +1,3 @@
-// Telegram plugin module implements sent message cache behavior.
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getTelegramRuntime } from "./runtime.js";

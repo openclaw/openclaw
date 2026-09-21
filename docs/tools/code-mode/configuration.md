@@ -2,7 +2,7 @@
 summary: "Code Mode configuration fields, automatic per-model activation, and the activation order"
 title: "Code Mode configuration"
 read_when:
-  - You are setting Code Mode limits, languages, or the runtime
+  - You are setting Code Mode limits or the runtime
   - You need the preferred-model list and the compat catalog flag
   - You need the exact activation precedence for a run
 ---
@@ -13,20 +13,23 @@ read_when:
 `false`, including when the Code Mode object configures other fields. Set
 `true` or `"auto"` explicitly, or use an [agent or model override](/tools/code-mode/quickstart#override-one-model).
 
-| Field                 | Default                        | Clamp                                           |
-| --------------------- | ------------------------------ | ----------------------------------------------- |
-| `enabled`             | `false`                        | `false`, `true`, or `"auto"` (per-model)        |
-| `runtime`             | `"quickjs-wasi"`               | only supported value                            |
-| `mode`                | `"only"`                       | exposes control/direct tools, catalogs the rest |
-| `languages`           | `["javascript", "typescript"]` | any subset of the two                           |
-| `timeoutMs`           | `10000`                        | `100`-`60000`                                   |
-| `memoryLimitBytes`    | `67108864`                     | `1048576`-`1073741824`                          |
-| `maxOutputBytes`      | `65536`                        | `1024`-`10485760`                               |
-| `maxSnapshotBytes`    | `10485760`                     | `1024`-`268435456`                              |
-| `maxPendingToolCalls` | `16`                           | `1`-`128`                                       |
-| `snapshotTtlSeconds`  | `900`                          | `1`-`86400`                                     |
-| `searchDefaultLimit`  | `8`                            | clamped to `maxSearchLimit`                     |
-| `maxSearchLimit`      | `50`                           | `1`-`50`                                        |
+| Field                 | Default          | Clamp                                           |
+| --------------------- | ---------------- | ----------------------------------------------- |
+| `enabled`             | `false`          | `false`, `true`, or `"auto"` (per-model)        |
+| `runtime`             | `"quickjs-wasi"` | only supported value                            |
+| `mode`                | `"only"`         | exposes control/direct tools, catalogs the rest |
+| `timeoutMs`           | `10000`          | `100`-`60000`                                   |
+| `memoryLimitBytes`    | `67108864`       | `1048576`-`1073741824`                          |
+| `maxOutputBytes`      | `65536`          | `1024`-`10485760`                               |
+| `maxSnapshotBytes`    | `10485760`       | `1024`-`268435456`                              |
+| `maxPendingToolCalls` | `16`             | `1`-`128`                                       |
+| `snapshotTtlSeconds`  | `900`            | `1`-`86400`                                     |
+| `searchDefaultLimit`  | `8`              | clamped to `maxSearchLimit`                     |
+| `maxSearchLimit`      | `50`             | `1`-`50`                                        |
+
+Code Mode executes JavaScript only. Doctor and eligible Gateway startup
+migrations remove the retired `languages` setting from global and per-agent
+Code Mode config, preserving activation and limits.
 
 `timeoutMs` is a wall-clock budget per `exec` or `wait` call. Worker preparation, guest
 computation, and inline tool waits share that budget; approval waits pause it.

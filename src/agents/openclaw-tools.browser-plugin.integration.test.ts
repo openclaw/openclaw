@@ -626,6 +626,7 @@ describe("createOpenClawTools browser plugin integration", () => {
           allowGatewaySubagentBinding: false,
           modelCatalog: { entries: [], routeVariants: [] },
           configuredRuntimeModels: [],
+          findConfiguredRuntimeModel: () => undefined,
           inlineProviderModels: [],
           createStores: vi.fn(),
         },

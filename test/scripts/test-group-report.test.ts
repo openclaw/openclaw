@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -34,9 +34,10 @@ import {
   waitForPidFile,
 } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = new Set<string>();
+const cliTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const tsxImport = import.meta.resolve("tsx");
 
 afterAll(() => {
@@ -103,6 +104,44 @@ describe("scripts/test-group-report grouping", () => {
 });
 
 describe("scripts/test-group-report aggregation", () => {
+  it("profiles a selected test through the real Node wrapper", async () => {
+    const root = cliTempDirs.make("openclaw-test-group-report-cli-");
+    const output = path.join(root, "group-report.json");
+    const target = "src/shared/human-list.test.ts";
+    const result = await spawnText(
+      process.execPath,
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/test-group-report.mts",
+        "--config",
+        "test/vitest/vitest.unit-fast.config.ts",
+        "--no-rss",
+        "--output",
+        output,
+        "--",
+        target,
+      ],
+      {
+        env: {
+          ...process.env,
+          NODE_OPTIONS: "--max-old-space-size=512",
+          OPENCLAW_VITEST_ENABLE_MAGLEV: "0",
+          OPENCLAW_VITEST_INCLUDE_FILE: undefined,
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "cache"),
+        },
+        timeoutMs: 60_000,
+      },
+    );
+
+    expect(result.status, result.output).toBe(0);
+    expect(JSON.parse(fs.readFileSync(output, "utf8"))).toMatchObject({
+      totals: { fileCount: 1, testCount: expect.any(Number) },
+      topFiles: [expect.objectContaining({ file: target })],
+      runs: [expect.objectContaining({ status: 0 })],
+    });
+  });
+
   it("aggregates file durations by group and config", () => {
     const report = buildGroupedTestReport({
       groupBy: "area",

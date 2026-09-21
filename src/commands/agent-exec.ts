@@ -398,7 +398,7 @@ export async function agentExecCommand(
     const [
       { withAuthProfileStoreAgentDir, withEnvOnlyAuthProfileStore },
       { withHostExecInheritedEnvOmitted },
-      { listKnownProviderAuthEnvVarNames },
+      { listKnownProviderAuthEnvVarNamesCore },
       runAgent,
     ] = await Promise.all([
       import("../agents/auth-profiles.js"),
@@ -481,7 +481,7 @@ export async function agentExecCommand(
       }
       return await toolBudget.run(() =>
         withHostExecInheritedEnvOmitted(
-          listKnownProviderAuthEnvVarNames({ env: process.env }),
+          listKnownProviderAuthEnvVarNamesCore({ env: process.env }),
           runWithAuthScope,
         ),
       );

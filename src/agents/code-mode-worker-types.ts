@@ -23,10 +23,7 @@ type CodeModeBridgeMethod =
   | "sleep"
   | "swarmNote";
 
-export type CodeModeLanguage = "javascript" | "typescript";
-
 export type CodeModeConfig = {
-  languages: CodeModeLanguage[];
   timeoutMs: number;
   memoryLimitBytes: number;
   maxOutputBytes: number;
@@ -59,9 +56,7 @@ type CodeModeWorkerInput =
   | {
       kind: "exec";
       source: string;
-      language?: CodeModeLanguage;
       prelude?: string;
-      preflightDeclarations?: string;
       executionTimeoutMs?: number;
       config: CodeModeConfig;
       catalog: unknown[];
@@ -90,6 +85,7 @@ export type CodeModeSettlementMode =
 
 /** Transient worker boundary; no heap serialization and no resumable handle. */
 export type CodeModeWorkerBoundary = {
+  networkContentObserved?: true;
   status: "boundary";
   pendingRequests: PendingBridgeRequest[];
   canceledRequestIds: string[];
@@ -110,7 +106,7 @@ export type CodeModeWorkerContinuation =
 
 export type CodeModeFailurePhase = "input" | "guest" | "bridge" | "host";
 
-type CodeModeWorkerOutcome<Output, Value> =
+type CodeModeWorkerOutcome<Output, Value> = { networkContentObserved?: true } & (
   | {
       status: "completed";
       value: Value;
@@ -136,7 +132,8 @@ type CodeModeWorkerOutcome<Output, Value> =
       failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;
       bridgeDispatchStarted: false;
       output: Output;
-    };
+    }
+);
 
 export type CodeModeVmResult = CodeModeWorkerOutcome<unknown[], unknown>;
 export type CodeModeWorkerThreadResult = CodeModeWorkerOutcome<

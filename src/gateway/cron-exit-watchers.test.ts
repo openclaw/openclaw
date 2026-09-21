@@ -1,8 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveExitWatchShell } from "./cron-exit-watch-shell.js";
 import {
   createCronExitWatchers,
@@ -151,14 +153,31 @@ function createWatcherFixture(
 const flush = () => setImmediate();
 
 describe("createCronExitWatchers", () => {
-  it("arms a watcher for an enabled on-exit job and fires the job on exit", async () => {
+  it("arms a watcher and fires on exit after the creating request closes", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
+    const creatorContext = new AsyncLocalStorage<string>();
+    const creatorWork = new AsyncWorkScope();
+    const inCreator = creatorContext.run("creator", () =>
+      creatorWork.run(() => AsyncLocalStorage.snapshot()),
+    );
+    const observedContexts: Array<string | undefined> = [];
+    const spawn = expectDefined(supervisor.spawn.getMockImplementation(), "supervisor spawn");
+    supervisor.spawn.mockImplementationOnce(async (input) => {
+      observedContexts.push(creatorContext.getStore());
+      return await spawn(input);
+    });
     const order: string[] = [];
     const reserveExit = vi.fn(async () => {
-      order.push("persist");
+      await trackAsyncWork(() => {
+        observedContexts.push(creatorContext.getStore());
+        order.push("persist");
+      });
     });
     const fireOnExit = vi.fn(async (_job: CronJob, _exit: CronExitResult) => {
-      order.push("fire");
+      await trackAsyncWork(() => {
+        observedContexts.push(creatorContext.getStore());
+        order.push("fire");
+      });
     });
     const w = createWatcherFixture({
       getProcessSupervisor: () => supervisor as never,
@@ -167,7 +186,8 @@ describe("createCronExitWatchers", () => {
       logger: noopLogger,
     });
 
-    w.reconcile([onExitJob("job-a")]);
+    inCreator(() => w.reconcile([onExitJob("job-a")]));
+    await creatorWork.drain();
     await flush();
     expect(supervisor.spawn).toHaveBeenCalledTimes(1);
     expect(w.activeJobIds()).toEqual(["job-a"]);
@@ -190,6 +210,10 @@ describe("createCronExitWatchers", () => {
     // One-shot terminal state is persisted BEFORE firing (restart-safe).
     expect(reserveExit).toHaveBeenCalledWith(expect.objectContaining({ id: "job-a" }));
     expect(order).toEqual(["persist", "fire"]);
+    expect(observedContexts).toEqual([undefined, undefined, undefined]);
+    await expect(inCreator(() => trackAsyncWork(() => undefined))).rejects.toThrow(
+      "Async work scope is closed",
+    );
   });
 
   it("rebinds live watchers but drains callbacks already owned by the previous scheduler", async () => {

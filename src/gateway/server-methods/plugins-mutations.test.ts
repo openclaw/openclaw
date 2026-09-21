@@ -14,7 +14,7 @@ import {
 } from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import type { installManagedPlugin } from "../../plugins/management-mutations.js";
-import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
+import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
 import type { GatewayRequestHandler } from "./types.js";
 
 const managementMocks = vi.hoisted(() => ({
@@ -255,8 +255,9 @@ describe("plugin management Gateway mutation handlers", () => {
     { label: "cleanup", error: new Error("file cleanup failed") },
     {
       label: "nested lease",
-      error: new OpenClawStateLeaseError("package cleanup lease timed out", {
-        code: "OPENCLAW_STATE_LEASE_TIMEOUT",
+      error: new OpenClawStateLeaseAcquisitionError("package cleanup lease", {
+        kind: "held",
+        holder: { owner: "another-package-owner", epoch: 1 },
       }),
     },
   ])(

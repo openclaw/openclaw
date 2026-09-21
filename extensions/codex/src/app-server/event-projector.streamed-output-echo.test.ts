@@ -87,10 +87,13 @@ describe("CodexAppServerEventProjector streamed output echo filtering", () => {
 
   it("does not promote a raw echo of an earlier tool progress summary after later stream output", async () => {
     const onToolResult = vi.fn();
+    const onAgentEvent = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
       verboseLevel: "full",
+      messageChannel: "telegram",
       onToolResult,
+      onAgentEvent,
     });
 
     await projector.handleNotification(
@@ -111,7 +114,7 @@ describe("CodexAppServerEventProjector streamed output echo filtering", () => {
       }),
     );
     const summaryText = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
-    expect(summaryText).toBe("🛠️ `run tests (workspace)`");
+    expect(summaryText).toBe("🛠️ Bash");
 
     await projector.handleNotification(
       forCurrentTurn("item/commandExecution/outputDelta", {
@@ -119,6 +122,36 @@ describe("CodexAppServerEventProjector streamed output echo filtering", () => {
         delta: "streamed-output-chunk-that-would-overwrite-summary",
       }),
     );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-multi-shape",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          status: "completed",
+          aggregatedOutput: "streamed-output-chunk-that-would-overwrite-summary",
+          exitCode: 2,
+          durationMs: 12,
+        },
+      }),
+    );
+    const prepared = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter(
+        (event) =>
+          event.stream === "item" &&
+          event.data.toolCallId === "cmd-multi-shape" &&
+          !event.data.suppressChannelProgress,
+      );
+    expect(prepared.map((event) => event.data.itemId)).toEqual([
+      "tool:cmd-multi-shape",
+      "tool:cmd-multi-shape",
+    ]);
+    expect(prepared.at(-1)?.data.status).toBe("failed");
+    expect(
+      onToolResult.mock.calls.map(([payload]) => payload.channelData?.openclawToolProgressId),
+    ).toEqual([prepared[0]?.data.itemId, prepared[0]?.data.itemId]);
     await projector.handleNotification(
       forCurrentTurn("rawResponseItem/completed", {
         item: {

@@ -15,12 +15,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexOpenClawPromptContext,
   buildCodexWatchedSessionsContext,
-  buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
+import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import type { CodexAppServerContextEngineBinding } from "./session-binding.js";
 
@@ -261,6 +261,7 @@ describe("Codex app-server attempt context", () => {
           pluginHarnessToolPolicyRestricted: true,
           config: { agents: { defaults: { workspace: workspaceDir } } },
         } as EmbeddedRunAttemptParams,
+        agentWorkspaceDeveloperInstructions: "Saved ordinary thread instructions",
         resolvedWorkspace: workspaceDir,
         executionWorkspace: executionDir,
         effectiveWorkspace: executionDir,
@@ -275,6 +276,123 @@ describe("Codex app-server attempt context", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(executionDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "ring-zero",
+      ringZeroActive: true,
+      inheritedWorkspace: true,
+      overrides: { toolsAllow: ["openclaw"], pluginHarnessToolPolicyRestricted: true },
+    },
+    {
+      name: "lightweight cron",
+      ringZeroActive: false,
+      inheritedWorkspace: true,
+      overrides: { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "cron" },
+    },
+    {
+      name: "tool-disabled restricted",
+      ringZeroActive: false,
+      inheritedWorkspace: false,
+      overrides: { pluginHarnessToolPolicyRestricted: true, disableTools: true },
+    },
+    {
+      name: "message-only restricted",
+      ringZeroActive: false,
+      inheritedWorkspace: false,
+      overrides: {
+        pluginHarnessToolPolicyRestricted: true,
+        toolsAllow: ["message"],
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    },
+  ])(
+    "keeps saved workspace instructions suppressed after $name bootstrap failure",
+    async (entry) => {
+      const bootstrapRuntime = await import("openclaw/plugin-sdk/agent-harness-runtime");
+      const failure = new Error("synthetic workspace bootstrap failure");
+      const load = vi
+        .spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun")
+        .mockRejectedValueOnce(failure);
+      vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const workspaceDir = path.join(os.tmpdir(), "codex-suppressed-bootstrap-workspace");
+      const executionDir = entry.inheritedWorkspace
+        ? path.join(workspaceDir, "execution")
+        : workspaceDir;
+
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+          ...entry.overrides,
+        } as EmbeddedRunAttemptParams,
+        agentWorkspaceDeveloperInstructions: "Saved ordinary thread instructions",
+        resolvedWorkspace: workspaceDir,
+        executionWorkspace: executionDir,
+        effectiveWorkspace: executionDir,
+        sessionKey: "agent:main:session-1",
+        sessionAgentId: "main",
+        memoryToolNames: [],
+        ringZeroActive: entry.ringZeroActive,
+      });
+
+      expect(load).toHaveBeenCalledOnce();
+      expect(context.threadDeveloperInstructions).toBeUndefined();
+      expect(context.bootstrapFiles).toEqual([]);
+    },
+  );
+
+  it("rebuilds turn-only personal instructions without capturing them in the thread snapshot", async () => {
+    const runtime = await import("openclaw/plugin-sdk/agent-harness-runtime");
+    vi.spyOn(runtime, "resolveBootstrapFilesForRun").mockImplementation(async (params) => [
+      {
+        name: "USER.md",
+        path: "/workspace/USER.md",
+        content: "Shared preferences",
+        missing: false,
+      },
+      ...(params.bootstrapUserProfileId
+        ? [
+            {
+              name: "USER.md" as const,
+              path: "/workspace/users/" + params.bootstrapUserProfileId + "/USER.md",
+              content:
+                params.bootstrapUserProfileId === "alice" ? "Alice preferences" : "Bob preferences",
+              missing: false,
+            },
+          ]
+        : []),
+    ]);
+    for (const profile of ["alice", "bob", undefined]) {
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "shared",
+          sessionKey: "agent:main:shared",
+          bootstrapUserProfileId: profile,
+        } as EmbeddedRunAttemptParams,
+        agentWorkspaceDeveloperInstructions: "Saved project instructions",
+        resolvedWorkspace: "/workspace",
+        executionWorkspace: "/task",
+        effectiveWorkspace: "/task",
+        sessionKey: "agent:main:shared",
+        sessionAgentId: "main",
+        memoryToolNames: [],
+        ringZeroActive: false,
+      });
+      const turn = context.turnScopedDeveloperInstructions ?? "";
+      expect(turn).toContain("Shared preferences");
+      expect(turn.includes("Alice preferences")).toBe(profile === "alice");
+      expect(turn.includes("Bob preferences")).toBe(profile === "bob");
+      if (profile) {
+        expect(turn.indexOf("Shared preferences")).toBeLessThan(
+          turn.indexOf(profile === "alice" ? "Alice preferences" : "Bob preferences"),
+        );
+        expect(turn).toContain("applies only to the current requester");
+      }
+      expect(context.threadDeveloperInstructions).toBe("Saved project instructions");
     }
   });
 

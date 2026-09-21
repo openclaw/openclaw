@@ -3,12 +3,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
-import {
-  createGatewayHarness,
-  createSessions,
-  mountSidebar,
-  setupSidebarTest,
-} from "../test-helpers/app-sidebar.ts";
+import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import { createGatewayHarness, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,

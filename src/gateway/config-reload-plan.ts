@@ -139,10 +139,17 @@ function expandReloadPolicies(policies: ReloadPolicy[]): ReloadRule[] {
     .toSorted(compareReloadRules);
 }
 
+const AGENT_ROSTER_RELOAD_ACTIONS: readonly ReloadAction[] = [
+  "restartHeartbeat",
+  "reconcileSystemJobs",
+  "refreshHooksPolicy",
+  "reloadInternalHooks",
+];
+
 const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
   { prefixes: ["gateway.remote", "gateway.reload"], kind: "none" },
   {
-    prefixes: [...AUTH_CREDENTIAL_PATHS, "mcp.apps", "secrets.egressProxy"],
+    prefixes: [...AUTH_CREDENTIAL_PATHS, "mcp.apps", "secrets.egressProxy", "gateway.portals"],
     kind: "restart",
   },
   {
@@ -161,6 +168,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.controlUi.embedSandbox",
       "gateway.controlUi.allowExternalEmbedUrls",
       "gateway.controlUi.automaticallyFetchFavicons",
+      "gateway.controlUi.experimental.customPlugins",
       "gateway.controlUi.allowedOrigins",
       "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
       "gateway.nodes.browser",
@@ -175,6 +183,8 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "discovery.mdns.mode",
       "mcp.apps.sandboxOrigin",
       "agents.defaults",
+      "desktop.host.enabled",
+      "cloudWorkers.desktop",
     ],
     kind: "hot",
   },
@@ -200,12 +210,12 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
   {
     prefixes: ["agents.entries"],
     kind: "hot",
-    actions: [
-      "restartHeartbeat",
-      "reconcileSystemJobs",
-      "refreshHooksPolicy",
-      "reloadInternalHooks",
-    ],
+    actions: AGENT_ROSTER_RELOAD_ACTIONS,
+  },
+  {
+    prefixes: ["agents.entries.*.decisionModel"],
+    kind: "hot",
+    actions: [...AGENT_ROSTER_RELOAD_ACTIONS, "reloadPlugins"],
   },
   {
     prefixes: ["agents.defaults.sessionStore", "agents.ownership"],
@@ -216,6 +226,11 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     prefixes: ["skills.workshop.autonomous.mode"],
     kind: "hot",
     actions: ["reconcileSystemJobs"],
+  },
+  {
+    prefixes: ["agents.defaults.decisionModel"],
+    kind: "hot",
+    actions: ["reloadPlugins"],
   },
   { prefixes: ["plugins.load", "plugins.installs"], kind: "hot", actions: ["reloadPlugins"] },
   { prefixes: ["cron"], kind: "hot", actions: ["restartCron"] },

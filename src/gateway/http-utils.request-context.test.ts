@@ -286,6 +286,12 @@ describe("resolveTrustedHttpOperatorScopes", () => {
         ),
       ).toEqual(roleScopes.length ? ["operator.read"] : []);
       expect(
+        resolveTrustedHttpOperatorScopes(
+          createReq({ "x-openclaw-scopes": "operator.admin" }),
+          requestAuth,
+        ),
+      ).toEqual(roleScopes);
+      expect(
         resolveTrustedHttpOperatorScopes(createReq({ "x-openclaw-scopes": "" }), requestAuth),
       ).toEqual([]);
     },

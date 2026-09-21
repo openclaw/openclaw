@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
@@ -35,6 +36,7 @@ export function projectSessionMessagePayload(params: {
   runId?: string;
   sessionKey: string;
   sessionSnapshot?: Record<string, unknown>;
+  subagentCoordination?: SubagentCoordinationDisplayResolver;
 }): {
   payload?: Record<string, unknown>;
   projectionState: SessionMessageProjectionState;
@@ -52,7 +54,9 @@ export function projectSessionMessagePayload(params: {
   const historyProjection = params.historyDelta
     ? projectChatDisplayMessagesWithState([rawMessage], {
         ...params.projectionState,
+        subagentCoordination: params.subagentCoordination,
         includeCommentaryFallbacks: true,
+        activity: false,
       })
     : undefined;
   if (
@@ -79,9 +83,15 @@ export function projectSessionMessagePayload(params: {
         ? projectChatDisplayMessagesWithState([rawMessage], {
             assistantErrorPending: params.projectionState.assistantErrorPending,
             turnBoundaryPending: params.projectionState.turnBoundaryPending,
+            activity: false,
+            subagentCoordination: params.subagentCoordination,
           })
         : {
-            messages: [projectChatDisplayMessage(rawMessage)],
+            messages: [
+              projectChatDisplayMessage(rawMessage, {
+                subagentCoordination: params.subagentCoordination,
+              }),
+            ],
             assistantErrorPending: false,
             turnBoundaryPending: false,
           };
@@ -96,12 +106,14 @@ export function projectSessionMessagePayload(params: {
   const projectCurrentUserProfile =
     params.projectCurrentUserProfile ??
     createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
+  const projectedMessage = projectCurrentUserProfile(message);
+  params.subagentCoordination?.assertCurrent?.();
   return {
     payload: {
       sessionKey: params.sessionKey,
       ...(senderIsOwner === undefined ? {} : { senderIsOwner }),
       ...(params.agentId ? { agentId: params.agentId } : {}),
-      message: projectCurrentUserProfile(message),
+      message: projectedMessage,
       ...(params.messageId ? { messageId: params.messageId } : {}),
       ...(params.messageSeq !== undefined ? { messageSeq: params.messageSeq } : {}),
       ...params.sessionSnapshot,

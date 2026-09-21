@@ -12,6 +12,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.19"
 tokio = { version = "1.52.3", features = ["macros", "net", "rt", "sync", "time"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
 url = "2.5.8"
 rustls = { version = "0.23.42", default-features = false, features = ["ring", "std", "tls12"] }
 serde_json = "1.0.150"

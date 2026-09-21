@@ -59,7 +59,7 @@ const mocks = vi.hoisted(() => ({
     async (_params: {
       channel?: string | null;
       channelDriver?: string | null;
-      publishTransportArtifacts?: boolean;
+      transportArtifacts?: unknown;
       recordedEvidence?: QaEvidenceSummaryJson;
     }) => ({
       evidence: _params.recordedEvidence,
@@ -95,6 +95,10 @@ vi.mock("./crabline-transport.js", () => {
     }),
     handleAction: vi.fn(async () => {}),
     createReportNotes: () => [],
+    captureArtifacts: vi.fn(async () => ({
+      artifacts: [{ kind: "channel-driver-smoke", path: "/qa-output/driver-smoke.json" }],
+      reportNotes: [],
+    })),
     cleanupAfterGatewayStop: vi.fn(async () => {}),
   }));
   return {
@@ -409,12 +413,14 @@ describe("runtime parity suite transport cleanup", () => {
         expect(runScenario).toHaveBeenCalledTimes(parity ? 2 : 1);
         expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(labs.length);
         for (const [childArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
-          expect(childArtifacts.publishTransportArtifacts).toBe(false);
+          expect(childArtifacts.transportArtifacts).toBeUndefined();
         }
         expect(mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0]).toMatchObject({
           channel: "telegram",
           channelDriver: "crabline",
-          publishTransportArtifacts: true,
+          transportArtifacts: {
+            artifacts: [{ kind: "channel-driver-smoke", path: "/qa-output/driver-smoke.json" }],
+          },
         });
         for (const lab of labs) {
           expect(lab.stop).toHaveBeenCalledOnce();

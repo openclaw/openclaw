@@ -133,6 +133,21 @@ async function createFakeGateway(): Promise<FakeGateway> {
   let seq = 1;
   let worker = workerRecord("ready");
   const workerEnvironmentService = {
+    getSessionAttachment: () => undefined,
+    findSessionAttachment: () => undefined,
+    getSessionAttachmentStatus: () => undefined,
+    assertSessionAttachment: () => {},
+    touchSessionAttachment: () => {},
+    createSessionAttachment: async () => {
+      throw new Error("conversation attachments are outside the SDK environment RPC proof");
+    },
+    destroySessionAttachment: async () => undefined,
+    execSessionAttachment: async () => {
+      throw new Error("attached execution is outside the SDK environment RPC proof");
+    },
+    openNodePortal: async () => {
+      throw new Error("attached portals are outside the SDK environment RPC proof");
+    },
     list: () => [worker],
     get: (environmentId: string) => (environmentId === worker.environmentId ? worker : undefined),
     inventoryVersion: () => 0,
@@ -140,12 +155,13 @@ async function createFakeGateway(): Promise<FakeGateway> {
     machineShapeVersion: () => 0,
     supportsExecutionMode: (profileId, mode) =>
       profileId === "development" && mode === "worker-turn",
+    readProviderDisplayId: () => undefined,
     listMachineOptions: async () => undefined,
     listOperatingSystems: async () => undefined,
     prepare: async () => {
       throw new Error("build preparation is outside the SDK environment RPC proof");
     },
-    create: async (_profileId: string, _idempotencyKey: string) => {
+    create: async () => {
       const requested = workerRecord("requested");
       worker = workerRecord("ready");
       return requested;

@@ -15,6 +15,6 @@
     "mermaid": "11.17.2"
   },
   "devDependencies": {
-    "vite": "8.2.2"
+    "vite": "8.3.0"
   }
 }

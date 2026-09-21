@@ -358,9 +358,15 @@ export function acknowledgeNotifyOnExit(record: {
   record.notifyOnExitRemoval = undefined;
 }
 
+/** Returns the promoted process owner even after its presentation record is removed. */
+export function getActiveBackgroundExecSession(sessionId: string): ProcessSession | undefined {
+  const active = activeExecSessions.get(sessionId);
+  return active?.promoted ? active.session : undefined;
+}
+
 /** Reports owner-tracked process liveness even after visibility is removed. */
 export function hasActiveBackgroundExecSession(sessionId: string): boolean {
-  return activeExecSessions.get(sessionId)?.promoted === true;
+  return getActiveBackgroundExecSession(sessionId) !== undefined;
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */

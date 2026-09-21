@@ -2,7 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
+import {
+  captureDeliveryQueueStateContext,
+  getDeliveryQueueEntryStatus,
+} from "../infra/delivery-queue-sqlite.js";
 import { runOutboundDeliveryInternal } from "../infra/outbound/deliver-queue.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "../infra/outbound/delivery-commit-hooks.js";
@@ -30,7 +33,11 @@ import {
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
@@ -82,11 +89,12 @@ describe("restart sentinel notice recovery", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let stateDir = "";
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
+    afterEach(async () => {
       vi.useRealTimers();
       vi.restoreAllMocks();
       resetGatewayWorkAdmission();
       resetPluginRuntimeStateForTest();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       envSnapshot?.restore();
       envSnapshot = undefined;
@@ -97,7 +105,7 @@ describe("restart sentinel notice recovery", () => {
   beforeEach(() => {
     closeOpenClawStateDatabaseForTest();
     stateDir = tempDirs.make("openclaw-restart-notice-");
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_SUPERVISOR_MODE"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     mocks.sendDurableMessageBatch.mockReset();
     mocks.recoveryDeliver.mockReset();
@@ -241,7 +249,7 @@ describe("restart sentinel notice recovery", () => {
       if (destination !== "owner") {
         for (const kind of ["ack", "activating", "verifying", "finished"]) {
           expect(
-            deliveryQueueStorage.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`),
+            await deliveryQueueStorage.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`),
           ).toBeNull();
         }
       }
@@ -428,6 +436,167 @@ describe("restart sentinel notice recovery", () => {
     expect(queueStatus(queueId)).toBe("completed");
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
+
+  it.each(["state directory", "supervisor mode"] as const)(
+    "retains notice custody when ambient %s changes during preparation",
+    async (changed) => {
+      setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "external");
+      claimOpenClawStateOwnership("restart-notice-fixture", { env: process.env });
+      const context = captureDeliveryQueueStateContext(stateDir);
+      const replacement = tempDirs.make("openclaw-restart-notice-replacement-");
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      mocks.hookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
+      mocks.hookRunner.runMessageSending.mockImplementationOnce(async () => {
+        entered.resolve();
+        await resume.promise;
+        return undefined;
+      });
+      const pending = enqueueNotice();
+      await entered.promise;
+      if (changed === "state directory") {
+        setTestEnvValue("OPENCLAW_STATE_DIR", replacement);
+      } else {
+        setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "");
+      }
+      resume.resolve();
+      const id = await pending;
+      expect(await loadPendingDelivery(id, undefined, context)).toMatchObject({
+        to: "+15550002",
+        maxRetries: 45,
+        completionRetention: "permanent",
+      });
+      expect(await loadPendingDelivery(id, replacement)).toBeNull();
+      expect(mocks.sendDurableMessageBatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["preparation", "state directory"],
+    ["preparation", "supervisor mode"],
+    ["transport", "state directory"],
+    ["transport", "supervisor mode"],
+  ] as const)(
+    "retains lifecycle delivery through %s when ambient %s changes",
+    async (phase, changed) => {
+      const { sendDurableMessageBatchCore } = await import("../channels/message/send.js");
+      mocks.sendDurableMessageBatch.mockImplementation(sendDurableMessageBatchCore);
+      mocks.recoveryDeliver.mockImplementation(runOutboundDeliveryInternal);
+      setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "external");
+      claimOpenClawStateOwnership("lifecycle-notice-fixture", { env: process.env });
+      const context = captureDeliveryQueueStateContext(stateDir);
+      const replacement = tempDirs.make("openclaw-lifecycle-notice-replacement-");
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const pause = async () => {
+        entered.resolve();
+        await resume.promise;
+      };
+      mocks.hookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
+      mocks.hookRunner.runMessageSending.mockImplementationOnce(async () => {
+        if (phase === "preparation") {
+          await pause();
+        }
+        return undefined;
+      });
+      const sendText = vi.fn(async () => {
+        if (phase === "transport") {
+          await pause();
+        }
+        return { channel: "matrix" as const, messageId: "retained-notice" };
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "matrix",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "matrix",
+              outbound: { deliveryMode: "direct", sendText },
+            }),
+          },
+        ]),
+      );
+      const queueId = "lifecycle-retained-context";
+      const pending = sendGatewayLifecycleNotice({
+        cfg: {},
+        deps: {},
+        channel: "matrix",
+        to: "!operator:example",
+        message: "update starting",
+        deliveryIntentId: queueId,
+      });
+      await entered.promise;
+      if (changed === "state directory") {
+        setTestEnvValue("OPENCLAW_STATE_DIR", replacement);
+      } else {
+        setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "");
+      }
+      resume.resolve();
+      await expect(pending).resolves.toBe(true);
+      expect(sendText).toHaveBeenCalledOnce();
+      expect(
+        await deliveryQueueStorage.findDeliveryIntentOwner(queueId, undefined, context),
+      ).toMatchObject({ status: "completed" });
+      expect(await loadPendingDelivery(queueId, replacement)).toBeNull();
+    },
+  );
+
+  it.each(["retry recovery", "permanent rejection"] as const)(
+    "retains explicitly captured restart custody through %s",
+    async (outcome) => {
+      const { sendDurableMessageBatchCore } = await import("../channels/message/send.js");
+      mocks.sendDurableMessageBatch.mockImplementation(sendDurableMessageBatchCore);
+      mocks.recoveryDeliver.mockImplementation(runOutboundDeliveryInternal);
+      setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "external");
+      claimOpenClawStateOwnership("restart-recovery-fixture", { env: process.env });
+      const context = captureDeliveryQueueStateContext(stateDir);
+      const sendText = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new PlatformMessageNotDispatchedError("retry synthetic transport", {
+            cause: new Error("not dispatched"),
+            retryable: outcome === "retry recovery",
+          }),
+        )
+        .mockResolvedValue({ channel: "matrix", messageId: "recovered-context" });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "matrix",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "matrix",
+              outbound: { deliveryMode: "direct", sendText },
+            }),
+          },
+        ]),
+      );
+      const request = {
+        cfg: {},
+        channel: "matrix",
+        to: "!operator:example",
+        message: "restart complete",
+        sessionKey: "agent:main:main",
+        revision: 123,
+      };
+      const queued = await enqueueRestartSentinelNotice(request, context);
+      const replacement = tempDirs.make("openclaw-restart-recovery-replacement-");
+      setTestEnvValue("OPENCLAW_STATE_DIR", replacement);
+      setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "");
+      await expect(
+        deliverRestartSentinelNotice(
+          { ...request, deps: {}, summary: "synthetic restart", queueId: queued.id },
+          context,
+        ),
+      ).resolves.toBe(false);
+      expect(sendText).toHaveBeenCalledTimes(outcome === "retry recovery" ? 2 : 1);
+      expect(
+        await deliveryQueueStorage.findDeliveryIntentOwner(queued.id, undefined, context),
+      ).toMatchObject({ status: outcome === "retry recovery" ? "completed" : "failed" });
+      expect(await loadPendingDelivery(queued.id, replacement)).toBeNull();
+    },
+  );
 
   it("serializes stable notice preparation before modifiers can run twice", async () => {
     mocks.hookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sending");

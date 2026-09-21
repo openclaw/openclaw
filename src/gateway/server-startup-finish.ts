@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { diffGatewayReloadPaths } from "./config-diff.js";
 import {
@@ -22,13 +23,17 @@ import {
   reconcileClientPluginNodeCapabilities,
 } from "./plugin-node-capability.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
+import { activateGatewayAgentDatabaseStartup } from "./server-agent-database-startup.js";
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
+import { clearGatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
 import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
-import { getRequiredSharedGatewaySessionGeneration } from "./server-shared-auth-generation.js";
+import { createRequiredSharedGatewaySessionGenerationReader } from "./server-shared-auth-generation.js";
+import { logGatewayReady } from "./server-startup-readiness.js";
 import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
+import { collectGatewayWorkerPoolMetrics } from "./server/process-vitals.js";
 import { disconnectDisallowedGatewayBrowserOriginClients } from "./server/ws-origin-policy.js";
 import { DEFAULT_TERMINAL_DETACH_SECONDS } from "./terminal/session-limits.js";
 
@@ -148,12 +153,14 @@ export async function finishGatewayStartup(params: {
     getPluginNodeCapabilities,
   } = runtime;
   const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
-  const { attachGatewayWsHandlers } = await startupTrace.measure(
+  const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
+  const getReadiness = runtime.createHttpTransportOptions().getReadiness;
+  const { attachGatewayWsConnectionHandler } = await startupTrace.measure(
     "gateway.ws-imports",
-    () => import("./server-ws-runtime.js"),
+    () => import("./server/ws-connection.js"),
   );
   await startupTrace.measure("gateway.ws-attach", () =>
-    attachGatewayWsHandlers({
+    attachGatewayWsConnectionHandler({
       wss,
       clients,
       connectionWork: runtime.connectionWork,
@@ -164,8 +171,9 @@ export async function finishGatewayStartup(params: {
       pluginSurfaceScheme: gatewayTls.enabled ? "https" : "http",
       getPluginNodeCapabilities,
       getResolvedAuth,
-      getRequiredSharedGatewaySessionGeneration: () =>
-        getRequiredSharedGatewaySessionGeneration(sharedGatewaySessionGenerationState),
+      getRequiredSharedGatewaySessionGeneration: createRequiredSharedGatewaySessionGenerationReader(
+        sharedGatewaySessionGenerationState,
+      ),
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
       nodeReapprovalCoordinator,
@@ -181,7 +189,8 @@ export async function finishGatewayStartup(params: {
       getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
       ...(workerEnvironmentService ? { workerConnectionService: workerEnvironmentService } : {}),
       broadcast,
-      context: gatewayRequestContext,
+      refreshHealthSnapshot: gatewayRequestContext.refreshHealthSnapshot,
+      buildRequestContext: () => gatewayRequestContext,
     }),
   );
   await startupTrace.measure("http.listen", () => startListening());
@@ -352,6 +361,7 @@ export async function finishGatewayStartup(params: {
             kernel.markSidecarsReady();
             activateScheduledServicesWhenReady();
           },
+          getReadiness,
           isClosing: () => lifecycle.closePreludeStarted,
           startupTrace,
           sidecarStartup,
@@ -362,10 +372,33 @@ export async function finishGatewayStartup(params: {
     ),
   );
   kernel.setPostAttachHandles(postAttachHandles);
-  startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
-  startupTrace.mark("ready");
-  if (sidecarStartup === "defer") {
-    log.info("gateway ready");
+  if (databaseStartupAdmission && !opts.updateCanary) {
+    void postAttachHandles.startupSettled
+      .then(() => {
+        if (!lifecycle.closePreludeStarted) {
+          activateGatewayAgentDatabaseStartup({
+            admission: databaseStartupAdmission,
+            getConfig: getRuntimeConfig,
+            getPluginRegistry: () => pluginRuntime.registry,
+            getPluginMetadataSnapshot,
+            isCurrent: () => !lifecycle.closePreludeStarted,
+            log,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        log.warn(`agent database startup preparation could not activate: ${String(error)}`);
+      });
+  }
+  startupTrace.detail("memory.ready", [
+    ...collectGatewayProcessMemoryUsageMb(),
+    ...(minimalTestGateway ? [] : await collectGatewayWorkerPoolMetrics()),
+  ]);
+  if (getReadiness().ready) {
+    startupTrace.mark("ready");
+    if (sidecarStartup === "defer") {
+      logGatewayReady({ getReadiness, log });
+    }
   }
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
   if (opts.updateCanary) {
@@ -410,6 +443,8 @@ export async function finishGatewayStartup(params: {
   if (tlsRenewal) {
     registerGatewayLifetimeSidecars(tlsRenewal);
   }
+  let appliedCustomPluginUiEnabled =
+    gatewayPluginConfigAtStart.gateway?.controlUi?.experimental?.customPlugins === true;
   const configReloaderParams: Parameters<typeof startManagedGatewayConfigReloader>[0] = {
     onReloadEnabledChange: tlsRenewal?.setEnabled,
     configRevisionProjector: gatewayRequestContext.configRevisionProjector,
@@ -429,6 +464,7 @@ export async function finishGatewayStartup(params: {
     subscribeToWrites: (listener) =>
       registerConfigWriteListener(listener, {
         ownsRuntimeActivationFor: configSnapshot.path,
+        prepareSnapshot: opts.prepareConfigSnapshot,
         preCommitRuntimePreflight: async (sourceConfig, runtimeRefresh) => {
           const candidate = await prepareReloadCandidate({
             runtimeConfig: sourceConfig,
@@ -520,10 +556,27 @@ export async function finishGatewayStartup(params: {
       for (const nodeSession of nodeRegistry.refreshRuntimePolicy(nextConfig)) {
         refreshConnectedNodeSurfaceCaches({ context: gatewayRequestContext, nodeSession });
       }
-      await Promise.all([
+      const reconciled = await Promise.allSettled([
+        runtime.hostDesktopService.reconcileRuntimePolicy(),
+        runtime.gatewayComputerService.reconcileRuntimePolicy(),
+        workerEnvironmentService?.reconcileDesktopPolicy(),
         nodeDesktopService.reconcileRuntimePolicy(),
         runtimeState.discovery?.update({ mdnsMode: nextConfig.discovery?.mdns?.mode }),
+        (async () => {
+          const customPluginUiEnabled =
+            nextConfig.gateway?.controlUi?.experimental?.customPlugins === true;
+          if (customPluginUiEnabled !== appliedCustomPluginUiEnabled) {
+            const { listControlUiPluginCatalog } = await import("./control-ui-plugin-assets.js");
+            const catalog = await listControlUiPluginCatalog();
+            broadcast("plugins.controlUi.changed", { revision: catalog.revision });
+            appliedCustomPluginUiEnabled = customPluginUiEnabled;
+          }
+        })(),
       ]);
+      const failed = reconciled.find((result) => result.status === "rejected");
+      if (failed) {
+        throw failed.reason;
+      }
     },
     commitRuntimePolicy: (nextConfig) => {
       controlUiRootLifecycle.setEnabled(
@@ -545,7 +598,7 @@ export async function finishGatewayStartup(params: {
     applyRuntimeConfigOverrides: applyFixedGatewayOverlays,
     resolveSharedGatewaySessionGenerationForConfig,
     sharedGatewaySessionGenerationState,
-    clients: clients.authorityClients,
+    clients,
     ...(opts.hotReloadRecovery ? { requestRecoveryRestart: opts.hotReloadRecovery } : {}),
     restartRecoveryAvailable: opts.hotReloadRecovery !== undefined,
   };
@@ -578,7 +631,7 @@ export async function finishGatewayStartup(params: {
       },
       applyMaintenance: async (maintenance) => {
         if (lifecycle.closePreludeStarted) {
-          await gatewayRuntimeServices.clearGatewayMaintenanceHandles(maintenance);
+          await clearGatewayMaintenanceHandles(maintenance);
           return;
         }
         // Publish the stop owner before cleanup can touch SQLite or state paths;
@@ -624,6 +677,22 @@ export async function finishGatewayStartup(params: {
         },
         log,
         errorMessage: "retained npm generation cleanup failed",
+      }),
+    );
+    registerGatewayLifetimeSidecars(
+      gatewayRuntimeServices.scheduleGatewayIdleTask({
+        delayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
+        retryDelayMs: RETAINED_PLUGIN_CLEANUP_DELAY_MS,
+        isClosing: () => lifecycle.closePreludeStarted,
+        isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+        repeatDelayMs: 15 * 60_000,
+        run: async () => {
+          const { reclaimAbandonedSqliteSnapshotsAsync } =
+            await import("../infra/sqlite-snapshot-staging.js");
+          await reclaimAbandonedSqliteSnapshotsAsync();
+        },
+        log,
+        errorMessage: "SQLite snapshot staging cleanup failed",
       }),
     );
   } else {

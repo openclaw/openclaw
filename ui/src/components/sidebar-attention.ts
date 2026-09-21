@@ -7,6 +7,7 @@ import type { ExecApprovalDecision } from "../app/exec-approval.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -24,6 +25,8 @@ import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.ru
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 import "./tooltip.ts";
+
+registerSidebarAttentionEnglish();
 
 type SidebarAttentionPanelRenderer =
   typeof import("./sidebar-attention-panel.runtime.ts").renderSidebarAttentionPanel;
@@ -289,10 +292,13 @@ class SidebarAttention extends OpenClawLightDomElement {
   }
 
   override render() {
-    if (this.context?.gateway.snapshot.phase !== "connected") {
+    if (!this.context) {
       return nothing;
     }
     const entries = this.currentInboxEntries();
+    if (this.context.gateway.snapshot.phase !== "connected" && entries.length === 0) {
+      return nothing;
+    }
     const count = sidebarInboxTabCounts(entries).all;
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),

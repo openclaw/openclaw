@@ -32,13 +32,66 @@ import {
   registerSubagentRun,
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import {
+  removeSubagentSessionEntry,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { testing } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
 const rootKey = "agent:main:subagent:publication-root";
 const childKey = "agent:main:subagent:publication-drain";
+
+it.each(["replacement", "retirement"] as const)(
+  "revalidates the session after held publication preparation permits %s",
+  async (transition) => {
+    const target = {
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: rootKey,
+      defaultSessionId: "prepared-publication-session",
+    };
+    await writeSubagentSessionEntry(target);
+    registerSubagentRun({
+      runId: "prepared-publication",
+      childSessionKey: rootKey,
+      requesterSessionKey: "agent:main:main",
+      requesterAgentId: "main",
+      requesterDisplayKey: "main",
+      task: "publication ownership",
+      cleanup: "keep",
+    });
+    const onResult = vi.fn();
+    const preparePublication = vi.fn(async () => {
+      if (transition === "replacement") {
+        await writeSubagentSessionEntry({ ...target, sessionId: "successor-session" });
+      } else {
+        await removeSubagentSessionEntry(target);
+      }
+    });
+    const result = await killSubagentRunAdmin(
+      {
+        cfg: getRuntimeConfig(),
+        sessionKey: rootKey,
+        agentId: "main",
+        expectedRunId: "prepared-publication",
+        onResult,
+      },
+      {
+        assertCurrent: () => {},
+        preparePublication: { prepare: preparePublication, needsPreparation: () => false },
+      },
+    );
+    expect(preparePublication).toHaveBeenCalledOnce();
+    expect(onResult).toHaveBeenCalledExactlyOnceWith(result);
+    expect(result).toMatchObject({
+      found: true,
+      error: expect.stringContaining("ownership changed"),
+    });
+    expect(result).not.toHaveProperty("targetState");
+  },
+);
 
 it.each(["canonical", "managed"] as const)(
   "publishes same-owner completion when the selected %s task write lags",

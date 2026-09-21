@@ -1,4 +1,3 @@
-// Discord plugin module implements native command behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
@@ -401,8 +400,7 @@ async function dispatchDiscordCommandInteraction(params: {
     return (
       routeState.effectiveRoute.matchedBy === "binding.channel" ||
       routeState.boundSessionKey != null ||
-      routeState.configuredBinding != null ||
-      routeState.configuredRoute != null
+      routeState.configuredBinding != null
     );
   };
   if (channelConfig?.enabled === false && !(await canBypassConfiguredAcpGuildGuards())) {

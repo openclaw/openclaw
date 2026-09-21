@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
+  NativeChromeExtensionSetupResult,
   SettingKey,
 } from "../../app/native-device-settings.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -12,6 +14,7 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
+  createTauriDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
 import "./device-page.ts";
 import "./permissions-page.ts";
@@ -38,6 +41,14 @@ function createCapability(
     openSystemSettings: vi.fn(),
     openPanel: vi.fn(),
     checkForUpdates: vi.fn(),
+    chromeExtensionStatus: vi
+      .fn<() => Promise<NativeChromeExtensionSetupResult>>()
+      .mockResolvedValue({
+        nativeHostRegistered: false,
+        installRequested: false,
+        installedProfiles: 0,
+        discoveredProfiles: 0,
+      }),
     installChromeExtension: vi.fn(),
     refresh: vi.fn(),
     dispose: vi.fn(),
@@ -94,6 +105,45 @@ afterEach(() => {
 });
 
 describe("native device settings pages", () => {
+  it.each(["linux", "windows"] as const)(
+    "edits %s desktop sharing and displays worker failures without unsupported controls",
+    async (platform) => {
+      const snapshot = createTauriDeviceSettingsSnapshot(platform);
+      const native = createCapability(snapshot);
+      const page = await mount("openclaw-device-page", native.capability);
+      expect(page.textContent).toContain("This computer");
+      expect(row(page, "Desktop sharing").textContent).toContain("authenticated local VNC server");
+      expect(row(page, "Desktop sharing status").textContent).toContain("Running");
+      expect(page.textContent).not.toContain("Computer Control");
+      toggle(page, "Desktop sharing", false);
+      expect(native.capability.set).toHaveBeenCalledExactlyOnceWith(
+        "capabilities.desktopSharingEnabled",
+        false,
+      );
+      native.publish({
+        ...snapshot,
+        capabilities: { desktopSharingEnabled: false },
+        desktopSharing: { state: "off" },
+      });
+      await page.updateComplete;
+      expect(row(page, "Desktop sharing").querySelector<ToggleElement>("wa-switch")!.checked).toBe(
+        false,
+      );
+      native.publish({
+        ...snapshot,
+        desktopSharing: {
+          state: "error",
+          detail: "Install the OpenClaw CLI to share this desktop.",
+        },
+      });
+      await page.updateComplete;
+      expect(row(page, "Desktop sharing status").textContent).toContain("Unavailable");
+      expect(page.textContent).toContain("Install the OpenClaw CLI");
+      const permissions = await mount("openclaw-device-permissions-page", native.capability);
+      expect(permissions.querySelector("wa-switch")).toBeNull();
+      expect(permissions.textContent).not.toContain("Location access");
+    },
+  );
   it("switches the advertised Mac experience and follows the native owner's saved value", async () => {
     const native = createCapability();
     const page = await mount("openclaw-device-page", native.capability);
@@ -119,7 +169,7 @@ describe("native device settings pages", () => {
     expect(page.textContent).not.toContain(title);
   });
 
-  it("shows native desktop state and reconciles unattended hosting with the native owner", async () => {
+  it("shows native desktop state and reconciles Keep computer awake with the native owner", async () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     const native = createCapability({
       ...snapshot,
@@ -127,12 +177,12 @@ describe("native device settings pages", () => {
       desktopAvailability: { state: "locked" },
     });
     const page = await mount("openclaw-device-page", native.capability);
-    const hosting = row(page, "Unattended desktop hosting");
+    const hosting = row(page, "Keep computer awake");
     expect(hosting.textContent).toContain("between jobs");
     expect(hosting.textContent).toContain("Manual lock and logout");
     expect(row(page, "Desktop availability").textContent).toContain("Locked");
     expect(native.capability.set).not.toHaveBeenCalled();
-    toggle(page, "Unattended desktop hosting", true);
+    toggle(page, "Keep computer awake", true);
     expect(native.capability.set).toHaveBeenCalledWith(
       "capabilities.unattendedDesktopEnabled",
       true,
@@ -150,7 +200,7 @@ describe("native device settings pages", () => {
     native.publish({ ...snapshot, capabilities, desktopAvailability: { state: "unlocked" } });
     await page.updateComplete;
     expect(row(page, "Desktop availability").textContent).toContain("Unlocked");
-    expect(page.textContent).not.toContain("Unattended desktop hosting");
+    expect(page.textContent).not.toContain("Keep computer awake");
   });
 
   it("requests setup only on click and reports Chrome approval separately from installation", async () => {
@@ -158,16 +208,120 @@ describe("native device settings pages", () => {
     capability.installChromeExtension.mockResolvedValue({
       nativeHostRegistered: true,
       installRequested: true,
+      installedProfiles: 0,
       discoveredProfiles: 0,
     });
     const page = await mount("openclaw-device-page", capability);
     expect(capability.installChromeExtension).not.toHaveBeenCalled();
-    row(page, "Set up Chrome on this Mac").querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(page.textContent).toContain("Not installed"));
+    row(page, "Chrome on this Mac").querySelector<HTMLButtonElement>("button")!.click();
     await vi.waitFor(() => expect(page.textContent).toContain("installation requested"));
     expect(page.textContent).not.toContain("Native host registered and extension found");
     capability.installChromeExtension.mockRejectedValueOnce(new Error("CLI missing"));
-    row(page, "Set up Chrome on this Mac").querySelector<HTMLButtonElement>("button")!.click();
+    row(page, "Chrome on this Mac").querySelector<HTMLButtonElement>("button")!.click();
     await vi.waitFor(() => expect(page.textContent).toContain("Setup could not finish"));
+    capability.installChromeExtension.mockResolvedValueOnce({
+      nativeHostRegistered: true,
+      installRequested: false,
+      discoveredProfiles: 0,
+    });
+    row(page, "Chrome on this Mac").querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() =>
+      expect(page.textContent).toContain(
+        "Automatic installation checks require an updated Mac app",
+      ),
+    );
+    expect(row(page, "Chrome on this Mac").textContent).toContain("Status unavailable");
+    expect(row(page, "Chrome on this Mac").textContent).not.toContain("Not installed");
+    expect(row(page, "Chrome on this Mac").textContent).not.toContain(
+      "Add OpenClaw from the Chrome Web Store",
+    );
+  });
+  it.each([
+    {
+      nativeHostRegistered: true,
+      discoveredProfiles: 1,
+      hint: "Native host registered and extension found",
+      repair: false,
+    },
+    {
+      nativeHostRegistered: true,
+      discoveredProfiles: 0,
+      hint: "installed but not enabled",
+      repair: false,
+    },
+    {
+      nativeHostRegistered: false,
+      discoveredProfiles: 1,
+      hint: "Repair the Mac connection",
+      repair: true,
+    },
+  ])(
+    "shows Installed with helper=$nativeHostRegistered and enabled=$discoveredProfiles",
+    async ({ nativeHostRegistered, discoveredProfiles, hint, repair }) => {
+      const { capability } = createCapability();
+      capability.chromeExtensionStatus.mockResolvedValue({
+        nativeHostRegistered,
+        discoveredProfiles,
+        installedProfiles: 1,
+        installRequested: false,
+      });
+      const page = await mount("openclaw-device-page", capability);
+      await vi.waitFor(() => expect(page.textContent).toContain(hint));
+      const card = row(page, "Chrome on this Mac");
+      expect(card.querySelector('[role="status"]')?.textContent).toContain("Installed");
+      expect(card.textContent).not.toContain("Set up Chrome on this Mac");
+      expect(card.textContent?.includes("Repair Mac connection")).toBe(repair);
+      expect(capability.installChromeExtension).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refreshes after returning from Chrome and reports read failures without installing", async () => {
+    const { capability } = createCapability();
+    capability.chromeExtensionStatus.mockRejectedValueOnce(new Error("CLI missing"));
+    const page = await mount("openclaw-device-page", capability);
+    await vi.waitFor(() =>
+      expect(page.textContent).toContain("Could not check Chrome installation"),
+    );
+    expect(page.textContent).not.toContain("Not installed");
+    capability.chromeExtensionStatus.mockResolvedValue({
+      nativeHostRegistered: true,
+      installedProfiles: 1,
+      discoveredProfiles: 1,
+      installRequested: false,
+    });
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() =>
+      expect(page.textContent).toContain("Native host registered and extension found"),
+    );
+    capability.chromeExtensionStatus.mockRejectedValueOnce(new Error("CLI unavailable"));
+    row(page, "Chrome on this Mac").querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(page.textContent).toContain("Status unavailable"));
+    expect(
+      row(page, "Chrome on this Mac").querySelector('[role="status"]')?.textContent,
+    ).not.toContain("Installed");
+    expect(capability.installChromeExtension).not.toHaveBeenCalled();
+  });
+
+  it("ignores a status reply from a previous page visit", async () => {
+    const { capability } = createCapability();
+    const first = createDeferred<NativeChromeExtensionSetupResult>();
+    capability.chromeExtensionStatus.mockReturnValueOnce(first.promise);
+    const page = await mount("openclaw-device-page", capability);
+    const provider = page.parentElement!;
+    page.remove();
+    provider.append(page);
+    await vi.waitFor(() => expect(page.textContent).toContain("Not installed"));
+    first.resolve({
+      nativeHostRegistered: true,
+      installedProfiles: 1,
+      discoveredProfiles: 1,
+      installRequested: false,
+    });
+    await first.promise;
+    await page.updateComplete;
+    expect(page.textContent).toContain("Not installed");
+    expect(page.textContent).not.toContain("Native host registered and extension found");
   });
   it.each(["openclaw-device-page", "openclaw-device-permissions-page"] as const)(
     "shows an app-only state without a bridge and waits for the initial snapshot on %s",
@@ -601,7 +755,9 @@ describe("native device settings pages", () => {
   });
 
   it("keeps permission order and maps each native status to the correct action", async () => {
-    const { capability } = createCapability();
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    snapshot.permissions.entries.find(({ id }) => id === "microphone")!.status = "unavailable";
+    const { capability } = createCapability(snapshot);
     const page = await mount("openclaw-device-permissions-page", capability);
     const permissions = page.querySelector(".settings-group");
     expect(
@@ -616,7 +772,6 @@ describe("native device settings pages", () => {
       "Camera",
       "Speech Recognition",
       "Location",
-      "Automation (Terminal)",
     ]);
     expect(row(page, "Notifications").textContent).toContain("Not determined");
     row(page, "Notifications").querySelector<HTMLButtonElement>("button")!.click();
@@ -626,12 +781,43 @@ describe("native device settings pages", () => {
     expect(capability.openSystemSettings).toHaveBeenCalledExactlyOnceWith("accessibility");
     for (const [title, label] of [
       ["Screen Recording", "Granted"],
-      ["Automation (Terminal)", "Unavailable"],
+      ["Microphone", "Unavailable"],
     ] as const) {
       expect(row(page, title).textContent).toContain(label);
       expect(row(page, title).querySelector("button")).toBeNull();
     }
   });
+
+  it.each([
+    ["screenRecording", "Screen Recording", "notDetermined", "Not granted", "Grant…"],
+    ["accessibility", "Accessibility", "notDetermined", "Not granted", "Grant…"],
+  ] as const)(
+    "requests %s access and retains explicit settings recovery without assuming a prior denial",
+    async (id, title, status, label, action) => {
+      const snapshot = createNativeDeviceSettingsSnapshot();
+      snapshot.permissions.entries = [{ id, status }];
+      const native = createCapability(snapshot);
+      const page = await mount("openclaw-device-permissions-page", native.capability);
+      const permission = row(page, title);
+      expect(permission.textContent).toContain(label);
+      const button = permission.querySelector<HTMLButtonElement>("button");
+      expect(button?.textContent?.trim()).toBe(action);
+      expect(native.capability.requestPermission).not.toHaveBeenCalled();
+      button!.click();
+      expect(native.capability.requestPermission).toHaveBeenCalledExactlyOnceWith(id);
+      expect(native.capability.openSystemSettings).not.toHaveBeenCalled();
+      const recovery = permission.querySelector<HTMLButtonElement>(".settings-permission-recovery");
+      expect(recovery?.textContent?.trim()).toBe("Open System Settings…");
+      recovery!.click();
+      expect(native.capability.openSystemSettings).toHaveBeenCalledExactlyOnceWith(id);
+      expect(native.capability.requestPermission).toHaveBeenCalledTimes(1);
+      snapshot.permissions.entries = [{ id, status: "granted" }];
+      native.publish(snapshot);
+      await page.updateComplete;
+      expect(permission.textContent).toContain("Granted");
+      expect(permission.querySelector("button")).toBeNull();
+    },
+  );
 
   it.each([false, undefined])(
     "keeps iOS permission order and system-owned precision read-only (editable: %s)",
@@ -662,7 +848,7 @@ describe("native device settings pages", () => {
       expect(native.capability.requestPermission).toHaveBeenCalledWith("calendars");
       row(page, "Reminders").querySelector<HTMLButtonElement>("button")!.click();
       expect(native.capability.openSystemSettings).toHaveBeenCalledWith("reminders");
-      expect(page.textContent).not.toContain("Active computer presence");
+      expect(page.textContent).not.toContain("System-wide presence detection");
       expect(row(page, "Precise location").querySelector("wa-switch")).toBeNull();
       expect(row(page, "Precise location").textContent).toContain("Disabled");
       const settings = row(page, "Precise location").querySelector<HTMLButtonElement>("button")!;
@@ -705,13 +891,13 @@ describe("native device settings pages", () => {
     );
     toggle(page, "Precise location", true);
     expect(native.capability.set).toHaveBeenCalledWith("permissions.location.precise", true);
-    toggle(page, "Active computer presence", true);
+    toggle(page, "System-wide presence detection", true);
     expect(native.capability.set).toHaveBeenCalledWith(
       "capabilities.activeComputerPresenceEnabled",
       true,
     );
-    expect(row(page, "Active computer presence").textContent).toContain(
-      "Never sends keys, pointer positions, app names, or window titles.",
+    expect(row(page, "System-wide presence detection").textContent).toContain(
+      "Shares only idle duration, never keys, pointer positions, app names, or window titles.",
     );
   });
 });

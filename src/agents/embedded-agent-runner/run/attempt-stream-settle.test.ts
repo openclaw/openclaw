@@ -17,8 +17,10 @@ import { createAssistantMessageEventStream } from "../../../llm/utils/event-stre
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
   createAssistant,
@@ -58,6 +60,9 @@ vi.mock("../../provider-stream.js", async (importOriginal) => ({
 type SettleInput = Parameters<typeof settleEmbeddedAttemptStream>[0];
 type PrepareTransportInput = Parameters<typeof prepareEmbeddedAttemptTransport>[0];
 const MP4 = Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex");
+const admittedRunContext = {
+  operationalRunInstance: createOperationalRunInstanceRef("test-run"),
+};
 
 function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
   const sessionManager = SessionManager.inMemory();
@@ -196,6 +201,12 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       const originalEntries = sessionManager.getEntries();
       const controller = new AbortController();
       const promptError = new Error("synthetic provider failure");
+      const assistant = createAssistant(
+        testModel,
+        [{ type: "text", text: "partial reply" }],
+        "error",
+      );
+      const usage = { input: 100, output: 20 };
       const input = createSettleFixture({
         sessionManager,
         runAbortSignal: controller.signal,
@@ -205,6 +216,8 @@ describe("settleEmbeddedAttemptStream liveness", () => {
           timedOutDuringCompaction: false,
         }),
       });
+      input.activeSession.messages.push(assistant);
+      input.subscription.getUsageTotals = () => usage;
       input.attempt = {
         ...input.attempt,
         ...target,
@@ -258,13 +271,16 @@ describe("settleEmbeddedAttemptStream liveness", () => {
         if (heldWriter) {
           await setImmediate();
           expect(settled).toBe(false);
-          controller.abort();
+          controller.abort(new Error("synthetic cancellation"));
           release.resolve();
           await heldWriter;
         }
         const result = await settlement;
         expect(result.promptError).toBe(promptError);
         expect(result.promptErrorSource).toBe("prompt");
+        expect(result.messagesSnapshot).toEqual([assistant]);
+        expect(result.currentAttemptAssistant).toBe(assistant);
+        expect(result.attemptUsage).toEqual(usage);
         const entries = SessionManager.open(target, state.workspaceDir).getEntries();
         if (scenario === "active provider failure") {
           expect(entries).toHaveLength(originalEntries.length + 1);
@@ -471,6 +487,7 @@ describe("attempt projection persistence through settlement", () => {
       }
     } finally {
       clearEmbeddedSessionPromptStates([scope.sessionId]);
+      await closeOpenClawAgentDatabasesAsync(dir);
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
@@ -512,6 +529,7 @@ function createTransportFixture(testCase: {
       resolvedApiKey: undefined,
       authStorage: { getApiKey: async () => testCase.apiKey },
       runId: "run-transport-1",
+      admittedRunContext,
       runtimePlan: {
         auth: { forwardedAuthProfileId: undefined },
         transport: {
@@ -702,6 +720,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
           modelId: model.id,
           provider: model.provider,
           runId: "run-native-video",
+          admittedRunContext,
           runtimePlan: {
             auth: { forwardedAuthProfileId: undefined },
             transport: { resolveExtraParams: () => ({}) },
@@ -764,6 +783,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
         modelId: model.id,
         provider: model.provider,
         runId: "run-native-image-failure",
+        admittedRunContext,
         runtimePlan: {
           auth: { forwardedAuthProfileId: undefined },
           transport: { resolveExtraParams: () => ({}) },

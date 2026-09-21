@@ -36,6 +36,7 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - `supportsParallelToolCalls: true` marks servers that adapters can call concurrently
     - HTTP servers can use static headers, OAuth login, TLS verification control, and mTLS certificate/key paths
     - embedded OpenClaw exposes configured MCP tools in normal `coding` and `messaging` tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]` disables them explicitly
+    - whole-server tool denials such as `tools.deny: ["bundle-mcp"]` or `tools.deny: ["docs__*"]` exclude those servers before connecting; individual tool denials still apply to the discovered catalog
     - per-server `toolFilter.include` and `toolFilter.exclude` filter discovered MCP tools before they become OpenClaw tools
     - servers that advertise resources or prompts also expose utility tools for listing/reading resources and listing/fetching prompts; those generated utility names (`resources_list`, `resources_read`, `prompts_list`, `prompts_get`) use the same include/exclude filter
     - fetched prompts present their description and role-labeled messages to the agent, including native image blocks for vision-capable models; Code Mode keeps the original prompt JSON shape
@@ -43,6 +44,7 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - repeated MCP tool request/protocol failures pause that server briefly so one broken server does not consume the whole turn
     - session-scoped MCP runtimes stay alive between turns until session reset/deletion or compaction ID rollover, explicit Stop, a relevant server config change, or Gateway shutdown; owned stdio children terminate during cleanup
     - detached one-shot runs without a surviving runtime session retire their MCP runtimes at run end; a retained transcript does not extend that lifetime
+    - native harness preparation retains the final bundle's server connections and OAuth context until the session closes; unused discovery servers outside that bundle can be retired after preparation when no other lease needs them
     - canceling compaction closes MCP runtimes created for that compaction, including pending startup and tool discovery
     - `mcp.sessionIdleTtlMs` is an opt-in idle timeout in milliseconds: unset or `0` keeps runtimes alive, and positive finite values enable idle eviction (fractions round down)
     - a Gateway admits at most 256 OpenClaw-managed runtimes with server connections across sessions and requester partitions; sessions without available servers and sign-in-only catalogs do not consume this limit. Reaching the limit rejects new admissions until you stop or reset unused sessions. See [MCP configuration](/gateway/config-extensions#mcp) for details

@@ -67,10 +67,41 @@ export async function tryListenOnPort(params: ListenOnPortParams): Promise<numbe
   });
 }
 
+/** Observe a listener without retaining its socket or cancellation hook. */
+export async function probeTcpListener(
+  port: number,
+  host: string,
+  signal?: AbortSignal,
+): Promise<PortUsageStatus> {
+  signal?.throwIfAborted();
+  return await new Promise<PortUsageStatus>((resolve) => {
+    const socket = net.connect({ host, port });
+    let result: PortUsageStatus = "unknown";
+    const destroy = () => socket.destroy();
+    signal?.addEventListener("abort", destroy, { once: true });
+    socket.once("connect", () => {
+      result = "busy";
+      destroy();
+    });
+    socket.once("error", (error) => {
+      result = isErrno(error) && error.code === "ECONNREFUSED" ? "free" : "unknown";
+      destroy();
+    });
+    socket.setTimeout(250, destroy);
+    // Closing, not just requesting destruction, releases the probe's I/O and timer.
+    socket.once("close", () => {
+      signal?.removeEventListener("abort", destroy);
+      resolve(result);
+    });
+  });
+}
+
 async function probePortOnHost(port: number, host: string): Promise<PortUsageStatus | "skip"> {
   try {
     await tryListenOnPort({ port, host, exclusive: true });
-    return "free";
+    // A successful scoped bind can coexist with a wildcard listener on macOS.
+    // Confirm the endpoint before declaring it free, even without lsof or ss.
+    return await probeTcpListener(port, host);
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") {
       return "busy";

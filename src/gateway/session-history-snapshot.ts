@@ -4,7 +4,10 @@ import type {
   SessionHistoryReadParams,
   SessionHistorySnapshot,
 } from "../config/sessions/session-history-types.js";
-import { projectChatDisplayMessagesWithState } from "./chat-display-projection.core.js";
+import {
+  projectChatDisplayMessagesWithState,
+  type ChatDisplayProjectionOptions,
+} from "./chat-display-projection.core.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
@@ -19,6 +22,7 @@ type SessionHistorySnapshotOptions = {
   readOnly?: boolean;
   deferProfileDisplay?: boolean;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
+  resolveCronJobName?: ChatDisplayProjectionOptions["resolveCronJobName"];
 };
 
 /** Keep raw scan context inside the worker; only the completed page crosses isolates. */
@@ -40,8 +44,10 @@ export async function readSessionHistorySnapshotKernel(
     rawMessages = snapshot.messages;
     transcriptPath = snapshot.transcriptPath;
     projected = projectChatDisplayMessagesWithState(rawMessages, {
+      subagentCoordination: options.readers.subagentCoordination,
       includeCommentaryFallbacks: true,
       maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      resolveCronJobName: options.resolveCronJobName,
       ...(options.deferProfileDisplay
         ? {}
         : { resolveCurrentUserProfileDisplay: options.resolveCurrentUserProfileDisplay }),

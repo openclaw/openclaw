@@ -1,4 +1,15 @@
+import type { SqliteWorkerNativeSettlementOwner } from "../infra/sqlite-worker-operation-settlement.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import type { TaskInitialWorkerOperations } from "./task-initial-worker.types.js";
+import type {
+  TaskAgentEventInput,
+  TaskAgentEventReceipt,
+} from "./task-registry-agent-event.operation.js";
+import type {
+  TaskRegistryRestoreResult,
+  TaskMirroredFlowSyncOutcome,
+} from "./task-registry-restore.worker.js";
 import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 // Stores task registry records in memory and bridges persistence runtime hooks.
 import {
@@ -6,49 +17,66 @@ import {
   deleteTaskAndDeliveryStateFromSqlite,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryMutationStateFromSqlite,
-  listTaskRegistryRecordsByOwnerKeyFromSqlite,
   upsertTaskWithDeliveryStateToSqlite,
   upsertTaskDeliveryStateToSqlite,
   withTaskRegistrySqliteMutation,
+  settleTaskRegistrySqliteWrites,
 } from "./task-registry.store.sqlite.js";
 import type {
+  TaskExecutionRestoreStore,
+  TaskLiveFlowAuthority,
+  TaskLiveFlowSyncOutcome,
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
+  TaskRegistryObserverEvent,
 } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 
-export type TaskRegistryStore = {
-  loadSnapshot: () => TaskRegistryStoreSnapshot;
-  loadMutationSnapshot?: (scope: TaskRegistryMutationScope) => TaskRegistryStoreSnapshot;
-  withMutation?: <T>(operation: () => T) => T;
-  listTasksForOwnerKey?: (ownerKey: string) => Promise<TaskRecord[]>;
-  upsertTaskWithDeliveryState: (params: {
-    task: TaskRecord;
-    deliveryState?: TaskDeliveryState;
-  }) => void;
+export type TaskRegistryStore = TaskExecutionRestoreStore & {
+  runAgentEventMutationAsync(
+    context: OpenClawStateWorkerContext,
+    input: TaskAgentEventInput,
+    assertCurrent: () => void,
+    onGranted: (owner: SqliteWorkerNativeSettlementOwner) => void,
+  ): Promise<TaskAgentEventReceipt | null>;
+  settleAgentEventWrites(join: (deadlineMs: number) => void): void;
+  runInitialMutationAsync<Key extends keyof TaskInitialWorkerOperations>(
+    context: OpenClawStateWorkerContext,
+    command: { type: Key; input: TaskInitialWorkerOperations[Key]["input"] },
+    assertCurrent: () => void,
+    onGranted?: (owner: SqliteWorkerNativeSettlementOwner) => void,
+  ): Promise<TaskInitialWorkerOperations[Key]["output"]>;
+  syncLiveTaskFlowAsync(
+    context: OpenClawStateWorkerContext,
+    params: { taskId: string; flowId: string },
+    authority: TaskLiveFlowAuthority,
+  ): Promise<TaskLiveFlowSyncOutcome>;
+  withSnapshotAsync<T>(
+    context: OpenClawStateWorkerContext,
+    consume: (snapshot: TaskRegistryRestoreResult, reconcileFlows: () => Promise<void>) => T,
+  ): Promise<T>;
+  syncTaskFlowAsync: (
+    context: OpenClawStateWorkerContext,
+    params: { taskId: string; expectedParentFlowId?: string },
+  ) => Promise<TaskMirroredFlowSyncOutcome>;
+  loadMutationSnapshotAsync: (
+    context: OpenClawStateWorkerContext,
+    scope?: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],
+  ) => Promise<TaskRegistryStoreSnapshot>;
+  loadMutationSnapshot?: (
+    scopes: readonly TaskRegistryMutationScope[],
+  ) => TaskRegistryStoreSnapshot;
+  listTasksForOwnerKey?: (
+    context: OpenClawStateWorkerContext,
+    ownerKey: string,
+    assertCurrent: () => void,
+  ) => Promise<TaskRecord[]>;
   deleteTaskWithDeliveryState: (taskId: string) => void;
   upsertDeliveryState: (state: TaskDeliveryState) => void;
   close?: () => void;
 };
-
-type TaskRegistryObserverRecord = Omit<TaskRecord, "detail">;
-
-export type TaskRegistryObserverEvent =
-  | {
-      kind: "restored";
-    }
-  | {
-      kind: "upserted";
-      task: TaskRegistryObserverRecord;
-      previous?: TaskRegistryObserverRecord;
-    }
-  | {
-      kind: "deleted";
-      taskId: string;
-      previous: TaskRegistryObserverRecord;
-    };
 
 type TaskRegistryObservers = {
   // Observers are incremental/best-effort only. Persistence belongs to TaskRegistryStore.
@@ -56,10 +84,60 @@ type TaskRegistryObservers = {
 };
 
 const defaultTaskRegistryStore: TaskRegistryStore = {
+  async runAgentEventMutationAsync(context, input, assertCurrent, onGranted) {
+    const { runTaskRegistryWorkerOperation } = await import("./task-registry-worker-operation.js");
+    return runTaskRegistryWorkerOperation(
+      context,
+      { type: "tasks.observeAgentEvent", input },
+      assertCurrent,
+      onGranted,
+    );
+  },
+  settleAgentEventWrites: settleTaskRegistrySqliteWrites,
+  async runInitialMutationAsync(context, command, assertCurrent, onGranted) {
+    const { runTaskRegistryWorkerOperation } = await import("./task-registry-worker-operation.js");
+    return runTaskRegistryWorkerOperation(context, command, assertCurrent, onGranted);
+  },
+  async syncLiveTaskFlowAsync(context, params, authority) {
+    const { syncLiveTaskFlowWithWorker } = await import("./task-registry-live-flow-sync.js");
+    return syncLiveTaskFlowWithWorker(context, params, authority);
+  },
+  async withSnapshotAsync(context, consume) {
+    const { runTaskFlowRestoreWorkerOperation } = await import("./task-flow-restore-store.js");
+    return runTaskFlowRestoreWorkerOperation(
+      context,
+      { type: "tasks.restore", input: undefined },
+      consume,
+    );
+  },
+  async syncTaskFlowAsync(context, params) {
+    const { runTaskFlowRestoreWorkerOperation } = await import("./task-flow-restore-store.js");
+    return runTaskFlowRestoreWorkerOperation(
+      context,
+      { type: "flows.syncMirroredTask", input: params },
+      async (result, reconcileFlows) => {
+        await reconcileFlows();
+        return result;
+      },
+    );
+  },
   loadSnapshot: loadTaskRegistryStateFromSqlite,
+  async loadMutationSnapshotAsync(context, scope) {
+    const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+    return executeOpenClawStateWorker(context, { type: "tasks.mutationSnapshot", input: scope });
+  },
   loadMutationSnapshot: loadTaskRegistryMutationStateFromSqlite,
   withMutation: withTaskRegistrySqliteMutation,
-  listTasksForOwnerKey: listTaskRegistryRecordsByOwnerKeyFromSqlite,
+  async listTasksForOwnerKey(context, ownerKey, assertCurrent) {
+    const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+    assertCurrent();
+    const records = await executeOpenClawStateWorker(context, {
+      type: "tasks.ownerRecords",
+      input: { ownerKey },
+    });
+    assertCurrent();
+    return records;
+  },
   upsertTaskWithDeliveryState: upsertTaskWithDeliveryStateToSqlite,
   deleteTaskWithDeliveryState: deleteTaskAndDeliveryStateFromSqlite,
   upsertDeliveryState: upsertTaskDeliveryStateToSqlite,
@@ -75,6 +153,15 @@ export function getTaskRegistryStore(): TaskRegistryStore {
 
 export function getTaskRegistryObservers(): TaskRegistryObservers | null {
   return configuredTaskRegistryObservers;
+}
+
+/** Subscribe at the publication owner; readers recheck current task authority. */
+export function onTaskRegistryChange(
+  listener: (event?: TaskRegistryObserverEvent) => void,
+): () => void {
+  const listeners = getTaskRegistryProcessState().changeListeners;
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }
 
 export function configureTaskRegistryRuntime(params: {
@@ -96,6 +183,37 @@ export function resetTaskRegistryRuntimeForTests() {
 }
 
 const storeLog = createSubsystemLogger("tasks/registry");
+
+export function deliverTaskRegistryObserverEvent(
+  createEvent: () => TaskRegistryObserverEvent,
+  recordPublication: (event: TaskRegistryObserverEvent) => void,
+): void {
+  const observers = getTaskRegistryObservers();
+  const state = getTaskRegistryProcessState();
+  if (
+    !observers?.onEvent &&
+    state.projection.pending.size === 0 &&
+    state.changeListeners.size === 0
+  ) {
+    return;
+  }
+  let event: TaskRegistryObserverEvent | undefined;
+  try {
+    event = createEvent();
+    recordPublication(event);
+    observers?.onEvent?.(event);
+  } catch (error) {
+    storeLog.warn("Task registry observer failed", { event: "task-registry", error });
+  } finally {
+    for (const listener of state.changeListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        storeLog.warn("Task registry change listener failed", { error });
+      }
+    }
+  }
+}
 
 export function tryPersistTaskUpsert(
   task: TaskRecord,

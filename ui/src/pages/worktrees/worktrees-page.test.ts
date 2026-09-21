@@ -226,11 +226,11 @@ describe("WorktreesPage lifecycle", () => {
     const link = [...page.querySelectorAll("a")].find((anchor) =>
       anchor.getAttribute("href")?.includes("12345678"),
     );
-    expect(link?.getAttribute("href")).toBe("/chat/main/12345678");
+    expect(link?.getAttribute("href")).toBe("/chat/main/1234567890abcdef1234567890abcdef");
     link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
     expect(context.navigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/12345678",
+      pathname: "/chat/main/1234567890abcdef1234567890abcdef",
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
   });
@@ -755,32 +755,41 @@ describe("WorktreesPage lifecycle", () => {
     expect(freshInputs.every((input) => !input.disabled)).toBe(true);
   });
 
-  it("uses the current branch when a repository has no remote default", async () => {
-    const request = vi.fn((method: string) => {
-      if (method === "worktrees.branches") {
-        return Promise.resolve({ branches: [{ name: "main" }], headBranch: "main" });
-      }
-      return Promise.resolve({ worktrees: [] });
-    });
-    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
-    page.context = contextWithGateway(
-      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
-    );
-    page.createRepoRoot = "/tmp/repo";
-    document.body.append(page);
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith(
-        "worktrees.list",
-        {},
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
-      ),
-    );
+  it.each([undefined, "main"])(
+    "leaves base resolution to the Gateway (remote default: %s)",
+    async (defaultBranch) => {
+      const request = vi.fn((method: string) => {
+        if (method === "worktrees.branches") {
+          return Promise.resolve({
+            branches: [{ name: "main" }],
+            headBranch: "main",
+            defaultBranch,
+          });
+        }
+        return Promise.resolve({ worktrees: [] });
+      });
+      const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+      page.context = contextWithGateway(
+        gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+      );
+      page.createRepoRoot = "/tmp/repo";
+      document.body.append(page);
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith(
+          "worktrees.list",
+          {},
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        ),
+      );
 
-    page.loadCreateBranches();
+      page.loadCreateBranches();
 
-    await waitForFast(() => expect(page.createBranches).toEqual(["main"]));
-    expect(page.createBaseRef).toBe("main");
-  });
+      await waitForFast(() => expect(page.createBranches).toEqual(["main"]));
+      expect(page.createBaseRef).toBe("");
+      await page.createWorktree();
+      expect(request).toHaveBeenCalledWith("worktrees.create", { repoRoot: "/tmp/repo" });
+    },
+  );
 
   it("ignores a stale branch failure after a newer request succeeds", async () => {
     const firstBranches = deferred<unknown>();
@@ -799,6 +808,7 @@ describe("WorktreesPage lifecycle", () => {
       gatewayWithClient({ request } as unknown as GatewayBrowserClient),
     );
     page.createRepoRoot = "/tmp/repo";
+    page.createBaseRef = "release";
     document.body.append(page);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
@@ -811,13 +821,13 @@ describe("WorktreesPage lifecycle", () => {
     page.loadCreateBranches();
     page.loadCreateBranches();
     await waitForFast(() => expect(page.createBranches).toEqual(["main"]));
-    expect(page.createBaseRef).toBe("main");
+    expect(page.createBaseRef).toBe("release");
 
     firstBranches.reject(new Error("stale branch failure"));
     await Promise.resolve();
     await Promise.resolve();
 
     expect(page.createBranches).toEqual(["main"]);
-    expect(page.createBaseRef).toBe("main");
+    expect(page.createBaseRef).toBe("release");
   });
 });

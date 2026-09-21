@@ -1,7 +1,8 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
-import "../../components/modal-dialog.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import "../../components/modal-dialog.ts";
+import type { SessionProgressCardRefreshAction } from "../../components/session-progress-card.ts";
 import { t } from "../../i18n/index.ts";
 import { boardProviderCacheKey } from "../../lib/board/provider.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -27,18 +28,22 @@ import { ChatPaneBoard } from "./chat-pane-board.ts";
 import { consumePaneSessionHandoff, type PaneSessionHandoff } from "./chat-pane-shared.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
-import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { refreshChatMetadata } from "./chat-state-refresh.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
-import { resetTranscriptSession } from "./components/chat-thread-interactions.ts";
+import {
+  dismissThreadPortals,
+  isThreadPresentationFocused,
+  resetTranscriptSession,
+} from "./components/chat-thread-interactions.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
@@ -46,6 +51,55 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
+  protected captureProgressCardRefreshAction(): SessionProgressCardRefreshAction | undefined {
+    const state = this.state;
+    const scope = this.captureConnectionScope();
+    if (!state || !scope) {
+      return undefined;
+    }
+    const sessionKey = state.sessionKey;
+    const sessionId = state.currentSessionId;
+    const agentId = resolveChatAgentId(state);
+    return {
+      state: this.progressCard.refreshState,
+      onRefresh: (card) => {
+        const current = this.state;
+        if (
+          current &&
+          this.isConnectionScopeCurrent(scope) &&
+          current.sessionKey === sessionKey &&
+          current.currentSessionId === sessionId &&
+          resolveChatAgentId(current) === agentId
+        ) {
+          this.progressCard.refresh(card);
+        }
+      },
+    };
+  }
+
+  private currentSessionArchived: boolean | undefined;
+  private archiveFocusOwned = false;
+
+  protected captureArchivePresentationFocus(): void {
+    this.archiveFocusOwned = Boolean(
+      this.state &&
+      this.isCurrentSessionArchived(this.state) &&
+      this.currentSessionArchived === false &&
+      isThreadPresentationFocused(this.presentationId, this),
+    );
+  }
+
+  protected retireArchivedPresentation(): void {
+    const archived = this.state ? this.isCurrentSessionArchived(this.state) : false;
+    if (archived && this.currentSessionArchived === false) {
+      dismissThreadPortals(this.presentationId, this);
+      if (this.archiveFocusOwned) {
+        this.querySelector<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
+      }
+    }
+    this.currentSessionArchived = archived;
+  }
+
   private retainedQueuedEdit = false;
 
   get hasQueuedMessageEdit(): boolean {
@@ -113,6 +167,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const state = this.state;
     if (
       !state ||
+      state.settings.chatShowTaskProgress === false ||
       !this.presented ||
       this.isCurrentSessionArchived(state) ||
       parseCatalogSessionKey(state.sessionKey)
@@ -167,12 +222,13 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return undefined;
     }
     // Unlike secondary metadata, the progress card determines transcript geometry.
-    return this.resolveChatReadTarget();
+    // Consult preferences only after the pane and its history owner are ready.
+    return state.settings.chatShowTaskProgress === false ? undefined : this.resolveChatReadTarget();
   }
 
   protected get progressCardInitialLoading(): boolean {
     const state = this.state;
-    if (!state) {
+    if (!state || state.settings.chatShowTaskProgress === false) {
       return false;
     }
     if (this.progressPresentationSessionKey !== state.sessionKey) {
@@ -321,7 +377,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     if (active && this.presented && this.state?.chatQueue.length) {
       void refreshCurrentChatSessionList(this.state).catch(() => undefined);
-      void retryReconnectableQueuedChatSends(this.state);
+      void resumeStoredChatOutboxes(this.state);
     }
     this.querySelector(".chat-transcript-announcement")?.setAttribute(
       "aria-live",
@@ -394,8 +450,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (state) {
       stopChatRealtimeTalk(state);
       invalidateImageLightbox(state);
-      // The detail slot's render guard cannot run once the content is wiped,
-      // so the transcript loader's timer/fetch loop must be stopped here.
       resetTaskDetail(state);
       state.sidebarContent = null;
       clearSessionWorkspacePreviews(state);

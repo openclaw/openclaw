@@ -34,6 +34,18 @@ const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
 
 type MemoryReadTarget = { databasePath: string; agentId: string };
 
+export async function runMemoryPresenceInspection(databasePath: string): Promise<boolean> {
+  ensureSqliteLibrarySelected();
+  const result = await retrieval.run(
+    { kind: "presence", databasePath },
+    { inputBytes: databasePath.length * 2 },
+  );
+  if (result.kind !== "presence") {
+    throw new Error("Invalid memory presence worker result");
+  }
+  return result.present;
+}
+
 export async function runMemoryKeywordSearch(
   target: MemoryReadTarget,
   query: MemoryKeywordWorkerQuery,

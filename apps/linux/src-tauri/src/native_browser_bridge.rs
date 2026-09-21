@@ -8,10 +8,10 @@ use tauri::{AppHandle, Manager, State, Url, Webview};
 use tauri_plugin_opener::OpenerExt;
 
 #[derive(Clone)]
-struct DashboardDocument {
+pub(crate) struct DashboardDocument {
     url: Url,
     token: String,
-    generation: u64,
+    pub(crate) generation: u64,
     ready: bool,
 }
 
@@ -85,6 +85,7 @@ impl NativeBrowserBridgeState {
                     .remote(format!("{origin}/*"))
                     .webview("main")
                     .permission("allow-native-browser-request")
+                    .permission("allow-native-device-settings-request")
                     .permission("allow-window-chrome-request");
             #[cfg(not(target_os = "macos"))]
             let capability = capability.permission("allow-window-chrome-drag");
@@ -130,7 +131,7 @@ impl NativeBrowserBridgeState {
         });
     }
 
-    fn authorize(&self, webview: &Webview, token: &str) -> Option<DashboardDocument> {
+    pub(crate) fn authorize(&self, webview: &Webview, token: &str) -> Option<DashboardDocument> {
         if webview.label() != "main" {
             return None;
         }
@@ -143,6 +144,25 @@ impl NativeBrowserBridgeState {
                 document.ready && document.token == token && matches_dashboard(&url, &document.url)
             })
             .cloned()
+    }
+
+    pub(crate) fn with_document_authority<T>(
+        &self,
+        generation: u64,
+        action: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let state = self
+            .inner
+            .lock()
+            .map_err(|_| "Desktop document authority is unavailable.")?;
+        if !state
+            .document
+            .as_ref()
+            .is_some_and(|document| document.ready && document.generation == generation)
+        {
+            return Err("The desktop settings document changed.".into());
+        }
+        action()
     }
 }
 
@@ -183,6 +203,24 @@ fn initialization_script(document: &DashboardDocument) -> String {
   Object.defineProperty(window, "__OPENCLAW_NATIVE_BROWSER_HANDLERS__", {{ value: handlers, configurable: true }});
   Object.defineProperty(handlers, "openclawBrowser", {{ value: handler, configurable: true }});
   Object.defineProperty(handlers, "openclawLink", {{ value: handler, configurable: true }});
+  let deviceSettingsSnapshot;
+  const acceptDeviceSettings = snapshot => {{
+    if (deviceSettingsSnapshot && snapshot.revision <= deviceSettingsSnapshot.revision) return deviceSettingsSnapshot;
+    deviceSettingsSnapshot = snapshot;
+    window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__ = snapshot;
+    window.dispatchEvent(new CustomEvent("openclaw:native-device-settings-changed", {{ detail: snapshot }}));
+    return snapshot;
+  }};
+  Object.defineProperty(window, "__OPENCLAW_ACCEPT_NATIVE_DEVICE_SETTINGS__", {{ value: acceptDeviceSettings, configurable: true }});
+  let deviceSettingsRequests = Promise.resolve();
+  Object.defineProperty(handlers, "openclawDeviceSettings", {{ value: {{ postMessage: message => {{
+    const request = deviceSettingsRequests.then(async () => {{
+      await ready;
+      return acceptDeviceSettings(await invoke("native_device_settings_request", {{ message, token }}));
+    }});
+    deviceSettingsRequests = request.catch(() => {{}});
+    return request;
+  }} }}, configurable: true }});
   Object.defineProperty(window, "__OPENCLAW_NATIVE_BROWSER_TOKEN__", {{ value: token, configurable: true }});
 "#
         ),
@@ -246,21 +284,36 @@ pub fn request_is_current(app: &AppHandle, generation: u64) -> bool {
     })
 }
 
-pub fn publication_script(app: &AppHandle, serialized_state: &str) -> Option<String> {
+pub(crate) enum Publication {
+    Browser,
+    DeviceSettings,
+}
+
+pub fn publication_script(
+    app: &AppHandle,
+    serialized_state: &str,
+    publication: Publication,
+) -> Option<String> {
     let state = app.try_state::<NativeBrowserBridgeState>()?;
     let inner = state.inner.lock().ok()?;
     let document = inner.document.as_ref().filter(|document| document.ready)?;
     let token = json!(document.token);
-    Some(scoped_script(
-        document,
-        &format!(
+    let script = match publication {
+        Publication::Browser => format!(
             r#"
   if (window.__OPENCLAW_NATIVE_BROWSER_TOKEN__ !== {token}) return;
   window.__OPENCLAW_NATIVE_BROWSER__ = {serialized_state};
   window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", {{detail: window.__OPENCLAW_NATIVE_BROWSER__}}));
 "#
         ),
-    ))
+        Publication::DeviceSettings => format!(
+            r#"
+  if (window.__OPENCLAW_NATIVE_BROWSER_TOKEN__ !== {token}) return;
+  window.__OPENCLAW_ACCEPT_NATIVE_DEVICE_SETTINGS__({serialized_state});
+"#
+        ),
+    };
+    Some(scoped_script(document, &script))
 }
 
 pub fn page_load(webview: Webview, started: bool, document_token: Option<&str>) {
@@ -340,6 +393,7 @@ pub fn page_load(webview: Webview, started: bool, document_token: Option<&str>) 
         };
         let _ = webview.eval(script);
         app.state::<NativeBrowserState>().publish(&app).await;
+        crate::native_device_settings::publish(&app);
     });
 }
 
@@ -389,6 +443,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn queued_document_action_rechecks_authority_before_entering_its_side_effect() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+
+        let bridge = Arc::new(NativeBrowserBridgeState::default());
+        {
+            let mut state = bridge.inner.lock().unwrap();
+            state.generation = 1;
+            state.document = Some(DashboardDocument {
+                url: Url::parse("https://gateway.example/openclaw/").unwrap(),
+                token: "original-document".into(),
+                generation: 1,
+                ready: true,
+            });
+        }
+        let captured_generation = bridge
+            .inner
+            .lock()
+            .unwrap()
+            .document
+            .as_ref()
+            .unwrap()
+            .generation;
+        let side_effects = Arc::new(AtomicUsize::new(0));
+        let (queued, pending) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let queued_bridge = Arc::clone(&bridge);
+        let queued_effects = Arc::clone(&side_effects);
+        let request = tauri::async_runtime::spawn_blocking(move || {
+            queued.send(()).unwrap();
+            resume.recv_timeout(Duration::from_secs(5)).unwrap();
+            queued_bridge.with_document_authority(captured_generation, || {
+                queued_effects.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        });
+        pending.recv_timeout(Duration::from_secs(5)).unwrap();
+        {
+            let mut state = bridge.inner.lock().unwrap();
+            state.generation = 2;
+            let document = state.document.as_mut().unwrap();
+            document.generation = 2;
+            document.token = "replacement-document".into();
+        }
+        release.send(()).unwrap();
+        assert_eq!(
+            tauri::async_runtime::block_on(request).unwrap(),
+            Err("The desktop settings document changed.".into())
+        );
+        assert_eq!(side_effects.load(Ordering::SeqCst), 0);
+        bridge
+            .with_document_authority(2, || {
+                side_effects.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(side_effects.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn dashboard_authority_requires_exact_origin_and_path_boundary() {
         let dashboard = Url::parse("https://gateway.example/openclaw/").unwrap();
         for (candidate, expected) in [
@@ -406,6 +521,89 @@ mod tests {
                 "{candidate}"
             );
         }
+    }
+
+    #[test]
+    fn device_settings_preserve_newer_events_and_fifo_edits_after_a_rejection() {
+        let document = DashboardDocument {
+            url: Url::parse("https://gateway.example/openclaw/").unwrap(),
+            token: "fixture-bridge-token".into(),
+            generation: 1,
+            ready: false,
+        };
+        let runner = r#"
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const calls = [];
+const changes = [];
+const events = new Map();
+const window = {
+  addEventListener(name, listener) { events.set(name, listener); },
+  dispatchEvent(event) { changes.push(event.detail); },
+  __TAURI_INTERNALS__: { invoke(command, args) {
+    return new Promise((resolve, reject) => calls.push({command, args, resolve, reject}));
+  } },
+};
+window.top = window;
+vm.runInNewContext(process.argv[1], {
+  window, location: new URL('https://gateway.example/openclaw/chat'), Promise,
+  CustomEvent: class { constructor(name, {detail}) { this.detail = detail; } },
+});
+const flush = () => new Promise(setImmediate);
+const post = value => window.webkit.messageHandlers.openclawDeviceSettings.postMessage({
+  type: 'set', key: 'capabilities.desktopSharingEnabled', value,
+});
+const snapshot = (revision, state, enabled) => ({
+  contract: 1, revision, capabilities: {desktopSharingEnabled: enabled}, desktopSharing: {state},
+});
+(async () => {
+  const on = post(true);
+  const off = post(false);
+  await flush();
+  assert.equal(calls.length, 0, 'edits must wait for document readiness');
+  events.get('openclaw:native-browser-ready')();
+  await flush();
+  assert.equal(calls.length, 1, 'the second edit must not race the first native save');
+  assert.equal(calls[0].command, 'native_device_settings_request');
+  assert.equal(calls[0].args.message.value, true);
+  const running = snapshot(2, 'running', true);
+  window.__OPENCLAW_ACCEPT_NATIVE_DEVICE_SETTINGS__(running);
+  calls[0].resolve(snapshot(1, 'starting', true));
+  assert.equal(await on, running, 'an older reply must return the newer native state');
+  await flush();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].args.message.value, false);
+  const stopped = snapshot(4, 'off', false);
+  window.__OPENCLAW_ACCEPT_NATIVE_DEVICE_SETTINGS__(stopped);
+  window.__OPENCLAW_ACCEPT_NATIVE_DEVICE_SETTINGS__(snapshot(3, 'starting', false));
+  calls[1].resolve(snapshot(3, 'starting', false));
+  assert.equal(await off, stopped);
+  assert.equal(window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__, stopped);
+  assert.deepEqual(changes.map(value => value.revision), [2, 4]);
+
+  const rejected = assert.rejects(post(true), /synthetic vault failure/);
+  const finalOff = post(false);
+  await flush();
+  assert.equal(calls.length, 3);
+  calls[2].reject(new Error('synthetic vault failure'));
+  await rejected;
+  await flush();
+  assert.equal(calls.length, 4, 'a rejected edit must not poison the document queue');
+  assert.equal(calls[3].args.message.value, false);
+  calls[3].resolve(snapshot(5, 'off', false));
+  assert.equal((await finalOff).revision, 5);
+  assert.deepEqual(calls.map(call => call.args.message.value), [true, false, true, false]);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"#;
+        let output = std::process::Command::new("node")
+            .args(["-e", runner, &initialization_script(&document)])
+            .output()
+            .expect("Node.js is required to exercise the injected settings bridge");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

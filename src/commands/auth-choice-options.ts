@@ -181,9 +181,10 @@ export function buildAuthChoiceGroups(params: {
     });
   }
   const groups = Array.from(groupsById.values())
-    .map((group) =>
-      Object.assign({}, group, { options: [...group.options].toSorted(compareAssistantOptions) }),
-    )
+    .map((group) => {
+      group.options = group.options.toSorted(compareAssistantOptions);
+      return group;
+    })
     .toSorted(compareAuthChoiceGroups);
 
   const skipOption = params.includeSkip

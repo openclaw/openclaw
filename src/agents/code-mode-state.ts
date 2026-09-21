@@ -195,7 +195,7 @@ export function removeExpiredRuns(now = Date.now()): void {
   }
 }
 
-export function disposeCodeModeRun(runId: string): void {
+function disposeCodeModeRun(runId: string): void {
   const state = activeRuns.get(runId);
   activeRuns.delete(runId);
   state?.owner.close();
@@ -562,15 +562,13 @@ export function codeModeAbortedResult(params: {
   );
 }
 
-export function codeModeWaitingReason(
-  pending: readonly PendingBridgeState[],
-): "pending_tools" | "yield" {
+function codeModeWaitingReason(pending: readonly PendingBridgeState[]): "pending_tools" | "yield" {
   return pending.length > 0 && pending.every((entry) => entry.method === "yield")
     ? "yield"
     : "pending_tools";
 }
 
-export function pendingToolCalls(pending: readonly PendingBridgeState[]) {
+function pendingToolCalls(pending: readonly PendingBridgeState[]) {
   // Settled calls remain in snapshots until QuickJS consumes their response,
   // but they must not be advertised as outstanding work to exec or wait.
   return pending

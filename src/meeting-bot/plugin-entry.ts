@@ -60,7 +60,10 @@ export type MeetingPluginEntryOptions<
   isInvalidRequest(error: unknown): boolean;
   name: string;
   nodeCommand: string;
-  nodeHandler(paramsJSON?: string | null): Promise<string>;
+  nodeHandler: {
+    (paramsJSON?: string | null): Promise<string>;
+    hasActiveWork?: () => boolean;
+  };
   normalizeRequesterSessionKey(value: unknown, trustedOwner: boolean): string | undefined;
   normalizeToolAgentId(agentId: string | undefined): string | undefined;
   normalizeUrl(url: string): string;
@@ -417,6 +420,7 @@ export function createMeetingPluginEntryOptions<
           cap: options.cap,
           dangerous: true,
           handle: (paramsJSON) => options.nodeHandler(paramsJSON),
+          hasActiveWork: options.nodeHandler.hasActiveWork,
         });
         api.registerNodeInvokePolicy(options.createNodePolicy(config));
       }

@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -775,6 +776,17 @@ function getSwiftPMResourceBundleBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf('echo "📦 Copying SwiftPM resource bundles"');
   const end = script.indexOf("running_packaged_app_pids()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function getControlUiOmissionBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("# The native dashboard loads the Gateway-served HTTP UI.");
+  const end = script.indexOf('echo "📦 Copying SwiftPM resource bundles"', start);
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -2356,6 +2368,44 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
   });
 
+  it.skipIf(process.platform === "win32")(
+    "rejects standalone and private-worker Control UI copies before signing",
+    () => {
+      const root = tempDirs.make("openclaw-package-no-control-ui-");
+      const appRoot = path.join(root, "OpenClaw.app");
+      const block = getControlUiOmissionBlock();
+      mkdirSync(path.join(appRoot, "Contents/Resources/node-worker/arm64"), { recursive: true });
+
+      const run = () =>
+        runHelper(`
+          set -euo pipefail
+          APP_ROOT=${JSON.stringify(appRoot)}
+          BUILD_ARCHS=(arm64)
+          ${block}
+        `);
+
+      expect(run().status).toBe(0);
+
+      mkdirSync(path.join(appRoot, "Contents/Resources/control-ui"), { recursive: true });
+      const standalone = run();
+      expect(standalone.status).toBe(1);
+      expect(standalone.stderr).toContain("Standalone Control UI assets must not be embedded");
+
+      const standalonePath = path.join(appRoot, "Contents/Resources/control-ui");
+      rmSync(standalonePath, { recursive: true });
+      mkdirSync(
+        path.join(
+          appRoot,
+          "Contents/Resources/node-worker/arm64/lib/node_modules/openclaw/dist/control-ui",
+        ),
+        { recursive: true },
+      );
+      const worker = run();
+      expect(worker.status).toBe(1);
+      expect(worker.stderr).toContain("Private node worker must not embed Control UI assets");
+    },
+  );
+
   it("embeds provider vectors as signed app resources", () => {
     const script = readFileSync(scriptPath, "utf8");
     const packageManifest = readFileSync("apps/macos/Package.swift", "utf8");
@@ -2387,7 +2437,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
   });
 
-  it("stages the pinned universal CUA driver before nested-code signing", () => {
+  it("stages the pinned CUA driver and thins single-architecture packages before signing", () => {
     const packageScript = readFileSync(scriptPath, "utf8");
     const stageScript = readFileSync("scripts/stage-cua-driver-macos.sh", "utf8");
     const codesignScript = readFileSync("scripts/codesign-mac-app.sh", "utf8");
@@ -2404,13 +2454,14 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
     expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
     expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
-    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.24.0");
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.28.2");
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
-      "31790cb49baa206f6455fbc259f8f83ae27e86be908f5c8cac5ec2f8521f8382",
+      "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa",
     );
-    expect(packageScript).toContain(
-      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
-    );
+    expect(packageScript).toContain('"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"');
+    expect(packageScript).toContain('if [[ "${#BUILD_ARCHS[@]}" -eq 1 ]]');
+    expect(packageScript).toContain('lipo "$CUA_DRIVER" -thin "$CUA_ARCH"');
+    expect(packageScript).toContain('[[ "$(lipo -archs "$CUA_DRIVER")" == "$CUA_ARCH" ]]');
     expect(packageScript.indexOf("Staging embedded CUA driver")).toBeLessThan(
       packageScript.indexOf('echo "🔏 Signing bundle'),
     );
@@ -2435,9 +2486,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     expect(cuaBlock).toContain("Omitting embedded CUA driver from elevation-host package");
     expect(cuaBlock).toContain("else");
     expect(cuaBlock).toContain("Staging embedded CUA driver");
-    expect(cuaBlock).toContain(
-      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
-    );
+    expect(cuaBlock).toContain('"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"');
   });
 
   it("does not mask required Info.plist stamp failures", () => {

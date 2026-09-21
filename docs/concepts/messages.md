@@ -161,19 +161,19 @@ Details: [Configuration](/gateway/config-agents/messages-and-talk#messages) and 
 
 ## Silent replies
 
-The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) means "do not deliver a user-visible reply." When a turn also has pending tool media, such as generated TTS audio, OpenClaw strips the silent text but still delivers the media attachment.
+The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) is never delivered as user-visible text. When a turn also has pending tool media, such as generated TTS audio, OpenClaw strips the silent text but still delivers the media attachment.
 
 Silence policy resolves by conversation type:
 
-- Direct conversations never receive `NO_REPLY` prompt guidance. If a direct run accidentally returns a bare silent token, OpenClaw suppresses it instead of rewriting or delivering it.
-- Groups/channels allow silence by default. In `message_tool` visible-reply mode, silence means the model does not call `message(action=send)`.
-- Internal orchestration allows silence by default.
+- Direct conversations never receive `NO_REPLY` prompt guidance. An undelivered required answer still needs recovery; the token cannot waive that obligation.
+- Accepted group/channel requests require a reply by default, including unmentioned messages admitted with `requireMention: false`. Mention and access gates still decide which messages reach the agent. To allow unaddressed requests to finish silently, explicitly set `silentReply.group: "allow"` at one of the configuration scopes below; mentions and authorized commands still require a response.
+- [Ambient room events](/channels/ambient-room-events) and internal helper turns can remain silent. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`.
 
 Defaults live under `agents.defaults.silentReply`; `surfaces.<id>.silentReply` can override group/internal policy per surface.
 
-OpenClaw also uses silent replies for generic internal runner failures in non-direct chats, so groups/channels do not see gateway error boilerplate. Classified failures with user-facing recovery copy, such as missing auth, rate-limit, or overload notices, can still be delivered. Direct chats show compact failure copy by default; raw runner details show only when `/verbose full` is enabled.
+Generic internal runner failures stay quiet for optional turns that have not shown visible output, including groups explicitly configured to allow silence. Required turns still receive an error. Classified recovery guidance, such as missing-auth, rate-limit, or overload notices, remains deliverable, and visible progress receives a failure outcome rather than being left unfinished. Direct chats show compact failure copy by default; raw runner details show only when `/verbose full` is enabled.
 
-Bare silent replies are dropped on all surfaces, so parent sessions stay quiet instead of rewriting sentinel text into fallback chatter.
+Reply requirements come from admission, not model control tokens. Confirmed delivery or still-owned delivery prevents duplicate recovery; see [Reply shaping](/concepts/agent-loop#reply-shaping).
 
 ## Related
 

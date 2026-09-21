@@ -56,7 +56,7 @@ function resolveRetrySignalStatus(signal: Pick<FailoverSignal, "message" | "stat
 }
 
 /** Narrow evidence that replaying the same assistant request may succeed within this session. */
-export function hasTransientRetryEvidence(
+function hasTransientRetryEvidence(
   signal: Pick<FailoverSignal, "code" | "message" | "status">,
 ): boolean {
   const status = resolveRetrySignalStatus(signal);
@@ -162,10 +162,9 @@ export function classifyRateLimitWindow(
 /** Apply the intra-attempt replay policy to one already-classified failover signal. */
 export function shouldRetryFailoverSignal(params: {
   classification: FailoverClassification | null;
-  hasTransientEvidence: boolean;
   signal: Pick<FailoverSignal, "code" | "message" | "status">;
 }): boolean {
-  if (!params.hasTransientEvidence) {
+  if (!hasTransientRetryEvidence(params.signal)) {
     return false;
   }
   const reason =

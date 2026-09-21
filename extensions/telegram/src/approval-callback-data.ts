@@ -1,4 +1,3 @@
-// Telegram plugin module implements approval callback data behavior.
 import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-reference-runtime";
 import type { MessagePresentationAction } from "openclaw/plugin-sdk/interactive-runtime";
 

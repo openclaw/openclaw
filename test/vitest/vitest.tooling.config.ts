@@ -16,7 +16,6 @@ export function createToolingVitestConfig(env?: Record<string, string | undefine
       ...toolingIsolatedTestFiles,
       ...gatewayPluginTestFiles,
     ],
-    fileParallelism: false,
     includeOpenClawRuntimeSetup: false,
     name: "tooling",
     passWithNoTests: true,

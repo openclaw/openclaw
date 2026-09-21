@@ -11,7 +11,7 @@ import {
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
 import {
-  listKnownProviderAuthEnvVarNames,
+  listKnownProviderAuthEnvVarNamesCore,
   omitEnvKeysCaseInsensitive,
 } from "../secrets/provider-env-vars.js";
 import { classifyAcpToolApproval, type AcpApprovalClass } from "./approval-classifier.js";
@@ -198,7 +198,7 @@ export function buildAcpClientStripKeys(params: {
 }): Set<string> {
   const stripKeys = new Set<string>(params.activeSkillEnvKeys ?? []);
   if (params.stripProviderAuthEnvVars) {
-    for (const key of listKnownProviderAuthEnvVarNames()) {
+    for (const key of listKnownProviderAuthEnvVarNamesCore()) {
       stripKeys.add(key);
     }
   }

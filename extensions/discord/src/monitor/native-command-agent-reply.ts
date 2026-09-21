@@ -1,4 +1,3 @@
-// Discord plugin module implements native command agent reply behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   hasVisibleInboundReplyDispatch,

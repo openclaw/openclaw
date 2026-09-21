@@ -69,3 +69,27 @@ export async function settleWorkspaceRuns(
     await withTimeout(released, SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS, "workspace run cleanup");
   }
 }
+
+export async function waitForCreatedSessionRun(
+  context: { chatAbortControllers: Map<string, ChatAbortControllerEntry> },
+  storePath: string,
+  sessionKey: string | undefined,
+) {
+  const released = getSessionWorkAdmissionRelease({
+    scope: storePath,
+    identities: [sessionKey],
+  });
+  const removed = await waitForChatAbortControllerRemoval({
+    entries: context.chatAbortControllers,
+    targets: [...context.chatAbortControllers].map(([runId, entry]) => ({ runId, entry })),
+    timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+  });
+  if (released) {
+    await withTimeout(
+      released,
+      SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+      "worktree title run cleanup",
+    );
+  }
+  return removed;
+}

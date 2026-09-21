@@ -1,14 +1,11 @@
-/**
- * Focused runtime SDK subpath for native harness tool-surface routing.
- *
- * Keep tool-search and code-mode dependencies out of the lightweight harness
- * lifecycle facade used during plugin startup.
- */
-import {
-  createAgentHarnessToolSurfaceRuntimeCore,
-  type AgentHarnessToolSurfaceRuntime as CoreAgentHarnessToolSurfaceRuntime,
-} from "../agents/harness/tool-surface-bridge.js";
+// Keep Tool Search and Code Mode dependencies out of the lightweight harness lifecycle SDK.
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 
+export { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
+export {
+  normalizeAcceptedSessionSpawnResult,
+  type AcceptedSessionSpawn,
+} from "../agents/accepted-session-spawn.js";
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
 export {
@@ -20,23 +17,48 @@ type OpenClawCodingToolsOptions = NonNullable<
   Parameters<typeof import("./agent-harness.js").createOpenClawCodingTools>[0]
 >;
 
-export type AgentHarnessToolSurfaceRuntime = Omit<
-  CoreAgentHarnessToolSurfaceRuntime,
-  "toolSearchCatalogExecutor" | "toolSearchCatalogRef"
-> & {
-  toolSearchCatalogExecutor: OpenClawCodingToolsOptions["toolSearchCatalogExecutor"];
-  toolSearchCatalogRef: OpenClawCodingToolsOptions["toolSearchCatalogRef"];
-};
+type CoreCompactTools = ReturnType<typeof createAgentHarnessToolSurfaceRuntimeCore>["compactTools"];
+export type AgentHarnessToolSurfaceRuntime = ReturnType<
+  typeof createAgentHarnessToolSurfaceRuntime
+>;
 
 export type AgentHarnessToolSurfaceRuntimeParams = Omit<
   Parameters<typeof createAgentHarnessToolSurfaceRuntimeCore>[0],
-  "executeTool" | "disableToolSearch"
+  "executeTool" | "disableToolSearch" | "forceCodeModeControls"
 > & {
   executeTool: NonNullable<OpenClawCodingToolsOptions["toolSearchCatalogExecutor"]>;
 };
 
-export function createAgentHarnessToolSurfaceRuntime(
-  params: AgentHarnessToolSurfaceRuntimeParams,
-): AgentHarnessToolSurfaceRuntime {
-  return createAgentHarnessToolSurfaceRuntimeCore(params);
+export function createAgentHarnessToolSurfaceRuntime(params: AgentHarnessToolSurfaceRuntimeParams) {
+  const runtime = createAgentHarnessToolSurfaceRuntimeCore(params);
+  const catalog: Pick<
+    OpenClawCodingToolsOptions,
+    "toolSearchCatalogExecutor" | "toolSearchCatalogRef"
+  > = runtime;
+  return {
+    codeModeControlsEnabled: runtime.codeModeControlsEnabled,
+    config: runtime.config,
+    includeToolSearchControls: runtime.includeToolSearchControls,
+    runtimeToolAllowlist: runtime.runtimeToolAllowlist,
+    toolSearchCatalogExecutor: catalog.toolSearchCatalogExecutor,
+    toolSearchCatalogRef: catalog.toolSearchCatalogRef,
+    toolSearchControlsEnabled: runtime.toolSearchControlsEnabled,
+    cleanup: runtime.cleanup,
+    compactTools: (
+      tools: Parameters<CoreCompactTools>[0],
+      {
+        hookContext,
+        localModelLeanApplied,
+      }: Pick<
+        NonNullable<Parameters<CoreCompactTools>[1]>,
+        "hookContext" | "localModelLeanApplied"
+      > = {},
+    ) => {
+      const { tools: compacted, promptToolPolicy } = runtime.compactTools(tools, {
+        hookContext,
+        localModelLeanApplied,
+      });
+      return { tools: compacted, promptToolPolicy };
+    },
+  };
 }

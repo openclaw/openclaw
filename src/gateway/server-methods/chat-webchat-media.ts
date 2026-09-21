@@ -27,6 +27,7 @@ const ALLOWED_WEBCHAT_DATA_IMAGE_MEDIA_TYPES = new Set([
 ]);
 
 type WebchatAudioEmbeddingOptions = {
+  assertCurrent?: () => void;
   localRoots?: readonly string[];
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
 };
@@ -93,9 +94,12 @@ async function readLocalAudioContentBlockForEmbedding(
   }
   let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | undefined;
   try {
+    options?.assertCurrent?.();
     await assertLocalMediaAllowed(resolved, options?.localRoots);
+    options?.assertCurrent?.();
     opened = await openLocalFileSafely({ filePath: resolved });
     await assertLocalMediaAllowed(opened.realPath, options?.localRoots);
+    options?.assertCurrent?.();
     if (opened.stat.size > MAX_WEBCHAT_AUDIO_BYTES) {
       return null;
     }

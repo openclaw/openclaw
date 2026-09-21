@@ -1,4 +1,3 @@
-// Voice Call plugin module implements call status behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EndReason } from "../../types.js";
 

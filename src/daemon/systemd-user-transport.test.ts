@@ -6,9 +6,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
+import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
+import type { GatewayServiceEnv } from "./service-types.js";
 import { execBusctlUser, execSystemctlUser } from "./systemd-exec.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
-import { readSystemdServiceExecStart } from "./systemd-service-files.js";
+import { readSystemdServiceExecStart, resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { readSystemdUserTransport, resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
@@ -21,6 +23,18 @@ const missing = {
   stderr: "Failed to connect to bus: No such file or directory",
 };
 const version = 's "252.39"';
+
+function readSelectedUserService(env: GatewayServiceEnv) {
+  // Routing starts from a selected user unit; scope discovery has its own fixtures.
+  return readSystemdServiceExecStart(env, {
+    requireEffective: true,
+    systemdReadTarget: {
+      scope: "user",
+      unitName: "openclaw-gateway.service",
+      unitPath: resolveSystemdUnitPath(env),
+    },
+  });
+}
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -86,7 +100,7 @@ it.each(["custom", "runtime", "private", "unavailable"] as const)(
       expect(probes).toEqual([custom, runtime, "machine"]);
       return;
     }
-    await expect(readSystemdServiceExecStart(env, { requireEffective: true })).resolves.toBeNull();
+    await expect(readSelectedUserService(env)).resolves.toBeNull();
     expect((await execSystemctlUser(env, ["status"])).code).toBe(0);
     const transport = await readSystemdUserTransport(env);
     expect(transport?.kind).toBe(
@@ -148,6 +162,45 @@ it("deduplicates concurrent discovery without retaining caller environment", asy
   expect(execFileUtf8).toHaveBeenCalledOnce();
 });
 
+it.each([
+  { busctl: "ENOENT", systemctl: "ENOENT", reason: "service-manager-unavailable" },
+  { busctl: "ENOENT", systemctl: undefined, reason: "systemd-busctl-unavailable" },
+  { busctl: "EACCES", systemctl: undefined, reason: "service-manager-access-denied" },
+  { busctl: undefined, systemctl: undefined, reason: "systemd-user-bus-unavailable" },
+  { busctl: undefined, systemctl: "offline", reason: "service-manager-unavailable" },
+  { busctl: undefined, systemctl: "not-booted", reason: "service-manager-unavailable" },
+] as const)(
+  "distinguishes missing native tools from $reason ($busctl, $systemctl)",
+  async ({ busctl, systemctl, reason }) => {
+    const home = dirs.make("openclaw-missing-manager-");
+    vi.mocked(execFileUtf8).mockImplementation(async (command) => {
+      const errorCode =
+        command === "busctl" ? busctl : systemctl === "ENOENT" ? systemctl : undefined;
+      if (command === "systemctl" && systemctl === "offline") {
+        return { ...missing, stdout: "offline\n", stderr: "" };
+      }
+      if (command === "systemctl" && systemctl === "not-booted") {
+        return {
+          ...missing,
+          stderr: "System has not been booted with systemd as init system (PID 1). Can't operate.",
+        };
+      }
+      return errorCode
+        ? { ...missing, termination: "error", errorCode }
+        : command === "systemctl"
+          ? success("running")
+          : missing;
+    });
+    await expect(
+      resolveSystemdUserTransport({
+        HOME: home,
+        XDG_RUNTIME_DIR: home,
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/bus`,
+      }),
+    ).rejects.toMatchObject({ reason });
+  },
+);
+
 it("does not let a short failed discovery poison the next caller", async () => {
   const home = dirs.make("openclaw-short-transport-");
   const env = {
@@ -202,12 +255,49 @@ it("reports a lost selected private socket without reselecting or blaming the de
     .mockRejectedValue(new Error("Original systemd manager peer inspection is unavailable."));
   await expect(resolveSystemdUserTransport(env)).resolves.toMatchObject({ kind: "private" });
   const probes = vi.mocked(execFileUtf8).mock.calls.length;
-  await expect(readSystemdServiceExecStart(env, { requireEffective: true })).rejects.toMatchObject({
+  await expect(readSelectedUserService(env)).rejects.toMatchObject({
     reason: "systemd-user-bus-unavailable",
   });
   expect(execFileUtf8).toHaveBeenCalledTimes(probes);
   expect(close).toHaveBeenCalledOnce();
 });
+
+it.each(["discovery", "connection", "query"])(
+  "preserves native ownership refusal during private %s without a fallback route",
+  async (phase) => {
+    const home = dirs.make("openclaw-refused-private-");
+    await fs.mkdir(path.join(home, "systemd"));
+    await fs.writeFile(path.join(home, "systemd/private"), "");
+    const env = {
+      HOME: home,
+      XDG_RUNTIME_DIR: home,
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/missing-bus`,
+    };
+    vi.mocked(execFileUtf8).mockResolvedValue(missing);
+    const refusal = new ServiceOwnershipRefusalError("systemd-manager-changed");
+    const close = vi.fn(async () => {});
+    const connection = { close, verify: () => {}, query: async () => ["252.39"] };
+    vi.mocked(openSystemdUserManager).mockRejectedValue(refusal);
+    if (phase !== "discovery") {
+      vi.mocked(openSystemdUserManager).mockResolvedValueOnce(connection);
+    }
+    if (phase === "query") {
+      vi.mocked(openSystemdUserManager).mockResolvedValue({
+        ...connection,
+        query: async () => {
+          throw refusal;
+        },
+      });
+    }
+    const read =
+      phase === "discovery" ? resolveSystemdUserTransport(env) : readSelectedUserService(env);
+    await expect(read).rejects.toBe(refusal);
+    expect(vi.mocked(execFileUtf8).mock.calls.some(([, args]) => args.includes("--machine"))).toBe(
+      false,
+    );
+    expect(close).toHaveBeenCalledTimes(phase === "discovery" ? 0 : phase === "connection" ? 1 : 2);
+  },
+);
 
 it("retains direct-root machine routing at the selection owner", async () => {
   const home = dirs.make("openclaw-root-transport-");
@@ -269,7 +359,7 @@ it.each([true, false])(
     const waiting = resolveSystemdUserTransport(env, undefined, undefined, "admission");
     release();
     expect(await first).toMatchObject(
-      privateAvailable ? { kind: "private" } : { reason: "systemd-user-bus-unavailable" },
+      privateAvailable ? { kind: "private" } : { reason: "systemd-inspection-deadline-exceeded" },
     );
     const selected = await waiting;
     expect(selected).toMatchObject({ kind: "session-bus", address: env.DBUS_SESSION_BUS_ADDRESS });

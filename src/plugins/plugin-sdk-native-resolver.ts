@@ -264,7 +264,10 @@ function resolveAliasTargetForParentUrl(
   request: string,
   parentUrl: string | undefined,
 ): string | undefined {
-  if (!parentUrl?.startsWith("file:")) {
+  if (
+    !parentUrl?.startsWith("file:") ||
+    (!isPluginSdkAliasSpecifier(request) && !getPluginCache().sdk.native.aliases.has(request))
+  ) {
     return undefined;
   }
   try {

@@ -1,5 +1,8 @@
 /** A small real PDF with independently selectable text and vector pages. */
-export function createPdfFixture(pageContents: string[]): Buffer {
+export function createPdfFixture(
+  pageContents: string[],
+  { width = 600, height = 800, rotation = 0 } = {},
+): Buffer {
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     `<< /Type /Pages /Count ${pageContents.length} /Kids [${pageContents.map((_, index) => `${4 + index * 2} 0 R`).join(" ")}] >>`,
@@ -7,7 +10,7 @@ export function createPdfFixture(pageContents: string[]): Buffer {
   ];
   for (const [index, content] of pageContents.entries()) {
     objects.push(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + index * 2} 0 R >>`,
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Rotate ${rotation} /Resources << /Font << /F1 3 0 R >> >> /Contents ${5 + index * 2} 0 R >>`,
       `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
     );
   }

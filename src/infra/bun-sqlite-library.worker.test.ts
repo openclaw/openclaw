@@ -28,6 +28,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 vi.mock("node:module", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:module")>();
   return {
+    getCompileCacheDir: actual.getCompileCacheDir,
     createRequire: (...args: Parameters<typeof actual.createRequire>) => {
       const require = actual.createRequire(...args);
       return Object.assign((specifier: string) => {

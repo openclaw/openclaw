@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   advanceCursor,
@@ -131,6 +132,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     if (result.numAffectedRows !== 1n) {
       throw new Error(`Session ${identity.sessionId} placement changed during turn admission`);
     }
+    sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
     return {
       sessionId: current.sessionId,
       claimId,
@@ -213,6 +215,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Session ${sessionId} turn claim changed during release`);
         }
+        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
         return getRequired(db, sessionId);
       });
       signalWorkerTurnClaimClosed(path, claim);
@@ -262,6 +265,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Session ${sessionId} workspace result changed during release`);
         }
+        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
         return getRequired(db, sessionId);
       });
       signalWorkerTurnClaimClosed(path, claim);
@@ -342,6 +346,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         if (result.numAffectedRows !== 1n) {
           throw new Error(`Session ${sessionId} workspace result changed during cancellation`);
         }
+        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
         return getRequired(db, sessionId);
       });
       signalWorkerTurnClaimClosed(path, claim);
@@ -524,6 +529,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           // fence protecting remote workspace results from stale-claim teardown.
           insertWorkerWorkspacePendingResult(db, input.claim, now(), instanceId);
         }
+        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
         return getRequired(db, sessionId);
       });
     },
@@ -622,6 +628,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
             throw new Error(`Worker workspace journal changed for session ${sessionId}`);
           }
         }
+        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
         return getRequired(db, sessionId);
       });
     },
@@ -667,6 +674,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           throw new Error(`Worker session workspace ${sessionId} changed during reconciliation`);
         }
         clearWorkerWorkspaceReconciliation(db, sessionId);
+        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
         return getRequired(db, sessionId);
       });
     },

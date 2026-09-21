@@ -85,6 +85,13 @@ export function resolveGitHubPublicationFailure(error: unknown): PublicationFail
     return error.failure;
   }
   const message = error instanceof Error ? error.message : "";
+  if (message.includes("publication workspace base")) {
+    return {
+      code: "unavailable",
+      nextAction:
+        "The pull request base or its Git history could not be verified. Check repository read access, connectivity, and local Git objects before retrying publication.",
+    };
+  }
   if (message.includes("publication remote branch could not be verified")) {
     return {
       code: "unavailable",

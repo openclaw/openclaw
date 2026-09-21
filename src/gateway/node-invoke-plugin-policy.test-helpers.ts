@@ -121,8 +121,8 @@ export function createOperatorClient(connId = "conn-requester"): GatewayClient {
 
 export type NodeInvokePolicyRegistration = PluginRegistry["nodeInvokePolicies"][number];
 type NodeInvokePolicyHandler = NodeInvokePolicyRegistration["policy"]["handle"];
-export type PluginApprovalRecord = ReturnType<
-  ExecApprovalManager<PluginApprovalRequestPayload>["listPendingRecords"]
+export type PluginApprovalRecord = Awaited<
+  ReturnType<ExecApprovalManager<PluginApprovalRequestPayload>["listPendingRecords"]>
 >[number];
 
 export function createDemoPolicy(handle: NodeInvokePolicyHandler): NodeInvokePolicyRegistration {
@@ -200,10 +200,10 @@ export async function invokeDemoPolicy(
 export async function expectSinglePendingApproval(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
 ): Promise<PluginApprovalRecord> {
-  await vi.waitFor(() => {
-    expect(manager.listPendingRecords()).toHaveLength(1);
+  await vi.waitFor(async () => {
+    expect(await manager.listPendingRecords()).toHaveLength(1);
   });
-  const [record] = manager.listPendingRecords();
+  const [record] = await manager.listPendingRecords();
   if (!record) {
     throw new Error("expected pending approval");
   }
@@ -215,11 +215,11 @@ export async function expectApprovalResolution(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
   record: PluginApprovalRecord,
 ) {
-  expect(manager.resolve(record.id, "allow-once")).toBe(true);
+  expect(await manager.resolve(record.id, "allow-once")).toBe(true);
   await expect(resultPromise).resolves.toStrictEqual({
     ok: true,
     payload: { id: record.id, decision: "allow-once" },
   });
-  expect(manager.getSnapshot(record.id)?.consumedDecision).toBe("allow-once");
-  expect(manager.consumeAllowOnce(record.id)).toBe(false);
+  expect((await manager.getSnapshot(record.id))?.consumedDecision).toBe("allow-once");
+  expect(await manager.consumeAllowOnce(record.id)).toBe(false);
 }

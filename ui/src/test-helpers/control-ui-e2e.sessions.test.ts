@@ -1,78 +1,13 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
-import {
-  createControlUiMockGatewayInitScript,
-  type ControlUiMockGatewayScenario,
-} from "./control-ui-e2e.ts";
+import { sessionGatewayTest as it } from "./control-ui-e2e.sessions.test-support.ts";
+import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 import { buildWorkboardMocks } from "./control-ui-workboard-fixtures.ts";
-import { mockGatewayTest } from "./mock-gateway-page.test-support.ts";
+import { flushMockTimers as flush } from "./mock-gateway-page.test-support.ts";
 
 type Row = Record<string, unknown>;
-type Frame = { type: string; id: string; ok: boolean; payload: Row; error?: Row; event?: string };
-type Controls = {
-  emit: (event: string, payload: unknown) => void;
-  deferNext: (method: string) => void;
-  resolveDeferred: (method: string, payload?: unknown) => void;
-  rejectDeferred: (method: string) => void;
-  setMethodResponse: (method: string, payload: unknown) => void;
-  setSessionsListResponse: (payload: { sessions: unknown[] }) => void;
-};
-const flush = () =>
-  new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
 const notes = { key: "agent:ops:notes", sessionId: "notes-generation-1", label: "Notes" };
-
-const it = mockGatewayTest.extend<{
-  connect: (scenario?: ControlUiMockGatewayScenario) => Promise<{
-    send: (method: string, params?: Row) => Promise<string>;
-    response: (id: string) => Frame | undefined;
-    request: (method: string, params?: Row) => Promise<Frame>;
-    controls: Controls;
-    frames: Frame[];
-  }>;
-}>({
-  connect: async ({ gatewayPage }, use) => {
-    await use(async (scenario = {}) => {
-      const { window, execute } = gatewayPage;
-      execute(createControlUiMockGatewayInitScript(scenario));
-      const socket = new window.WebSocket("ws://mock-gateway");
-      const frames: Frame[] = [];
-      socket.addEventListener("message", (event: MessageEvent) => {
-        frames.push(JSON.parse(String(event.data)) as Frame);
-      });
-      await flush();
-      let sequence = 0;
-      const send = async (method: string, params: Row = {}) => {
-        const id = String(++sequence);
-        socket.send(JSON.stringify({ type: "req", id, method, params }));
-        await flush();
-        return id;
-      };
-      const response = (id: string) =>
-        frames.find((frame) => frame.type === "res" && frame.id === id);
-      const controls = (
-        window as typeof window & {
-          openclawControlUiE2eGateway: Controls;
-        }
-      ).openclawControlUiE2eGateway;
-      return {
-        send,
-        response,
-        controls,
-        frames,
-        request: async (method, params) => {
-          const frame = response(await send(method, params));
-          if (!frame) {
-            throw new Error(`Missing response for ${method}`);
-          }
-          return frame;
-        },
-      };
-    });
-  },
-});
 
 it.for([
   { defaultAgentId: "main", sessionKey: "agent:main:notes", expected: "agent:main:main" },

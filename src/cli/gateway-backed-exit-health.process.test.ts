@@ -1,12 +1,30 @@
 // Process coverage for health failures and unreachable Gateway commands.
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { WebSocketServer } from "ws";
+import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import type { ChannelsStatusResult } from "../../packages/gateway-protocol/src/schema/channels.js";
+import {
+  buildMinimalGatewayHelloOkPayload,
+  closeMinimalGatewayServer,
+  parseMinimalGatewayRequestFrame,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "../gateway/minimal-gateway.test-helpers.js";
+import type { GatewayEventLoopHealth } from "../gateway/server/event-loop-health.js";
+import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getFreePort } from "../test-utils/ports.js";
 import {
   prepareGatewayCliFixture,
   prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
+  snapshotDirectoryContents,
   snapshotSharedStateArtifacts,
   tempDirs,
   UNREACHABLE_GATEWAY_URL,
@@ -37,6 +55,163 @@ function expectUnreachableGatewayTransportFailure(
 }
 
 describe("gateway-backed CLI process exit", () => {
+  it.each([
+    {
+      label: "channels status",
+      method: "channels.status",
+      args: ["channels", "status", "--probe"],
+    },
+    {
+      label: "gateway call system.info",
+      method: "system.info",
+      args: ["gateway", "call", "system.info"],
+    },
+    {
+      label: "gateway call channels.status",
+      method: "channels.status",
+      args: [
+        "gateway",
+        "call",
+        "channels.status",
+        "--params",
+        JSON.stringify({ probe: true, timeoutMs: 2000 }),
+      ],
+    },
+  ])("reads $label while another process owns state lifecycle", async ({ method, args }) => {
+    const root = tempDirs.make("openclaw-status-state-custody-");
+    const gateway = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    let coordinator: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
+    try {
+      await once(gateway, "listening");
+      const address = gateway.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Expected a TCP Gateway fixture");
+      }
+      const url = `ws://127.0.0.1:${address.port}`;
+      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+        mode: "remote",
+        auth: { mode: "none" },
+        remote: { url },
+      });
+      const env = { ...process.env, HOME: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir };
+      const identity = loadOrCreateDeviceIdentity({ env });
+      seedOriginDeviceToken({
+        gatewayScope: gatewayOriginScope(url),
+        deviceId: identity.deviceId,
+        role: "operator",
+        token: "synthetic-stored-device-token",
+        scopes: ["operator.admin"],
+        env,
+      });
+      closeOpenClawStateDatabaseForTest();
+      const before = await snapshotDirectoryContents(stateDir);
+      const eventLoop = {
+        degraded: false,
+        degradedSinceMs: null,
+        reasons: [],
+        intervalMs: 1_000,
+        delayP99Ms: 1,
+        delayMaxMs: 2,
+        utilization: 0.01,
+        cpuCoreRatio: 0.01,
+      } satisfies GatewayEventLoopHealth;
+      const channelStatus = {
+        ts: 1_800_000_000_000,
+        channelOrder: [],
+        channelLabels: {},
+        channelDetailLabels: {},
+        channelSystemImages: {},
+        channelMeta: [],
+        channels: {},
+        channelAccounts: {},
+        channelDefaultAccountId: {},
+        eventLoop,
+      } satisfies ChannelsStatusResult;
+      const payload =
+        method === "channels.status"
+          ? channelStatus
+          : { pid: 123, runtimeVersion: "synthetic-runtime" };
+      const calls: string[] = [];
+      const transportEvents: string[] = [];
+      gateway.on("connection", (ws) => {
+        transportEvents.push("connection");
+        ws.on("close", () => transportEvents.push("close"));
+        sendMinimalGatewayConnectChallenge(ws);
+        ws.on("message", (data) => {
+          const frame = parseMinimalGatewayRequestFrame(data);
+          transportEvents.push(`message:${frame.method}`);
+          if (frame.type !== "req" || !frame.id) {
+            return;
+          }
+          if (frame.method === "connect") {
+            expect(frame.params?.auth).toEqual({ deviceToken: "synthetic-stored-device-token" });
+            expect(frame.params?.device).toMatchObject({
+              id: identity.deviceId,
+              nonce: "test-nonce",
+            });
+            // Auth loading has finished; hold native custody before the hello can trigger storage.
+            coordinator ??= acquireStateDatabaseCoordinator({
+              databasePath: resolveOpenClawStateSqlitePath(env),
+              keepAlive: false,
+            });
+            sendMinimalGatewayResponse(
+              ws,
+              frame.id,
+              buildMinimalGatewayHelloOkPayload({
+                methods: [method],
+                auth: {
+                  role: "operator",
+                  scopes: ["operator.read"],
+                  deviceToken: "synthetic-issued-device-token",
+                },
+              }),
+            );
+            return;
+          }
+          expect(frame.method).toBe(method);
+          if (method === "channels.status") {
+            const timeoutMs = frame.params?.timeoutMs;
+            expect(frame.params).toEqual({ probe: true, timeoutMs });
+            expect(Number.isInteger(timeoutMs)).toBe(true);
+            expect(timeoutMs).toBeGreaterThan(0);
+            expect(timeoutMs).toBeLessThanOrEqual(2000);
+            if (args[0] === "gateway") {
+              expect(timeoutMs).toBe(2000);
+            }
+          }
+          calls.push(method);
+          sendMinimalGatewayResponse(ws, frame.id, payload);
+        });
+      });
+      const result = await runIsolatedGatewayCli({
+        args: [...args, "--json", "--timeout", "2000"],
+        root,
+        stateDir,
+        configPath,
+      });
+      const after = await snapshotDirectoryContents(stateDir);
+      const evidence = JSON.stringify({
+        result,
+        calls,
+        transportEvents,
+        coordinatorHeld: coordinator?.closed === false,
+        stateBefore: before,
+        stateAfter: after,
+      });
+      expect(JSON.parse(result.stdout), evidence).toEqual(payload);
+      expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
+      expect(calls).toEqual([method]);
+      expect(coordinator?.closed).toBe(false);
+      expect(after).toEqual(before);
+    } finally {
+      try {
+        coordinator?.release();
+      } finally {
+        await closeMinimalGatewayServer(gateway);
+      }
+    }
+  });
+
   // One child per case: the deadlock guard is sized against a single cold CLI start.
   it.each(
     [

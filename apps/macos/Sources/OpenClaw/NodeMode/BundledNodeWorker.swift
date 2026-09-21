@@ -10,7 +10,11 @@ enum BundledNodeWorker {
         let buildId: String
     }
 
-    static func launch(bundle: Bundle, profile: AppProfile = .current) throws -> MacNodeHostWorkerLaunch {
+    static func launch(
+        bundle: Bundle,
+        profile: AppProfile = .current,
+        desktopSharingEnabled: Bool? = nil) throws -> MacNodeHostWorkerLaunch
+    {
         #if arch(arm64)
         let architecture = "arm64"
         #elseif arch(x86_64)
@@ -21,7 +25,7 @@ enum BundledNodeWorker {
         let root = bundle.bundleURL.appendingPathComponent("Contents/Resources/node-worker/\(architecture)")
         let node = root.appendingPathComponent("bin/node")
         let packageRoot = root.appendingPathComponent("lib/node_modules/openclaw")
-        let entry = packageRoot.appendingPathComponent("dist/entry.js")
+        let entry = packageRoot.appendingPathComponent("dist/mac-node-worker.js")
         let info = bundle.infoDictionary ?? [:]
         let appBuild = ArtifactBuildInfo(infoDictionary: info)
         do {
@@ -43,7 +47,8 @@ enum BundledNodeWorker {
                 diagnostic: error.localizedDescription)
         }
         return MacNodeHostWorkerLaunch(
-            command: CommandResolver.nodeHostWorkerCommand(prefix: [node.path, entry.path], profile: profile),
+            command: CommandResolver.nodeHostWorkerCommand(
+                prefix: [node.path, entry.path], profile: profile, desktopSharingEnabled: desktopSharingEnabled),
             currentDirectoryURL: packageRoot,
             environment: ["PATH": node.deletingLastPathComponent().path])
     }

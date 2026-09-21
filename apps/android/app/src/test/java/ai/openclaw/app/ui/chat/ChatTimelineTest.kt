@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatAgentActivity
 import ai.openclaw.app.chat.ChatDiffStat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
@@ -18,6 +19,42 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatTimelineTest {
+  @Test
+  fun preparedQuietHistoryKeepsRawDetailsAndUnknownOutcomes() {
+    val quiet = ChatToolActivity("wait", "process", "action: poll", "raw result", false)
+    val unknown = ChatAgentActivity("tool:unknown", "tool", "end", "Outcome unknown", toolCallId = "unknown")
+    val messages =
+      listOf(
+        ChatMessage("call", "assistant", listOf(ChatMessageContent(type = "toolCall", toolActivity = quiet.copy(result = null))), 0, activity = listOf(unknown.copy(itemId = "tool:wait", toolCallId = "wait", phase = "start", title = "Process", status = "running"))),
+        ChatMessage("quiet", "assistant", listOf(ChatMessageContent(type = "toolResult", toolActivity = quiet)), 1, activity = emptyList()),
+        ChatMessage("unknown", "assistant", listOf(ChatMessageContent(type = "toolResult", toolActivity = quiet.copy(toolCallId = "unknown"))), 2, activity = listOf(unknown)),
+      )
+    val group =
+      prepareChatHistory(messages, "agent:main:main", mainSessionKey = "agent:main:main")
+        .buildTimeline(0, emptyList(), null)
+        .items
+        .filterIsInstance<ChatTimelineItem.CompletedTools>()
+        .single()
+    assertTrue(group.tools.all { it.activityPrepared })
+    assertEquals(listOf("raw result", "raw result"), group.tools.map { it.result })
+    assertEquals("Outcome unknown", completedToolGroupSummary(group.tools))
+    assertEquals(null, group.tools.first().activity)
+    val legacyResult = messages.map { if (it.id == "quiet") it.copy(activity = null) else it }
+    val legacyGroup =
+      prepareChatHistory(legacyResult, "agent:main:main", mainSessionKey = "agent:main:main")
+        .buildTimeline(0, emptyList(), null)
+        .items
+        .filterIsInstance<ChatTimelineItem.CompletedTools>()
+        .single()
+    assertEquals(
+      "Process",
+      legacyGroup.tools
+        .first()
+        .activity
+        ?.title,
+    )
+  }
+
   @Test
   fun groupsContiguousToolOnlyMessagesWithoutSwallowingAssistantText() {
     val call = ChatToolActivity("call-1", "read", "path: README.md", null, false)

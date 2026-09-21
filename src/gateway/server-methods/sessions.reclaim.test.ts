@@ -1,10 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
-import {
-  flushPendingSessionsChangedEvents,
-  readSessionsMutationVersion,
-} from "./session-change-event.js";
+import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import {
   dispatchTestSessionId,
   dispatchTestSessionKey,
@@ -82,6 +80,8 @@ describe("sessions.reclaim", () => {
         getMany: () => new Map([[dispatchTestSessionId, reclaimed]]),
       },
     });
+    const changes = vi.fn();
+    onTestFinished(sessionChanges.subscribe(changes));
     const respond = await invokeSessionReclaim(context);
 
     expect(reclaim).toHaveBeenCalledWith(
@@ -100,7 +100,7 @@ describe("sessions.reclaim", () => {
       }),
       undefined,
     );
-    expect(readSessionsMutationVersion(context)).toBe(0);
+    expect(changes).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -211,6 +211,8 @@ describe("sessions.reclaim", () => {
       },
     });
 
+    const changes = vi.fn();
+    onTestFinished(sessionChanges.subscribe(changes));
     const respond = await invokeSessionReclaim(context);
 
     expect(respond).toHaveBeenCalledWith(
@@ -221,7 +223,7 @@ describe("sessions.reclaim", () => {
       }),
       undefined,
     );
-    expect(readSessionsMutationVersion(context)).toBe(1);
+    expect(changes).toHaveBeenCalledExactlyOnceWith({ sessionKey: dispatchTestSessionKey });
   });
 
   it.each(["success", "persisted failure"] as const)(
@@ -263,6 +265,8 @@ describe("sessions.reclaim", () => {
         });
 
         try {
+          const changes = vi.fn();
+          onTestFinished(sessionChanges.subscribe(changes));
           const respond = await invokeSessionReclaim(context);
 
           expect(respond).toHaveBeenCalledWith(
@@ -272,15 +276,16 @@ describe("sessions.reclaim", () => {
               ? undefined
               : expect.objectContaining({ message: reclaimError.message }),
           );
+          await flushPendingSessionsChangedEvents(context);
           expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
             "sessions.changed",
             expect.objectContaining({ reason: "reclaim", sessionKey: dispatchTestSessionKey }),
             new Set(["another-client"]),
             expect.objectContaining({ agentId: "main", dropIfSlow: true }),
           );
-          expect(readSessionsMutationVersion(context)).toBe(1);
+          expect(changes).toHaveBeenCalledExactlyOnceWith({ sessionKey: dispatchTestSessionKey });
         } finally {
-          flushPendingSessionsChangedEvents(context);
+          await flushPendingSessionsChangedEvents(context);
         }
       });
     },

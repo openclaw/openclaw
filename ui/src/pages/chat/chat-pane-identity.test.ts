@@ -6,8 +6,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { t } from "../../i18n/index.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
@@ -28,7 +28,10 @@ import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 describe("chat pane assistant identity snapshots", () => {
   it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     (pane as TestChatPane & { agentId: string }).agentId = "personal";
     pane.sessionKey = "global";
     state.sessionKey = "global";
@@ -198,7 +201,7 @@ describe("chat pane assistant identity snapshots", () => {
 
   it("keeps a session-specific assistant identity across ordinary gateway snapshots", () => {
     const client = createGatewayBrowserClientFixture();
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane } = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
     const state = (pane as unknown as { state: ChatPageHost }).state;
     state.client = client;
     state.connected = true;
@@ -215,7 +218,10 @@ describe("chat pane assistant identity snapshots", () => {
   it("resets a session-specific identity when the logical connection changes", () => {
     const client = createGatewayBrowserClientFixture();
     const nextClient = createGatewayBrowserClientFixture();
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     state.assistantName = "Session Agent";
 
     pane.applyGatewaySnapshot({
@@ -240,7 +246,7 @@ describe("chat pane approval requester identity", () => {
       derivedTitle: "Presentation session derived title",
     } satisfies GatewaySessionRow;
     const source = {
-      key: "agent:main:dashboard:11111111-2222-4333-8444-555555555555",
+      key: "agent:research:dashboard:11111111-2222-4333-8444-555555555555",
       kind: "direct",
       updatedAt: 1,
     } satisfies GatewaySessionRow;
@@ -296,7 +302,7 @@ describe("chat pane approval requester identity", () => {
               severity: "warning",
               pluginId: "test-plugin",
               toolName: null,
-              agentId: "main",
+              agentId: "research",
               allowedDecisions: ["allow-once", "deny"],
             },
           },
@@ -438,7 +444,7 @@ function createGlobalFeaturePane(
     };
     gateway.emitTestEvent({ type: "event", event: "progressCard.changed", payload, seq: 1 });
   };
-  return { pane, select, emit };
+  return { pane, select, emit, context };
 }
 
 function globalProgressCard(agentId: string, revision = 1): ProgressCard {
@@ -452,6 +458,168 @@ function globalProgressCard(agentId: string, revision = 1): ProgressCard {
 }
 
 describe("global chat pane feature ownership", () => {
+  it.each([
+    ["global", "research"],
+    ["main", "research"],
+    ["agent:research:main", undefined],
+  ] as const)(
+    "scopes question cards, terminal summaries and inline approvals for %s/%s",
+    async (sessionKey, agentId) => {
+      const { pane, select, context } = createGlobalFeaturePane(() => ({}), []);
+      const now = Date.now();
+      const approval = (
+        id: string,
+        target: { sessionKey?: string; agentId?: string },
+      ): ExecApprovalRequest => ({
+        id,
+        kind: "exec",
+        request: { command: id, ...target },
+        createdAtMs: now,
+        expiresAtMs: now + 60_000,
+      });
+      Object.assign(context, {
+        overlays: {
+          snapshot: {
+            approvalQueue: [
+              approval("unscoped", {}),
+              approval("research-oldest", { sessionKey, agentId }),
+              approval("research-newest", { sessionKey, agentId }),
+              approval("other-session", { sessionKey: "agent:research:other" }),
+            ],
+            approvalCanGrant: true,
+            approvalBusy: false,
+            approvalErrors: new Map(),
+          },
+          decideApproval: vi.fn(),
+          subscribe: () => () => undefined,
+        },
+      });
+      for (const [id, target] of [
+        ["research-question", { sessionKey, agentId }],
+        ["unscoped-question", {}],
+        ["other-session-question", { sessionKey: "agent:research:other" }],
+      ] as const) {
+        pane.receiveQuestionEvent({
+          event: "question.requested",
+          payload: {
+            id,
+            ...target,
+            createdAtMs: now,
+            expiresAtMs: now + 60_000,
+            status: "pending",
+            questions: [{ questionId: "review", header: "Research", question: id, options: [] }],
+          },
+        });
+      }
+      const container = document.body.appendChild(document.createElement("div"));
+      const draw = async () => {
+        await pane.updateComplete;
+        render(renderChat(pane.chatProps!), container);
+        await (
+          container.querySelector("openclaw-chat-question-panel") as
+            | (HTMLElement & {
+                updateComplete?: Promise<unknown>;
+              })
+            | null
+        )?.updateComplete;
+      };
+      const expectStableQuestions = async () => {
+        const previous = pane.chatProps?.gatewayQuestionPrompts;
+        pane.requestUpdate();
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).toBe(previous);
+      };
+      try {
+        select("main");
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).toEqual([]);
+        expect(container.querySelector(".chat-question-panel, .chat-inline-approval")).toBeNull();
+        await expectStableQuestions();
+
+        select("research");
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts?.map((prompt) => prompt.id)).toEqual([
+          "research-question",
+        ]);
+        expect(container.querySelector(".chat-question-panel")?.textContent).toContain(
+          "research-question",
+        );
+        expect(
+          container
+            .querySelector(".chat-inline-approval [data-approval-id]")
+            ?.getAttribute("data-approval-id"),
+        ).toBe("research-oldest");
+        await expectStableQuestions();
+        const pendingQuestions = pane.chatProps?.gatewayQuestionPrompts;
+        pane.receiveQuestionEvent({
+          event: "question.resolved",
+          payload: { id: "other-session-question", status: "expired" },
+        });
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).toBe(pendingQuestions);
+        pane.receiveQuestionEvent({
+          event: "question.resolved",
+          payload: { id: "research-question", status: "cancelled" },
+        });
+        await draw();
+        expect(pane.chatProps?.gatewayQuestionPrompts).not.toBe(pendingQuestions);
+        expect(container.querySelector(".chat-question-panel")).toBeNull();
+        expect(container.querySelector(".chat-question-summary")?.textContent).toContain("Skipped");
+        await expectStableQuestions();
+
+        select("main");
+        await draw();
+        expect(container.querySelector(".chat-question-summary, .chat-inline-approval")).toBeNull();
+      } finally {
+        render(html``, container);
+        container.remove();
+      }
+    },
+  );
+
+  it("refreshes the captured global card without chat effects and ignores stale actions", async () => {
+    let revision = 1;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "progressCard.refresh") {
+        return { runId: "quiet-refresh", status: "accepted", revision: 1 };
+      }
+      const agentId = (params as { agentId?: string } | undefined)?.agentId ?? "research";
+      return { card: globalProgressCard(agentId, revision) };
+    });
+    const { pane, select, emit } = createGlobalFeaturePane(request, [
+      "progressCard.get",
+      "progressCard.refresh",
+    ]);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCardRefresh).toBeDefined());
+    const original = pane.chatProps!.progressCard!;
+    const action = pane.chatProps!.progressCardRefresh!;
+    const messages = pane.chatProps!.messages;
+    const queue = pane.chatProps!.queue;
+    action.onRefresh(original);
+    expect(request).toHaveBeenLastCalledWith("progressCard.refresh", {
+      sessionKey: "global",
+      agentId: "research",
+      idempotencyKey: expect.any(String),
+    });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCardRefresh?.state).toBe("pending"));
+    expect(pane.chatProps!.progressCard).toBe(original);
+    expect(pane.chatProps!.messages).toBe(messages);
+    expect(pane.chatProps!.queue).toBe(queue);
+    revision = 2;
+    emit({ sessionKey: "agent:research:global", revision });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCardRefresh?.state).toBe("updated"));
+    select("main");
+    action.onRefresh(original);
+    await vi.waitFor(() =>
+      expect(pane.chatProps?.progressCard?.sessionKey).toBe("agent:main:global"),
+    );
+    expect(pane.chatProps?.progressCardRefresh?.state).toBeUndefined();
+    expect(request.mock.calls.filter(([method]) => method === "progressCard.refresh")).toHaveLength(
+      1,
+    );
+    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+  });
+
   it("loads, refreshes and dismisses the selected agent's global progress card", async () => {
     let card: ProgressCard | null = globalProgressCard("research");
     const request = vi.fn(async (method: string) => {

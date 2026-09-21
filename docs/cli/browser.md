@@ -26,6 +26,9 @@ Related: [Browser tool](/tools/browser)
   `openclaw browser status --json` also works when the selected child command does not
   define its own `--json`.
 
+The CLI reserves 10 additional seconds beyond the request timeout for node and
+Gateway transport, allowing browser timeout diagnostics to reach the caller.
+
 ## Quick start (local)
 
 ```bash
@@ -233,6 +236,13 @@ openclaw browser close t1
 
 `tabs` returns `suggestedTargetId` first, then the stable `tabId` (such as `t1`), the optional label, and the raw `targetId`. Pass `suggestedTargetId` back into `focus`, `close`, snapshots, and actions. Assign a label with `open --label`, `tab new --label`, or `tab label`. Labels, tab ids, raw target ids, and unique target-id prefixes are all accepted. The request field is still named `targetId` for compatibility, but it accepts any of these tab references.
 
+Profiles configured with `driver: "extension"` can additionally return a numeric
+`webExtensionTabId`. It is scoped to the current browser runtime and is intended
+only for calls into Chrome's WebExtensions API. It can change after the browser
+or extension reconnects and is omitted for other drivers or when extension
+metadata is unavailable. Do not pass it to OpenClaw browser commands; keep using
+`suggestedTargetId` or `tabId` there.
+
 Raw target ids are volatile diagnostic handles, not durable agent memory. Chromium can replace the underlying raw target during a navigation or form submit. OpenClaw then keeps the stable `tabId` or label attached to the replacement tab, when it can prove the match. Prefer `suggestedTargetId`.
 
 ## Snapshot / screenshot / actions
@@ -299,6 +309,8 @@ openclaw browser dialog --dismiss --dialog-id d1
 
 Managed Chrome profiles save ordinary click-triggered downloads into the OpenClaw downloads directory (`/tmp/openclaw/downloads` by default, or the configured temp root). Use `waitfordownload` or `download` when the agent needs to wait for a specific file and return its path. Those explicit waiters own the next download. Uploads accept files from the OpenClaw temp uploads root and OpenClaw-managed inbound media, including `media://inbound/<id>` and sandbox-relative `media/inbound/<id>` references. Nested media refs, traversal, and arbitrary local paths are rejected.
 
+For remote browser nodes, OpenClaw stages private copies and normalizes filenames for portability, including Windows device names and trailing dots or spaces. File bytes remain unchanged.
+
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
 
 When an action opens a modal dialog, text output reports the block and pending dialog IDs. The JSON response returns `blockedByDialog` with `browserState.dialogs.pending`. Pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
@@ -344,6 +356,11 @@ openclaw browser storage local get
 openclaw browser storage local set token abc123
 openclaw browser storage session clear
 ```
+
+Storage keys preserve surrounding whitespace. Quote the key in shell commands,
+for example `openclaw browser storage local get " account "`. Setting that key
+does not overwrite the separate `account` entry. Empty or whitespace-only keys
+remain invalid for `set`; omitting the key in `get` lists all entries.
 
 ## Debugging
 

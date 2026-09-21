@@ -50,8 +50,8 @@ describe("task registry process state", () => {
     };
     firstStore.configureTaskRegistryRuntime({ store });
     const firstRegistry = await import("./task-registry.js");
-    const firstState = await import("./task-registry-state.js");
-    firstState.resetTaskRegistryListenerState();
+    const firstListener = await import("./task-registry-listener-state.js");
+    firstListener.resetTaskRegistryListenerState();
     events.resetAgentEventsForTest();
     firstRegistry.ensureTaskRegistryReady();
 
@@ -60,7 +60,7 @@ describe("task registry process state", () => {
     const secondStore = await import("./task-registry.store.js");
     secondStore.configureTaskRegistryRuntime({ store });
     const secondRegistry = await import("./task-registry.js");
-    const secondState = await import("./task-registry-state.js");
+    const secondListener = await import("./task-registry-listener-state.js");
 
     try {
       secondRegistry.ensureTaskRegistryReady();
@@ -88,8 +88,8 @@ describe("task registry process state", () => {
       expect(secondRegistry.getTaskById(task!.taskId)?.toolUseCount).toBe(2);
       expect(secondRegistry.getTaskById(task!.taskId)?.lastToolName).toBe("exec");
     } finally {
-      firstState.resetTaskRegistryListenerState();
-      secondState.resetTaskRegistryListenerState();
+      firstListener.resetTaskRegistryListenerState();
+      secondListener.resetTaskRegistryListenerState();
       events.resetAgentEventsForTest();
       firstStore.resetTaskRegistryRuntimeForTests();
       secondStore.resetTaskRegistryRuntimeForTests();

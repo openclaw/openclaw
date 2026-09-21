@@ -9,11 +9,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { detectWorktreeFilesystemBackend } from "../../src/agents/worktrees/filesystem-backend.js";
 import { listTemplates } from "../../src/agents/worktrees/template-registry.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { collectEagerRuntimeImportClosure } from "./eager-import-closure.test-support.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
 
@@ -30,7 +31,9 @@ it("extracts the complete eager runtime import closure without duplicate wrapper
     .filter((entry) => entry.isFile())
     .map((entry) => relative(extracted, join(entry.parentPath, entry.name)));
   expect(
-    collectEagerRuntimeImportClosure(files).filter((file) => !existsSync(join(extracted, file))),
+    collectRuntimeImportClosure(process.cwd(), files).filter(
+      (file) => !existsSync(join(extracted, file)),
+    ),
   ).toEqual([]);
 });
 
@@ -89,6 +92,21 @@ describePosix("native PR source provisioning", () => {
         f.env.OPENCLAW_CONFIG_PATH!,
         JSON.stringify({ worktreeAcceleration: acceleration }),
       );
+      const preload = join(f.root, "native-provision-imports.mjs");
+      writeFileSync(
+        preload,
+        `import { registerHooks } from "node:module";
+if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
+  registerHooks({ load(url, context, nextLoad) {
+    if (url.endsWith("/src/config/config.ts")) {
+      throw new Error("Native Git provisioning must not load acceleration configuration.");
+    }
+    return nextLoad(url, context);
+  } });
+}
+`,
+      );
+      f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
       const parent = join(f.canonical, ".worktrees");
       const physicalParent = join(f.root, "pr-worktrees");
       rmdirSync(parent);
@@ -386,7 +404,10 @@ ${changeLock}
       const templateNames = readdirSync(templates).toSorted();
       expect(templateNames.length).toBeGreaterThan(0);
       expect(first.stderr).toContain("PR source checkout: filesystem template clone.");
-      const template = listTemplates(f.env).find((entry) => entry.sourceCommit === f.main);
+      const template = listTemplates({
+        ...f.env,
+        OPENCLAW_STATE_DIR: join(f.canonical, ".local", "pr-state"),
+      }).find((entry) => entry.sourceCommit === f.main);
       expect(template?.backend).toBe("apfs");
       expect(template?.status).toBe("ready");
       const warmResult = nextPr(f, 43);

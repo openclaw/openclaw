@@ -12,6 +12,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
+import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -97,6 +98,42 @@ afterEach(() => {
 });
 
 describe("doctor agent memory schema repair", () => {
+  it("invalidates verification before a failed writable repair while inspection preserves it", async () => {
+    const { databasePath, env } = createRegisteredAgentDatabase();
+    recreateUnreleasedInlineMemoryMetadata(databasePath);
+    expect(readOpenClawAgentIntegrityVerification(databasePath, env)?.clean_close).toBe(1);
+    await noteDoctorAgentMemorySchemaHealth({ env, shouldRepair: false }, { note: vi.fn() });
+    expect(readOpenClawAgentIntegrityVerification(databasePath, env)?.clean_close).toBe(1);
+
+    const sqlite = await import("../infra/node-sqlite.js");
+    const nativeOpen = sqlite.openNodeSqliteDatabase;
+    let observedWritableOpen = false;
+    let receiptBeforeOpen: ReturnType<typeof readOpenClawAgentIntegrityVerification>;
+    const open = vi
+      .spyOn(sqlite, "openNodeSqliteDatabase")
+      .mockImplementation((pathname, options) => {
+        if (pathname === databasePath && !options?.readOnly) {
+          observedWritableOpen = true;
+          receiptBeforeOpen = readOpenClawAgentIntegrityVerification(databasePath, env);
+          throw new Error("synthetic maintenance native open failed");
+        }
+        return nativeOpen(pathname, options);
+      });
+    try {
+      const report = await noteDoctorAgentMemorySchemaHealth(
+        { env, shouldRepair: true },
+        { note: vi.fn() },
+      );
+      expect(observedWritableOpen).toBe(true);
+      expect(receiptBeforeOpen).toBeUndefined();
+      expect(report.repaired).toEqual([]);
+      expect(report.warnings.join(" ")).toContain("synthetic maintenance native open failed");
+      expect(readOpenClawAgentIntegrityVerification(databasePath, env)).toBeUndefined();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
   it.each([17, 18])(
     "moves v%s inline recall metadata, preserves rows, and lists the durable repair",
     async (version) => {

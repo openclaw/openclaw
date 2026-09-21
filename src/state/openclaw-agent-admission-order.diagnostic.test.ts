@@ -27,6 +27,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -74,6 +75,8 @@ function seed() {
   expect(database.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest();
+  // Independent fixture writers model unclean state that requires a full admission check.
+  clearOpenClawAgentIntegrityVerification(pathname, options.env);
   const writer = realOpen(pathname);
   independent.push(writer);
   writer.exec("PRAGMA foreign_keys=OFF;");
@@ -178,6 +181,7 @@ describe("physical-open admission ordering", () => {
     expect(openOpenClawAgentDatabase(options)).toBe(first);
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
     expect(disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
+    clearOpenClawAgentIntegrityVerification(pathname, options.env);
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
   });
 
@@ -633,6 +637,7 @@ describe("asynchronous canonical admission", () => {
     const { options, pathname, writer } = seed();
     await openOpenClawAgentDatabaseAsync(options);
     expect(disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
+    clearOpenClawAgentIntegrityVerification(pathname, options.env);
     corruptForeignKey(writer);
     await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
       /foreign_key_check failed/,

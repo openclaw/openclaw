@@ -39,6 +39,20 @@ suite.define(() => {
               result: { content: [{ type: "text", text: "Workspace ready." }] },
             },
           };
+          const itemEvent = {
+            ...toolEvent,
+            seq: 2,
+            stream: "item",
+            data: {
+              itemId: "tool:workspace-check",
+              toolCallId: "workspace-check",
+              kind: "tool",
+              name: "read",
+              title: "Check workspace",
+              phase: "end",
+              status: "completed",
+            },
+          };
           const message = {
             role: "assistant",
             content: [{ type: "text", text }],
@@ -70,7 +84,7 @@ suite.define(() => {
             runId,
             startedAt: 1_000,
             text: steer ? `${text} Checking the follow-up.` : text,
-            ...(tool ? { events: [toolEvent] } : {}),
+            ...(tool ? { events: [toolEvent, itemEvent] } : {}),
           };
           const gateway = await installMockGateway(page, {
             historyMessages: [],
@@ -88,6 +102,7 @@ suite.define(() => {
           });
           if (tool) {
             await gateway.emitGatewayEvent("agent", toolEvent);
+            await gateway.emitGatewayEvent("agent", itemEvent);
           }
           const persist = () =>
             gateway.emitGatewayEvent("session.message", {
@@ -174,7 +189,7 @@ suite.define(() => {
         { itemId: "commentary-item-two", text: "Checking the result." },
       ];
       const events = items.map(({ itemId, text }, index) => ({
-        data: { kind: "preamble", itemId, phase: "update", progressText: text },
+        data: { kind: "preamble", itemId, phase: "end", progressText: text },
         runId,
         seq: index + 1,
         sessionKey: "agent:main:main",

@@ -1,16 +1,11 @@
 import { createHash } from "node:crypto";
 import type { HumanMention } from "@openclaw/gateway-protocol";
-import { expectDefined, stableStringify } from "@openclaw/normalization-core";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
-import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
-import {
-  combineChannelAdmissionEvidence,
-  compareChannelAdmissionParticipants,
-} from "../../../channels/message-access/admission-evidence.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 // Drains queued follow-up runs while preserving route and session identity.
@@ -31,8 +26,7 @@ import {
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
-import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
-import { normalizeMessageChannel } from "../../../utils/message-channel.js";
+import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
   buildCollectPrompt,
   beginQueueDrain,
@@ -43,8 +37,15 @@ import {
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
-import { resolveReplyScreenToolTarget } from "../reply-tool-authority.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { resolveCollectedRun } from "./collected-run.js";
+import {
+  collectRuntimeMetadata,
+  hasExclusiveTurnAdmission,
+  hasPreparedCurrentTurnImages,
+  resolveFollowupDeliveryContextKey,
+  resolveFollowupReplyAnchor,
+} from "./delivery-context.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
@@ -59,10 +60,6 @@ type InternalFollowupRun = FollowupRun & {
   /** Admission-owned layout; fact indexes are relative to this run's media array. */
   mediaImageLayout?: MediaImageLayout;
 };
-
-function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
-  return (run as InternalFollowupRun).currentTurnImagesPrepared === true;
-}
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -91,42 +88,6 @@ function bindFollowupRestartDrainSignal(): void {
     },
     { once: true },
   );
-}
-
-const QUEUED_ADMISSION_OWNER_STATE_KEY = Symbol.for("openclaw.queuedAdmissionOwnerState");
-const queuedAdmissionOwnerState = resolveGlobalSingleton(QUEUED_ADMISSION_OWNER_STATE_KEY, () => ({
-  keys: new WeakMap<NonNullable<FollowupRun["turnAdoptionLifecycle"]>, string>(),
-  nextId: 1,
-}));
-
-function hasExclusiveTurnAdmission(
-  lifecycle: FollowupRun["turnAdoptionLifecycle"],
-): lifecycle is NonNullable<FollowupRun["turnAdoptionLifecycle"]> & {
-  admission: "exclusive";
-} {
-  return lifecycle?.admission === "exclusive";
-}
-
-function resolveTurnAdoptionLifecycleDeliveryKey(
-  lifecycle: FollowupRun["turnAdoptionLifecycle"],
-): string {
-  if (!lifecycle) {
-    return "";
-  }
-  const explicitOwnerKey = lifecycle.ownerKey ?? "";
-  // Closed admission marker — never infer exclusive from onAbandoned presence.
-  // Cancel-only owners share collect identity via ownerKey alone.
-  if (!hasExclusiveTurnAdmission(lifecycle)) {
-    return explicitOwnerKey;
-  }
-  let admissionOwnerKey = queuedAdmissionOwnerState.keys.get(lifecycle);
-  if (!admissionOwnerKey) {
-    admissionOwnerKey = `admission:${queuedAdmissionOwnerState.nextId++}`;
-    queuedAdmissionOwnerState.keys.set(lifecycle, admissionOwnerKey);
-  }
-  // Durable admission callbacks own separate ingress identities. Combining
-  // them would let one source commit before a sibling rejects the aggregate.
-  return JSON.stringify([explicitOwnerKey, admissionOwnerKey]);
 }
 
 function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
@@ -289,155 +250,6 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
   };
 }
 
-// Keep this key aligned with the fields that affect per-message authorization or
-// exec-context propagation in collect-mode batching. Display-only sender fields
-// stay out of the key so profile/name drift does not force conservative splits.
-// Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
-// intentionally excluded because they are session-level or not consulted in
-// per-message authorization checks.
-function hasVerifiedAdmissionParticipant(run: FollowupRun): boolean {
-  return compareChannelAdmissionParticipants([run.channelAdmissionEvidence]) === "same";
-}
-
-function resolveFollowupAuthorizationKey(run: FollowupRun): string {
-  const execution = run.run;
-  return JSON.stringify([
-    execution.senderId ?? "",
-    JSON.stringify(execution.channelContext ?? null),
-    stableStringify(execution.conversationToolPolicy ?? null),
-    execution.senderE164 ?? "",
-    execution.senderIsOwner === true,
-    execution.execOverrides?.host ?? "",
-    execution.execOverrides?.security ?? "",
-    execution.execOverrides?.ask ?? "",
-    execution.execOverrides?.node ?? "",
-    execution.execOverrides?.nodeCwd ?? "",
-    execution.bashElevated?.enabled === true,
-    execution.bashElevated?.allowed === true,
-    execution.bashElevated?.defaultLevel ?? "",
-    execution.approvalReviewerDeviceId ?? "",
-  ]);
-}
-
-function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun["run"]) {
-  const participantComparison = compareChannelAdmissionParticipants(
-    items.map((item) => item.channelAdmissionEvidence),
-  );
-  if (
-    participantComparison === "same" ||
-    !items.every((item) => hasVerifiedAdmissionParticipant(item))
-  ) {
-    return source;
-  }
-  // Mixed or unverifiable people share no downstream sender authority. The
-  // opaque admission aggregate records unknown identity at the run boundary.
-  return {
-    ...source,
-    senderId: undefined,
-    senderName: undefined,
-    senderUsername: undefined,
-    senderE164: undefined,
-    senderIsOwner: false,
-    traceAuthorized: false,
-    ownerNumbers: [],
-  };
-}
-
-export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
-  const execution = run.run;
-  const provenance = execution.inputProvenance;
-  return JSON.stringify([
-    channelRouteDedupeKey({
-      channel: run.originatingChannel,
-      to: run.originatingTo,
-      accountId: run.originatingAccountId,
-      threadId: run.originatingThreadId,
-    }),
-    hasPreparedCurrentTurnImages(run),
-    // Approved sources skip the write hook; never carry unstaged input past it.
-    Boolean(run.userTurnTranscriptRecorder?.getPendingInputMessage?.()),
-    run.originatingChatId ?? "",
-    resolveFollowupReplyAnchor(run) ?? "",
-    run.originatingReplyToMode ?? "",
-    normalizeChatType(run.originatingChatType) ?? "",
-    resolveFollowupAuthorizationKey(run),
-    run.turnAdoptionLifecycle?.ownerKey ?? "",
-    normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
-    execution.provider,
-    execution.model,
-    execution.messageProvider ?? "",
-    JSON.stringify([...new Set(execution.clientCaps ?? [])].toSorted()),
-    stableStringify(resolveReplyScreenToolTarget(run) ?? null),
-    stableStringify(execution.toolBindings ?? null),
-    execution.chatType ?? "",
-    execution.agentAccountId ?? "",
-    execution.conversationRoutePeerId ?? "",
-    execution.groupId ?? "",
-    execution.groupChannel ?? "",
-    execution.groupSpace ?? "",
-    JSON.stringify([...new Set(execution.memberRoleIds ?? [])].toSorted()),
-    execution.spawnedBy ?? "",
-    execution.traceAuthorized === true,
-    execution.traceLevelOverride ?? "",
-    execution.thinkLevel ?? "",
-    execution.thinkLevelOverride ?? "",
-    execution.fastMode ?? "",
-    execution.fastModeOverride === true,
-    execution.fastModeAutoOnSecondsOverride === true,
-    execution.fastModeAutoOnSeconds ?? "",
-    execution.verboseLevel ?? "",
-    execution.verboseLevelOverride ?? "",
-    execution.reasoningLevel ?? "",
-    execution.elevatedLevel ?? "",
-    provenance?.kind ?? "",
-    provenance?.originSessionId ?? "",
-    provenance?.sourceSessionKey ?? "",
-    provenance?.sourceChannel ?? "",
-    provenance?.sourceTool ?? "",
-    stableStringify(execution.trustedInternalHandoff ?? null),
-    stableStringify(execution.scheduledToolPolicy ?? null),
-    stableStringify(execution.runtimePluginToolGrant ?? null),
-    stableStringify(run.toolsAllow ?? null),
-    stableStringify(
-      run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
-    ),
-    run.disableTools === true,
-    execution.extraSystemPrompt ?? "",
-    execution.extraSystemPromptStatic ?? "",
-    execution.sourceReplyDeliveryMode ?? "",
-    execution.taskSuggestionDeliveryMode ?? "",
-    execution.silentReplyPromptMode ?? "",
-    execution.enforceFinalTag === true,
-    execution.skipProviderRuntimeHints === true,
-    execution.silentExpected === true,
-    execution.allowEmptyAssistantReplyAsSilent === true,
-    execution.terminalReplyExpectation ?? "",
-    execution.suppressNextUserMessagePersistence === true,
-    execution.suppressTranscriptOnlyAssistantPersistence === true,
-    execution.blockReplyBreak,
-    resolveTurnAdoptionLifecycleDeliveryKey(run.turnAdoptionLifecycle),
-  ]);
-}
-
-function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
-  if (run.originatingReplyToMode === "off") {
-    return undefined;
-  }
-  const replyToId = normalizeOptionalString(run.originatingReplyToId);
-  if (replyToId || normalizeMessageChannel(run.originatingChannel) !== "slack") {
-    return replyToId;
-  }
-  const threadId = run.originatingThreadId;
-  const hasRoutedThread =
-    typeof threadId === "number"
-      ? Number.isFinite(threadId)
-      : normalizeOptionalString(threadId) !== undefined;
-  // Slack standalone turns have no parent reply id, but enabled reply policies
-  // still need the message id so collect groups cannot cross independent roots.
-  // A routed thread already owns that boundary and remains collectable across turns.
-  return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
-}
-
 function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[][] {
   if (items.length <= 1) {
     return items.length === 0 ? [] : [items];
@@ -551,31 +363,6 @@ function collectQueuedPromptMedia(
     ...(mediaImageLayout ? { mediaImageLayout } : {}),
     ...(media.length > 0 ? { media } : {}),
   };
-}
-
-type FollowupRuntimeMetadata = Pick<
-  FollowupRun,
-  | "currentInboundEventKind"
-  | "currentInboundAudio"
-  | "currentInboundContext"
-  | "explicitSkillSelections"
-  | "channelAdmissionEvidence"
-  | "toolsAllow"
-  | "disableTools"
-  | "abortSignal"
-  | "queueAbortSignal"
-  | "deliveryCorrelations"
-  | "turnAdoptionLifecycle"
-  | "replyOperationRunStates"
-  | "queuedFollowupReplyDisposition"
->;
-
-function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
-  return (
-    item.currentInboundEventKind === "room_event" ||
-    item.currentInboundAudio === true ||
-    Boolean(item.currentInboundContext)
-  );
 }
 
 function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
@@ -786,79 +573,6 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
         disposeSignal(signal);
       }
     },
-  };
-}
-
-function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
-  const contexts = items.flatMap((item, index) =>
-    item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
-  );
-  if (contexts.length === 0) {
-    return undefined;
-  }
-  if (contexts.length === 1) {
-    return contexts[0]?.context;
-  }
-  const renderField = (field: "text" | "resumableText") => {
-    const blocks = contexts.flatMap(({ context, index }) => {
-      const value = context[field];
-      return value ? [`Queued #${index + 1} context:\n${value}`] : [];
-    });
-    return blocks.length > 0 ? blocks.join("\n\n") : undefined;
-  };
-  const text = renderField("text");
-  if (!text) {
-    return undefined;
-  }
-  const resumableText = renderField("resumableText");
-  const injectedGoalContexts = [
-    ...new Set(contexts.flatMap(({ context }) => context.injectedGoalContexts ?? [])),
-  ];
-  return {
-    text,
-    ...(resumableText ? { resumableText } : {}),
-    fragments: contexts.flatMap(
-      ({ context }) =>
-        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
-    ),
-    promptJoiner: "\n\n",
-    ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
-  };
-}
-
-function collectRuntimeMetadata(
-  items: FollowupRun[],
-  abortSignal?: AbortSignal,
-): FollowupRuntimeMetadata {
-  const currentTurnSource = items.find(hasCurrentTurnRuntimeMetadata);
-  // Delivery-key equality proves every source has the same turn authority.
-  // Preserve the exact carrier (including hidden intersections); never derive it from identity evidence.
-  const authoritySource = items.at(-1);
-  const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
-  const explicitSkillSelections = [
-    ...new Map(
-      items
-        .flatMap((item) => item.explicitSkillSelections ?? [])
-        .map((selection) => [selection.path, selection] as const),
-    ).values(),
-  ];
-  return {
-    currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
-    currentInboundAudio: currentTurnSource?.currentInboundAudio,
-    currentInboundContext: collectCurrentInboundContext(items),
-    explicitSkillSelections:
-      explicitSkillSelections.length > 0 ? explicitSkillSelections : undefined,
-    channelAdmissionEvidence: combineChannelAdmissionEvidence(
-      items.map((item) => item.channelAdmissionEvidence),
-    ),
-    toolsAllow: authoritySource?.toolsAllow,
-    disableTools: authoritySource?.disableTools,
-    abortSignal,
-    queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
-    deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
-    turnAdoptionLifecycle: items.length === 1 ? items[0]?.turnAdoptionLifecycle : undefined,
-    replyOperationRunStates: items.flatMap((item) => item.replyOperationRunStates ?? []),
-    queuedFollowupReplyDisposition: items.at(-1)?.queuedFollowupReplyDisposition,
   };
 }
 
@@ -1214,6 +928,7 @@ async function drainProtectedPriorityFollowup(
 export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
   return {
     prompt: source.prompt,
+    operatorAuthority: source.operatorAuthority,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
     userTurnTranscriptRecorder: source.userTurnTranscriptRecorder,
@@ -1305,6 +1020,7 @@ async function runSyntheticOverflowSummary(params: {
     abortSignal: params.abortSignal,
     explicitSkillSelections: runtimeMetadata.explicitSkillSelections,
     channelAdmissionEvidence: runtimeMetadata.channelAdmissionEvidence,
+    operatorAuthority: runtimeMetadata.operatorAuthority,
     toolsAllow: runtimeMetadata.toolsAllow,
     disableTools: runtimeMetadata.disableTools,
     queuedFollowupReplyDisposition: runtimeMetadata.queuedFollowupReplyDisposition,

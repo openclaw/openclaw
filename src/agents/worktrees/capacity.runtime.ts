@@ -64,9 +64,18 @@ async function hydrateCommitObjects(repoRoot: string, commit: string): Promise<v
       throw missingObjectsError(commit, missing.length);
     }
     // Hydrate once under the checkout budget; objectsize must never fetch one blob at a time.
+    // Shared commits do not prove that their promised blobs are present.
     await requireGit(
       repoRoot,
-      ["fetch", remote, "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--stdin"],
+      [
+        "fetch",
+        "--refetch",
+        remote,
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        "--stdin",
+      ],
       { input: Buffer.from(`${missing.join("\n")}\n`), timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS },
     );
   }

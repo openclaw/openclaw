@@ -1,4 +1,3 @@
-// Imessage plugin module implements group policy behavior.
 import {
   buildChannelGroupsScopeTree,
   resolveScopeRequireMention,

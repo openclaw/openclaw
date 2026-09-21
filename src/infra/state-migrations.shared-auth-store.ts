@@ -10,7 +10,6 @@ import {
   inspectSharedAuthStoreOwnership,
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStoreOwnership,
-  SHARED_AUTH_STORE_STATE_KEY,
 } from "../agents/auth-profiles/path-resolve.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
@@ -23,13 +22,14 @@ import {
   type SharedAuthLegacyStateRow as StateRow,
   type SharedAuthLegacyStoreRow as StoreRow,
 } from "../agents/auth-profiles/shared-store-bootstrap.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/sqlite-json.js";
 import {
   closeAuthProfileReadPool,
   resolveAuthProfileDatabaseOwnerId,
 } from "../agents/auth-profiles/sqlite.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -79,10 +79,10 @@ function sourceMigrationKey(sourcePath: string, sourceTable: string): string {
     .digest("hex")}`;
 }
 
-function readSourceSnapshot(params: { env: NodeJS.ProcessEnv; sourcePath: string }): {
+async function readSourceSnapshot(params: { env: NodeJS.ProcessEnv; sourcePath: string }): Promise<{
   rows: AuthRows;
   size: number | null;
-} {
+}> {
   const source = inspectSharedAuthLegacySourceFile(params.sourcePath);
   if (source.status === "missing") {
     return { rows: { store: null, state: null }, size: null };
@@ -98,7 +98,7 @@ function readSourceSnapshot(params: { env: NodeJS.ProcessEnv; sourcePath: string
       { operationLabel: "state-migration.shared-auth-source-read" },
     );
     closeAuthProfileReadPool({ kind: "database", databasePath: params.sourcePath });
-    closeOpenClawAgentDatabaseByPath(params.sourcePath);
+    await closeOpenClawAgentDatabaseByPathAsync(params.sourcePath);
     return { rows, size: fs.statSync(params.sourcePath).size };
   } catch (error) {
     throw new SharedAuthStoreSourceInspectionError(params.sourcePath, "read", error);
@@ -430,7 +430,10 @@ function advanceMigration(
   return flipped;
 }
 
-function cleanupSourceRows(params: { env: NodeJS.ProcessEnv; sourcePath: string }): boolean {
+async function cleanupSourceRows(params: {
+  env: NodeJS.ProcessEnv;
+  sourcePath: string;
+}): Promise<boolean> {
   if (inspectSharedAuthLegacySourceFile(params.sourcePath).status === "missing") {
     return false;
   }
@@ -461,7 +464,7 @@ function cleanupSourceRows(params: { env: NodeJS.ProcessEnv; sourcePath: string 
       { operationLabel: "state-migration.shared-auth-cleanup" },
     );
     closeAuthProfileReadPool({ kind: "database", databasePath: params.sourcePath });
-    closeOpenClawAgentDatabaseByPath(params.sourcePath);
+    await closeOpenClawAgentDatabaseByPathAsync(params.sourcePath);
     return removed;
   } catch (error) {
     throw new SharedAuthStoreSourceInspectionError(params.sourcePath, "clean", error);
@@ -509,9 +512,20 @@ export async function migrateSharedAuthStore(params: {
     label: "legacy shared auth store",
     releaseLabel: "Shared auth store",
     errorLabel: "Failed relocating the shared auth store",
+    beforeRelease: async () => {
+      // Readers opened before maintenance are outside its resource scope.
+      try {
+        closeAuthProfileReadPool({
+          kind: "database",
+          databasePath: params.detected.sourcePath,
+        });
+      } finally {
+        await closeOpenClawAgentDatabaseByPathAsync(params.detected.sourcePath);
+      }
+    },
     run: async (env) => {
       const now = params.now?.() ?? Date.now();
-      const source = readSourceSnapshot({ env, sourcePath: params.detected.sourcePath });
+      const source = await readSourceSnapshot({ env, sourcePath: params.detected.sourcePath });
       const snapshot = {
         env,
         sourcePath: params.detected.sourcePath,
@@ -521,7 +535,10 @@ export async function migrateSharedAuthStore(params: {
       };
       const rows = copyRowsToState(snapshot);
       const ownershipFlipped = advanceMigration({ ...snapshot, rows, stage: "ownership-flipped" });
-      const sourceCleaned = cleanupSourceRows({ env, sourcePath: params.detected.sourcePath });
+      const sourceCleaned = await cleanupSourceRows({
+        env,
+        sourcePath: params.detected.sourcePath,
+      });
       const relocatedRows = rows.store !== null || rows.state !== null || sourceCleaned;
       advanceMigration({ ...snapshot, rows, stage: "completed" });
       return {

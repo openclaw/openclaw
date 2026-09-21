@@ -198,14 +198,15 @@ describe("legacy migration with invalid plugin config", () => {
       ],
     });
 
-    const result = migrateLegacyConfig({
+    const raw = {
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5.5" },
           llm: { idleTimeoutSeconds: 120 },
         },
       },
-    });
+    };
+    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
     expect(result).toEqual({
       config: {

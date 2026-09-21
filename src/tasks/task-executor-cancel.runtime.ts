@@ -26,24 +26,17 @@ export async function cancelDetachedTaskRunByIdCore(params: {
       ...(task ? { task } : {}),
     };
   }
-  if (!task) {
-    if (registeredRuntime) {
-      const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);
-      if (cancelled.found) {
-        return cancelled;
-      }
+  if (task) {
+    try {
+      assertTaskCancellationReadyById(task.taskId);
+    } catch (error) {
+      return {
+        found: true,
+        cancelled: false,
+        reason: formatErrorMessage(error),
+        task,
+      };
     }
-    return cancelTaskById(params);
-  }
-  try {
-    assertTaskCancellationReadyById(task.taskId);
-  } catch (error) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: formatErrorMessage(error),
-      task,
-    };
   }
   if (registeredRuntime) {
     const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);

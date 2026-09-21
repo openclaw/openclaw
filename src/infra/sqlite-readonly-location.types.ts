@@ -6,3 +6,5 @@ export type PreparedSqliteReadOnlyLocation = {
   // owned root), so diagnostics name the retained path, not an already-deleted child.
   cleanupRoot?: string;
 };
+
+export type AsyncPreparedSqliteReadOnlyLocation = Omit<PreparedSqliteReadOnlyLocation, "cleanup">;

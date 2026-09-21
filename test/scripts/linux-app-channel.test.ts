@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join, resolve } from "node:path";
+import { Script } from "node:vm";
 import { expect, it } from "vitest";
+import { runLinuxAppChannel } from "../../scripts/linux-app-channel.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
-const cli = resolve("scripts/linux-app-channel.mjs");
 const tag = "v2026.9.3";
 const nextTag = "v2026.9.4";
 const channel = "linux-stable";
@@ -68,6 +70,7 @@ type State = {
   nextId: number;
   calls: Call[];
   verifierExit: number;
+  publicDownloadCache?: Record<string, string>;
   fault?: Fault;
   corruptDownload?: { tag: string; name: string };
   replaceReleaseAfterDownload?: { tag: string; name: string };
@@ -418,6 +421,12 @@ try {
     const entry = owner.assets.find((asset) => asset.name === name);
     if (owner.draft || !entry || fault("download", tag, name)) fail("HTTP 404: public asset unavailable");
     let bytes = Buffer.from(entry.bytes, "base64");
+    if (state.publicDownloadCache) {
+      const revalidate = args.includes("--header") && flag("--header") === "Cache-Control: no-cache";
+      const cached = state.publicDownloadCache[url];
+      if (cached && !revalidate) bytes = Buffer.from(cached, "base64");
+      state.publicDownloadCache[url] = bytes.toString("base64");
+    }
     if ((state.corruptDownload?.tag === tag && state.corruptDownload.name === name) ||
         (legacy && fault("legacy-readback", tag, name))) {
       delete state.corruptDownload;
@@ -453,16 +462,55 @@ try {
 }
 `;
 
+const fixtureRequire = createRequire(import.meta.url);
+// Compile the same fake gh/curl/minisign program once, then feed it the exact
+// argv/env contract that execFileSync would receive.
+const compiledCommandFixture = new Script(
+  `(function (require, process, console, Buffer, URL) {${commandFixture}\n})`,
+).runInThisContext();
+
+function runFixtureCommand(binary: string, args: string[]): string {
+  let stdout = "";
+  let stderr = "";
+  let status = 0;
+  const exit = new Error("fixture exit");
+  const fixtureProcess = {
+    argv: [process.execPath, binary, ...args],
+    env: process.env,
+    exitCode: 0,
+    stdout: { write: (value: unknown) => (stdout += String(value)) },
+    exit: (code = 0) => {
+      status = code;
+      throw exit;
+    },
+  };
+  const fixtureConsole = {
+    error: (...values: unknown[]) => {
+      stderr += `${values.map(String).join(" ")}\n`;
+    },
+  };
+  try {
+    compiledCommandFixture(fixtureRequire, fixtureProcess, fixtureConsole, Buffer, URL);
+  } catch (error) {
+    if (error !== exit) {
+      throw error;
+    }
+  }
+  if (status !== 0 || fixtureProcess.exitCode !== 0) {
+    const error = new Error(
+      stderr.trim() || `fixture command exited ${status || fixtureProcess.exitCode}`,
+    ) as Error & { status: number; stderr: string; stdout: string };
+    error.status = status || fixtureProcess.exitCode;
+    error.stderr = stderr;
+    error.stdout = stdout;
+    throw error;
+  }
+  return stdout;
+}
+
 function fixture(workflowRef = toolingRef, desktop = false) {
   const workflowFullRef = `${workflowRef.startsWith("release-publish/") ? "refs/tags" : "refs/heads"}/${workflowRef}`;
   const root = createTempDir("linux-channel-");
-  const bin = join(root, "bin");
-  mkdirSync(bin);
-  for (const name of ["gh", "curl", "minisign"]) {
-    const file = join(bin, name);
-    writeFileSync(file, `#!${process.execPath}\n${commandFixture}`);
-    chmodSync(file, 0o755);
-  }
   const statePath = join(root, "state.json");
   writeFileSync(
     statePath,
@@ -593,7 +641,7 @@ function fixture(workflowRef = toolingRef, desktop = false) {
     latest?: string,
     publicOnly = false,
   ) => {
-    const args = [cli, mode, "--tag", releaseTag, "--source-sha", sourceSha(releaseTag)];
+    const args = [mode, "--tag", releaseTag, "--source-sha", sourceSha(releaseTag)];
     args.push("--tooling-sha", toolingSha);
     update((value) => {
       value.authority.writerRef = mode === "publish" ? "main" : workflowRef;
@@ -647,23 +695,43 @@ function fixture(workflowRef = toolingRef, desktop = false) {
         args.push("--assets", inputs(releaseTag), "--signature", signaturePath);
       }
     }
-    const result = spawnSync(process.execPath, args, {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        PATH: `${bin}:${dirname(process.execPath)}`,
-        HOME: root,
-        TMPDIR: root,
-        CHANNEL_FIXTURE_STATE: statePath,
-        GITHUB_RUN_ID: "44",
-        GITHUB_RUN_ATTEMPT: "1",
-      },
-      timeout: 30_000,
-      killSignal: "SIGKILL",
-      maxBuffer: 2 * 1024 * 1024,
+    const previousEnv = {
+      CHANNEL_FIXTURE_STATE: process.env.CHANNEL_FIXTURE_STATE,
+      GITHUB_RUN_ID: process.env.GITHUB_RUN_ID,
+      GITHUB_RUN_ATTEMPT: process.env.GITHUB_RUN_ATTEMPT,
+    };
+    Object.assign(process.env, {
+      CHANNEL_FIXTURE_STATE: statePath,
+      GITHUB_RUN_ID: "44",
+      GITHUB_RUN_ATTEMPT: "1",
     });
-    expect(result.error).toBeUndefined();
-    return result;
+    try {
+      const result = runLinuxAppChannel(args, {
+        runCommand: runFixtureCommand,
+        report: () => {},
+      });
+      return {
+        error: undefined,
+        status: 0,
+        stderr: "",
+        stdout: `${JSON.stringify(result, null, 2)}\n`,
+      };
+    } catch (error) {
+      return {
+        error: undefined,
+        status: 1,
+        stderr: `Release publication incomplete; reconcile before retry: ${error instanceof Error ? error.message : String(error)}\n`,
+        stdout: "",
+      };
+    } finally {
+      for (const [key, value] of Object.entries(previousEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
   };
   const bytes = (releaseTag: string, name: string) => {
     const entry = releaseFrom(state(), releaseTag).assets.find((asset) => asset.name === name);
@@ -690,9 +758,20 @@ function failed(result: ReturnType<ReturnType<typeof fixture>["run"]>, message: 
   expect(result.stdout.trim()).toBe("");
 }
 
+it("retains the direct CLI entrypoint", () => {
+  const result = spawnSync(process.execPath, [resolve("scripts/linux-app-channel.mjs")], {
+    encoding: "utf8",
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Usage: linux-app-channel.mjs");
+});
+
 it("reuses complete public Linux assets without local build inputs", () => {
   const f = fixture();
   const original = f.seedLegacy();
+  f.update((state) => {
+    state.publicDownloadCache = {};
+  });
   const assetIds = new Set(releaseFrom(f.state(), tag).assets.map((entry) => entry.id));
   expect(succeeded(f.run("publish", tag, undefined, true))).toMatchObject({ state: "published" });
   const published = JSON.parse(f.bytes(tag, "OpenClaw-2026.9.3-linux.json").toString());
@@ -712,6 +791,11 @@ it("reuses complete public Linux assets without local build inputs", () => {
       ),
   ).toEqual([]);
   expect(f.state().calls.some((entry) => entry.tool === "minisign")).toBe(true);
+  f.addRelease(nextTag, true);
+  succeeded(f.run("publish", nextTag));
+  const advanced = f.bytes(nextTag, "OpenClaw-2026.9.4-linux.json");
+  expect(f.bytes(channel, "latest.json")).toEqual(advanced);
+  expect(f.bytes(nextTag, "latest.json")).toEqual(advanced);
 });
 
 it("reuses immutable publication bytes without local build inputs on replay", () => {
@@ -1487,6 +1571,8 @@ it.each([null, tag])(
 
 it.each([
   { releaseTag: nextTag, prerelease: false },
+  { releaseTag: "v2026.6.33", prerelease: false },
+  { releaseTag: "v2026.8.35", prerelease: false },
   { releaseTag: "v2026.9.4-alpha.1", prerelease: true },
   { releaseTag: "v2026.9.4-beta.1", prerelease: true },
 ])("honors explicit non-latest finalization of $releaseTag", ({ releaseTag, prerelease }) => {
@@ -1557,8 +1643,8 @@ it("refuses non-latest finalization that would demote the current latest", () =>
 it.each([
   {
     releaseTag: "v2026.6.33",
-    latest: "false",
-    message: "Unsupported core GitHub release train",
+    latest: "true",
+    message: "Extended-stable releases cannot become core latest",
   },
   {
     releaseTag: "v2026.9.04",

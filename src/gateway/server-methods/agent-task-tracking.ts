@@ -16,8 +16,11 @@ import {
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
 import { finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
-import { findTaskByRunId } from "../../tasks/runtime-internal.js";
-import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import {
+  isTerminalTaskStatus,
+  type TaskRecord,
+  type TaskStatus,
+} from "../../tasks/task-registry.types.js";
 import { formatForLog } from "../ws-log.js";
 import type {
   GatewayContextResolver,
@@ -91,7 +94,12 @@ export type GatewayAgentTaskTrackingMode =
   | "cli"
   | "plugin_subagent"
   | "none"
-  | { kind: "session_followup"; requesterSessionKey: string; label?: string };
+  | {
+      kind: "session_followup";
+      requesterSessionKey: string;
+      label?: string;
+      existingTaskStatus?: TaskStatus;
+    };
 
 export function resolveGatewayAgentTaskTrackingMode(params: {
   client: GatewayRequestHandlerOptions["client"];
@@ -101,7 +109,7 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
   sessionEntry?: Pick<SessionEntry, "spawnedBy" | "label" | "displayName" | "acp">;
   confirmedAcpManualSpawn?: boolean;
   modelRun?: boolean;
-  runId?: string;
+  existingTask?: Pick<TaskRecord, "runtime" | "childSessionKey" | "status">;
 }): GatewayAgentTaskTrackingMode {
   // Model probes are stateless one-shot work. A terminal CLI task row would
   // outlive the probe even when its session/transcript effects are internal.
@@ -111,7 +119,7 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
   if (!params.sessionKey?.trim()) {
     return "none";
   }
-  const existingTask = params.runId ? findTaskByRunId(params.runId) : undefined;
+  const existingTask = params.existingTask;
   if (params.inputProvenance?.kind === "inter_session") {
     const requesterSessionKey = normalizeOptionalString(params.inputProvenance.sourceSessionKey);
     if (
@@ -123,7 +131,7 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
       !params.sessionEntry.acp &&
       !isAcpSessionKey(params.sessionKey) &&
       !params.confirmedAcpManualSpawn &&
-      !existingTask
+      (!existingTask || isTerminalTaskStatus(existingTask.status))
     ) {
       // The new turn owns activity only. The original subagent keeps its
       // accepted result or yield obligation; sessions_send still owns replies.
@@ -131,6 +139,7 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
         kind: "session_followup",
         requesterSessionKey,
         label: params.sessionEntry.label ?? params.sessionEntry.displayName,
+        existingTaskStatus: existingTask?.status,
       };
     }
     // Only the settlement batch owns automatic paused-run adoption. Individual
@@ -270,6 +279,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
 }
 
 export function tryFinalizeTrackedAgentTask(params: {
+  finalizeRun?: typeof finalizeTaskRunByRunId;
   runId: string;
   sessionKey?: string;
   status: GatewayAgentTaskTerminalStatus;
@@ -278,7 +288,7 @@ export function tryFinalizeTrackedAgentTask(params: {
   log: Pick<GatewayRequestContext["logGateway"], "warn">;
 }): void {
   try {
-    finalizeTaskRunByRunId({
+    (params.finalizeRun ?? finalizeTaskRunByRunId)({
       runId: params.runId,
       runtime: "cli",
       sessionKey: params.sessionKey,

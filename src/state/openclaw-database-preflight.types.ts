@@ -15,6 +15,7 @@ export type IndeterminateOpenClawDatabase = {
   kind: "agent" | "state";
   path: string;
   reason: string;
+  agentId?: string;
 };
 
 export type DeferredStateSchemaPublication = {

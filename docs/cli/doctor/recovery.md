@@ -18,14 +18,50 @@ loaded, or `openclaw gateway install --force` from the intended installation to
 replace its service definition. Externally managed services still belong to
 their supervisor.
 
+Doctor also compares the service's package path and version with the active CLI,
+without requiring a Gateway connection. Update finalization and standalone
+`openclaw doctor --fix` reconcile eligible, previously running managed services
+through the native installer; update-time Doctor reports drift and defers publication
+to finalization. Doctor can automatically refresh installation-only drift in a
+verified, writable packaged service; additional native settings, operator edits,
+or uncertain inspection still require interactive confirmation.
+Services already stopped keep their definitions and stop state; run the reported
+profile-aware `openclaw gateway install --force` command from the intended
+installation to reconcile them (installation may start the service).
+It preserves the service's profile and an explicit service port when no port is
+configured. Source checkouts, deployment-owned overrides, and unavailable native
+inspection do not grant automatic installation repair authority; Doctor reports
+the mismatch and the next repair action.
+
+If Doctor loses maintenance ownership during installation, it stops further
+installation or activation and restores its captured service definition when it
+can verify ownership of the replacement. The warning reports whether the
+definition was unchanged, restored, or needs inspection; follow the reported
+status and installer commands after the active maintenance or update finishes.
+Unverified restoration keeps recovery pending instead of claiming a safe restart.
+
 For legacy services or conflicting systemd scopes, run `openclaw doctor`
 interactively to review the findings and confirm supported cleanup. Cleanup
 reports what it removed or skipped; it does not guarantee a replacement service
 will be installed. Explicit repair maintenance skips this separate cleanup flow.
 
+If Doctor stopped a managed Gateway for repair, a failed or timed-out restoration
+probe produces a warning and Doctor still attempts to start that service and
+verify readiness. Live maintenance custody and update admission still apply;
+observed changes to the service command, account, or manager require operator review.
+An explicit ownership refusal is reported as a refusal, without attempting to
+start the rejected service. On systemd, Doctor retains the native manager and
+unit identity before stopping the service and revalidates it at activation. If
+that identity cannot be captured, Doctor leaves the service running and reports
+the inspection warning; live state writers still prevent unsafe offline repair.
+
 When service inspection blocks repair, Doctor and `gateway status --deep` name
 the failed native probe:
 
+- **Linux inspection deadline expired:** the manager probe or its custody/admission
+  guards exhausted the inspection budget. This does not mean the user session bus
+  is missing. Check the reported restoration result and run
+  `openclaw gateway status --deep` after recovery.
 - **Linux user session bus unavailable:** check `XDG_RUNTIME_DIR` and
   `DBUS_SESSION_BUS_ADDRESS` for the service account. A working `systemctl --user`
   command alone is insufficient: effective service inspection also uses
@@ -56,6 +92,15 @@ maintenance inspection and service mutations; it retains Gateway/state
 coordinators and agent-database lease checks. Shutdown and restart remain with
 the deployment owner. A failed native probe is never treated as proof that the
 Gateway is stopped.
+
+For a system template such as `openclaw@.service` with `User=%i`, inspection
+follows the current account's instance (`openclaw@<user>.service`) while
+preserving the shared template. Run Doctor as that account after the system
+service owner stops its instance.
+
+Doctor waits for a starting local Gateway using the shared 60-second readiness budget, both on its initial check and after an approved restart. It reports the observed startup phase while waiting. A Gateway that still reports startup at the deadline produces a non-failing “still starting” result; Doctor leaves it running and does not offer another restart. Connection failure without startup evidence remains a diagnostic failure. This also applies when an installed updater invokes the candidate Doctor.
+
+Plugin initialization and database startup checks can make a cold start take longer than ten seconds on a loaded or older host. Let the existing Gateway finish starting before requesting a separate restart. Remote Gateway diagnostics keep using the configured remote target.
 
 ## Remote Gateway recovery
 
@@ -88,6 +133,25 @@ inline token, run `openclaw doctor --fix --generate-gateway-token`, then restart
 the Gateway. For a SecretRef, rotate the external secret source instead; doctor
 preserves its reference and leaves password, `none`, and trusted-proxy auth modes
 unchanged. An absent token still uses the normal startup token generation flow.
+
+Known redaction placeholders, including `__OPENCLAW_REDACTED__`, are also invalid
+credentials. Doctor and `gateway status --deep` name the affected reference even
+if an older Gateway process still works with its previous in-memory token.
+For a store-backed Gateway token, run `openclaw doctor --fix` (or
+`openclaw doctor --generate-gateway-token`). Doctor verifies a database backup,
+regenerates the referenced value, preserves the SecretRef and the entry's current
+`secret`/`env` kind and allowed hosts, and prints the backup path. A credential
+changed during backup is preserved. Restart the Gateway,
+then reconnect or re-pair devices with the new token.
+
+Explicit token generation reports when it skips a healthy SecretRef. Other
+placeholder secrets require a real replacement from their provider; Doctor
+reports them without deleting their stored values.
+
+In trusted-proxy mode, a redacted inline or environment-supplied optional password
+does not block proxy authentication. Startup, Doctor, and status warn that local
+password fallback is unavailable. Replace or remove the optional password and
+restart; Doctor preserves trusted-proxy mode instead of generating a token.
 
 ## macOS: `launchctl` env overrides
 

@@ -1,20 +1,15 @@
-import { SourceMap, type SourceMapPayload } from "node:module";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { QuickJS } from "quickjs-wasi";
-import type { CodeModeLanguage } from "./code-mode-worker-types.js";
 
 export const USER_SOURCE_FILE = "openclaw-code-mode:user.js";
-const GENERATED_SOURCE_FILE = "openclaw-code-mode:generated.js";
 export const SOURCE_LOCATION_KEY = "__openclawSourceLocation";
 
 export type SourceLocation = {
-  file: typeof USER_SOURCE_FILE | typeof GENERATED_SOURCE_FILE;
+  file: typeof USER_SOURCE_FILE;
   lineOffset: number;
   lineCount: number;
   columnOffset: number;
   endColumn: number;
-  sourceMap?: string;
-  generatedLines?: string[];
 };
 
 function sourceExtent(source: string): { lines: number; lastColumn: number } {
@@ -51,7 +46,7 @@ export function readSourceLocation(vm: QuickJS): SourceLocation | undefined {
     const isOffset = (offset: unknown): offset is number =>
       typeof offset === "number" && Number.isSafeInteger(offset) && offset >= 0;
     if (
-      (file !== USER_SOURCE_FILE && file !== GENERATED_SOURCE_FILE) ||
+      file !== USER_SOURCE_FILE ||
       !isOffset(lineOffset) ||
       !isOffset(lineCount) ||
       lineCount === 0 ||
@@ -69,11 +64,6 @@ export function readSourceLocation(vm: QuickJS): SourceLocation | undefined {
       lineCount,
       columnOffset,
       endColumn,
-      ...(typeof value.sourceMap === "string" &&
-      Array.isArray(value.generatedLines) &&
-      value.generatedLines.every((line) => typeof line === "string")
-        ? { sourceMap: value.sourceMap, generatedLines: value.generatedLines }
-        : {}),
     };
   } catch {
     return undefined;
@@ -91,11 +81,6 @@ export function normalizeSourceStack(
   if (!stack || !location) {
     return stack;
   }
-  // SAFETY: The TypeScript compiler produces this v3 map; the immutable VM property
-  // is written before guest evaluation and travels in the bounded snapshot.
-  const map = location.sourceMap
-    ? new SourceMap(JSON.parse(location.sourceMap) as SourceMapPayload) // SAFETY: compiler-produced v3 map, immutable before guest execution.
-    : undefined;
   // Leave arbitrary guest stack text opaque instead of copying every line into an array.
   return stack.replace(
     /^[^\S\r\n]+at [^\r\n]*openclaw-code-mode:(?:user|controller)\.js:\d+:\d+\)?(?:\r?\n|$)/gmu,
@@ -115,23 +100,6 @@ export function normalizeSourceStack(
       ) {
         return "";
       }
-      if (map) {
-        // QuickJS uses UTF-8 byte columns; v3 source maps use UTF-16 columns.
-        const lineText = location.generatedLines?.[line - 1] ?? "";
-        const utf16Column = Buffer.from(lineText)
-          .subarray(0, column - 1)
-          .toString("utf8").length;
-        const original = map.findEntry(line - 1, utf16Column);
-        if ("originalLine" in original) {
-          return frame.replace(
-            match[0],
-            "openclaw-code-mode:user.ts:" +
-              (original.originalLine + 1) +
-              ":" +
-              (original.originalColumn + 1),
-          );
-        }
-      }
       return frame.replace(match[0], location.file + ":" + line + ":" + column);
     },
   );
@@ -140,16 +108,15 @@ export function normalizeSourceStack(
 export function buildUserSource(
   code: string,
   prelude = "",
-  language?: CodeModeLanguage,
 ): { source: string; location: SourceLocation } {
-  const prefix = `globalThis.__openclawResult = (async () => {\n${prelude}`;
+  const prefix = `globalThis.__openclawResult = __openclawRunCell(async () => {\n${prelude}`;
   const before = sourceExtent(prefix);
   const body = sourceExtent(code);
   const columnOffset = before.lastColumn - 1;
   return {
-    source: `${prefix}${code}\n})()`,
+    source: `${prefix}${code}\n})`,
     location: {
-      file: language === "typescript" ? GENERATED_SOURCE_FILE : USER_SOURCE_FILE,
+      file: USER_SOURCE_FILE,
       lineOffset: before.lines - 1,
       lineCount: body.lines,
       columnOffset,

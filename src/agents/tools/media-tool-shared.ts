@@ -574,9 +574,10 @@ export async function resolveMediaToolReferenceAccess(params: {
       : { resolved: resolveHostPath() };
   return {
     resolvedPath: params.isDataUrl ? null : pathInfo.resolved,
-    localRoots: workspaceOnly
-      ? workspaceRoots
-      : uniqueStrings([...getDefaultLocalRootsCore(), ...workspaceRoots]),
+    localRoots: uniqueStrings([
+      ...(workspaceOnly ? workspaceRoots : [...getDefaultLocalRootsCore(), ...workspaceRoots]),
+      ...(params.fsPolicy?.readOnlyRoots ?? []),
+    ]),
     ...(pathInfo.rewrittenFrom ? { rewrittenFrom: pathInfo.rewrittenFrom } : {}),
   };
 }
@@ -585,7 +586,7 @@ type LoadedToolReferenceMedia = WebMediaResult | ReturnType<typeof decodeDataUrl
 
 export type MediaToolSandbox = Pick<
   SandboxedBridgeMediaPathConfig,
-  "root" | "bridge" | "stagedMediaPaths"
+  "root" | "bridge" | "stagedMediaPaths" | "readOnlyResourceMounts"
 >;
 
 export function resolveMediaToolSandboxConfig(

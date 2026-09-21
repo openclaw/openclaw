@@ -139,12 +139,19 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const inspected = await inspectManagedPlugin({
+        config: context.getRuntimeConfig(),
+        pluginId: params.pluginId,
+      });
+      const { inspectDecisionProviders } = await import("../../decisions/runtime.js");
       respond(
         true,
-        await inspectManagedPlugin({
-          config: context.getRuntimeConfig(),
-          pluginId: params.pluginId,
-        }),
+        {
+          ...inspected,
+          decisions: inspectDecisionProviders(context.getRuntimeConfig()).filter(
+            (entry) => entry.pluginId === params.pluginId,
+          ),
+        },
         undefined,
       );
     } catch (error) {

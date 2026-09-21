@@ -6,6 +6,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareGithubIssue } from "../infra/github-issue.js";
 import { VERSION } from "../version.js";
 import {
+  canonicalMigrationFilePath,
   readSessionSqliteMigrationManifest,
   filterRestoreManifestTargets,
   writeSessionSqliteMigrationManifest,
@@ -15,12 +16,17 @@ import {
 } from "./doctor-session-sqlite-migration-run.js";
 import type {
   DoctorSessionSqliteIssue,
+  DoctorSessionSqliteTargetReport,
   SessionSqliteMigrationFailureIssue,
 } from "./doctor-session-sqlite-types.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 export function writeSessionSqliteMigrationFailureReports(
   manifestPath: string,
-  params: { reason: string; trustedTargets?: readonly SessionSqliteMigrationTargetInput[] },
+  params: {
+    reason: string;
+    recoveryTargets?: readonly DoctorSessionSqliteTargetReport[];
+    trustedTargets?: readonly SessionSqliteMigrationTargetInput[];
+  },
 ): { jsonPath: string; markdownPath: string } {
   const manifest = readSessionSqliteMigrationManifest(manifestPath);
   const { jsonPath, markdownPath } = resolveFailureReportPaths(manifestPath);
@@ -42,10 +48,10 @@ export function writeSessionSqliteMigrationFailureReports(
     targets: targets.map((target) => ({
       agentId: sanitizeFailureReportText(target.agentId),
       completedMoves: target.completedMoves.length,
-      issues: target.issues.map((issue) => ({
+      issues: collectFailureReportIssues(target, params.recoveryTargets).map((issue) => ({
         code: issue.code,
         message: sanitizeFailureIssueMessage(issue, target),
-        ...(issue.sessionKey ? { sessionKey: redactSessionKey(issue.sessionKey) } : {}),
+        sessionKey: issue.sessionKey ? redactSessionKey(issue.sessionKey) : undefined,
       })),
       plannedMoves: target.plannedMoves.length,
       sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
@@ -67,6 +73,25 @@ export function writeSessionSqliteMigrationFailureReports(
     writeSessionSqliteMigrationManifest({ manifest, manifestPath });
   }
   return { jsonPath, markdownPath };
+}
+
+function collectFailureReportIssues(
+  target: SessionSqliteMigrationTargetManifest,
+  recoveryTargets: readonly DoctorSessionSqliteTargetReport[] = [],
+): DoctorSessionSqliteIssue[] {
+  const recoveryTarget = recoveryTargets.find(
+    (current) =>
+      current.agentId === target.agentId &&
+      canonicalMigrationFilePath(current.storePath) ===
+        canonicalMigrationFilePath(target.storePath) &&
+      canonicalMigrationFilePath(current.sqlitePath) ===
+        canonicalMigrationFilePath(target.sqlitePath),
+  );
+  const issues = new Map<string, DoctorSessionSqliteIssue>();
+  for (const issue of [...target.issues, ...(recoveryTarget?.issues ?? [])]) {
+    issues.set(JSON.stringify([issue.code, issue.message, issue.sessionKey]), issue);
+  }
+  return [...issues.values()];
 }
 
 export function createSessionSqliteMigrationFailureIssue(
@@ -246,7 +271,7 @@ function renderFailureMarkdown(payload: {
       `- Validation before archive: ${target.validationBeforeArchive}`,
       `- Issues: ${target.issues.length}`,
     );
-    for (const issue of target.issues.slice(0, 10)) {
+    for (const issue of target.issues) {
       lines.push(
         `  - [${issue.code}] ${issue.sessionKey ? `${issue.sessionKey}: ` : ""}${issue.message}`,
       );

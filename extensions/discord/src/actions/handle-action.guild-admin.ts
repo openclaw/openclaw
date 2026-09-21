@@ -23,7 +23,15 @@ import {
 
 type Ctx = Pick<
   ChannelMessageActionContext,
-  "action" | "params" | "cfg" | "accountId" | "requesterSenderId" | "senderIsOwner" | "toolContext"
+  | "action"
+  | "params"
+  | "cfg"
+  | "accountId"
+  | "requesterAccountId"
+  | "requesterSenderId"
+  | "senderIsOwner"
+  | "toolContext"
+  | "assertDirectAdapterHandoff"
 >;
 
 function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
@@ -31,11 +39,32 @@ function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
   if (currentProvider?.toLowerCase() === "discord") {
     return normalizeOptionalString(ctx.requesterSenderId);
   }
+  // The host binds a source-less scheduled edit to its saved native requester.
+  // The handoff guards that admitted invocation; requester fields never come from params.
+  if (
+    ctx.action === "channel-edit" &&
+    !currentProvider &&
+    ctx.senderIsOwner === false &&
+    ctx.assertDirectAdapterHandoff &&
+    ctx.accountId &&
+    ctx.requesterAccountId === ctx.accountId
+  ) {
+    ctx.assertDirectAdapterHandoff();
+    const requester = normalizeOptionalString(ctx.requesterSenderId);
+    if (requester) {
+      return requester;
+    }
+  }
   if (
     isTrustedRequesterGuildAdminAction(ctx.action) &&
     (currentProvider || ctx.senderIsOwner !== true)
   ) {
-    throw new Error("Discord guild admin actions require a trusted Discord sender identity.");
+    throw new Error(
+      "Discord guild admin actions require a trusted Discord sender identity." +
+        (ctx.action === "channel-edit" && !currentProvider
+          ? " Recreate an automation without recorded execution authorization from a fresh authenticated Discord turn that can manage automations."
+          : ""),
+    );
   }
   return undefined;
 }

@@ -161,10 +161,10 @@ export async function recoverEmbeddedRunOverflow(
         reason: "detached recovery has no caller-owned transcript",
       };
     }
-    return await withSessionManagerWrite(sessionManager, () => {
+    return await withSessionManagerWrite(sessionManager, async () => {
       const target = sessionManager.getSessionTarget();
       assertActive();
-      const result = truncateOversizedToolResultsInSessionManager({
+      const result = await truncateOversizedToolResultsInSessionManager({
         sessionManager,
         contextWindowTokens: contextTokenBudget,
         maxCharsOverride: resolveLiveToolResultMaxChars({

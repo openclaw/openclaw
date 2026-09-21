@@ -237,14 +237,16 @@ export function formatMessageCliText(
     const rows = results.map((entry) => ({
       Channel: resolveChannelLabel(entry.channel),
       Target: shortenText(formatTargetDisplay({ channel: entry.channel, target: entry.to }), 36),
-      Status: entry.ok ? "ok" : "error",
+      Status: entry.ok ? "ok" : entry.attempted === false ? "not attempted" : "error",
       Error: entry.ok ? "" : shortenText(entry.error ?? "unknown error", 48),
     }));
     const okCount = results.filter((entry) => entry.ok).length;
+    const notAttemptedCount = results.filter((entry) => entry.attempted === false).length;
+    const failedCount = results.length - okCount - notAttemptedCount;
     const total = results.length;
     const successful = outcome.ok;
     const headingLine = (successful ? ok : fail)(
-      `${successful ? "✅ Broadcast complete" : "❌ Broadcast failed"} (${okCount}/${total} succeeded, ${total - okCount} failed)`,
+      `${successful ? "✅ Broadcast complete" : notAttemptedCount ? "❌ Broadcast incomplete" : "❌ Broadcast failed"} (${okCount}/${total} succeeded, ${failedCount} failed${notAttemptedCount ? `, ${notAttemptedCount} not attempted` : ""})`,
     );
     return [
       headingLine,

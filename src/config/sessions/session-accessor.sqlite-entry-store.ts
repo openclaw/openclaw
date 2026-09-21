@@ -27,6 +27,8 @@ import {
   readExactSessionEntryRow,
   readSessionEntryRowScan,
 } from "./session-accessor.sqlite-entry-read.js";
+import { getSessionEntryWriteQueries } from "./session-accessor.sqlite-entry-write-queries.js";
+import { advanceSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   clearSessionCollaborationForKey,
   copySessionNodeArtifactsForRepair,
@@ -257,7 +259,7 @@ export function deleteSessionEntryRows(
       database.db,
       db.deleteFrom("session_nodes").where("session_key", "=", sessionKey),
     );
-    publishSessionEntryCacheInvalidation(database);
+    publishSessionEntryCacheInvalidation(database, { sessionKey });
     return;
   }
   const remainingWindow = executeSqliteQueryTakeFirstSync(
@@ -277,14 +279,14 @@ export function deleteSessionEntryRows(
       sessionKey,
       updatedAt: remainingWindow.updated_at,
     });
-    publishSessionEntryCacheInvalidation(database);
+    publishSessionEntryCacheInvalidation(database, { sessionKey });
     return;
   }
   executeSqliteQuerySync(
     database.db,
     db.deleteFrom("session_nodes").where("session_key", "=", sessionKey),
   );
-  publishSessionEntryCacheInvalidation(database);
+  publishSessionEntryCacheInvalidation(database, { sessionKey });
 }
 
 /** Remove the logical entry while retaining its node-owned transcript windows. */
@@ -410,8 +412,9 @@ export function deleteLegacySessionEntryRows(
       database.db,
       db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
     );
-    publishSessionEntryCacheInvalidation(database);
+    publishSessionEntryCacheInvalidation(database, { sessionKey: legacyKey });
   }
+  publishSessionEntryCacheInvalidation(database, { sessionKey });
 }
 
 /** Move retained generations to the canonical node before removing key aliases. */
@@ -442,6 +445,8 @@ export function writeSessionEntry(
   entry: SessionEntry,
   options: {
     allowStoredAliases?: boolean;
+    /** Only the personal involvement owner may replace this logical-node state. */
+    profileInvolvement?: SessionEntry["profileInvolvement"];
     /** Canonical row revalidated in this write transaction; null proves absence. */
     canonicalPreviousEntry?: SessionEntry | null;
     consumePendingReset?: boolean;
@@ -450,7 +455,6 @@ export function writeSessionEntry(
     routeContext?: ConversationRouteContext | null;
   } = {},
 ): SessionEntry {
-  const db = getSessionKysely(database.db);
   if (!options.allowStoredAliases) {
     assertCanonicalSessionKeyWriteMatchesDatabase(database, sessionKey);
     assertCanonicalSessionEntryLineageWrite(database, entry);
@@ -491,6 +495,23 @@ export function writeSessionEntry(
   // ordinary writes cannot restamp a logical node's creator.
   if (!options.allowStoredAliases || canonicalPreviousEntry?.sandbox === "required") {
     normalizedEntry = preserveCreationStamp(normalizedEntry, canonicalPreviousEntry);
+  }
+  // Personal choices follow the logical node through reset and relocation. A
+  // fork has a different key; stale entry writers cannot replace committed choices.
+  const involvement =
+    options.profileInvolvement ??
+    canonicalPreviousEntry?.profileInvolvement ??
+    (entry.profileInvolvement?.key === sessionKey || options.allowStoredAliases
+      ? entry.profileInvolvement
+      : undefined);
+  if (involvement) {
+    normalizedEntry = {
+      ...normalizedEntry,
+      profileInvolvement: { ...involvement, key: sessionKey },
+    };
+  } else if (normalizedEntry.profileInvolvement) {
+    const { profileInvolvement: _sourceInvolvement, ...forkEntry } = normalizedEntry;
+    normalizedEntry = forkEntry;
   }
   const previousEntry =
     options.previousEntry === undefined
@@ -564,53 +585,16 @@ export function writeSessionEntry(
     previousEntry,
   });
   const sessionNode = bindSessionNode({ entry: normalizedEntry, sessionKey, updatedAt });
-  const writeGeneration = trackSessionEntryCacheWrite(
-    database,
-    () => {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("session_nodes")
-          .values(sessionNode)
-          .onConflict((conflict) =>
-            conflict.column("session_key").doUpdateSet((eb) => ({
-              current_session_id: eb.ref("excluded.current_session_id"),
-              entry_json: eb.ref("excluded.entry_json"),
-              entry_valid: eb.ref("excluded.entry_valid"),
-              updated_at: eb.ref("excluded.updated_at"),
-              status: eb.ref("excluded.status"),
-              created_at: eb.ref("excluded.created_at"),
-              created_via: eb.ref("excluded.created_via"),
-              created_actor_type: eb.ref("excluded.created_actor_type"),
-              created_actor_id: eb.ref("excluded.created_actor_id"),
-              project_id: eb.ref("excluded.project_id"),
-              parent_session_key: eb.ref("excluded.parent_session_key"),
-              spawned_by: eb.ref("excluded.spawned_by"),
-              fork_source_session_key: eb.ref("excluded.fork_source_session_key"),
-              fork_source_session_id: eb.ref("excluded.fork_source_session_id"),
-              fork_source_entry_id: eb.ref("excluded.fork_source_entry_id"),
-              label: eb.ref("excluded.label"),
-              display_name: eb.ref("excluded.display_name"),
-              category: eb.ref("excluded.category"),
-              icon: eb.ref("excluded.icon"),
-              pinned_at: eb.ref("excluded.pinned_at"),
-              archived_at: eb.ref("excluded.archived_at"),
-              last_read_at: eb.ref("excluded.last_read_at"),
-              last_interaction_at: eb.ref("excluded.last_interaction_at"),
-              last_activity_at: eb.ref("excluded.last_activity_at"),
-            })),
-          ),
-      );
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("session_nodes")
-          .set({ entry_valid: 1 })
-          .where("session_key", "=", sessionKey),
-      );
-    },
-    { sessionKey, entry: normalizedEntry, previousEntry: canonicalPreviousEntry },
-  );
+  const queries = getSessionEntryWriteQueries(database.db);
+  const writeGeneration = trackSessionEntryCacheWrite(database, () => {
+    queries.node(sessionNode);
+    queries.markValid(sessionKey);
+  });
+  advanceSessionEntryMaintenanceAgeFact(database.db, {
+    sessionKey,
+    entry: normalizedEntry,
+    previousEntry: canonicalPreviousEntry,
+  });
   if (
     canonicalPreviousEntry &&
     (canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId ||
@@ -618,43 +602,11 @@ export function writeSessionEntry(
   ) {
     retainLegacyAcpMigrationSourcesForEntry(database.db, sessionKey, normalizedEntry);
   }
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .insertInto("session_windows")
-      .values(sessionRow)
-      .onConflict((conflict) =>
-        conflict.column("session_id").doUpdateSet((eb) => ({
-          // Logical nodes can share a physical window. Only creation or a
-          // generation change claims it; metadata updates retain its owner.
-          ...(canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
-            ? {}
-            : { session_key: eb.ref("excluded.session_key") }),
-          previous_session_id: eb.ref("excluded.previous_session_id"),
-          reason: eb.ref("excluded.reason"),
-          session_scope: eb.ref("excluded.session_scope"),
-          transcript_observed_at: eb.ref("excluded.transcript_observed_at"),
-          session_entry_provenance: eb.ref("excluded.session_entry_provenance"),
-          acp_owned: eb.ref("excluded.acp_owned"),
-          plugin_owner_id: eb.ref("excluded.plugin_owner_id"),
-          hook_external_content_source: eb.ref("excluded.hook_external_content_source"),
-          updated_at: eb.ref("excluded.updated_at"),
-          started_at: eb.ref("excluded.started_at"),
-          ended_at: eb.ref("excluded.ended_at"),
-          status: eb.ref("excluded.status"),
-          chat_type: eb.ref("excluded.chat_type"),
-          channel: eb.ref("excluded.channel"),
-          account_id: eb.ref("excluded.account_id"),
-          primary_conversation_id: eb.ref("excluded.primary_conversation_id"),
-          model_provider: eb.ref("excluded.model_provider"),
-          model: eb.ref("excluded.model"),
-          agent_harness_id: eb.ref("excluded.agent_harness_id"),
-          parent_session_key: eb.ref("excluded.parent_session_key"),
-          spawned_by: eb.ref("excluded.spawned_by"),
-          display_name: eb.ref("excluded.display_name"),
-        })),
-      ),
-  );
+  const writeWindow =
+    canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
+      ? queries.retainWindow
+      : queries.claimWindow;
+  writeWindow(sessionRow);
   if (conversation) {
     linkSessionConversation({
       database,

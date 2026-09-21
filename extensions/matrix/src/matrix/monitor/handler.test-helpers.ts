@@ -6,6 +6,7 @@ import {
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { vi, type Mock } from "vitest";
 import type {
   MatrixConfig,
@@ -51,6 +52,7 @@ const DEFAULT_ROUTE = {
 };
 
 type MatrixHandlerTestHarnessOptions = {
+  system?: Pick<MatrixMonitorHandlerParams["core"]["system"], "enqueueSystemEvent">;
   accountId?: string;
   accountConfig?: MatrixConfig;
   cfg?: unknown;
@@ -110,7 +112,6 @@ type MatrixHandlerTestHarnessOptions = {
   runPrepared?: MatrixRunPreparedMock;
   inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
   shouldAckReaction?: MatrixMonitorHandlerParams["core"]["channel"]["reactions"]["shouldAckReaction"];
-  enqueueSystemEvent?: (...args: unknown[]) => void;
   getRoomInfo?: MatrixMonitorHandlerParams["getRoomInfo"];
   getMemberDisplayName?: MatrixMonitorHandlerParams["getMemberDisplayName"];
   resolveLiveUserAllowlist?: MatrixMonitorHandlerParams["resolveLiveUserAllowlist"];
@@ -118,7 +119,6 @@ type MatrixHandlerTestHarnessOptions = {
 
 type MatrixHandlerTestHarness = {
   dispatchInboundMessage: MatrixDispatchInboundMessage;
-  enqueueSystemEvent: (...args: unknown[]) => void;
   finalizeInboundContext: (ctx: unknown) => unknown;
   handler: ReturnType<typeof createMatrixRoomMessageHandler>;
   readAllowFromStore: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
@@ -196,7 +196,6 @@ export function createMatrixHandlerTestHarness(
     (options.formatAgentEnvelope ?? (({ body }: { body: string }) => body))({
       body: input.body,
     })) as NonNullable<MatrixMonitorHandlerParams["createChannelInboundEnvelopeBuilder"]>;
-  const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
   const runPrepared =
     options.runPrepared ??
     vi.fn<MatrixRunPreparedMockFn>(async (turn) => {
@@ -299,6 +298,7 @@ export function createMatrixHandlerTestHarness(
       ...options.client,
     } as never,
     core: {
+      system: options.system ?? { enqueueSystemEvent },
       config: {
         current: options.currentConfig ?? (() => options.liveCfg ?? cfgForHandler),
       },
@@ -343,9 +343,6 @@ export function createMatrixHandlerTestHarness(
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),
         },
-      },
-      system: {
-        enqueueSystemEvent,
       },
     } as never,
     cfg: cfgForHandler as never,
@@ -402,7 +399,6 @@ export function createMatrixHandlerTestHarness(
 
   return {
     dispatchInboundMessage,
-    enqueueSystemEvent,
     finalizeInboundContext,
     handler,
     readAllowFromStore,

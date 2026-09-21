@@ -1,4 +1,3 @@
-// Slack plugin module implements setup surface behavior.
 import { resolveBasicAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   noteChannelLookupFailure,

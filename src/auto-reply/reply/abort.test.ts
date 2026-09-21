@@ -22,12 +22,8 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 import { stopSubagentsForRequester } from "./abort-operation.js";
-import {
-  getAbortMemory,
-  isAbortRequestText,
-  isAbortTrigger,
-  setAbortMemory,
-} from "./abort-primitives.js";
+import { getAbortMemory, isAbortRequestText, setAbortMemory } from "./abort-primitives.js";
+import { isAbortTrigger } from "./abort-trigger-text.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
 import { clearFollowupQueue } from "./queue/state.js";

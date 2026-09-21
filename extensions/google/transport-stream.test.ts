@@ -1928,8 +1928,8 @@ describe("google transport stream", () => {
   });
 
   it("retries when a pending response callback reaches the Gemini first-response deadline", async () => {
+    vi.useFakeTimers();
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "10");
-    const controller = new AbortController();
     const cancel = vi.fn();
     guardedFetchMock.mockResolvedValueOnce(
       buildOpenRawSseResponse({
@@ -1938,32 +1938,32 @@ describe("google transport stream", () => {
       }),
     );
     mockGoogleTextResponse("recovered");
-    let responseCount = 0;
-    const onResponse = vi.fn(() => {
-      responseCount += 1;
-      return responseCount === 1 ? new Promise<void>(() => {}) : undefined;
+    let markHookStarted!: () => void;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
     });
-    const safetyTimeout = setTimeout(() => {
-      controller.abort(new Error("test safety deadline reached"));
-    }, 5000);
+    const onResponse = vi.fn<() => void | Promise<void>>().mockImplementationOnce(() => {
+      markHookStarted();
+      return new Promise<void>(() => {});
+    });
+    const resultPromise = runGeminiStreamResult({
+      model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
+      options: { reasoning: "high", onResponse },
+    });
 
-    try {
-      const result = await runGeminiStreamResult({
-        model: buildGeminiModel({ id: "gemini-3.1-pro-preview" }),
-        options: {
-          reasoning: "high",
-          signal: controller.signal,
-          onResponse,
-        },
-      });
+    // Advance only after callback entry so host load cannot race recovery.
+    await hookStarted;
+    await vi.advanceTimersByTimeAsync(9);
+    expect(guardedFetchMock).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
 
-      expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
-      expect(onResponse).toHaveBeenCalledTimes(2);
-      expect(guardedFetchMock).toHaveBeenCalledTimes(2);
-      expect(cancel).toHaveBeenCalledOnce();
-    } finally {
-      clearTimeout(safetyTimeout);
-    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+    expect(onResponse).toHaveBeenCalledTimes(2);
+    expect(cancel).toHaveBeenCalledOnce();
+    const result = await resultPromise;
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
   });
 
   it("keeps oversized-video shedding in the Gemini 3 retry payload", async () => {

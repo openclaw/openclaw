@@ -1,5 +1,6 @@
 // Gateway chat integration tests cover dashboard chat requests, transcript
 // history limits, model overrides, inbound dispatch, and streaming event fanout.
+
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -33,6 +34,11 @@ import {
   replaceTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteTranscriptScope,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import {
   waitForSessionTranscriptIndexReconcile,
@@ -44,11 +50,11 @@ import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
-import { isPathInside } from "../infra/path-guards.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { getMediaDir } from "../media/store.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { rebasePluginMetadataSnapshotManifestRegistry } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -59,28 +65,26 @@ import {
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
-import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  listOpenClawRegisteredAgentDatabases,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { assertPluginMetadataSnapshotConsistency } from "./plugin-metadata.test-helpers.js";
 import {
+  createChatVisionModelCatalogSnapshot,
   createDirectChatContext,
   createTextTranscriptEvent,
 } from "./server-chat.agent-events.test-helpers.js";
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import { createGatewayChatMetadataRuntime } from "./server-methods/chat-metadata-runtime.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
   RespondFn,
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { releaseSessionTestDirectories } from "./session-test-directories.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
 import {
   connectOk,
@@ -173,27 +177,6 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-function createChatVisionModelCatalogSnapshot(): Awaited<
-  ReturnType<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>
-> {
-  return {
-    agentId: "main",
-    agentDir: "/tmp/chat-attachment-vision-agent",
-    catalogComplete: false,
-    workspaceDir: "/tmp/chat-attachment-vision-workspace",
-    config: {},
-    entries: [
-      {
-        id: "vision-model",
-        name: "Vision Model",
-        provider: "test-provider",
-        input: ["text", "image"],
-      },
-    ],
-    routeVariants: [],
-  };
-}
-
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
@@ -224,17 +207,7 @@ function createGatewayPluginMetadataSnapshot(config: OpenClawConfig): PluginMeta
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: new Map(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
-    },
+    owners: makeEmptyPluginMetadataOwners(),
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -276,16 +249,7 @@ function createGatewayPluginMetadataSnapshot(config: OpenClawConfig): PluginMeta
 const autoCleanupTempDirs = createTempDirTracker();
 
 afterEach(async () => {
-  const roots = [...autoCleanupTempDirs.dirs];
-  for (const root of roots) {
-    await closeOpenClawAgentDatabasesAsync(root);
-  }
-  // The shared Gateway must not retain registrations for deleted fixture stores.
-  for (const database of listOpenClawRegisteredAgentDatabases()) {
-    if (roots.some((root) => isPathInside(root, database.path))) {
-      unregisterOpenClawAgentDatabase(database);
-    }
-  }
+  await releaseSessionTestDirectories([...autoCleanupTempDirs.dirs]);
   autoCleanupTempDirs.cleanup();
 });
 
@@ -435,6 +399,9 @@ async function callDirectChatHandler(
   options: GatewayRequestHandlerOptions,
 ) {
   const { coreGatewayHandlers } = await import("./server-methods.js");
+  if (method === "chat.history" || method === "chat.startup") {
+    await initializeSessionReadContext(options.context);
+  }
   await expectDefined(coreGatewayHandlers[method], `${method} test invariant`)(options);
 }
 
@@ -1916,6 +1883,12 @@ describe("gateway server chat", () => {
             fixture.rawCatalog === "slow" ? slowCatalog.promise : Promise.resolve(rawSnapshot),
           ),
         getRuntimeConfig: () => config,
+        readPreparedGatewayModelCatalog: async () =>
+          fixture.preparedEmpty
+            ? { entries: [] }
+            : fixture.preparedReasoning === undefined && !fixture.preparedUnknown
+              ? undefined
+              : { entries: preparedCatalog, pluginRegistry: { providers: [] } },
         readChatStartupProjection: async () =>
           fixture.preparedEmpty
             ? {
@@ -2315,6 +2288,7 @@ describe("gateway server chat", () => {
                     ...catalogSnapshot,
                   }),
                 getRuntimeConfig: () => persistedConfig,
+                readPreparedGatewayModelCatalog: async () => catalogSnapshot,
                 readChatStartupProjection: vi.fn(async ({ agentId, sessionEntry }) => {
                   const [neutralProjection, sessionProjection] = await Promise.all([
                     projectAgent(context, agentId),
@@ -2580,14 +2554,6 @@ describe("gateway server chat", () => {
     async (method) => {
       openDirectChatSession();
       try {
-        await writeSessionStore({
-          entries: {
-            "agent:work:main": {
-              sessionId: "sess-work",
-              updatedAt: Date.now(),
-            },
-          },
-        });
         const config = {
           agents: {
             defaults: {
@@ -2624,6 +2590,14 @@ describe("gateway server chat", () => {
           },
         } as unknown as OpenClawConfig;
         await writeGatewayConfig(config);
+        await writeSessionStore({
+          entries: {
+            "agent:work:main": {
+              sessionId: "sess-work",
+              updatedAt: Date.now(),
+            },
+          },
+        });
         const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
         const metadata = {
           models: [
@@ -5420,12 +5394,12 @@ describe("gateway server chat", () => {
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(true);
       expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(true);
       const { createAgentTurnService } = await import("./agent-turn/agent-turn-service.js");
-      await expect(
-        createAgentTurnService({ context, isWebchatConnect: () => true }).waitForTurn({
-          runId: "idem-queued-followup",
-          timeoutMs: 10,
-        }),
-      ).resolves.toMatchObject({
+      const service = createAgentTurnService({ context, isWebchatConnect: () => true });
+      const { result: waitResult } = await service.waitForTurn({
+        runId: "idem-queued-followup",
+        timeoutMs: 10,
+      });
+      expect(waitResult).toMatchObject({
         runId: "idem-queued-followup",
         status: "pending",
         timeoutPhase: "queue",
@@ -7586,22 +7560,30 @@ describe("gateway server chat", () => {
 
   test("chat.history returns retryable unavailable while a dirty projection rebuilds", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await prepareMainHistoryHarness({ ws, createSessionDir });
       await writeMainSessionTranscript([
         JSON.stringify({ message: { role: "user", content: "ready after rebuild" } }),
       ]);
-      const databaseOptions = {
-        agentId: "main",
-        path: path.join(sessionDir, "openclaw-agent.sqlite"),
-      };
+      const databaseOptions = toDatabaseOptions(
+        resolveSqliteTranscriptScope(makeMainSessionScope(testState.sessionStorePath)),
+      );
       const database = openOpenClawAgentDatabase(databaseOptions);
-      database.db
-        .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-        .run("sess-main");
-
-      const rebuilding = await rpcReq(ws, "chat.history", makeMainSessionParams({ limit: 1 }));
-      expect(rebuilding.ok).toBe(false);
-      expect(rebuilding.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+      // Keep the writer-held rebuild pending until the real RPC observes its dirty state.
+      await runExclusiveSqliteSessionWrite(
+        databaseOptions,
+        async () => {
+          const marked = database.db
+            .prepare(
+              "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+            )
+            .run("sess-main");
+          expect(marked.changes).toBe(1);
+          const rebuilding = await rpcReq(ws, "chat.history", makeMainSessionParams({ limit: 1 }));
+          expect(rebuilding.ok).toBe(false);
+          expect(rebuilding.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+        },
+        "sessions.transcript-index.preflight",
+      );
 
       await waitForSessionTranscriptIndexReconcile(databaseOptions);
       const ready = await rpcReq<{ messages?: unknown[] }>(
@@ -8197,24 +8179,17 @@ describe("gateway server chat", () => {
           JSON.stringify({
             message: {
               role: "assistant",
+              // Replay metadata repeats the text; keep each row below the per-message byte cap.
               content: Array.from({ length: projectedSiblingCount }, (_, index) => ({
-                type: "toolcall",
-                name: "message",
-                arguments: {
-                  action: "send",
-                  message: `projected sibling ${index + 1} ${"x".repeat(100_000)}`,
-                },
+                type: "text",
+                text: `projected sibling ${index + 1} ${"x".repeat(50_000)}`,
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: `history-progress-${index}`,
+                  phase: "commentary",
+                }),
               })),
               timestamp: Date.now() + 1,
-            },
-          }),
-          JSON.stringify({
-            message: {
-              role: "assistant",
-              toolName: "message",
-              result: { ok: true },
-              content: [{ type: "text", text: "NO_REPLY" }],
-              timestamp: Date.now() + 2,
             },
           }),
         ]);
@@ -8236,7 +8211,7 @@ describe("gateway server chat", () => {
         expect(firstPage.ok).toBe(true);
         const firstPageSequences = firstPage.payload?.messages?.map(readOpenClawSeq) ?? [];
         expect(firstPageSequences.length).toBeGreaterThan(0);
-        expect(firstPageSequences.every((seq) => seq === 3)).toBe(true);
+        expect(firstPageSequences.every((seq) => seq === 2)).toBe(true);
         expect(firstPage.payload?.hasMore).toBe(true);
         expect(firstPage.payload?.nextOffset).toBeGreaterThan(0);
         expect(

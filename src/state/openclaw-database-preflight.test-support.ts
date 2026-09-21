@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { expect } from "vitest";
 
 /** Capture persistent artifacts without releasing the test writer's POSIX locks. */
@@ -33,4 +35,24 @@ export function snapshotPreflightSourceManifest(stateDir: string, allowAgentRead
   );
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout);
+}
+
+export function snapshotSourceFamily(databasePath: string) {
+  const paths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`].filter(fs.existsSync);
+  return {
+    entries: fs.readdirSync(path.dirname(databasePath)).toSorted(),
+    files: paths.map((pathname) => {
+      const stat = fs.statSync(pathname, { bigint: true });
+      return {
+        pathname,
+        bytes: fs.readFileSync(pathname),
+        birthtimeNs: stat.birthtimeNs,
+        ctimeNs: stat.ctimeNs,
+        dev: stat.dev,
+        ino: stat.ino,
+        mtimeNs: stat.mtimeNs,
+        size: stat.size,
+      };
+    }),
+  };
 }

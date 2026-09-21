@@ -26,6 +26,7 @@ import {
 import {
   isMainRestartRecoveryAggregateTerminalOnly,
   isMainRestartRecoveryCandidate,
+  isMainSessionRecoveryReconciliationCandidate,
   normalizeMainSessionRecoveryRunFences,
   transitionMainSessionRecovery,
 } from "./main-session-recovery-state.js";
@@ -328,7 +329,7 @@ async function markOrphanedMainSessionStore(
   const orphanChecks: Array<() => boolean> = [];
   return await markRecoveryStore({
     ...params.target,
-    statuses: ["running"],
+    statuses: params.target.sessionKey ? undefined : ["running"],
     assertCommitAllowed: () => {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       params.assertCommitAllowed?.();
@@ -339,7 +340,7 @@ async function markOrphanedMainSessionStore(
     plan: (entry, sessionKey) => {
       params.assertCommitAllowed?.();
       if (
-        entry.status !== "running" ||
+        (entry.status !== "running" && !isMainSessionRecoveryReconciliationCandidate(entry)) ||
         (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) ||
         (params.expectedLifecycleRevision !== undefined &&
           entry.lifecycleRevision !== params.expectedLifecycleRevision)
@@ -400,7 +401,7 @@ async function markOrphanedMainSessionStore(
       orphanChecks.push(hasLiveOwner);
       return isMainRestartRecoveryAggregateTerminalOnly(entry)
         ? { action: "retire_terminal" }
-        : { action: "mark" };
+        : { action: "mark", resetRuntime: entry.status !== "running" };
     },
   });
 }

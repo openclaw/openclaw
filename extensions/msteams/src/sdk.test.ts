@@ -1,4 +1,5 @@
 // Msteams tests cover sdk plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startMSTeamsQaBotFrameworkServer } from "./qa/bot-framework-server.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
@@ -132,9 +133,27 @@ describe("createMSTeamsApp", () => {
     expect(String(await app.tokenManager.getBotToken())).toBe(privateQaBotToken);
   });
 
-  it("routes a private QA proactive send through the loopback Connector", async () => {
+  it.each([
+    {
+      name: "routes a private QA proactive send through the loopback Connector",
+      revokeAt: "never",
+    },
+    {
+      name: "does not dispatch a private QA send when authority closes during token acquisition",
+      revokeAt: "token",
+    },
+    {
+      name: "retains a private QA accepted receipt when authority closes before the response",
+      revokeAt: "accepted",
+    },
+  ] as const)("$name", async ({ revokeAt }) => {
     vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
     vi.stubEnv("CLIENT_SECRET", "ambient-private-qa-secret");
+    const tokenStarted = createDeferred<void>();
+    const releaseToken = createDeferred<void>();
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    let active = true;
+    let pendingSend: Promise<unknown> | undefined;
     const outbound: Array<{
       activity: Record<string, unknown>;
       activityId: string;
@@ -146,6 +165,9 @@ describe("createMSTeamsApp", () => {
       nonce: "qa-nonce",
       onOutbound: async (activity) => {
         outbound.push(activity);
+        if (revokeAt === "accepted") {
+          active = false;
+        }
       },
     });
     (
@@ -169,7 +191,13 @@ describe("createMSTeamsApp", () => {
         appPassword: "test-secret",
         tenantId: "test-tenant",
       });
-      const result = await sendMSTeamsActivityWithReference(
+      const getBotToken = app.tokenManager.getBotToken.bind(app.tokenManager);
+      vi.spyOn(app.tokenManager, "getBotToken").mockImplementation(async () => {
+        tokenStarted.resolve();
+        await releaseToken.promise;
+        return getBotToken();
+      });
+      const send = sendMSTeamsActivityWithReference(
         app,
         {
           serviceUrl: "https://smba.trafficmanager.net/qa",
@@ -183,10 +211,38 @@ describe("createMSTeamsApp", () => {
           channelId: "msteams",
         },
         { type: "message", text: "qa outbound" },
-        { threadActivityId: "thread-root" },
+        {
+          threadActivityId: "thread-root",
+          assertDirectAdapterHandoff: () => {
+            if (!active) {
+              throw new Error("private QA delivery authority closed");
+            }
+          },
+          onPlatformSendDispatch,
+        },
       );
+      pendingSend = send.catch(() => undefined);
+
+      await Promise.race([tokenStarted.promise, send]);
+      expect(outbound).toEqual([]);
+      expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+      if (revokeAt === "token") {
+        active = false;
+      }
+      releaseToken.resolve();
+
+      if (revokeAt === "token") {
+        await expect(send).rejects.toThrow("private QA delivery authority closed");
+        expect(outbound).toEqual([]);
+        expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+        return;
+      }
+
+      const result = await send;
 
       expect(result.id).toMatch(/^qa-outbound-/u);
+      expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+      expect(active).toBe(revokeAt === "never");
       expect(outbound).toEqual([
         {
           activity: expect.objectContaining({
@@ -199,6 +255,8 @@ describe("createMSTeamsApp", () => {
         },
       ]);
     } finally {
+      releaseToken.resolve();
+      await pendingSend;
       await connector.close();
     }
   });

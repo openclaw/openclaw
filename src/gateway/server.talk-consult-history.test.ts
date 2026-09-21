@@ -38,6 +38,11 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 import { createTalkClientAgentConsultRunner } from "./talk/client-agent-consult.js";
 import {
   createGatewaySuiteHarness,
@@ -97,6 +102,8 @@ beforeEach(async () => {
   });
   await prepareGatewayReplyRuntimeForTest({ force: true });
   context = createDirectChatContext({ getRuntimeConfig });
+  const rowProjection = await createSessionRowProjection({ cfg: getRuntimeConfig(), context });
+  bindSessionRowProjection(context, () => rowProjection);
   const profile = ensureProfileForEmail("talk-history@example.test");
   client = {
     connId: connectionId,
@@ -140,6 +147,7 @@ beforeEach(async () => {
   publications = [];
   publicationErrors = [];
   const publish = createTranscriptUpdateBroadcastHandler({
+    getSessionRowProjection: () => getSessionRowProjection(context),
     broadcastToConnIds: broadcast,
     sessionEventSubscribers: { getAll: () => new Set([connectionId]) },
     sessionMessageSubscribers: { get: () => new Set([connectionId]) },
@@ -172,6 +180,7 @@ afterEach(async () => {
     await drainPublications();
   } finally {
     unsubscribe?.();
+    getSessionRowProjection(context)?.dispose();
     unsubscribe = undefined;
     voiceSessionId = undefined;
     clientVoiceSessionTesting.reset();

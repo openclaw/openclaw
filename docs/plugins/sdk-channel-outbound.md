@@ -389,7 +389,8 @@ preview, and reply pipeline options.
 ### Migrating from channel-message
 
 `openclaw/plugin-sdk/channel-message` is a deprecated compatibility entrypoint.
-It still re-exports `channel-outbound` and preserves three dispatch aliases.
+It retains its published outbound exports and three dispatch aliases. New outbound
+helpers are exported only from `openclaw/plugin-sdk/channel-outbound`.
 Migrate those aliases to `openclaw/plugin-sdk/channel-inbound`:
 
 | Deprecated alias                   | Replacement                         |

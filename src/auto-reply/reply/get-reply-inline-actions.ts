@@ -332,14 +332,18 @@ export async function handleInlineActions(params: {
     params.skillCommands.length > 0
       ? params.skillCommands
       : shouldLoadSkillCommands
-        ? (await skillCommandsRuntimeLoader.load()).listSkillCommandsForWorkspace({
+        ? await (
+            await skillCommandsRuntimeLoader.load()
+          ).prepareSkillCommandsForWorkspace({
             ...skillCommandContext,
             skillFilter,
           })
         : [];
   const allSkillCommands =
     shouldLoadSkillCommands && skillFilter !== undefined
-      ? (await skillCommandsRuntimeLoader.load()).listSkillCommandsForWorkspace({
+      ? await (
+          await skillCommandsRuntimeLoader.load()
+        ).prepareSkillCommandsForWorkspace({
           ...skillCommandContext,
           includeAllowlistHidden: true,
         })
@@ -428,6 +432,16 @@ export async function handleInlineActions(params: {
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
         };
+        opts?.abortSignal?.throwIfAborted();
+        if (opts?.runId) {
+          // Tool commands leave transcript persistence with ordinary reply dispatch.
+          opts.onAgentRunStart?.(opts.runId, undefined, {
+            completionSource: "reply-dispatch",
+            getResult: () => ({}),
+          });
+        }
+        // The execution owner can observe revocation while arming cancellation.
+        opts?.abortSignal?.throwIfAborted();
         const result = await tool.execute(toolCallId, toolArgs, opts?.abortSignal);
         const blockedReason = extractBlockedToolReason(result);
         if (blockedReason) {

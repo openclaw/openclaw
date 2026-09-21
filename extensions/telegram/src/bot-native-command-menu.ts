@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot native command menu behavior.
 import { createHash } from "node:crypto";
 import type { Bot } from "grammy";
 import type { LanguageCode } from "grammy/types";

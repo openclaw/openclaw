@@ -94,24 +94,6 @@ export function openMatrixIdbSnapshotStoreOptions(storageRootDir: string) {
   };
 }
 
-function readMatrixRecoveryKeyState(storageRootDir: string): MatrixStoredRecoveryKey | null {
-  return readMatrixRecoveryKeyStateWithKey({
-    storageRootDir,
-    stateKey: STATE_KEY,
-  });
-}
-
-function readMatrixRecoveryKeyStateWithKey(params: {
-  storageRootDir: string;
-  stateKey: string;
-}): MatrixStoredRecoveryKey | null {
-  return normalizeMatrixStoredRecoveryKey(
-    openSyncStore<MatrixStoredRecoveryKey>(
-      openMatrixRecoveryKeyStoreOptions(params.storageRootDir),
-    ).lookup(params.stateKey),
-  );
-}
-
 export async function readMatrixRecoveryKeyStateForPathAsync(
   recoveryKeyPath: string,
   stateRuntime: MatrixSnapshotStateRuntime,
@@ -185,20 +167,6 @@ async function updateMatrixRecoveryKeyState(
   }
 }
 
-function writeMatrixRecoveryKeyStateWithKey(params: {
-  storageRootDir: string;
-  stateKey: string;
-  payload: MatrixStoredRecoveryKey;
-}): void {
-  const payload = normalizeMatrixStoredRecoveryKey(params.payload);
-  if (!payload) {
-    throw new Error("Invalid Matrix recovery key state");
-  }
-  openSyncStore<MatrixStoredRecoveryKey>(
-    openMatrixRecoveryKeyStoreOptions(params.storageRootDir),
-  ).register(params.stateKey, payload);
-}
-
 export async function hasMatrixRecoveryKeyStateInStore(params: {
   store: Pick<PluginStateKeyedStore<MatrixStoredRecoveryKey>, "lookup">;
 }): Promise<boolean> {
@@ -216,27 +184,16 @@ export async function writeMatrixRecoveryKeyStateToStore(params: {
   await params.store.register(STATE_KEY, payload);
 }
 
-function readMatrixLegacyCryptoMigrationState(
+async function readMatrixLegacyCryptoMigrationState(
   storageRootDir: string,
-): MatrixLegacyCryptoMigrationState | null {
+): Promise<MatrixLegacyCryptoMigrationState | null> {
   return normalizeMatrixLegacyCryptoMigrationState(
-    openSyncStore<MatrixLegacyCryptoMigrationState>(
-      openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir),
-    ).lookup(STATE_KEY),
+    await getMatrixRuntime()
+      .state.openKeyedStore<MatrixLegacyCryptoMigrationState>(
+        openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir),
+      )
+      .lookup(STATE_KEY),
   );
-}
-
-function writeMatrixLegacyCryptoMigrationState(params: {
-  storageRootDir: string;
-  state: MatrixLegacyCryptoMigrationState;
-}): void {
-  const state = normalizeMatrixLegacyCryptoMigrationState(params.state);
-  if (!state) {
-    throw new Error("Invalid Matrix legacy crypto migration state");
-  }
-  openSyncStore<MatrixLegacyCryptoMigrationState>(
-    openMatrixLegacyCryptoMigrationStoreOptions(params.storageRootDir),
-  ).register(STATE_KEY, state);
 }
 
 export async function hasMatrixLegacyCryptoMigrationStateInStore(params: {
@@ -267,11 +224,13 @@ export async function readMatrixIdbSnapshotJson(
   });
 }
 
-function hasMatrixIdbSnapshotState(storageRootDir: string): boolean {
+async function hasMatrixIdbSnapshotState(storageRootDir: string): Promise<boolean> {
   return isIdbSnapshotMeta(
-    openSyncStore<MatrixIdbSnapshotRecord>(
-      openMatrixIdbSnapshotStoreOptions(storageRootDir),
-    ).lookup(idbMetaKey()),
+    await getMatrixRuntime()
+      .state.openKeyedStore<MatrixIdbSnapshotRecord>(
+        openMatrixIdbSnapshotStoreOptions(storageRootDir),
+      )
+      .lookup(idbMetaKey()),
   );
 }
 
@@ -315,16 +274,6 @@ export async function writeMatrixIdbSnapshotJsonToStore(params: {
   }
 }
 
-export function migrateLegacyMatrixRecoveryKeyFileToStore(storageRootDir: string): boolean {
-  const recoveryKeyPath = path.join(storageRootDir, MATRIX_RECOVERY_KEY_FILENAME);
-  const existing = readMatrixRecoveryKeyState(storageRootDir);
-  const legacy = readLegacyMatrixRecoveryKeyFile(recoveryKeyPath);
-  if (!existing && legacy) {
-    writeMatrixRecoveryKeyStateWithKey({ storageRootDir, stateKey: STATE_KEY, payload: legacy });
-  }
-  return archiveLegacyStateFileIfPossible(recoveryKeyPath);
-}
-
 export async function migrateLegacyMatrixRecoveryKeyFilePathToStoreAsync(
   recoveryKeyPath: string,
   stateRuntime: MatrixSnapshotStateRuntime,
@@ -340,13 +289,36 @@ export async function migrateLegacyMatrixRecoveryKeyFilePathToStoreAsync(
   return archiveLegacyStateFileIfPossible(recoveryKeyPath);
 }
 
-export function migrateLegacyMatrixLegacyCryptoMigrationFileToStore(
+export async function migrateLegacyMatrixLegacyCryptoMigrationFileToStore(
   storageRootDir: string,
-): boolean {
-  const existing = readMatrixLegacyCryptoMigrationState(storageRootDir);
+): Promise<boolean> {
+  const options = openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir);
+  const store = getMatrixRuntime().state.openKeyedStore<MatrixLegacyCryptoMigrationState>(options);
   const legacy = readLegacyMatrixLegacyCryptoMigrationState(storageRootDir);
-  if (!existing && legacy) {
-    writeMatrixLegacyCryptoMigrationState({ storageRootDir, state: legacy });
+  if (!legacy) {
+    await store.lookup(STATE_KEY);
+  } else if (!store.observe || !store.compareAndApply) {
+    // Keep the synchronous import decision for hosts before data-only comparisons.
+    const legacyStore = openSyncStore<MatrixLegacyCryptoMigrationState>(options);
+    if (!normalizeMatrixLegacyCryptoMigrationState(legacyStore.lookup(STATE_KEY))) {
+      legacyStore.register(STATE_KEY, legacy);
+    }
+  } else {
+    let observation = await store.observe(STATE_KEY);
+    for (;;) {
+      if (normalizeMatrixLegacyCryptoMigrationState(observation.value)) {
+        break;
+      }
+      const result = await store.compareAndApply(STATE_KEY, observation.comparison, {
+        operation: "update",
+        action: "set",
+        value: legacy,
+      });
+      if (result.status !== "conflict") {
+        break;
+      }
+      observation = result.current;
+    }
   }
   return archiveLegacyStateFileIfPossible(
     path.join(storageRootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME),
@@ -372,27 +344,32 @@ export function readLegacyMatrixLegacyCryptoMigrationState(
   );
 }
 
-export function scoreMatrixCryptoStateInStore(storageRootDir: string): number {
+export async function scoreMatrixCryptoStateInStore(storageRootDir: string): Promise<number> {
   if (!matrixCryptoStateDatabaseExists(storageRootDir)) {
     return 0;
   }
   let score = 0;
   try {
-    if (readMatrixLegacyCryptoMigrationState(storageRootDir)) {
+    if (await readMatrixLegacyCryptoMigrationState(storageRootDir)) {
       score += 3;
     }
   } catch {
     // Storage root scoring must stay best-effort; unreadable state should not block startup.
   }
   try {
-    if (readMatrixRecoveryKeyState(storageRootDir)) {
+    if (
+      await readMatrixRecoveryKeyStateForPathAsync(
+        path.join(storageRootDir, MATRIX_RECOVERY_KEY_FILENAME),
+        getMatrixRuntime().state,
+      )
+    ) {
       score += 2;
     }
   } catch {
     // Storage root scoring must stay best-effort; unreadable state should not block startup.
   }
   try {
-    if (hasMatrixIdbSnapshotState(storageRootDir)) {
+    if (await hasMatrixIdbSnapshotState(storageRootDir)) {
       score += 2;
     }
   } catch {

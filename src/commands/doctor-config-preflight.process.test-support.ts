@@ -1,8 +1,9 @@
-import { execFile, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -42,17 +43,15 @@ export function runBuiltRuntime(
   timeout: number,
   maxBuffer?: number,
 ) {
-  return spawnSync(
-    isolatedRuntimeNodeExecPath,
-    [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
-    {
-      cwd: runtimeRoot,
-      encoding: "utf8",
-      env,
-      timeout,
-      ...(maxBuffer === undefined ? {} : { maxBuffer }),
-    },
-  );
+  return runCliProcessChild({
+    nodeExecutable: isolatedRuntimeNodeExecPath,
+    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
+    nodeArgsPolicy: "caller",
+    cwd: runtimeRoot,
+    env,
+    timeoutMs: timeout,
+    maxBuffer: maxBuffer ?? 1024 * 1024,
+  });
 }
 
 export function runSourceRuntime(
@@ -62,17 +61,15 @@ export function runSourceRuntime(
   timeout: number,
   maxBuffer?: number,
 ) {
-  return spawnSync(
-    isolatedRuntimeNodeExecPath,
-    [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args],
-    {
-      cwd: runtimeRoot,
-      encoding: "utf8",
-      env,
-      timeout,
-      ...(maxBuffer === undefined ? {} : { maxBuffer }),
-    },
-  );
+  return runCliProcessChild({
+    nodeExecutable: isolatedRuntimeNodeExecPath,
+    nodeArgs: [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args],
+    nodeArgsPolicy: "caller",
+    cwd: runtimeRoot,
+    env,
+    timeoutMs: timeout,
+    maxBuffer: maxBuffer ?? 1024 * 1024,
+  });
 }
 
 export function runIsolatedModuleScript(
@@ -111,10 +108,14 @@ export function createSourceRuntime(root: string): string {
     );
   }
   for (const filename of [
+    "node-host-launcher.mjs",
     "node-version.mjs",
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
     "node-runtime-recovery.mjs",
+    "cli-root-options.mjs",
+    "gateway-run-argv.mjs",
+    "gateway-shutdown-budget.mjs",
     "package.json",
     "tsconfig.json",
   ]) {

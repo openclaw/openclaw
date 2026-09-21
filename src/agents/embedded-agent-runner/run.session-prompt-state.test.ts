@@ -242,37 +242,69 @@ describe("embedded run session prompt state", () => {
     expect(prompt.match(/Continue from the compacted transcript/gu)).toHaveLength(1);
   });
 
-  it("releases compaction continuation before a visible draft revision", async () => {
+  it("keeps a draft revision pending until its owned projection is ready", async () => {
+    const reconcile = await import("../../config/sessions/session-transcript-reconcile.js");
+    const projection = createDeferred();
+    const projectionStarted = createDeferred();
+    const waitForProjection = vi
+      .spyOn(reconcile, "waitForSessionTranscriptProjection")
+      .mockImplementation(async () => {
+        projectionStarted.resolve();
+        await projection.promise;
+      });
     await using state = await createState();
-    state.activateCompactionContinuation("continue after compaction");
-    const assistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "Visible draft." }],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: ["Visible draft."],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      beforeAgentFinalizeRevisionReason: "Tighten the final wording.",
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
+    try {
+      state.activateCompactionContinuation("continue after compaction");
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: "Visible draft." }],
+      });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: ["Visible draft."],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        beforeAgentFinalizeRevisionReason: "Tighten the final wording.",
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
 
-    await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          attempt,
-          attemptAssistant: assistant,
-          payloadsWithToolMedia: [{ text: "Visible draft." }],
-          finalAssistantVisibleText: "Visible draft.",
-          activePromptPersisted: state.activePrompt.persisted,
-          activateInternalPrompt: state.activateInternalPrompt,
-          activateCompactionContinuation: state.activateCompactionContinuation,
-          clearCompactionContinuation: state.clearCompactionContinuation,
-        }),
-      ),
-    ).resolves.toEqual({ action: "retry" });
+      await expect(
+        resolveEmbeddedRunTerminal(
+          makeTerminalInput({
+            attempt,
+            attemptAssistant: assistant,
+            payloadsWithToolMedia: [{ text: "Visible draft." }],
+            finalAssistantVisibleText: "Visible draft.",
+            activePromptPersisted: state.activePrompt.persisted,
+            activateInternalPrompt: state.activateInternalPrompt,
+            markOwnedTranscriptRetry: state.markOwnedTranscriptRetry,
+            activateCompactionContinuation: state.activateCompactionContinuation,
+            clearCompactionContinuation: state.clearCompactionContinuation,
+          }),
+        ),
+      ).resolves.toEqual({ action: "retry" });
 
-    expect(state.activePrompt.override).toContain("Tighten the final wording.");
-    expect(state.activePrompt.override).not.toContain("continue after compaction");
+      expect(state.activePrompt.override).toContain("Tighten the final wording.");
+      expect(state.activePrompt.override).not.toContain("continue after compaction");
+      let resumed = false;
+      const retryReady = state
+        .settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget)
+        .then(() => {
+          resumed = true;
+        });
+      await expect(
+        Promise.race([
+          projectionStarted.promise.then(() => "projection"),
+          retryReady.then(() => "retry"),
+        ]),
+      ).resolves.toBe("projection");
+      await Promise.resolve();
+      expect(resumed).toBe(false);
+      projection.resolve();
+      await retryReady;
+      expect(resumed).toBe(true);
+    } finally {
+      projection.resolve();
+      waitForProjection.mockRestore();
+    }
   });
 
   it("adds failed-tool guidance to current-transcript continuation", async () => {

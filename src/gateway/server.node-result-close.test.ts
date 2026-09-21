@@ -2,7 +2,10 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { writeConfigFile } from "../config/config.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
@@ -75,7 +78,10 @@ async function seedActiveDevicePlacement(nodeId: string): Promise<void> {
       bootstrapReceipt: {
         bundleHash: RUNNER_BUNDLE_HASH,
         openclawVersion: "2026.8.19",
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
         installKind: "bundle",
       },
       credential: {

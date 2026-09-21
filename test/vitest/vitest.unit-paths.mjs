@@ -19,6 +19,7 @@ export const boundaryTestFiles = [
   "src/infra/package-json.test.ts",
   "src/infra/path-env.test.ts",
   "src/infra/stable-node-path.test.ts",
+  "test/control-ui-import-boundary.test.ts",
   "test/extension-import-boundaries.test.ts",
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
@@ -31,8 +32,6 @@ export const bundledPluginDependentUnitTestFiles = [
 ];
 
 export const unitTestAdditionalExcludePatterns = [
-  ...databaseWorkerCoreTestFiles,
-  ...cliProcessTestFiles,
   "src/gateway/**",
   "packages/gateway-client/**",
   "packages/gateway-protocol/**",
@@ -63,6 +62,9 @@ export const unitTestAdditionalExcludePatterns = [
   "src/wizard/**",
   "src/plugins/contracts/**",
   "src/scripts/**",
+  "test/**",
+  ...databaseWorkerCoreTestFiles,
+  ...cliProcessTestFiles,
   "src/infra/boundary-path.test.ts",
   "src/infra/git-root.test.ts",
   "src/infra/home-dir.test.ts",
@@ -75,7 +77,6 @@ export const unitTestAdditionalExcludePatterns = [
   "src/config/doc-baseline.integration.test.ts",
   "src/config/schema.base.generated.test.ts",
   "src/config/schema.help.quality.test.ts",
-  "test/**",
 ];
 
 const sharedBaseExcludePatterns = [

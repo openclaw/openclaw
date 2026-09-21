@@ -6,7 +6,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
 import { ManagedWorktreeService } from "./service.js";
 
@@ -41,8 +44,37 @@ describe("ManagedWorktreeService branch discovery", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("fetches the default base without advancing an explicitly selectable local branch", async () => {
+    const localHead = await git(repo, "rev-parse", "HEAD");
+    const remoteHead = await git(
+      repo,
+      "commit-tree",
+      "HEAD^{tree}",
+      "-p",
+      "HEAD",
+      "-m",
+      "remote update",
+    );
+    const remote = path.join(root, "remote.git");
+    await git(root, "clone", "--bare", repo, remote);
+    await git(repo, "remote", "add", "origin", remote);
+    await git(repo, "fetch", "origin");
+    await git(repo, "remote", "set-head", "origin", "-a");
+    await git(remote, "update-ref", "refs/heads/main", remoteHead, localHead);
+
+    const explicit = await service.create({ repoRoot: repo, name: "local-base", baseRef: "main" });
+    expect(await git(explicit.path, "rev-parse", "HEAD")).toBe(localHead);
+    expect(await git(repo, "rev-parse", "origin/main")).toBe(localHead);
+
+    const defaultBase = await service.create({ repoRoot: repo, name: "remote-base" });
+    expect(defaultBase.baseRef).toBe("origin/main");
+    expect(await git(defaultBase.path, "rev-parse", "HEAD")).toBe(remoteHead);
+    expect(await git(repo, "rev-parse", "main")).toBe(localHead);
   });
 
   it("falls back from a pruned remote HEAD only when no explicit base was requested", async () => {
@@ -78,7 +110,7 @@ describe("ManagedWorktreeService branch discovery", () => {
       service.create({ repoRoot: repo, name: "explicit-base", baseRef: "origin/HEAD" }),
     ).rejects.toThrow(InvalidWorktreeBaseRefError);
     expect(await git(repo, "branch", "--list", "openclaw/explicit-base")).toBe("");
-    expect(service.listRegistryRecords()).toEqual([created]);
+    expect(await service.listRegistryRecords()).toEqual([created]);
   });
 
   it("reports Git, plain-directory, and unavailable repository status", async () => {

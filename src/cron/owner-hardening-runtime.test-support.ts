@@ -1,4 +1,4 @@
-// Compile both roots together so the activation-crash trigger uses Cron's database connection.
+// Compile together so child processes share Cron's database connection and command queue.
 const currentModuleUrl = import.meta.url;
 
 export const cronOwnerHardeningEntrypoints = {
@@ -11,5 +11,10 @@ export const cronOwnerHardeningEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-state-db",
     distWorkerPath: "state/openclaw-state-db.js",
+  },
+  commandQueue: {
+    currentModuleUrl,
+    sourceWorkerName: "../process/command-queue",
+    distWorkerPath: "process/command-queue.js",
   },
 } as const;

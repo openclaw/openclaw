@@ -48,6 +48,7 @@ describe("package rollback executor ownership", () => {
     });
     try {
       const result = await rollbackFailedUpdate({
+        definitionRecovery: {},
         result: { status: "error", mode: "npm", root, steps: [], durationMs: 0 },
         previousRoot: root,
         rollbackBlockedReason: "state-migrated-no-rollback",
@@ -136,6 +137,7 @@ describe("package rollback executor ownership", () => {
     });
     const restart = vi.spyOn(service, "maybeRestartService").mockResolvedValue("ok");
     const pending = rollbackFailedUpdate({
+      definitionRecovery: {},
       result: {
         status: "error",
         mode: "npm",
@@ -257,6 +259,7 @@ describe("package rollback executor ownership", () => {
       };
     });
     const outcome = await rollbackFailedUpdate({
+      definitionRecovery: {},
       result: {
         status: "error",
         mode: "npm",

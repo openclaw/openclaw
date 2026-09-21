@@ -21,7 +21,7 @@ const persistedConfigResultMock = vi.fn((config: OpenClawConfig) => config);
 const runtimeApplication = { claimed: true };
 const validateConfigObjectWithPluginsMock = vi.fn();
 const prepareSecretsRuntimeSnapshotMock = vi.fn();
-const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
+const scheduleGatewayRestartMock = vi.fn(() => ({
   scheduled: true,
   delayMs: 1_000,
   coalesced: false,
@@ -88,7 +88,7 @@ vi.mock("../../secrets/runtime-state.js", () => ({
 }));
 
 vi.mock("../../infra/restart.js", () => ({
-  scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
+  scheduleGatewayRestart: scheduleGatewayRestartMock,
 }));
 
 vi.mock("../../infra/restart-sentinel.js", async () => {
@@ -192,7 +192,7 @@ async function runConfigPatch(
 }
 
 function expectNoDirectRestart(): void {
-  expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+  expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
 }
 
 afterEach(() => {

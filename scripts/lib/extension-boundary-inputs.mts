@@ -46,6 +46,9 @@ const GENERATOR_INPUTS = [
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/prepare-extension-package-boundary-artifacts.mts",
   "scripts/check-extension-package-tsc-boundary.mts",
+  "scripts/lib/extension-boundary-projects.mts",
+  "scripts/lib/bundled-plugin-build-entries.mjs",
+  "src/plugins/package-entrypoints.ts",
   "scripts/run-tsgo.mjs",
   "scripts/run-tsgo.mts",
 ];
@@ -54,7 +57,7 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
   private readonly boundary: ReturnType<typeof createDeclarationInputBoundary>;
   private readonly libraryRoot: string;
 
-  constructor(rootDir: string) {
+  constructor(rootDir: string, generatorInputs: string[] = []) {
     const boundary = createDeclarationInputBoundary(rootDir);
     const assertInput = (file: string) => boundary.assert(file);
     // Bind compact receipt lib names to this checkout's compiler, never ambient cwd.
@@ -81,7 +84,11 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
       require.resolve("typescript"),
       require.resolve("typescript/package.json"),
     ].map(assertInput);
-    super(boundary.root, { toolchainFiles, generatorInputs: GENERATOR_INPUTS, assertInput });
+    super(boundary.root, {
+      toolchainFiles,
+      generatorInputs: [...GENERATOR_INPUTS, ...generatorInputs],
+      assertInput,
+    });
     this.boundary = boundary;
     this.libraryRoot = fs.realpathSync.native(platformLibraryRoot);
   }

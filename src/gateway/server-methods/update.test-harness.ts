@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
+import { validateUpdateRunResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
@@ -23,15 +24,12 @@ export const sentinelState: {
   capturedPayload?: RestartSentinelPayload;
   restartSentinelWriteError: Error | null;
 } = { restartSentinelWriteError: null };
-
-export const runGatewayUpdateMock =
-  vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdate>();
-export const runGatewayUpdatePreflightMock =
-  vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdatePreflight>();
 export const resolveUpdateInstallSurfaceMock =
-  vi.fn<typeof import("../../infra/update-runner.js").resolveUpdateInstallSurface>();
-export const initializeGatewayUpdateStatusMock =
-  vi.fn<typeof import("../../infra/update-startup.js").initializeGatewayUpdateStatus>();
+  vi.fn<
+    typeof import("../../infra/update-runner-install-surface.js").resolveUpdateInstallSurface
+  >();
+export const resolveStartupInstallStatusMock =
+  vi.fn<typeof import("../../infra/update-install-status.js").resolveStartupInstallStatus>();
 const getLatestUpdateRestartSentinelMock = vi.fn<() => RestartSentinelPayload | null>(() => null);
 const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentinelPayload | null>>(
   async () => null,
@@ -60,7 +58,7 @@ type UpdateCampaignAdoption = ReturnType<
 export const adoptUpdateCampaignMock = vi.fn<() => UpdateCampaignAdoption>(() => ({
   status: "absent",
 }));
-export const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
+const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
 export const startManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").startManagedServiceUpdateHandoff
 >(async (params) => ({
@@ -71,6 +69,9 @@ export const startManagedServiceUpdateHandoffMock = vi.fn<
   handoffId: params?.handoffId ?? "handoff-default",
   installRoot: params?.root ?? "/tmp/openclaw",
 }));
+export const claimManagedServiceUpdateHandoffMock = vi.fn<
+  typeof import("../../infra/update-managed-service-handoff.js").claimManagedServiceUpdateHandoff
+>(() => true);
 export const transferManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").transferManagedServiceUpdateHandoff
 >(async () => true);
@@ -222,15 +223,14 @@ vi.mock("../server-restart-sentinel-notice.js", () => ({
   resolveGatewayLifecycleNoticeRoute: resolveGatewayLifecycleNoticeRouteMock,
 }));
 
-export const scheduleGatewaySigusr1RestartMock = vi.fn(
-  (
-    _opts?: Parameters<typeof import("../../infra/restart.js").scheduleGatewaySigusr1Restart>[0],
-  ) => ({ scheduled: true }),
+export const scheduleGatewayRestartMock = vi.fn(
+  (_opts?: Parameters<typeof import("../../infra/restart.js").scheduleGatewayRestart>[0]) => ({
+    scheduled: true,
+  }),
 );
 
-export const runPostCoreFinalizeAfterGatewayUpdateMock = vi.fn<
-  typeof import("../../infra/update-post-core-finalize.js").runPostCoreFinalizeAfterGatewayUpdate
->(async () => ({ status: "skipped", reason: "not-git-update" }));
+export const readGatewayOwnerLeaseMock =
+  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>();
 
 export type UpdateRunPayload = {
   runId: string;
@@ -285,7 +285,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
 
 vi.mock("../../infra/restart.js", async () => ({
   ...(await vi.importActual<typeof import("../../infra/restart.js")>("../../infra/restart.js")),
-  scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
+  scheduleGatewayRestart: scheduleGatewayRestartMock,
 }));
 
 vi.mock("../../infra/package-json.js", () => ({ readPackageVersion: readPackageVersionMock }));
@@ -308,10 +308,16 @@ vi.mock("../../infra/update-channels.js", async () => {
   return { ...actual, normalizeUpdateChannel: normalizeUpdateChannelMock };
 });
 
-vi.mock("../../infra/update-startup.js", () => ({
+vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
   getUpdateSchedule: getUpdateScheduleMock,
-  initializeGatewayUpdateStatus: initializeGatewayUpdateStatusMock,
+}));
+
+vi.mock("../../infra/update-install-status.js", () => ({
+  resolveStartupInstallStatus: resolveStartupInstallStatusMock,
+}));
+
+vi.mock("../../infra/update-startup.js", () => ({
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
@@ -319,31 +325,37 @@ vi.mock("../../infra/update-campaign.js", () => ({
   gatewayUpdateCampaign: { adopt: adoptUpdateCampaignMock },
 }));
 
-vi.mock("../../infra/update-runner.js", () => ({
+vi.mock("../../infra/update-runner-install-surface.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-runner-install-surface.js")>()),
   resolveUpdateInstallSurface: resolveUpdateInstallSurfaceMock,
-  runGatewayUpdate: runGatewayUpdateMock,
-  runGatewayUpdatePreflight: runGatewayUpdatePreflightMock,
 }));
 
-// Keep the real `foldPostCoreFinalizeIntoResult` so the restart-gate behavior on
-// finalize failure is exercised; only stub the subprocess-spawning finalizer.
-vi.mock("../../infra/update-post-core-finalize.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/update-post-core-finalize.js")>(
-    "../../infra/update-post-core-finalize.js",
-  );
+vi.mock("../../daemon/gateway-entrypoint.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/gateway-entrypoint.js")>()),
+  resolveGatewayInstallEntrypoint: async (root: string) => `${root}/dist/index.js`,
+}));
+
+vi.mock("../../infra/gateway-owner-lease.js", async (original) => ({
+  ...(await original<typeof import("../../infra/gateway-owner-lease.js")>()),
+  readGatewayOwnerLease: readGatewayOwnerLeaseMock,
+}));
+
+vi.mock("../../../packages/gateway-protocol/src/index.js", async () => {
+  const { ErrorCodes, errorShape } =
+    await import("../../../packages/gateway-protocol/src/schema/error-codes.js");
+  const { validateUpdateRunResult: validateResult } =
+    await import("../../../packages/gateway-protocol/src/validator-registry.js");
   return {
-    ...actual,
-    runPostCoreFinalizeAfterGatewayUpdate: runPostCoreFinalizeAfterGatewayUpdateMock,
+    ErrorCodes,
+    errorShape,
+    validateUpdateRunResult: validateResult,
+    validateUpdateRunsGetParams: () => true,
+    validateUpdateRunsListParams: () => true,
+    validateUpdateStatusParams: () => true,
+    validateUpdateStatusResult: () => true,
+    validateUpdateRunParams: () => true,
   };
 });
-
-vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
-  validateUpdateRunsGetParams: () => true,
-  validateUpdateRunsListParams: () => true,
-  validateUpdateStatusParams: () => true,
-  validateUpdateStatusResult: () => true,
-  validateUpdateRunParams: () => true,
-}));
 
 vi.mock("../server-restart-sentinel.js", () => ({
   getLatestUpdateRestartSentinel: getLatestUpdateRestartSentinelMock,
@@ -368,6 +380,7 @@ vi.mock("../../infra/update-managed-service-handoff.js", async () => ({
   )),
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
   transferManagedServiceUpdateHandoff: transferManagedServiceUpdateHandoffMock,
+  claimManagedServiceUpdateHandoff: claimManagedServiceUpdateHandoffMock,
   cancelManagedServiceUpdateHandoff: cancelManagedServiceUpdateHandoffMock,
 }));
 
@@ -415,16 +428,6 @@ beforeEach(() => {
   });
   detectRespawnSupervisorMock.mockReset();
   detectRespawnSupervisorMock.mockReturnValue(null);
-  runGatewayUpdateMock.mockReset();
-  runGatewayUpdateMock.mockResolvedValue({
-    status: "ok",
-    mode: "npm",
-    after: { version: "2.0.0" },
-    steps: [],
-    durationMs: 100,
-  });
-  runGatewayUpdatePreflightMock.mockReset();
-  runGatewayUpdatePreflightMock.mockResolvedValue(undefined);
   resolveUpdateInstallSurfaceMock.mockReset();
   resolveUpdateInstallSurfaceMock.mockImplementation(async ({ root, installKind }) =>
     root && installKind === "git"
@@ -433,8 +436,8 @@ beforeEach(() => {
         ? { kind: "package-root", mode: "unknown", root, packageRoot: root }
         : { kind: "missing", mode: "unknown" },
   );
-  initializeGatewayUpdateStatusMock.mockReset();
-  initializeGatewayUpdateStatusMock.mockResolvedValue({
+  resolveStartupInstallStatusMock.mockReset();
+  resolveStartupInstallStatusMock.mockResolvedValue({
     root: "/tmp/openclaw",
     status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
     installReceipt: null,
@@ -445,6 +448,7 @@ beforeEach(() => {
   recordLatestUpdateRestartSentinelMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockReset();
   transferManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
+  claimManagedServiceUpdateHandoffMock.mockReset().mockReturnValue(true);
   cancelManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue("restored-in-process");
   startManagedServiceUpdateHandoffMock.mockImplementation(async (params) => ({
     status: "started",
@@ -454,13 +458,23 @@ beforeEach(() => {
     handoffId: params?.handoffId ?? "handoff-default",
     installRoot: params?.root ?? "/tmp/openclaw",
   }));
-  scheduleGatewaySigusr1RestartMock.mockClear();
-  scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
-  runPostCoreFinalizeAfterGatewayUpdateMock.mockClear();
-  runPostCoreFinalizeAfterGatewayUpdateMock.mockResolvedValue({
-    status: "skipped",
-    reason: "not-git-update",
-  });
+  scheduleGatewayRestartMock.mockClear();
+  scheduleGatewayRestartMock.mockReturnValue({ scheduled: true });
+  readGatewayOwnerLeaseMock.mockReset().mockImplementation(() =>
+    detectRespawnSupervisorMock.mock.results.at(-1)?.value
+      ? undefined
+      : {
+          owner: "foreground-owner",
+          pid: process.pid,
+          host: "fixture-host",
+          startedAt: 1,
+          port: 18789,
+          mode: "foreground",
+          supervisor: null,
+          state: "live",
+          expired: false,
+        },
+  );
 });
 
 export async function invokeUpdateRun(
@@ -496,6 +510,11 @@ export async function captureUpdateRunPayload(
     },
     runtimeConfig,
   );
+  if (payload !== undefined) {
+    expect(validateUpdateRunResult(payload), JSON.stringify(validateUpdateRunResult.errors)).toBe(
+      true,
+    );
+  }
   if (
     payload?.result?.status &&
     payload.result.status !== "ok" &&
@@ -511,7 +530,7 @@ export async function captureUpdateRunPayload(
 }
 
 export function mockGlobalInstallSurface() {
-  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
+  resolveStartupInstallStatusMock.mockResolvedValueOnce({
     root: "/tmp/openclaw-global",
     status: { root: "/tmp/openclaw-global", installKind: "package", packageManager: "npm" },
     installReceipt: null,
@@ -525,7 +544,7 @@ export function mockGlobalInstallSurface() {
 }
 
 export function mockGitInstallSurface(root: string) {
-  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
+  resolveStartupInstallStatusMock.mockResolvedValueOnce({
     root,
     status: { root, installKind: "git", packageManager: "pnpm" },
     installReceipt: null,

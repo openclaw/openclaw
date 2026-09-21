@@ -1,8 +1,15 @@
 import fs from "node:fs";
 import type { SQLOutputValue } from "node:sqlite";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { normalizeSqliteNumber } from "./sqlite-number.js";
+import {
+  readSqliteReaderDiagnosticsForPath,
+  sqliteReaderDatabasePathKey,
+  type SqliteReaderDiagnostic,
+  type SqliteReaderDiagnostics,
+} from "./sqlite-reader-lifecycle.js";
 
 export type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
 
@@ -23,7 +30,77 @@ export type SqliteWalHealth = {
   consecutiveBlocked: number;
   warning: boolean;
   error?: string;
+  activeReaders?: SqliteReaderDiagnostic[];
+  readerDiagnostics?: Array<Omit<SqliteReaderDiagnostics, "activeReaders">>;
 };
+
+export type SqliteWalCheckpointObservation = { databasePath: string; health: SqliteWalHealth };
+const checkpointListeners = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWalCheckpointListeners"),
+  () => new Set<(observation: SqliteWalCheckpointObservation) => void>(),
+);
+
+/** Maintenance consumers receive observations after the checkpoint owner records its outcome. */
+export function onSqliteWalCheckpoint(
+  listener: (observation: SqliteWalCheckpointObservation) => void,
+): () => void {
+  checkpointListeners.add(listener);
+  return () => {
+    checkpointListeners.delete(listener);
+  };
+}
+
+/** A relayed worker result adds host observations without claiming visibility into other threads. */
+function observeSqliteWalCheckpointHealth(
+  databasePath: string,
+  health: SqliteWalHealth,
+): SqliteWalHealth {
+  const {
+    activeReaders: previousReaders,
+    readerDiagnostics: previousDiagnostics,
+    ...observation
+  } = health;
+  if (health.state === "complete") {
+    return observation;
+  }
+  const { activeReaders, ...local } = readSqliteReaderDiagnosticsForPath(databasePath);
+  return {
+    ...observation,
+    activeReaders: [
+      ...(previousReaders ?? []).filter((reader) => reader.threadId !== local.threadId),
+      ...activeReaders,
+    ]
+      .toSorted((left, right) => right.ageMs - left.ageMs)
+      .slice(0, 8),
+    readerDiagnostics: [
+      ...(previousDiagnostics ?? []).filter((diagnostic) => diagnostic.threadId !== local.threadId),
+      local,
+    ].slice(-8),
+  };
+}
+
+function notifyCheckpoint(databasePath: string, health: SqliteWalHealth): void {
+  for (const listener of checkpointListeners) {
+    try {
+      listener({
+        databasePath: sqliteReaderDatabasePathKey(databasePath),
+        health: structuredClone(health),
+      });
+    } catch {
+      // Diagnostic consumers cannot change the native checkpoint's outcome.
+    }
+  }
+}
+
+/** Worker result transport relays the recorded fact and returns its enriched diagnostic snapshot. */
+export function publishSqliteWalCheckpointHealth(
+  databasePath: string,
+  health: SqliteWalHealth,
+): SqliteWalHealth {
+  const observed = observeSqliteWalCheckpointHealth(databasePath, health);
+  notifyCheckpoint(databasePath, observed);
+  return observed;
+}
 
 function sqliteFileBytes(pathname: string): number {
   try {
@@ -34,6 +111,16 @@ function sqliteFileBytes(pathname: string): number {
     }
     throw error;
   }
+}
+
+function readCheckpointResult(row: Record<string, SQLOutputValue> | undefined) {
+  const [busy, logFrames, checkpointedFrames] = Object.values(row ?? {}).map((value) =>
+    normalizeSqliteNumber(typeof value === "number" || typeof value === "bigint" ? value : null),
+  );
+  if (busy === undefined || logFrames === undefined || checkpointedFrames === undefined) {
+    throw new Error("SQLite returned an invalid WAL checkpoint result");
+  }
+  return { busy, logFrames, checkpointedFrames };
 }
 
 /** The maintenance lifecycle owns this checkpoint result and its last observation. */
@@ -56,7 +143,7 @@ export function createSqliteWalCheckpoint(
   });
 
   const recordCheckpointError = (error: unknown, observation = checkpointObservation()): void => {
-    health = {
+    const failed: SqliteWalHealth = {
       ...observation,
       observedAtMs: Date.now(),
       state: "error",
@@ -64,6 +151,12 @@ export function createSqliteWalCheckpoint(
       warning: true,
       error: formatErrorMessage(error),
     };
+    health = options.databasePath
+      ? observeSqliteWalCheckpointHealth(options.databasePath, failed)
+      : failed;
+    if (options.databasePath) {
+      notifyCheckpoint(options.databasePath, health);
+    }
     options.onCheckpointError?.(error);
   };
 
@@ -75,14 +168,7 @@ export function createSqliteWalCheckpoint(
     let busy: boolean;
     let sizeError: unknown;
     try {
-      const [busyResult, logFrames, checkpointedFrames] = Object.values(row ?? {}).map((value) =>
-        normalizeSqliteNumber(
-          typeof value === "number" || typeof value === "bigint" ? value : null,
-        ),
-      );
-      if (busyResult === undefined || logFrames === undefined || checkpointedFrames === undefined) {
-        throw new Error("SQLite returned an invalid WAL checkpoint result");
-      }
+      const { busy: busyResult, logFrames, checkpointedFrames } = readCheckpointResult(row);
       busy = busyResult !== 0;
       observation.logFrames = logFrames;
       observation.checkpointedFrames = checkpointedFrames;
@@ -110,7 +196,12 @@ export function createSqliteWalCheckpoint(
           (observation.walBytes !== null &&
             observation.databaseBytes !== null &&
             observation.walBytes > Math.max(2 * observation.databaseBytes, journalSizeLimitBytes)));
-      health = observation;
+      health = options.databasePath
+        ? observeSqliteWalCheckpointHealth(options.databasePath, observation)
+        : observation;
+      if (options.databasePath) {
+        notifyCheckpoint(options.databasePath, health);
+      }
     } catch (error) {
       recordCheckpointError(error, observation);
       return false;
@@ -132,8 +223,16 @@ export function createSqliteWalCheckpoint(
   return {
     record: recordCheckpoint,
     recordError: recordCheckpointError,
+    inspectIdle(row: Record<string, SQLOutputValue> | undefined): boolean {
+      const { busy, logFrames, checkpointedFrames } = readCheckpointResult(row);
+      // An incomplete PASSIVE checkpoint can belong to another connection's reader.
+      // A local native reader instead refuses the checkpoint; non-WAL results are negative.
+      return (
+        busy === 0 && logFrames >= 0 && checkpointedFrames >= 0 && checkpointedFrames <= logFrames
+      );
+    },
     get health() {
-      return health ? { ...health } : undefined;
+      return health ? structuredClone(health) : undefined;
     },
   };
 }

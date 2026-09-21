@@ -96,6 +96,8 @@ Behavior:
 - Quitting the app does **not** stop the Gateway (launchd keeps it alive).
 - If a Gateway is already running on the configured port, the app attaches to
   it instead of starting a new one.
+- Other listeners are left running. Resolve port conflicts through the process
+  or service that owns them; automatic cleanup only reaps recorded orphaned SSH tunnels.
 - If service inspection is inconclusive, the app defers installation and uses
   its existing readiness checks. A service confirmed absent can still be installed.
 

@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readSessionMessageIdentity } from "../../packages/gateway-client/src/session-projection-message-identity.js";
+import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import { resolveAgentRunSessionTarget } from "../agents/run-session-target.js";
+import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
+import { SessionManager } from "../agents/sessions/index.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createRuntimeAgent } from "../plugins/runtime/runtime-agent.js";
@@ -19,6 +25,66 @@ afterEach(async () => {
 });
 
 describe("voice consult concrete store ownership", () => {
+  it.each([
+    "talk-realtime-consult",
+    "talk-realtime-relay-consult",
+    "voice-realtime-consult:11111111-2222-4333-8444-123456789012",
+    "google-meet:meet_11111111-2222-4333-8444-123456789012",
+    "zoom-meetings:zoom_meeting_11111111-2222-4333-8444-123456789012",
+    "teams-meetings:teams_meeting_11111111-2222-4333-8444-123456789012",
+  ])("preserves live run identity through transcript storage for %s", async (runIdPrefix) => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+    };
+    const runIds: string[] = [];
+    const secret = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const runEmbeddedAgent = vi.fn(async (params: RunEmbeddedAgentParams) => {
+      const target = await resolveAgentRunSessionTarget({
+        ...params,
+        missingSessionKey: "resolve-existing",
+      });
+      expect(params.runId).toBe(runIds.at(-1));
+      expect(params.runId.startsWith(runIdPrefix)).toBe(true);
+      const manager = SessionManager.open(target, state.workspaceDir);
+      guardSessionManager(manager, {
+        config: cfg,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+      }).appendMessage(makeAgentAssistantMessage({ content: [{ type: "text", text: secret }] }));
+      const persisted = SessionManager.open(target, state.workspaceDir)
+        .getEntries()
+        .filter((entry) => entry.type === "message");
+      expect(persisted.map((entry) => readSessionMessageIdentity(entry.message)?.runId)).toEqual(
+        runIds,
+      );
+      expect(JSON.stringify(persisted)).not.toContain(secret);
+      return { payloads: [{ text: "Checked" }], meta: { durationMs: 0 } };
+    });
+    const agentRuntime = { ...createRuntimeAgent(), runEmbeddedAgent };
+    for (let turn = 0; turn < 2; turn++) {
+      await expect(
+        consultRealtimeVoiceAgent({
+          cfg,
+          agentRuntime,
+          logger: { warn: vi.fn() },
+          sessionKey: "agent:main:voice-identity",
+          messageProvider: "webchat",
+          lane: "talk",
+          runIdPrefix,
+          args: { question: "Check this" },
+          transcript: [],
+          surface: "test voice",
+          userLabel: "User",
+          onRunStarted: ({ runId }) => {
+            runIds.push(runId);
+          },
+        }),
+      ).resolves.toEqual({ text: "Checked" });
+    }
+    expect(new Set(runIds).size).toBe(2);
+  });
+
   it.each([
     { parentAgentId: "main", locked: false },
     { parentAgentId: "other", locked: false },

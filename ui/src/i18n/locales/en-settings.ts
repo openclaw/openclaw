@@ -3,7 +3,85 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  searchPage: {
+    enabled: "Web search",
+    advanced: "Advanced search settings",
+    enabledHint: "Allow agents to find up-to-date information on the web.",
+    provider: "Search provider",
+    automatic: "Automatic",
+    automaticHint:
+      "Prefer native search when supported; otherwise use a configured search provider.",
+    scopeHint:
+      "Search settings apply to all agents. Choose an agent and model to see their effective route.",
+    agent: "Agent",
+    model: "Model",
+    agentDefault: "Agent default",
+    route: "Search for this model",
+    routeKinds: {
+      native: "Native search",
+      external: "Check in chat",
+      managed: "Provider search",
+      disabled: "Off",
+      unavailable: "Unavailable",
+    },
+    loading: "Checking search configuration…",
+    offline: "Connect to the Gateway to configure search.",
+    readOnly: "An administrator can change search settings and credentials.",
+    setup: "Provider setup",
+    setupProvider: "Configure provider",
+    setupHint:
+      "Configure a provider for OpenClaw web search. External harnesses may also supply their own search tools.",
+    configured: "Configured",
+    pluginUnavailable: "Enable plugin to use",
+    pluginMissing: "Install plugin to use",
+    testInChat: "Test in chat",
+    testInChatHint:
+      "Open a new chat with this agent and model selected. Nothing is sent automatically.",
+    needsSetup: "Needs setup",
+    configuration: "Configuration",
+    credentialSources: {
+      config: "Saved credential",
+      secretRef: "Secret reference",
+      env: "Gateway environment",
+      "auth-profile": "Connected account",
+      none: "No separate API key required",
+      missing: "Credential missing",
+    },
+    health: "Search health",
+    untested: "Not tested",
+    untestedHint:
+      "Configuration alone does not verify access. Run a search to check the current route.",
+    test: "Test search",
+    testProvider: "Test {provider}",
+    testing: "Searching…",
+    query: "Search query",
+    queryPlaceholder: "What would you like to find?",
+    queryDefault: "OpenClaw documentation",
+    success: "Search succeeded",
+    failure: "Search failed",
+    duration: "{ms} ms",
+    cached: "Cached result",
+    result: "Answer",
+    sources: "Sources",
+    noResults: "The provider returned no results for this query.",
+    pluginSettings: "All provider settings",
+    pluginSettingsHint: "Open the plugin’s complete configuration and access controls.",
+    moreProviders: "Add search providers",
+    moreProvidersHint:
+      "Install a search plugin, or configure a custom endpoint with a compatible provider.",
+    docs: "Provider documentation",
+    refresh: "Refresh search status",
+  },
   connection: {
+    browser: {
+      title: "Browser",
+      savedSignIn: "Saved sign-in for this gateway",
+      forgetDevice: "Forget this browser",
+      confirmTitle: "Forget this browser?",
+      confirmMessage:
+        "Removes the saved sign-in for {gateway} and signs this tab out, clearing any active password or session credential, then reconnects fresh. Other gateways, your preferences, and this browser’s device identity are kept. You may need to sign in or approve this browser again.",
+      confirmLabel: "Forget",
+    },
     ping: {
       title: "Gateway ping",
       latest: "Latest ping",
@@ -321,13 +399,23 @@ const enSettings = {
       action: "Connect provider",
       title: "Connect a provider",
       noOptions: "No account connection methods are available.",
+      method: "Connection method",
+      searchProviders: "Search providers…",
+      noMatches: "No providers match your search.",
+      noProviders: "No providers are available to connect.",
+      discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
       done: "Provider credentials saved.",
       finishing: "Credentials are being saved. Wait for the result.",
       sessionExpired:
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",
     },
-    subtitle: "Providers and credentials for the selected agent.",
+    subtitle: "Global model defaults and provider access for your agents.",
+    accessTitle: "Provider access",
+    accessDescription:
+      "Manage connections for the selected agent. Global defaults above apply to all agents.",
+    search: "Search providers…",
+    noMatches: "No providers match your search.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
     disconnected: "Connect to the gateway to see configured model providers.",
@@ -445,7 +533,7 @@ const enSettings = {
       saved: "Provider {provider} added.",
     },
     defaults: {
-      title: "Global defaults",
+      title: "Defaults for all agents",
       subtitle:
         "Model and behavior defaults for all agents. Agent-specific settings override these defaults. View each agent's model in Agents → Overview.",
       primary: "Model",
@@ -461,7 +549,7 @@ const enSettings = {
       fallback: "Fallback Model",
       noFallback: "No fallback model",
       selectModel: "Select a model",
-      noModels: "Configure a provider before selecting default models.",
+      noModels: "Configure a chat provider to select a primary, utility, or fallback model.",
       discoveringMore: "Discovering more models…",
       discoverFailed: "More models could not be discovered.",
       retryDiscover: "Retry",
@@ -475,6 +563,31 @@ const enSettings = {
         "Sets the global default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
       fastModeDefaultHelp:
         "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
+    },
+    installedAgents: {
+      title: "Installed agents",
+      description:
+        "Coding apps on the Gateway computer. Each app manages its own account and permissions. Enabling an app does not sign you in.",
+      status: {
+        installed: "Installed",
+        missing: "Not detected",
+        unverified: "Not verified",
+        signIn: "Sign in required",
+        discovering: "Discovering models…",
+        modelsAvailable: "Models available",
+      },
+      unverifiedHint:
+        "Check this app's custom launch command on the Gateway computer, then check again.",
+      installHint: "Install and sign in to {name} on the Gateway computer, then check again.",
+      disabledHint: "Enable this app to include its models in the picker.",
+      signInHint: "Open {name} on the Gateway computer and check its sign-in, then check again.",
+      discoveryHint:
+        "Open {name} on the Gateway computer and check its connection and sign-in, then check again.",
+      toggle: "Use {name}",
+      check: "Check again",
+      checking: "Checking…",
+      empty: "No supported coding apps are available.",
+      note: "Update installed agents from Control UI",
     },
     readOnly: {
       disconnected: "Connect to the gateway to change model settings.",
@@ -614,6 +727,8 @@ const enSettings = {
       cameraHint: "Allow the agent to capture a photo or short video via the built-in camera.",
       keepAwake: "Keep awake",
       keepAwakeHint: "Keep the screen awake while OpenClaw is active.",
+      keepAwakeComputerHint:
+        "Prevent idle sleep while OpenClaw is running. Manual sleep and locking remain available.",
       healthSummary: "Health summaries",
       healthSummaryHint: "Allow the agent to request a health summary from this device.",
       device: "Device",
@@ -628,7 +743,19 @@ const enSettings = {
       computerControlHint:
         "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
       computerControlProvider: "Computer Control provider",
-      unattendedDesktop: "Unattended desktop hosting",
+      desktopSharing: "Desktop sharing",
+      desktopSharingHint:
+        "View and control this Mac from Systems. Enabled by default. Requires Screen Sharing in macOS System Settings → General → Sharing. Changes briefly reconnect this Mac; a new capability may need pairing approval.",
+      desktopSharingComputerHint:
+        "View and control this computer from Systems. Enabled by default. Requires an authenticated local VNC server. Changes briefly reconnect this computer; a new capability may need pairing approval.",
+      desktopSharingStatus: "Desktop sharing status",
+      desktopSharingStates: {
+        off: "Off",
+        starting: "Starting",
+        running: "Running",
+        error: "Unavailable",
+      },
+      unattendedDesktop: "Keep computer awake",
       unattendedDesktopHint:
         "Keep this Mac awake between jobs while it is connected and hosting. Manual lock and logout are still respected; OpenClaw never unlocks the Mac.",
       desktopAvailability: "Desktop availability",
@@ -645,6 +772,21 @@ const enSettings = {
         "Allow signed tools to drive UI automation via Peekaboo Bridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
       browser: "Browser",
       chromeExtension: "Chrome extension",
+      chromeExtensionOnMac: "Chrome on this Mac",
+      chromeExtensionDetected: "Installed",
+      chromeExtensionNotInstalled: "Not installed",
+      chromeExtensionUnknown: "Status unavailable",
+      chromeExtensionChecking: "Checking installation…",
+      chromeExtensionCheckAgain: "Check again",
+      chromeExtensionRepair: "Repair Mac connection",
+      chromeExtensionRepairHint:
+        "The extension is installed. Repair the Mac connection to enable automatic pairing.",
+      chromeExtensionEnableHint:
+        "The extension is installed but not enabled. Open Chrome and approve or enable OpenClaw.",
+      chromeExtensionStatusFailed:
+        "Could not check Chrome installation automatically. You can still run setup. Make sure the OpenClaw Mac app and CLI are up to date.",
+      chromeExtensionStatusUnsupported:
+        "Automatic installation checks require an updated Mac app. Open Chrome to check whether OpenClaw is installed and enabled.",
       chromeExtensionSetup: "Set up Chrome on this Mac",
       chromeExtensionHint:
         "Prepare the OpenClaw extension on this Mac, then approve it in Chrome. This does not install on a remote Gateway.",
@@ -688,6 +830,7 @@ const enSettings = {
         limited: "Limited",
         denied: "Denied",
         notDetermined: "Not determined",
+        notGranted: "Not granted",
         unavailable: "Unavailable",
       },
       permissions: {
@@ -710,10 +853,6 @@ const enSettings = {
           hint: "Use Apple Speech; passive Voice Wake stays on-device.",
         },
         location: { title: "Location", hint: "Share location when requested by the agent." },
-        automation: {
-          title: "Automation (Terminal)",
-          hint: "Control Terminal for automation actions; other apps request access separately.",
-        },
         contacts: { title: "Contacts", hint: "Access contacts when requested by the agent." },
         calendars: {
           title: "Calendars",
@@ -731,9 +870,9 @@ const enSettings = {
       preciseLocationReadOnlyHint: "Manage precise location access in Settings.",
       preciseLocationStatuses: { enabled: "Enabled", disabled: "Disabled" },
       privacy: "Privacy",
-      activePresence: "Active computer presence",
+      activePresence: "System-wide presence detection",
       activePresenceHint:
-        "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+        "OpenClaw activity identifies this Mac without extra permissions. Enable this to also detect activity in other apps. Shares only idle duration, never keys, pointer positions, app names, or window titles. Requires Accessibility.",
     },
     deviceTalk: {
       title: "This Mac",
@@ -938,7 +1077,8 @@ const enSettings = {
     appearance: {
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
       theme: "Theme",
-      chooseTheme: "Choose a theme family.",
+      chooseTheme: "Choosing a different theme resets its fonts and accent colors.",
+      themeUnavailable: "{id} is unavailable. Using Claw until the theme becomes available again.",
       typography: "Typography",
       fonts: {
         ui: "Interface",
@@ -966,7 +1106,7 @@ const enSettings = {
       accent: "Accent color",
       accentHint: "Choose an accent color for buttons, highlights, and other controls.",
       customAccent: "Custom color",
-      usingInheritedAccent: "Using inherited accent",
+      usingThemeAccent: "Using theme accent",
       usingAccent: "Using {value}",
       accents: {
         default: "Theme default",
@@ -1005,6 +1145,9 @@ const enSettings = {
         "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
+      showTaskProgress: "Show task progress cards",
+      showTaskProgressHint:
+        "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
       collapseTaskProgress: "Collapse task progress by default",
       collapseTaskProgressHint:
         "Start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session.",
@@ -1326,6 +1469,7 @@ export const registerSettingsEnglish = Object.assign(
   () => {
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;
+    en.searchPage = enSettings.searchPage;
     // Extend the shared objects: eager save/update copy and existing readers survive.
     en.cloudWorkersPage = enSettings.cloudWorkersPage;
     Object.assign(en.connection, enSettings.connection);

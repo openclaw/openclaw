@@ -13,6 +13,7 @@ import { connectRfbAttachment, type DesktopRfbAttachment } from "./attachment.js
 import type { DesktopObserveRequester } from "./observe-requester.js";
 import {
   preauthenticateRfb,
+  RfbAuthenticationRejectedError,
   RfbPreauthBuffer,
   type RfbPreauthDescriptor,
   type RfbPreauthPeer,
@@ -47,6 +48,7 @@ type DesktopObserverTokenEntry = {
   attachment: DesktopRfbAttachment;
   preauth?: RfbPreauthDescriptor;
   requester?: DesktopObserveRequester;
+  onAbandon?: () => Promise<void>;
 };
 
 const observerTokens = createOneTimeTicketStore<DesktopObserverTokenEntry>({ ttlMs: TOKEN_TTL_MS });
@@ -62,6 +64,7 @@ export function mintDesktopObserverToken(params: {
   attachment: DesktopRfbAttachment;
   preauth?: RfbPreauthDescriptor;
   requester?: DesktopObserveRequester;
+  onAbandon?: () => Promise<void>;
   nowMs?: number;
 }): { token: string; expiresAtMs: number } {
   const { nowMs, ...payload } = params;
@@ -77,6 +80,38 @@ function consumeDesktopObserverToken(
   nowMs = Date.now(),
 ): DesktopObserverTokenEntry | undefined {
   return observerTokens.consume(token, nowMs);
+}
+
+export async function releaseDesktopObserverToken(
+  wsPath: string,
+  requester: DesktopObserveRequester | undefined,
+): Promise<boolean> {
+  const connId = requester?.connId;
+  if (!connId || !requester.isCurrent()) {
+    return false;
+  }
+  let resource: URL;
+  try {
+    resource = new URL(wsPath, "http://127.0.0.1");
+  } catch {
+    return false;
+  }
+  if (resource.pathname !== DESKTOP_OBSERVE_PATH) {
+    return false;
+  }
+  const entry = observerTokens.consume(
+    resource.searchParams.get("token") ?? "",
+    Date.now(),
+    (candidate) =>
+      candidate.requester?.connId === connId &&
+      candidate.requester.isCurrent() &&
+      requester.isCurrent(),
+  );
+  if (!entry) {
+    return false;
+  }
+  await entry.onAbandon?.();
+  return true;
 }
 
 function rawDataBuffer(data: RawData): Buffer {
@@ -296,8 +331,8 @@ export function handleDesktopObserveUpgrade(
     desktopSocket.once("close", () => closeBoth(1000, "desktop stream closed", "stream-close"));
     desktopSocket.once("error", () =>
       closeBoth(
-        negotiating ? 1008 : 1011,
-        negotiating ? "desktop authentication failed" : "desktop stream failed",
+        1011,
+        negotiating ? "desktop connection failed during authentication" : "desktop stream failed",
         "stream-error",
       ),
     );
@@ -328,10 +363,14 @@ export function handleDesktopObserveUpgrade(
         browser.detach();
         entry.preauth = undefined;
         closeBoth(
-          1008,
+          error instanceof RfbAuthenticationRejectedError ? 1008 : 1011,
           error instanceof RfbPreauthTimeoutError
             ? "desktop authentication timed out"
-            : `desktop ${preauth.auth === "ard-account" ? "ARD" : "VNC"} authentication failed`,
+            : error instanceof RfbAuthenticationRejectedError
+              ? preauth.auth === "ard-account"
+                ? "macOS denied desktop access; check credentials and Screen Sharing or Remote Management Observe/Control permissions"
+                : "desktop VNC authentication rejected"
+              : "desktop security negotiation failed; check the desktop service and reconnect",
           "authentication-failed",
         );
       }

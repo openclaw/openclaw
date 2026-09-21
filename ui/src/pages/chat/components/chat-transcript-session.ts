@@ -3,6 +3,7 @@
 import type { TemplateResult } from "lit";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
+import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
@@ -38,6 +39,7 @@ export type TranscriptHeader = {
 };
 
 export type ChatTranscriptSession = {
+  readonly entryAnimations: ChatMessageEntryAnimations;
   readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;
   readonly scrollElementRef: (element?: Element) => void;
@@ -81,4 +83,5 @@ export type TranscriptRenderSnapshot<T> = {
   header: TranscriptHeader | null;
   messageRows: ReadonlyMap<string, string>;
   renderKeyRows: ReadonlyMap<string, string>;
+  entryKeys: ChatMessageEntryAnimations["projectedKeys"];
 };

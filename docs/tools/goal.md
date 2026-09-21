@@ -175,10 +175,19 @@ so an operator stop remains in effect until the goal is resumed.
 
 ## Control UI
 
-Select **Goal** from the command picker, type the objective, and send. The
-composer shows a Goal label so you can see what Send will do. The objective is
-literal text: words such as `clear` and text such as `/stop` do not become
-commands in Goal mode. Cancel leaves the objective as a normal chat draft.
+Select **Goal** from the command picker with Enter, Tab, or a click, then type
+the objective and choose **Start goal**. Typing `/goal start` followed by a
+space, or submitting `/goal start` without an objective, also opens Goal mode.
+Sending bare `/goal`, even after dismissing
+the picker, opens the composer instead of adding a command to the conversation.
+An empty objective cannot be submitted.
+
+The composer shows a Goal label and an objective prompt so you can see what
+Send will do. The objective is literal text: words such as `clear` and text
+such as `/stop` do not become commands in Goal mode. Escape or Cancel leaves
+the objective as a normal chat draft. Complete pasted commands such as
+`/goal start Fix the tests` and explicit management commands such as
+`/goal status` retain their text-command behavior.
 
 Starting a Goal saves the Goal, its user turn, and the run admission together
 before acknowledging Send. A failed admission leaves the draft intact and
@@ -203,8 +212,19 @@ The pill carries inline controls:
 
 Edit, Pause, and Clear do not send slash commands or add chat turns. Controls
 target the displayed Goal ID, so a stale button cannot change a replacement
-Goal. If a request is interrupted, retry it unchanged. A successful replay
-refreshes the current state instead of restoring an old Goal snapshot.
+Goal. If a request is interrupted or its acknowledgment does not arrive within
+30 seconds, the UI reports an unconfirmed outcome. Use **Check outcome** in the
+recovery notice, even if the goal changed or was cleared. This retries the saved action
+unchanged to reconcile it with the Gateway receipt. The original request stays
+in this browser tab across reconnects and reloads; it is never retried
+automatically. The UI does not send goal controls if the connection has no
+account-scoped recovery identity. Incognito requests stay in memory only. A successful replay
+refreshes the current state instead of restoring an old Goal snapshot or
+starting another continuation. Dismissing an error or cancelling an editor
+does not cancel a mutation already sent to the Gateway. After 24 hours, the saved
+request expires and its literal payload is removed; **Review current goal** refreshes
+state before another decision. Forgetting this browser or switching authenticated
+accounts removes that Gateway's previous account recovery payloads.
 
 The action buttons are unavailable without a connection. The expand chevron
 keeps working. Concurrent Goal actions are rejected while an operation is

@@ -153,7 +153,7 @@ describe("users gateway methods", () => {
   });
 
   it("lists profiles through the read method", async () => {
-    listProfiles.mockReturnValue([{ id: "profile-1" }]);
+    listProfiles.mockResolvedValue([{ id: "profile-1" }]);
 
     expect(await runUsersHandler("users.list", {})).toHaveBeenCalledWith(true, {
       profiles: [{ id: "profile-1" }],

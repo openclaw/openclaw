@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
+import { renderFindingGroups } from "./lib/grouped-findings.js";
 import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
 
 type EnvMutationOperation = "assign" | "delete" | "replace" | "stubEnv";
@@ -251,45 +252,10 @@ export function collectTestEnvMutationReport(
   };
 }
 
-function groupFindingsByFile(
-  findings: TestEnvMutationFinding[],
-): Map<string, TestEnvMutationFinding[]> {
-  const grouped = new Map<string, TestEnvMutationFinding[]>();
-  for (const finding of findings) {
-    const fileFindings = grouped.get(finding.file);
-    if (fileFindings) {
-      fileFindings.push(finding);
-    } else {
-      grouped.set(finding.file, [finding]);
-    }
-  }
-  return grouped;
-}
-
-function renderFindingGroups(findings: TestEnvMutationFinding[], limit: number): string[] {
-  const lines: string[] = [];
-  let shown = 0;
-  for (const [file, fileFindings] of groupFindingsByFile(findings)) {
-    if (shown >= limit) {
-      break;
-    }
-    lines.push(`- ${file} (${fileFindings.length})`);
-    for (const finding of fileFindings) {
-      if (shown >= limit) {
-        break;
-      }
-      const action =
-        finding.operation === "stubEnv" ? "vi.stubEnv" : `${finding.operation} process.env`;
-      lines.push(`  L${finding.line} ${finding.key} ${action}: ${finding.excerpt}`);
-      shown += 1;
-    }
-  }
-  if (findings.length > shown) {
-    lines.push(
-      `... ${findings.length - shown} more finding(s) not shown; pass --limit 0 to show all.`,
-    );
-  }
-  return lines;
+function renderEnvMutationFinding(finding: TestEnvMutationFinding): string {
+  const action =
+    finding.operation === "stubEnv" ? "vi.stubEnv" : `${finding.operation} process.env`;
+  return `  L${finding.line} ${finding.key} ${action}: ${finding.excerpt}`;
 }
 
 export function renderTestEnvMutationReport(
@@ -308,12 +274,12 @@ export function renderTestEnvMutationReport(
     lines.push("Active findings: none");
   } else {
     lines.push("Active findings:");
-    lines.push(...renderFindingGroups(report.activeFindings, limit));
+    lines.push(...renderFindingGroups(report.activeFindings, limit, renderEnvMutationFinding));
   }
 
   if (options.includeAllowed && report.allowedFindings.length > 0) {
     lines.push("", "Allowed harness findings:");
-    lines.push(...renderFindingGroups(report.allowedFindings, limit));
+    lines.push(...renderFindingGroups(report.allowedFindings, limit, renderEnvMutationFinding));
   }
 
   return `${lines.join("\n")}\n`;

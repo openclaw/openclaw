@@ -25,7 +25,7 @@ let sequence = 0;
 const sdkHostDirs = createTempDirTracker();
 let sdkHost: string | undefined;
 beforeAll(() => {
-  sdkHost = createCompiledSdkHost(mcpProviderCatalogEntrypoint, (prefix) =>
+  sdkHost = createCompiledSdkHost([mcpProviderCatalogEntrypoint], (prefix) =>
     sdkHostDirs.make(prefix),
   );
 });

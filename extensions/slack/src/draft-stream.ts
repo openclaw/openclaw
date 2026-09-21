@@ -1,4 +1,3 @@
-// Slack plugin module implements draft stream behavior.
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
@@ -31,6 +30,9 @@ type SlackDraftStreamUpdate =
   | {
       text: string;
       blocks?: (Block | KnownBlock)[];
+      // Partial preambles can edit a visible draft, but must never create a
+      // fresh Slack notification after an intervening human reply rotates it.
+      allowNewMessage?: boolean;
     };
 
 type SlackDraftMessage = { channelId: string; messageId: string; detachedByHuman?: boolean };
@@ -78,6 +80,9 @@ export function createSlackDraftStream(params: {
     const update = normalizeUpdate(pending);
     const trimmed = update.text.trimEnd();
     if (!trimmed) {
+      return;
+    }
+    if (!streamMessage && update.allowNewMessage === false) {
       return;
     }
     if (trimmed.length > maxChars) {

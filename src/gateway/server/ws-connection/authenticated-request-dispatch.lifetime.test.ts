@@ -17,6 +17,56 @@ afterEach(() => {
 });
 
 describe("authenticated request completion", { concurrent: false }, () => {
+  it.for(["lazy import", "start scheduler"] as const)(
+    "rejects access revoked during %s before entering the handler",
+    async (stage, { signal }) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const grant = new AbortController();
+      const handleGatewayRequest = vi.fn(async () => {});
+      const unblock = () => release.resolve();
+      signal.addEventListener("abort", unblock, { once: true });
+      const hold = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      vi.resetModules();
+      vi.doMock("./authenticated-request-dispatch.server-methods.runtime.js", async () => {
+        if (stage === "lazy import") {
+          await hold();
+        }
+        return { handleGatewayRequest };
+      });
+      if (stage === "start scheduler") {
+        vi.doMock("./request-start.js", () => ({ scheduleGatewayRequestStart: hold }));
+      }
+      const { createDispatchTestHarness, createOperatorWsClient } =
+        await import("./authenticated-request-dispatch.test-support.js");
+      const harness = createDispatchTestHarness();
+      const client = createOperatorWsClient({ socket: new EventEmitter() });
+      client.internal = {
+        operatorAccessAuthority: {
+          signal: grant.signal,
+          assertCurrent: () => grant.signal.throwIfAborted(),
+        },
+      };
+      const dispatch = harness.dispatcher.dispatch(
+        { type: "req", id: "revoked", method: "test.lifetime", params: {} },
+        client,
+      );
+      try {
+        await entered.promise;
+        grant.abort(new Error("Access ended"));
+      } finally {
+        unblock();
+        await dispatch;
+        signal.removeEventListener("abort", unblock);
+      }
+      expect(handleGatewayRequest).not.toHaveBeenCalled();
+      expect([...harness.clients.authorityClients]).toEqual([]);
+    },
+  );
+
   it.for([
     "lazy import",
     "start scheduler",

@@ -14,10 +14,14 @@ import * as transcriptSearch from "../config/sessions/session-transcript-search.
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { loadSessionPullRequestReferences } from "./control-ui-session-pr-references.js";
 import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
@@ -55,8 +59,10 @@ describe("session pull request references", () => {
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
@@ -167,6 +173,7 @@ describe("session pull request references", () => {
       "agent.sqlite",
     );
     // Closing the isolated owner checkpoints its committed WAL before copying.
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     copyFileSync(database.path, replacementPath);
     const replacement = new DatabaseSync(replacementPath);

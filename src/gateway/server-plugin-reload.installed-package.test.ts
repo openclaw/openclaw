@@ -4,6 +4,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
+import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -13,12 +14,12 @@ import type { PluginLifecycleReason } from "../plugins/lifecycle.js";
 import { activatePluginRegistry } from "../plugins/loader-shared.js";
 import { refreshManagedPlugins } from "../plugins/management-mutations.js";
 import { resolvePluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
+import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import {
   clearPluginMetadataLifecycleCaches,
   retainGatewayPluginMetadata,
 } from "../plugins/plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   clearActivePluginRegistry,
   createPluginRegistryOwner,
@@ -34,6 +35,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
+import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -79,7 +81,11 @@ async function verifyInstalledPackageRetention(
   const stopFailurePath = path.join(root, "refuse-stop");
   const registrations: string[] = [];
   const registrationEvent = `installed-retry-registration:${root}`;
-  const observeRegistration = (instance: string) => registrations.push(instance);
+  const capturedEntries = new Map<string, string>();
+  const observeRegistration = (instance: string, filename: string) => {
+    registrations.push(instance);
+    capturedEntries.set(instance, filename);
+  };
   if (cleanupRetry) {
     process.on(registrationEvent, observeRegistration);
     cleanups.push(async () => {
@@ -90,6 +96,7 @@ async function verifyInstalledPackageRetention(
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
   };
+  fs.mkdirSync(env.OPENCLAW_BUNDLED_PLUGINS_DIR, { recursive: true });
   const writePackage = (id: string) => {
     const packageDir = writeManagedNpmPlugin({
       stateDir,
@@ -123,7 +130,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   ${
     cleanupRetry && id === "installed-probe"
       ? `const fs = require('node:fs');
-  process.emit(${JSON.stringify(registrationEvent)}, instance);
+  process.emit(${JSON.stringify(registrationEvent)}, instance, __filename);
   const resource = fs.openSync(${JSON.stringify(resourcePath)}, 'wx');
   api.lifecycle.onDispose(() => {
     fs.closeSync(resource);
@@ -153,7 +160,13 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     const siblingDir = writePackage("sibling");
     const healthyDir = cleanupRetry === "mixed-recovery" ? writePackage("healthy") : undefined;
     const initialConfig: OpenClawConfig = {
-      agents: { entries: { main: { workspace: workspaceDir } } },
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { workspace: workspaceDir },
+          secondary: { workspace: path.join(root, "secondary-workspace") },
+        },
+      },
       plugins: {
         allow: healthyDir ? ["sibling", "healthy"] : ["sibling"],
         entries: {
@@ -166,11 +179,13 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     };
     setRuntimeConfigSnapshot(initialConfig);
     const log = { ...createSubsystemLogger("gateway/plugins"), ...logs };
-    const initialMetadata = loadPluginMetadataSnapshot({
+    const initialMetadata = resolveConfigWidePluginMetadataSnapshot({
       config: initialConfig,
-      workspaceDir,
       env,
     });
+    expect(initialMetadata.manifestRegistry.plugins.map((plugin) => plugin.id).toSorted()).toEqual(
+      healthyDir ? ["healthy", "sibling"] : ["sibling"],
+    );
     const initial = bootstrap.prepareGatewayPluginLoad({
       pluginMetadataSnapshot: initialMetadata,
       cfg: initialConfig,
@@ -213,6 +228,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       }
     });
     const runtime = {
+      requestEntryLifetime: new GatewayRequestEntryLifetime(),
       pluginMetadataSnapshot: initialMetadata,
       pluginRuntime: registryOwner,
       pluginWorkspaceDir: workspaceDir,
@@ -351,10 +367,19 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           (await reload(nextConfig, [...pluginIds], reason, assertInvokerOwned)).runtime,
       });
     const validated = validateConfigObjectWithPlugins(config, { env });
-    assert.ok(validated.ok);
+    assert.ok(validated.ok, JSON.stringify(validated));
     expect(validated.config.plugins?.entries?.sibling?.config).toEqual(sibling.settings);
     // Startup uses authored config; the first install applies a validated runtime snapshot.
-    const firstReceipt = await reload(validated.config, ["installed-probe"], "install");
+    assert.ok(siblingRecord);
+    const siblingInstance = getPluginInstance(siblingRecord);
+    assert.ok(siblingInstance);
+    const releaseSiblingWork = siblingInstance.retainWork();
+    let firstReceipt: Awaited<ReturnType<typeof reload>>;
+    try {
+      firstReceipt = await reload(validated.config, ["installed-probe"], "install");
+    } finally {
+      releaseSiblingWork();
+    }
     expect(firstReceipt.runtime.pluginIds).toEqual(["installed-probe"]);
     expect(await probe("sibling")).toEqual(sibling);
     const first = await probe("installed-probe");
@@ -405,6 +430,10 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       expect(
         runtime.pluginRuntime.registry.gatewayHandlers["installed-probe.probe"],
       ).toBeUndefined();
+      expect(owner.getReloadStatus()).toMatchObject({
+        phase: "failed",
+        pluginIds: ["installed-probe"],
+      });
       expect(registrations).toHaveLength(2);
       expect(fs.existsSync(resourcePath)).toBe(false);
       expect(runtime.pluginRuntime.registry.plugins.find((record) => record.id === "sibling")).toBe(
@@ -429,7 +458,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           await release.promise;
           fs.writeFileSync(effectsPath, "completed once");
         });
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
         let failedSettled = false;
         const failed = reload().catch((error: unknown) => {
           failedSettled = true;
@@ -439,24 +468,41 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           await vi.waitFor(() => expect(retiredInstance.acceptingCalls).toBe(false));
           await vi.advanceTimersByTimeAsync(5_000);
           expect(failedSettled).toBe(false);
-          await vi.advanceTimersByTimeAsync(5_000);
+          expect(owner.getReloadStatus()).toMatchObject({
+            phase: "reloading",
+            deadlineAtMs: expect.any(Number),
+            reason: expect.stringContaining("admitted work"),
+          });
+          expect(retiredInstance.disposing).toBe(false);
+          expect(retiredInstance.lifecycle.signal.aborted).toBe(false);
+          expect(fs.existsSync(resourcePath)).toBe(true);
+          expect(registrations).toEqual([first.instance]);
+          const deadlineAtMs = owner.getReloadStatus()?.deadlineAtMs;
+          assert.ok(deadlineAtMs);
+          await vi.advanceTimersByTimeAsync(deadlineAtMs - Date.now());
           expect(await failed).toMatchObject({
             details: { phase: "drain", committed: false, pluginIds: ["installed-probe"] },
+            message: expect.stringMatching(
+              /plugin installed-probe admitted work.*previous plugin generation stays active/,
+            ),
           });
+          expect(owner.getReloadStatus()).toBeUndefined();
+          expect(retiredInstance.acceptingCalls).toBe(true);
           expect(retiredInstance.disposing).toBe(false);
           expect(retiredInstance.lifecycle.signal.aborted).toBe(false);
           expect(runtime.pluginRuntime.registry).toBe(retiredRegistry);
           expect(registrations).toEqual([first.instance]);
           expect(fs.existsSync(resourcePath)).toBe(true);
           expect(fs.existsSync(effectsPath)).toBe(false);
-          expect(() => retiredInstance.run(() => "still fenced")).toThrow("reloaded or disabled");
+          expect(retiredInstance.run(() => "still serving")).toBe("still serving");
+          expect(await probe("installed-probe")).toEqual(first);
           expect(await probe("sibling")).toEqual(sibling);
 
-          // Both bounded drain attempts returned before this original write finishes.
+          // The original write retains its resources after the replacement times out.
           release.resolve();
           await call;
           expect(fs.readFileSync(effectsPath, "utf8")).toBe("completed once");
-          expect(() => retiredInstance.run(() => "still fenced")).toThrow("reloaded or disabled");
+          expect(retiredInstance.run(() => "still serving")).toBe("still serving");
           fs.writeFileSync(
             path.join(packageDir, "dist", "helper.cjs"),
             'module.exports = "retry";',
@@ -464,6 +510,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           await expect(reload()).resolves.toMatchObject({
             runtime: { pluginIds: ["installed-probe"] },
           });
+          expect(owner.getReloadStatus()).toBeUndefined();
           const current = await probe("installed-probe");
           expect(current.helper).toBe("retry");
           expect(current.instance).not.toBe(first.instance);
@@ -479,15 +526,26 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           expect(await probe("sibling")).toEqual(sibling);
         } finally {
           release.resolve();
-          await Promise.allSettled([call, failed]);
-          vi.useRealTimers();
+          try {
+            await call;
+            await vi.advanceTimersByTimeAsync(5_000);
+            await failed;
+          } finally {
+            vi.useRealTimers();
+          }
         }
         return;
       }
       const entered = createDeferredCore();
       const release = createDeferredCore();
       let blockedInstance = retiredInstance;
+      let capturedEntry: string | undefined;
+      let capturedBytes: string | undefined;
       const gateDisposal = () => {
+        capturedEntry = capturedEntries.get(registrations.at(-1)!);
+        assert.ok(capturedEntry);
+        expect(capturedEntry).not.toBe(path.join(packageDir, "dist", "index.js"));
+        capturedBytes = fs.readFileSync(capturedEntry, "utf8");
         // Physical source cleanup remains owned after the caller's observation budget expires.
         blockedInstance.onModuleDispose(async () => {
           entered.resolve();
@@ -557,7 +615,10 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         fs.rmSync(stopFailurePath, { force: true });
         fs.writeFileSync(path.join(packageDir, "dist", "helper.cjs"), 'module.exports = "retry";');
         if (cleanupRetry !== "gateway-stop") {
-          expect(fs.existsSync(resourcePath)).toBe(true);
+          // Plugin cleanup releases its lock before module cleanup relinquishes captured code.
+          assert.ok(capturedEntry);
+          expect(fs.existsSync(resourcePath)).toBe(false);
+          expect(fs.readFileSync(capturedEntry, "utf8")).toBe(capturedBytes);
           retry = reload();
           const pendingOutcome = retry.then(
             () => ({ accepted: true as const }),
@@ -565,9 +626,15 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           );
           await nextTurn();
           expect(registrations).toEqual(failedRegistrations);
-          expect(fs.existsSync(resourcePath)).toBe(true);
+          expect(fs.existsSync(resourcePath)).toBe(false);
+          expect(fs.readFileSync(capturedEntry, "utf8")).toBe(capturedBytes);
           release.resolve();
-          await blockedInstance.dispose();
+          const { errors } = await blockedInstance.dispose();
+          expect(errors).toHaveLength(1);
+          const timeout = errors[0];
+          assert.ok(timeout instanceof PluginInstanceDrainTimeoutError);
+          await timeout.settled;
+          expect(fs.existsSync(capturedEntry)).toBe(false);
           // Admission may wait or reject while cleanup is pending. A subsequent
           // retry after settlement must work without a Gateway restart either way.
           const outcome = await pendingOutcome;
@@ -733,5 +800,5 @@ it.each(["gateway-stop", "pending-disposal", "candidate-disposal", "recovery-dis
 it("recovers a healthy changed plugin from captured code while excluding a previously retired plugin", () =>
   verifyInstalledPackageRetention("empty", "mixed-recovery"));
 
-it("retries after an admitted call outlasts both drain attempts without restarting its sibling", () =>
+it("retries after an admitted call outlasts the replacement deadline without restarting its sibling", () =>
   verifyInstalledPackageRetention("empty", "active-call"));

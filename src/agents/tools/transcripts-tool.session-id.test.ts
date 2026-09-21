@@ -7,6 +7,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -98,6 +99,7 @@ afterEach(async () => {
     pendingStops.clear();
     getTranscriptSourceProviderMock.mockReset();
     vi.useRealTimers();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     tempDirs.cleanup();
   }
@@ -178,6 +180,7 @@ describe("transcripts bounded export names", () => {
         expect(asOptionalRecord(stopped.details)?.summaryExportError).toBeUndefined();
         expect(stop.mock.calls[0]?.[0].sessionId === handle).toBe(true);
       }
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       const summarized = await tool.execute("summarize", {
         action: "summarize",
@@ -216,6 +219,7 @@ describe("transcripts bounded export names", () => {
     for (const sessionId of ids) {
       await capture(harness, "import", sessionId);
     }
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const entries = await harness.store.listSessionEntries();
     expect(new Set(entries.map((entry) => entry.selector)).size).toBe(2);
@@ -232,13 +236,24 @@ describe("transcripts bounded export names", () => {
   });
 
   it("keeps an older dated handle separate from an active next-day capture", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-07-01T10:00:00.000Z"));
     const harness = createHarness();
     const sessionId = "notes-" + "x".repeat(900);
-    await capture(harness, "import", sessionId);
+    const yesterday = new Date();
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    const historicalSession = {
+      sessionId,
+      startedAt: yesterday.toISOString(),
+      stoppedAt: yesterday.toISOString(),
+      source: { providerId: "room-audio" },
+    };
+    await harness.store.writeSession(historicalSession);
+    await harness.store.appendUtteranceForSession(historicalSession, { text: note, final: true });
+    const imported = await harness.tool.execute("historical-summary", {
+      action: "summarize",
+      sessionId,
+    });
+    expect(asOptionalRecord(imported.details)?.summaryExportError).toBeUndefined();
     const older = (await harness.store.listSessionEntries())[0]!;
-    vi.setSystemTime(new Date("2026-07-02T10:00:00.000Z"));
     await capture(harness, "start", sessionId);
     const current = (await harness.store.listSessionEntries())[0]!;
     await harness.tool.execute("old-stop", { action: "stop", sessionId: older.selector });
@@ -250,6 +265,7 @@ describe("transcripts bounded export names", () => {
     harness.active.delete(sessionId);
     expect(harness.stop.mock.calls[0]?.[0].sessionId === sessionId).toBe(true);
     expect(asOptionalRecord(result.details)?.summaryExportError).toBeUndefined();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     for (const entry of [older, current]) {
       expect((await harness.store.readSession(entry.selector))?.startedAt).toBe(
@@ -308,9 +324,11 @@ describe("transcripts bounded export names", () => {
         .set({ markdown })
         .where("session_id", "=", sessionId),
     );
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     await store.writeSession({ ...session, stoppedAt: "2026-07-01T11:00:00.000Z" });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const entry = await store.readSessionEntry(sessionId);
     expect(entry?.session.sessionId === sessionId).toBe(true);

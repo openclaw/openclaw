@@ -8,6 +8,83 @@ import { createCrabboxWorkerDesktopSetup } from "./crabbox-worker-desktop-setup.
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionBus = "unix:path=/run/fixture/bus";
 const wallpaper = Buffer.from("fixture wallpaper");
+const browserLauncherProof = String.raw`
+import ctypes, json, os, pathlib, shlex, shutil, signal, subprocess, sys, time
+
+root = pathlib.Path(sys.argv[2])
+home = root / "home"
+bin = root / "bin"
+home.mkdir()
+bin.mkdir()
+flock = shutil.which("flock")
+assert flock, "Linux flock is required"
+# Adopt the launcher's background child so this fixture can terminate and reap it.
+assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0
+environment = {"PATH": str(bin) + ":" + os.environ["PATH"], "HOME": str(home), "FIXTURE_ROOT": str(root)}
+commands = {
+    "getent": 'import os; print("fixture:x:0:0::" + os.environ["FIXTURE_ROOT"] + "/home:/bin/bash")',
+    "curl": 'import os, pathlib, sys; assert sys.argv[-1] == "http://127.0.0.1:9222/json/version"; sys.exit(0 if (pathlib.Path(os.environ["FIXTURE_ROOT"]) / "ready").exists() else 1)',
+    "crabbox-browser": '''import os, pathlib, time
+root = pathlib.Path(os.environ["FIXTURE_ROOT"])
+with (root / "launches").open("a") as output: output.write("launch" + chr(10))
+(root / "browser.pid.tmp").write_text(str(os.getpid()))
+(root / "browser.pid.tmp").replace(root / "browser.pid")
+while not (root / "stop").exists(): time.sleep(0.01)
+''',
+}
+for name, body in commands.items():
+    target = bin / name
+    target.write_text("#!" + sys.executable + "\n" + body + "\n")
+    target.chmod(0o700)
+(root / "desktop.env").write_text("CRABBOX_DESKTOP_ENV=xfce\nDISPLAY=:99\n")
+script = pathlib.Path(sys.argv[1]).read_text()
+script = script.replace("/var/lib/crabbox/desktop.env", shlex.quote(str(root / "desktop.env")))
+script = script.replace("/usr/local/bin/crabbox-browser", shlex.quote(str(bin / "crabbox-browser")))
+launcher = root / "launcher"
+launcher.write_text(script)
+def interrupted(signum, frame): raise SystemExit(128 + signum)
+signal.signal(signal.SIGTERM, interrupted)
+signal.signal(signal.SIGINT, interrupted)
+first = subprocess.Popen(["/bin/bash", str(launcher)], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+result = {}
+try:
+    deadline = time.monotonic() + 5
+    while not (root / "browser.pid").exists():
+        assert first.poll() is None and time.monotonic() < deadline, "Browser fixture did not start"
+        time.sleep(0.01)
+    browser = int((root / "browser.pid").read_text())
+    locks = list(home.glob(".cache/openclaw/worker-browser/*/.openclaw-launch.lock"))
+    assert len(locks) == 1
+    def lock_available():
+        return subprocess.run([flock, "-n", str(locks[0]), "true"], timeout=5).returncode == 0
+    result["parentHeldDuringReadiness"] = not lock_available()
+    assert result["parentHeldDuringReadiness"], "Launcher released its lock before readiness"
+    (root / "ready").touch()
+    _, errors = first.communicate(timeout=5)
+    assert first.returncode == 0, errors.decode()
+    os.kill(browser, 0)
+    result["browserAliveAfterReady"] = True
+    result["releasedAfterReady"] = lock_available()
+    assert result["releasedAfterReady"], "Browser child kept the launch lock after readiness"
+    second = subprocess.run(["/bin/bash", str(launcher)], env=environment, capture_output=True, timeout=5)
+    assert second.returncode == 0, second.stderr.decode()
+    os.kill(browser, 0)
+    assert int((root / "browser.pid").read_text()) == browser
+    result["launches"] = len((root / "launches").read_text().splitlines())
+    assert result["launches"] == 1
+    result["reusedLiveBrowser"] = True
+finally:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    (root / "stop").touch()
+    if first.poll() is None: first.terminate()
+    first.communicate(timeout=5)
+    while True:
+        try: os.waitpid(-1, 0)
+        except ChildProcessError: break
+    result["childrenJoined"] = True
+    print(json.dumps(result))
+`;
 type RendererState =
   | "healthy"
   | "wrong-bus"
@@ -83,8 +160,9 @@ printf 'kill:%s\\n' "$1" >>"$FIXTURE_ROOT/events"
 : >"$FIXTURE_ROOT/renderers"`,
     nohup: `echo launch >>"$FIXTURE_ROOT/events"
 exec "$@"`,
+    // A disabled renderer cannot become ready; only live launches need time to settle.
     sleep: `echo settle >>"$FIXTURE_ROOT/events"
-/bin/sleep "$@"`,
+if [ "$FIXTURE_LAUNCH" = true ]; then /bin/sleep "$@"; fi`,
     "xfconf-query": `if [ "$3" = "-l" ]; then
   echo /backdrop/screen0/monitor0/workspace0/last-image
 else
@@ -141,6 +219,32 @@ printf '%s\\n' "$pid" >"$FIXTURE_ROOT/renderers"`,
 }
 
 describe.skipIf(process.platform !== "linux")("Crabbox desktop renderer setup", () => {
+  it("reuses the live browser after releasing only the completed launcher's lock", () => {
+    const root = tempDirs.make("crabbox-browser-launch-");
+    const setup = createCrabboxWorkerDesktopSetup("cbx_browser_test", wallpaper.toString("base64"));
+    const launcher = setup.match(
+      /<<'WORKER_BROWSER_LAUNCHER_EOF'\n([\s\S]*?)\nWORKER_BROWSER_LAUNCHER_EOF/u,
+    )?.[1];
+    expect(launcher).toBeDefined();
+    const launcherFile = path.join(root, "browser.sh");
+    fs.writeFileSync(launcherFile, `${launcher}\n`);
+    const result = spawnSync("python3", ["-c", browserLauncherProof, launcherFile, root], {
+      encoding: "utf8",
+      timeout: 15_000,
+      env: { PATH: process.env.PATH },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      parentHeldDuringReadiness: true,
+      browserAliveAfterReady: true,
+      releasedAfterReady: true,
+      launches: 1,
+      reusedLiveBrowser: true,
+      childrenJoined: true,
+    });
+  });
+
   it("retains the bound renderer without termination, launch, or settling on resumed setup", () => {
     const { result, home, renderers, events } = desktopFixture("healthy");
     expect(result.status, result.stderr).toBe(0);

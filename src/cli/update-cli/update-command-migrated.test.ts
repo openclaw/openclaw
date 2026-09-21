@@ -7,6 +7,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { createConfigIO } from "../../config/io.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
+import {
+  createPackageIntegrityReader,
+  type PackageLauncherFingerprint,
+} from "../../infra/package-update-integrity.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
@@ -282,7 +287,7 @@ it("refuses state inspection when activation leaves no known runtime root", asyn
   ).resolves.toBe("rollback-state-unverified");
   expect(result).toMatchObject({
     reason: "rollback-state-unverified",
-    steps: [expect.objectContaining({ name: "state schema verification", exitCode: 1 })],
+    steps: [expect.objectContaining({ name: "state-schema-verification", exitCode: 1 })],
   });
 });
 
@@ -339,11 +344,24 @@ it.each([
   { json: false, legacy: false, parentOwns: false },
   { json: true, legacy: false, parentOwns: true },
   { json: false, legacy: true, parentOwns: true },
+  { json: true, legacy: true, parentOwns: true, foreground: true },
+  { json: true, legacy: false, parentOwns: true, retained: true },
+  { json: true, legacy: true, parentOwns: true, retained: true },
+  { json: true, legacy: false, parentOwns: true, retained: true, original: true },
   { json: true, legacy: false, parentOwns: true, checkWorkMs: 31_000, stepBudgetMs: 120_000 },
   { json: true, legacy: false, parentOwns: true, checkWorkMs: 31_000, stepBudgetMs: 20_000 },
 ])(
-  "fences migrated candidate finalization (json=$json, legacy=$legacy, parentOwns=$parentOwns, check=$checkWorkMs, budget=$stepBudgetMs)",
-  async ({ json, legacy, parentOwns, checkWorkMs, stepBudgetMs }) => {
+  "fences migrated candidate finalization (json=$json, legacy=$legacy, parentOwns=$parentOwns, foreground=$foreground, retained=$retained, original=$original, check=$checkWorkMs, budget=$stepBudgetMs)",
+  async ({
+    json,
+    legacy,
+    parentOwns,
+    foreground,
+    retained,
+    original,
+    checkWorkMs,
+    stepBudgetMs,
+  }) => {
     const stateDir = await fs.realpath(dirs.make("migrated-update-"));
     const env = {
       ...process.env,
@@ -362,7 +380,7 @@ it.each([
         const fs = require("node:fs");
         const { DatabaseSync } = require("node:sqlite");
         if (process.argv[2] === "--check") {
-          process.stdout.write(JSON.stringify({state:${OPENCLAW_STATE_SCHEMA_VERSION + 1}, agent:${OPENCLAW_AGENT_SCHEMA_VERSION}}));
+          process.stdout.write(JSON.stringify({state:${OPENCLAW_STATE_SCHEMA_VERSION + 1}, agent:${OPENCLAW_AGENT_SCHEMA_VERSION}${foreground || retained ? ', executorDelegation: "pid-start-v1"' : ""}}));
         } else {
           const input = JSON.parse(fs.readFileSync(0,"utf8"));
           fs.writeFileSync(${JSON.stringify(legacyEffect)}, "unfenced effect");
@@ -374,11 +392,15 @@ it.each([
       `,
       );
     }
-    const created = createUpdateRun({ trigger: "cli" }, { env });
+    const created = createUpdateRun({ trigger: foreground ? "api" : "cli" }, { env });
     const parentDriver = parentOwns
       ? adoptUpdateRun(created.runId, { env }).origin.driver
       : undefined;
-    const run = { runId: created.runId, env };
+    const run = {
+      runId: created.runId,
+      env,
+      ...(foreground ? { completionOwner: "gateway-restart" as const } : {}),
+    };
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.useFakeTimers();
     presentation = createUpdateProgress(!json, run);
@@ -391,6 +413,11 @@ it.each([
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
+    // Original runtime intent belongs to the pre-migration observation. The old
+    // parent must not reopen its state DB after the candidate advances the schema.
+    const originalRuntimePin = original
+      ? readDaemonRuntimePin({ kind: "gateway", env }, { programArguments: [] })
+      : undefined;
     const migrated = new DatabaseSync(database.path);
     try {
       migrated.exec(`
@@ -449,10 +476,61 @@ it.each([
       );
     }
     const work = withUpdateCommandExecutor(run.runId, async (executor) => {
-      const executorFence = await executor.enter(root);
+      const serviceRoot = retained ? path.join(stateDir, "service-A") : undefined;
+      if (serviceRoot) {
+        await fs.mkdir(serviceRoot);
+        if (original) {
+          await fs.writeFile(
+            path.join(serviceRoot, "package.json"),
+            JSON.stringify({
+              name: "openclaw",
+              version: "2026.9.3",
+              type: "module",
+            }),
+          );
+        }
+      }
+      const originalFingerprint =
+        original && serviceRoot
+          ? await createPackageIntegrityReader().tree(serviceRoot)
+          : undefined;
+      const unverifiedLauncher: PackageLauncherFingerprint = {
+        type: "file",
+        mode: "33188",
+        uid: "0",
+        gid: "0",
+        contents: "unverified",
+      };
+      const executorFence = await executor.enter(root, { serviceRoot });
       return await continueMigratedUpdateInFreshProcess(
         {
           mutationStarted: true,
+          ...(originalFingerprint && serviceRoot
+            ? {
+                originalManagedServiceRuntime: {
+                  root: serviceRoot,
+                  nodeRunner: process.execPath,
+                  version: "2026.9.3",
+                  verified: false,
+                  definition: {
+                    command: { programArguments: [] },
+                    fingerprint: "unverified",
+                    runtimePin: originalRuntimePin!,
+                  },
+                  service: { serviceEnv: env },
+                  packageFingerprint: originalFingerprint,
+                  packageIdentity: originalFingerprint,
+                  // Deliberately uncertified; these fields must not grant recovery.
+                  launcher: {
+                    path: path.join(serviceRoot, "unverified-launcher"),
+                    realPath: path.join(serviceRoot, "unverified-launcher"),
+                    fingerprint: unverifiedLauncher,
+                    targetFingerprint: unverifiedLauncher,
+                  },
+                  nodeIdentity: "unverified-original-service-fixture",
+                },
+              }
+            : {}),
           result: {
             status: "error",
             reason: "doctor-failed",
@@ -514,7 +592,9 @@ it.each([
       return;
     }
     if (legacy) {
-      await expect(work).rejects.toThrow(/live executor delegation/);
+      await expect(work).rejects.toThrow(
+        foreground ? /cannot defer foreground update completion/ : /live executor delegation/,
+      );
       await expect(fs.access(legacyEffect)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await family()).toEqual(before);
       expect(terminalAtCleanup).toBeUndefined();
@@ -533,6 +613,16 @@ it.each([
       status: "error",
       reason: "state-migrated-no-rollback",
     });
+    if (original) {
+      expect(result.result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "original-managed-service-compensation",
+          cwd: path.join(stateDir, "service-A"),
+          exitCode: 1,
+        }),
+      );
+      expect(result.result.recovery?.serviceRestartSafe).toBe(false);
+    }
     expect(rollback).not.toHaveBeenCalled();
     expect(terminalAtCleanup).toEqual({ status: "failed", reason: "state-migrated-no-rollback" });
     if (json) {

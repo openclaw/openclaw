@@ -835,43 +835,40 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("preserves selected-profile identity in exhausted fallback summaries", async () => {
-    const code = "selected_auth_profile_unavailable";
-    const run = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new FailoverError("primary selected profile missing", {
-          provider: "openai",
-          model: "gpt-5.5",
-          reason: "auth",
-          status: 401,
-          code,
-        }),
-      )
-      .mockRejectedValueOnce(
-        new FailoverError("fallback selected profile missing", {
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          reason: "auth",
-          status: 401,
-          code,
-        }),
+  it.each([undefined, 401])(
+    "preserves local profile absence through model fallback without provider reauthentication (status=%s)",
+    async (status) => {
+      const code = "selected_auth_profile_unavailable";
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(
+          Object.assign(new Error("primary selected profile missing"), { code, status }),
+        )
+        .mockRejectedValueOnce(
+          Object.assign(new Error("fallback selected profile missing"), { code, status }),
+        );
+
+      const error = requireFallbackSummaryError(
+        await captureRejection(
+          runWithModelFallback({
+            cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-6"]),
+            provider: "openai",
+            model: "gpt-5.5",
+            run,
+          }),
+        ),
       );
 
-    const error = requireFallbackSummaryError(
-      await captureRejection(
-        runWithModelFallback({
-          cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-6"]),
-          provider: "openai",
-          model: "gpt-5.5",
-          run,
-        }),
-      ),
-    );
-
-    expect(error).toMatchObject({ reason: "auth", status: 401, code });
-    expect(error.attempts).toMatchObject([{ code }, { code }]);
-  });
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(error).toMatchObject({ reason: "auth", code });
+      expect(error.status).toBeUndefined();
+      expect(error.attempts).toMatchObject([
+        { code, error: "primary selected profile missing", status: undefined },
+        { code, error: "fallback selected profile missing", status: undefined },
+      ]);
+      expect(error.message).not.toMatch(/HTTP 401|re-authenticate|Authentication failed/i);
+    },
+  );
 
   it("uses the opt-in auth skip cache on the second turn for the same session", async () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;

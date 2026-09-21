@@ -73,6 +73,7 @@ export function renderBoardPendingCapabilities(options: {
 
 export function renderBoardGrantedCapabilities(
   widget: BoardWidget,
+  presentation: "tooltip" | "details" = "tooltip",
 ): TemplateResult | typeof nothing {
   if (widget.grantState !== "granted" || !widget.declared) {
     return nothing;
@@ -87,6 +88,18 @@ export function renderBoardGrantedCapabilities(
   ];
   if (capabilities.length === 0) {
     return nothing;
+  }
+  if (presentation === "details") {
+    return html`<div
+      class="board-widget__menu-capabilities"
+      role="note"
+      aria-label=${t("board.widget.activeCapabilities")}
+    >
+      <strong>${t("board.widget.activeCapabilities")}</strong>
+      <ul>
+        ${capabilities.map((capability) => html`<li>${capability}</li>`)}
+      </ul>
+    </div>`;
   }
   return html`
     <openclaw-tooltip

@@ -267,7 +267,7 @@ function selectSlashCommand(
   requestUpdate: () => void,
   completeOnly = false,
 ): void {
-  if (!completeOnly && host.activateComposerMode?.(cmd)) {
+  if (host.activateComposerMode?.(cmd)) {
     return;
   }
   if (

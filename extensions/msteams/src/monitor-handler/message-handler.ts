@@ -220,7 +220,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         if (historyBody) {
           enqueuePrimaryMessageSystemEvent();
           createChannelHistoryWindow({ historyMap: conversationHistories }).record({
-            historyKey: conversationId,
+            historyKey: facts.historyKey,
             limit: historyLimit,
             entry: {
               sender: senderName,

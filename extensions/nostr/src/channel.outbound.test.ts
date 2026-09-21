@@ -195,7 +195,11 @@ describe("nostr outbound cfg threading", () => {
     });
     expect(convertMarkdownTables).toHaveBeenCalledWith("|a|b|", "off");
     expect(mocks.normalizePubkey).toHaveBeenCalledWith("NPUB123");
-    expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "Table: docs (https://example.com)");
+    expect(sendDm).toHaveBeenCalledWith(
+      "normalized-npub123",
+      "Table: docs (https://example.com)",
+      expect.any(Object),
+    );
     await expect(
       nostrOutboundAdapter.sendText({
         cfg: cfg as OpenClawConfig,
@@ -232,7 +236,7 @@ describe("nostr outbound cfg threading", () => {
       channel: "nostr",
       accountId: "work",
     });
-    expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello");
+    expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello", expect.any(Object));
 
     await cleanup.stop();
   });
@@ -280,7 +284,7 @@ describe("nostr outbound cfg threading", () => {
             text: "hello",
             accountId: "default",
           });
-          expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello");
+          expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello", expect.any(Object));
           expect(result.receipt.parts[0]?.kind).toBe("text");
         },
         messageSendingHooks: () => {

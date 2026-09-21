@@ -436,6 +436,13 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const transportKind = accountInfo.transport.kind;
   const managedTransport =
     accountInfo.transport.kind === "managed-native" ? accountInfo.transport : undefined;
+  const socketPath = managedTransport?.socketPath;
+  if (
+    socketPath &&
+    (opts.baseUrl !== undefined || opts.httpHost !== undefined || opts.httpPort !== undefined)
+  ) {
+    throw new Error("Signal socket transport cannot be combined with HTTP endpoint overrides");
+  }
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
   const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
   const waitForTransportReadyFn = opts.waitForTransportReady ?? waitForTransportReady;
@@ -471,6 +478,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       await assertSignalDaemonEndpointAvailable({
         httpHost,
         httpPort,
+        ...(socketPath ? { socketPath } : {}),
         abortSignal: endpointProbeSignal,
       });
     } catch (error) {
@@ -501,6 +509,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       httpHost,
       httpPort,
+      ...(socketPath ? { socketPath } : {}),
       receiveMode: opts.receiveMode ?? managedTransport?.receiveMode,
       ignoreAttachments: opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments,
       ignoreStories: opts.ignoreStories ?? managedTransport?.ignoreStories,

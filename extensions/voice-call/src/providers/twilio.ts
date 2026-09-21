@@ -1,4 +1,3 @@
-// Voice Call plugin module implements twilio behavior.
 import crypto from "node:crypto";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";

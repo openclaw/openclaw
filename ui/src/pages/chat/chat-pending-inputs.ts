@@ -12,7 +12,7 @@ import { findChatSubmissionMessage } from "../../lib/chat/history-message-identi
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
-import { removeQueuedMessage } from "./chat-queue.ts";
+import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
@@ -143,7 +143,7 @@ function reconcilePendingInputPage(
   page: ChatPendingInputsPage | undefined,
   receipts?: ChatInputReceipts,
 ): ChatPendingInputsPage {
-  const { page: displayPage } = reconcileChatInputCustody(state, page, receipts);
+  const { page: displayPage, acceptedRunIds } = reconcileChatInputCustody(state, page, receipts);
   const settled = new Set([
     ...(receipts ?? [])
       .filter((receipt) => receipt.state === "consumed")
@@ -161,6 +161,12 @@ function reconcilePendingInputPage(
       (!item.sessionId || item.sessionId === state.currentSessionId)
     ) {
       removeQueuedMessage(state, item.id);
+    } else if (
+      item.sendRunId &&
+      acceptedRunIds.has(item.sendRunId) &&
+      (!item.sessionId || item.sendState === "unconfirmed")
+    ) {
+      confirmQueuedMessageCustody(state, item, state.currentSessionId ?? undefined);
     }
   }
   return displayPage;

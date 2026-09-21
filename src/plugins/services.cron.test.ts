@@ -92,10 +92,13 @@ describe("plugin service scheduler ownership", () => {
       throw new Error("Gateway service has no scheduler");
     }
     expect(first.context.getCron?.()).toBe(service);
+    const isEnabled = expectDefined(service.isEnabled, "scheduler enabled observation");
+    expect(await isEnabled()).toBe(false);
     await service.add(createJob());
     await first.handle.stop();
     expect(() => first.context.getCron?.()).toThrow("no longer active");
     await expect(service.list()).rejects.toThrow("no longer active");
+    await expect(isEnabled()).rejects.toThrow("no longer active");
 
     const next = await startService(() => cron);
     const successor = next.context.getCron?.();
@@ -180,6 +183,7 @@ describe("plugin service scheduler ownership", () => {
       });
       await entered.promise;
       const queued = [
+        expectDefined(service.isEnabled, "scheduler enabled observation")(),
         service.list({ includeDisabled: true }),
         service.add({ ...createJob("late addition"), declarationKey: "test-plugin:late" }),
         service.update(job.id, { name: "late update" }),
@@ -214,6 +218,7 @@ describe("plugin service scheduler ownership", () => {
       }
       await blocker;
       expect((await results).map((result) => result.status)).toEqual([
+        "rejected",
         "rejected",
         "rejected",
         "rejected",

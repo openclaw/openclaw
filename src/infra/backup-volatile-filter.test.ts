@@ -41,6 +41,9 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/sandbox/skills-workspaces/workspace-main`, true],
     [`${stateDir}/sandbox/skills-workspaces/workspace-main/skills/demo`, true],
     [`${stateDir}/cache/control-ui-assets/generation/assets/app.js`, true],
+    [`${stateDir}/tmp/plugin-captures/instance/captures/source.js`, true],
+    [`${stateDir}/tmp/plugin-captures/instance/owner.sqlite`, true],
+    [`${stateDir}/tmp/plugin-captures-saved/source.js`, false],
 
     // non-volatile: session config, not jsonl/log
     [`${stateDir}/sessions/s-abc/meta.json`, false],

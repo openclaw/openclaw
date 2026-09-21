@@ -252,56 +252,60 @@ defineDiscordVoiceTests(
       },
     );
 
-    it("changes the room voice from a native delegation and speaks its answer on the replacement", async () => {
-      useNativeVoices();
-      const { entry, manager } = await createJoinedAgentProxyFixture();
-      const bindRun = vi.spyOn(selectionHandle(), "bindRun");
-      try {
-        beginSpeakerTurn(entry, { userId: "owner", senderIsOwner: true }).close();
-        const original = lastRealtimeBridge();
-        original.bridgeParams.onTranscript?.(
-          "user",
-          "Remember that the agenda starts with budget.",
-          true,
-        );
-        original.bridgeParams.onTranscript?.("assistant", "Budget comes first.", true);
-        agentCommandMock.mockImplementationOnce(async () => {
-          const input = lastAgentCommandArgs();
-          expect(bindRun).toHaveBeenCalledOnce();
-          const binding = bindRun.mock.calls[0]![0];
-          expect(input.runId).toBe(binding.runId);
-          expect(selectionOwner().read()).toMatchObject({
-            voice: "marin",
-            voices: ["marin", "cedar"],
-            canChange: true,
+    it.each([false, true])(
+      "changes the room voice from an admitted native delegation (owner=%s)",
+      async (senderIsOwner) => {
+        useNativeVoices();
+        const { entry, manager } = await createJoinedAgentProxyFixture();
+        const bindRun = vi.spyOn(selectionHandle(), "bindRun");
+        try {
+          beginSpeakerTurn(entry, { senderIsOwner }).close();
+          const original = lastRealtimeBridge();
+          original.bridgeParams.onTranscript?.(
+            "user",
+            "Remember that the agenda starts with budget.",
+            true,
+          );
+          original.bridgeParams.onTranscript?.("assistant", "Budget comes first.", true);
+          agentCommandMock.mockImplementationOnce(async () => {
+            const input = lastAgentCommandArgs();
+            expect(input.senderIsOwner).toBe(senderIsOwner);
+            expect(bindRun).toHaveBeenCalledOnce();
+            const binding = bindRun.mock.calls[0]![0];
+            expect(input.runId).toBe(binding.runId);
+            expect(selectionOwner().read()).toMatchObject({
+              voice: "marin",
+              voices: ["marin", "cedar"],
+              canChange: true,
+            });
+            await selectionOwner().changeVoice("cedar", { assertCurrent: binding.assertCurrent });
+            expect(input.abortSignal).toBeInstanceOf(AbortSignal);
+            if (input.abortSignal instanceof AbortSignal) {
+              expect(input.abortSignal.aborted).toBe(false);
+            }
+            return { payloads: [{ text: "I'm speaking with Cedar now." }] };
           });
-          await selectionOwner().changeVoice("cedar", { assertCurrent: binding.assertCurrent });
-          expect(input.abortSignal).toBeInstanceOf(AbortSignal);
-          if (input.abortSignal instanceof AbortSignal) {
-            expect(input.abortSignal.aborted).toBe(false);
-          }
-          return { payloads: [{ text: "I'm speaking with Cedar now." }] };
-        });
-        await expect(
-          original.bridgeParams.runAgentConsult!({ prompt: "Switch to Cedar." }),
-        ).resolves.toEqual({ text: "I'm speaking with Cedar now." });
-        const replacement = lastRealtimeBridge();
-        expect(replacement.session).not.toBe(original.session);
-        expect(replacement.bridgeParams.instructions).toContain("Budget comes first.");
-        expect(replacement.bridgeParams.instructions).toContain("quoted conversation history");
-        expect(original.session.close).toHaveBeenCalledExactlyOnceWith({ disposition: "detach" });
-        expect(selectionOwner().read()).toMatchObject({ voice: "cedar" });
-        expect(
-          sentUserMessages(replacement.session).some((text) =>
-            text.includes("I'm speaking with Cedar now."),
-          ),
-        ).toBe(true);
-        expect(manager.status()).toHaveLength(1);
-        expect(original.session.submitToolResult).not.toHaveBeenCalled();
-      } finally {
-        await manager.destroy();
-      }
-    });
+          await expect(
+            original.bridgeParams.runAgentConsult!({ prompt: "Switch to Cedar." }),
+          ).resolves.toEqual({ text: "I'm speaking with Cedar now." });
+          const replacement = lastRealtimeBridge();
+          expect(replacement.session).not.toBe(original.session);
+          expect(replacement.bridgeParams.instructions).toContain("Budget comes first.");
+          expect(replacement.bridgeParams.instructions).toContain("quoted conversation history");
+          expect(original.session.close).toHaveBeenCalledExactlyOnceWith({ disposition: "detach" });
+          expect(selectionOwner().read()).toMatchObject({ voice: "cedar" });
+          expect(
+            sentUserMessages(replacement.session).some((text) =>
+              text.includes("I'm speaking with Cedar now."),
+            ),
+          ).toBe(true);
+          expect(manager.status()).toHaveLength(1);
+          expect(original.session.submitToolResult).not.toHaveBeenCalled();
+        } finally {
+          await manager.destroy();
+        }
+      },
+    );
 
     it("does not hand cancelled native consult speech to the replacement", async () => {
       useNativeVoices();
@@ -310,7 +314,7 @@ defineDiscordVoiceTests(
         import("./realtime-player.js"),
       ]);
       const { entry, manager } = await createJoinedAgentProxyFixture();
-      const player = new DiscordRealtimePlayer(entry.player);
+      const player = new DiscordRealtimePlayer(entry.audio);
       const answer = createDeferred<string>();
       const cancellation = new AbortController();
       const context = { senderIsOwner: true, speakerLabel: "Owner" };

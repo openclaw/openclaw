@@ -10,34 +10,48 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Requested CUA update with keyboard delivery fixes; remove after 2026-09-22T22:00:08Z.
+  - "@trycua/cua-driver@0.28.2"
+  - "@trycua/cua-driver-darwin-arm64@0.28.2"
+  - "@trycua/cua-driver-darwin-x64@0.28.2"
+  - "@trycua/cua-driver-linux-arm64-gnu@0.28.2"
+  - "@trycua/cua-driver-linux-x64-gnu@0.28.2"
+  - "@trycua/cua-driver-win32-arm64-msvc@0.28.2"
+  - "@trycua/cua-driver-win32-x64-msvc@0.28.2"
+  # Reviewed ACPX release; remove after 2026-09-27T20:56:00Z.
+  - acpx@0.18.0
+  # Published ACPX runtime dependencies; remove after 2026-09-22T12:38:43Z.
+  - "@openclaw/fs-safe@0.12.0"
+  - "@openclaw/fs-safe-darwin-arm64@0.12.0"
+  - "@openclaw/fs-safe-darwin-x64@0.12.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.12.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.12.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.12.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.12.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.12.0"
+  # Published ACPX runtime dependency; remove after 2026-09-17T21:44:31Z.
+  - zod@4.6.2
   # GHSA-jqcg-44mw-7w3h trust-subnet fix; remove after 2026-09-22 06:13 UTC.
   - "proxy-addr@2.0.8"
   # Smartquotes denial-of-service fix; remove after 2026-09-18 04:04 UTC.
   - "markdown-it@15.0.2"
-  # Reviewed Discord local-provider contract; remove after 2026-09-21.
-  - "@openclaw/crabline@0.1.24"
+  # Reviewed running-adapter evidence contract; remove after 2026-09-23.
+  - "@openclaw/crabline@0.1.27"
   # Reviewed Opus WASM stack repair; remove after 2026-09-21.
   - "libopus-wasm@0.4.0"
   # Reviewed proxy DNS/TLS controls; remove after 2026-09-15 10:08 UTC.
   - "@openclaw/proxyline@0.3.12"
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe descriptor ownership fix; remove after 2026-09-23 22:01 UTC.
-  - "@openclaw/fs-safe@0.13.1"
-  # Remove after 2026-09-23 21:57 UTC.
-  - "@openclaw/fs-safe-darwin-arm64@0.13.1"
-  # Remove after 2026-09-23 21:51 UTC.
-  - "@openclaw/fs-safe-darwin-x64@0.13.1"
-  # Remove after 2026-09-23 21:48 UTC.
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.13.1"
-  # Remove after 2026-09-23 21:49 UTC.
-  - "@openclaw/fs-safe-linux-arm64-musl@0.13.1"
-  # Remove after 2026-09-23 21:44 UTC.
-  - "@openclaw/fs-safe-linux-x64-gnu@0.13.1"
-  # Remove after 2026-09-23 21:46 UTC.
-  - "@openclaw/fs-safe-linux-x64-musl@0.13.1"
-  # Remove after 2026-09-23 21:58 UTC.
-  - "@openclaw/fs-safe-win32-x64-msvc@0.13.1"
+  # Reviewed fs-safe 0.17.0 release and native helpers; remove after 2026-09-27T16:54:36Z.
+  - "@openclaw/fs-safe@0.17.0"
+  - "@openclaw/fs-safe-darwin-arm64@0.17.0"
+  - "@openclaw/fs-safe-darwin-x64@0.17.0"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.17.0"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.17.0"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.17.0"
+  - "@openclaw/fs-safe-linux-x64-musl@0.17.0"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.17.0"
   # fs-safe archive dependency; remove after 2026-09-16.
   - "jszip@3.10.2"
   # GHSA-prgh-xp8r-p3m5 / GHSA-v53p-9fqp-m79j security fixes; remove after 2026-09-18.
@@ -45,6 +59,8 @@ minimumReleaseAgeExclude:
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
+# Private inodes keep sibling installs from changing compiler input ctimes.
+packageImportMethod: clone-or-copy
 # GWTs share node_modules; script commands must not reconcile that shared install.
 verifyDepsBeforeRun: false
 blockExoticSubdeps: true
@@ -95,6 +111,7 @@ overrides:
   uuid: 14.0.2
 
 allowBuilds:
+  onnxruntime-node: false
   "@google/genai": true
   "@lydell/node-pty": true
   "@matrix-org/matrix-sdk-crypto-nodejs": true
@@ -122,6 +139,7 @@ packageExtensions:
         optional: true
 
 patchedDependencies:
+  "chrome-devtools-mcp@1.8.0": patches/chrome-devtools-mcp@1.8.0.patch
   "@awesome.me/webawesome@3.12.0": patches/@awesome.me__webawesome@3.12.0.patch
   "matrix-js-sdk@42.3.0": patches/matrix-js-sdk@42.3.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch

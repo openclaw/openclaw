@@ -71,6 +71,7 @@ openclaw tui --local
 - If the session has a [goal](/tools/goal), the footer shows its compact state:
   `Pursuing goal`, `Goal paused (/goal resume)`, `Goal blocked (/goal resume)`, or `Goal achieved`.
 - When started without `--session`, gateway-mode TUI resumes the last selected session. The gateway, agent, and session scope must match, and that session must still exist. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
+- Session details and remembered-session restoration select the exact conversation, even when newer sessions have similar names. After reconnecting, metadata from the previous connection is discarded.
 
 ## Sending + delivery
 

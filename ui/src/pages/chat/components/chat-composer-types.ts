@@ -8,10 +8,12 @@ import type {
 } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import type { SessionProgressCardRefreshAction } from "../../../components/session-progress-card.ts";
 import type {
   ChatGoalAction,
   ChatGoalDraft,
   ChatGoalDraftMode,
+  ChatGoalRecovery,
   ChatQueueItem,
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
@@ -29,6 +31,7 @@ import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
 import type { RealtimeVoiceSelectionState } from "../talk/voice-selection.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
+import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ComposerEmojiMenu } from "./chat-composer-emoji.ts";
 import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.ts";
@@ -95,6 +98,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   progressCard?: ProgressCard | null;
   progressCardIdentity?: string;
   progressCardInitialLoading?: boolean;
+  progressCardRefresh?: SessionProgressCardRefreshAction;
   gatewayScope?: object;
   runActive?: boolean;
   collapseTaskProgress?: boolean;
@@ -102,7 +106,9 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onProgressManipulate?: () => void;
   runId?: string | null;
   onDismissProgressCard?: (card: ProgressCard) => void;
+  /** The pane scopes Gateway questions to this conversation's agent and session. */
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
+  asyncQuestions?: AsyncQuestionPresentation;
   messages: unknown[];
   stream: string | null;
   queue: ChatQueueItem[];
@@ -151,7 +157,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   typingActors?: readonly { id: string; label: string; preview?: string }[];
   onTypingChange?: (typing: boolean, preview?: string) => void;
   composerControls?: TemplateResult | typeof nothing;
-  anchoredNotices?: TemplateResult | typeof nothing;
+  footerContent?: TemplateResult | typeof nothing;
+  notices?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
@@ -175,6 +182,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   displayQueue?: ChatQueueItem[];
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
+  goalRecovery?: ChatGoalRecovery;
   onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
   onGoalSubmit?: (draft: ChatGoalDraft, submissionAction?: Event) => Promise<boolean>;
   goalDraftMode?: ChatGoalDraftMode | null;
@@ -207,8 +215,10 @@ export type ChatComposerState = SkillMenuState &
     pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
     goalExpandedId: string | null;
     goalComposer: (ChatGoalDraftMode & { key: string; pending: boolean }) | null;
-    activeGatewayQuestionId: string | null;
-    gatewayQuestionCollapsed: boolean;
+    activeQuestionKey: string | null;
+    gatewayQuestionIds: Set<string>;
+    asyncQuestionIds: Set<string>;
+    questionCollapsed: boolean;
     questionTakeoverActive: boolean;
     restoreComposerFocus: boolean;
     composerInput: HTMLElement | null;

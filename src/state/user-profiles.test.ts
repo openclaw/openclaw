@@ -3,15 +3,19 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import * as stateDatabase from "./openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
+import { listUserProfilesSync } from "./user-profile-list.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
   adoptTailscaleProfileAvatar,
@@ -23,7 +27,6 @@ import {
   getUserProfileListItem,
   getUserProfileRole,
   linkEmail,
-  listProfiles,
   setAvatar,
   setDisplayName,
   setUserProfileRole,
@@ -31,8 +34,9 @@ import {
 } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   });
@@ -154,6 +158,7 @@ describe("user profiles", () => {
     const profileVersion = readUserProfileVersion();
     const first = ensureProfileForEmail("  Ada@Example.COM ", options);
     expect(readUserProfileVersion()).toBe(profileVersion + 1);
+    const transaction = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
     const second = ensureProfileForEmail("ada@example.com", options);
 
     expect(tableExists(openOpenClawStateDatabase(options).db, "user_profiles")).toBe(true);
@@ -166,8 +171,9 @@ describe("user profiles", () => {
     expect(versionBefore).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(second).toEqual(first);
     expect(ensureProfileForEmail("ADA@example.com", options)).toEqual(first);
+    expect(transaction).not.toHaveBeenCalled();
     expect(readUserProfileVersion()).toBe(profileVersion + 1);
-    expect(listProfiles(options)).toEqual([
+    expect(listUserProfilesSync(options)).toEqual([
       expect.objectContaining({ id: first.id, emails: ["ada@example.com"] }),
     ]);
   });
@@ -180,6 +186,7 @@ describe("user profiles", () => {
       { login: "Ada@GitHub", name: "Ada Lovelace" },
       options,
     );
+    const transaction = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
     const second = ensureProfileForTailscaleIdentity(
       { login: "ada@github", name: "Different Provider Name" },
       options,
@@ -187,8 +194,9 @@ describe("user profiles", () => {
 
     expect(second.id).toBe(first.id);
     expect(second.displayName).toBe("Ada Lovelace");
+    expect(transaction).not.toHaveBeenCalled();
     expect(readUserProfileVersion()).toBe(profileVersion + 1);
-    expect(listProfiles(options)).toEqual([
+    expect(listUserProfilesSync(options)).toEqual([
       expect.objectContaining({ id: first.id, emails: [], displayName: "Ada Lovelace" }),
     ]);
     expect(
@@ -198,6 +206,46 @@ describe("user profiles", () => {
         )
         .all(),
     ).toEqual([{ provider: "github", subject: "login:ada", profile_id: first.id }]);
+  });
+
+  it.each(["email", "provider"])(
+    "reuses a %s profile created while waiting for writer admission",
+    (kind) => {
+      const options = stateOptions();
+      ensureProfileForEmail("schema-ready@example.test", options);
+      const ensure =
+        kind === "email"
+          ? () => ensureProfileForEmail("racing@example.test", options)
+          : () => ensureProfileForTailscaleIdentity({ login: "racing@github" }, options);
+      const originalTransaction = stateDatabase.runOpenClawStateWriteTransaction;
+      let competingProfile: ReturnType<typeof ensureProfileForEmail> | undefined;
+      vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction").mockImplementationOnce(
+        (operation, databaseOptions, transactionOptions) => {
+          competingProfile = ensure();
+          return originalTransaction(operation, databaseOptions, transactionOptions);
+        },
+      );
+
+      expect(ensure()).toEqual(competingProfile);
+      expect(competingProfile).toBeDefined();
+      expect(listUserProfilesSync(options)).toHaveLength(2);
+    },
+  );
+
+  it("preserves a custom name saved while waiting to adopt a provider name", () => {
+    const options = stateOptions();
+    const profile = ensureProfileForTailscaleIdentity({ login: "racing@github" }, options);
+    const originalTransaction = stateDatabase.runOpenClawStateWriteTransaction;
+    vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction").mockImplementationOnce(
+      (operation, databaseOptions, transactionOptions) => {
+        setDisplayName(profile.id, "User Chosen", options);
+        return originalTransaction(operation, databaseOptions, transactionOptions);
+      },
+    );
+
+    expect(
+      ensureProfileForTailscaleIdentity({ login: "racing@github", name: "Provider Name" }, options),
+    ).toMatchObject({ id: profile.id, displayName: "User Chosen" });
   });
 
   it("publishes a normalized provider subject without repeating an unchanged identity", () => {
@@ -245,7 +293,7 @@ describe("user profiles", () => {
     const target = ensureProfileForEmail("target@example.com", options);
 
     expect(getUserProfileListItem(target.id, options)).not.toHaveProperty("role");
-    expect(listProfiles(options).every((profile) => !("role" in profile))).toBe(true);
+    expect(listUserProfilesSync(options).every((profile) => !("role" in profile))).toBe(true);
 
     linkEmail("source@example.com", target.id, options);
     const version = readUserProfileVersion();
@@ -256,7 +304,7 @@ describe("user profiles", () => {
     expect(readUserProfileVersion()).toBe(version + 1);
     expect(getUserProfileRole(source.id, options)).toBe("maintainer");
     expect(getUserProfileRole(target.id, options)).toBe("maintainer");
-    expect(listProfiles(options)).toContainEqual(
+    expect(listUserProfilesSync(options)).toContainEqual(
       expect.objectContaining({ id: target.id, role: "maintainer" }),
     );
 
@@ -265,7 +313,7 @@ describe("user profiles", () => {
     expect(cleared).toMatchObject({ id: target.id });
     expect(cleared).not.toHaveProperty("role");
     expect(getUserProfileRole(target.id, options)).toBeNull();
-    expect(listProfiles(options).every((profile) => !("role" in profile))).toBe(true);
+    expect(listUserProfilesSync(options).every((profile) => !("role" in profile))).toBe(true);
   });
 
   it("rejects role access for a missing durable profile", () => {
@@ -426,7 +474,7 @@ describe("user profiles", () => {
       theme: "claw",
       [GIT_COAUTHOR_PREFERENCE_KEY]: true,
     });
-    expect(listProfiles(options)).toEqual([
+    expect(listUserProfilesSync(options)).toEqual([
       expect.objectContaining({ id: accountA.id, mergedInto: null }),
       expect.objectContaining({ id: accountB.id, mergedInto: null }),
     ]);
@@ -444,7 +492,7 @@ describe("user profiles", () => {
     );
 
     expect(second.id).toBe(first.id);
-    expect(listProfiles(options)).toEqual([
+    expect(listUserProfilesSync(options)).toEqual([
       expect.objectContaining({ id: first.id, displayName: "Ada Lovelace", mergedInto: null }),
     ]);
     setDisplayName(first.id, "User Chosen", options);
@@ -698,7 +746,7 @@ describe("user profiles", () => {
     ).toEqual(profile);
     expect(readUserProfileVersion()).toBe(version);
     expect(profile.displayName).toBe("Person Example");
-    expect(listProfiles(options)).toEqual([
+    expect(listUserProfilesSync(options)).toEqual([
       expect.objectContaining({ id: profile.id, emails: ["person@gmail.com"] }),
     ]);
   });
@@ -760,7 +808,7 @@ describe("user profiles", () => {
       updatedAt: 400,
       emails: ["source@example.com", "target@example.com"],
     });
-    expect(listProfiles(options)).toContainEqual(
+    expect(listUserProfilesSync(options)).toContainEqual(
       expect.objectContaining({
         id: source.id,
         updatedAt: 400,
@@ -882,13 +930,12 @@ describe("user profiles", () => {
 
   it("preserves a user avatar written while provider avatar bytes are in flight", async () => {
     const options = stateOptions();
-    let resolveFetch: ((response: Response) => void) | undefined;
-    const fetchImpl = vi.fn(
-      async () =>
-        await new Promise<Response>((resolve) => {
-          resolveFetch = resolve;
-        }),
-    );
+    const entered = createDeferredCore();
+    const response = createDeferredCore<Response>();
+    const fetchImpl = vi.fn(async () => {
+      entered.resolve();
+      return response.promise;
+    });
     const pending = ensureTailscaleProfileWithAvatar(
       {
         login: "avatar-race@github",
@@ -898,21 +945,29 @@ describe("user profiles", () => {
       options,
       { fetchImpl },
     );
-    await vi.waitFor(() => expect(resolveFetch).toBeTypeOf("function"));
-    const profileId = listProfiles(options)[0]?.id;
-    expect(profileId).toBeTruthy();
-    expect(setAvatar(profileId!, new Uint8Array([9, 8, 7]), "image/png", options).ok).toBe(true);
-    const version = readUserProfileVersion();
-
-    resolveFetch?.(
-      new Response(Uint8Array.from(fixtureImage("ui/public/favicon-32.png")).buffer, {
-        headers: { "content-type": "image/png" },
-      }),
-    );
-    await pending;
-
-    expect(readUserProfileVersion()).toBe(version);
-    expect(getProfileAvatar(profileId!, options)?.bytes).toEqual(new Uint8Array([9, 8, 7]));
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("Avatar adoption did not enter its fetch");
+        }),
+      ]);
+      const profileId = listUserProfilesSync(options)[0]?.id;
+      expect(profileId).toBeTruthy();
+      expect(setAvatar(profileId!, new Uint8Array([9, 8, 7]), "image/png", options).ok).toBe(true);
+      const version = readUserProfileVersion();
+      response.resolve(
+        new Response(Uint8Array.from(fixtureImage("ui/public/favicon-32.png")).buffer, {
+          headers: { "content-type": "image/png" },
+        }),
+      );
+      await pending;
+      expect(readUserProfileVersion()).toBe(version);
+      expect(getProfileAvatar(profileId!, options)?.bytes).toEqual(new Uint8Array([9, 8, 7]));
+    } finally {
+      response.resolve(new Response("unavailable", { status: 503 }));
+      await Promise.allSettled([pending]);
+    }
   });
 
   it("migrates legacy provider logins while preserving profiles and real emails", () => {
@@ -935,7 +990,7 @@ describe("user profiles", () => {
     expect(database.prepare("SELECT email, profile_id FROM user_profile_emails").all()).toEqual([
       { email: "person@gmail.com", profile_id: email.id },
     ]);
-    expect(listProfiles(options)).toEqual(
+    expect(listUserProfilesSync(options)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: provider.id,
@@ -1004,7 +1059,7 @@ describe("user profiles", () => {
       sha256,
       updatedAt: expect.any(Number),
     });
-    expect(listProfiles(options)).toEqual([
+    expect(listUserProfilesSync(options)).toEqual([
       expect.objectContaining({ id: profile.id, hasAvatar: true }),
     ]);
     expect(getUserProfileDisplay(profile.id, options)).toEqual({

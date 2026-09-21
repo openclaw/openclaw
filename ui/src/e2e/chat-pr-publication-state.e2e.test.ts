@@ -5,6 +5,7 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gat
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import {
   publicationMethods,
   publicationOptions,
@@ -28,7 +29,12 @@ suite.define(() => {
       const href = "https://github.com/synthetic/publication-demo/pull/42";
       const gateway = await installMockGateway(page, {
         communityInvite: false,
-        featureMethods: [...publicationMethods, "controlUi.githubPreview"],
+        featureMethods: [
+          ...publicationMethods,
+          TEST_LINK_READER.linkReader.previewMethod!,
+          TEST_LINK_READER.linkReader.detailMethod,
+        ],
+        controlUiLinkReaders: [TEST_LINK_READER],
         deferredMethods: ["sessions.github.options"],
         historyMessages: [
           {
@@ -39,16 +45,13 @@ suite.define(() => {
         methodResponses: {
           [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
           "sessions.github.options": publicationOptions,
-          "controlUi.githubPreview": {
-            kind: "pull",
-            number: 42,
-            owner: "synthetic",
-            repo: "publication-demo",
-            state: "closed",
-            mergedAt: "2026-09-12T00:00:00Z",
+          [TEST_LINK_READER.linkReader.previewMethod!]: {
+            url: href,
+            subtitle: "synthetic/publication-demo #42",
+            badge: { label: "Merged", tone: "accent" },
             createdAt: "2026-09-11T00:00:00Z",
             updatedAt: "2026-09-12T00:00:00Z",
-            login: "reviewer",
+            author: "reviewer",
             title: "Completed task in another worktree",
           },
         },
@@ -57,10 +60,10 @@ suite.define(() => {
       await showPublicationBranch(gateway, "openclaw/review-request");
       await gateway.waitForRequest("sessions.github.options");
       const chip = page.locator(`a.markdown-github-item[href="${href}"]`);
-      await expect.poll(() => chip.getAttribute("data-github-state")).toBe("merged");
+      await expect.poll(() => chip.getAttribute("data-link-reader-tone")).toBe("accent");
       await chip.focus();
       await expect
-        .poll(() => page.locator(".github-link-hovercard").textContent())
+        .poll(() => page.locator(".link-reader-hovercard").textContent())
         .toContain("Merged");
       await page.keyboard.press("Escape");
       if (captureUiProof) {
@@ -69,14 +72,14 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".chat-prs"), [chip]),
         );
       }
-      expect(await chip.getAttribute("data-github-state")).toBe("merged");
+      expect(await chip.getAttribute("data-link-reader-tone")).toBe("accent");
       expect(await page.locator(".chat-prs").textContent()).not.toContain("Publishing");
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       await gateway.resolveDeferred("sessions.github.options");
       await page.getByRole("button", { name: "Publish PR", exact: true }).waitFor();
       expect(await page.locator(".chat-prs").textContent()).toContain("openclaw/review-request");
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-      expect(await gateway.getRequests("controlUi.githubPreview")).toHaveLength(1);
+      expect(await gateway.getRequests(TEST_LINK_READER.linkReader.previewMethod!)).toHaveLength(1);
       if (captureUiProof) {
         await writeFile(
           path.join(suite.artifactDir, "merged-pr-idle-workspace.png"),

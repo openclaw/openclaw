@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { workspaceStatIdentity } from "../gateway/worker-environments/workspace-hash-memo.js";
+import { copyFileHandle } from "../infra/file-descriptor.js";
 import { resolveOpenedFileRealPathForHandle } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { tempWorkspace } from "../infra/private-temp-workspace.js";
@@ -34,33 +35,13 @@ async function stageUploadSource(params: {
     }
     const identity = workspaceStatIdentity("worker", before);
     const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    let offset = 0;
-    for (;;) {
-      params.signal?.throwIfAborted();
-      const { bytesRead } = await source.read(buffer, 0, buffer.length, offset);
-      if (bytesRead === 0) {
-        break;
-      }
-      offset += bytesRead;
-      if (offset > params.source.size) {
-        throw new Error("workspace changed while preparing its transfer snapshot");
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      let written = 0;
-      while (written < bytesRead) {
-        const { bytesWritten } = await destination.write(
-          buffer,
-          written,
-          bytesRead - written,
-          offset - bytesRead + written,
-        );
-        if (bytesWritten === 0) {
-          throw new Error("workspace transfer snapshot write made no progress");
-        }
-        written += bytesWritten;
-      }
-    }
+    const offset = await copyFileHandle(source, destination, {
+      maxBytes: params.source.size,
+      signal: params.signal,
+      onChunk(chunk) {
+        hash.update(chunk);
+      },
+    });
     const after = await source.stat({ bigint: true });
     if (
       offset !== params.source.size ||

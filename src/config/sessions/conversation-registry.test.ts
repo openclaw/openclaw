@@ -1,9 +1,10 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -42,10 +43,14 @@ describe("conversation registry", () => {
   let tempDir: string;
   let storePath: string;
 
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
+  const tempDirs = createTempDirTracker();
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+      closeOpenClawAgentDatabasesForTest(dir);
+    }
+    tempDirs.cleanup();
   });
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
     tempDir = tempDirs.make("openclaw-conversations-");

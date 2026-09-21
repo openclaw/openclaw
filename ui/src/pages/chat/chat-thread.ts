@@ -19,11 +19,7 @@ import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts
 import { readChatThreadMessageIdentity, sanitizeStreamText } from "./chat-thread-items.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
-export {
-  isPendingSendMessage,
-  persistedMessageEntryId,
-  readPendingSendStatus,
-} from "./chat-thread-items.ts";
+export { persistedMessageEntryId, readPendingSendStatus } from "./chat-thread-items.ts";
 export {
   assistantGroupCanOwnActiveRunStatus,
   coalesceActivityRuns,
@@ -80,6 +76,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     previous.senderLabel === next.senderLabel &&
     previous.senderSession?.sessionKey === next.senderSession?.sessionKey &&
     previous.senderSession?.agentId === next.senderSession?.agentId &&
+    previous.senderSession?.label === next.senderSession?.label &&
     messageClientSourcesKey(previous.sourceClients ?? []) ===
       messageClientSourcesKey(next.sourceClients ?? []) &&
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
@@ -130,9 +127,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.label === next.label &&
         previous.metric === next.metric &&
         previous.description === next.description &&
-        previous.timestamp === next.timestamp &&
-        previous.action?.kind === next.action?.kind &&
-        previous.action?.label === next.action?.label
+        previous.timestamp === next.timestamp
       );
     case "stream":
       return (
@@ -140,6 +135,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.text === next.text &&
         previous.startedAt === next.startedAt &&
         previous.isStreaming === next.isStreaming &&
+        JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );
@@ -214,6 +210,7 @@ function stabilizeChatItems(
         prior.senderLabel !== item.senderLabel ||
         prior.senderSession?.sessionKey !== item.senderSession?.sessionKey ||
         prior.senderSession?.agentId !== item.senderSession?.agentId ||
+        prior.senderSession?.label !== item.senderSession?.label ||
         messageClientSourcesKey(prior.sourceClients ?? []) !==
           messageClientSourcesKey(item.sourceClients ?? []) ||
         senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)

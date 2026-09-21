@@ -266,6 +266,7 @@ export interface SessionInputCompletions {
 }
 
 export interface SessionKeyContract {
+  canonical_ready: string | null;
   id: Generated<number>;
   main_key: string;
   updated_at: number;
@@ -434,9 +435,15 @@ export interface SessionTranscriptFtsIdx {
   term: string;
 }
 
+export interface SessionTranscriptFtsRows {
+  fts_rowid: Generated<number>;
+  session_id: string;
+}
+
 export interface SessionTranscriptIndexState {
   active_event_count: Generated<number>;
   active_message_count: Generated<number>;
+  fts_row_count: number | null;
   indexed_seq: number;
   leaf_event_id: string | null;
   needs_rebuild: Generated<number>;
@@ -590,6 +597,7 @@ export interface DB {
   session_transcript_fts_data: SessionTranscriptFtsData;
   session_transcript_fts_docsize: SessionTranscriptFtsDocsize;
   session_transcript_fts_idx: SessionTranscriptFtsIdx;
+  session_transcript_fts_rows: SessionTranscriptFtsRows;
   session_transcript_index_state: SessionTranscriptIndexState;
   session_windows: SessionWindows;
   standing_intents: StandingIntents;

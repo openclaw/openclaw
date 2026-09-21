@@ -16,6 +16,7 @@ import {
   setupGatewaySessionsHandlerTestHarness,
   sessionStoreEntry,
   directSessionReq,
+  writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -38,6 +39,8 @@ type ResetSessionEntry = {
   createdActor?: { type: string; id?: string };
   createdAt?: number;
   sandbox?: "required";
+  sandboxMode?: "off";
+  nativeRuntimeConsent?: string;
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   previousSessionId?: string;
   forkedFromParent?: boolean;
@@ -349,6 +352,59 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect(reset.payload?.entry.modelProvider).toBe("openai");
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
+});
+
+test("sessions.reset retains sandbox choice but requires fresh native runtime consent", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sandbox-opt-out", {
+        sandboxMode: "off",
+        nativeRuntimeConsent: "native-fixture",
+      }),
+    },
+  });
+  const reset = await directSessionReq<{ entry: ResetSessionEntry }>("sessions.reset", {
+    key: "main",
+  });
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.sandboxMode).toBe("off");
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.sandboxMode).toBe("off");
+  expect(reset.payload?.entry.nativeRuntimeConsent).toBeUndefined();
+  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).not.toHaveProperty(
+    "nativeRuntimeConsent",
+  );
+});
+test("sessions.reset preserves the selected runtime and retires native conversation bindings", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "old conversation");
+  await writeSessionStore({
+    entries: {
+      main: {
+        ...sessionStoreEntry("sess-main"),
+        lifecycleRevision: "old-lifecycle",
+        providerOverride: "provider-a",
+        modelOverride: "opaque/model",
+        modelOverrideSource: "user",
+        agentRuntimeOverride: "native-runtime",
+        agentHarnessId: "previous-runtime",
+        cliSessionIds: { "previous-runtime": "old-native-session" },
+      },
+    },
+  });
+  const response = await directSessionReq("sessions.reset", { key: "main" });
+  expect(response.ok).toBe(true);
+  const entry = loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath });
+  expect(entry).toMatchObject({
+    sessionId: "sess-main",
+    providerOverride: "provider-a",
+    modelOverride: "opaque/model",
+    modelOverrideSource: "user",
+    agentRuntimeOverride: "native-runtime",
+  });
+  expect(entry?.lifecycleRevision).not.toBe("old-lifecycle");
+  expect(entry?.agentHarnessId).toBeUndefined();
+  expect(entry?.cliSessionIds).toBeUndefined();
 });
 
 test("sessions.reset clears stale estimated context budget status", async () => {

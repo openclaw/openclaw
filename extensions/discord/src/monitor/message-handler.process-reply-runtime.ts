@@ -200,6 +200,7 @@ export function createDiscordMessageReplyRuntime(params: {
     cfg,
     discordConfig,
     accountId,
+    abortSignal: ctx.abortSignal,
     sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
     textLimit,
     deliveryRest: params.deliveryRest,

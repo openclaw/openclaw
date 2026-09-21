@@ -1,7 +1,4 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
@@ -34,7 +31,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Codex tests cover dynamic tools plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { estimateToolResultTextChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -47,11 +43,11 @@ import {
 } from "./dynamic-tools.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  type CodexDynamicToolCallResponse,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
-import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
@@ -128,11 +124,11 @@ function createBridgeWithToolResult(
   });
 }
 
-function expectInputText(text: string) {
-  return {
+function expectInputText(response: CodexDynamicToolCallResponse, text: string) {
+  expect(toCodexDynamicToolProtocolResponse(response)).toEqual({
     success: true,
     contentItems: [{ type: "inputText", text }],
-  };
+  });
 }
 
 const requireRecord = createRequireRecord("object", "expected-label");
@@ -370,7 +366,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(prepareArguments).toHaveBeenCalledWith(null);
-    expect(response).toEqual(expectInputText("done"));
+    expectInputText(response, "done");
     expectExecuteCall(execute, {
       callId: "call-null-compatibility",
       args: { preparedBy: "optional_object_tool" },
@@ -409,7 +405,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     if (testCase.executes) {
-      expect(response).toEqual(expectInputText("done"));
+      expectInputText(response, "done");
       expectExecuteCall(execute, {
         callId,
         args: { instruction: "repaired" },
@@ -455,7 +451,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { instruction: 47 },
     });
 
-    expect(response).toEqual(expectInputText("mcp handled"));
+    expectInputText(response, "mcp handled");
   });
 
   it("scopes normalized input validation to the projected Codex wrapper", async () => {
@@ -510,7 +506,7 @@ describe("createCodexDynamicToolBridge", () => {
     const stringCase = await call("string", "call-cache-string");
     const numberCase = await call("number", "call-cache-number");
 
-    expect(stringCase.response).toEqual(expectInputText("done"));
+    expectInputText(stringCase.response, "done");
     expectSchemaRejection(numberCase.response, numberCase.execute, "instruction: must be number");
   });
 
@@ -553,7 +549,6 @@ describe("createCodexDynamicToolBridge", () => {
     });
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toContain("I'll remember");
-    expect(JSON.stringify(response)).not.toContain("memory-lancedb");
     expect(JSON.stringify(toCodexDynamicToolProtocolResponse(response))).not.toContain(
       "memory-lancedb",
     );
@@ -596,7 +591,6 @@ describe("createCodexDynamicToolBridge", () => {
     });
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toContain("I forgot");
-    expect(JSON.stringify(response)).not.toContain("memory-lancedb");
     expect(JSON.stringify(toCodexDynamicToolProtocolResponse(response))).not.toContain(
       "memory-lancedb",
     );
@@ -889,7 +883,7 @@ describe("createCodexDynamicToolBridge", () => {
       { onAgentToolResult },
     );
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [
         {
@@ -926,92 +920,6 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
-  it("treats an accepted child session spawn result as a successful dynamic tool call", async () => {
-    // An accepted sessions_spawn launch carries details.status "accepted" with a
-    // runId + childSessionKey. The launch succeeded (the child session was
-    // accepted), so Codex must see a successful tool call, not an error.
-    // Regression for #96833: the former Codex-only success allowlist omitted
-    // "accepted", so the launch was persisted with isError: true and reported
-    // to Codex as success: false.
-    const onAgentToolResult = vi.fn();
-    const bridge = createBridgeWithToolResult(
-      "sessions_spawn",
-      textToolResult("Accepted: launching child session to scan logs.", {
-        status: "accepted",
-        runId: "run_5f3a9c",
-        childSessionKey: "child-7b21",
-        mode: "run",
-      }),
-    );
-
-    const result = await bridge.handleToolCall(
-      {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-accepted",
-        namespace: null,
-        tool: "sessions_spawn",
-        arguments: { task: "scan logs" },
-      },
-      { onAgentToolResult },
-    );
-
-    // success: true proves the accepted launch is not classified as an error;
-    // the content assertion proves the tool actually executed (not a denial path).
-    expect(result.success).toBe(true);
-    expect(result.contentItems).toEqual([
-      { type: "inputText", text: "Accepted: launching child session to scan logs." },
-    ]);
-    expect(onAgentToolResult).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "sessions_spawn", isError: false }),
-    );
-    expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-      { runId: "run_5f3a9c", childSessionKey: "child-7b21" },
-    ]);
-  });
-
-  it("preserves an accepted sessions_spawn after result middleware strips its details", async () => {
-    const registry = createEmptyPluginRegistry();
-    const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => ({
-      result: {
-        ...event.result,
-        content: [{ type: "text" as const, text: "Child launch recorded." }],
-        details: {},
-      },
-    }));
-    registry.agentToolResultMiddlewares.push({
-      pluginId: "result-compactor",
-      pluginName: "Result Compactor",
-      rawHandler: handler,
-      handler,
-      runtimes: ["codex"],
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
-    const bridge = createBridgeWithToolResult(
-      "sessions_spawn",
-      textToolResult("Accepted: launching child session.", {
-        status: "accepted",
-        runId: "run_compacted",
-        childSessionKey: "child-compacted",
-      }),
-    );
-
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-compacted",
-      namespace: null,
-      tool: "sessions_spawn",
-      arguments: { task: "scan logs" },
-    });
-
-    expect(result).toEqual(expectInputText("Child launch recorded."));
-    expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-      { runId: "run_compacted", childSessionKey: "child-compacted" },
-    ]);
-  });
-
   it("retains all sanitized details for OpenClaw transcript projection", async () => {
     const mcpAppPreview = {
       kind: "canvas",
@@ -1046,9 +954,10 @@ describe("createCodexDynamicToolBridge", () => {
       mcpAppPreview,
       structuredContent: { privateModelPayload: true },
     });
-    expect(Object.keys(result)).not.toContain("transcriptDetails");
-    expect(JSON.stringify(result)).not.toContain("mcpAppPreview");
-    expect(JSON.stringify(result)).not.toContain("privateModelPayload");
+    const protocolResponse = toCodexDynamicToolProtocolResponse(result);
+    expect(Object.keys(protocolResponse)).not.toContain("transcriptDetails");
+    expect(JSON.stringify(protocolResponse)).not.toContain("mcpAppPreview");
+    expect(JSON.stringify(protocolResponse)).not.toContain("privateModelPayload");
   });
 
   it("still reports a forbidden sessions_spawn result as a failed dynamic tool call", async () => {
@@ -1247,7 +1156,7 @@ describe("createCodexDynamicToolBridge", () => {
       properties: { action: { type: "string" } },
     });
     expect(bridge.telemetry.quarantinedTools).toEqual([]);
-    expect(response).toEqual(expectInputText("done"));
+    expectInputText(response, "done");
     expectExecuteCall(execute, {
       callId: "call-repaired-schema",
       args: { action: "inspect" },
@@ -1272,7 +1181,7 @@ describe("createCodexDynamicToolBridge", () => {
       ...schema,
       properties: { ["__proto__"]: { type: "string" } },
     });
-    expect(response).toEqual(expectInputText("done"));
+    expectInputText(response, "done");
     expectExecuteCall(execute, { callId: "call-literal-schema-property", args });
   });
 
@@ -1369,7 +1278,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: {},
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: fuzzplugin_move_angles" }],
     });
@@ -2083,7 +1992,7 @@ describe("createCodexDynamicToolBridge", () => {
         arguments: { prompt: "hello" },
       });
 
-      expect(result).toEqual(expectInputText("Generated media reply."));
+      expectInputText(result, "Generated media reply.");
       expect(bridge.telemetry.toolMediaUrls).toEqual([mediaUrl]);
       expect(bridge.telemetry.toolAudioAsVoice).toBe(audioAsVoice === true);
     },
@@ -2132,6 +2041,7 @@ describe("createCodexDynamicToolBridge", () => {
                   status: "accepted",
                   runId: "child-run",
                   childSessionKey: "child-session",
+                  expectsCompletionMessage: true,
                 });
       const outer = new AbortController();
       const bridge = createCodexDynamicToolBridge({
@@ -2182,7 +2092,11 @@ describe("createCodexDynamicToolBridge", () => {
           expect(bridge.telemetry.successfulCronAdds).toBe(1);
         } else {
           expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-            { runId: "child-run", childSessionKey: "child-session" },
+            {
+              runId: "child-run",
+              childSessionKey: "child-session",
+              expectsCompletionMessage: true,
+            },
           ]);
         }
       } finally {
@@ -2222,7 +2136,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { text: "hello" },
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: true,
       contentItems: [{ type: "inputText", text: "(spoken) hello" }],
     });
@@ -2317,7 +2231,7 @@ describe("createCodexDynamicToolBridge", () => {
       threadId: "thread-ts-1",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTexts).toEqual(["hello from Codex"]);
     expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual(["/tmp/reply.png"]);
@@ -2346,7 +2260,12 @@ describe("createCodexDynamicToolBridge", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
     );
-    const execute = vi.fn(async () => textToolResult("Sent."));
+    const execute = vi.fn(async () =>
+      textToolResult("Sent.", {
+        messageId: "rewritten-message",
+        messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
+      }),
+    );
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "message", execute })],
       signal: new AbortController().signal,
@@ -2430,7 +2349,10 @@ describe("createCodexDynamicToolBridge", () => {
           name: "message",
           execute: vi.fn(async () => {
             hasRepliedRef.value = true;
-            return textToolResult("Sent.");
+            return textToolResult("Sent.", {
+              messageId: "implicit-thread-message",
+              messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
+            });
           }),
         }),
       ],
@@ -2510,6 +2432,8 @@ describe("createCodexDynamicToolBridge", () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", {
+        messageId: "provider-routed-message",
+        messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
         toolSend: {
           to: "channel:resolved-id",
           threadId: "root-post-id",
@@ -2537,123 +2461,12 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("records message tool media attachment aliases as delivery evidence", async () => {
-    const toolResult = {
-      content: [{ type: "text", text: "Sent." }],
-      details: { messageId: "message-1" },
-    } satisfies AgentToolResult<unknown>;
-    const tool = createTool({
-      name: "message",
-      execute: vi.fn(async () => toolResult),
-    });
-    const bridge = createCodexDynamicToolBridge({
-      tools: [tool],
-      signal: new AbortController().signal,
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "send",
-      text: "song attached",
-      media: "/tmp/generated-song.mp3",
-      attachments: [{ filePath: "/tmp/generated-cover.png" }],
-    });
-
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
-    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([
-      "/tmp/generated-song.mp3",
-      "/tmp/generated-cover.png",
-    ]);
-    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
-      {
-        tool: "message",
-        provider: "message",
-        to: undefined,
-        threadId: undefined,
-        text: "song attached",
-        mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
-      },
-    ]);
-  });
-
-  it("transfers remote Slack file uploads over the Codex app-server connection", async () => {
-    const openClawState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "codex-remote-slack-upload-",
-    });
-    const workspaceDir = await mkdtemp(path.join(os.tmpdir(), "codex-remote-upload-"));
-    try {
-      const relativePath = "reports/slack-upload.txt";
-      const localPath = path.join(workspaceDir, relativePath);
-      const remoteContent = "authoritative remote Slack attachment\n";
-      await mkdir(path.dirname(localPath), { recursive: true });
-      await writeFile(localPath, remoteContent);
-
-      const toolResult = textToolResult("Uploaded.", { messageId: "message-1" });
-      const execute = vi.fn(async () => toolResult);
-      const remotePath = `/remote/codex-workspace/${relativePath}`;
-      const readRemoteWorkspaceFile = vi.fn<CodexRemoteWorkspaceFileReader>(async () => ({
-        dataBase64: Buffer.from(remoteContent).toString("base64"),
-      }));
-      const bridge = createCodexDynamicToolBridge({
-        tools: [createTool({ name: "message", execute })],
-        signal: new AbortController().signal,
-        hookContext: {
-          workspaceDir,
-          remoteWorkspaceRoot: "/remote/codex-workspace",
-          remoteWorkspaceRequestTimeoutMs: 90_000,
-        },
-      });
-      bridge.setRemoteWorkspaceFileReader?.(readRemoteWorkspaceFile);
-
-      const result = await handleMessageToolCall(bridge, {
-        action: "upload-file",
-        channel: "slack",
-        to: "channel:C123",
-        filePath: remotePath,
-      });
-
-      expect(result).toEqual(expectInputText("Uploaded."));
-      const executedArgs = requireRecord(
-        callArg(execute, 0, 1, "Slack upload args"),
-        "upload args",
-      );
-      const stagedPath = executedArgs.filePath;
-      expectExecuteCall(execute, {
-        callId: "call-1",
-        args: {
-          action: "upload-file",
-          channel: "slack",
-          to: "channel:C123",
-          filePath: stagedPath,
-        },
-      });
-      expect(stagedPath).not.toBe(localPath);
-      expect(stagedPath).toEqual(
-        expect.stringContaining(`${path.sep}media${path.sep}outbound${path.sep}`),
-      );
-      expect(readRemoteWorkspaceFile).toHaveBeenCalledWith({
-        path: remotePath,
-        maxBytes: 64 * 1024 * 1024,
-        workspaceRoot: "/remote/codex-workspace",
-        signal: expect.any(AbortSignal),
-        timeoutMs: expect.any(Number),
-      });
-      expect(readRemoteWorkspaceFile.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(0);
-      expect(readRemoteWorkspaceFile.mock.calls[0]?.[0].timeoutMs).toBeLessThanOrEqual(90_000);
-      await expect(readFile(String(stagedPath), "utf8")).resolves.toBe(remoteContent);
-      await expect(readFile(localPath, "utf8")).resolves.toBe(remoteContent);
-    } finally {
-      await rm(workspaceDir, { recursive: true, force: true });
-      await openClawState.cleanup();
-    }
-  });
-
   it("records internal UI source replies separately from outbound messaging evidence", async () => {
     const toolResult = textToolResult("Sent to current chat.", {
       status: "ok",
       deliveryStatus: "sent",
       sourceReplySink: "internal-ui",
+      mediaUrl: "/tmp/reply.png",
       sourceReply: {
         text: "visible reply",
         mediaUrls: ["/tmp/reply.png"],
@@ -2666,7 +2479,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "<think>private</think>visible reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent to current chat."));
+    expectInputText(result, "Sent to current chat.");
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
     expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([]);
@@ -2693,13 +2506,13 @@ describe("createCodexDynamicToolBridge", () => {
       message: "visible reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
   it("keeps omitted source-reply finality terminal when the tool requests termination", async () => {
@@ -2736,7 +2549,7 @@ describe("createCodexDynamicToolBridge", () => {
       final: false,
     });
 
-    expect(progressResult).toEqual(expectInputText("Sent."));
+    expectInputText(progressResult, "Sent.");
     expect(progressResult.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
@@ -2749,13 +2562,13 @@ describe("createCodexDynamicToolBridge", () => {
       final: true,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
   it.each([undefined, "message_tool_only"] as const)(
@@ -2800,10 +2613,10 @@ describe("createCodexDynamicToolBridge", () => {
         final: true,
       });
 
-      expect(result).toEqual(expectInputText("Sent."));
+      expectInputText(result, "Sent.");
       expect(result.terminate).toBe(sourceReplyDeliveryMode ? true : undefined);
       expect(bridge.telemetry.sourceReplyDelivered).toBe(true);
-      expect(Object.keys(result)).not.toContain("terminate");
+      expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
     },
   );
 
@@ -2819,15 +2632,9 @@ describe("createCodexDynamicToolBridge", () => {
       message: "visible reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
-      expect.objectContaining({
-        tool: "message",
-        provider: "imessage",
-        to: "chat-1",
-        text: "visible reply",
-      }),
-    ]);
+    expectInputText(result, "Sent.");
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -2837,6 +2644,7 @@ describe("createCodexDynamicToolBridge", () => {
       "message",
       textToolResult("Sent.", { ok: true, messageId: "imessage-853" }),
       {
+        sessionKey: "agent:main:imessage:dm:source",
         sourceReplyDeliveryMode: "message_tool_only",
         currentChannelProvider: "imessage",
         currentChannelId: "imessage:+12069106512",
@@ -2854,13 +2662,13 @@ describe("createCodexDynamicToolBridge", () => {
       final: true,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
   it("keeps normalized explicit source routes terminal", async () => {
@@ -2885,6 +2693,7 @@ describe("createCodexDynamicToolBridge", () => {
       "message",
       textToolResult("Sent.", { ok: true, messageId: "sms-853" }),
       {
+        sessionKey: "agent:main:sms:dm:source",
         sourceReplyDeliveryMode: "message_tool_only",
         currentChannelProvider: "sms",
         currentChannelId: "sms:+12069106512",
@@ -2901,7 +2710,7 @@ describe("createCodexDynamicToolBridge", () => {
       final: true,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
@@ -2912,22 +2721,23 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
     expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
-  it("keeps message-tool-only source replies terminal when the reply receipt matches the current message id", async () => {
+  it("uses the message owner's source confirmation for provider-native routes", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", {
-        ok: true,
-        messageId: "provider-message-1",
-        repliedTo: "provider-guid-857",
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+          sourceReplyDelivered: true,
+        },
       }),
       {
         sourceReplyDeliveryMode: "message_tool_only",
-        currentChannelProvider: "imessage",
         currentChannelId: "imessage:any;-;+12069106512",
-        currentMessageId: "provider-guid-857",
       },
     );
 
@@ -2937,51 +2747,13 @@ describe("createCodexDynamicToolBridge", () => {
       target: "+12069106512",
       messageId: "857",
       message: "visible reply",
-      buttons: [],
-      final: true,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
-      expect.objectContaining({
-        tool: "message",
-        provider: "imessage",
-        to: "+12069106512",
-        text: "visible reply",
-      }),
-    ]);
     expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
-  });
-
-  it("keeps message-tool-only source replies terminal when a text receipt matches the current message id", async () => {
-    const receiptText = JSON.stringify({
-      ok: true,
-      messageId: "provider-message-1",
-      repliedTo: "provider-guid-861",
+    expect(bridge.telemetry.sourceReplyDelivered).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
+      sourceReplyFinal: true,
     });
-    const bridge = createBridgeWithToolResult("message", textToolResult(receiptText), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      currentChannelProvider: "imessage",
-      currentChannelId: "imessage:any;-;+12069106512",
-      currentMessageId: "provider-guid-861",
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "reply",
-      channel: "imessage",
-      target: "+12069106512",
-      messageId: "861",
-      message: "visible reply",
-      buttons: [],
-      final: true,
-    });
-
-    expect(result).toEqual(expectInputText(receiptText));
-    expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
   });
 
   it("does not let dry-run reply receipts terminate message-tool-only source replies", async () => {
@@ -3006,7 +2778,7 @@ describe("createCodexDynamicToolBridge", () => {
       buttons: [],
     });
 
-    expect(result).toEqual(expectInputText(receiptText));
+    expectInputText(result, receiptText);
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -3035,56 +2807,11 @@ describe("createCodexDynamicToolBridge", () => {
       message: "visible reply",
     });
 
-    expect(result).toEqual(expectInputText("Dry run."));
+    expectInputText(result, "Dry run.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
-  });
-
-  it("keeps message-tool-only source replies terminal for explicit native target segments", async () => {
-    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      currentChannelProvider: "imessage",
-      currentChannelId: "imessage:any;-;+12069106512",
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "reply",
-      channel: "imessage",
-      target: "+12069106512",
-      messageId: "863",
-      message: "visible reply",
-      buttons: [],
-      final: true,
-    });
-
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
-  });
-
-  it("keeps message-tool-only source replies terminal when the provider is only in the current channel id", async () => {
-    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
-      sourceReplyDeliveryMode: "message_tool_only",
-      currentChannelId: "imessage:any;-;+12069106512",
-    });
-
-    const result = await handleMessageToolCall(bridge, {
-      action: "reply",
-      channel: "imessage",
-      target: "+12069106512",
-      messageId: "865",
-      message: "visible reply",
-      buttons: [],
-      final: true,
-    });
-
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(result.terminate).toBe(true);
-    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
-    expect(Object.keys(result)).not.toContain("terminate");
   });
 
   it("keeps omitted finality terminal when the message tool returns termination", async () => {
@@ -3106,13 +2833,13 @@ describe("createCodexDynamicToolBridge", () => {
       buttons: [],
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBe(true);
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: true,
     });
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(toCodexDynamicToolProtocolResponse(result))).not.toContain("terminate");
   });
 
   it("lets explicit progress override legacy message-tool-owned termination", async () => {
@@ -3135,7 +2862,7 @@ describe("createCodexDynamicToolBridge", () => {
       final: false,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
       sourceReplyFinal: false,
@@ -3152,8 +2879,9 @@ describe("createCodexDynamicToolBridge", () => {
       message: "visible reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
-    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expectInputText(result, "Sent.");
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -3184,7 +2912,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(firstResult.terminate).toBe(true);
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
-    expect(secondResult).toEqual(expectInputText("No message sent."));
+    expectInputText(secondResult, "No message sent.");
     expect(secondResult.terminate).toBeUndefined();
   });
 
@@ -3202,7 +2930,7 @@ describe("createCodexDynamicToolBridge", () => {
       final: true,
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -3223,7 +2951,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "cross-provider reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -3245,7 +2973,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "sibling thread reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -3266,7 +2994,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "sibling thread reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -3287,7 +3015,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "thread reply from top-level source",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -3316,7 +3044,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "cross-channel reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
@@ -3358,7 +3086,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "cross-chat reply",
     });
 
-    expect(result).toEqual(expectInputText("Sent."));
+    expectInputText(result, "Sent.");
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([
       expect.objectContaining({
         tool: "message",
@@ -3390,7 +3118,7 @@ describe("createCodexDynamicToolBridge", () => {
       to: "C123",
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "send failed" }],
     });
@@ -3422,7 +3150,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: {},
     });
 
-    expect(result).toEqual(expectInputText("Accepted."));
+    expectInputText(result, "Accepted.");
     expect(bridge.telemetry.heartbeatToolResponse).toEqual({
       outcome: "needs_attention",
       notify: true,
@@ -3466,7 +3194,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "git status" },
     });
 
-    expect(result).toEqual(expectInputText("exec compacted"));
+    expectInputText(result, "exec compacted");
     const event = requireRecord(callArg(handler, 0, 0, "middleware event"), "middleware event");
     expect(event.threadId).toBe("thread-1");
     expect(event.turnId).toBe("turn-1");
@@ -3527,7 +3255,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { action: "screenshot" },
     });
 
-    expect(result).toEqual(expectInputText("screenshot removed"));
+    expectInputText(result, "screenshot removed");
     expect(computerContextEpoch).toEqual({ value: 1 });
   });
 
@@ -3744,7 +3472,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { text: "hello" },
     });
 
-    expect(result).toEqual(expectInputText("message sent: msg_123"));
+    expectInputText(result, "message sent: msg_123");
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
@@ -3775,7 +3503,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "false" },
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "failed output" }],
     });
@@ -4029,12 +3757,13 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { prompt: "lighthouse" },
     });
 
-    expect(result).toEqual(expectInputText("Background task started."));
+    const protocolResponse = toCodexDynamicToolProtocolResponse(result);
+    expectInputText(protocolResponse, "Background task started.");
     expect(result.asyncStarted).toBe(true);
     expect(result.sideEffectEvidence).toBe(true);
     expect(result.terminate).toBe(true);
-    expect(Object.keys(result)).not.toContain("asyncStarted");
-    expect(Object.keys(result)).not.toContain("terminate");
+    expect(Object.keys(protocolResponse)).not.toContain("asyncStarted");
+    expect(Object.keys(protocolResponse)).not.toContain("terminate");
   });
 
   it("marks executed dynamic tool results as side-effect evidence", async () => {
@@ -4049,7 +3778,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "touch /tmp/openclaw-replay-test" },
     });
 
-    expect(result).toEqual(expectInputText("done"));
+    expectInputText(result, "done");
     expect(result.sideEffectEvidence).toBe(true);
   });
 
@@ -4065,7 +3794,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { url: "https://example.com/private" },
     });
 
-    expect(result).toEqual(expectInputText("done"));
+    expectInputText(result, "done");
     expect(result.sideEffectEvidence).toBeUndefined();
   });
 
@@ -4257,7 +3986,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: {},
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "invalid arguments" }],
     });
@@ -4314,7 +4043,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: {},
     });
 
-    expect(result).toEqual(expectInputText("Generated media reply."));
+    expectInputText(result, "Generated media reply.");
     expect(bridge.telemetry.toolMediaUrls).toStrictEqual([]);
   });
 
@@ -4356,7 +4085,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "git status" },
     });
 
-    expect(result).toEqual(expectInputText("legacy compacted"));
+    expectInputText(result, "legacy compacted");
   });
 
   it("keeps config out of Codex tool-result contexts", async () => {
@@ -4523,7 +4252,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "pwd" },
     });
 
-    expect(result).toEqual(expectInputText("done"));
+    expectInputText(result, "done");
     expect(result.executedArguments).toEqual({ command: "pwd", mode: "safe" });
     const beforeEvent = requireRecord(
       callArg(beforeToolCall, 0, 0, "before_tool_call event"),
@@ -4788,7 +4517,7 @@ describe("createCodexDynamicToolBridge", () => {
       to: "chat-1",
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "blocked by policy" }],
     });
@@ -5139,7 +4868,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "status" },
     });
 
-    expect(result).toEqual(expectInputText("compacted output"));
+    expectInputText(result, "compacted output");
     await vi.waitFor(() => {
       expect(events).toEqual(["before_tool_call", "execute", "middleware", "after_tool_call"]);
     });
@@ -5229,9 +4958,7 @@ describe("createCodexDynamicToolBridge", () => {
       text: "hello",
     });
 
-    expect(result).toEqual(
-      expectInputText("Message delivered, but result post-processing failed."),
-    );
+    expectInputText(result, "Message delivered, but result post-processing failed.");
     expect(result.sideEffectEvidence).toBe(true);
   });
 
@@ -5267,7 +4994,7 @@ describe("createCodexDynamicToolBridge", () => {
       text: "hello",
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [
         { type: "inputText", text: "Tool output unavailable due to post-processing error." },
@@ -5415,7 +5142,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "false" },
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [{ type: "inputText", text: "tool failed" }],
     });
@@ -5478,7 +5205,7 @@ describe("createCodexDynamicToolBridge", () => {
     expect(capturedSignal.aborted).toBe(true);
     resolveTool?.(textToolResult("done"));
 
-    await expect(result).resolves.toEqual(expectInputText("done"));
+    expectInputText(await result, "done");
   });
 
   it("does not double-wrap dynamic tools that already have before_tool_call", async () => {

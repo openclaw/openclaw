@@ -197,7 +197,15 @@ export async function sweepTrackedBrowserTabs(
     dashboardClosed = await reconcileBrowserDashboards(params);
   }
   if (params.ordinaryCleanup === false) {
-    return dashboardClosed;
+    return (
+      dashboardClosed +
+      (await closeTrackedTabs(
+        readDurableTabs(params.onWarn).filter(
+          (tab) => !tab.dashboard && tab.cleanupKind === "lifecycle",
+        ),
+        { ...params, now, cleanupKind: "lifecycle" },
+      ))
+    );
   }
   const volatile: VolatileTab[] = [];
   for (const tabs of volatileTabsBySession().values()) {

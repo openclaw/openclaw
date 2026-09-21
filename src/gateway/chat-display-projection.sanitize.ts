@@ -17,8 +17,9 @@ import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
   hasAssistantDisplayableNonTextContent,
+  hasTranscriptMediaFacts,
   isAssistantTextContentType,
-  isProjectedSessionsSendForwardedMessage,
+  isProjectedForwardedMessage,
   shouldPreserveAssistantControlReplyText,
   stripAssistantMediaDirectivesForDisplay,
   stripPrivateToolCallContextForDisplay,
@@ -190,21 +191,36 @@ export function sanitizeChatHistoryContentBlock(
     changed = true;
     truncated ||= projectedDetails.truncated;
   }
-  if (typeof entry.text === "string") {
-    if (!preserveExactToolPayload) {
-      const res = truncateChatHistoryText(entry.text, maxChars);
-      entry.text = res.text;
-      changed ||= res.truncated;
-      truncated ||= res.truncated;
+  if (preserveExactToolPayload && Array.isArray(entry.content)) {
+    // Some transcripts carry both nested output blocks and their joined text.
+    // Keep one representation, and apply the same media privacy rules recursively.
+    const text = entry.content
+      .flatMap((item) => {
+        const value = readRecord(item)?.text;
+        return typeof value === "string" ? [value] : [];
+      })
+      .join("\n");
+    if (entry.text === text) {
+      delete entry.text;
+      changed = true;
     }
+    const content = entry.content.map((item) =>
+      sanitizeChatHistoryContentBlock(item, { preserveExactToolPayload: true, maxChars }),
+    );
+    if (content.some((item) => item.changed)) {
+      entry.content = content.map((item) => item.block);
+      changed = true;
+    }
+    truncated ||= content.some((item) => item.truncated);
   }
-  if (typeof entry.content === "string") {
-    if (!preserveExactToolPayload) {
-      const res = truncateChatHistoryText(entry.content, maxChars);
-      entry.content = res.text;
-      changed ||= res.truncated;
-      truncated ||= res.truncated;
+  for (const field of ["text", "content"] as const) {
+    if (typeof entry[field] !== "string") {
+      continue;
     }
+    const res = truncateChatHistoryText(entry[field], maxChars, preserveExactToolPayload);
+    entry[field] = res.text;
+    changed ||= res.truncated;
+    truncated ||= res.truncated;
   }
   if (typeof entry.partialJson === "string" && !preserveExactToolPayload) {
     const res = truncateChatHistoryText(entry.partialJson, maxChars);
@@ -311,62 +327,54 @@ function projectAssistantMixedToolContent(
   return hasVisibleText ? { content: projectedContent, changed: true } : null;
 }
 
-function sanitizeCost(raw: unknown): Record<string, number> | undefined {
+const COST_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "total"] as const;
+const USAGE_FIELDS = [
+  "input",
+  "output",
+  "total",
+  "totalTokens",
+  "inputTokens",
+  "outputTokens",
+  "promptTokens",
+  "completionTokens",
+  "cacheRead",
+  "cacheWrite",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+  "input_tokens",
+  "output_tokens",
+  "prompt_tokens",
+  "completion_tokens",
+  "total_tokens",
+] as const;
+
+function sanitizeNumericMetadata(
+  raw: unknown,
+  fields: readonly string[],
+): Record<string, unknown> | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
-  const c = raw as Record<string, unknown>;
-  const out: Record<string, number> = {};
-  for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
-    const value = asFiniteNumber(c[key]);
+  const record = raw as Record<string, unknown>;
+  const projected: Record<string, unknown> = {};
+  for (const key of fields) {
+    const value = asFiniteNumber(record[key]);
     if (value !== undefined) {
-      out[key] = value;
+      projected[key] = value;
     }
   }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
-function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const u = raw as Record<string, unknown>;
-  const out: Record<string, number> = {};
-  const knownFields = [
-    "input",
-    "output",
-    "total",
-    "totalTokens",
-    "inputTokens",
-    "outputTokens",
-    "promptTokens",
-    "completionTokens",
-    "cacheRead",
-    "cacheWrite",
-    "cache_read_input_tokens",
-    "cache_creation_input_tokens",
-    "input_tokens",
-    "output_tokens",
-    "prompt_tokens",
-    "completion_tokens",
-    "total_tokens",
-  ];
-
-  for (const k of knownFields) {
-    const n = asFiniteNumber(u[k]);
-    if (n !== undefined) {
-      out[k] = n;
+  if (
+    fields === USAGE_FIELDS &&
+    "cost" in record &&
+    record.cost != null &&
+    typeof record.cost === "object"
+  ) {
+    const cost = sanitizeNumericMetadata(record.cost, COST_FIELDS);
+    if (cost) {
+      projected.cost = cost;
     }
   }
-
-  if ("cost" in u && u.cost != null && typeof u.cost === "object") {
-    const sanitizedCost = sanitizeCost(u.cost);
-    if (sanitizedCost) {
-      (out as Record<string, unknown>).cost = sanitizedCost;
-    }
-  }
-
-  return Object.keys(out).length > 0 ? out : undefined;
+  return Object.keys(projected).length > 0 ? projected : undefined;
 }
 
 function projectWorkspaceConflictDetails(
@@ -475,7 +483,7 @@ export function sanitizeChatHistoryMessage(
     }
   } else {
     if ("usage" in entry) {
-      const sanitized = sanitizeUsage(entry.usage);
+      const sanitized = sanitizeNumericMetadata(entry.usage, USAGE_FIELDS);
       if (sanitized) {
         entry.usage = sanitized;
       } else {
@@ -484,7 +492,7 @@ export function sanitizeChatHistoryMessage(
       changed = true;
     }
     if ("cost" in entry) {
-      const sanitized = sanitizeCost(entry.cost);
+      const sanitized = sanitizeNumericMetadata(entry.cost, COST_FIELDS);
       if (sanitized) {
         entry.cost = sanitized;
       } else {
@@ -505,14 +513,10 @@ export function sanitizeChatHistoryMessage(
         )
       : entry.content;
     changed ||= controlStripped !== entry.content;
-    if (preserveExactToolPayload) {
-      entry.content = controlStripped;
-    } else {
-      const res = truncateChatHistoryText(controlStripped, maxChars);
-      entry.content = res.text;
-      changed ||= res.truncated;
-      truncated ||= res.truncated;
-    }
+    const res = truncateChatHistoryText(controlStripped, maxChars, preserveExactToolPayload);
+    entry.content = res.text;
+    changed ||= res.truncated;
+    truncated ||= res.truncated;
   } else if (Array.isArray(entry.content)) {
     const content = entry.content;
     const commentary = readRecord(entry.openclawStreamFallback)?.source === "segment";
@@ -588,14 +592,10 @@ export function sanitizeChatHistoryMessage(
         )
       : entry.text;
     changed ||= controlStripped !== entry.text;
-    if (preserveExactToolPayload) {
-      entry.text = controlStripped;
-    } else {
-      const res = truncateChatHistoryText(controlStripped, maxChars);
-      entry.text = res.text;
-      changed ||= res.truncated;
-      truncated ||= res.truncated;
-    }
+    const res = truncateChatHistoryText(controlStripped, maxChars, preserveExactToolPayload);
+    entry.text = res.text;
+    changed ||= res.truncated;
+    truncated ||= res.truncated;
   }
 
   if (truncated) {
@@ -652,7 +652,7 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (entry.role !== "assistant") {
     return false;
   }
-  if (isProjectedSessionsSendForwardedMessage(entry)) {
+  if (isProjectedForwardedMessage(entry)) {
     return false;
   }
   if (resolveAssistantMessagePhase(message) === "commentary") {
@@ -682,9 +682,15 @@ export function sanitizeChatHistoryMessages(
       message = projection.message;
       changed ||= message !== original;
       for (const commentary of projection.fallbacks) {
-        const projected = sanitizeChatHistoryMessage(commentary, maxChars);
-        next.push(projected.message);
         changed = true;
+        const hasMediaFacts = hasTranscriptMediaFacts(readRecord(commentary) ?? {});
+        if (!hasMediaFacts && shouldDropAssistantHistoryMessage(commentary)) {
+          continue;
+        }
+        const projected = sanitizeChatHistoryMessage(commentary, maxChars);
+        if (hasMediaFacts || !shouldDropAssistantHistoryMessage(projected.message)) {
+          next.push(projected.message);
+        }
       }
     }
     if (shouldDropAssistantHistoryMessage(message)) {

@@ -1,4 +1,3 @@
-// Workspace skill loader tests cover source merging, metadata, filtering, and precedence.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -13,10 +12,12 @@ import type {
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "../../plugins/manifest-registry.js";
+// Workspace skill loader tests cover source merging, metadata, filtering, and precedence.
+import { buildPluginMetadataProviderFacts } from "../../plugins/plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { buildDeclaredProviderOwnerIndex } from "../../plugins/provider-owner-index.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -27,7 +28,6 @@ import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test
 import type { OpenClawSkillMetadata, SkillEligibilityContext } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
-  loadBundledSkillEntryByName,
   loadVisibleSkills,
   loadWorkspaceSkills,
   prepareWorkspaceSkills,
@@ -356,6 +356,8 @@ function createWorkspacePluginMetadataSnapshot(params: {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: buildPluginMetadataProviderFacts(params.manifestRegistry.plugins)
+      .providerAuthContributions,
     modelIdNormalizationPolicies: new Map(),
   };
   const index: PluginMetadataSnapshot["index"] = {
@@ -496,7 +498,9 @@ describe("loadWorkspaceSkills", () => {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
     });
     const mergedControlUi = visible.find((entry) => entry.skill.name === "control-ui");
-    const bundledControlUi = loadBundledSkillEntryByName("control-ui", {
+    const [bundledControlUi] = await prepareWorkspaceSkills(workspaceDir, {
+      bundledSkillName: "control-ui",
+      eligibility: {},
       config: {},
       bundledSkillsDir,
     });
@@ -601,6 +605,32 @@ describe("loadWorkspaceSkills", () => {
     } finally {
       directoryReads.mockRestore();
     }
+  });
+
+  it("reconciles incoming plugin metadata before caching a changed watch generation", async () => {
+    const { workspaceDir, managedDir } = await setupWorkspaceSkillPlugin();
+    const config = { plugins: { entries: { "workspace-skills": { enabled: true } } } };
+    const options = { config, managedSkillsDir: managedDir };
+    expect(
+      loadTestWorkspaceSkills(workspaceDir, options).map((entry) => entry.skill.name),
+    ).toContain("drafting");
+    const version = getSkillsSnapshotVersion(workspaceDir);
+    const pluginMetadataSnapshot = createWorkspacePluginMetadataSnapshot({
+      workspaceDir,
+      config,
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    bumpSkillsSnapshotVersion({
+      workspaceDir,
+      reason: "watch-targets",
+      refreshInputs: { sourceScope: {}, config, pluginMetadataSnapshot },
+    });
+    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
+    expect(
+      loadTestWorkspaceSkills(workspaceDir, { ...options, pluginMetadataSnapshot }).map(
+        (entry) => entry.skill.name,
+      ),
+    ).not.toContain("drafting");
   });
 
   it("filters plugin-shipped skills through plugin config", async () => {

@@ -13,7 +13,6 @@ import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
-import { setDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.test-support.js";
 import { getTaskById, findTaskByRunId } from "../../../tasks/task-registry.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
@@ -42,11 +41,9 @@ import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import {
-  bindSubagentRunRecord,
-  loadSubagentRegistryFromSqlite,
-  upsertSubagentRunRowInDatabase,
-} from "./subagent-registry.store.sqlite.js";
+import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { upsertSubagentRunRowInDatabase } from "./subagent-registry.store.kernel.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { releaseSubagentRun, testing } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
@@ -179,15 +176,16 @@ it.each([
           }
           if (transition.includes("successor")) {
             const taskRuntime = getDetachedTaskLifecycleRuntime();
+            let releaseTaskRuntime = () => {};
             const failTask =
               transition.includes("required-task") || transition.includes("failed rollback");
             if (failTask) {
-              setDetachedTaskLifecycleRuntime({
+              releaseTaskRuntime = fixture.useTaskRuntime({
                 ...taskRuntime,
                 createQueuedTaskRun: () => {
                   expect(subagentRuns.has("successor")).toBe(true);
                   expect(loadSubagentRegistryFromSqlite().has("successor")).toBe(true);
-                  throw new Error("required task rejected");
+                  return null;
                 },
               });
             }
@@ -216,9 +214,15 @@ it.each([
               });
             try {
               if (transition.startsWith("accepted successor")) {
-                register();
+                await register();
               } else {
-                expect(register).toThrow(/rejected/);
+                await expect(register()).rejects.toThrow(
+                  transition === "retained successor after failed rollback"
+                    ? "Queued registration rollback failed"
+                    : transition === "successor required-task rollback"
+                      ? "created no task row"
+                      : "Queued subagent registry persistence failed",
+                );
               }
               if (cancel) {
                 expect(subagentRuns.has("successor")).toBe(false);
@@ -229,7 +233,7 @@ it.each([
                 releaseSubagentRun("successor");
               }
             } finally {
-              setDetachedTaskLifecycleRuntime(taskRuntime);
+              releaseTaskRuntime();
               persist.mockImplementation(persistSubagentRunsToDiskOrThrow);
             }
           } else if (transition === "session replacement") {
@@ -659,6 +663,56 @@ describe("restored historical cancellation ownership", () => {
     expect(wake).toHaveBeenCalledOnce();
     expectNoExecutionReplay();
   });
+
+  it.each([false, true])(
+    "settles an uncaptured retained cancellation wake before retiring it (yielded=%s)",
+    async (yielded) => {
+      const input = historicalCancellation();
+      const endedAt = Date.now() - 2 * 24 * 60 * 60_000;
+      input.subagent.createdAt = endedAt - 60_000;
+      input.subagent.execution.startedAt = endedAt - 50_000;
+      input.subagent.execution.endedAt = endedAt;
+      input.subagent.cleanupCompletedAt = endedAt + 30_000;
+      input.subagent.killReconciliation = {
+        killedAt: endedAt + 30_000,
+        taskCancellationAccepted: true,
+      };
+      input.subagent.completionTarget = "parent";
+      input.subagent.requesterSettleWake = {
+        status: "dispatching",
+        attemptCount: 3,
+        batchRunIds: [input.subagent.runId],
+        rearmGeneration: 1,
+        ...(yielded ? { requesterYieldBatch: true, afterRequesterYield: true } : {}),
+      };
+      input.task.createdAt = input.subagent.createdAt;
+      input.task.endedAt = endedAt + 30_000;
+      input.task.error = "Cancelled by operator.";
+      input.task.deliveryStatus = "pending";
+      delete input.task.terminalOutcome;
+      persistRetiredOwner(input, true);
+      restore();
+      resumeSubagentRun(input.subagent.runId, "restore");
+      await settleSubagentRegistryPersistenceWork();
+      await testing.sweepOnceForTests();
+      await settleSubagentRegistryPersistenceWork();
+
+      expect(
+        loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.requesterSettleWake,
+      ).toBeUndefined();
+      expect(getTaskById(input.task.taskId)).toMatchObject({
+        status: "cancelled",
+        deliveryStatus: "failed",
+        endedAt: input.task.endedAt,
+        error: "Cancelled by operator.",
+      });
+      await testing.sweepOnceForTests();
+      await settleSubagentRegistryPersistenceWork();
+      expect(loadSubagentRegistryFromSqlite().has(input.subagent.runId)).toBe(false);
+      expect(wake).toHaveBeenCalledOnce();
+      expectNoExecutionReplay();
+    },
+  );
 
   it("leaves a newer persisted kill marker untouched by the restored snapshot", async () => {
     const input = historicalCancellation();

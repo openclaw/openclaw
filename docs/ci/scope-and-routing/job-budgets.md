@@ -38,8 +38,8 @@ cleanup joins its process tree and callback work before removing those inputs.
 Outer suites and the remaining checkout contract cases stay sequential.
 
 Once admitted, canonical Linux CI permits up to 96 concurrent Node test jobs.
-The manifest separately enforces total-job budgets: 64 Node rows for canonical
-pushes and 120 for canonical PRs, including precise and plugin plans. GitHub
+The manifest separately enforces total-job budgets: 70 Node rows for canonical
+pushes and 130 for canonical PRs, including precise and plugin plans. GitHub
 also caps one job's combined outputs at 1 MiB measured in UTF-16, so preflight
 has 524,288 characters for every matrix together. Grouped Node rows list each
 striped test file explicitly. The manifest projects the five fields consumed by
@@ -56,6 +56,16 @@ Type-aware lint on CI runners with fewer than 8 CPUs or 24 GiB of RAM uses the
 existing Go compiler memory policy (`GOGC=30`, `GOMEMLIMIT=3GiB`) to reduce swap
 pressure. Explicit Go settings remain authoritative. The limit is soft and
 applies only to the lint child; declaration preparation retains its own policy.
+Explicit core-stripe invocations keep `src/agents`, `src/gateway`, `src/infra`, and `ui` in separate lint
+processes from their stripe's remaining targets. Their semantic caches can exceed the Go
+soft limit when combined with neighboring targets. Constrained runners execute
+these processes serially and release each process tree before starting the next.
+The five stripe assignments, workflow rows, lint rules, and file coverage stay
+unchanged; this adds no runner registrations.
+Automatic full lint (`pnpm lint`) retains its original five aggregated core
+Programs, including when it inherits CI environment variables. Published Git
+updaters call this full pipeline with a fixed 20-minute command deadline; the
+explicit stripe caller must not add compiler startups to that preflight.
 
 Regular Android PR/main CI and PR `release_gate` dispatches use four rows: Play and Wear-shared unit tests/lint, third-party unit tests/lint, Wear unit tests/lint, and Kotlin lint for all four modules. Each phone flavor has its own source set and `SensitiveFeatureConfig`; `apps/android/app/src/thirdParty/AndroidManifest.xml` declares additional permissions and components. The Kotlin-lint row also compiles the benchmark when benchmark or Android build/dependency inputs change; missing or unusable changed-path data keeps that build.
 

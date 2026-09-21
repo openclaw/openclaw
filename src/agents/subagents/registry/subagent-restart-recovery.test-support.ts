@@ -3,17 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
+import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import {
-  consumeSessionWorkAdmissionHandoff,
-  type SessionWorkAdmissionLease,
-} from "../../../sessions/session-lifecycle-admission.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -27,6 +19,7 @@ import {
 import {
   createCanonicalSubagentRunFixture,
   createSubagentRegistryTestDeps,
+  settleSubagentRegistryPersistenceWork,
 } from "./subagent-registry.persistence.test-support.js";
 import {
   activateSubagentRegistry,
@@ -54,32 +47,7 @@ export function makeRestartRecoveryRun(
 }
 
 export function useSubagentRestartRecoveryFixture() {
-  function consumeRecoveryAdmission(payload: Record<string, unknown>): SessionWorkAdmissionLease {
-    const sessionKey = String(payload.sessionKey);
-    const sessionId = String(payload.expectedExistingSessionId);
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const scope = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
-    const admission = consumeSessionWorkAdmissionHandoff({
-      handoffId: String(payload.internalRuntimeHandoffId),
-      scope,
-      identities: [sessionKey, sessionId],
-      onInterrupt: () => undefined,
-    });
-    if (!admission) {
-      throw new Error("expected recovery dispatch to consume its session admission handoff");
-    }
-    return admission;
-  }
-
-  async function acceptRecoveryDispatch(payload: Record<string, unknown>) {
-    consumeRecoveryAdmission(payload).release();
-    return {
-      runId: String(payload.idempotencyKey),
-      status: "accepted",
-    };
-  }
-
-  const dispatchAgent = vi.fn(acceptRecoveryDispatch);
+  const dispatchAgent = vi.fn();
   const gatewayRuntime: GatewayRecoveryRuntime = {
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
@@ -115,10 +83,10 @@ export function useSubagentRestartRecoveryFixture() {
     });
     activateGatewayRuntime();
     dispatchAgent.mockReset();
-    dispatchAgent.mockImplementation(acceptRecoveryDispatch);
   });
 
   afterEach(async () => {
+    await settleSubagentRegistryPersistenceWork();
     testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
     await cleanupSessionStateForTest({ stateDir: tempStateDir ?? undefined });
@@ -132,7 +100,6 @@ export function useSubagentRestartRecoveryFixture() {
   });
 
   return {
-    acceptRecoveryDispatch,
     activateGatewayRuntime,
     dispatchAgent,
     gatewayRuntime,

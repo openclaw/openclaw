@@ -5,7 +5,8 @@ import type {
 } from "../../infra/update-requester-authority.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import type { UpdateRecoveryHandoff } from "../../infra/update-run-recovery.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
 import type { UpdateCommandChildGrant } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 
@@ -16,9 +17,12 @@ export type UpdateDoctorInput = {
   configInputHash: string;
   requester?: UpdateRequester;
   repair: boolean;
+  yes?: boolean;
+  workspaceSuggestions?: boolean;
+  postCoreSchemaRepair?: true;
 };
 
-export type MigratedUpdateFinalizationInput = {
+export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
   params: Omit<FinishUpdateParams, "packageTransaction" | "preManagedServiceStop" | "opts"> & {
     opts: Omit<FinishUpdateParams["opts"], "run" | "recovery"> & {
       run?: Omit<
@@ -43,7 +47,9 @@ export type MigratedUpdateFinalizationInput = {
 export type MigratedUpdateFinalizationResult = {
   result: UpdateRunResult;
   exitCode: number;
-  terminalRunId: string;
   executorDelegation?: "pid-start-v1";
   automaticTriage?: TriageFailureContext;
-};
+} & (
+  | { terminalRunId: string; restartRunId?: never }
+  | { restartRunId: string; terminalRunId?: never }
+);

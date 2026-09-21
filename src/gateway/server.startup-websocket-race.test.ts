@@ -3,11 +3,8 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { tryListenOnPort } from "../infra/ports-probe.js";
-import {
-  getGatewayTestPort,
-  installGatewayTestHooks,
-  startTestGatewayServer,
-} from "./test-helpers.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
 type StartGatewayServer = typeof import("./test-helpers.js").startTestGatewayServer;
@@ -84,12 +81,12 @@ describe("gateway startup websocket readiness", () => {
     let server: GatewayServerForTest | undefined;
     let client: WebSocket | undefined;
     try {
-      const port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port, {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      server = await startTestGatewayServer(portClaim, {
         auth: { mode: "none" },
       });
 
-      client = await connectWebSocket(`ws://127.0.0.1:${port}`);
+      client = await connectWebSocket(`ws://127.0.0.1:${portClaim.port}`);
     } finally {
       if (client) {
         await disconnectWebSocket(client);
@@ -115,15 +112,15 @@ describe("gateway startup websocket readiness", () => {
     let server: GatewayServerForTest | undefined;
     const clients: WebSocket[] = [];
     try {
-      const port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port, {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      server = await startTestGatewayServer(portClaim, {
         host: "127.0.0.2",
         auth: { mode: "none" },
       });
 
       clients.push(
-        await connectWebSocket(`ws://127.0.0.1:${port}`),
-        await connectWebSocket(`ws://127.0.0.2:${port}`),
+        await connectWebSocket(`ws://127.0.0.1:${portClaim.port}`),
+        await connectWebSocket(`ws://127.0.0.2:${portClaim.port}`),
       );
     } finally {
       await Promise.all(clients.map(async (client) => await disconnectWebSocket(client)));
@@ -139,10 +136,10 @@ describe("gateway startup websocket readiness", () => {
   });
 
   it("releases the loopback alias when the selected bind fails", async () => {
-    const port = await getGatewayTestPort();
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
 
     await expect(
-      startTestGatewayServer(port, {
+      startTestGatewayServer(portClaim, {
         bind: "lan",
         host: "192.0.2.1",
         auth: { mode: "token", token: "test-token" },
@@ -150,7 +147,7 @@ describe("gateway startup websocket readiness", () => {
     ).rejects.toThrow("failed to bind gateway socket");
 
     await expect(
-      tryListenOnPort({ host: "127.0.0.1", port, exclusive: true }),
+      tryListenOnPort({ host: "127.0.0.1", port: portClaim.port, exclusive: true }),
     ).resolves.toBeUndefined();
   });
 });

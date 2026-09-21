@@ -26,6 +26,7 @@ import {
   deliverAgentHarnessTaskCompletion,
 } from "../plugin-sdk/agent-harness-task-runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   captureHarnessCompletionRecovery,
   createHarnessCompletionSourceAssertion,
@@ -33,11 +34,8 @@ import {
   getOwedHarnessCompletionTask,
 } from "../tasks/agent-harness-completion-recovery.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
-import {
-  getTaskById,
-  markTaskTerminalById,
-  reloadTaskRegistryFromStore,
-} from "../tasks/task-registry.js";
+import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry-state.js";
+import { getTaskById, markTaskTerminalById } from "../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../tasks/task-registry.test-support.js";
 import {
   withOpenClawTestState,
@@ -189,7 +187,7 @@ describe("host-owned harness completion recovery", () => {
       } else {
         await replaceSessionEntry(target, terminalEntry(entry));
         resetTaskRegistryForTests({ persist: false });
-        reloadTaskRegistryFromStore();
+        await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         reconcileRetainedHarnessCompletionDeliveries();
         expect(reconcileHarnessCompletionDelivery(request)).toBe(
           status === "succeeded" ? "delivered" : "blocked",
@@ -349,7 +347,7 @@ describe("host-owned harness completion recovery", () => {
             createPeer();
           }
           resetTaskRegistryForTests({ persist: false });
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           reconcileRetainedHarnessCompletionDeliveries();
           expect(getTaskById(task.taskId)?.deliveryStatus).toBe(
             phase === "single" ? "delivered" : "pending",
@@ -615,7 +613,7 @@ describe("host-owned harness completion recovery", () => {
       const { entry, target, request, task } = await admit(state);
       await replaceSessionEntry(target, terminalEntry(entry));
       resetTaskRegistryForTests({ persist: false });
-      reloadTaskRegistryFromStore();
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
       expect(getTaskById(task.taskId)?.deliveryStatus).toBe("pending");
       reconcileRetainedHarnessCompletionDeliveries();
       expect(getTaskById(task.taskId)?.deliveryStatus).toBe("delivered");
@@ -662,7 +660,7 @@ describe("host-owned harness completion recovery", () => {
       }
       await replaceSessionEntry(target, terminal);
       resetTaskRegistryForTests({ persist: false });
-      reloadTaskRegistryFromStore();
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
       reconcileRetainedHarnessCompletionDeliveries();
       expect(getTaskById(task.taskId)?.deliveryStatus).toBe(
         ["exact", "default-account", "casefolded-provider"].includes(kind)

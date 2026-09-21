@@ -145,7 +145,7 @@ export function createSessionInitialization(
           { resolveSandboxRuntimeStatus },
           { resolveWebSearchToolPolicy },
         ] = await Promise.all([
-          import("../agents/harness/selection.js"),
+          import("../agents/harness/execution-environment.js"),
           import("../agents/sandbox/runtime-status.js"),
           import("../agents/web-search-tool-policy.js"),
         ]);

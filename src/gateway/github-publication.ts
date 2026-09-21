@@ -435,8 +435,8 @@ export function createGitHubPublicationCoordinator(params: {
         ? repository.personalStatus(...args)!
         : personal.personalStatus(...args);
     },
-    personalPending(...args: Parameters<typeof personal.personalPending>) {
-      return repository.personalPending(...args) ?? personal.personalPending(...args);
+    async personalPending(...args: Parameters<typeof personal.personalPending>) {
+      return (await repository.personalPending(...args)) ?? personal.personalPending(...args);
     },
     confirmPersonal(...args: Parameters<typeof personal.confirmPersonal>) {
       return repository.hasRequest(args[0].requestId)

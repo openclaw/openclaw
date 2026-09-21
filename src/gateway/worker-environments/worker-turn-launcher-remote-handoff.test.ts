@@ -13,6 +13,7 @@ import {
   type ExecutionIdentityAdmissionWork,
 } from "../../audit/execution-identity-admission.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { setActiveNodeContext } from "../../infra/active-node-context.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
@@ -53,8 +54,10 @@ import {
 describe("worker turn launcher remote handoff", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => setActiveNodeContext(null));
 
   it("round-trips the stored bootstrap receipt while reporting keep-local conflicts", async () => {
+    setActiveNodeContext({ nodeId: "active-mac" });
     let admissionWork: ExecutionIdentityAdmissionWork | undefined;
     setWorkerTurnAdmissionCleanup(
       configureExecutionIdentityAdmissionSink((work) => {
@@ -238,6 +241,7 @@ describe("worker turn launcher remote handoff", () => {
         toolsAllow: ["browser"],
         workspaceDir: path.join(root, "stale-caller-workspace"),
         transcriptPrompt: "Canonical transcript request",
+        extraSystemPrompt: "Keep the worker guidance.",
         onAgentEvent,
       },
       runLocal,
@@ -278,6 +282,9 @@ describe("worker turn launcher remote handoff", () => {
         ),
     ).toBe(true);
     expect(descriptor?.assignment.prompt).toBe("Inspect this workspace");
+    expect(descriptor?.assignment.systemPrompt).toBe(
+      "Keep the worker guidance.\n\nCurrent active computer (latest physical input, not message origin): active_node=active-mac",
+    );
     expect(descriptor?.assignment.suppressPromptTranscript).toBe(true);
     expect(descriptor?.assignment.agentId).toBe(sessionTarget.agentId);
     expect(descriptor?.version).toBe(4);
@@ -355,6 +362,7 @@ describe("worker turn launcher remote handoff", () => {
   });
 
   it("keeps reset tool pairs valid without replaying the already-persisted current user", async () => {
+    setActiveNodeContext({ nodeId: "disconnected-mac" }, { isCurrent: () => false });
     const remote = path.join(await realpath(root), "remote");
     await mkdir(remote);
     seedActivePlacement("worker-turn", remote);
@@ -518,6 +526,9 @@ describe("worker turn launcher remote handoff", () => {
       "media/inbound/openclaw-staged-",
     );
     expect(tunnel.stageAttachments).toHaveBeenCalledOnce();
+    expect(descriptor?.assignment.systemPrompt).toBe(
+      "Current active computer (latest physical input, not message origin): active_node=unknown",
+    );
     const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
       descriptor?.assignment.agentRuntimeIdentityToken,
     );

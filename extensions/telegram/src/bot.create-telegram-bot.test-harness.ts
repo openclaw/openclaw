@@ -288,9 +288,9 @@ function createModelsProviderDataFromConfig(
 }
 
 const systemEventsHoisted = vi.hoisted(() => ({
-  enqueueSystemEventSpy: vi.fn<TelegramBotDeps["enqueueSystemEvent"]>(() => false),
+  enqueueSystemEventSpy: vi.fn<TelegramBotDeps["enqueueRoutedSystemEvent"]>(() => false),
 }));
-export const enqueueSystemEventSpy: MockFn<TelegramBotDeps["enqueueSystemEvent"]> =
+export const enqueueSystemEventSpy: MockFn<TelegramBotDeps["enqueueRoutedSystemEvent"]> =
   systemEventsHoisted.enqueueSystemEventSpy;
 const execApprovalHoisted = vi.hoisted(
   (): { resolveExecApprovalSpy: MockFn<ResolveTelegramApprovalForTest> } => ({
@@ -530,7 +530,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
     upsertChannelPairingRequest as TelegramBotDeps["upsertChannelPairingRequest"],
-  enqueueSystemEvent: enqueueSystemEventSpy as TelegramBotDeps["enqueueSystemEvent"],
+  enqueueRoutedSystemEvent: enqueueSystemEventSpy as TelegramBotDeps["enqueueRoutedSystemEvent"],
   dispatchReplyWithBufferedBlockDispatcher,
   loadWebMedia: loadWebMedia as TelegramBotDeps["loadWebMedia"],
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],

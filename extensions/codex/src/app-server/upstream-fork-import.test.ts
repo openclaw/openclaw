@@ -193,6 +193,8 @@ describe("fork boundaries from imported Codex history", () => {
         {
           bindingStore,
           controlFactory: {
+            hasActiveWork: () => false,
+            disconnect: async () => {},
             forRequest: () => control,
             forNode: async () => {
               throw new Error("Node source is outside this local fork fixture");
@@ -256,15 +258,25 @@ describe("fork boundaries from imported Codex history", () => {
   });
 
   it.each([
-    { label: "message count", count: 105, text: "same question" },
+    { label: "message count", count: 105, text: "same question", omittedImage: false },
+    {
+      label: "message count with an earlier image",
+      count: 105,
+      text: "same question",
+      omittedImage: true,
+    },
     { label: "total UTF-8 bytes", count: 12, text: "🦞".repeat(16_000) },
   ])(
     "selects the original turn after the $label cap drops an identical-text prefix",
-    async ({ count, text }) => {
+    async ({ count, text, omittedImage }) => {
       // Repeated text makes ordinal misalignment select the wrong valid turn rather than reject.
-      const history = await importHistory(
-        Array.from({ length: count }, (_, index) => turn(`turn-${index}`, [text])),
-      );
+      const turns = Array.from({ length: count }, (_, index) => turn(`turn-${index}`, [text]));
+      if (omittedImage) {
+        turns[0]!.items[0]!.content = [
+          { type: "localImage", path: "/synthetic/omitted-image.png" },
+        ];
+      }
+      const history = await importHistory(turns);
       expect(history.imported.omittedMessages).toBeGreaterThan(0);
       expect(history.users.length).toBeLessThan(count);
 

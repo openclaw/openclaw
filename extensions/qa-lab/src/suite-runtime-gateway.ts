@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements suite runtime gateway behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";

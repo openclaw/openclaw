@@ -25,8 +25,8 @@ import {
   setUserProfileAuthLink,
   updateUserModelAuthProfile,
 } from "./user-model-accounts.js";
-import type { UserProfilesDatabase } from "./user-profiles-schema.js";
 import { ensureProfileForEmail, linkEmail, setAvatar } from "./user-profiles.js";
+import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 const tempDirs = createTempDirTracker();
 const statePaths: string[] = [];

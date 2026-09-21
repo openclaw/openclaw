@@ -1,10 +1,17 @@
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
+import { projectRuntimeChangesOntoSource } from "../config/source-value-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { adoptRuntimeContextEngineRegistrations } from "../context-engine/registry.js";
+import { adoptRuntimeDecisionProviders } from "../decisions/registry-adoption.js";
 import {
   listLoadedRuntimePluginIds,
   listRuntimePluginIdsFromRegistry,
   registryContainsRuntimePluginIds,
 } from "../plugins/active-runtime-registry.js";
+import {
+  adoptRuntimeChannelRegistrations,
+  captureRuntimeChannelSource,
+} from "../plugins/channel-registry-adoption.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import {
@@ -38,6 +45,7 @@ import {
   type AgentHarnessPluginSelection,
   type RuntimePluginLoadPurpose,
 } from "./harness/runtime-plugin-load-plan.js";
+import { releaseRuntimePluginWork, retainRuntimePluginWork } from "./runtime-plugin-work.js";
 
 type AgentRuntimePluginRegistryParams = {
   config?: OpenClawConfig;
@@ -62,7 +70,7 @@ function resolveAgentRuntimePluginRegistryLoad(
 ): PluginLoadOptions {
   const loadOptions: PluginLoadOptions = {
     config: params.config,
-    activationSourceConfig: params.config,
+    activationSourceConfig: params.config && projectConfigOntoRuntimeSourceSnapshot(params.config),
     env: params.env,
     workspaceDir:
       typeof params.workspaceDir === "string" && params.workspaceDir.trim()
@@ -107,10 +115,21 @@ function resolveAgentRuntimePluginRegistryLoad(
     metadataSnapshot,
     ...(params.purpose ? { purpose: params.purpose } : {}),
   });
+  // No-op plans keep the captured authored fleet by identity. Changed plans must
+  // project policy edits onto that capture, not the current global generation.
+  let activationSourceConfig = loadOptions.activationSourceConfig;
+  if (plan.config !== params.config) {
+    const projectedSource =
+      params.config && activationSourceConfig
+        ? projectRuntimeChangesOntoSource(activationSourceConfig, params.config, plan.config)
+        : plan.config;
+    // SAFETY: Typed config inputs project only the planner's plugin-policy edits onto authored config.
+    activationSourceConfig = projectedSource as OpenClawConfig;
+  }
   return {
     ...loadOptions,
     config: plan.config,
-    activationSourceConfig: plan.config,
+    activationSourceConfig,
     workspaceDir,
     discovery: metadataSnapshot.discovery,
     installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
@@ -141,24 +160,40 @@ function adoptAgentRuntimeRegistrations(
   pluginRegistry: PluginRegistry,
   params: AgentRuntimePluginRegistryParams,
   config: OpenClawConfig | undefined,
+  channelSource: ReturnType<typeof captureRuntimeChannelSource>,
 ): {
   registry: PluginRegistry;
   donor?: PluginRegistry;
 } {
   const activeRegistry = getActivePluginRegistry();
-  if (!activeRegistry || params.purpose === "model-catalog") {
+  if (params.purpose === "model-catalog") {
     return { registry: pluginRegistry };
+  }
+  const channelRegistry =
+    params.allowGatewaySubagentBinding === true &&
+    (params.env === undefined || params.env === process.env)
+      ? adoptRuntimeChannelRegistrations(pluginRegistry, channelSource)
+      : pluginRegistry;
+  if (!activeRegistry) {
+    return { registry: channelRegistry };
   }
   const memoryRegistry =
     params.metadataSnapshot &&
     params.workspaceDir &&
     config &&
     getActivePluginRegistryWorkspaceDir() === resolveUserPath(params.workspaceDir)
-      ? adoptRuntimeMemoryRegistrations(pluginRegistry, activeRegistry, config)
-      : pluginRegistry;
+      ? adoptRuntimeMemoryRegistrations(channelRegistry, activeRegistry, config)
+      : channelRegistry;
   const registry = bindPluginRegistryResourceOwner(
     adoptRuntimeWidgetPresenterRegistrations(
-      adoptRuntimeContextEngineRegistrations(memoryRegistry, activeRegistry),
+      adoptRuntimeContextEngineRegistrations(
+        config &&
+          params.allowGatewaySubagentBinding === true &&
+          (params.env === undefined || params.env === process.env)
+          ? adoptRuntimeDecisionProviders(memoryRegistry, activeRegistry, config)
+          : memoryRegistry,
+        activeRegistry,
+      ),
       activeRegistry,
     ),
     pluginRegistry,
@@ -173,6 +208,7 @@ export type AcquiredAgentRuntimePluginRegistry =
       primaryRegistry: PluginRegistry;
       resources: NonNullable<ReturnType<typeof getPluginRegistryInspectionResources>>;
       releaseRegistry: () => Promise<void>;
+      releaseWork: () => void;
     };
 
 /** Prepared read-only owners reuse the load plan while owning fresh, uncached registrations. */
@@ -185,15 +221,20 @@ export async function acquireAgentRuntimePluginRegistry(
     return { registry: reusable, primaryRegistry: reusable };
   }
   const acquire = () => acquirePluginRegistryForInspection(loadOptions);
+  const channelSource = captureRuntimeChannelSource(getActivePluginRegistry());
   const acquired = await (params.metadataSnapshot
     ? withPluginMetadataSnapshotScope(params.metadataSnapshot, acquire)
     : acquire());
+  let releaseWork = () => {};
   try {
     const { registry, donor } = adoptAgentRuntimeRegistrations(
       acquired.registry,
       params,
       loadOptions.config,
+      channelSource,
     );
+    // Fence replacement before adopting donors, including the await back to the build owner.
+    releaseWork = retainRuntimePluginWork([registry]);
     const primaryResources = getPluginRegistryInspectionResources(acquired.registry);
     if (!primaryResources) {
       throw new Error("Acquired prepared registry has no registration resource owner");
@@ -209,10 +250,11 @@ export async function acquireAgentRuntimePluginRegistry(
       primaryRegistry: acquired.registry,
       resources: primaryResources,
       releaseRegistry: acquired.release,
+      releaseWork,
     };
   } catch (error) {
     try {
-      await acquired.release();
+      await releaseRuntimePluginWork(acquired.release, releaseWork);
     } catch (cleanupError) {
       throw new AggregateError(
         [error, cleanupError],
@@ -239,12 +281,14 @@ export function loadAgentRuntimePluginRegistryHandle(
   // Adopt full-only runtime capabilities from the matching composition-root owners.
   // Prepared metadata outlives a transient caller's install or reload lease.
   const load = () => loadPluginRegistryHandle(loadOptions);
+  const channelSource = captureRuntimeChannelSource(getActivePluginRegistry());
   const pluginRegistry = params.metadataSnapshot
     ? withPluginMetadataSnapshotScope(params.metadataSnapshot, load)
     : load();
   // Media providers remain owned by this source when full-only donors require a copy.
   onPrimaryRegistry?.(pluginRegistry);
-  return adoptAgentRuntimeRegistrations(pluginRegistry, params, loadOptions.config).registry;
+  return adoptAgentRuntimeRegistrations(pluginRegistry, params, loadOptions.config, channelSource)
+    .registry;
 }
 
 /** Binds a scoped plugin generation when a direct host has no Gateway owner. */
@@ -267,7 +311,7 @@ export async function withAgentPluginRegistry<T>(params: {
   // Direct hosts resolve one policy generation; disabled plugins never reopen discovery.
   const context = resolvePluginRuntimeLoadContext({
     config: params.config,
-    activationSourceConfig: params.config,
+    activationSourceConfig: projectConfigOntoRuntimeSourceSnapshot(params.config),
     env: params.env,
     workspaceDir: params.workspaceDir,
     ...(params.config.plugins?.enabled === false

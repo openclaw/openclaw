@@ -324,6 +324,7 @@ export function authorizeOpenAiCompatibleHttpSession(params: {
     client: createSyntheticPluginRuntimeClient({
       ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
       operatorRoleActor: params.requestAuth.operatorRoleActor,
+      operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
       scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
     }),
     sessionKey: params.sessionKey,

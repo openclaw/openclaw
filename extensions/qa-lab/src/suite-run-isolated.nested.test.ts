@@ -265,13 +265,18 @@ describe("isolated QA suite nested publication", () => {
     expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(5);
     for (const [nonFinalArtifacts] of mocks.writeQaSuiteArtifacts.mock.calls.slice(0, -1)) {
       expect(nonFinalArtifacts).toMatchObject({ channel: "telegram", channelDriver: "crabline" });
-      expect(nonFinalArtifacts.publishTransportArtifacts).not.toBe(true);
+      expect(nonFinalArtifacts.transportArtifacts).toBeUndefined();
     }
     const finalArtifacts = mocks.writeQaSuiteArtifacts.mock.calls.at(-1)?.[0];
     expect(finalArtifacts).toMatchObject({
       channel: "telegram",
       channelDriver: "crabline",
-      publishTransportArtifacts: true,
+      transportArtifacts: {
+        artifacts: [
+          { kind: "channel-capability-matrix", path: "capabilities.json" },
+          { kind: "channel-driver-smoke", path: "readiness.json" },
+        ],
+      },
     });
   });
 

@@ -128,6 +128,11 @@ host.
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
 
+    `usage.costUsd` is omitted when no recorded cost or configured/eligible catalog
+    pricing is available. Default-filled zero rates do not establish free usage.
+    Explicit operator zero pricing and provider-billed zero totals remain `0`;
+    recorded request costs retain their original pricing tiers.
+
     Direct completions can set `responseFormat` for provider-native constrained
     output. When the provider exposes them, the result also includes the concrete
     `responseModel` and terminal `stopReason`. Security-sensitive callers can set
@@ -142,6 +147,10 @@ host.
     maps each effort to its supported wire value. Explicit `off` reaches the
     provider's disabled-thinking policy; whether thinking can be disabled depends
     on the selected model and auth route.
+
+    Codex isolated completions pass explicit reasoning levels through the native
+    model's supported-effort mapping. When reasoning is omitted, these bounded
+    calls keep their low-effort default.
 
     <Warning>
     Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. `plugins.entries.<id>.llm.allowedModels` restricts those overrides; `plugins.entries.<id>.llm.allowedCompletionModels` separately restricts every completion, including host-resolved defaults. For direct completions, a `model@profile` override remains part of the authorized model override. Isolated `model@profile` overrides and `execution.authProfileId` require `plugins.entries.<id>.llm.allowAuthProfileOverride: true`. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.

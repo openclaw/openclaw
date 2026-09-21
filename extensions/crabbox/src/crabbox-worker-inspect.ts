@@ -5,6 +5,7 @@ type CrabboxInspect = {
   providerMetadata?: unknown;
   ready?: unknown;
   state?: unknown;
+  sshUser?: unknown;
   tailscale?: unknown;
 };
 
@@ -13,6 +14,7 @@ export type ParsedInspect = {
   id: string;
   ready?: boolean;
   state: string;
+  sshUser?: string;
   tailscaleEnabled: boolean;
 };
 
@@ -30,6 +32,7 @@ export function parseInspectJson(stdout: string): ParsedInspect {
 
   const id = nonEmptyString(value.id);
   const state = nonEmptyString(value.state)?.toLowerCase();
+  const sshUser = nonEmptyString(value.sshUser);
   if (!id || !/^\S{1,128}$/u.test(id) || !state) {
     throw new Error("Crabbox inspect returned an invalid lease identity or state");
   }
@@ -64,6 +67,7 @@ export function parseInspectJson(stdout: string): ParsedInspect {
   return {
     id,
     state,
+    ...(sshUser ? { sshUser } : {}),
     tailscaleEnabled,
     ...(awsInstanceProfileAttached !== undefined ? { awsInstanceProfileAttached } : {}),
     ...(typeof value.ready === "boolean" ? { ready: value.ready } : {}),

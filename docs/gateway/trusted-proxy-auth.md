@@ -102,6 +102,8 @@ read_when:
 `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 
 Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
+
+Update and restart health checks can also reuse the local CLI's existing paired device credentials when no shared credential is configured. These checks read existing identity and token state without creating an identity or saving replacement credentials.
 </Warning>
 
 ### Configuration reference

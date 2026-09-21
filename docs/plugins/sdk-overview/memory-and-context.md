@@ -60,7 +60,7 @@ generation until its readers close; publication, source-hash validation, and
 forget operations remain with their existing database owners.
 
 Bundled workers use the private `memory-core-host-engine-knn` facade for
-read-only database access and vector primitives, and
+read-only database access, the shared SQLite idle lifetime, and vector primitives, and
 `memory-core-host-engine-indexing` for pure chunking, annotations, hashes, and
 embedding input limits. These facades avoid loading provider registries or
 writable-store initialization into worker threads. They are bundled runtime

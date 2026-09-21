@@ -9,8 +9,8 @@ import {
 import * as userProfileList from "../../state/user-profile-list.js";
 import { ensureProfileForEmail, setAvatar } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -51,6 +51,7 @@ describe("pending input read boundary", () => {
             ),
           );
         }
+        const context = await createHistoryReadContext();
         const readPage = async () => {
           readDisplay.mockClear();
           let result: unknown;
@@ -59,7 +60,7 @@ describe("pending input read boundary", () => {
             "history handler",
           )({
             params: { sessionKey: scope.sessionKey },
-            context: createDirectChatContext(),
+            context,
             req: { type: "req", id: "history", method: "chat.history" },
             client: null,
             isWebchatConnect: () => false,

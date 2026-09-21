@@ -17,7 +17,10 @@ import { recordCronNextCheckProposal } from "../../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { bindCronManagementGrant } from "../cron-creator-authority-context.js";
+import {
+  bindCronManagementGrant,
+  bindCronRequesterGrant,
+} from "../cron-creator-authority-context.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
@@ -174,17 +177,14 @@ function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
 }
 
 function buildCronToolDescription(params: { triggersEnabled: boolean }): string {
-  const addFields = params.triggersEnabled
-    ? "{name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}"
-    : "{name?,schedule,payload,sessionTarget?,pacing?,delivery?,enabled?}";
   const streamScheduleLine = params.triggersEnabled
-    ? '\n- {kind:"stream",command:[argv],mode?:"line"|"match",match?}: fires on supervised process output; disabled only when cron.triggers.enabled=false.'
+    ? '\n- {kind:"stream",command:[argv]}: fires on supervised process output; disabled only when cron.triggers.enabled=false.'
     : "";
   const scriptPayloadLine = params.triggersEnabled
-    ? '\n- script {kind:"script",script,timeoutSeconds?,toolBudget?}: main|isolated only; disabled only when cron.triggers.enabled=false.'
+    ? '\n- {kind:"script",script}: main|isolated only; disabled only when cron.triggers.enabled=false.'
     : "";
   const triggerSection = params.triggersEnabled
-    ? `TRIGGER (condition watcher on every/cron): {script,once?}; available unless cron.triggers.enabled=false — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await exec({command:"..."}).`
+    ? `TRIGGER (condition watcher on every/cron): {script}; available unless cron.triggers.enabled=false — if off, say so; never model-poll instead. Quiet headless check, no model; 30s/5 tool calls/16KB state. Read frozen trigger.state, return json({fire,message?,state?}) with NEW state; dedupe via state, never memory. fire:false saves state only. fire:true runs payload; message is that run's entire context — self-contained. Fire on failures/timeouts too; success-only watchers look healthy when broken. Script stays read-only; actions belong in payload. once:true disables after first fire. Code Mode: await exec({command:"..."}).`
     : `TRIGGERS DISABLED (cron.triggers.enabled=false): condition triggers, script payloads, and stream schedules are unavailable here. Omit trigger; use plain time-based schedules. If the user asks for a conditional watcher, say it is unsupported — never model-poll instead, and never silently create an unconditional job in its place.`;
   const silentWatcherCue = params.triggersEnabled ? ' Silent watcher=>mode:"none".' : "";
   return `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
@@ -193,7 +193,7 @@ ACTIONS: status | list [includeDisabled,limit?,offset?] (compact summaries with 
 
 SCOPE: Authenticated configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns see only caller-visible jobs; totals/counts and hasMore describe that scoped view, not global inventory. In that restricted view, an empty list or failed list/get/update/remove (including not-found) does not establish global absence, whatever the source of a known job id (including your own history). Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results. Report that you cannot establish global absence and ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page; do not bypass caller scope. Genuinely new, requested automations can still be created.
 
-ADD: ${addFields}. Required: schedule+payload.
+ADD: job requires schedule+payload.
 
 SCHEDULE:
 - {kind:"at",at:"ISO-8601"} one-shot; no tz=UTC; auto-deletes after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.
@@ -205,14 +205,14 @@ TARGET+PAYLOAD:
 - "isolated" = fresh detached session (shows in \`openclaw tasks\`); standalone background work.
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
 - "session:<key>" = named session.
-- agentTurn {kind:"agentTurn",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.
+- {kind:"agentTurn",message}; timeoutSeconds 0=none.
 - Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.${scriptPayloadLine}
 
 PACED LOOP: recurring job + pacing{min?,max?} durations ("15m","4h"; at least one). Inside its run, job calls next_check in:"<dur>" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.
 
 ${triggerSection}
 
-DELIVERY {mode:"none"|"announce"|"webhook",channel?,to?,threadId?,bestEffort?,completionDestination?}: where detached run output goes. Omitted=announce (current=>canonical session commit, plus one normal channel send for external chats; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). A current announce succeeds only after its history commit; WebChat observes that commit live and after reconnect without another user message.${silentWatcherCue} webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
+DELIVERY: where detached run output goes. Omitted=announce (current=>canonical session commit, plus one normal channel send for external chats; isolated=>last route; set channel/to for a specific chat — no messaging tool inside the run). A current announce succeeds only after its history commit; WebChat observes that commit live and after reconnect without another user message.${silentWatcherCue} webhook posts finished-run event (successful empty summary is intentional silence, no POST) to URL in \`to\`. To keep announce delivery and also POST completion, use mode:"announce" with completionDestination:{mode:"webhook",to:"https://..."}.
 
 FAILURE ALERTS: jobs with a failure route default to alerting after 2 consecutive execution failures with a 1h cooldown. Route order: job failureAlert fields, delivery.failureDestination over global cron.failureAlert destination fields, then primary announce. failureAlert:false disables execution/delivery alerts, not the auto-disable safety notice; a failureAlert object activates/tunes. bestEffort suppresses inherited execution alerts. Required completion-delivery failure uses only an alternate route, bypasses after, and shares the execution-alert cooldown from the first failure; it does not increment the execution streak.
 
@@ -222,6 +222,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const gatewayCall = deps?.callGatewayTool ?? callGatewayTool;
   const managementAuthority = bindCronManagementGrant(opts?.runId);
+  const requesterAuthority = bindCronRequesterGrant(opts?.runId);
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
   const tool: AnyAgentTool = {
@@ -248,16 +249,23 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
       ) => {
         const identity = getGatewayToolCallerIdentity();
         const grant = managementAuthority?.mint(request[0], operationSignal);
-        if (grant && !identity) {
+        const requesterGrant =
+          !grant &&
+          !identity?.cronCreatorAuthorityGrant &&
+          (request[0] === "cron.add" || request[0] === "cron.update")
+            ? (requesterAuthority ?? identity?.mintCronRequesterGrant)?.(operationSignal)
+            : undefined;
+        if ((grant || requesterGrant) && !identity) {
           throw new Error(
             "Automation management requires the active configured channel owner or Control UI administrator turn.",
           );
         }
-        return grant && identity
+        return (grant || requesterGrant) && identity
           ? await withGatewayToolCallerIdentity(
               {
                 ...identity,
-                cronManagementGrant: grant,
+                ...(grant ? { cronManagementGrant: grant } : {}),
+                ...(requesterGrant ? { cronCreatorAuthorityGrant: requesterGrant } : {}),
               },
               () => gatewayCall<T>(...request),
             )

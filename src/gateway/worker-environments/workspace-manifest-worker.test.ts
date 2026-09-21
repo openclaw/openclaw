@@ -108,6 +108,39 @@ it("authenticates both manifests before selecting changed transfer payloads", as
   ).rejects.toThrow("digest");
 });
 
+it("admits a large rebase against its original synchronization manifest", async () => {
+  const entries = (prefix: string, count: number, hash: string) =>
+    Array.from({ length: count }, (_, index) => ({
+      path: `${prefix}-${index}.ts`,
+      type: "file" as const,
+      mode: 0o644,
+      size: 16 * 1024,
+      sha256: hash.repeat(64),
+    }));
+  const encode = (values: ReturnType<typeof entries>) => {
+    const raw = JSON.stringify({
+      version: 1,
+      baseCommit: "a".repeat(40),
+      entries: values.toSorted((left, right) => (left.path < right.path ? -1 : 1)),
+    });
+    return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
+  };
+  // A rebase can leave Git clean while changing the full dispatched workspace.
+  const base = encode([...entries("modified", 18_407, "a"), ...entries("deleted", 3_103, "a")]);
+  const current = encode([...entries("modified", 18_407, "b"), ...entries("added", 17_395, "b")]);
+  const result = await parseWorkspaceManifestPair({
+    baseRaw: base.raw,
+    baseRef: base.ref,
+    currentRaw: current.raw,
+    currentRef: current.ref,
+  });
+  expect(result.changed).toBe(true);
+  expect(result.paths).toHaveLength(35_802);
+  expect(
+    result.entries.reduce((bytes, entry) => bytes + (entry.type === "file" ? entry.size : 0), 0),
+  ).toBe(586_579_968);
+});
+
 it("admits a pair of manifests at the exact supported byte limit", async () => {
   // Keep this legal 128 MiB request outside the shared Vitest heap.
   const adapterUrl = new URL("./workspace-manifest-worker.ts", import.meta.url).href;

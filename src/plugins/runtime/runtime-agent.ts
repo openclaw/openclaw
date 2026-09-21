@@ -156,13 +156,13 @@ async function createSessionEntry(
   const [
     { createGatewaySession },
     { resolveGatewaySessionStoreTarget },
-    { readAcpSessionMetaForEntry, upsertAcpSessionMeta },
+    { readAcpSessionMetaForEntry },
+    { upsertAcpSessionMeta },
     { resolveSandboxedSessionCreation },
   ] = await Promise.all([
     import("../../gateway/session-create-service.js"),
     import("../../gateway/session-utils.js"),
-    // session-meta rides the same lazy boundary: session-utils already pulls it
-    // in transitively, so a separate import here would only duplicate the edge.
+    import("../../acp/runtime/session-meta-readonly.js"),
     import("../../acp/runtime/session-meta.js"),
     import("../../gateway/operator-role-policy.js"),
   ]);

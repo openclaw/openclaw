@@ -1,6 +1,4 @@
 // Doctor gateway methods inspect and repair memory dreaming artifacts and managed cron state.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -30,7 +28,14 @@ import * as defaultMemoryCoreRuntime from "../../plugin-sdk/memory-core-bundled-
 import { getActiveMemorySearchManagerCore } from "../../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { formatError } from "../server-utils.js";
+import {
+  listWorkspaceDailyFiles,
+  readDreamDiary,
+  type DoctorMemoryDreamDiaryPayload,
+} from "./doctor-memory-files.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+
+export type { DoctorMemoryDreamDiaryPayload } from "./doctor-memory-files.js";
 
 type DoctorMemoryCoreRuntime = Pick<
   typeof defaultMemoryCoreRuntime,
@@ -46,7 +51,6 @@ type DoctorMemoryCoreRuntime = Pick<
 const MANAGED_DEEP_SLEEP_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DEEP_SLEEP_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 const DEEP_SLEEP_SYSTEM_EVENT_TEXT = "__openclaw_memory_core_short_term_promotion_dream__";
-const DREAM_DIARY_FILE_NAMES = ["DREAMS.md", "dreams.md"] as const;
 
 type DoctorMemoryDreamingPhasePayload = {
   enabled: boolean;
@@ -125,14 +129,6 @@ export type DoctorMemoryEmbeddingRuntimePayload = {
   loadError?: string;
 };
 
-export type DoctorMemoryDreamDiaryPayload = {
-  agentId: string;
-  found: boolean;
-  path: string;
-  content?: string;
-  updatedAtMs?: number;
-};
-
 export type DoctorMemoryDreamActionPayload = {
   agentId: string;
   action:
@@ -172,22 +168,6 @@ function groundedMarkdownToDiaryLines(markdown: string): string[] {
         line.length > 0 ||
         (index > 0 && expectDefined(lines[index - 1], "lines entry at index 1")?.length > 0),
     );
-}
-
-async function listWorkspaceDailyFiles(memoryDir: string): Promise<string[]> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(memoryDir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
-  return entries
-    .filter((name) => /^\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/i.test(name))
-    .map((name) => path.join(memoryDir, name))
-    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolveDreamingConfig(cfg: OpenClawConfig): DoctorMemoryDreamingConfigPayload {
@@ -521,49 +501,6 @@ async function resolveAllManagedDreamingCronStatuses(context: {
   };
 }
 
-async function readDreamDiary(
-  workspaceDir: string,
-): Promise<Omit<DoctorMemoryDreamDiaryPayload, "agentId">> {
-  for (const name of DREAM_DIARY_FILE_NAMES) {
-    const filePath = path.join(workspaceDir, name);
-    let stat;
-    try {
-      stat = await fs.lstat(filePath);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      if (code === "ENOENT") {
-        continue;
-      }
-      return {
-        found: false,
-        path: name,
-      };
-    }
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      // Ignore redirected diaries; doctor actions only operate on real workspace files.
-      continue;
-    }
-    try {
-      const content = await fs.readFile(filePath, "utf-8");
-      return {
-        found: true,
-        path: name,
-        content,
-        updatedAtMs: Math.floor(stat.mtimeMs),
-      };
-    } catch {
-      return {
-        found: false,
-        path: name,
-      };
-    }
-  }
-  return {
-    found: false,
-    path: DREAM_DIARY_FILE_NAMES[0],
-  };
-}
-
 function shouldProbeMemoryEmbeddings(params: unknown): boolean {
   if (!params || typeof params !== "object") {
     return false;
@@ -787,8 +724,7 @@ export const createDoctorHandlers = (
       return;
     }
     const { cfg, agentId, workspaceDir } = target;
-    const memoryDir = path.join(workspaceDir, "memory");
-    const sourceFiles = await listWorkspaceDailyFiles(memoryDir);
+    const sourceFiles = await listWorkspaceDailyFiles(workspaceDir);
     if (sourceFiles.length === 0) {
       const dreamDiary = await readDreamDiary(workspaceDir);
       const payload: DoctorMemoryDreamActionPayload = {

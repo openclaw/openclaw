@@ -64,7 +64,9 @@ liveness, perform network requests, or infer missing provider facts. Return:
   inbound claim handler.
 - `{ kind: "unavailable" }` when authoritative owner state is temporarily
   unavailable and the caller should retry.
-- `null` when the supplied identity is invalid or cannot be authorized.
+- `null` when the supplied identity is invalid or cannot be authorized, including
+  an account that has been removed or disabled. Retained conversation history
+  for that account must not make active-account listings fail.
 - `undefined` to delegate to core's generic owner resolution.
 
 Keep temporary unavailability distinct from `null`: an adapter restart is not

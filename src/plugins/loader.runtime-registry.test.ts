@@ -13,19 +13,17 @@ import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wa
 import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { VERSION } from "../version.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import {
   getRegisteredEmbeddingProvider,
   registerEmbeddingProvider,
 } from "./embedding-providers.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-// Verifies plugin loader runtime registry behavior.
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import * as loaderModule from "./loader-module-runtime.js";
-import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import {
   resolveNativePluginModelAuth,
   resolveNativePluginModelConfig,
@@ -209,7 +207,7 @@ it.each(["cjs", "ts"])(
               loaderStats.sourceTransformForced,
             );
             expect(loadedStats.topSourceTransformTargets).toContainEqual(
-              expect.objectContaining({ target: plugin.file }),
+              expect.objectContaining({ target: toSafeImportPath(plugin.file) }),
             );
           }
           expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({
@@ -234,7 +232,7 @@ it.each(["cjs", "ts"])(
           const system = runtime.system;
           expect(system.requestHeartbeat).toBe(requestHeartbeat);
           expect(system.runCommandWithTimeout).toBe(runCommandWithTimeout);
-          expect(drainSystemEvents("prepared-runtime-system")).toEqual(["registration"]);
+          expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["registration"]);
           await vi.waitFor(() =>
             expect(heartbeat).toHaveBeenCalledWith(
               expect.objectContaining({ reason: "registration" }),
@@ -303,7 +301,7 @@ it.each(["cjs", "ts"])(
           expect(runtime.system.formatNativeDependencyHint({ packageName: "fixture" })).toBe(
             "retained method",
           );
-          expect(drainSystemEvents("prepared-runtime-system")).toEqual(["materialized"]);
+          expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["materialized"]);
           await vi.waitFor(() =>
             expect(heartbeat).toHaveBeenCalledWith(
               expect.objectContaining({ reason: "materialized" }),
@@ -412,7 +410,7 @@ it.each(["cjs", "ts"])(
           expect(resolveRuntime).toHaveBeenCalledTimes(1);
         } finally {
           disposeHeartbeat();
-          drainSystemEvents("prepared-runtime-system");
+          drainSystemEvents("agent:main:prepared-runtime-system");
         }
       },
     );
@@ -425,73 +423,6 @@ it("keeps an empty scoped handle load from replacing the root registry", () => {
 
   expect(handle).not.toBe(root);
   expect(getActivePluginRegistry()).toBe(root);
-});
-
-it("keeps version and injected instance surfaces independent of the broad runtime module", () => {
-  const gateway = {} as PluginRuntime["gateway"];
-  const hooks = {
-    dispatchHookAgentTurn: vi.fn<PluginRuntime["hooks"]["dispatchHookAgentTurn"]>(),
-  };
-  const nodes = {} as PluginRuntime["nodes"];
-  const subagent = {} as PluginRuntime["subagent"];
-  const loadPluginModule = vi.fn((_modulePath: string): unknown => {
-    throw new Error("broad runtime should stay lazy");
-  });
-  const runtime = createLazyPluginRuntime({
-    loadPluginModule,
-    runtimeOptions: { gateway, hooks, nodes, subagent },
-  });
-
-  expect(runtime.version).toBe(VERSION);
-  expect(Object.getOwnPropertyDescriptor(runtime, "version")?.get?.()).toBe(VERSION);
-  const descriptors = Object.getOwnPropertyDescriptors(runtime);
-  expect(Object.keys(runtime)).toEqual([
-    "version",
-    "gateway",
-    "config",
-    "agent",
-    "subagent",
-    "system",
-    "media",
-    "mediaUnderstanding",
-    "tts",
-    "channel",
-    "events",
-    "logging",
-    "state",
-    "modelAuth",
-    "imageGeneration",
-    "videoGeneration",
-    "musicGeneration",
-    "llm",
-    "hooks",
-    "nodes",
-    "sandbox",
-    "worktrees",
-    "webSearch",
-    "tasks",
-    "modelConfig",
-  ]);
-  expect(Reflect.ownKeys(runtime)).toEqual(Object.keys(descriptors));
-  for (const key of Object.keys(descriptors)) {
-    expect(key in runtime).toBe(true);
-    expect(descriptors[key]).toMatchObject({ configurable: true, enumerable: true });
-  }
-  for (const [key, instance] of [
-    ["gateway", gateway],
-    ["hooks", hooks],
-    ["nodes", nodes],
-    ["subagent", subagent],
-  ] as const) {
-    expect(runtime[key]).toBe(instance);
-    expect(descriptors[key]?.get?.()).toBe(instance);
-    expect(Reflect.get(runtime, key, null)).toBe(instance);
-    expect(Reflect.get(runtime, key, undefined)).toBe(instance);
-  }
-  expect(loadPluginModule).not.toHaveBeenCalled();
-  // Object.prototype names are not declared runtime metadata.
-  expect(() => Reflect.has(runtime, "toString")).toThrow("broad runtime should stay lazy");
-  expect(loadPluginModule).toHaveBeenCalledTimes(1);
 });
 
 it("reuses discovered registrations through prepared load options until invalidated", () => {

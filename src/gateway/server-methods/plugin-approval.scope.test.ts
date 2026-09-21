@@ -44,8 +44,11 @@ describe("plugin approval request scopes", () => {
       audience: "external",
     });
     const pending = handler(options);
-    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
-    const record = expectDefined(manager.listPendingRecords()[0], "pending plugin approval");
+    await vi.waitFor(async () => expect(await manager.listPendingRecords()).toHaveLength(1));
+    const record = expectDefined(
+      (await manager.listPendingRecords())[0],
+      "pending plugin approval",
+    );
 
     expect(record.request.scope).toEqual({
       kind: "message-send",
@@ -54,7 +57,7 @@ describe("plugin approval request scopes", () => {
       recipients: ["alice\\u{200B}@example.com", "bob@example.com"],
       audience: "external",
     });
-    manager.resolve(record.id, "allow-once");
+    await manager.resolve(record.id, "allow-once");
     await pending;
   });
 
@@ -65,11 +68,14 @@ describe("plugin approval request scopes", () => {
       visibility: "public",
     });
     const pending = handler(options);
-    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
-    const record = expectDefined(manager.listPendingRecords()[0], "pending plugin approval");
+    await vi.waitFor(async () => expect(await manager.listPendingRecords()).toHaveLength(1));
+    const record = expectDefined(
+      (await manager.listPendingRecords())[0],
+      "pending plugin approval",
+    );
 
     expect(record.request.scope).toBeNull();
-    manager.resolve(record.id, "allow-once");
+    await manager.resolve(record.id, "allow-once");
     await pending;
   });
 
@@ -85,6 +91,6 @@ describe("plugin approval request scopes", () => {
       undefined,
       expect.objectContaining({ code: expect.any(String) }),
     );
-    expect(manager.listPendingRecords()).toHaveLength(0);
+    expect(await manager.listPendingRecords()).toHaveLength(0);
   });
 });

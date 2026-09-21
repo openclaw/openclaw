@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements inbound policy behavior.
 import {
   resolveStableChannelMessageIngress,
   type ChannelIngressContextBinding,

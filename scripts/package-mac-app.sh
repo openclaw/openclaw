@@ -457,7 +457,20 @@ if [[ "$SIGNING_VARIANT" == "elevation-host" ]]; then
   echo "🖥  Omitting embedded CUA driver from elevation-host package"
 else
   echo "🖥  Staging embedded CUA driver"
-  "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
+  CUA_DRIVER="$APP_ROOT/Contents/Resources/cua-driver"
+  "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"
+  if [[ "${#BUILD_ARCHS[@]}" -eq 1 ]]; then
+    CUA_ARCH="${BUILD_ARCHS[0]}"
+    CUA_DRIVER_THIN="${CUA_DRIVER}.thin"
+    echo "🖥  Thinning embedded CUA driver [$CUA_ARCH]"
+    lipo "$CUA_DRIVER" -thin "$CUA_ARCH" -output "$CUA_DRIVER_THIN"
+    chmod 0755 "$CUA_DRIVER_THIN"
+    mv "$CUA_DRIVER_THIN" "$CUA_DRIVER"
+    [[ "$(lipo -archs "$CUA_DRIVER")" == "$CUA_ARCH" ]] || {
+      echo "ERROR: CUA driver architecture did not match requested build: $CUA_ARCH" >&2
+      exit 1
+    }
+  fi
 fi
 
 echo "📦 Staging browser sign-in helper"
@@ -481,16 +494,19 @@ echo "🌐 Copying app localizations"
 node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
   --output "$APP_ROOT/Contents/Resources"
 
-echo "📦 Copying Control UI assets"
-CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
-CONTROL_UI_DEST="$APP_ROOT/Contents/Resources/control-ui"
-if [ -d "$CONTROL_UI_SRC" ] && [ -f "$CONTROL_UI_SRC/index.html" ]; then
-  rm -rf "$CONTROL_UI_DEST"
-  cp -R "$CONTROL_UI_SRC" "$CONTROL_UI_DEST"
-else
-  echo "ERROR: Control UI assets missing at $CONTROL_UI_SRC. Run pnpm ui:build first." >&2
+# The native dashboard loads the Gateway-served HTTP UI. Neither the app bundle
+# nor its private `node worker` runtime serves a second Control UI copy.
+if [[ -e "$APP_ROOT/Contents/Resources/control-ui" || -L "$APP_ROOT/Contents/Resources/control-ui" ]]; then
+  echo "ERROR: Standalone Control UI assets must not be embedded in OpenClaw.app" >&2
   exit 1
 fi
+for arch in "${BUILD_ARCHS[@]}"; do
+  worker_ui="$APP_ROOT/Contents/Resources/node-worker/$arch/lib/node_modules/openclaw/dist/control-ui"
+  if [[ -e "$worker_ui" || -L "$worker_ui" ]]; then
+    echo "ERROR: Private node worker must not embed Control UI assets: $worker_ui" >&2
+    exit 1
+  fi
+done
 
 echo "📦 Copying SwiftPM resource bundles"
 SWIFTPM_BUILD_PRODUCTS=("$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG")

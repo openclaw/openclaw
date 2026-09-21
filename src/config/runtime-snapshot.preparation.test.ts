@@ -1,5 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createConfigResolutionFacts,
@@ -15,6 +16,10 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "./runtime-snapshot.js";
+import {
+  captureRuntimeConfig,
+  projectConfigOntoRuntimeSourceSnapshot,
+} from "./runtime-source-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("prepared runtime snapshots", () => {
@@ -40,6 +45,8 @@ describe("prepared runtime snapshots", () => {
   });
 
   it("publishes a cold config only after its contributions and legacy callbacks are ready", async () => {
+    const changes = vi.fn(() => getRuntimeConfigSnapshot());
+    unregister.push(sessionChanges.subscribe(changes));
     const candidate: OpenClawConfig = { gateway: { port: 19001 } };
     const facts = createConfigResolutionFacts([]);
     setConfigResolutionFacts(candidate, facts);
@@ -74,6 +81,8 @@ describe("prepared runtime snapshots", () => {
     expect(syncPrepare).not.toHaveBeenCalled();
     expect(legacyPrepare).toHaveBeenCalledExactlyOnceWith(candidate);
     expect(contribute).toHaveBeenCalledOnce();
+    expect(changes).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "config" });
+    expect(changes).toHaveReturnedWith(candidate);
   });
 
   it.each([
@@ -323,4 +332,59 @@ describe("async cold runtime pin", () => {
       expect(rollback.commit).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("captured async runtime reads", () => {
+  afterEach(() => {
+    resetConfigRuntimeState();
+    vi.unstubAllEnvs();
+  });
+
+  it.each(["source", "reset", "captured source"])(
+    "keeps the selected runtime/source pair after %s changes before continuation",
+    async (change) => {
+      const runtime: OpenClawConfig = { gateway: { port: 19001 } };
+      const firstSource: OpenClawConfig = { gateway: { port: 19002 } };
+      setRuntimeConfigSnapshot(runtime, firstSource);
+      const selected = change === "captured source" ? captureRuntimeConfig(runtime) : runtime;
+      setRuntimeConfigSnapshot(selected, firstSource);
+      vi.stubEnv("CONFIG_CAPTURE_TEST", "original");
+      const pending = loadPinnedRuntimeConfigAsync(async () => ({ config: {} }), { capture: true });
+      if (change === "reset") {
+        resetConfigRuntimeState();
+      } else {
+        setRuntimeConfigSnapshot(selected, { gateway: { port: 19003 } });
+      }
+      vi.stubEnv("CONFIG_CAPTURE_TEST", "replacement");
+      const captured = await pending;
+      expect(captured.config).toEqual(runtime);
+      expect(projectConfigOntoRuntimeSourceSnapshot(captured.config)).toEqual(firstSource);
+      expect(captured.env.CONFIG_CAPTURE_TEST).toBe("original");
+      if (change === "captured source") {
+        const next = await loadPinnedRuntimeConfigAsync(async () => ({ config: {} }), {
+          capture: true,
+        });
+        expect(projectConfigOntoRuntimeSourceSnapshot(next.config)).toEqual({
+          gateway: { port: 19003 },
+        });
+      }
+    },
+  );
+
+  it("captures a cold publication before queued source replacement", async () => {
+    const runtime: OpenClawConfig = { gateway: { port: 19001 } };
+    const release = sessionChanges.subscribe(() => {
+      release();
+      queueMicrotask(() => setRuntimeConfigSnapshot(runtime, { gateway: { port: 19002 } }));
+    });
+    try {
+      const captured = await loadPinnedRuntimeConfigAsync(async () => ({ config: runtime }), {
+        capture: true,
+      });
+      expect(getRuntimeConfigSourceSnapshot()).toEqual({ gateway: { port: 19002 } });
+      expect(projectConfigOntoRuntimeSourceSnapshot(captured.config)).toEqual(runtime);
+    } finally {
+      release();
+    }
+  });
 });

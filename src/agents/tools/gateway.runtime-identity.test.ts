@@ -758,8 +758,8 @@ describe("gateway tool runtime identity", () => {
             oldRecord.agentRuntimeDelegatedAuthority = oldIdentity.delegatedAuthority;
             // The request is already dispatched, but has not registered its pending card.
             oldGeneration.abort(new Error("Permission change"));
-            expect(() => manager.register(oldRecord, 2_000)).toThrow("no longer active");
-            expect(manager.listPendingRecords()).toHaveLength(0);
+            await expect(manager.register(oldRecord, 2_000)).rejects.toThrow("no longer active");
+            expect(await manager.listPendingRecords()).toHaveLength(0);
 
             await callGatewayTool(method, {}, {}, { signal: nextGeneration.signal });
             const nextCall = mocks.callGateway.mock.calls.at(-1)?.[0] as CallGatewayOptions;
@@ -775,10 +775,10 @@ describe("gateway tool runtime identity", () => {
               "next-generation",
             );
             nextRecord.agentRuntimeDelegatedAuthority = nextIdentity.delegatedAuthority;
-            const decision = manager.register(nextRecord, 2_000);
+            const decision = (await manager.register(nextRecord, 2_000)).decision;
             const waiter = manager.awaitDecision(nextRecord.id);
-            expect(manager.listPendingRecords()).toHaveLength(1);
-            manager.resolve(nextRecord.id, "allow-once");
+            expect(await manager.listPendingRecords()).toHaveLength(1);
+            await manager.resolve(nextRecord.id, "allow-once");
             await expect(decision).resolves.toBe("allow-once");
             expect(manager.projectDecisionIfActive(nextRecord.id, await waiter)).toBe("allow-once");
           },
@@ -787,8 +787,8 @@ describe("gateway tool runtime identity", () => {
         outerLifetime.abort();
         oldGeneration.abort();
         nextGeneration.abort();
-        for (const record of manager.listPendingRecords()) {
-          manager.resolve(record.id, "deny");
+        for (const record of await manager.listPendingRecords()) {
+          await manager.resolve(record.id, "deny");
         }
       }
     },

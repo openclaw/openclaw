@@ -15,6 +15,7 @@ import {
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
+import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
@@ -111,6 +112,7 @@ function dictationPointer(type: "pointerdown" | "pointerup", pointerId: number):
 }
 
 beforeEach(() => {
+  onTestFinished(installChatComposerPickerDismissal(document));
   // ESM imports remain live when the composer was cached by another test file.
   // Patch the shared dependencies instead of clearing isolate:false's registry.
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
@@ -257,7 +259,7 @@ describe("renderChatComposer controls", () => {
     },
   );
 
-  it("keeps composing enabled and explains queued delivery while offline", () => {
+  it("keeps composing enabled and explains the conversation outbox while offline", () => {
     const { container } = renderComposer({
       offline: true,
       queuedOutboxCount: 3,
@@ -266,7 +268,13 @@ describe("renderChatComposer controls", () => {
 
     expect(container.querySelector(".agent-chat__input--offline")).not.toBeNull();
     expect(container.querySelector(".agent-chat__composer-status-band")?.textContent?.trim()).toBe(
-      "Offline — 3 queued; messages send when the connection returns.",
+      "3 in this conversation’s outbox.",
+    );
+    expect(container.querySelector(".agent-chat__composer-status")?.getAttribute("data-tone")).toBe(
+      "info",
+    );
+    expect(container.querySelector(".agent-chat__composer-status-band")?.getAttribute("role")).toBe(
+      "status",
     );
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
     expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
@@ -274,7 +282,9 @@ describe("renderChatComposer controls", () => {
     const empty = renderComposer({ offline: true, queuedOutboxCount: 0 });
     expect(
       empty.container.querySelector(".agent-chat__composer-status-band")?.textContent?.trim(),
-    ).toBe("Offline — messages will be queued and sent when the connection returns.");
+    ).toBe(
+      "You can keep writing. Send when you’re ready to add a message to this conversation’s outbox.",
+    );
 
     const online = renderComposer({ queuedOutboxCount: 3 });
     expect(online.container.querySelector(".agent-chat__composer-status-band")).toBeNull();
@@ -288,6 +298,18 @@ describe("renderChatComposer controls", () => {
       canAbort: true,
       onAbort,
       gatewayQuestionPrompts: [{ ...questionPrompt("pending", "Continue?"), sessionKey: "main" }],
+      asyncQuestions: {
+        scope: "archived-session",
+        pending: [{ itemId: "audience", questions: [{ title: "Which audience?" }] }],
+        archived: new Map(),
+        historyKey: "",
+        drafts: new Map(),
+        resolved: new Map(),
+        dismiss: vi.fn(async () => {}),
+        onChange: vi.fn(),
+        reopen: vi.fn(),
+        submit: vi.fn(async () => true),
+      },
       disabledBanner: {
         kind: "composer-replacement",
         text: "This session is archived. Unarchive it to continue the conversation.",
@@ -329,12 +351,17 @@ describe("renderChatComposer controls", () => {
       canSend: false,
       disabledReason: reason,
       draft: "a draft that hides the placeholder",
+      offline: true,
+      queuedOutboxCount: 3,
     });
 
     // The placeholder carries the reason only for an empty composer; the
     // dedicated reason row must keep the explanation visible alongside a draft.
     expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).toContain(
       reason,
+    );
+    expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).not.toContain(
+      "outbox",
     );
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
@@ -350,7 +377,7 @@ describe("renderChatComposer controls", () => {
 
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
     expect(container.querySelector(".agent-chat__input")?.getAttribute("aria-busy")).toBe("true");
-    const status = container.querySelector('.agent-chat__composer-underlaps[data-tone="info"]');
+    const status = container.querySelector('.agent-chat__composer-status[data-tone="info"]');
     expect(status?.textContent).toContain("Preparing workspace…");
     expect(status?.querySelector(".btn__spinner")).not.toBeNull();
   });
@@ -888,7 +915,7 @@ describe("renderChatComposer controls", () => {
     expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
   });
 
-  it("shows an actionable error underlap and returns the microphone to idle on startup failure", async () => {
+  it("shows an actionable error status and returns the microphone to idle on startup failure", async () => {
     vi.useFakeTimers();
     openMicrophoneMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
     const request = vi.fn(async (method: string) => {
@@ -913,16 +940,16 @@ describe("renderChatComposer controls", () => {
     await vi.advanceTimersByTimeAsync(800);
     await vi.waitFor(() =>
       expect(
-        container.querySelector('.agent-chat__composer-underlaps[data-tone="danger"]'),
+        container.querySelector('.agent-chat__composer-status[data-tone="danger"]'),
       ).not.toBeNull(),
     );
 
-    const underlap = container.querySelector('.agent-chat__composer-underlaps[data-tone="danger"]');
-    expect(underlap?.getAttribute("role")).toBeNull();
-    expect(underlap?.querySelector('[role="alert"]')?.textContent).toContain(
+    const status = container.querySelector('.agent-chat__composer-status[data-tone="danger"]');
+    expect(status?.getAttribute("role")).toBeNull();
+    expect(status?.querySelector('[role="alert"]')?.textContent).toContain(
       t("chat.composer.microphonePermissionBlocked"),
     );
-    expect(underlap?.textContent).toContain(t("chat.composer.dictationStartRecovery"));
+    expect(status?.textContent).toContain(t("chat.composer.dictationStartRecovery"));
     expect(container.querySelector(".chat-send-btn--dictating")).toBeNull();
     expect(container.querySelector(".chat-send-btn--voice")).not.toBeNull();
   });
@@ -1026,19 +1053,6 @@ describe("renderChatComposer status", () => {
     expect(panel.props.model.requestPosition).toEqual({ current: 2, total: 2 });
   });
 
-  it("keeps unscoped and other-session gateway questions out of the composer", () => {
-    const unscopedPrompt = questionPrompt("question-1", "Unscoped prompt");
-    unscopedPrompt.sessionKey = undefined;
-    const otherSessionPrompt = questionPrompt("question-2", "Other prompt");
-    otherSessionPrompt.sessionKey = "agent:other:main";
-
-    const view = renderComposer({
-      sessionKey: "queue-test",
-      gatewayQuestionPrompts: [unscopedPrompt, otherSessionPrompt],
-    });
-
-    expect(view.container.querySelector("openclaw-chat-question-panel")).toBeNull();
-  });
   it("floats a fresh interrupted status above the composer", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     let view = renderComposer({

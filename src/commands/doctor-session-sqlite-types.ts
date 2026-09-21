@@ -8,9 +8,12 @@ export type DoctorSessionSqliteIssue = {
 };
 
 const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
+  "active_sqlite_transcript_jsonl",
   "entry_invalid",
   "historical_transcript_deferred",
+  "legacy_index_informational",
   "plugin_migration_source_retained",
+  "retained_plugin_source_index_rebuilt",
   "transcript_archive_failed",
   "transcript_malformed",
   "transcript_missing",
@@ -19,6 +22,25 @@ const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
 
 export function isSessionSqliteMigrationWarning(issue: DoctorSessionSqliteIssue): boolean {
   return SESSION_SQLITE_WARNING_ISSUE_CODES.has(issue.code);
+}
+
+export function countBlockingSessionSqliteIssues(report: DoctorSessionSqliteTargetReport): number {
+  return report.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue)).length;
+}
+
+export function isRetainedSourceIssue(issue: DoctorSessionSqliteIssue): boolean {
+  return [
+    "entry_invalid",
+    "transcript_malformed",
+    "transcript_missing",
+    "retained_plugin_source_index_rebuilt",
+  ].includes(issue.code);
+}
+
+export function isInformationalMissingSessionIndex(
+  report: DoctorSessionSqliteTargetReport,
+): boolean {
+  return report.issues.some((issue) => issue.code === "legacy_index_informational");
 }
 
 export type DoctorSessionSqliteRestoreConflict = {

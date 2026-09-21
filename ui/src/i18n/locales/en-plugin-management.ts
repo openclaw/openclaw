@@ -3,16 +3,6 @@ import { en } from "./en.ts";
 
 // Plugin management and its lazy sibling surfaces register this shared copy on use.
 const enPluginManagement = {
-  filePreview: {
-    bundle: {
-      binary: "This binary file is included in the bundle but cannot be displayed as text.",
-      "too-large":
-        "This file exceeds the preview limit. Its contents have not been truncated or loaded.",
-      unavailable:
-        "This file could not be read safely or is unavailable. Close and reopen the skill to try again.",
-      incomplete: "Some bundle content is unavailable. Select a file to see its status.",
-    },
-  },
   custodian: {
     pluginPlaceholder: "Ask OpenClaw about {plugin}",
     pluginIntroTitle: "Ask about {plugin}",
@@ -280,7 +270,6 @@ const enPluginManagement = {
 
 export const registerPluginManagementEnglish = Object.assign(
   () => {
-    en.filePreview.bundle = enPluginManagement.filePreview.bundle;
     Object.assign(en.custodian, enPluginManagement.custodian);
     en.pluginsPage = enPluginManagement.pluginsPage;
   },

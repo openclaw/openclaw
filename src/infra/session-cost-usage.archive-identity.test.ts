@@ -1,7 +1,8 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   encodeSessionArchiveContent,
@@ -28,21 +29,21 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import {
-  readUsageCostRollups,
-  refreshCostUsageCacheForAgent,
-  resolveUsageCostPricingFingerprint,
-} from "./session-cost-usage-aggregation.js";
-import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.sqlite.js";
+import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
 import {
   listUsageCountedTranscriptStats,
   resolveUsageCostTranscriptFile,
 } from "./session-cost-usage-collection.js";
+import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
+import { decodeUsageCostRollup } from "./session-cost-usage-rollup-codec.js";
 import {
   discoverAllSessions,
   loadCostUsageSummary,
@@ -150,7 +151,28 @@ describe("usage archive identity", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await state.cleanup();
+  });
+
+  it("lists legacy usage without creating the optional archive identity table", async () => {
+    const manager = transcript();
+    const sessionFile = await writeArchive({ state, manager, encoding: "plain" });
+    const { db } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    db.exec("DROP TABLE session_transcript_archives");
+    expect(tableExists(db, "session_transcript_archives")).toBe(false);
+
+    expect(await listUsageCountedTranscriptStats("main")).toEqual([
+      expect.objectContaining({
+        sessionId: manager.getSessionId(),
+        filePath: sessionFile,
+        sourcePath: sessionFile,
+        kind: "jsonl",
+        size: Buffer.byteLength(serialize(manager)),
+        mtimeMs: archiveTime,
+      }),
+    ]);
+    expect(tableExists(db, "session_transcript_archives")).toBe(false);
   });
 
   it.each(["shared.sqlite", "my-store.json", "shared-link.sqlite"])(
@@ -409,9 +431,9 @@ describe("usage archive identity", () => {
 
   for (const encoding of encodings) {
     for (const reason of ["reset", "deleted"] as const) {
-      it.each(["main", "worker"])(
+      it.for(["main", "worker"])(
         `discovers and reads ${encoding} ${reason} archives for %s`,
-        async (agentId) => {
+        async (agentId, { signal }) => {
           const manager = transcript();
           const sessionId = manager.getSessionId();
           const sessionFile = await writeArchive({
@@ -448,11 +470,25 @@ describe("usage archive identity", () => {
 
           const cacheLookup = { agentId, config, sessions: [{ sessionId, sessionFile }] };
           expect(readSessionCostUsageRollupRows(agentId)).toEqual([]);
-          expect(await loadSessionCostSummariesFromCache(cacheLookup)).toMatchObject({
-            summaries: [null],
-            cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 1 },
-          });
-          await expect.poll(() => readSessionCostUsageRollupRows(agentId)).toHaveLength(1);
+          const work = new AsyncWorkScope();
+          try {
+            expect(
+              await racePromiseWithAbortSignal(
+                work.track(() => loadSessionCostSummariesFromCache(cacheLookup)),
+                signal,
+              ),
+            ).toMatchObject({
+              summaries: [null],
+              cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 1 },
+            });
+            await racePromiseWithAbortSignal(
+              work.runWhenIdle(() => undefined),
+              signal,
+            );
+            expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(1);
+          } finally {
+            await work.drain();
+          }
           expect(
             await loadSessionCostSummariesFromCache({ ...cacheLookup, requestRefresh: false }),
           ).toMatchObject({
@@ -500,8 +536,15 @@ describe("usage archive identity", () => {
         { agentId: "main", sessionId, sessionKey, storePath },
         { messages: [{ message: assistant(17) }], touchSessionEntry: false },
       );
-      await writeArchive({ state, manager, encoding });
+      const mainArchive = await writeArchive({ state, manager, encoding });
       const workerArchive = await writeArchive({ state, manager, encoding, agentId: "worker" });
+      const readFile = vi.spyOn(fsSync, "readFileSync");
+      try {
+        await listUsageCountedTranscriptStats("main");
+        expect(readFile.mock.calls.filter(([file]) => file === mainArchive)).toEqual([]);
+      } finally {
+        readFile.mockRestore();
+      }
 
       const sessions = await discoverAllSessions({ agentId: "main" });
       expect.soft(sessions).toHaveLength(1);
@@ -615,8 +658,11 @@ describe("usage archive identity", () => {
     const rows = readSessionCostUsageRollupRows("main");
     expect(rows.map((row) => row.key)).toEqual([replacement.filePath]);
     const fingerprint = await resolveUsageCostPricingFingerprint(config, state.agentDir());
-    const rollups = readUsageCostRollups("main", fingerprint);
-    expect(rollups.get(replacement.filePath)?.entry.checkpoint).toMatchObject({
+    const rollup = expectDefined(
+      rows.find((row) => row.key === replacement.filePath),
+      "replacement archive rollup",
+    );
+    expect(decodeUsageCostRollup(rollup.valueJson, fingerprint)?.checkpoint).toMatchObject({
       kind: "jsonl",
       parsedOffset: Buffer.byteLength(serialize(manager)),
       observedSize: Buffer.byteLength(serialize(manager)),
@@ -642,7 +688,9 @@ describe("usage archive identity", () => {
     await fs.writeFile(sessionFile, "not a zstd frame");
 
     await expect(resolveUsageCostTranscriptFile(sessionFile)).resolves.toBeUndefined();
-    await expect(discoverAllSessions({ agentId: "main" })).rejects.toThrow();
+    expect(await discoverAllSessions({ agentId: "main" })).toMatchObject([
+      { sessionId: manager.getSessionId(), sessionFile },
+    ]);
     await expect(refreshCostUsageCacheForAgent({ agentId: "main", config })).rejects.toThrow();
     expect(readSessionCostUsageRollupRows("main")).toEqual(rows);
   });

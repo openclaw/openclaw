@@ -93,6 +93,7 @@ export type PackageInstallCommonParams = InstallSafetyOverrides & {
   extensionsDir?: string;
   npmDir?: string;
   timeoutMs?: number;
+  workTimeoutMs?: number | null;
   logger?: PluginInstallLogger;
   mode?: "install" | "update";
   dryRun?: boolean;

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { Selectable } from "kysely";
+import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
 import {
   executeSqliteQuerySync,
@@ -9,6 +10,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { ensureSecretStoreSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -51,6 +53,8 @@ export type SecretStoreWriteParams = {
   scope: SecretStoreScope;
   name: string;
   value: string;
+  /** Replace only the matching value during repair, preserving the current kind and host policy. */
+  expectedValue?: string;
   kind: SecretStoreKind;
   allowedHosts?: readonly string[];
   updatedBy: string | null;
@@ -94,6 +98,7 @@ type SecretStoreReadError =
   | { code: "SECRET_STORE_UNAVAILABLE"; message: string; cause: unknown };
 
 const SECRET_STORE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const log = createSubsystemLogger("secrets/store");
 
 function normalizeScope(_scope: SecretStoreScope): { scopeKind: "team"; scopeId: "" } {
   return { scopeKind: "team", scopeId: "" };
@@ -117,7 +122,13 @@ function assertSecretStoreMutationName(name: string): void {
   }
 }
 
-export function assertSecretStoreValue(value: string, kind: SecretStoreKind): void {
+export function assertSecretStoreValue(value: string, kind: SecretStoreKind, name: string): void {
+  if (isRedactedSecretValue(value)) {
+    throw new SecretStoreValidationError(
+      "SECRET_STORE_VALUE_REDACTED",
+      `Secret store entry "${name}" contains a redaction placeholder. Supply a real value or leave the field unchanged. Run openclaw doctor --fix to repair a store-backed Gateway token.`,
+    );
+  }
   const bytes = Buffer.byteLength(value, "utf8");
   if (bytes > SECRET_STORE_VALUE_MAX_BYTES) {
     throw new SecretStoreValidationError(
@@ -201,6 +212,7 @@ function toMetadata(row: SecretStoreRow): SecretStoreEntryMetadata {
 export function listSecretStoreEntries(params: {
   scope: SecretStoreScope;
   includeDeleted?: boolean;
+  redactedOnly?: boolean;
   database?: OpenClawStateDatabaseOptions;
 }): SecretStoreEntryMetadata[] {
   const { scopeKind, scopeId } = normalizeScope(params.scope);
@@ -218,7 +230,11 @@ export function listSecretStoreEntries(params: {
           query = query.where("deleted_at_ms", "is", null);
         }
         return executeSqliteQuerySync(sqlite, query)
-          .rows.filter((row) => classifyHiddenGitHubStoreName(row.name) === undefined)
+          .rows.filter(
+            (row) =>
+              classifyHiddenGitHubStoreName(row.name) === undefined &&
+              (!params.redactedOnly || isRedactedSecretValue(row.value)),
+          )
           .map(toMetadata);
       }, params.database ?? {}) ?? []
     );
@@ -318,6 +334,12 @@ export function readSecretStoreExecEnvironment(params: {
           ) {
             continue;
           }
+          if (isRedactedSecretValue(row.value)) {
+            log.warn(
+              `Secret store entry "${row.name}" contains a redaction placeholder; excluded from the exec environment. Replace it with a real value, or run openclaw doctor --fix for a Gateway token.`,
+            );
+            continue;
+          }
           if (row.kind === "env") {
             env[row.name] = row.value;
             continue;
@@ -406,7 +428,7 @@ function writeSecretStoreEntryInternal(
   capturePrevious: boolean,
 ): SecretStoreWriteSnapshot | undefined {
   assertSecretStoreMutationName(params.name);
-  assertSecretStoreValue(params.value, params.kind);
+  assertSecretStoreValue(params.value, params.kind, params.name);
   if (params.kind === "env" && params.allowedHosts !== undefined) {
     throw new SecretStoreValidationError(
       "SECRET_STORE_INVALID_ALLOWED_HOST",
@@ -424,18 +446,25 @@ function writeSecretStoreEntryInternal(
     ({ db: sqlite }) => {
       ensureSecretStoreSchema(sqlite);
       const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-      const previous = capturePrevious
-        ? executeSqliteQueryTakeFirstSync(
-            sqlite,
-            db
-              .selectFrom("secret_store_entries")
-              .select(["value", "kind", "allowed_hosts", "updated_by"])
-              .where("scope_kind", "=", scopeKind)
-              .where("scope_id", "=", scopeId)
-              .where("name", "=", params.name)
-              .where("deleted_at_ms", "is", null),
-          )
-        : undefined;
+      const previous =
+        capturePrevious || params.expectedValue !== undefined
+          ? executeSqliteQueryTakeFirstSync(
+              sqlite,
+              db
+                .selectFrom("secret_store_entries")
+                .select(["value", "kind", "allowed_hosts", "updated_by"])
+                .where("scope_kind", "=", scopeKind)
+                .where("scope_id", "=", scopeId)
+                .where("name", "=", params.name)
+                .where("deleted_at_ms", "is", null),
+            )
+          : undefined;
+      if (params.expectedValue !== undefined && previous?.value !== params.expectedValue) {
+        throw new SecretStoreValidationError(
+          "SECRET_STORE_VALUE_CHANGED",
+          `Secret store entry "${params.name}" changed before repair; its current value was preserved. Run openclaw doctor again.`,
+        );
+      }
       executeSqliteQuerySync(
         sqlite,
         db
@@ -455,15 +484,14 @@ function writeSecretStoreEntryInternal(
           .onConflict((conflict) =>
             conflict.columns(["scope_kind", "scope_id", "name"]).doUpdateSet({
               value: params.value,
-              kind: params.kind,
+              ...(params.expectedValue === undefined ? { kind: params.kind } : {}),
               updated_at_ms: now,
               updated_by: params.updatedBy,
               deleted_at_ms: null,
-              ...(params.kind === "env"
-                ? { allowed_hosts: null }
-                : allowedHosts !== undefined
-                  ? { allowed_hosts: allowedHostsJson }
-                  : {}),
+              ...(params.expectedValue === undefined &&
+              (params.kind === "env" || allowedHosts !== undefined)
+                ? { allowed_hosts: allowedHostsJson }
+                : {}),
             }),
           ),
       );

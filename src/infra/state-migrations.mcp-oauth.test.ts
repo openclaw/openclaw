@@ -312,6 +312,13 @@ describe("legacy MCP OAuth Doctor migration", () => {
       allowAuthorizationRedirect: true,
     });
     await provider.saveCodeVerifier("new-login-verifier");
+    expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).toMatchObject({
+      credentialState: "uninitialized",
+    });
+    expect(JSON.parse(storeRow(env, storeKey)?.store_json ?? "null")).not.toHaveProperty(
+      "codeVerifier",
+    );
+    await provider.redirectToAuthorization(new URL("https://auth.example.com/authorize"));
     const sourcePath = await writeLegacy({
       stateDir,
       fileName: `${storeKey}.json`,

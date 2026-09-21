@@ -73,6 +73,7 @@ export function readLegacyPrimaryTranscriptIdentity(
   filePath: string,
   originalPath: string,
   retainedSharedAliasIds?: ReadonlySet<string>,
+  registered = false,
 ): { sessionId: string; updatedAt: number } | undefined {
   const filename = path.basename(originalPath);
   const filenameId =
@@ -116,13 +117,16 @@ export function readLegacyPrimaryTranscriptIdentity(
       !parseOpaqueLeafEntry(raw) &&
       !parseParentLinkedOpaqueEntry(raw)
     ) {
+      if (registered) {
+        return undefined;
+      }
       throw new Error("Unrecognized primary transcript record");
     }
     if (classified.recognized && classified.entry.type === "message") {
       messages += 1;
     }
   }
-  return sessionId && messages > 0
+  return sessionId && (messages > 0 || registered)
     ? { sessionId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
     : undefined;
 }

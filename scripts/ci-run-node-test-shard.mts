@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { isConstrainedCiCheckHost } from "./lib/local-check-runtime.mts";
+import { isConstrainedCiCheckHost, isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
 import { parsePositiveInt, readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import type { VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 
@@ -42,6 +42,7 @@ const FS_MODULE_CACHE_GENERATION_FILE = ".openclaw-transform-generation";
 export type ShardTargetPlan = { kind: "target"; name: string; target: string };
 type ShardGroupConfig = {
   configs: string[];
+  fallbackMaxWorkers?: number;
   env?: Record<string, unknown> | null;
   includePatterns?: string[] | null;
   shard_name?: string;
@@ -121,13 +122,10 @@ export function resolveShardPlans(env: NodeJS.ProcessEnv = process.env): ShardPl
   });
 }
 
-function prepareChildEnv(entry: ShardPlan, baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const childEnv: NodeJS.ProcessEnv = { ...baseEnv, OPENCLAW_TEST_PROJECTS_PARALLEL: "1" };
-  if (entry.kind === "group") {
-    if (entry.plan.shard_name) {
-      childEnv.OPENCLAW_VITEST_SHARD_NAME = entry.plan.shard_name;
-    }
-    for (const [key, value] of Object.entries(entry.plan.env ?? {})) {
+function mergePlanEnv(baseEnv: NodeJS.ProcessEnv, overrides: unknown): NodeJS.ProcessEnv {
+  const childEnv = { ...baseEnv };
+  if (isRecord(overrides)) {
+    for (const [key, value] of Object.entries(overrides)) {
       if (typeof value === "string") {
         const inherited = baseEnv[key]?.trim();
         // Pins may lower the admitted job budget, never raise it. Compiler
@@ -147,25 +145,42 @@ function prepareChildEnv(entry: ShardPlan, baseEnv: NodeJS.ProcessEnv): NodeJS.P
   return childEnv;
 }
 
+function prepareChildEnv(entry: ShardPlan, baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return mergePlanEnv(
+    {
+      ...baseEnv,
+      OPENCLAW_TEST_PROJECTS_PARALLEL: "1",
+      ...(entry.kind === "group" && entry.plan.shard_name
+        ? { OPENCLAW_VITEST_SHARD_NAME: entry.plan.shard_name }
+        : {}),
+    },
+    entry.kind === "group" ? entry.plan.env : undefined,
+  );
+}
+
 export function buildChildEnv(
   entry: ShardPlan,
   baseEnv: NodeJS.ProcessEnv,
   scratchDir: string,
   index: number,
-  options: { serial?: boolean; cacheSlot?: number } = {},
+  options: { serial?: boolean; cacheSlot?: number; runtime?: "node" | "bun" } = {},
 ) {
   const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+  const cachePrefix = options.runtime === "bun" ? "vitest-cache-bun" : "vitest-cache";
   const cacheDirectory = persistentCacheRoot
-    ? `vitest-cache-${options.cacheSlot ?? index}`
+    ? `${cachePrefix}-${options.cacheSlot ?? index}`
     : options.serial
-      ? "vitest-cache-shared"
-      : `vitest-cache-${index}`;
+      ? `${cachePrefix}-shared`
+      : `${cachePrefix}-${index}`;
   // Persistent worker slots let serial plans reuse transforms without concurrent
   // writers. Scratch caches stay per-plan; group overrides still apply last.
   const childEnv = prepareChildEnv(entry, {
     ...baseEnv,
     [FS_MODULE_CACHE_PATH_ENV_KEY]: join(persistentCacheRoot || scratchDir, cacheDirectory),
   });
+  if (options.runtime) {
+    childEnv.OPENCLAW_VITEST_RUNTIME = options.runtime;
+  }
   if (entry.kind === "group") {
     const plan = entry.plan;
     if (Array.isArray(plan.includePatterns) && plan.includePatterns.length > 0) {
@@ -432,7 +447,15 @@ async function runChild(
 }
 
 export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions = {}) {
-  const baseEnv = options.env ?? process.env;
+  const inheritedEnv = options.env ?? process.env;
+  const jobEnv = mergePlanEnv({}, parseJsonEnv(inheritedEnv, "OPENCLAW_NODE_TEST_ENV_JSON"));
+  const baseEnv = mergePlanEnv(inheritedEnv, jobEnv);
+  // Historical targets use a five-file workflow-owned adapter. Their Node
+  // contract must not import current target discovery or runtime policy code.
+  const runtimePolicy = baseEnv.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
+  const runtimeOwner =
+    runtimePolicy === "node" ? undefined : await import("./lib/ci-test-runtime.mts");
+  const policy = runtimeOwner?.resolveCiTestRuntimePolicy(baseEnv) ?? "node";
   // Respect serial timing-sensitive bins and never clone cache slots that
   // cannot receive a plan.
   const requestedConcurrency =
@@ -446,6 +469,13 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const concurrency = Math.min(
     plans.length,
     requestedConcurrency,
+    // Cold in-process Gateway boot costs 37s quiet / 50s contended against a 90s
+    // budget. A job containing these configs must never admit a second plan.
+    plans.some(
+      (entry) => entry.kind === "group" && entry.plan.configs.some(isExclusiveCiTestConfig),
+    )
+      ? 1
+      : requestedConcurrency,
     hostResources
       ? isConstrainedCiCheckHost(hostResources)
         ? 1
@@ -457,6 +487,30 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
     );
   }
+  const hasMeasuredHeadroom =
+    hostResources !== null &&
+    !isConstrainedCiCheckHost(hostResources) &&
+    concurrency === 1 &&
+    baseEnv.RUNNER_ENVIRONMENT === "self-hosted" &&
+    baseEnv.FROZEN_TARGET !== "true";
+  const admittedPlans = plans.map((entry): ShardPlan => {
+    if (entry.kind !== "group" || entry.plan.fallbackMaxWorkers === undefined) {
+      return entry;
+    }
+    const fallback = parsePositiveInt(entry.plan.fallbackMaxWorkers, "Fallback worker limit");
+    if (hasMeasuredHeadroom) {
+      return entry;
+    }
+    return {
+      ...entry,
+      plan: {
+        ...entry.plan,
+        env: mergePlanEnv(mergePlanEnv({}, entry.plan.env), {
+          OPENCLAW_VITEST_MAX_WORKERS: String(fallback),
+        }),
+      },
+    };
+  });
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
   const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
   const nodeCompileCacheRoot = baseEnv[NODE_COMPILE_CACHE_PATH_ENV_KEY]?.trim();
@@ -467,7 +521,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     );
   }
 
-  const context = await createWorkerContext(baseEnv, plans);
+  const context = await createWorkerContext(baseEnv, admittedPlans);
   let interrupted: NodeJS.Signals | undefined;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
@@ -484,13 +538,13 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     let exitCode = 0;
     const workers = Array.from({ length: concurrency }, async (_, cacheSlot) => {
       try {
-        while (nextIndex < plans.length && (exitCode === 0 || options.continueOnFailure)) {
+        while (nextIndex < admittedPlans.length && (exitCode === 0 || options.continueOnFailure)) {
           if (interrupted) {
             return;
           }
           const index = nextIndex;
           nextIndex += 1;
-          const entry = plans[index];
+          const entry = admittedPlans[index];
           if (!entry) {
             return;
           }
@@ -503,35 +557,59 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             }
             continue;
           }
+          // A standalone plan already projects the job environment. Resolve its
+          // scoped override once, then append it to the inherited global flags.
           const vitestExtraArgs = [
-            baseEnv,
-            entry.kind === "group" ? entry.plan.env : undefined,
+            inheritedEnv,
+            mergePlanEnv(jobEnv, entry.kind === "group" ? entry.plan.env : undefined),
           ].flatMap((env) => {
-            const value = parseJsonEnv(env ?? {}, VITEST_EXTRA_ARGS_ENV_KEY, []);
+            const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
             return isStringArray(value) ? value : [];
           });
           const args =
             vitestExtraArgs.length > 0 ? [...targetArgs, "--", ...vitestExtraArgs] : targetArgs;
-          const childEnv = buildChildEnv(entry, baseEnv, scratchDir, index, {
-            serial: concurrency === 1,
-            cacheSlot,
-          });
-          const code = await runner(
-            args,
-            childEnv,
-            entry.name,
-            entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name,
-          );
-          if (code !== 0) {
-            // Ordinary CI stops scheduling after failure; cache warmers explicitly
-            // continue so later groups still seed their independent transforms.
-            exitCode = exitCode || code;
+          const selections = runtimeOwner?.resolveCiTestRuntimeSelections(
+            {
+              ...(entry.kind === "target" ? { targets: [entry.target] } : entry.plan),
+              env: prepareChildEnv(entry, baseEnv),
+              vitestArgs: vitestExtraArgs,
+            },
+            policy,
+          ) ?? [{ runtime: "node" as const }];
+          for (const selection of selections) {
+            if (interrupted) {
+              return;
+            }
+            const runtime = selection.runtime;
+            const selectedEntry =
+              entry.kind === "group" && selection.includePatterns
+                ? { ...entry, plan: { ...entry.plan, includePatterns: selection.includePatterns } }
+                : entry;
+            const childEnv = buildChildEnv(selectedEntry, baseEnv, scratchDir, index, {
+              serial: concurrency === 1,
+              cacheSlot,
+              runtime,
+            });
+            const timingKey = entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name;
+            const timingPrefix =
+              runtime === "bun" ? "bun:" : selection.includePatterns ? "node-subset:" : "";
+            const code = await runner(
+              args,
+              childEnv,
+              `${timingPrefix}${entry.name}`,
+              `${timingPrefix}${timingKey}`,
+            );
+            // A dual-runtime envelope always completes both ordinary test runs;
+            // its first failure still stops admission of later envelopes.
+            if (code !== 0) {
+              exitCode = exitCode || code;
+            }
           }
         }
       } catch (error) {
         // Setup failures stop admission immediately; live children still own
         // their cache slots until every admitted worker has joined.
-        nextIndex = plans.length;
+        nextIndex = admittedPlans.length;
         throw error;
       }
     });

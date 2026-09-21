@@ -2323,18 +2323,22 @@ fi
 
   defineInstallerNpmConfigContract(installerContract);
 
-  it("rejects OpenClaw GitHub source targets for npm installs", () => {
-    const result = runInstallCliShell(`
+  it.each(["linux", "darwin"])(
+    "rejects OpenClaw GitHub source targets for npm installs on %s",
+    (os) => {
+      const result = runInstallCliShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
+      os_detect() { printf '${os}\\n'; }
       OPENCLAW_VERSION=main
       install_openclaw
     `);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("npm installs do not support OpenClaw GitHub source targets");
-    expect(result.stdout).toContain("--install-method git --version main");
-  });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain("npm installs do not support OpenClaw GitHub source targets");
+      expect(result.stdout).toContain("--install-method git --version main");
+    },
+  );
 
   defineInstallerNpmRetryContract(installerContract);
 

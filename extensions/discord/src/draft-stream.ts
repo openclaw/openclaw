@@ -1,4 +1,3 @@
-// Discord plugin module implements draft stream behavior.
 import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -18,6 +17,7 @@ type DiscordDraftStream = {
   update: (text: string, options?: { complete?: boolean }) => void;
   flush: () => Promise<void>;
   messageId: () => string | undefined;
+  lastDeliveredText: () => string;
   clear: () => Promise<void>;
   deleteCurrentMessage: () => Promise<void>;
   discardPending: () => Promise<void>;
@@ -101,7 +101,6 @@ export function createDiscordDraftStream(params: {
       }
     }
 
-    lastSentText = trimmed;
     try {
       if (streamMessageId !== undefined) {
         // Edit existing message
@@ -112,6 +111,9 @@ export function createDiscordDraftStream(params: {
             ...(flags ? { flags } : {}),
           },
         });
+        if (generation === streamGeneration) {
+          lastSentText = trimmed;
+        }
         return true;
       }
       // Send new message
@@ -148,6 +150,7 @@ export function createDiscordDraftStream(params: {
         return false;
       }
       streamMessageId = sentMessageId;
+      lastSentText = trimmed;
       return true;
     } catch (err) {
       if (activeCreateGeneration === generation) {
@@ -274,6 +277,7 @@ export function createDiscordDraftStream(params: {
     update,
     flush: loop.flush,
     messageId: () => streamMessageId,
+    lastDeliveredText: () => lastSentText,
     clear,
     deleteCurrentMessage,
     discardPending,

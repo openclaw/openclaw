@@ -10,6 +10,7 @@ import {
   waitForControlUiRoute,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -95,7 +96,28 @@ suite.define(() => {
                 { id: "charlie", name: "Needle Charlie" },
               ],
             },
-            "cron.list": { jobs: [{ id: "bravo", name: "Needle Bravo" }] },
+            "cron.list": cronListResponseFixture({
+              jobs: [
+                {
+                  id: "bravo",
+                  name: "Needle Bravo",
+                  enabled: true,
+                  createdAtMs: 0,
+                  updatedAtMs: 0,
+                  schedule: { kind: "every", everyMs: 60_000 },
+                  sessionTarget: "main",
+                  wakeMode: "next-heartbeat",
+                  payload: { kind: "systemEvent", text: "Prepare the sample report." },
+                  state: {},
+                },
+              ],
+              snapshotRevision: "palette-group-order",
+              total: 1,
+              offset: 0,
+              limit: 50,
+              hasMore: false,
+              nextOffset: null,
+            }),
             "sessions.list": { ts: 1, path: "", count: 0, defaults: {}, sessions: [] },
             "sessions.usage": emptyUsage,
           },

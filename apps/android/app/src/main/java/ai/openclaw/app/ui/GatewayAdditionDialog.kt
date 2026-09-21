@@ -145,7 +145,8 @@ internal fun GatewayAdditionDialog(
       if (config != null) {
         GatewayAdditionStep.Review(config, previous)
       } else {
-        val message = gatewayEndpointValidationMessage(decoded.error ?: GatewayEndpointValidationError.INVALID_URL, GatewayEndpointInputSource.QR_SCAN)
+        val source = if (previous is GatewayAdditionStep.Code) GatewayEndpointInputSource.SETUP_CODE else GatewayEndpointInputSource.QR_SCAN
+        val message = gatewayEndpointValidationMessage(decoded.error ?: GatewayEndpointValidationError.INVALID_URL, source)
         if (previous is GatewayAdditionStep.Code) GatewayAdditionStep.Code(message) else GatewayAdditionStep.ScanError(message)
       }
   }
@@ -236,15 +237,52 @@ internal fun GatewayAdditionDialog(
           }
 
           is GatewayAdditionStep.Code -> {
-            ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = nativeString("Setup code"), secret = true, modifier = Modifier.testTag("gateway-add-code"))
+            ClawTextField(
+              value = setupCode,
+              onValueChange = {
+                setupCode = it
+                step = GatewayAdditionStep.Code()
+              },
+              placeholder = "",
+              label = nativeString("Setup code"),
+              secret = true,
+              modifier = Modifier.testTag("gateway-add-code"),
+            )
             current.error?.let { Text(it, color = ClawTheme.colors.warning) }
             ClawPrimaryButton(text = nativeString("Continue"), onClick = { stageCode(setupCode, GatewayAdditionStep.Code()) }, modifier = Modifier.fillMaxWidth())
           }
 
           is GatewayAdditionStep.Manual -> {
-            ClawTextField(value = address, onValueChange = { address = it }, placeholder = nativeString("Gateway URL"), modifier = Modifier.testTag("gateway-add-address"))
-            ClawTextField(value = token, onValueChange = { token = it }, placeholder = nativeString("Token (optional)"), secret = true)
-            ClawTextField(value = password, onValueChange = { password = it }, placeholder = nativeString("Password (optional)"), secret = true)
+            ClawTextField(
+              value = address,
+              onValueChange = {
+                address = it
+                step = GatewayAdditionStep.Manual()
+              },
+              placeholder = "",
+              label = nativeString("Gateway URL"),
+              modifier = Modifier.testTag("gateway-add-address"),
+            )
+            ClawTextField(
+              value = token,
+              onValueChange = {
+                token = it
+                step = GatewayAdditionStep.Manual()
+              },
+              placeholder = "",
+              label = nativeString("Token (optional)"),
+              secret = true,
+            )
+            ClawTextField(
+              value = password,
+              onValueChange = {
+                password = it
+                step = GatewayAdditionStep.Manual()
+              },
+              placeholder = "",
+              label = nativeString("Password (optional)"),
+              secret = true,
+            )
             current.error?.let { Text(it, color = ClawTheme.colors.warning) }
             ClawPrimaryButton(text = nativeString("Continue"), onClick = ::stageManual, modifier = Modifier.fillMaxWidth())
           }

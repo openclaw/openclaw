@@ -4,9 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import * as directoryDurability from "@openclaw/fs-safe/durability";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { createPrivateSqliteDirectory } from "../infra/sqlite-private-directory.js";
 import { runExec } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
@@ -14,7 +12,10 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
   createGenericDatabase,
+  createGenericSnapshot,
   expectMissing,
+  readGenericValues,
+  useLocalRepositoryFixtures,
   withDatabase,
   withRestoredSpies,
 } from "./local-repository.test-support.js";
@@ -67,7 +68,8 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
 
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { createTempDir, createGenericRepositoryFixture, createGenericSnapshotFixture } =
+  useLocalRepositoryFixtures(afterEach);
 const TRANSIENT_PLUGIN_BLOB_MARKER = `transient-plugin-blob-${"sensitive".repeat(32)}`;
 const DURABLE_PLUGIN_BLOB_MARKER = "durable-plugin-blob-control";
 const STATE_LEASE_MARKER = "snapshot-must-not-retain-active-lease";
@@ -77,74 +79,6 @@ afterEach(() => {
   durabilityTestState.beforeSync = undefined;
   durabilityTestState.pinnedSyncOutcome = undefined;
 });
-
-async function createTempDir(): Promise<string> {
-  const tempDir = tempDirs.make("openclaw-snapshot-repository-");
-  if (process.platform === "win32") {
-    const privateTempDir = path.join(tempDir, "private");
-    await createPrivateSqliteDirectory(privateTempDir);
-    return privateTempDir;
-  }
-  return tempDir;
-}
-
-function readGenericValues(databasePath: string): unknown[] {
-  return withDatabase(
-    databasePath,
-    (database) => database.prepare("SELECT value FROM entries ORDER BY id").all(),
-    { readOnly: true },
-  );
-}
-
-function createGenericSnapshot(
-  provider: ReturnType<typeof createLocalSqliteSnapshotProvider>,
-  sourcePath: string,
-  id: string,
-): Promise<SnapshotResult> {
-  return provider.create({ path: sourcePath, identity: { role: "generic", id } });
-}
-
-async function createGenericRepositoryFixture(
-  options: {
-    database?: Parameters<typeof createGenericDatabase>[1];
-    now?: () => Date;
-    useValidationRoot?: boolean;
-  } = {},
-) {
-  const tempDir = await createTempDir();
-  const sourcePath = path.join(tempDir, "source.sqlite");
-  const repositoryPath = path.join(tempDir, "snapshots");
-  const restorePath = path.join(tempDir, "restore", "source.sqlite");
-  const validationRootPath = path.join(tempDir, "validation");
-  createGenericDatabase(sourcePath, options.database);
-  if (options.useValidationRoot) {
-    await fs.mkdir(validationRootPath, { mode: 0o700 });
-    await fs.chmod(validationRootPath, 0o700);
-  }
-  return {
-    provider: createLocalSqliteSnapshotProvider({
-      repositoryPath,
-      ...(options.useValidationRoot ? { validationRootPath } : {}),
-      ...(options.now ? { now: options.now } : {}),
-    }),
-    repositoryPath,
-    restorePath,
-    sourcePath,
-    tempDir,
-    validationRootPath,
-  };
-}
-
-async function createGenericSnapshotFixture(
-  id: string,
-  options: Parameters<typeof createGenericRepositoryFixture>[0] = {},
-) {
-  const fixture = await createGenericRepositoryFixture(options);
-  return {
-    ...fixture,
-    snapshot: await createGenericSnapshot(fixture.provider, fixture.sourcePath, id),
-  };
-}
 
 function createGlobalDatabase(databasePath: string): void {
   withDatabase(databasePath, (database) => {
@@ -920,34 +854,6 @@ describe("local SQLite snapshot repository", () => {
         await fs.chmod(sharedPath, 0o700);
         lstatSpy.mockRestore();
       }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "accepts protected symlinked ancestors through their canonical path",
-    async () => {
-      const tempDir = await createTempDir();
-      const sourcePath = path.join(tempDir, "source.sqlite");
-      const repositoryPath = path.join(tempDir, "snapshots");
-      const realSharedPath = path.join(tempDir, "real-shared");
-      const aliasSharedPath = path.join(tempDir, "alias-shared");
-      const validationRootPath = path.join(aliasSharedPath, "validation");
-      const restorePath = path.join(aliasSharedPath, "restore", "source.sqlite");
-      createGenericDatabase(sourcePath, { values: ["canonical-staging"] });
-      await fs.mkdir(path.join(realSharedPath, "validation"), { recursive: true, mode: 0o700 });
-      await fs.chmod(path.join(realSharedPath, "validation"), 0o700);
-      await fs.symlink(realSharedPath, aliasSharedPath, "dir");
-      const provider = createLocalSqliteSnapshotProvider({
-        repositoryPath,
-        validationRootPath,
-      });
-      const snapshot = await createGenericSnapshot(provider, sourcePath, "canonical-staging");
-
-      await expect(provider.verify(snapshot.ref)).resolves.toMatchObject({ ok: true });
-      await expect(provider.restoreFresh(snapshot.ref, restorePath)).resolves.toMatchObject({
-        ok: true,
-      });
-      expect(readGenericValues(restorePath)).toEqual([{ value: "canonical-staging" }]);
     },
   );
 

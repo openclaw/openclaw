@@ -39,8 +39,10 @@ import {
   toWorkerTranscriptMessage,
   type WorkerProviderReplayUnavailable,
 } from "../../worker/transcript-message.js";
-import { parseWorkerRuntimeResult } from "../../worker/worker-process-protocol.js";
-import type { WorkerRuntimeResult } from "../../worker/worker.runtime.js";
+import {
+  parseWorkerRuntimeResult,
+  type WorkerRuntimeResult,
+} from "../../worker/worker-process-protocol.js";
 import {
   measureAgentRuntimeIdentityTokenBytes,
   mintAgentRuntimeIdentityToken,

@@ -10,15 +10,16 @@ import {
   runWithOwnedSessionTranscriptWrite,
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/transcript-write-context.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import {
   onInternalSessionTranscriptUpdate,
   readSessionTranscriptRunId,
 } from "../../sessions/transcript-events.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
+import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { readAssistantTextBlocksForPhase } from "../../shared/chat-message-content.js";
 import {
+  attachManagedOutgoingMediaToMessage,
   buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,
   prepareOutgoingMediaFromReplyPayload,
@@ -27,13 +28,19 @@ import {
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { AssistantDisplayContentBlock } from "./chat-assistant-content.js";
-import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
+import {
+  captureWebchatReplyMediaScope,
+  getWebchatReplyMediaLocalRoots,
+  normalizeWebchatReplyMediaPathsForDisplay,
+  type WebchatReplyMediaRequesterContext,
+} from "./chat-reply-media.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { publishAssistantTranscriptRewrite } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /** Materialize committed progress attachments within the same admitted webchat run. */
 export function observeChatSendCommentaryMedia(params: {
+  requesterContext?: WebchatReplyMediaRequesterContext;
   session: Pick<PreparedChatSendSession, "agentId" | "cfg" | "sessionKey" | "sessionLoadOptions">;
   accountId: string | undefined;
   getRunId: () => string;
@@ -131,7 +138,7 @@ export function observeChatSendCommentaryMedia(params: {
           if (!anchor) {
             const { waitForSessionTranscriptProjection } =
               await import("../../config/sessions/session-transcript-reconcile.js");
-            await waitForSessionTranscriptProjection(scope);
+            await waitForSessionTranscriptProjection(scope, params.abortSignal);
             assertCurrent();
             anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId });
           }
@@ -139,38 +146,48 @@ export function observeChatSendCommentaryMedia(params: {
             return;
           }
           const managedMedia = new Map<string, AssistantDisplayContentBlock[]>();
-          let attached = false;
+          let committed = false;
           try {
-            const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
+            const mediaScope = captureWebchatReplyMediaScope({
+              requesterContext: params.requesterContext,
               cfg: session.cfg,
               sessionKey: scope.sessionKey,
               agentId: scope.agentId,
+              sessionLoadOptions: session.sessionLoadOptions,
               accountId: params.accountId,
-              payloads: mediaUrls.map((url) => ({ mediaUrls: [url] })),
+              assertCurrent,
             });
-            assertCurrent();
-            for (const [index, payload] of payloads.entries()) {
-              const blocks = await createManagedOutgoingMediaBlocks({
-                sessionKey: scope.sessionKey,
-                agentId: scope.agentId,
-                messageId,
-                items: prepareOutgoingMediaFromReplyPayload(payload),
-                localRoots: getAgentScopedMediaLocalRoots(session.cfg, scope.agentId),
-                continueOnPrepareError: true,
-                assertCurrent,
-                abortSignal: params.abortSignal,
+            await withChannelReadAuthority(mediaScope.assertCurrent, async () => {
+              const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
+                ...mediaScope,
+                payloads: mediaUrls.map((url) => ({ mediaUrls: [url] })),
               });
-              blocks.push(
-                ...(getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []).map(
-                  buildManagedMediaFailureBlock,
-                ),
-              );
-              managedMedia.set(mediaUrls[index]!, blocks);
               assertCurrent();
-            }
+              for (const [index, payload] of payloads.entries()) {
+                // History ownership starts after the rewrite; GC can run during preparation.
+                const blocks = await createManagedOutgoingMediaBlocks({
+                  sessionKey: scope.sessionKey,
+                  agentId: scope.agentId,
+                  items: prepareOutgoingMediaFromReplyPayload(payload),
+                  localRoots: getWebchatReplyMediaLocalRoots({
+                    ...mediaScope,
+                  }),
+                  continueOnPrepareError: true,
+                  assertCurrent: mediaScope.assertCurrent,
+                  abortSignal: params.abortSignal,
+                });
+                blocks.push(
+                  ...(getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []).map(
+                    buildManagedMediaFailureBlock,
+                  ),
+                );
+                managedMedia.set(mediaUrls[index]!, blocks);
+                assertCurrent();
+              }
+            });
             const { waitForSessionTranscriptProjection } =
               await import("../../config/sessions/session-transcript-reconcile.js");
-            await waitForSessionTranscriptProjection(scope);
+            await waitForSessionTranscriptProjection(scope, params.abortSignal);
             assertCurrent();
             const rewritten = await rewriteTranscriptMessageAtAnchor(anchor, (value) => {
               assertCurrent();
@@ -209,15 +226,32 @@ export function observeChatSendCommentaryMedia(params: {
               return { ...currentMessage, [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent };
             });
             if (rewritten) {
-              attached = true;
+              // Publication failures must not discard originals already referenced by history.
+              committed = true;
               lastRewrite = { sessionId: scope.sessionId, generation: rewritten.generation };
+              // Settle the authorized commit even if the run becomes stale after the rewrite.
+              const mediaBlocks = [...managedMedia.values()]
+                .flat()
+                .filter(
+                  (block) =>
+                    block.type === "image" ||
+                    block.type === "audio" ||
+                    block.type === "video" ||
+                    block.type === "attachment",
+                );
+              if (
+                mediaBlocks.length > 0 &&
+                !attachManagedOutgoingMediaToMessage({ messageId, blocks: mediaBlocks })
+              ) {
+                throw new Error("Webchat commentary media ownership could not be persisted");
+              }
               await publishAssistantTranscriptRewrite({ scope, rewritten: [{ messageId }] });
             }
           } finally {
-            if (!attached) {
+            if (!committed) {
               await removeManagedOutgoingMediaBlocks({
                 blocks: [...managedMedia.values()].flat(),
-                messageId,
+                messageId: null,
               });
             }
           }

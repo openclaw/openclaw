@@ -20,6 +20,14 @@ export type PluginConfigUiHint = {
   presentation?: ConfigUiPresentation;
 };
 
+/** Static, portable palettes; no plugin JavaScript or native UI activation is required. */
+export type PluginManifestTheme = {
+  id: string;
+  name: string;
+  description: string;
+  source: string;
+};
+
 /** Top-level plugin manifest format. */
 export type PluginFormat = "openclaw" | "bundle";
 
@@ -384,6 +392,12 @@ export type PluginManifestBackupResource = {
   relativePath: string;
 };
 
+export type PluginManifestDecisionModel = {
+  provider: string;
+  id: string;
+  name: string;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
@@ -474,6 +488,7 @@ export type PluginManifest = {
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  themes?: PluginManifestTheme[];
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];
@@ -489,6 +504,8 @@ export type PluginManifest = {
    * compat wiring, and contract coverage without importing plugin runtime.
    */
   contracts?: PluginManifestContracts;
+  /** Static model choices owned by contracts.decisionProviders; never conversational models. */
+  decisionModels?: PluginManifestDecisionModel[];
   /** Setup descriptors keyed by ids owned in contracts.transcriptSourceProviders. */
   transcriptSources?: Record<string, PluginManifestTranscriptSource>;
   /** Cheap media-understanding provider defaults without importing plugin runtime. */
@@ -519,6 +536,7 @@ export type PluginManifestContracts = {
    * plugin instead of every provider plugin.
    */
   externalAuthProviders?: string[];
+  decisionProviders?: string[];
   embeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];

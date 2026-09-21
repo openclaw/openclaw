@@ -10,7 +10,7 @@ import {
   type JSValueHandle,
   type Snapshot,
 } from "quickjs-wasi";
-import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-pool.js";
+import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-server.js";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
 import {
   boundCodeModeError,
@@ -30,7 +30,6 @@ import {
 import { prepareSource } from "./code-mode-source.js";
 import type {
   CodeModeConfig,
-  CodeModeLanguage,
   CodeModeNamespaceDescriptor,
   CodeModeWorkerPayload,
   CodeModeWorkerContinuation,
@@ -67,6 +66,7 @@ type BridgeState = {
   pendingRequests: PendingBridgeRequest[];
   canceledRequestIds: string[];
   admissionFailure?: CodeModeWorkerFailure;
+  networkContentObserved?: true;
 };
 
 // QuickJS error stacks are backtrace frames only ("    at file:line:col"), with
@@ -150,11 +150,9 @@ function createHostRequestHandler(params: {
     ) {
       throw new Error("unsupported code mode bridge method");
     }
-    let args: unknown;
-    try {
-      args = JSON.parse(argsHandle.toString()) as unknown;
-    } catch {
-      args = [];
+    const args: unknown = JSON.parse(argsHandle.toString());
+    if (!Array.isArray(args)) {
+      throw new Error("invalid code mode bridge arguments: expected an array");
     }
     // Snapshotted method counters keep launch identity independent of unrelated bridge traffic.
     // Snapshots are process-local, so every resumable guest comes from the ID-aware source above.
@@ -170,7 +168,7 @@ function createHostRequestHandler(params: {
     params.bridge.pendingRequests.push({
       id,
       method,
-      args: Array.isArray(args) ? args : [],
+      args,
     });
     // Return only diagnostic guest coordinates, not host frames or dispatch authority.
     const stack = callStackHandle?.isString ? callStackHandle.toString().slice(0, 8192) : "";
@@ -227,6 +225,13 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
     const callbacks = [
       ["__openclawHostRequest", createHostRequestHandler({ vm, bridge, config: input.config })],
       ["__openclawHostCancelRequest", createHostCancelRequestHandler({ vm, bridge })],
+      [
+        "__openclawHostObserveNetworkContent",
+        () => {
+          bridge.networkContentObserved = true;
+          return vm.undefined;
+        },
+      ],
     ] as const;
     for (const [name, callback] of callbacks) {
       if (input.kind === "resume") {
@@ -269,10 +274,10 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
 }
 
 function takeOutput(vm: QuickJS): unknown[] {
-  return vm.global.getProp("__openclawTakeOutput").consume((take) =>
+  return vm.global.getProp("__openclawTakeOutputJson").consume((take) =>
     vm.callFunction(take, vm.undefined).consume((output) => {
-      const dumped = vm.dump(output);
-      return Array.isArray(dumped) ? (dumped as unknown[]) : [];
+      const parsed: unknown = JSON.parse(output.toString());
+      return Array.isArray(parsed) ? parsed : [];
     }),
   );
 }
@@ -338,24 +343,16 @@ function workerFailureResult(params: {
   if (params.error instanceof CodeModeWorkerFailure) {
     return failedWorkerResult(params.error.code, params.error.message, output);
   }
-  if (output.length > 0) {
-    return failedWorkerResult(
-      "internal_error",
-      errorMessage(params.error, readSourceLocation(params.vm)),
-      output,
-    );
-  }
-  if (params.error instanceof JSException) {
-    // Preserve guest coordinates before the VM is disposed and the outer catch formats the error.
-    throw new Error(errorMessage(params.error, readSourceLocation(params.vm)));
-  }
-  throw params.error;
+  // Return while the VM still owns the source coordinates and provenance, even
+  // when the guest throws before emitting output.
+  return failedWorkerResult(
+    params.error instanceof ToolInputError ? "invalid_input" : "internal_error",
+    errorMessage(params.error, readSourceLocation(params.vm)),
+    output,
+  );
 }
 
 async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Promise<unknown> {
-  if (!resultHandle.isPromise) {
-    return serializeCompletedCatalogHandles(vm, resultHandle);
-  }
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
     return settled.error.consume((error) => {
@@ -380,15 +377,7 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       throw new Error(text);
     });
   }
-  return settled.value.consume((value) => serializeCompletedCatalogHandles(vm, value));
-}
-
-function serializeCompletedCatalogHandles(vm: QuickJS, value: JSValueHandle): unknown {
-  return vm.global
-    .getProp("__openclawSerializeCatalogHandles")
-    .consume((serialize) =>
-      vm.callFunction(serialize, vm.undefined, value).consume((serialized) => vm.dump(serialized)),
-    );
+  return settled.value.consume((value) => JSON.parse(value.toString()));
 }
 
 function waitingResult(params: {
@@ -473,6 +462,9 @@ async function runVmExecution(params: {
             params.pauseBudget();
             const response = await params.channel.request({
               status: "boundary",
+              ...(params.bridge.networkContentObserved
+                ? { networkContentObserved: true as const }
+                : {}),
               pendingRequests: params.bridge.pendingRequests,
               canceledRequestIds: params.bridge.canceledRequestIds,
               settlementMode,
@@ -520,7 +512,9 @@ async function runVmExecution(params: {
         using rejection = params.vm.global
           .getProp("__openclawUnhandledRejection")
           .consume((read) => params.vm.callFunction(read, params.vm.undefined));
-        await readCompletedResult(params.vm, rejection);
+        if (rejection.isPromise) {
+          await readCompletedResult(params.vm, rejection);
+        }
         return { status: "completed", value, output };
       } finally {
         resultHandle.dispose();
@@ -570,25 +564,7 @@ async function run(
   channel?: WorkerTaskChannel,
 ): Promise<CodeModeWorkerResult> {
   const startedAt = performance.now();
-  let sourceMap: string | undefined;
-  const source =
-    input.kind === "exec"
-      ? await prepareSource({
-          code: input.source,
-          language: input.language,
-          config: input.config,
-          preflight:
-            input.preflightDeclarations === undefined
-              ? undefined
-              : {
-                  declarations: input.preflightDeclarations,
-                  maxBytes: input.config.memoryLimitBytes,
-                },
-          onSourceMap: (map) => {
-            sourceMap = map;
-          },
-        })
-      : "";
+  const source = input.kind === "exec" ? prepareSource(input.source) : "";
   const config = {
     ...input.config,
     timeoutMs: Math.min(
@@ -605,7 +581,7 @@ async function run(
     canceledRequestIds: [],
   };
   const { vm, didTimeout, setBudget, pauseBudget } = await createVm({ ...input, config }, bridge);
-  return runVmExecution({
+  const result = await runVmExecution({
     vm,
     didTimeout,
     setBudget,
@@ -616,11 +592,7 @@ async function run(
     maxTimeoutMs: input.config.timeoutMs,
     prepare: () => {
       if (input.kind === "exec") {
-        const program = buildUserSource(source, input.prelude, input.language);
-        if (sourceMap) {
-          program.location.sourceMap = sourceMap;
-          program.location.generatedLines = source.split(/\r\n|[\r\n\u2028\u2029]/u);
-        }
+        const program = buildUserSource(source, input.prelude);
         // Immutable guest state travels with the existing VM snapshot and its byte limit.
         vm.newString(JSON.stringify(program.location)).consume((location) =>
           vm.global.defineProp(SOURCE_LOCATION_KEY, location),
@@ -631,6 +603,7 @@ async function run(
       settleRequests(vm, input.settledRequests);
     },
   });
+  return bridge.networkContentObserved ? { ...result, networkContentObserved: true } : result;
 }
 
 function isQuickJsWasmModule(value: unknown): value is WebAssembly.Module {
@@ -677,11 +650,6 @@ async function main(
             wasmModule: input.wasmModule,
             wasmExtensions: input.wasmExtensions,
             source: input.source,
-            preflightDeclarations:
-              typeof input.preflightDeclarations === "string"
-                ? input.preflightDeclarations
-                : undefined,
-            language: input.language as CodeModeLanguage | undefined,
             prelude: typeof input.prelude === "string" ? input.prelude : undefined,
             executionTimeoutMs:
               typeof input.executionTimeoutMs === "number" ? input.executionTimeoutMs : undefined,

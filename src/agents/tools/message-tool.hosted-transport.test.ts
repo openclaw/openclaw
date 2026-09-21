@@ -79,6 +79,14 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     runId: operationalRunInstance.runId,
     sessionKey,
   });
+  const assertDashboardReadCurrent = vi.fn();
+  const dashboardCapability = mintMessageActionTurnCapability({
+    agentId: "ops",
+    runId: operationalRunInstance.runId,
+    sessionKey,
+    assertDashboardReadCurrent,
+    expiresWithRun: true,
+  });
   try {
     const openListener = async (listener: "hosted-local" | "remote-primary") => {
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -148,12 +156,7 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     };
     setRuntimeConfigSnapshot(config, config);
     process.env.OPENCLAW_GATEWAY_URL = remote.url;
-    const dispatched = vi.fn<GatewayRequestHandler>(({ params, client, respond }) => {
-      expect(client?.internal?.agentRuntimeIdentity).toMatchObject({
-        agentId: "ops",
-        sessionKey,
-        operationalRunInstance,
-      });
+    const dispatched = vi.fn<GatewayRequestHandler>(({ params, respond }) => {
       respond(true, { ok: true, listener: "hosted-local", action: params });
     });
     const methods = createGatewayMethodRegistry([
@@ -169,22 +172,24 @@ it("dispatches a hosted message action without connecting to either Gateway endp
       getGatewayMethodRegistry: () => methods,
       trackExecution: <T>(run: () => Promise<T>) => run(),
     } as GatewayRequestContext;
-    const tool = createMessageTool({
-      getRuntimeConfig: () => config,
-      runMessageAction,
-      agentId: "ops",
-      agentSessionKey: sessionKey,
-      runId: operationalRunInstance.runId,
-      messageActionTurnCapability: capability,
-      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-      resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-        resolvedConfig,
-        diagnostics: [],
-        targetStatesByPath: {},
-        hadUnresolvedTargets: false,
-      }),
-    });
-    const execute = () =>
+    const makeTool = (turnCapability?: string) =>
+      createMessageTool({
+        getRuntimeConfig: () => config,
+        runMessageAction,
+        agentId: "ops",
+        agentSessionKey: sessionKey,
+        runId: operationalRunInstance.runId,
+        messageActionTurnCapability: turnCapability,
+        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+        resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
+          resolvedConfig,
+          diagnostics: [],
+          targetStatesByPath: {},
+          hadUnresolvedTargets: false,
+        }),
+      });
+    const tool = makeTool(capability);
+    const execute = (selectedTool = tool, accountId?: string) =>
       withGatewayToolCallerIdentity(
         {
           agentId: "ops",
@@ -195,17 +200,23 @@ it("dispatches a hosted message action without connecting to either Gateway endp
             getActiveAgentRunDelegatedAuthority(operationalRunInstance) === authority,
         },
         () =>
-          tool.execute("hosted-reaction", {
+          selectedTool.execute("hosted-reaction", {
             action: "react",
             channel: "gatewaychat",
             target: "alice",
             messageId: "message-1",
             emoji: "✅",
+            ...(accountId ? { accountId } : {}),
           }),
       );
     const result = await execute();
     expect(result.details).toMatchObject({ ok: true, listener: "hosted-local" });
     expect(dispatched).toHaveBeenCalledOnce();
+    expect(dispatched.mock.calls[0]?.[0].client?.internal?.agentRuntimeIdentity).toMatchObject({
+      agentId: "ops",
+      sessionKey,
+      operationalRunInstance,
+    });
     expect(result.details).toMatchObject({
       action: {
         channel: "gatewaychat",
@@ -216,15 +227,30 @@ it("dispatches a hosted message action without connecting to either Gateway endp
     });
     expect(local.connections).not.toHaveBeenCalled();
     expect(remote.connections).not.toHaveBeenCalled();
+    const contextlessTool = makeTool();
+    const dashboardTool = makeTool(dashboardCapability);
+    for (const selectedTool of [contextlessTool, dashboardTool]) {
+      await expect(execute(selectedTool, "default")).resolves.toMatchObject({
+        details: { ok: true, listener: "hosted-local" },
+      });
+      expect(
+        dispatched.mock.calls.at(-1)?.[0].client?.internal?.agentRuntimeIdentity,
+      ).toBeUndefined();
+    }
+    expect(dispatched.mock.calls[2]?.[0].params).toEqual(dispatched.mock.calls[1]?.[0].params);
+    expect(assertDashboardReadCurrent).not.toHaveBeenCalled();
     releaseAgentRunDelegatedAuthority(authority);
-    await expect(execute()).rejects.toThrow(
-      /agent (?:runtime identity requires active delegated run|tool caller) authority/,
-    );
-    expect(dispatched).toHaveBeenCalledOnce();
+    for (const selectedTool of [tool, contextlessTool, dashboardTool]) {
+      await expect(execute(selectedTool)).rejects.toThrow(
+        /agent (?:runtime identity requires active delegated run|tool caller) authority/,
+      );
+    }
+    expect(dispatched).toHaveBeenCalledTimes(3);
     expect(local.connections).not.toHaveBeenCalled();
     expect(remote.connections).not.toHaveBeenCalled();
   } finally {
     revokeMessageActionTurnCapability(capability);
+    revokeMessageActionTurnCapability(dashboardCapability);
     releaseAgentRunDelegatedAuthority(authority);
     restoreActivePluginRegistrySnapshot(registry);
     try {
@@ -243,6 +269,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
   const source = new AbortController();
   const jobId = "scheduled-config-handoff";
   const runId = "scheduled-config-run";
+  const sessionId = "scheduled-persistent-session";
   const sessionKey = `agent:ops:cron:${jobId}:run:${runId}`;
   const policy = { version: 1, mode: "trusted" } as const;
   // Only runtime config changes here; canonical job revocation has its own owner tests.
@@ -315,6 +342,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
         cfg: configA,
         agentId: "ops",
         runId,
+        sessionId,
         sessionKey,
         jobId,
         toolsAllow: ["message"],
@@ -345,7 +373,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
         agentId: "ops",
         sessionKey,
         runId,
-        sessionId: runId,
+        sessionId,
         agentAccountId: "default",
         scheduledToolPolicy: policy,
       }),
@@ -372,7 +400,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
       agentSessionKey: sessionKey,
       agentAccountId: "default",
       runId,
-      sessionId: runId,
+      sessionId,
       messageActionTurnCapability: capability,
       admitScheduledInvocation: admitInvocation,
       getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
@@ -416,7 +444,7 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
       () =>
         resolveTrustedMessageActionToolContext({
           client,
-          request: { sessionKey, sessionId: runId },
+          request: { sessionKey, sessionId },
         }),
     );
     expect(mismatched).toMatchObject({ ok: true, messageActionConfig: undefined });

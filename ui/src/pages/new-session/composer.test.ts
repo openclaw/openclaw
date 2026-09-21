@@ -527,7 +527,7 @@ describe("new-session composer keyboard submission", () => {
     const start = composer.querySelector<HTMLButtonElement>(".new-session-page__start-submit");
 
     expect(notice?.getAttribute("role")).toBe("status");
-    expect(notice?.classList.contains("agent-chat__composer-underlaps")).toBe(true);
+    expect(notice?.classList.contains("agent-chat__composer-status")).toBe(true);
     expect(notice?.getAttribute("data-tone")).toBe("info");
     expect(notice?.querySelector(".agent-chat__composer-status-band")).not.toBeNull();
     expect(notice?.textContent?.trim()).toBe("Restoring your last session setup…");

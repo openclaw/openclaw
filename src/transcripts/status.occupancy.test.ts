@@ -11,6 +11,42 @@ import {
 const fixture = useTranscriptStatusFixture();
 
 describe("configured transcript occupancy diagnostics", () => {
+  it("joins an initially occupied capture while releasing its watcher before startup settles", async () => {
+    const f = fixture({ transcripts: { autoStart: [{ ...room, whenOccupied: true }] } });
+    const entered = createDeferred<TranscriptStartRequest>();
+    const gate = createDeferred();
+    const unwatched = createDeferred();
+    f.provider.watchOccupancy = async (request) => {
+      request.onOccupied();
+      return { ok: true, value: { stop: () => unwatched.resolve() } };
+    };
+    f.provider.start = async (request) => {
+      entered.resolve(request);
+      await gate.promise;
+      return { ok: true, session: request.session };
+    };
+    const service = createTranscriptsAutoStartService(f.ctx);
+    try {
+      let settled = false;
+      const starting = service.start().settled.then(() => {
+        settled = true;
+      });
+      const request = await entered.promise;
+      expect(settled).toBe(false);
+      const stopping = service.stop();
+      await unwatched.promise;
+      expect(request.abortSignal?.aborted).toBe(true);
+      expect(settled).toBe(false);
+      gate.resolve();
+      await starting;
+      await stopping;
+      expect((await f.read()).active).toEqual([]);
+    } finally {
+      gate.resolve();
+      await service.stop();
+    }
+  });
+
   it.each(["retrying", "starting", "reoccupied"] as const)(
     "settles a %s capture when its room becomes empty",
     async (mode) => {
@@ -99,10 +135,8 @@ describe("configured transcript occupancy diagnostics", () => {
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         service.start();
-        await vi.waitFor(async () =>
-          expect(
-            (await f.read()).configuredSources.map((source) => source.startDiagnostic),
-          ).toEqual(entries.map(() => "retrying")),
+        expect((await f.read()).configuredSources.map((source) => source.startDiagnostic)).toEqual(
+          entries.map(() => "retrying"),
         );
         vi.mocked(providerRegistry.getTranscriptSourceProvider).mockReturnValue(f.provider);
         await vi.advanceTimersByTimeAsync(5_000);

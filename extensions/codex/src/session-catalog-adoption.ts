@@ -104,13 +104,13 @@ export async function listAdoptedSessionEntries(params: {
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): Promise<Map<string, AdoptedSessionEntry>> {
-  const adopted = new Map<string, AdoptedSessionEntry>();
-  for (const { agentId, entry, sessionKey } of listSessionCatalogEntries({
+  const entries = listSessionCatalogEntries({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     config: params.config ?? {},
     runtime: params.runtime,
     sessionEntries: params.sessionEntries,
-  })) {
+  });
+  const candidateForEntry = ({ agentId, entry, sessionKey }: (typeof entries)[number]) => {
     const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
     const marker = readCodexSupervisionMarker(entry);
     if (
@@ -120,37 +120,76 @@ export async function listAdoptedSessionEntries(params: {
       entry.agentHarnessId !== "codex" ||
       entry.modelSelectionLocked !== true
     ) {
-      continue;
+      return undefined;
     }
     const sessionId = entry.sessionId?.trim();
     if (!sessionId) {
-      continue;
+      return undefined;
     }
-    const binding = params.bindingStore.read(
-      sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
-    );
-    const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
-    const boundThreadId = binding?.threadId.trim();
-    if (
-      binding?.connectionScope !== "supervision" ||
-      !sourceThreadId ||
-      !boundThreadId ||
-      sessionKeyRest !== adoptionSessionKey(sourceThreadId, marker.sourceHomeId)
-    ) {
-      continue;
+    return {
+      agentId,
+      sessionKey,
+      sessionKeyRest,
+      sessionId,
+      marker,
+      identity: sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
+    };
+  };
+  function* candidates() {
+    for (const entry of entries) {
+      const candidate = candidateForEntry(entry);
+      if (candidate) {
+        yield candidate;
+      }
     }
-    const sourceKey = sessionCatalogAdoptedSourceKey(
-      marker.sourceHomeId ?? CODEX_LOCAL_SESSION_HOST_ID,
-      sourceThreadId,
-    );
-    if (adopted.has(sourceKey)) {
-      throw new Error(
-        `multiple OpenClaw sessions adopt Codex thread ${sourceThreadId} from the same home`,
-      );
-    }
-    adopted.set(sourceKey, { key: sessionKey, sessionId, agentId, boundThreadId });
   }
-  return adopted;
+  const collect = (
+    selected: Iterable<NonNullable<ReturnType<typeof candidateForEntry>>>,
+    readBinding: CodexAppServerBindingStore["read"] = (identity) =>
+      params.bindingStore.read(identity),
+  ) => {
+    const adopted = new Map<string, AdoptedSessionEntry>();
+    for (const { agentId, sessionKey, sessionKeyRest, sessionId, marker, identity } of selected) {
+      const binding = readBinding(identity);
+      const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
+      const boundThreadId = binding?.threadId.trim();
+      if (
+        binding?.connectionScope !== "supervision" ||
+        !sourceThreadId ||
+        !boundThreadId ||
+        sessionKeyRest !== adoptionSessionKey(sourceThreadId, marker.sourceHomeId)
+      ) {
+        continue;
+      }
+      const sourceKey = sessionCatalogAdoptedSourceKey(
+        marker.sourceHomeId ?? CODEX_LOCAL_SESSION_HOST_ID,
+        sourceThreadId,
+      );
+      if (adopted.has(sourceKey)) {
+        throw new Error(
+          `multiple OpenClaw sessions adopt Codex thread ${sourceThreadId} from the same home`,
+        );
+      }
+      adopted.set(sourceKey, { key: sessionKey, sessionId, agentId, boundThreadId });
+    }
+    return adopted;
+  };
+  if (!params.bindingStore.readMany) {
+    return collect(candidates());
+  }
+  let prepared: Array<NonNullable<ReturnType<typeof candidateForEntry>>>;
+  try {
+    prepared = [...candidates()];
+  } catch {
+    // Replay validation in row order before any bulk acquisition.
+    return collect(candidates());
+  }
+  const bindings = params.bindingStore.readMany(prepared.map(({ identity }) => identity));
+  try {
+    return collect(prepared, () => bindings.next().value);
+  } finally {
+    bindings.return(undefined);
+  }
 }
 
 async function findAdoptedSessionEntry(params: {

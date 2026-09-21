@@ -6,6 +6,7 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isNodeHostLauncherChild, runNodeHostLauncher } from "./node-host-launcher.mjs";
 import {
   consumeLauncherRootOptionToken,
   isForegroundGmailRunInvocation,
@@ -624,6 +625,15 @@ const tryOutputPrecomputedCommandHelp = () => {
 
 // Resolve Node before loading pending package lifecycle code or any built runtime modules.
 const waitingForNodeUpdateRespawn = await ensureSupportedRuntimeVersion();
+if (
+  !waitingForNodeUpdateRespawn &&
+  (await runNodeHostLauncher({
+    entryPath: fileURLToPath(import.meta.url),
+    packageRoot: fileURLToPath(new URL("./", import.meta.url)),
+  }))
+) {
+  process.exit(process.exitCode ?? 0);
+}
 const currentNodeRuntimeFailure = process.versions.bun
   ? null
   : nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities());
@@ -660,7 +670,8 @@ if (!waitingForNodeUpdateRespawn) {
 // so a timeout cannot strand a compile-cache respawn child.
 const waitingForCompileCacheRespawn =
   waitingForNodeUpdateRespawn ||
-  (!isForegroundGmailRunInvocation(process.argv) &&
+  (!isNodeHostLauncherChild() &&
+    !isForegroundGmailRunInvocation(process.argv) &&
     !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
     (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded()));
 
@@ -672,7 +683,17 @@ if (
   !isSourceCheckoutLauncher()
 ) {
   try {
-    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
+    const directory = resolvePackagedCompileCacheDirectory();
+    const baseDirectory = path.resolve(directory);
+    const result = module.enableCompileCache(directory);
+    const enabled = module.constants?.compileCacheStatus?.ENABLED;
+    if (enabled !== undefined && result?.status === enabled) {
+      // Bootstrap adapter for src/infra/node-compile-cache-env.ts: preserve the first
+      // successful input without importing runtime code before cache activation.
+      const key = Symbol.for("openclaw.nodeCompileCacheBase");
+      const owner = (globalThis[key] ??= {});
+      owner.baseDirectory ??= baseDirectory;
+    }
   } catch {
     // Ignore errors
   }

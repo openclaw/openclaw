@@ -83,6 +83,8 @@ import {
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
+import { registerWorkerBackgroundExecLifecycleTests } from "./worker-runtime-background-exec.suite.js";
+import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 const browserRuntimeMocks = vi.hoisted(() => ({
@@ -150,7 +152,8 @@ type InferencePlan =
   | "burst-text"
   | "oversized-text"
   | "oversized-error"
-  | "empty-terminal";
+  | "empty-terminal"
+  | { args: Record<string, unknown>; toolCallId: string; toolName: string };
 type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"];
 
 type FakeGatewayOptions = {
@@ -598,6 +601,10 @@ class FakeWorkerGateway {
     });
     const plan = this.options.inferencePlans?.[this.inferencePlanIndex] ?? "text";
     this.inferencePlanIndex += 1;
+    if (typeof plan === "object") {
+      this.sendToolCallTurn(socket, frame.params, plan);
+      return;
+    }
     if (plan === "read-image") {
       this.sendToolCallTurn(socket, frame.params, {
         args: { path: "attachment.png" },
@@ -909,6 +916,7 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       liveEvents: { ackedSeq: 0, nextSeq: 1 },
       toolAuthority: {
         allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
+        exec: { host: "gateway", security: "full", ask: "off" },
       },
     },
   };
@@ -942,6 +950,14 @@ afterEach(async () => {
 });
 
 describe("worker runtime", () => {
+  registerWorkerBackgroundExecLifecycleTests({
+    setup,
+    waitForFast,
+    bundleHash: BUNDLE_HASH,
+    sessionId: SESSION_ID,
+    inferenceStartTimeoutMs: WORKER_INFERENCE_START_TIMEOUT_MS,
+  });
+
   it("sends current image and scanned PDF page content through remote inference exactly once", async () => {
     const { gateway, launch } = await setup();
     const images = [
@@ -1887,46 +1903,6 @@ describe("worker runtime", () => {
     },
   );
 
-  it("joins retained background processes before closing the managed owner on EOF", async () => {
-    const { launch } = await setup({ inferencePlans: ["background-tool", "text"] });
-    const input = new PassThrough();
-    const output = new PassThrough();
-    const result = createDeferred<WorkerProcessResult>();
-    output.on("data", (chunk: Buffer) => {
-      const parsed = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-      if (parsed) {
-        result.resolve(parsed);
-      }
-    });
-    const command = runWorkerCommand({ managed: true, input, output });
-    const scopeKey = `worker:${SESSION_ID}`;
-    const supervisor = getProcessSupervisor();
-    try {
-      input.write(
-        `${JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch })}\n`,
-      );
-      await expect(result.promise).resolves.toMatchObject({ retainWorker: true });
-      const running = listRunningSessions().filter((session) => session.scopeKey === scopeKey);
-      expect(running).toHaveLength(1);
-      const pid = running[0]!.pid!;
-      expect(pid).toBeGreaterThan(0);
-      input.end();
-      await command;
-      expect(() => process.kill(pid, 0)).toThrow();
-      expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
-        0,
-      );
-    } finally {
-      input.end();
-      try {
-        await command;
-      } finally {
-        supervisor.cancelScope(scopeKey, "manual-cancel");
-        await waitForExecScope(scopeKey);
-      }
-    }
-  });
-
   it.each(["foreground", "hidden-background"] as const)(
     "keeps environment state until %s exec finalization settles",
     async (visibility) => {
@@ -2342,86 +2318,7 @@ describe("worker runtime", () => {
     }
   });
 
-  it.each([
-    {
-      mode: "read-only" as const,
-      omittedTools: ["write", "edit", "apply_patch"],
-      denial: /host=gateway security=deny/u,
-    },
-    {
-      mode: "guarded" as const,
-      omittedTools: [],
-      denial:
-        /approval_required.*worker guarded permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
-    },
-    {
-      mode: "workspace" as const,
-      omittedTools: [],
-      denial:
-        /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
-    },
-    { mode: "full" as const, omittedTools: [], denial: null },
-  ])("applies the $mode worker permission clamp", async ({ mode, omittedTools, denial }) => {
-    const { gateway, workspaceDir, launch } = await setup({
-      inferencePlans: ["tool", "text"],
-      ...(mode === "full"
-        ? {
-            execApprovals: {
-              version: 1,
-              defaults: { security: "full", ask: "always" },
-              agents: {},
-            },
-          }
-        : {}),
-    });
-    launch.assignment.permissionMode = mode;
-    launch.assignment.workerContainmentRoot = workspaceDir;
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
-    for (const toolName of omittedTools) {
-      expect(toolNames).not.toContain(toolName);
-    }
-    const toolResult = JSON.stringify(
-      gateway.inferenceRequests[1]?.context.messages.find(
-        (message) => message.role === "toolResult",
-      ),
-    );
-    if (denial) {
-      expect(toolResult).toMatch(denial);
-      await expect(
-        readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-    } else {
-      await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
-        "worker-local",
-      );
-      expect(toolResult).not.toMatch(/approval_required|approval-pending/iu);
-      expect(gateway.methods.some((method) => method.includes("approval"))).toBe(false);
-    }
-  });
-
-  it.each(["guarded", "workspace"] as const)(
-    "keeps the %s worker allowlist fast path",
-    async (mode) => {
-      const { gateway, workspaceDir, launch } = await setup({
-        inferencePlans: ["safe-tool", "text"],
-      });
-      launch.assignment.permissionMode = mode;
-      launch.assignment.workerContainmentRoot = workspaceDir;
-
-      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-      const toolResult = JSON.stringify(
-        gateway.inferenceRequests[1]?.context.messages.find(
-          (message) => message.role === "toolResult",
-        ),
-      );
-      expect(toolResult).not.toContain("approval_required");
-      expect(toolResult).toMatch(/\b0\b/u);
-    },
-  );
+  registerWorkerPermissionTests({ setup });
 
   it("canonicalizes an in-root worker workspace before enforcing containment", async () => {
     const { workspaceDir, launch } = await setup();

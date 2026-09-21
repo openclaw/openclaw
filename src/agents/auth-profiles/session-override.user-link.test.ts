@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyMixedDirectives } from "../../auto-reply/reply/directive-handling.mixed-inline.test-helpers.js";
 import { createModelSelectionState } from "../../auto-reply/reply/model-selection.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -17,6 +17,17 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createApiKeyCredential } from "./credential-fixtures.test-support.js";
 import { resolveSessionAuthSelection } from "./session-override.js";
+
+// Runtime eligibility has separate owner coverage; account ownership stays real here.
+vi.mock("../model-runtime-choice.js", () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<
+    typeof import("../model-runtime-choice.js").preparePublishedModelRuntimeChoice
+  >(async ({ runtimeId, preferredRuntimeId }) => ({
+    kind: "ready",
+    runtimeId: runtimeId ?? preferredRuntimeId ?? "codex",
+    validate: () => undefined,
+  })),
+}));
 
 const DEFAULT_PROFILE_ID = "openai:shared";
 const SESSION_KEY = "agent:main:main";
@@ -106,7 +117,7 @@ describe("person-linked session auth", () => {
         });
 
         if (requester === "owner") {
-          expect(sessionEntry.authProfileOverride).toBe(personalId);
+          expect(sessionEntry.authProfileOverride, JSON.stringify(result)).toBe(personalId);
           expect(sessionEntry.authProfileOverrideSource).toBe("user");
         } else {
           expect(sessionEntry.authProfileOverride).toBeUndefined();

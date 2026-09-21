@@ -61,6 +61,29 @@ function capture(f: ReturnType<typeof fixture>) {
   return JSON.parse(text);
 }
 
+it("publishes redacted baseline and candidate agent-turn failures", () => {
+  const f = fixture();
+  for (const stage of ["baseline", "candidate"]) {
+    fs.writeFileSync(
+      path.join(f.artifacts, `legacy-operator-${stage}-turn.err`),
+      `Provider request failed during ${stage}: token=${secret}\n`,
+    );
+    fs.writeFileSync(
+      path.join(f.artifacts, `legacy-operator-${stage}-turn.out`),
+      `Agent ${stage} turn ended before completion: apiKey=${secret}\n`,
+    );
+  }
+  const report = capture(f);
+  for (const stage of ["baseline", "candidate"]) {
+    expect(report.logs[`legacy-operator-${stage}-turn.err`]).toContain(
+      `Provider request failed during ${stage}`,
+    );
+    expect(report.logs[`legacy-operator-${stage}-turn.out`]).toContain(
+      `Agent ${stage} turn ended before completion`,
+    );
+  }
+});
+
 it("retains Doctor IPC refusal facts before the parent consumes its file and log prefix", () => {
   const f = fixture();
   write(path.join(f.root, "package.json"), {
@@ -253,8 +276,14 @@ it("omits unsafe migration files and oversized registration collections without 
   });
 });
 
-it("does not reuse sibling observations when a retry fails before fixture seeding", () => {
+it("does not reuse sibling or agent-turn observations when a retry fails before fixture seeding", () => {
   const f = fixture();
+  const turnLogs = ["baseline", "candidate"].flatMap((stage) =>
+    ["out", "err"].map((extension) => `legacy-operator-${stage}-turn.${extension}`),
+  );
+  for (const name of turnLogs) {
+    fs.writeFileSync(path.join(f.artifacts, name), "previous attempt failure");
+  }
   fs.writeFileSync(
     path.join(f.artifacts, "sibling-registrations.jsonl"),
     JSON.stringify({
@@ -283,6 +312,9 @@ it("does not reuse sibling observations when a retry fails before fixture seedin
   expect(prepared.status, prepared.stderr).toBe(0);
   const report = capture(f);
   expect(report.migration.sibling.availability).toBe("unavailable");
+  for (const name of turnLogs) {
+    expect(report.logs[name]).toBeNull();
+  }
 });
 
 it("does not create missing WAL sidecars through either receipt or plugin-index capture", () => {

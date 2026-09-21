@@ -11,30 +11,6 @@ type PluginVersionRestartReadiness =
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
 
-export async function runActiveToolSchemaWarningsHealth(
-  ctx: DoctorHealthFlowContext,
-): Promise<void> {
-  // Preview mode already collects these while deciding whether to apply repairs.
-  // Repair mode defers the runtime-backed diagnostic until migrations are durable.
-  if (!ctx.prompter.shouldRepair) {
-    return;
-  }
-  const { collectActiveToolSchemaProjectionWarnings } =
-    await import("../commands/doctor/shared/active-tool-schema-warnings.js");
-  const warnings = await collectActiveToolSchemaProjectionWarnings({
-    cfg: ctx.cfg,
-    env: ctx.env ?? process.env,
-    ...(ctx.runWithPluginMetadataSnapshot
-      ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
-      : {}),
-  });
-  if (warnings.length === 0) {
-    return;
-  }
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  note(warnings.join("\n"), "Doctor warnings");
-}
-
 export async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (!ctx.cfg.hooks?.gmail?.model?.trim()) {
     return;

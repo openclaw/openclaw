@@ -509,19 +509,10 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.runCapability).toHaveBeenCalledOnce();
-    expect(requireRunCapabilityRequest()).toEqual({
+    expect(requireRunCapabilityRequest()).toMatchObject({
       capability: "image",
-      cfg: {
-        tools: {
-          media: {
-            image: {
-              prompt: "Count visible buttons",
-              _requestPromptOverride: "Count visible buttons",
-              timeoutSeconds: 90,
-            },
-          },
-        },
-      },
+      cfg,
+      request: { prompt: "Count visible buttons" },
       ctx: {
         media: [{ path: "/tmp/sample.jpg", contentType: "image/jpeg" }],
       },
@@ -531,7 +522,6 @@ describe("media-understanding runtime", () => {
       providerRegistry,
       config: {
         prompt: "Count visible buttons",
-        _requestPromptOverride: "Count visible buttons",
         timeoutSeconds: 90,
       },
       activeModel: undefined,

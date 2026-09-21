@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements credential lease behavior.
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";

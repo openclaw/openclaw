@@ -124,11 +124,19 @@ describe("SessionsCatalogStartTerminal schemas", () => {
 });
 
 describe("SessionsCatalogListParamsSchema", () => {
+  it("accepts only boolean metadata selection while retaining full-list defaults", () => {
+    for (const params of [{}, { metadataOnly: false }, { metadataOnly: true }]) {
+      expect(Value.Check(SessionsCatalogListParamsSchema, params)).toBe(true);
+    }
+    expect(Value.Check(SessionsCatalogListParamsSchema, { metadataOnly: "true" })).toBe(false);
+  });
+
   it("accepts an optional progressive stream id without a catalog selector", () => {
     expect(
       Value.Check(SessionsCatalogListParamsSchema, {
         agentId: "main",
         progressId: "progress-1",
+        allowPartialResults: true,
       }),
     ).toBe(true);
   });
@@ -177,6 +185,12 @@ describe("SessionsCatalogHostEventSchema", () => {
     };
 
     expect(Value.Check(SessionsCatalogHostEventSchema, event)).toBe(true);
+    expect(
+      Value.Check(SessionsCatalogHostEventSchema, {
+        ...event,
+        catalog: { ...event.catalog, hosts: [{ ...event.catalog.hosts[0], pending: true }] },
+      }),
+    ).toBe(true);
     expect(Value.Check(SessionsCatalogHostEventSchema, { ...event, unexpected: true })).toBe(false);
     expect(
       Value.Check(SessionsCatalogHostEventSchema, {

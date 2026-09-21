@@ -1,4 +1,3 @@
-// Discord plugin module implements outbound send context behavior.
 import {
   createReplyToFanout,
   resolveOutboundSendDep,

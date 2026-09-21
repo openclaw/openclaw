@@ -248,7 +248,7 @@ describe("runDaemonInstall integration", () => {
           if (typeof options === "number" || !options?.input) {
             throw new Error("Missing plist fixture input");
           }
-          return decodeLaunchAgentPlistFixture(options.input);
+          return decodeLaunchAgentPlistFixture(options.input, args[1]);
         }
         return runExec(file, args, options);
       });

@@ -7,8 +7,6 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
-import { clearDurableTabAliases } from "./session-tab-ephemeral-aliases.js";
-import { activeDurableStorageKeys } from "./session-tab-process-state.js";
 import type { BrowserSessionTabRoute } from "./session-tab-route.js";
 import {
   type BrowserSessionTabRecord,
@@ -120,14 +118,10 @@ function deleteClaimedTab(tab: DurableTab, onWarn?: (message: string) => void): 
       });
       return;
     }
-    const deleted = deleteBrowserSessionTabIf(tab.storageKey, (current) => {
+    deleteBrowserSessionTabIf(tab.storageKey, (current) => {
       const record = parseBrowserSessionTabRecord(current);
       return matchesCleanupAttempt(record, tab);
     });
-    if (deleted) {
-      clearDurableTabAliases(tab.storageKey);
-      activeDurableStorageKeys().delete(tab.storageKey);
-    }
   } catch (error) {
     onWarn?.(`failed to delete tracked browser tab ${tab.nativeTargetId}: ${String(error)}`);
   }

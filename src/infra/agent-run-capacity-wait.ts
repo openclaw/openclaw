@@ -1,4 +1,5 @@
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { bumpAgentRunIndexVersion } from "./agent-run-registry-state.js";
 import { getAgentRunContext, getAgentRunLifecycleGeneration } from "./agent-run-registry.js";
 
 export function isAgentRunWaitingForCapacity(runId: string): boolean {
@@ -26,6 +27,7 @@ export function registerAgentRunCapacityWait(
   const waits = (context.capacityWaits ??= new Set());
   const token = Symbol("agent-run-capacity-wait");
   const publish = () => {
+    bumpAgentRunIndexVersion(context);
     if (
       context.sessionKey &&
       context.projectSessionLifecycle !== false &&

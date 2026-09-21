@@ -3,6 +3,16 @@ import { en } from "./en.ts";
 
 const enModelSetup = {
   modelSetup: {
+    discovery: {
+      title: "On this Gateway",
+      description:
+        "Find existing connections or prepare a local model for {agent}. Using a model here changes this agent, not the global defaults.",
+      useForAgent: "Test & use for this agent",
+      connectForAgent: "Connect & use for this agent",
+      connectProvider: "Connect provider",
+      returnToModels: "Return to Models",
+      otherSoftware: "Other detected software",
+    },
     verify: {
       title: "Selected model",
       button: "Check model",

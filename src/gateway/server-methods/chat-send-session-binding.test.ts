@@ -13,6 +13,10 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -21,17 +25,39 @@ import { registerChatAbortController } from "../chat-abort.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
 
-it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "queued"] as const)(
+const admissionScenarios = [
+  "removed",
+  "replaced",
+  "aborted",
+  "released",
+  "terminal",
+  "rotated",
+  "queued",
+  "dashboard",
+  "dashboard-writer",
+  "dashboard-credential-revoked",
+  "dashboard-member-revoked",
+  "dashboard-unattested",
+  "dashboard-internal",
+] as const;
+
+it.each(admissionScenarios)(
   "keeps prepared-session binding with its exact admission: %s",
-  async (closure) => {
+  async (scenario) => {
+    const dashboard = scenario.startsWith("dashboard");
+    const directDashboard = dashboard && scenario !== "dashboard-internal";
+    const dashboardReadAllowed = directDashboard && scenario !== "dashboard-unattested";
+    const membershipRequired = scenario === "dashboard-member-revoked";
+    const closure = scenario === "dashboard-writer" ? "aborted" : dashboard ? "released" : scenario;
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const runId = "retained-preparation";
-      const sessionKey = "agent:main:binding";
+      const sessionKey = scenario === "dashboard" ? "agent:main:main" : "agent:main:binding";
       const scope = { agentId: "main", sessionKey };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:unrelated" },
@@ -47,8 +73,35 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
             entry.sessionId === "unrelated-session",
         ).length;
       const profile = ensureProfileForEmail("authoring-binding@example.test");
+      const owner = membershipRequired
+        ? ensureProfileForEmail("authoring-owner@example.test")
+        : profile;
+      const initialSessionId = membershipRequired ? "member-session" : runId;
+      const createdActor = { type: "human", source: "profile", id: owner.id } as const;
+      if (membershipRequired) {
+        await upsertSessionEntryCore(scope, {
+          sessionId: initialSessionId,
+          updatedAt: Date.now(),
+          visibility: "suggest",
+          createdActor,
+        });
+        addSessionMember(scope, { identityId: profile.id, addedBy: owner.id });
+      }
+      const connection = new AbortController();
+      const hasCurrentClientAuthority = vi.fn(() => true);
       const client: GatewayClient = {
         connId: "authoring-binding",
+        connectionSignal: connection.signal,
+        ...(dashboard && scenario !== "dashboard-unattested"
+          ? {
+              internal: {
+                authenticatedControlUi: true as const,
+                ...(scenario !== "dashboard-writer" && !membershipRequired
+                  ? { controlUiAdmin: true as const }
+                  : {}),
+              },
+            }
+          : {}),
         authenticatedUserProfile: {
           profileId: profile.id,
           displayName: null,
@@ -59,8 +112,15 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
           minProtocol: 1,
           maxProtocol: 1,
           role: "operator",
-          scopes: ["operator.read", "operator.write", "operator.admin"],
-          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+          scopes:
+            scenario === "dashboard-writer" || membershipRequired
+              ? ["operator.write"]
+              : dashboard
+                ? ["operator.admin"]
+                : ["operator.read", "operator.write", "operator.admin"],
+          client: dashboard
+            ? { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" }
+            : { id: "cli", version: "test", platform: "test", mode: "cli" },
         },
       };
       const namespaceRun = prepareSystemAgentRunAdmission({}, runId, "main", "test");
@@ -96,7 +156,8 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
       try {
         const respond = vi.fn();
         const params = {
-          sessionKey,
+          // Exercise the ordinary dashboard alias without an explicit agentId.
+          sessionKey: scenario === "dashboard" ? "main" : sessionKey,
           message: "Keep this user turn in its session",
           idempotencyKey: runId,
         };
@@ -107,22 +168,28 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
           requestParams: params,
         });
         expect(authorization.error).toBeNull();
-        await handleChatSend({
+        const sendChat = directDashboard ? handleDirectExternalChatSend : handleChatSend;
+        await sendChat({
           params,
           req: { type: "req", id: runId, method: "chat.send" },
           respond,
           context,
           client,
+          hasCurrentClientAuthority,
           sessionMutationAuthorization: authorization.authorization,
           isWebchatConnect: () => false,
         });
         expect(respond).toHaveBeenCalledWith(
           true,
-          { runId, status: "started" },
+          dashboard
+            ? expect.objectContaining({ runId, status: "started" })
+            : { runId, status: "started" },
           undefined,
           expect.anything(),
         );
         options = await entered.promise;
+        const dashboardRead = options.replyOptions?.dashboardReadAdmission;
+        expect(Boolean(dashboardRead)).toBe(dashboardReadAllowed);
         owned = observeDispatch.mock.calls.at(-1)?.[0];
         const prepared = options.replyOptions?.onSessionPrepared;
         const runStarted = options.replyOptions?.onAgentRunStart;
@@ -143,11 +210,13 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
           withGatewayToolCallerIdentity(caller, () => capability.invoke({ action: "list" }));
         const { admission, userTurn } = owned;
         const original = admission.activeRunAbort.entry;
-        expect(original?.sessionId).toBe(runId);
+        expect(original?.sessionId).toBe(initialSessionId);
         // This focused test controls preparation; the native WS test proves its real producer.
         await upsertSessionEntryCore(scope, {
-          sessionId: "committed-session",
+          sessionId: membershipRequired ? initialSessionId : "committed-session",
           updatedAt: Date.now(),
+          createdActor,
+          ...(membershipRequired ? { visibility: "suggest" as const } : {}),
         });
         const committed = loadExactSessionEntryReadOnly(scope);
         if (!committed) {
@@ -161,10 +230,31 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
         prepared(binding);
         prepared(binding);
         prepared({ ...binding, sessionKey: "agent:main:unrelated", sessionId: "foreign" });
+        if (dashboardRead) {
+          expect(admission.admittedSessionId).toBe(initialSessionId);
+          expect(dashboardRead.sessionId).toBe(binding.sessionId);
+          dashboardRead.assertCurrent();
+        }
         clone.mockClear();
         runStarted(runId);
         expect.soft(unrelatedCloneCount()).toBe(0);
         await expect(readLibrary()).resolves.toMatchObject({ profileId: profile.id });
+        if (dashboardRead) {
+          connection.abort();
+          expect(admission.activeRunAbort.controller.signal.aborted).toBe(false);
+          expect(dashboardRead.assertCurrent).not.toThrow();
+          if (scenario === "dashboard-credential-revoked") {
+            hasCurrentClientAuthority.mockReturnValue(false);
+            expect(dashboardRead.assertCurrent).toThrow(
+              "Dashboard message read admission is no longer active.",
+            );
+          } else if (membershipRequired) {
+            removeSessionMember(scope, profile.id, undefined, binding.sessionId);
+            expect(admission.activeRunAbort.controller.signal.aborted).toBe(false);
+            expect(hasCurrentClientAuthority()).toBe(true);
+            expect(dashboardRead.assertCurrent).toThrow("session is suggest for this connection");
+          }
+        }
 
         if (closure === "queued") {
           expect(original?.sessionId).toBe(binding.sessionId);
@@ -206,6 +296,9 @@ it.each(["removed", "replaced", "aborted", "released", "terminal", "rotated", "q
         }
         // No await after closure: release must fence even before its promise settles.
         expect(() => prepared({ ...binding, sessionId: "late-session" })).toThrow();
+        if (dashboardRead) {
+          expect(dashboardRead.assertCurrent).toThrow();
+        }
         expect(original?.sessionId).toBe(binding.sessionId);
         expect(successor?.entry?.sessionId).toBe(
           closure === "replaced" ? "successor-session" : undefined,

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
 import { getAiTransportHost } from "@openclaw/ai";
 import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import type { Message } from "@openclaw/llm-core";
@@ -14,6 +13,7 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import * as reconciliation from "../../config/sessions/session-transcript-reconcile.js";
+import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "../../config/sessions/session-transcript-reconcile.worker.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -34,6 +34,13 @@ import {
 } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
+vi.mock("node:worker_threads", async () =>
+  (
+    await import("../../config/sessions/session-transcript-reconcile.test-support.js")
+  ).createObservedWorkerThreads(),
+);
+
+const observer = useReconcileWorkerObserver();
 const tempRoots = createTempDirTracker();
 const runAttempt = vi.fn<(params: EmbeddedRunAttemptParams) => Promise<EmbeddedRunAttemptResult>>();
 type ProductionRun = typeof import("./run.js").runEmbeddedAgent;
@@ -83,29 +90,30 @@ function fenceProjection(target: SessionTranscriptRuntimeTarget) {
   const held = createDeferred();
   let releaseAcknowledgement: (() => void) | undefined;
   let released = false;
+  observer.onTask = ({ input, port, observeMessage }) => {
+    if (input.mode !== "disk" || input.path !== database.path) {
+      return;
+    }
+    const postMessage = port.postMessage.bind(port);
+    let startingTarget = false;
+    observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
+      startingTarget = message.type === "plan-start" && message.plan.sessionId === target.sessionId;
+    });
+    // Hold after the owner's claim, before any rebuilt projection is committed.
+    port.postMessage = (message: unknown, transferList) => {
+      const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
+      if (startingTarget && !released) {
+        startingTarget = false;
+        releaseAcknowledgement = () => postMessage(message, options);
+        held.resolve();
+        return;
+      }
+      postMessage(message, options);
+    };
+  };
   reconciliation.startSessionTranscriptIndexReconcile({
     ...databaseOptions,
     preferredSessionId: target.sessionId,
-    createWorker: (filename, options) => {
-      const worker = new Worker(filename, options);
-      const postMessage = worker.postMessage.bind(worker);
-      let startingTarget = false;
-      worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
-        startingTarget =
-          message.type === "plan-start" && message.plan.sessionId === target.sessionId;
-      });
-      // Hold after the owner's claim, before any rebuilt projection is committed.
-      worker.postMessage = (message: unknown, transferList) => {
-        if (startingTarget && !released) {
-          startingTarget = false;
-          releaseAcknowledgement = () => postMessage(message, transferList);
-          held.resolve();
-          return;
-        }
-        postMessage(message, transferList);
-      };
-      return worker;
-    },
   });
   const joined = reconciliation.waitForSessionTranscriptIndexReconcile(databaseOptions);
   return {

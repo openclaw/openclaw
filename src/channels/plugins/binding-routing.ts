@@ -63,14 +63,13 @@ type ConfiguredBindingRouteConversationInput =
 function resolveConfiguredBindingConversationRef(
   params: ConfiguredBindingRouteConversationInput,
 ): ConversationRef {
-  if ("conversation" in params) {
-    return params.conversation;
-  }
+  const { channel, accountId, conversationId, parentConversationId } =
+    "conversation" in params ? params.conversation : params;
   return {
-    channel: params.channel,
-    accountId: params.accountId,
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
+    channel,
+    accountId,
+    conversationId,
+    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
   };
 }
 
@@ -125,19 +124,12 @@ export function resolveConfiguredBindingRoute(
   };
 }
 
-/**
- * Rewrites an agent route using a persisted runtime conversation binding, when applicable.
- */
-export function resolveRuntimeConversationBindingRoute(
-  params: {
-    route: ResolvedAgentRoute;
-    /** Set false for read-only ownership checks that must not extend binding liveness. */
-    touchBinding?: boolean;
-  } & ConfiguredBindingRouteConversationInput,
-): RuntimeConversationBindingRouteResult {
-  const inspection = inspectSessionBindingByConversation(
-    resolveConfiguredBindingConversationRef(params),
-  );
+/** Projects prepared ownership facts without reading or changing binding storage. */
+export function inspectRuntimeConversationBindingRoute(params: {
+  route: ResolvedAgentRoute;
+  inspection: ReturnType<typeof inspectSessionBindingByConversation>;
+}): RuntimeConversationBindingRouteResult {
+  const { inspection } = params;
   if (inspection.status === "unavailable") {
     return {
       bindingOwnerAvailable: false,
@@ -167,13 +159,6 @@ export function resolveRuntimeConversationBindingRoute(
     };
   }
 
-  if (params.touchBinding !== false) {
-    getSessionBindingService().touch(
-      bindingRecord.bindingId,
-      undefined,
-      bindingRecord.conversation,
-    );
-  }
   const pluginId = isPluginOwnedBindingMetadata(bindingRecord.metadata)
     ? bindingRecord.metadata.pluginId.trim()
     : undefined;
@@ -211,6 +196,77 @@ export function resolveRuntimeConversationBindingRoute(
       matchedBy: "binding.channel",
     },
   };
+}
+
+/**
+ * Resolves runtime routing after the binding owner settles its activity mutation.
+ * Legacy adapters may still perform synchronous persistence during migration.
+ */
+export async function resolveRuntimeConversationBindingRouteAsync(
+  params: { route: ResolvedAgentRoute } & ConfiguredBindingRouteConversationInput,
+): Promise<RuntimeConversationBindingRouteResult> {
+  const route = { ...params.route };
+  const conversation = resolveConfiguredBindingConversationRef(params);
+  const service = getSessionBindingService();
+  let result = inspectRuntimeConversationBindingRoute({
+    route,
+    inspection: await service.inspectByConversationAsync(conversation),
+  });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (!result.bindingRecord) {
+      return result;
+    }
+    const { bindingId, boundAt, targetSessionKey, targetKind } = result.bindingRecord;
+    const scope = {
+      channel: result.bindingRecord.conversation.channel,
+      accountId: result.bindingRecord.conversation.accountId,
+    };
+    await service.touchAsync(bindingId, undefined, scope);
+    result = inspectRuntimeConversationBindingRoute({
+      route,
+      inspection: await service.inspectByConversationAsync(conversation),
+    });
+    if (
+      !result.bindingRecord ||
+      (result.bindingRecord.bindingId === bindingId &&
+        result.bindingRecord.boundAt === boundAt &&
+        result.bindingRecord.targetSessionKey === targetSessionKey &&
+        result.bindingRecord.targetKind === targetKind &&
+        result.bindingRecord.conversation.channel === scope.channel &&
+        result.bindingRecord.conversation.accountId === scope.accountId)
+    ) {
+      return result;
+    }
+    // IDs can survive rebinding; a new binding incarnation needs its own activity update.
+  }
+  throw new Error(
+    "Conversation binding changed repeatedly while recording activity. Retry the message.",
+  );
+}
+
+/**
+ * Rewrites an agent route using a persisted runtime conversation binding, when applicable.
+ */
+export function resolveRuntimeConversationBindingRoute(
+  params: {
+    route: ResolvedAgentRoute;
+    touchBinding?: boolean;
+  } & ConfiguredBindingRouteConversationInput,
+): RuntimeConversationBindingRouteResult {
+  const result = inspectRuntimeConversationBindingRoute({
+    route: params.route,
+    inspection: inspectSessionBindingByConversation(
+      resolveConfiguredBindingConversationRef(params),
+    ),
+  });
+  if (params.touchBinding !== false && result.bindingRecord) {
+    getSessionBindingService().touch(
+      result.bindingRecord.bindingId,
+      undefined,
+      result.bindingRecord.conversation,
+    );
+  }
+  return result;
 }
 
 /**

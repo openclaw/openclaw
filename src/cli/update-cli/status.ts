@@ -3,6 +3,7 @@
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { ChannelStatusIssue } from "../../channels/plugins/types.public.js";
 import { readSessionSqliteMigrationWarnings } from "../../commands/doctor-session-sqlite-warnings.js";
 import { collectNodeRuntimeFindings } from "../../commands/node-runtime-diagnostics.js";
 import {
@@ -12,11 +13,19 @@ import {
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
+import { isDefaultInstallIdentity, resolveIsNixMode } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  auditGatewayServiceConfig,
+  type ServiceDefinitionDrift,
+} from "../../daemon/service-audit.js";
+import { resolveGatewayService } from "../../daemon/service.js";
 import {
   formatDeferredPluginMigration,
   readDeferredPluginMigrations,
 } from "../../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readGatewayLastInstallationReplacement } from "../../infra/gateway-boot-lifecycle.js";
 import {
   normalizeUpdateChannel,
   resolveUpdateChannelDisplay,
@@ -29,6 +38,28 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
+
+async function readChannelStatusIssues(
+  config: OpenClawConfig,
+  timeoutMs = 5_000,
+): Promise<ChannelStatusIssue[]> {
+  try {
+    const [{ callGateway }, { collectChannelStatusIssues }] = await Promise.all([
+      import("../../gateway/call.js"),
+      import("../../infra/channels-status-issues.js"),
+    ]);
+    const payload = await callGateway({
+      method: "channels.status",
+      params: { probe: false, timeoutMs },
+      timeoutMs,
+      config,
+      sharedStateMode: "read-only",
+    });
+    return collectChannelStatusIssues(payload, []);
+  } catch {
+    return [];
+  }
+}
 
 /** Print update status in JSON or table form for scripts and humans. */
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
@@ -44,19 +75,22 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   ]);
   const configChannel = normalizeUpdateChannel(config.update?.channel);
 
-  const update = await checkUpdateStatus({
-    root,
-    timeoutMs,
-    fetchGit: true,
-    useDetachedDevUpstream: configChannel === "dev",
-    includeRegistry: true,
-    resolveRegistryChannel: ({ installKind, git }) =>
-      resolveStatusRegistryUpdateChannel({
-        configChannel,
-        installKind,
-        git,
-      }),
-  });
+  const [update, channelIssues] = await Promise.all([
+    checkUpdateStatus({
+      root,
+      timeoutMs,
+      fetchGit: true,
+      useDetachedDevUpstream: configChannel === "dev",
+      includeRegistry: true,
+      resolveRegistryChannel: ({ installKind, git }) =>
+        resolveStatusRegistryUpdateChannel({
+          configChannel,
+          installKind,
+          git,
+        }),
+    }),
+    readChannelStatusIssues(config, timeoutMs),
+  ]);
 
   const channelInfo = resolveUpdateChannelDisplay({
     configChannel,
@@ -72,10 +106,53 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const runStatus = readUpdateRunStatus();
   const safeMessage = (message: string) =>
     sanitizeTerminalText(redactSensitiveText(message, { mode: "tools" }));
+  const replacement =
+    config.gateway?.mode === "remote" ? undefined : readGatewayLastInstallationReplacement();
+  const lastGatewayInstallationReplacement = replacement
+    ? { ...replacement, reason: safeMessage(replacement.reason) }
+    : undefined;
+  let serviceDefinition: { drift: ServiceDefinitionDrift[]; warnings: string[] } | undefined;
+  if (
+    config.gateway?.mode !== "remote" &&
+    isDefaultInstallIdentity(process.env) &&
+    !resolveIsNixMode(process.env)
+  ) {
+    try {
+      const command = await resolveGatewayService().readCommand(process.env, {
+        requireEffective: true,
+        timeoutMs,
+      });
+      if (command) {
+        const audit = await auditGatewayServiceConfig({ env: process.env, command, timeoutMs });
+        serviceDefinition = {
+          drift: audit.definitionDrift ?? [],
+          warnings: [
+            ...(audit.definitionDrift ?? []).map((fact) => fact.message),
+            ...(audit.definitionDriftError ? [audit.definitionDriftError] : []),
+          ].map(safeMessage),
+        };
+      }
+    } catch (error) {
+      serviceDefinition = {
+        drift: [],
+        warnings: [
+          safeMessage(`Service definition inspection failed: ${formatErrorMessage(error)}`),
+        ],
+      };
+    }
+  }
+  const safeChannelIssues = channelIssues.map((issue) =>
+    Object.assign({}, issue, {
+      channel: safeMessage(issue.channel),
+      accountId: safeMessage(issue.accountId),
+      message: safeMessage(issue.message),
+      ...(issue.fix ? { fix: safeMessage(issue.fix) } : {}),
+    }),
+  );
   const migrationWarnings: string[] = [];
   const migrationWarningErrors: string[] = [];
   for (const readWarnings of [
-    () => readDeferredPluginMigrations().map(formatDeferredPluginMigration),
+    () => readDeferredPluginMigrations().map((pending) => formatDeferredPluginMigration(pending)),
     () => readSessionSqliteMigrationWarnings(),
   ]) {
     try {
@@ -97,6 +174,9 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       },
       availability: updateAvailability,
       ...(runtimeFindings.length > 0 ? { runtimeFindings } : {}),
+      ...(serviceDefinition ? { serviceDefinition } : {}),
+      ...(lastGatewayInstallationReplacement ? { lastGatewayInstallationReplacement } : {}),
+      ...(safeChannelIssues.length > 0 ? { channelIssues: safeChannelIssues } : {}),
       ...(migrationWarnings.length > 0 ? { migrationWarnings } : {}),
       ...(migrationWarningsError ? { migrationWarningsError } : {}),
       ...runStatus,
@@ -150,6 +230,26 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     }).trimEnd(),
   );
   defaultRuntime.log("");
+
+  if (lastGatewayInstallationReplacement) {
+    const { reason, completedAtMs } = lastGatewayInstallationReplacement;
+    defaultRuntime.log(
+      `Previous Gateway installation replacement (${new Date(completedAtMs).toISOString()}): ${reason}`,
+    );
+    defaultRuntime.log("");
+  }
+  for (const warning of serviceDefinition?.warnings ?? []) {
+    defaultRuntime.log(theme.warn(`Warning: ${warning}`));
+  }
+  for (const issue of safeChannelIssues) {
+    defaultRuntime.log(theme.warn(`Channel ${issue.channel} ${issue.accountId}: ${issue.message}`));
+    if (issue.fix) {
+      defaultRuntime.log(issue.fix);
+    }
+  }
+  if (safeChannelIssues.length > 0) {
+    defaultRuntime.log("");
+  }
 
   for (const warning of migrationWarnings) {
     defaultRuntime.log(theme.warn(`Warning: ${warning}`));

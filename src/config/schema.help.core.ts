@@ -80,7 +80,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "update.channel":
     'Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). Extended-stable is package-only: installation is foreground-only, with optional read-only startup hints.',
   "update.checkOnStart":
-    "Checks the OpenClaw update endpoint when the gateway starts, including read-only extended-stable hints (default: true). Set false to disable update checks and anonymous update pings.",
+    "Checks for updates when the Gateway starts, including read-only extended-stable hints (default: true). Set false to disable automatic Gateway and headless-node update checks, applies, and anonymous update pings.",
   "update.auto.enabled":
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
   telemetry:
@@ -128,6 +128,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc":
+    "Optional verified GitHub identity from a selected Cloudflare Access OIDC provider. Requires the standard Access email and assertion headers. Missing claims keep email-only profiles; existing profile roles and co-author preferences are preserved.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.issuer":
+    "Exact HTTPS origin of the trusted Cloudflare Access team, such as https://example.cloudflareaccess.com, without a trailing slash. Claims from other issuers do not supply GitHub identity.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.providerId":
+    "Exact Access identity-provider ID for the trusted OIDC integration. A provider display name or a matching claim name alone does not establish trust.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.githubAccountIdClaim":
+    "Exact forwarded OIDC claim whose value is a verified positive decimal-string GitHub account ID. Configure Access to forward it in oidc_fields; never use an unverified user-editable claim.",
   "gateway.auth.trustedProxy.deviceAutoApprove":
     "Optional policy for automatically approving new browser and native UI operator devices and same-key scope upgrades after trusted-proxy authentication. Grants are capped by deviceAutoApprove.scopes and the proxy's x-openclaw-scopes header when present.",
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
@@ -141,7 +149,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.roles.definitions":
     "Nonempty administrator-named role definitions bundling the closed session-sharing, sandbox-isolation, agent-access, and operator-scope policies applied to authenticated user profiles.",
   "gateway.roles.definitions.*":
-    "One named operator role. Every definition must explicitly provide its session-sharing policy, allowed session and run agents, and operator-scope ceiling, and can require sandbox isolation for newly created sessions.",
+    "One named operator role. Every definition must explicitly provide its session-sharing policy, allowed session and run agents, and operator-scope ceiling, and can require sandbox isolation for newly created sessions and a plugin access policy.",
   "gateway.roles.definitions.*.sessions":
     "Session-sharing permissions granted to this role for sessions created by other authenticated people; a person's own sessions remain owner-accessible.",
   "gateway.roles.definitions.*.sessions.others":
@@ -152,6 +160,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Agents available when this role creates sessions or starts runs: set "*" to allow every agent, list agent IDs to allow only those agents, or use an empty list to disable both.',
   "gateway.roles.definitions.*.scopes":
     "Closed list of operator scopes granted as this role's maximum connection authority. Requested, paired, identity-granted, and upgraded scopes are intersected with this list.",
+  "gateway.roles.definitions.*.accessPolicyPlugin":
+    "Optional exact plugin ID whose Gateway access policy must authorize this role. Access is denied when the plugin is missing, disabled, fails to load, or supplies no current authority. Unavailable plugin IDs remain valid configuration so independent staff roles and the Gateway owner can repair access. Omitting this field adds no plugin dependency.",
   "gateway.trustedProxies":
     "CIDR/IP allowlist of upstream proxies permitted to provide forwarded client identity headers. Keep this list narrow so untrusted hops cannot impersonate users.",
   "gateway.allowRealIpFallback":
@@ -293,7 +303,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.subagents.delegationMode":
     'Per-agent override for sub-agent delegation strength. Omit to use "prefer" in this agent\'s main session and "suggest" elsewhere; explicit "prefer" or "suggest" always wins.',
   "agents.entries.*.contextInjection":
-    "Per-agent override for when workspace bootstrap files are injected into this agent's system prompt. Omit to inherit agents.defaults.contextInjection.",
+    "Per-agent override for workspace bootstrap-file injection in the embedded runtime. Omit to inherit agents.defaults.contextInjection. Does not control CLI-backed prompt preparation.",
   "agents.entries.*.cwd":
     "Working directory for this agent's reply runs. Overrides agents.defaults.cwd but not session-spawned cwd; bootstrap and memory files stay in workspace. Supports ~ and relative paths; a distinct cwd requires an unsandboxed run.",
   "agents.entries.*.bootstrapMaxChars":

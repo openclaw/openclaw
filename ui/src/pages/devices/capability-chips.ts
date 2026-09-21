@@ -60,7 +60,11 @@ export function renderCapabilityChips(caps: readonly string[]) {
   if (caps.length === 0) {
     return nothing;
   }
-  const unique = [...new Set(caps)];
+  const unique = [
+    ...new Set(
+      caps.map((cap) => (cap === "codex-cli-session-source" ? "codex-cli-sessions" : cap)),
+    ),
+  ];
   const runtimes = unique.filter((cap) => SESSION_RUNTIME_CAPABILITIES.has(cap));
   const capabilities = unique.filter((cap) => !SESSION_RUNTIME_CAPABILITIES.has(cap));
   const visible = capabilities.slice(0, CAPABILITY_CHIP_LIMIT - (runtimes.length > 0 ? 1 : 0));

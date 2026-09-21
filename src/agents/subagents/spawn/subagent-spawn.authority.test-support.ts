@@ -4,6 +4,7 @@ import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -44,6 +45,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
+import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
@@ -52,8 +54,25 @@ import {
   resetSubagentRegistryForTests,
   testing as registryTesting,
 } from "../registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
+
+export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) {
+  const completed = createDeferred();
+  const inspect = () => {
+    if (typeof entry.cleanupCompletedAt === "number") {
+      completed.resolve();
+    }
+  };
+  const unsubscribe = onSubagentRegistryPersisted(inspect);
+  try {
+    inspect();
+    await completed.promise;
+  } finally {
+    unsubscribe();
+  }
+}
 
 export function installSpawnThreadBindingFixture(
   onBound?: (binding: SessionBindingRecord) => Promise<void>,
@@ -129,13 +148,13 @@ export function installSpawnAttachmentFixture(params: {
   entered: () => void;
   release: Promise<void>;
 }) {
-  const root = path.join(params.stateDir, ".openclaw", "attachments");
+  const root = path.join(params.stateDir, "attachments", "subagents", "main");
   const lateWrites: string[] = [];
   const attachmentDirs: string[] = [];
   const mkdir = fs.mkdir;
   const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
     const result = await mkdir(...args);
-    if (typeof args[0] === "string" && path.dirname(args[0]) === root) {
+    if (typeof args[0] === "string" && path.dirname(path.dirname(args[0])) === root) {
       attachmentDirs.push(args[0]);
       if (!getAdmittedRunDelegatedAuthority(params.admitted)) {
         lateWrites.push("directory");
@@ -156,12 +175,16 @@ export function installSpawnAttachmentFixture(params: {
     return {
       ...store,
       writeText: async (...args) => {
+        const attachmentDir = path.join(rootDir, args[0].split("/")[0] ?? "");
+        if (!attachmentDirs.includes(attachmentDir)) {
+          attachmentDirs.push(attachmentDir);
+        }
         if (!getAdmittedRunDelegatedAuthority(params.admitted)) {
           lateWrites.push("content");
         }
         const result = await store.writeText(...args);
         expect(await fs.readFile(path.join(rootDir, args[0]), "utf8")).toBe("synthetic attachment");
-        if (params.pauseAt === "files") {
+        if (params.pauseAt === "directory" || params.pauseAt === "files") {
           params.entered();
           await params.release;
         }

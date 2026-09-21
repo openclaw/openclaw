@@ -110,6 +110,7 @@ export function assertControlUiE2eOwnership(makeTempDirectory: (prefix: string) 
     "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
     "ui/src/e2e/agent-switch-roster.e2e.test.ts",
     "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+    "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
@@ -119,6 +120,7 @@ export function assertControlUiE2eOwnership(makeTempDirectory: (prefix: string) 
     "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
     "ui/src/e2e/child-session-load-errors.e2e.test.ts",
     "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
+    "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
     "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
     "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
@@ -131,6 +133,7 @@ export function assertControlUiE2eOwnership(makeTempDirectory: (prefix: string) 
     "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-management.delete.e2e.test.ts",
+    "ui/src/e2e/session-mention-involvement.e2e.test.ts",
     "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
     "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",
   ]);

@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveHostAccountAvatar } from "../infra/host-account-avatar.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
@@ -16,7 +17,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
-import { sendJson, sendMethodNotAllowed } from "./http-common.js";
+import { sendJson, sendMethodNotAllowed, watchClientDisconnect } from "./http-common.js";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
@@ -200,13 +201,11 @@ async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Prom
 async function fetchGravatar(
   hash: string,
   fetchImpl: typeof globalThis.fetch,
-  deadline?: AbortSignal,
 ): Promise<GravatarResult> {
   try {
-    const perCall = AbortSignal.timeout(GRAVATAR_FETCH_TIMEOUT_MS);
     const response = await fetchImpl(`${GRAVATAR_BASE_URL}/${hash}?s=256&d=404`, {
       headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
-      signal: deadline ? AbortSignal.any([deadline, perCall]) : perCall,
+      signal: AbortSignal.timeout(GRAVATAR_FETCH_TIMEOUT_MS),
     });
     if (response.status === 404) {
       await cancelGravatarBody(response.body);
@@ -238,7 +237,7 @@ async function fetchGravatar(
 
 async function resolveGravatar(
   hash: string,
-  options: { fetchImpl: typeof globalThis.fetch; nowMs: () => number; deadline?: AbortSignal },
+  options: { fetchImpl: typeof globalThis.fetch; nowMs: () => number },
 ): Promise<GravatarResult> {
   const cached = getCachedGravatar(hash, options.nowMs());
   if (cached) {
@@ -248,7 +247,7 @@ async function resolveGravatar(
     gravatarRequests,
     hash,
     async () => {
-      const result = await fetchGravatar(hash, options.fetchImpl, options.deadline);
+      const result = await fetchGravatar(hash, options.fetchImpl);
       if (result.kind !== "error") {
         cacheGravatar(hash, result, options.nowMs());
       }
@@ -376,26 +375,43 @@ export async function handleUserProfileAvatarHttpRequest(
 
   // Resolve linked emails sequentially and stop at the first hit: the primary
   // email keeps precedence, and a secondary email's hash is disclosed to
-  // Gravatar only once the earlier one is a definite miss. A single shared
-  // deadline bounds the total wait, so an unreachable Gravatar cannot stall the
-  // held connection by one timeout per linked email.
+  // Gravatar only once the earlier one is a definite miss. Shared fetches own
+  // their upstream timeout; each HTTP waiter owns its deadline and disconnect.
   const hashes = profile?.emails.slice(0, MAX_GRAVATAR_EMAIL_LOOKUPS).map(hashEmail) ?? [];
-  const deadline = AbortSignal.timeout(GRAVATAR_TOTAL_TIMEOUT_MS);
+  const clientAbort = new AbortController();
+  const stopWatchingDisconnect = watchClientDisconnect(req, res, clientAbort);
+  const waiterSignal = AbortSignal.any([
+    clientAbort.signal,
+    AbortSignal.timeout(GRAVATAR_TOTAL_TIMEOUT_MS),
+  ]);
   let transientFailure = false;
-  for (const hash of hashes) {
-    const result = await resolveGravatar(hash, {
-      fetchImpl: opts.fetchImpl ?? globalThis.fetch,
-      nowMs: opts.nowMs ?? Date.now,
-      deadline,
-    });
-    if (result.kind === "hit") {
-      sendAvatar(req, res, result, "private, max-age=0, must-revalidate");
-      return true;
+  try {
+    for (const hash of hashes) {
+      waiterSignal.throwIfAborted();
+      const result = await racePromiseWithAbortSignal(
+        resolveGravatar(hash, {
+          fetchImpl: opts.fetchImpl ?? globalThis.fetch,
+          nowMs: opts.nowMs ?? Date.now,
+        }),
+        waiterSignal,
+      );
+      waiterSignal.throwIfAborted();
+      if (result.kind === "hit") {
+        sendAvatar(req, res, result, "private, max-age=0, must-revalidate");
+        return true;
+      }
+      transientFailure ||= result.kind === "error";
     }
-    transientFailure ||= result.kind === "error";
-    if (deadline.aborted) {
-      break;
+  } catch (error) {
+    if (!waiterSignal.aborted) {
+      throw error;
     }
+    transientFailure = true;
+  } finally {
+    stopWatchingDisconnect();
+  }
+  if (clientAbort.signal.aborted) {
+    return true;
   }
   sendJson(res, transientFailure ? 502 : 404, {
     ok: false,

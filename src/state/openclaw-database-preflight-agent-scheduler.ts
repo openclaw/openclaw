@@ -1,3 +1,12 @@
+import { availableParallelism } from "node:os";
+import {
+  isSqliteInspectionDeadlineOwnedByCaller,
+  readSqliteInspectionBudget,
+  resolveSqliteInspectionSignal,
+  withSqliteReadOnlyWorkerScope,
+} from "../infra/sqlite-readonly-worker.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 
@@ -21,6 +30,15 @@ export async function preflightAgentDatabasesBounded<T>(
   ) => Promise<void>,
   result: OpenClawDatabaseSchemaPreflight,
   signal?: AbortSignal,
+  startup?: {
+    signal: AbortSignal;
+    path: (target: T) => string;
+    track: (work: Promise<unknown>) => void;
+    defer: (
+      inspections: { target: T; result: Promise<OpenClawDatabaseSchemaPreflight> }[],
+      reason: string,
+    ) => AgentDatabaseAdmissionRefusal[];
+  },
 ): Promise<AgentDatabasePreflightStats> {
   const inspectedAgentPaths = new Set<string>();
   const inspectedAgentTargets = new Set<string>();
@@ -41,12 +59,57 @@ export async function preflightAgentDatabasesBounded<T>(
   const failures = new Map<number, unknown>();
   let nextInspectionIndex = 0;
   const readers: ReturnType<typeof createAgentSchemaInspectionWorker>[] = [];
+  const foreground = createDeferredCore();
+  const completions = targets.map(() => createDeferredCore<OpenClawDatabaseSchemaPreflight>());
+  for (const completion of completions) {
+    void completion.promise.catch(() => {});
+  }
+  const deferred = new Set<number>();
+  const active = new Set<number>();
+  const concurrency = Math.min(
+    AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
+    availableParallelism(),
+    targets.length,
+  );
+  let deferredReason = "";
+  let deferredRefusals: AgentDatabaseAdmissionRefusal[] = [];
+  const inspectionSignal = startup
+    ? signal
+      ? AbortSignal.any([startup.signal, signal])
+      : startup.signal
+    : resolveSqliteInspectionSignal(signal);
+  const deadlineOwnedByCaller = startup !== undefined || isSqliteInspectionDeadlineOwnedByCaller();
+  const settleForeground = () => {
+    if (!startup || deferred.size === 0 || deferredRefusals.length > 0 || failures.size > 0) {
+      return;
+    }
+    if (active.size === concurrency && [...active].every((index) => deferred.has(index))) {
+      for (let index = nextInspectionIndex; index < targets.length; index += 1) {
+        deferred.add(index);
+      }
+    }
+    if (targets.some((_, index) => inspections[index] === undefined && !deferred.has(index))) {
+      return;
+    }
+    try {
+      deferredRefusals = startup.defer(
+        [...deferred].map((index) => ({
+          target: targets[index]!,
+          result: completions[index]!.promise,
+        })),
+        deferredReason,
+      );
+      foreground.resolve();
+    } catch (error) {
+      foreground.reject(error);
+    }
+  };
 
   const worker = async () => {
     await using reader = createAgentSchemaInspectionWorker();
     readers.push(reader);
     while (true) {
-      if (signal?.aborted || failures.size > 0) {
+      if (inspectionSignal?.aborted || failures.size > 0) {
         return;
       }
 
@@ -65,37 +128,76 @@ export async function preflightAgentDatabasesBounded<T>(
         incompatible: [],
         indeterminate: [],
       };
+      active.add(index);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      if (startup && !deferred.has(index)) {
+        const pathname = startup.path(target);
+        const { timeoutMs, size } = readSqliteInspectionBudget("startup readiness", pathname);
+        timer = setTimeout(() => {
+          if (failures.size > 0 || inspectionSignal?.aborted) {
+            return;
+          }
+          deferred.add(index);
+          deferredReason ||= `The ${size} database at ${pathname} exceeded its ${timeoutMs / 1000} second startup wait; inspection continues.`;
+          settleForeground();
+        }, timeoutMs);
+        timer.unref();
+      }
       try {
-        await inspect(target, inspection, claimAgentTarget, reader.inspect);
+        await inspect(target, inspection, claimAgentTarget, (input, requestSignal, snapshot) =>
+          reader.inspect(input, inspectionSignal ?? requestSignal, snapshot),
+        );
         inspections[index] = inspection;
+        completions[index]!.resolve(inspection);
       } catch (error) {
         failures.set(index, error);
+        completions[index]!.reject(error);
         return;
+      } finally {
+        clearTimeout(timer);
+        active.delete(index);
+        settleForeground();
       }
     }
   };
 
-  await Promise.all(
+  const completed = Promise.all(
     Array.from(
       {
-        length: Math.min(AGENT_DATABASE_PREFLIGHT_CONCURRENCY, targets.length),
+        length: concurrency,
       },
-      () => worker(),
+      () =>
+        withSqliteReadOnlyWorkerScope(worker, {
+          signal: inspectionSignal ?? new AbortController().signal,
+          deadlineOwnedByCaller,
+        }),
     ),
-  );
+  ).finally(() => {
+    for (let index = 0; index < targets.length; index += 1) {
+      if (inspections[index] === undefined) {
+        completions[index]!.reject(
+          inspectionSignal?.reason ??
+            failures.values().next().value ??
+            new Error("Inspection cancelled"),
+        );
+      }
+    }
+  });
+  startup?.track(completed);
+  await (startup ? Promise.race([completed, foreground.promise]) : completed);
 
   // Workers are fully joined before propagating failure or cancellation so
   // every started database close and snapshot cleanup has completed.
   for (let index = 0; index < targets.length; index += 1) {
-    if (failures.has(index)) {
+    if (failures.has(index) && (!deferred.has(index) || deferredRefusals.length === 0)) {
       throw failures.get(index);
     }
   }
-  signal?.throwIfAborted();
+  inspectionSignal?.throwIfAborted();
 
   // Preserve serial-result ordering even when inspections finish out of order.
-  for (const inspection of inspections) {
-    if (inspection === undefined) {
+  for (const [index, inspection] of inspections.entries()) {
+    if (inspection === undefined || deferred.has(index)) {
       continue;
     }
     result.incompatible.push(...inspection.incompatible);
@@ -106,6 +208,9 @@ export async function preflightAgentDatabasesBounded<T>(
     if (inspection.pendingMigrations?.length) {
       (result.pendingMigrations ??= []).push(...inspection.pendingMigrations);
     }
+  }
+  if (deferredRefusals.length) {
+    (result.agentRefusals ??= []).push(...deferredRefusals);
   }
   return {
     schemaProcessCount: readers.reduce((count, reader) => count + reader.processCount, 0),

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements token efficiency report behavior.
 import { formatCacheMisses } from "./agentic-parity-cache-usage.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import { normalizeRuntimePair, resolveRuntimeParityUsagePolicy } from "./runtime-parity.js";

@@ -18,12 +18,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
-import {
-  createWorkerEnvironmentStore,
-  normalizeWorkerDesktopEndpoint,
-  normalizeWorkerSshEndpoint,
-  type WorkerEnvironmentStore,
-} from "./store.js";
+import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 
 type WorkerEnvironmentBootstrapReceipt = WorkerAdmissionHandshake & {
   installKind?: "bundle" | "local";
@@ -295,9 +290,19 @@ describe("worker environment store", () => {
     expect(store.listForReconcile()).toEqual([]);
   });
 
-  it("replaces ordered SSH fallback rows when the endpoint changes", () => {
+  it.each([
+    { name: "none", fallbackPorts: [] },
+    { name: "one", fallbackPorts: [2201] },
+    { name: "non-numeric order", fallbackPorts: [2201, 22] },
+    { name: "ten", fallbackPorts: Array.from({ length: 10 }, (_, index) => 2310 - index) },
+  ])("replaces and reopens ordered SSH fallback rows ($name)", ({ fallbackPorts }) => {
+    seedBootstrapping("worker-unrelated", "lease-unrelated");
     seedBootstrapping("worker-endpoint-change", "lease-endpoint-change");
-    const replacement = { ...SSH_ENDPOINT, fallbackPorts: [2201, 22] };
+    const replacement = { ...SSH_ENDPOINT, fallbackPorts };
+    const expected: WorkerEnvironmentSshEndpoint = { ...replacement };
+    if (fallbackPorts.length === 0) {
+      delete expected.fallbackPorts;
+    }
 
     expect(
       store.transition({
@@ -306,12 +311,40 @@ describe("worker environment store", () => {
         to: "ready",
         patch: { ...readyPatch(), sshEndpoint: replacement },
       }).sshEndpoint,
-    ).toEqual(replacement);
-    expect(fallbackPortRows("worker-endpoint-change")).toEqual([
-      { position: 0, port: 2201 },
-      { position: 1, port: 22 },
-    ]);
+    ).toStrictEqual(expected);
+    expect(fallbackPortRows("worker-endpoint-change")).toEqual(
+      fallbackPorts.map((port, position) => ({ position, port })),
+    );
+
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = createWorkerEnvironmentStore({ database, now: () => nowMs });
+    expect(store.get("worker-endpoint-change")?.sshEndpoint).toStrictEqual(expected);
+    for (const records of [store.list(), store.listForReconcile()]) {
+      expect(records.map((record) => [record.environmentId, record.sshEndpoint])).toEqual([
+        ["worker-endpoint-change", expected],
+        ["worker-unrelated", SSH_ENDPOINT],
+      ]);
+    }
   });
+
+  it.each([0, 65_536, 9_007_199_254_740_993n])(
+    "rejects invalid persisted fallback port %s for an SSH environment",
+    (port) => {
+      seedBootstrapping("worker-invalid-port", "lease-invalid-port");
+      // Simulate damaged stored values while leaving the real decoder and endpoint validation active.
+      database.db.exec("PRAGMA ignore_check_constraints = ON");
+      try {
+        const sql = "UPDATE worker_environment_ssh_fallback_ports SET port = ? WHERE position = 0";
+        database.db.prepare(sql).run(port);
+      } finally {
+        database.db.exec("PRAGMA ignore_check_constraints = OFF");
+      }
+      expect(() => store.get("worker-invalid-port")).toThrow();
+      expect(() => store.list()).toThrow();
+      expect(() => store.listForReconcile()).toThrow();
+    },
+  );
 
   it("lazily ensures the companion table once for a current database", () => {
     const databasePath = database.path;
@@ -393,6 +426,9 @@ describe("worker environment store", () => {
     expect(plan.map((row) => row.detail).join("\n")).toContain(
       "idx_worker_environments_terminal_changed",
     );
+    expect(plan.map((row) => row.detail).join("\n")).toContain(
+      "idx_worker_session_placements_environment",
+    );
   });
 
   it("prunes only old unreferenced terminal environments and cascades owned rows", () => {
@@ -444,103 +480,22 @@ describe("worker environment store", () => {
     expect(store.get("worker-ready")?.state).toBe("ready");
   });
 
-  it("normalizes provider-advertised SSH fallback ports at the durable boundary", () => {
-    expect(
-      normalizeWorkerSshEndpoint({
-        ...SSH_ENDPOINT,
-        fallbackPorts: [22, 2200, 22, 2222],
-      }),
-    ).toEqual(SSH_ENDPOINT);
-  });
-
-  it.each([
-    ["non-array", "22"],
-    ["non-integer", [22.5]],
-    ["below range", [0]],
-    ["above range", [65_536]],
-    ["more than ten", Array.from({ length: 11 }, (_, index) => 2300 + index)],
-  ])("rejects %s SSH fallback ports", (_name, fallbackPorts) => {
-    expect(() =>
-      normalizeWorkerSshEndpoint({
-        ...SSH_ENDPOINT,
-        fallbackPorts,
-      } as unknown as WorkerEnvironmentSshEndpoint),
-    ).toThrow("SSH fallback ports");
-  });
-
-  it.each([
-    ["a non-array app list", "browser", "desktop apps must be an array"],
-    [
-      "more than eight apps",
-      Array.from({ length: 9 }, () => ({
-        id: "terminal",
-        executablePath: "/usr/bin/xfce4-terminal",
-      })),
-      "desktop apps cannot exceed 8",
-    ],
-    [
-      "an unknown app id",
-      [{ id: "editor", executablePath: "/usr/bin/editor" }],
-      'desktop app id must be "browser" or "terminal"',
-    ],
-    [
-      "duplicate app ids",
-      [
-        { id: "terminal", executablePath: "/usr/bin/xfce4-terminal" },
-        { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
-      ],
-      "desktop app id terminal must be unique",
-    ],
-    [
-      "a relative executable path",
-      [{ id: "terminal", executablePath: "bin/xfce4-terminal" }],
-      "desktop app executable path must be absolute",
-    ],
-    [
-      "an invalid browser CDP port",
-      [
-        {
-          id: "browser",
-          executablePath: "/usr/local/bin/openclaw-worker-browser",
-          cdpPort: 65_536,
-        },
-      ],
-      "browser CDP port must be an integer",
-    ],
-    [
-      "an unknown browser field",
-      [
-        {
-          id: "browser",
-          executablePath: "/usr/local/bin/openclaw-worker-browser",
-          cdpPort: 9222,
-          args: ["--headless"],
-        },
-      ],
-      "browser desktop app contains unknown fields",
-    ],
-    [
-      "an unknown terminal field",
-      [
-        {
-          id: "terminal",
-          executablePath: "/usr/local/bin/openclaw-worker-terminal",
-          env: { DISPLAY: ":99" },
-        },
-      ],
-      "terminal desktop app contains unknown fields",
-    ],
-  ])("rejects %s", (_name, apps, error) => {
-    expect(() =>
-      normalizeWorkerDesktopEndpoint({
-        protocol: "rfb",
-        port: 5900,
-        apps,
-      } as unknown as WorkerDesktopEndpoint),
-    ).toThrow(error);
-  });
-
-  it("round-trips desktop metadata and clears it with the provider lease", () => {
+  it.each<WorkerDesktopEndpoint>([
+    DESKTOP,
+    {
+      protocol: "rfb",
+      port: 5900,
+      passwordFilePath: "/var/db/crabbox/openclaw-vnc.password",
+      username: "ec2-user",
+      allowsResize: false,
+    },
+    {
+      protocol: "rfb",
+      port: 5900,
+      passwordFilePath: "C:\\ProgramData\\crabbox\\vnc.password",
+      allowsResize: false,
+    },
+  ])("round-trips $passwordFilePath and clears it with the provider lease", (desktop) => {
     createIntent("worker-desktop");
     store.transition({
       environmentId: "worker-desktop",
@@ -551,12 +506,12 @@ describe("worker environment store", () => {
       environmentId: "worker-desktop",
       from: "provisioning",
       to: "bootstrapping",
-      patch: { leaseId: "lease-desktop", sshEndpoint: SSH_ENDPOINT, desktop: DESKTOP },
+      patch: { leaseId: "lease-desktop", sshEndpoint: SSH_ENDPOINT, desktop },
     });
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerEnvironmentStore({ database, now: () => nowMs });
-    expect(store.get("worker-desktop")?.desktop).toEqual(DESKTOP);
+    expect(store.get("worker-desktop")?.desktop).toEqual(desktop);
 
     const requested = store.requestDestroy({
       environmentId: "worker-desktop",
@@ -584,8 +539,8 @@ describe("worker environment store", () => {
   });
 
   it("idempotently ensures desktop_json on an existing state database", () => {
-    ensureAdditiveStateColumns(database.db);
-    ensureAdditiveStateColumns(database.db);
+    ensureAdditiveStateColumns(database.db, "runtime");
+    ensureAdditiveStateColumns(database.db, "runtime");
     const columns = database.db.prepare("PRAGMA table_info(worker_environments)").all() as Array<{
       name: string;
     }>;

@@ -39,6 +39,9 @@ const lazyColumns = [
   ["task_runs", "execution_owner_host", "TEXT", true],
   ["task_runs", "execution_owner_pid", "INTEGER", true],
   ["task_runs", "execution_owner_start_identity", "INTEGER", true],
+  ["session_watch_cursors", "watcher_store_path", "TEXT", true],
+  ["subagent_runs", "requester_store_path", "TEXT", true],
+  ["subagent_runs", "controller_store_path", "TEXT", true],
 ] as const satisfies readonly LazyColumn[];
 
 function lazyColumnDefinitions(firstUseOnly?: boolean) {

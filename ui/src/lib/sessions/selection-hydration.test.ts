@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   createAgentSelectionCapability,

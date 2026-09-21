@@ -2,16 +2,19 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Response } from "playwright";
 import { expect, it } from "vitest";
+import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI settings layout mocked Gateway E2E",
@@ -80,7 +83,6 @@ const settingsRowRoutes = [
   "agents",
   "ai-agents",
   "labs",
-  "model-setup",
   "model-providers",
   "mcp",
   "memory",
@@ -109,7 +111,7 @@ const mobileStandaloneSettingsPageRoutes = [
 
 const mobileGeometryCases = [
   { route: "appearance", contentSelector: ".settings-page" },
-  { route: "model-setup", contentSelector: ".model-setup" },
+  { route: "model-providers", contentSelector: ".settings-page" },
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
   { route: "plugin-settings", contentSelector: ".settings-page" },
 ] as const satisfies ReadonlyArray<{ route: RouteId; contentSelector: string }>;
@@ -132,7 +134,7 @@ const standaloneHeaderCases = [
 ] as const satisfies ReadonlyArray<{ route: RouteId; subtitle: string }>;
 
 function createCronLayoutMethodResponses() {
-  const jobs = [
+  const jobs: CronJob[] = [
     {
       id: "healthy",
       configRevision: "healthy-revision",
@@ -170,7 +172,7 @@ function createCronLayoutMethodResponses() {
       mainKey: "main",
       scope: "agent",
     },
-    "cron.list": {
+    "cron.list": cronListResponseFixture({
       jobs,
       snapshotRevision: "settings-layout",
       total: jobs.length,
@@ -178,7 +180,7 @@ function createCronLayoutMethodResponses() {
       limit: 50,
       hasMore: false,
       nextOffset: null,
-    },
+    }),
     "cron.runs": {
       entries: [],
       total: 0,
@@ -237,7 +239,10 @@ suite.define(() => {
         const startupResponses: Response[] = [];
         const settingsResponses: Response[] = [];
         const stopCapturing: Array<() => void> = [];
-        const providerCopy = "Providers and credentials for the selected agent.";
+        const settingsOnlyCopy = [
+          "Global model defaults and provider access for your agents.",
+          "Find existing connections or prepare a local model for {agent}.",
+        ];
         // Keep each cold-boot document alive through the final assertions: replacing
         // an observed document cancels its idle imports and creates test-owned failures.
         for (const pathname of ["new", "chat", "settings/model-providers"]) {
@@ -270,13 +275,15 @@ suite.define(() => {
 
           await page.goto(`${suite.server.baseUrl}${pathname}`);
           const ready = isSettings
-            ? page.getByRole("heading", { name: /^Configured providers\b/ })
+            ? page.getByRole("heading", { name: /^Provider access\b/ })
             : page.locator(".agent-chat__composer-combobox textarea");
           await ready.waitFor();
           if (isSettings) {
             expect(await page.locator(".model-providers__defaults").textContent()).toContain(
               "Utility Model",
             );
+            await openModelSetup(page);
+            await page.getByText(/Find existing connections or prepare a local model/).waitFor();
           }
           if (recordVisuals) {
             await page.screenshot({
@@ -293,8 +300,10 @@ suite.define(() => {
             (await Promise.all(responses.map((response) => response.text()))).join("\n"),
           ),
         );
-        expect(startupScripts).not.toContain(providerCopy);
-        expect(settingsScripts).toContain(providerCopy);
+        for (const copy of settingsOnlyCopy) {
+          expect(startupScripts).not.toContain(copy);
+          expect(settingsScripts).toContain(copy);
+        }
         expect(errors).toEqual([]);
         expect(failedScripts).toEqual([]);
       },
@@ -819,7 +828,9 @@ suite.define(() => {
           routeId: route,
         });
         if (route === "model-providers") {
-          await page.getByRole("heading", { name: "Global defaults", exact: true }).waitFor();
+          await page
+            .getByRole("heading", { name: "Defaults for all agents", exact: true })
+            .waitFor();
         }
 
         const titleDescriptionPairs = page.locator(

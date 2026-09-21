@@ -9,7 +9,10 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
-import type { CodexProjectedImageGroup } from "./context-engine-projection.js";
+import {
+  neutralizeCodexExplicitMentionSigils,
+  type CodexProjectedImageGroup,
+} from "./context-engine-projection.js";
 import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
@@ -28,7 +31,13 @@ import { buildCodexUserInput } from "./user-input.js";
 
 const CODEX_CURRENT_SENDER_FIELD_MAX_CHARS = 256;
 
-function buildCodexCurrentSenderContextValue(params: EmbeddedRunAttemptParams): string | undefined {
+type CodexCurrentSender = {
+  id?: string;
+  name?: string;
+  username?: string;
+};
+
+function readCodexCurrentSender(params: EmbeddedRunAttemptParams): CodexCurrentSender | undefined {
   const metadata = asOptionalRecord(
     asOptionalRecord(params.userTurnTranscriptRecorder?.message as unknown)?.["__openclaw"],
   );
@@ -48,13 +57,29 @@ function buildCodexCurrentSenderContextValue(params: EmbeddedRunAttemptParams): 
     return undefined;
   }
   const bound = (value: string) => truncateUtf16Safe(value, CODEX_CURRENT_SENDER_FIELD_MAX_CHARS);
-  return JSON.stringify({
-    sender: {
-      ...(id ? { id: bound(id) } : {}),
-      ...(name ? { name: bound(name) } : {}),
-      ...(username ? { username: bound(username) } : {}),
-    },
-  });
+  return {
+    ...(id ? { id: bound(id) } : {}),
+    ...(name ? { name: bound(name) } : {}),
+    ...(username ? { username: bound(username) } : {}),
+  };
+}
+
+function buildCodexCurrentSenderContextValue(params: EmbeddedRunAttemptParams): string | undefined {
+  const sender = readCodexCurrentSender(params);
+  return sender ? JSON.stringify({ sender }) : undefined;
+}
+
+export function buildCodexHistoryProvenancePrefix(
+  params: EmbeddedRunAttemptParams,
+): string | undefined {
+  const sender = readCodexCurrentSender(params);
+  // A label is not identity. Native thread history must only attach provenance
+  // when OpenClaw supplied a stable sender id, matching generic compaction.
+  return sender?.id
+    ? neutralizeCodexExplicitMentionSigils(
+        `[OpenClaw conversation info: sender=${JSON.stringify(sender)}]\n`,
+      )
+    : undefined;
 }
 
 export function buildTurnStartParams(
@@ -79,6 +104,7 @@ export function buildTurnStartParams(
     sessionStatusAvailable?: boolean;
     messageToolAvailable?: boolean;
     requireExplicitMessageTarget?: boolean;
+    historyProvenancePrefix?: string;
   },
 ): CodexTurnStartParams {
   const modelSelection = options.preserveNativeTurnSettings
@@ -115,6 +141,13 @@ export function buildTurnStartParams(
   // including automatic/disabled defaults, without replacing other context entries.
   additionalContext = {
     ...additionalContext,
+    // Codex emits changed context only. Unknown must replace a disconnected Mac's hint.
+    openclaw_active_computer: {
+      kind: "application",
+      value:
+        params.hostCapabilities.activeComputerContext?.() ??
+        "Current active computer: active_node=unknown (host presence unavailable)",
+    },
     openclaw_source_delivery: {
       kind: "application",
       value: [
@@ -153,6 +186,8 @@ export function buildTurnStartParams(
         options.promptText ?? params.prompt,
         params.images,
         options.contextImageGroups,
+        options.historyProvenancePrefix ??
+          (params.trigger === "user" ? buildCodexHistoryProvenancePrefix(params) : undefined),
       ),
       ...(options.explicitSkillInputs ?? []),
     ],

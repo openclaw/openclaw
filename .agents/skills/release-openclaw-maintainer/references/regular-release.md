@@ -72,14 +72,24 @@ against the untagged Release SHA:
 pnpm release:candidate -- \
   --tag <tag> \
   --target-sha <release-sha> \
+  --npm-dist-tag <beta-or-latest> \
+  --publication-route <normal-or-prepared> \
   --full-release-run <release-sha-validation-run-id> \
   --publish-workflow-ref release-publish/<tooling-sha12>-<epoch> \
   --plugin-sdk-api-acknowledgement <reviewed-8-character-digest> \
   --skip-dispatch
 ```
 
+Match `--npm-dist-tag` and `--publication-route` to the frozen validation
+selection; the helper defaults to `beta` and `normal`.
+`--publish-workflow-ref` selects the publication tag, not the helper checkout.
+The same-checkout bootstrap fetches the workflow branch tip. Verify that the
+executing helper's Tooling SHA matches the recorded tag; if it differs, use
+only an owner-supported exact-tooling entry path, without moving the protected
+tag or silently changing qualification identity.
+
 Omit `--plugin-sdk-api-acknowledgement` when no API change exists. The helper
-completes package/install proof and prints the publish command; do not dispatch
+completes package/install proof and prints the selected route's next command; do not dispatch
 another equivalent validation. Its `npm-beta-v1` Telegram package result is
 `deferred-postpublish`, never passed. Other policies retain their check. Beta
 and alpha defer Parallels to `pnpm release:beta-smoke`; stable/full run it before
@@ -99,8 +109,15 @@ Keep their exact run/attempt identities in the handoff's publication rows.
 
 ## Publish and verify
 
-Read [publication authentication and recovery](publication-recovery.md).
-Dispatch `.github/workflows/openclaw-release-publish.yml` using the candidate
+Read [publication authentication and recovery](publication-recovery.md) and
+keep the admitted publication route. For `prepared`, run the candidate's
+printed `openclaw-release-prepare.yml` command after the frozen release tag
+exists. Once preparation succeeds, pass its summary's `prepared_artifact` JSON
+to `openclaw-release-button.yml` at the same protected Tooling tag. Follow
+[the release-button procedure](../../../../docs/reference/RELEASING.md#prepare-once-then-use-the-release-button)
+and its readiness receipt; do not also dispatch the normal publisher.
+
+For `normal`, dispatch `.github/workflows/openclaw-release-publish.yml` using the candidate
 helper's protected `release-publish/<tooling-sha12>-<epoch>` ref. Pass matching
 `npm_dist_tag`, `preflight_run_id`, `full_release_validation_run_id` and its
 exact successful `full_release_validation_run_attempt`. Include the reviewed
@@ -138,8 +155,9 @@ when still applicable. Run published npm verification, Docker install/update,
 macOS-only Parallels smoke and required QA signal; broaden only for stale
 proof, material stable/beta differences, or explicit retesting. Promote beta to
 latest through the restricted dist-tag workflow in
-[publication recovery](publication-recovery.md). For direct latest publication,
-point beta to that stable only if requested. Verify each selector readback.
+[publication recovery](publication-recovery.md#registry-selectors). After either
+publishing or promoting to latest, immediately repair the beta floor through
+that owner and verify each selector readback; preserve any newer beta.
 
 Complete [stable main closeout](stable-main-closeout.md) once version,
 changelog, npm and Docker evidence are ready. Record pending apps and monitor

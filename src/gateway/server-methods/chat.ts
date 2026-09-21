@@ -22,7 +22,6 @@ import {
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { validateChatSelectedAgent } from "./chat-origin-routing.js";
-import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -53,7 +52,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     // older clients stop asking, while current clients read the tool call title.
     respond(true, { titles: {}, disabled: true });
   },
-  "chat.send": handleDirectExternalChatSend,
   "chat.inject": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateChatInjectParams, "chat.inject", respond)) {
       return;

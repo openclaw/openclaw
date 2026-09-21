@@ -2,18 +2,18 @@
 // Validates the npm tarball Docker E2E lanes install.
 // This is intentionally tarball-only: the check proves Docker lanes consume the
 // prebuilt package artifact with dist inventory, not a source checkout.
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
 import { gte as semverGte, valid as validSemver } from "semver";
 import { extract as extractTar, list as listTar, type ReadEntry } from "tar";
 import { coerceErrorMessage } from "./lib/error-format.mts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mts";
 import { collectNpmPackInventory, compareNpmPackInventory } from "./lib/npm-pack-inventory.mts";
+import { assertNpmShrinkwrapDependencies } from "./lib/npm-shrinkwrap-dependencies.mjs";
+import { collectBundledDependencyErrors } from "./lib/package-bundled-dependencies.mts";
 import { collectPackageDistImportErrors } from "./lib/package-dist-imports.mjs";
 import {
   comparePackageDistInventory,
@@ -111,44 +111,6 @@ const PACKAGE_DEPENDENCY_SECTIONS = [
   "peerDependencies",
   "devDependencies",
 ] as const;
-const REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES = ["@openclaw/ai"];
-// Strict Docker artifacts bundle this private runtime rather than resolving it
-// from npm. Keep the concrete load-bearing entries explicit instead of
-// reimplementing Node's conditional package-exports resolver here.
-const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
-  [
-    "@openclaw/ai",
-    [
-      { specifier: "@openclaw/ai", entry: "dist/index.mjs" },
-      { specifier: "@openclaw/ai/providers", entry: "dist/providers.mjs" },
-      {
-        specifier: "@openclaw/ai/transports",
-        entry: "dist/transports.mjs",
-        whenExported: "./transports",
-      },
-      {
-        specifier: "@openclaw/ai/internal/openai-completions-compat",
-        entry: "dist/internal/openai-completions-compat.mjs",
-        whenExported: "./internal/openai-completions-compat",
-      },
-      {
-        specifier: "@openclaw/ai/internal/openai-responses-payload-policy",
-        entry: "dist/internal/openai-responses-payload-policy.mjs",
-        whenExported: "./internal/openai-responses-payload-policy",
-      },
-      {
-        specifier: "@openclaw/ai/internal/runtime",
-        entry: "dist/internal/runtime.mjs",
-      },
-      {
-        specifier: "@openclaw/ai/internal/tool-schema",
-        entry: "dist/internal/tool-schema.mjs",
-        whenExported: "./internal/tool-schema",
-      },
-    ],
-  ],
-]);
-
 function collectWorkspaceProtocolDependencyErrors(packageJson: unknown, label: string): string[] {
   const errors: string[] = [];
   if (!packageJson || typeof packageJson !== "object") {
@@ -167,173 +129,6 @@ function collectWorkspaceProtocolDependencyErrors(packageJson: unknown, label: s
         errors.push(`${label} ${section}.${name} must not use workspace protocol ${spec}`);
       }
     }
-  }
-
-  return errors;
-}
-
-function listBundleDependencies(packageJson: unknown): string[] {
-  if (!packageJson || typeof packageJson !== "object") {
-    return [];
-  }
-  const packageRecord = packageJson as Record<string, unknown>;
-  if (packageRecord.bundleDependencies === true) {
-    return Object.keys((packageRecord.dependencies ?? {}) as object);
-  }
-  const bundleDependencies = Array.isArray(packageRecord.bundleDependencies)
-    ? packageRecord.bundleDependencies
-    : packageRecord.bundledDependencies;
-  return Array.isArray(bundleDependencies)
-    ? bundleDependencies.filter((name): name is string => typeof name === "string")
-    : [];
-}
-
-function resolveBundledPackageSpecifiers(
-  packageRoot: string,
-  specifiers: string[],
-): Record<string, string> | null {
-  const result = spawnSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      `const resolutions = {};
-for (const specifier of JSON.parse(process.argv[1])) {
-  try {
-    resolutions[specifier] = import.meta.resolve(specifier);
-  } catch {
-    resolutions[specifier] = "";
-  }
-}
-process.stdout.write(JSON.stringify(resolutions));`,
-      JSON.stringify(specifiers),
-    ],
-    { cwd: packageRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  if (result.status !== 0) {
-    return null;
-  }
-  try {
-    return JSON.parse(result.stdout) as Record<string, string>;
-  } catch {
-    return null;
-  }
-}
-
-function collectBundledPackageRuntimeErrors({
-  name,
-  entries,
-  files,
-  packageRoot,
-  readText,
-}: {
-  entries: ReadonlySet<string>;
-  files: string[];
-  name: string;
-  packageRoot: string;
-  readText: (relativePath: string) => string;
-}): string[] {
-  const errors: string[] = [];
-  const packagePrefix = `node_modules/${name}/`;
-  const manifestPath = `${packagePrefix}package.json`;
-  let bundledPackageJson: Record<string, unknown>;
-  try {
-    bundledPackageJson = JSON.parse(readText(manifestPath)) as Record<string, unknown>;
-  } catch (error) {
-    errors.push(`unreadable bundled ${name} package.json: ${coerceErrorMessage(error)}`);
-    return errors;
-  }
-  if (bundledPackageJson.name !== name) {
-    errors.push(`bundled ${name} package.json must name ${name}`);
-  }
-  const packageExports =
-    bundledPackageJson.exports &&
-    typeof bundledPackageJson.exports === "object" &&
-    !Array.isArray(bundledPackageJson.exports)
-      ? (bundledPackageJson.exports as Record<string, unknown>)
-      : {};
-  // Trusted current-main harnesses validate frozen release targets. Require
-  // post-cut runtime subpaths only when the candidate manifest owns them.
-  const runtimeEntries = (REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES.get(name) ?? []).filter(
-    ({ whenExported }) => !whenExported || Object.hasOwn(packageExports, whenExported),
-  );
-  const resolutions = resolveBundledPackageSpecifiers(
-    packageRoot,
-    runtimeEntries.map(({ specifier }) => specifier),
-  );
-  if (!resolutions) {
-    errors.push(`bundled ${name} runtime specifier resolution failed`);
-  }
-  for (const { entry, specifier } of runtimeEntries) {
-    if (!entries.has(`${packagePrefix}${entry}`)) {
-      errors.push(`bundled ${name} is missing required runtime entry ${entry}`);
-    }
-    const resolvedUrl = resolutions?.[specifier] ?? "";
-    if (!resolvedUrl) {
-      errors.push(`bundled ${name} runtime specifier ${specifier} is not resolvable`);
-      continue;
-    }
-    const expectedUrl = pathToFileURL(path.join(packageRoot, packagePrefix, entry)).href;
-    if (resolvedUrl !== expectedUrl) {
-      errors.push(
-        `bundled ${name} runtime specifier ${specifier} resolves to ${resolvedUrl} instead of ${expectedUrl}`,
-      );
-    }
-  }
-  const bundledFiles = files
-    .filter((file) => file.startsWith(packagePrefix))
-    .map((file) => file.slice(packagePrefix.length));
-  errors.push(
-    ...collectPackageDistImportErrors({
-      files: bundledFiles,
-      readText: (file: string) => readText(`${packagePrefix}${file}`),
-    }).map((error) => `bundled ${name} ${error}`),
-  );
-  return errors;
-}
-
-function collectRequiredBundledWorkspaceDependencyErrors(
-  packageJson: unknown,
-  entrySet: ReadonlySet<string>,
-  files: string[],
-  packageRoot: string,
-  readText: (relativePath: string) => string,
-): string[] {
-  const errors: string[] = [];
-  if (!packageJson || typeof packageJson !== "object") {
-    return errors;
-  }
-  const packageRecord = packageJson as Record<string, unknown>;
-
-  const dependencies = packageRecord.dependencies;
-  if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
-    return errors;
-  }
-  const dependencyRecord = dependencies as Record<string, unknown>;
-
-  const bundledDependencies = new Set(listBundleDependencies(packageJson));
-  for (const name of REQUIRED_BUNDLED_WORKSPACE_DEPENDENCIES) {
-    if (typeof dependencyRecord[name] !== "string") {
-      continue;
-    }
-    if (!bundledDependencies.has(name)) {
-      errors.push(
-        `package.json dependencies.${name} must be listed in bundleDependencies because it is private to the OpenClaw workspace`,
-      );
-    }
-    if (!entrySet.has(`node_modules/${name}/package.json`)) {
-      errors.push(`package.json dependencies.${name} must be bundled in node_modules/${name}`);
-      continue;
-    }
-    errors.push(
-      ...collectBundledPackageRuntimeErrors({
-        name,
-        entries: entrySet,
-        files,
-        packageRoot,
-        readText,
-      }),
-    );
   }
 
   return errors;
@@ -744,17 +539,16 @@ if (entrySet.has("package.json")) {
     packageJson = JSON.parse(readTarEntry("package.json")) as PackageManifest;
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
     errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
-    if (cliArgs.requireBundledWorkspaceDeps) {
-      errors.push(
-        ...collectRequiredBundledWorkspaceDependencyErrors(
-          packageJson,
-          entrySet,
-          normalized,
-          extractedPackageRoot,
-          readTarEntry,
-        ),
-      );
-    }
+    errors.push(
+      ...collectBundledDependencyErrors({
+        packageJson,
+        entries: entrySet,
+        files: normalized,
+        packageRoot: extractedPackageRoot,
+        readText: readTarEntry,
+        requireBundledWorkspaceDeps: cliArgs.requireBundledWorkspaceDeps,
+      }),
+    );
   } catch {
     packageVersion = "";
   }
@@ -798,6 +592,7 @@ if (hasShrinkwrap && !declaresShrinkwrap) {
 if (hasShrinkwrap && declaresShrinkwrap) {
   try {
     const shrinkwrap = JSON.parse(readTarEntry("npm-shrinkwrap.json")) as ShrinkwrapManifest;
+    assertNpmShrinkwrapDependencies(packageJson, shrinkwrap);
     const rootPackage = shrinkwrap.packages?.[""];
     if (shrinkwrap.name !== "openclaw") {
       errors.push("npm-shrinkwrap.json root name must be openclaw");

@@ -38,6 +38,8 @@ export type ManagedServiceManagerBoundaryOptions = {
   systemdHandoffFailure?: boolean;
   systemdPostExitStates?: ManagedSystemdPostExitState[];
   systemdStopDelayMs?: number;
+  expireParentWhileStopPending?: boolean;
+  originalRecovery?: UpdateRunResult["recovery"];
   revokeOwner?: boolean;
   requester?: { channel?: string; accountId?: string; senderId?: string };
   updaterExitCode?: number;
@@ -67,15 +69,6 @@ export type ManagedServiceCommandTiming = {
 };
 
 export type ManagedServiceManagerBoundaryResult = {
-  helperExitCode?: number | null;
-  repairEffects?: {
-    packagedReadOnly: boolean;
-    firstSpawn: boolean;
-    secondSpawn: boolean;
-    firstExec: boolean;
-    secondExec: boolean;
-    secondWrite: boolean;
-  };
   run?: UpdateRunRecord;
   commands: string[];
   parentSignal: NodeJS.Signals | null;
@@ -86,6 +79,14 @@ export type ManagedServiceManagerBoundaryResult = {
   triageDeadline?: { requestedMs: number; descendantPid: number };
   savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
   sensitiveFilesRemoved: boolean;
+  stopSettlement?: {
+    pid: number;
+    closed: boolean;
+    code: number | null;
+    signal: string | null;
+    parentKilledWhileStopPending: boolean;
+    failedWhileStopPending: boolean;
+  };
 };
 
 type ManagedSystemdFailureCase = readonly [string, ManagedSystemdPostExitState];
@@ -258,7 +259,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
     expect(
       commands.filter((command) => command.includes("start openclaw-gateway.service")),
     ).toHaveLength(0);
-    expect(state).toEqual({ nativeRelease: {} });
+    expect(state).toEqual({});
     expect(sentinel).toMatchObject({
       payload: {
         status: "skipped",

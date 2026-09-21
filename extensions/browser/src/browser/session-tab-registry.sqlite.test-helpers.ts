@@ -63,6 +63,7 @@ export type RegistryModule = {
       now?: number;
       idleMs?: number;
       maxTabsPerSession?: number;
+      ordinaryCleanup?: boolean;
       sessionFilter?: (sessionKey: string) => boolean;
     },
   ): Promise<number>;

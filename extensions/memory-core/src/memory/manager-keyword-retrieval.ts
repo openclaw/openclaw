@@ -18,9 +18,13 @@ import { buildFtsQuery, scoreExactPathTieForTemporalDecay } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
 import { runMemoryKeywordSearch } from "./manager-cpu-worker-runtime.js";
 import { MemoryProviderLifecycle } from "./manager-provider-lifecycle.js";
-import { resolveExactPathSpecificity, type ExactPathSpecificity } from "./manager-search.js";
+import { prepareExactPathMatcher, type ExactPathSpecificity } from "./manager-search.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
-import { applyProjectRanking, projectScoreMultiplier } from "./project-ranking.js";
+import {
+  applyProjectRanking,
+  prepareActiveProjectKeys,
+  projectScoreMultiplier,
+} from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
@@ -190,19 +194,39 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
       sessionSourceMtimes: this.loadSessionSourceMtimes(params.results),
+      memorySourceMtimes: this.loadRemoteMemorySourceMtimes(params.results),
     });
     // Preserve specificity and adjusted body relevance before normalizing exact public scores.
-    const ranked = applyProjectRanking(applyImportanceMultiplier(decayed), params.activeProjectKeys)
+    const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
+    const ranked = applyProjectRanking(applyImportanceMultiplier(decayed), activeProjects)
       .toSorted((left, right) => compareKeywordSearchHits(left, right, !appliesTemporalDecay))
       .map((entry) =>
         entry.exactPathSpecificity > 0
           ? Object.assign(entry, {
-              score: projectScoreMultiplier(entry.projectKey, params.activeProjectKeys),
+              score: projectScoreMultiplier(entry.projectKey, activeProjects),
             })
           : entry,
       );
     return this.toMemorySearchResults(
       this.selectScoredResults(ranked, params.maxResults, params.minScore, 0),
+    );
+  }
+
+  protected loadRemoteMemorySourceMtimes(
+    results: ReadonlyArray<Pick<MemorySearchResult, "path" | "source">>,
+  ): ReadonlyMap<string, number | undefined> | undefined {
+    if (!this.memoryFiles) {
+      return undefined;
+    }
+    const paths = results.filter((entry) => entry.source === "memory").map((entry) => entry.path);
+    if (paths.length === 0) {
+      return undefined;
+    }
+    return new Map(
+      loadMemorySourceFileState({ db: this.db, source: "memory", paths }).map((row) => [
+        row.path,
+        row.mtime,
+      ]),
     );
   }
 
@@ -298,15 +322,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     const bodyResults = result.body.rows;
     const pathResults = result.path.rows;
     const merged = this.mergeKeywordSearchHits(
-      [
-        bodyResults.map((entry) =>
-          Object.assign(entry, {
-            exactPathSpecificity: resolveExactPathSpecificity(exactPathQuery, entry.path),
-            pathScore: 0,
-          }),
-        ),
-        pathResults,
-      ],
+      [bodyResults.map((entry) => Object.assign(entry, { pathScore: 0 })), pathResults],
       exactPathQuery,
     );
     return this.limitKeywordSearchHits(merged, limit);
@@ -377,27 +393,29 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
   }
 
   private mergeKeywordSearchHits(
-    resultSets: KeywordSearchHit[][],
-    exactPathQuery?: string,
+    resultSets: Omit<KeywordSearchHit, "exactPathSpecificity">[][],
+    exactPathQuery: string,
   ): KeywordSearchHit[] {
+    // Fallback terms broaden lexical recall, but only the original user query
+    // can claim exact path, basename, or stem precedence.
+    const matchExactPath = prepareExactPathMatcher(exactPathQuery);
     const seenIds = new Map<string, KeywordSearchHit>();
     for (const results of resultSets) {
       for (const result of results) {
         const existing = seenIds.get(result.id);
         if (!existing) {
-          seenIds.set(result.id, result);
+          seenIds.set(
+            result.id,
+            Object.assign(result, { exactPathSpecificity: matchExactPath(result.path) }),
+          );
           continue;
         }
         const existingHasBody = keywordHitHasBody(existing);
-        const resultHasBody = keywordHitHasBody(result);
+        const resultHasBody = result.hasBodyMatch;
         const existingBodyScore = existingHasBody ? existing.score : 0;
         const resultBodyScore = resultHasBody ? result.score : 0;
         existing.textScore = Math.max(existing.textScore, result.textScore);
         existing.pathScore = Math.max(existing.pathScore, result.pathScore);
-        existing.exactPathSpecificity = Math.max(
-          existing.exactPathSpecificity,
-          result.exactPathSpecificity,
-        ) as ExactPathSpecificity;
         existing.hasBodyMatch ||= result.hasBodyMatch;
         const bodyScore = Math.max(existingBodyScore, resultBodyScore);
         existing.score = bodyScore > 0 ? bodyScore : existing.pathScore;
@@ -412,13 +430,6 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       }
     }
     const merged = [...seenIds.values()];
-    if (exactPathQuery !== undefined) {
-      // Fallback terms broaden lexical recall, but only the original user query
-      // can claim exact path, basename, or stem precedence.
-      for (const result of merged) {
-        result.exactPathSpecificity = resolveExactPathSpecificity(exactPathQuery, result.path);
-      }
-    }
     for (const result of merged) {
       if (!keywordHitHasBody(result)) {
         // A uniform exact-only baseline lets temporal decay order otherwise

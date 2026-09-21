@@ -1,39 +1,98 @@
 /* @vitest-environment jsdom */
 
-import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CostUsageSummary } from "../../api/types.ts";
+import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   cacheSnapshot,
   cleanupUsagePageTest,
   contextWithClient,
   createPage,
+  createPendingUsageRouteData,
   focusDocument,
   preloadUsage,
   refreshButton,
-  type TestUsagePage,
 } from "./usage-page.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 
 describe("UsagePage cache convergence", () => {
+  it("finishes after slower usage cache warmup", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const startedAt = Date.now();
+    const request = vi.fn(async (method: string) => {
+      const snapshot = cacheSnapshot(Date.now() - startedAt < 30_000 ? "refreshing" : "fresh");
+      return method === "usage.status" ? { updatedAt: 1, providers: [] } : snapshot.result;
+    });
+    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+    await preloadUsage(page);
+    await vi.advanceTimersByTimeAsync(35_000);
+    await page.updateComplete;
+
+    expect(page.querySelector(".usage-cache-warning")).toBeNull();
+    expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(4);
+  });
+
+  it.each([
+    { sessionCount: 0, emptyUsage: false },
+    { sessionCount: 1, emptyUsage: false },
+    { sessionCount: 1, emptyUsage: true },
+  ])(
+    "shows loading instead of zero metrics for a cold cache with $sessionCount sessions (empty usage: $emptyUsage)",
+    async ({ sessionCount, emptyUsage }) => {
+      vi.useFakeTimers();
+      focusDocument();
+      const snapshot = cacheSnapshot("refreshing");
+      const zeroTotals = {
+        ...snapshot.result.totals,
+        input: 0,
+        totalTokens: 0,
+        totalCost: 0,
+        inputCost: 0,
+      };
+      const result = {
+        ...snapshot.result,
+        totals: zeroTotals,
+        sessions: Array.from({ length: sessionCount }, () => ({
+          key: "agent:main:pending",
+          usage: emptyUsage ? zeroTotals : null,
+        })),
+      };
+      const request = vi.fn(async (method: string) =>
+        method === "usage.status" ? { updatedAt: 1, providers: [] } : result,
+      );
+      const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+      await preloadUsage(page);
+
+      expect(page.querySelector(".usage-loading-card")).not.toBeNull();
+      expect(page.querySelector(".usage-overview-card")).toBeNull();
+      expect(page.querySelector(".usage-header-metrics .usage-metric-badge")).toBeNull();
+      expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
+      expect(page.textContent).not.toContain("Select a date range and click Refresh");
+
+      await vi.advanceTimersByTimeAsync(35_000);
+      await page.updateComplete;
+      expect(page.querySelector(".usage-loading-card")).toBeNull();
+      expect(page.querySelector(".usage-cache-warning.warning")?.textContent).toContain(
+        "Automatic checks paused",
+      );
+      expect(page.querySelector(".usage-overview-card")).toBeNull();
+    },
+  );
+
   it("gives a debounced date change its own retries when an old poll becomes due", async () => {
     vi.useFakeTimers();
     focusDocument();
-    let snapshot = cacheSnapshot("sessions", "partial");
+    let snapshot = cacheSnapshot("partial");
     const request = vi.fn(async (method: string, _params?: unknown) =>
-      method === "usage.status"
-        ? { updatedAt: 1, providers: [] }
-        : method === "usage.cost"
-          ? snapshot.costSummary
-          : snapshot.result,
+      method === "usage.status" ? { updatedAt: 1, providers: [] } : snapshot.result,
     );
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
-    await vi.advanceTimersByTimeAsync(14_900);
+    await vi.advanceTimersByTimeAsync(34_900);
     expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(3);
 
     const input = page.querySelector<HTMLInputElement>("input.usage-date-input")!;
@@ -44,7 +103,7 @@ describe("UsagePage cache convergence", () => {
     expect(requests).toHaveLength(4);
     expect(requests[3]?.[1]).toMatchObject({ startDate: "2026-08-01" });
 
-    snapshot = cacheSnapshot("sessions", "fresh");
+    snapshot = cacheSnapshot("fresh");
     await vi.advanceTimersByTimeAsync(5_000);
     await page.updateComplete;
     expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(5);
@@ -57,17 +116,13 @@ describe("UsagePage cache convergence", () => {
     async (control) => {
       vi.useFakeTimers();
       focusDocument();
-      let snapshot = cacheSnapshot("sessions", "partial");
+      let snapshot = cacheSnapshot("partial");
       const request = vi.fn(async (method: string) =>
-        method === "usage.status"
-          ? { updatedAt: 1, providers: [] }
-          : method === "usage.cost"
-            ? snapshot.costSummary
-            : snapshot.result,
+        method === "usage.status" ? { updatedAt: 1, providers: [] } : snapshot.result,
       );
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(35_000);
       await page.updateComplete;
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(4);
       expect(page.querySelector(".usage-cache-warning")?.textContent).toContain(
@@ -91,7 +146,7 @@ describe("UsagePage cache convergence", () => {
       }
       await vi.advanceTimersByTimeAsync(400);
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(5);
-      snapshot = cacheSnapshot("sessions", "fresh");
+      snapshot = cacheSnapshot("fresh");
       await vi.advanceTimersByTimeAsync(5_000);
       await page.updateComplete;
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(6);
@@ -105,16 +160,16 @@ describe("UsagePage cache convergence", () => {
     focusDocument();
     let phase: "partial" | "failed" | "fresh" = "partial";
     const pendingProvider = deferred<{ updatedAt: number; providers: never[] }>();
-    const failedCost = deferred<CostUsageSummary>();
+    const failedUsage = deferred<SessionsUsageResult>();
     const request = vi.fn(async (method: string) => {
       if (method === "usage.status") {
         return phase === "failed" ? pendingProvider.promise : { updatedAt: 1, providers: [] };
       }
-      if (phase === "failed" && method === "usage.cost") {
-        return failedCost.promise;
+      if (phase === "failed" && method === "sessions.usage") {
+        return failedUsage.promise;
       }
-      const snapshot = cacheSnapshot("sessions", phase === "fresh" ? "fresh" : "partial");
-      return method === "usage.cost" ? snapshot.costSummary : snapshot.result;
+      const snapshot = cacheSnapshot(phase === "fresh" ? "fresh" : "partial");
+      return snapshot.result;
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const base = contextWithClient(client);
@@ -146,9 +201,9 @@ describe("UsagePage cache convergence", () => {
     listener!(snapshot);
     await vi.advanceTimersByTimeAsync(0);
     expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2);
-    failedCost.reject(new Error("cost unavailable"));
+    failedUsage.reject(new Error("usage unavailable"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(page.usageError).toBe("cost unavailable");
+    expect(page.usageError).toBe("usage unavailable");
     phase = "fresh";
     await vi.advanceTimersByTimeAsync(5_000);
     await page.updateComplete;
@@ -159,19 +214,12 @@ describe("UsagePage cache convergence", () => {
     pendingProvider.resolve({ updatedAt: 0, providers: [] });
   });
 
-  it.each([
-    ["sessions", "refreshing"],
-    ["sessions", "partial"],
-    ["sessions", "stale"],
-    ["cost", "refreshing"],
-    ["cost", "partial"],
-    ["cost", "stale"],
-  ] as const)(
-    "bounds %s %s retries without reporting a provider failure",
-    async (source, status) => {
+  it.each(["refreshing", "partial", "stale"] as const)(
+    "bounds %s retries without reporting a provider failure",
+    async (status) => {
       vi.useFakeTimers();
       focusDocument();
-      let snapshot = cacheSnapshot(source, status);
+      let snapshot = cacheSnapshot(status);
       const provider = { updatedAt: 1, providers: [] };
       const request = vi.fn(async (method: string) => {
         if (method === "sessions.usage.timeseries") {
@@ -182,12 +230,10 @@ describe("UsagePage cache convergence", () => {
         }
         return method === "usage.status"
           ? provider
-          : method === "usage.cost"
-            ? snapshot.costSummary
-            : {
-                ...snapshot.result,
-                sessions: [{ key: "agent:main:poll", usage: snapshot.result.totals }],
-              };
+          : {
+              ...snapshot.result,
+              sessions: [{ key: "agent:main:poll", usage: snapshot.result.totals }],
+            };
       });
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
@@ -198,7 +244,7 @@ describe("UsagePage cache convergence", () => {
       );
       expect(page.querySelector(".usage-loading-spinner")).toBeNull();
 
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(35_000);
       await page.updateComplete;
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(4);
       for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
@@ -215,7 +261,7 @@ describe("UsagePage cache convergence", () => {
 
       refreshButton(page).click();
       await vi.advanceTimersByTimeAsync(0);
-      snapshot = cacheSnapshot(source, "fresh");
+      snapshot = cacheSnapshot("fresh");
       await vi.advanceTimersByTimeAsync(5_000);
       await page.updateComplete;
       expect(page.querySelector(".usage-cache-warning")).toBeNull();
@@ -225,7 +271,7 @@ describe("UsagePage cache convergence", () => {
       window.dispatchEvent(new Event("focus"));
       expect(request).toHaveBeenCalledTimes(completedCalls);
 
-      snapshot = cacheSnapshot(source, status);
+      snapshot = cacheSnapshot(status);
       refreshButton(page).click();
       await vi.advanceTimersByTimeAsync(0);
       const callsBeforeRemoval = request.mock.calls.length;
@@ -236,7 +282,7 @@ describe("UsagePage cache convergence", () => {
   );
 
   it("does not transfer a manual detail refresh to a replacement selection", async () => {
-    const snapshot = cacheSnapshot("sessions", "fresh");
+    const snapshot = cacheSnapshot("fresh");
     const keys = ["agent:main:a", "agent:main:b"];
     const result = {
       ...snapshot.result,
@@ -254,7 +300,7 @@ describe("UsagePage cache convergence", () => {
       if (method === "sessions.usage.logs") {
         return { logs: [{ timestamp: Date.now(), role: "user", content: String(params?.key) }] };
       }
-      return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+      return { providers: [] };
     });
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
@@ -287,28 +333,28 @@ describe("UsagePage cache convergence", () => {
       focusDocument();
       let phase: "partial" | "failed" | "fresh" = "partial";
       const pendingProvider = deferred<{ updatedAt: number; providers: never[] }>();
-      const failedCost = deferred<CostUsageSummary>();
+      const failedUsage = deferred<SessionsUsageResult>();
       const request = vi.fn(async (method: string) => {
         if (method === "usage.status") {
           return phase === "failed" && providerState === "pending"
             ? pendingProvider.promise
             : { updatedAt: 1, providers: [] };
         }
-        if (phase === "failed" && method === "usage.cost") {
-          return failedCost.promise;
+        if (phase === "failed" && method === "sessions.usage") {
+          return failedUsage.promise;
         }
-        const snapshot = cacheSnapshot("sessions", phase === "fresh" ? "fresh" : "partial");
-        return method === "usage.cost" ? snapshot.costSummary : snapshot.result;
+        const snapshot = cacheSnapshot(phase === "fresh" ? "fresh" : "partial");
+        return snapshot.result;
       });
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
       phase = "failed";
       await vi.advanceTimersByTimeAsync(5_000);
-      failedCost.reject(new Error("cost unavailable"));
+      failedUsage.reject(new Error("usage unavailable"));
       await vi.advanceTimersByTimeAsync(0);
-      expect(page.usageError).toBe("cost unavailable");
+      expect(page.usageError).toBe("usage unavailable");
       phase = "fresh";
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await page.updateComplete;
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(3);
       expect(page.usageError).toBeNull();
@@ -333,25 +379,11 @@ describe("UsagePage provider usage outcome", () => {
           }
           return { updatedAt: 2, providers: [] };
         }
-        return method === "usage.cost" ? { daily: [] } : { sessions: [], totals: null };
+        return cacheSnapshot("fresh").result;
       });
-      const page = document.createElement("openclaw-usage-page") as TestUsagePage;
-      page.context = contextWithClient({ request } as unknown as GatewayBrowserClient);
-      page.render = () => nothing;
-      document.body.append(page);
-      await page.updateComplete;
+      const page = await createPage({ request } as unknown as GatewayBrowserClient);
       page.routeData = {
-        gateway: page.context.gateway,
-        gatewaySnapshot: page.context.gateway.snapshot,
-        query: {
-          startDate: "2026-08-07",
-          endDate: "2026-08-07",
-          scope: "family",
-          timeZone: "local",
-          agentId: null,
-        },
-        result: null,
-        costSummary: null,
+        ...createPendingUsageRouteData(page.context.gateway, "2026-08-07"),
         providerUsage:
           loadSource === "preload"
             ? {
@@ -360,7 +392,6 @@ describe("UsagePage provider usage outcome", () => {
               }
             : { state: "pending" },
         loadedAtMs: loadSource === "preload" ? Date.now() : null,
-        error: null,
       };
       await page.updateComplete;
       if (loadSource === "direct") {
@@ -394,35 +425,13 @@ describe("UsagePage provider usage outcome", () => {
       if (method === "usage.status") {
         return summary;
       }
-      if (method === "usage.cost") {
-        if (phase === 2) {
-          throw new Error("cost unavailable");
-        }
-        return { daily: [] };
+      if (phase === 2) {
+        throw new Error("usage unavailable");
       }
-      return { sessions: [], totals: null };
+      return cacheSnapshot("fresh").result;
     });
-    const page = document.createElement("openclaw-usage-page") as TestUsagePage;
-    page.context = contextWithClient({ request } as unknown as GatewayBrowserClient);
-    page.render = () => nothing;
-    document.body.append(page);
-    await page.updateComplete;
-    page.routeData = {
-      gateway: page.context.gateway,
-      gatewaySnapshot: page.context.gateway.snapshot,
-      query: {
-        startDate: "2026-08-07",
-        endDate: "2026-08-07",
-        scope: "family",
-        timeZone: "local",
-        agentId: null,
-      },
-      result: null,
-      costSummary: null,
-      providerUsage: { state: "pending" },
-      loadedAtMs: null,
-      error: null,
-    };
+    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+    page.routeData = createPendingUsageRouteData(page.context.gateway, "2026-08-07");
     await page.updateComplete;
 
     const refresh = () => {
@@ -452,35 +461,13 @@ describe("UsagePage provider usage outcome", () => {
         }
         return { updatedAt: 2, providers: [] };
       }
-      if (method === "usage.cost") {
-        if (phase === 2) {
-          throw new Error("cost unavailable");
-        }
-        return { daily: [] };
+      if (phase === 2) {
+        throw new Error("usage unavailable");
       }
-      return { sessions: [], totals: null };
+      return cacheSnapshot("fresh").result;
     });
-    const page = document.createElement("openclaw-usage-page") as TestUsagePage;
-    page.context = contextWithClient({ request } as unknown as GatewayBrowserClient);
-    page.render = () => nothing;
-    document.body.append(page);
-    await page.updateComplete;
-    page.routeData = {
-      gateway: page.context.gateway,
-      gatewaySnapshot: page.context.gateway.snapshot,
-      query: {
-        startDate: "2026-08-07",
-        endDate: "2026-08-07",
-        scope: "family",
-        timeZone: "local",
-        agentId: null,
-      },
-      result: null,
-      costSummary: null,
-      providerUsage: { state: "pending" },
-      loadedAtMs: null,
-      error: null,
-    };
+    const page = await createPage({ request } as unknown as GatewayBrowserClient);
+    page.routeData = createPendingUsageRouteData(page.context.gateway, "2026-08-07");
     await page.updateComplete;
 
     // First load: only usage.status fails; the notice flag records the failure.
@@ -494,7 +481,7 @@ describe("UsagePage provider usage outcome", () => {
       expect(page.providerUsageUnavailable).toBe(true);
     });
 
-    // Second load: usage.status succeeds but the aggregate fails on usage.cost.
+    // Second load: usage.status succeeds but sessions.usage fails.
     // The stale flag must not keep claiming the last provider request failed.
     phase = 2;
     refresh();

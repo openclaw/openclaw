@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveMacOSDesktopCodexAppPathCandidates,
   type MacOSDesktopCodexAppPathCandidate,
@@ -155,17 +156,14 @@ async function readFileFingerprint(
     if (!sameStat(before, expected)) {
       throw new Error(`Codex desktop artifact changed while fingerprinting: ${filePath}`);
     }
-    const hash = createHash("sha256");
     // Metadata can collide on coarse filesystems. Content binds an event-driven generation
     // to the exact executable/config bytes without adding request-hot-path polling.
-    for await (const chunk of handle.createReadStream({ autoClose: false })) {
-      hash.update(chunk);
-    }
+    const hash = await sha256File(handle, { maxBytes: Number(before.size) });
     const after = await handle.stat({ bigint: true });
-    if (!sameStat(before, after)) {
+    if (BigInt(hash.bytes) !== before.size || !sameStat(before, after)) {
       throw new Error(`Codex desktop artifact changed while fingerprinting: ${filePath}`);
     }
-    return hash.digest("hex");
+    return hash.digest;
   } finally {
     await handle.close();
   }

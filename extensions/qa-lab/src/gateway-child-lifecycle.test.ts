@@ -515,6 +515,7 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     }));
     const owner = own({
       ...params,
+      runtimePreloads: ["file:///adapter-first.mjs", "qa-second-preload"],
       command: {
         ...params.command,
         processBoundary: {
@@ -523,13 +524,28 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
           expectedGid: 1,
           expectedUid: 1,
           forwardedEnvKeys: [],
-          runtimeArgsPrefix: [],
+          runtimeArgsPrefix: ["--import", "/tmp/boundary-preload.mjs", "/tmp/index.js"],
           runtimeExecutablePath: process.execPath,
           terminationRetryTimeoutMs: 45_000,
         },
       },
     });
     const gateway = await owner.start();
+    expect(boundary.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          runtimeArgsPrefix: [
+            "--import",
+            "file:///adapter-first.mjs",
+            "--import",
+            "qa-second-preload",
+            "--import",
+            "/tmp/boundary-preload.mjs",
+            "/tmp/index.js",
+          ],
+        }),
+      }),
+    );
     expect(gateway.cliCommand).toBeUndefined();
     pids();
     const denied = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {

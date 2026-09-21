@@ -125,7 +125,7 @@ if (['xcrun', 'lldb', 'xctest', 'swiftpm-testing-helper'].includes(tool)) {
 }
 if (tool === 'swift' && args[0] === 'test') {
   if (env.OPENCLAW_TEST_MENU_CAPTURE_DIR) {
-    const captureNames = env.OPENCLAW_PROFILE === 'default' ? ['catalog'] : ['thread-reasoning', 'model-initial'];
+    const captureNames = env.OPENCLAW_PROFILE === 'default' ? ['catalog', 'browser-sign-in-before', 'browser-sign-in-after'] : ['thread-reasoning', 'model-initial'];
     for (const captureName of captureNames) {
       fs.writeFileSync(path.join(env.OPENCLAW_TEST_MENU_CAPTURE_DIR, captureName + '-window.png'), 'synthetic-png-bytes');
       fs.writeFileSync(path.join(env.OPENCLAW_TEST_MENU_CAPTURE_DIR, captureName + '-capture-status.json'), JSON.stringify({name: captureName, blockers: ['synthetic fixture, not visual proof']}));
@@ -262,6 +262,9 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
         "--build-system",
         "native",
         "--enable-code-coverage",
+        "--disable-index-store",
+        "-Xswiftc",
+        "-gline-tables-only",
         "--build-tests",
       ]);
       expect(build.env.HOME).toBe(f.env.HOME);
@@ -274,6 +277,9 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
           "--build-system",
           "native",
           "--enable-code-coverage",
+          "--disable-index-store",
+          "-Xswiftc",
+          "-gline-tables-only",
           "--skip-build",
           "--experimental-maximum-parallelization-width",
           expectedWidth,
@@ -323,7 +329,10 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
         expect(fs.existsSync(ownedRoot)).toBe(false);
         const profileMode = index === 0 ? "default" : "named";
         const captureName = index === 0 ? "catalog" : "thread-reasoning";
-        const captureNames = index === 0 ? [captureName] : [captureName, "model-initial"];
+        const captureNames =
+          index === 0
+            ? [captureName, "browser-sign-in-before", "browser-sign-in-after"]
+            : [captureName, "model-initial"];
         const exported = f.capturePath(profileMode);
         if (!exported) {
           throw new Error("The joined Swift partition must publish its capture path");
@@ -688,6 +697,9 @@ child.once('message', () => process.exit(0));
           "--build-system",
           "native",
           "--enable-code-coverage",
+          "--disable-index-store",
+          "-Xswiftc",
+          "-gline-tables-only",
           "--skip-build",
           "--no-parallel",
         ]);
