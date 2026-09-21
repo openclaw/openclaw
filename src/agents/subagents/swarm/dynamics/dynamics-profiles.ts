@@ -67,6 +67,7 @@ export function resolveDynamicsProfile(id: string): ResolvedDynamicsProfile {
   if (typeof id !== "string" || !Object.hasOwn(BUILTIN_PROFILES, id)) {
     throw new Error("Unknown cognitive dynamics profile");
   }
+  // SAFETY: Object.hasOwn above proves id is an own key of BUILTIN_PROFILES.
   const profile = BUILTIN_PROFILES[id as BuiltinDynamicsProfileId];
   const digestInput = stableProfileInput(profile);
   return {
