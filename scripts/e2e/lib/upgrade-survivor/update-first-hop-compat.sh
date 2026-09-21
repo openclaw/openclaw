@@ -20,22 +20,7 @@ EXPECTED_MISSING_CHUNK="${OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK-}"
 BASE_PATH="$PATH"
 ACCOUNT_HOME="$HOME"
 mock_pid=""
-proof_helper=scripts/e2e/lib/upgrade-survivor/update-validator-proof.mjs
-restore_validator_unit() {
-  node "$proof_helper" restore-service "$ARTIFACT_DIR" &&
-    systemctl --user daemon-reload &&
-    node "$proof_helper" verify-service-restored "$ARTIFACT_DIR"
-}
-cleanup() {
-  local status="$?"
-  trap - EXIT
-  if [ -f "$ARTIFACT_DIR/validator-unit.json" ] && [ ! -f "$ARTIFACT_DIR/validator-unit-restored.json" ]; then
-    restore_validator_unit || status=1
-  fi
-  openclaw_e2e_stop_process "${mock_pid:-}"
-  exit "$status"
-}
-trap cleanup EXIT
+trap 'openclaw_e2e_stop_process "${mock_pid:-}"' EXIT
 
 export CI=true
 export OPENCLAW_ALLOW_ROOT=1
@@ -61,16 +46,15 @@ package_root() {
 }
 
 run_update() {
-  local label="$1" output="$ARTIFACT_DIR/$1" target="$2" update_status=0
-  shift 2
+  local output="$ARTIFACT_DIR/$1" target="$2" update_status=0
   printf '%q ' env "PATH=$PATH" "npm_config_prefix=$npm_config_prefix" openclaw \
-    update --yes "--tag=$target" --json "$@" >"$output-command.txt"
+    update --yes "--tag=$target" --json >"$output-command.txt"
   printf '\n' >>"$output-command.txt"
-  openclaw update --yes "--tag=$target" --json "$@" \
+  openclaw update --yes "--tag=$target" --json \
     >"$output.stdout" 2>"$output.stderr" || update_status="$?"
   printf '%s\n' "$update_status" >"$output.exit"
   if [ "$update_status" -ne 0 ]; then
-    echo "package update $label exited with status $update_status" >&2
+    echo "package update $1 exited with status $update_status" >&2
     docker_e2e_print_log "$output.stdout" >&2
     docker_e2e_print_log "$output.stderr" >&2
   fi
@@ -266,32 +250,6 @@ else
   echo "No deterministic missing-chunk restart control for $source_version; positive hops remain required."
 fi
 run_positive_hops
-
-# Temporary, opt-in proof: preserve the positive hops above, then isolate the
-# actual installed validator failure from service activation and other children.
-if [ -f "$ARTIFACT_DIR/validator-proof-input.json" ]; then
-  reset_lane
-  setup_lane validator 18793
-  stop_lane
-  if systemctl --user is-active openclaw-gateway.service >/dev/null 2>&1; then
-    echo "validator proof requires an inactive service" >&2
-    exit 1
-  fi
-  record_service_state "$ARTIFACT_DIR/validator-service-inactive.txt"
-  node "$proof_helper" prepare-service "$ARTIFACT_DIR"
-  systemctl --user daemon-reload
-  node "$proof_helper" arm "$ARTIFACT_DIR" "$(package_root)" "$CANDIDATE_PACKAGE" "$SOURCE_PACKAGE"
-  validator_status=0
-  run_update validator-update "$CANDIDATE_PACKAGE" --no-restart || validator_status="$?"
-  record_service_state "$ARTIFACT_DIR/validator-service-after.txt"
-  if systemctl --user is-active openclaw-gateway.service >/dev/null 2>&1; then
-    echo "validator proof activated the inactive service" >&2
-    exit 1
-  fi
-  node "$proof_helper" verify "$ARTIFACT_DIR" "$validator_status"
-  restore_validator_unit
-  stop_lane
-fi
 
 node -e '
   const fs = require("node:fs"), path = require("node:path");
