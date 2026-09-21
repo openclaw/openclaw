@@ -125,12 +125,8 @@ When the [requirements](/tools/swarm#requirements) are met, Code Mode exposes
 this guest API:
 
 ```typescript
-type DynamicsProfileId =
-  | "explorer"
-  | "builder"
-  | "critic"
-  | "independent-verifier"
-  | "glass-breaker";
+type DynamicsBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
+type DynamicsRequirement = "optional" | "required";
 
 type AgentRunOptions = {
   label?: string;
@@ -141,7 +137,12 @@ type AgentRunOptions = {
   schema?: Record<string, unknown>;
   phase?: string;
   dynamics?: {
-    profile: DynamicsProfileId;
+    boundary: DynamicsBoundary;
+    requirements?: {
+      sandbox?: "inherit" | "require";
+      candidateDigest?: DynamicsRequirement;
+      artifactRefs?: DynamicsRequirement;
+    };
     handoff?: {
       candidateDigest?: string;
       artifactRefs?: string[];
@@ -173,15 +174,14 @@ starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
 They do not delay the script if the UI is unavailable.
 
-The optional `dynamics` field selects an experimental, host-owned cognitive
-profile for the collector launch. It changes search guidance and the explicit
-handoff bytes prepared for that child; it does not grant tools, change approvals,
-or set the model sampling temperature. `independent-verifier` requires a
-candidate digest plus artifact references and asks the existing spawn owner for a
-required sandbox. If that sandbox cannot be provided, the launch fails rather
-than retrying unsandboxed. Handoff filtering only controls the explicit
-`dynamics.handoff` payload; it is not a security boundary for the original task,
-workspace, memory, or tool visibility.
+The optional `dynamics` field is an experimental generic launch contract. Core
+owns only handoff filtering plus requests for stricter existing admission. It
+does not ship role/personality names, grant tools, change approvals, or set model
+sampling parameters. For example, an artifact-only verifier can request a
+required sandbox plus required candidate/artifact handoff. If that sandbox cannot
+be provided, the launch fails rather than retrying unsandboxed. Handoff filtering
+only controls the explicit `dynamics.handoff` payload; it is not a security
+boundary for the original task, workspace, memory, or tool visibility.
 
 ## Liquid Swarm: mixed-phase cognition
 
