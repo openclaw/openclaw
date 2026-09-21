@@ -60,11 +60,11 @@ async function writeConfig(): Promise<OpenClawConfig> {
   return config;
 }
 
-function explorerInput() {
+function isolatedInput() {
   return {
     ...prepareDynamicsSpawn({
       task,
-      dynamics: { profile: "explorer" },
+      dynamics: { boundary: "isolated" },
       sourceReplicaId: groupId,
       targetReplicaId: replayKey,
     }),
@@ -73,7 +73,7 @@ function explorerInput() {
   };
 }
 
-function fingerprint(input: ReturnType<typeof explorerInput>): string {
+function fingerprint(input: ReturnType<typeof isolatedInput>): string {
   return `sha256:${createHash("sha256").update(stableStringify(input)).digest("hex")}`;
 }
 
@@ -122,7 +122,7 @@ describe("Code Mode dynamics lifecycle integration", () => {
       dispatchGatewayMethodInProcess,
     });
 
-    const input = explorerInput();
+    const input = isolatedInput();
     const seeded = await spawnSubagentDirect(
       {
         ...input,
@@ -165,7 +165,7 @@ describe("Code Mode dynamics lifecycle integration", () => {
       request: {
         id: requestId,
         method: "agentSpawn",
-        args: [task, { dynamics: { profile: "explorer" } }],
+        args: [task, { dynamics: { boundary: "isolated" } }],
       },
       codeModeRunId,
       ctx,
