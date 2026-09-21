@@ -287,13 +287,12 @@ const COMPACT_EMBEDDED_GROUP_NAMES = [
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Compact bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// Two-slot Blacksmith placements admit 500s of aggregate work. Serial jobs retain
-// 200s/276s caps; expanded serial jobs retain 210s and their existing estimates.
+// Settle the original 360s placement before compacting only its parallel rows.
+// Serial jobs retain 200s/276s caps; expanded serial jobs retain 210s.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 500;
-// Gateway owners acquire the host serially after packing; keep their old ceiling.
-const COMPACT_GATEWAY_NODE_TEST_JOB_SECONDS = 360;
+const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 360;
+const COMPACT_FINAL_PARALLEL_NODE_TEST_JOB_SECONDS = 500;
 const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 210;
 // Includes the existing 100s runtime build; reserve 40s of the eight-minute
 // objective for checkout/setup. This is admission, never a test deadline.
@@ -3745,11 +3744,7 @@ function createCompactNodeTestShardBundles(
         usesBlacksmithRunner &&
         combined.every(isParallelCompactGroup) &&
         combined.every((entry) => estimateBinSeconds([entry]) <= serialSecondsCap);
-      const secondsCap = parallel
-        ? combined.some((entry) => entry.configs.some(isExclusiveCiTestConfig))
-          ? COMPACT_GATEWAY_NODE_TEST_JOB_SECONDS
-          : COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS
-        : serialSecondsCap;
+      const secondsCap = parallel ? COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS : serialSecondsCap;
       return (
         isExclusiveCompactGroup(candidate[0]) === exclusive &&
         admitsCompactBin(combined, secondsCap, estimateBinSeconds, {
@@ -3853,7 +3848,6 @@ function createCompactNodeTestShardBundles(
         : 1;
     // Tooling and the full CLI need host capacity while keeping serial isolation.
     // Promote only the emitted runner so packing, names and timing keys stay stable.
-    // The 4/8 classes both deliver two CPUs; prefer 8 to avoid the 4-class queue.
     const capacityRunner =
       runner === EXTRA_LARGE_NODE_TEST_RUNNER ||
       planConcurrency === 2 ||
@@ -3866,9 +3860,7 @@ function createCompactNodeTestShardBundles(
         ? EXTRA_LARGE_NODE_TEST_RUNNER
         : usesBlacksmithCapacity(runner) && bin.some((group) => group.shard_name === "agentic-cli")
           ? CAPACITY_NODE_TEST_RUNNER
-          : usesBlacksmithCapacity(runner) && runner === BUNDLED_NODE_TEST_RUNNER
-            ? DEFAULT_NODE_TEST_RUNNER
-            : runner;
+          : runner;
     compactJobs.push({
       checkName,
       groups: bin,
@@ -3886,8 +3878,8 @@ function createCompactNodeTestShardBundles(
   }
 
   const compactJobCap = effectiveJobCap(packedBins);
-  if (compactJobs.length > compactJobCap) {
-    if (packsHostedTooling && !splitHostedToolingTails) {
+  if (packsHostedTooling && compactJobs.length > compactJobCap) {
+    if (!splitHostedToolingTails) {
       // Repartition once at the file owner so timing identities and build costs
       // describe the smaller tails before the same admission checks pack them.
       return createCompactNodeTestShardBundles(
@@ -3898,11 +3890,7 @@ function createCompactNodeTestShardBundles(
         true,
       );
     }
-    if (
-      packsHostedTooling &&
-      hostedToolingTailBudgets === undefined &&
-      hostedToolingTailDonation === undefined
-    ) {
+    if (hostedToolingTailBudgets === undefined && hostedToolingTailDonation === undefined) {
       // Repartition only stranded tails to fit capacity left by compatible owners.
       // File ownership and timing identities are rebuilt before normal admission.
       const tailBudgets = new Map<string, number>();
@@ -3943,9 +3931,6 @@ function createCompactNodeTestShardBundles(
         bestTailDonation,
       );
     }
-    throw new Error(
-      `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${compactJobCap} jobs (${compactJobs.length} planned)`,
-    );
   }
 
   // Settle Gateway admission before runtime placement reads the recipient's policy.
@@ -4044,5 +4029,75 @@ function createCompactNodeTestShardBundles(
     );
   }
 
-  return compactJobs.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
+  // Larger initial bins change which groups reach serial Gateway/runtime rows.
+  // Freeze those settled rows; only already-overlapping jobs can share more work.
+  const parallelJobsByRunner = new Map<string, CompactNodeTestShard[]>();
+  for (const job of compactJobs) {
+    if (
+      job.planConcurrency !== 2 ||
+      job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER ||
+      !usesBlacksmithCapacity(job.runner) ||
+      job.pretestBuildMode ||
+      job.requiresDist ||
+      !job.groups.every(isParallelCompactGroup) ||
+      job.groups.some((group) => group.configs.some(isExclusiveCiTestConfig))
+    ) {
+      continue;
+    }
+    const runner = job.groups[0]!.runner;
+    const jobs = parallelJobsByRunner.get(runner) ?? [];
+    jobs.push(job);
+    parallelJobsByRunner.set(runner, jobs);
+  }
+  const retiredJobs = new Set<CompactNodeTestShard>();
+  for (const jobs of parallelJobsByRunner.values()) {
+    const groups = jobs
+      .flatMap((job) => job.groups)
+      .toSorted(
+        (a, b) =>
+          estimateStripeSeconds(b) - estimateStripeSeconds(a) ||
+          a.shard_name.localeCompare(b.shard_name),
+      );
+    const bins = packNodeTestGroups(groups, (candidate, group) =>
+      admitsCompactBin(
+        [...candidate, group],
+        COMPACT_FINAL_PARALLEL_NODE_TEST_JOB_SECONDS,
+        estimateBinSeconds,
+        { parallel: true },
+      ),
+    );
+    if (bins.length >= jobs.length) {
+      continue;
+    }
+    jobs.forEach((job, index) => {
+      const bin = bins[index];
+      if (!bin) {
+        retiredJobs.add(job);
+        return;
+      }
+      job.groups = bin;
+      job.predictedSeconds = Math.ceil(estimateBinSeconds(bin));
+      job.planConcurrency = bin.length > 1 ? 2 : 1;
+      job.timeoutMinutes = bin.some((group) => !group.includePatterns)
+        ? COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES
+        : undefined;
+      if (bin.length === 1) {
+        // Losing a sibling must not increase this child's previous worker allowance.
+        job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
+      }
+    });
+  }
+  const finalJobs = compactJobs.filter((job) => !retiredJobs.has(job));
+  if (finalJobs.length > compactJobCap) {
+    throw new Error(
+      `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${compactJobCap} jobs (${finalJobs.length} planned)`,
+    );
+  }
+  for (const job of finalJobs) {
+    // The 4/8 classes both deliver two CPUs. Routing must not alter placement anchors.
+    if (usesBlacksmithCapacity(job.runner) && job.runner === BUNDLED_NODE_TEST_RUNNER) {
+      job.runner = DEFAULT_NODE_TEST_RUNNER;
+    }
+  }
+  return finalJobs.toSorted((a, b) => a.checkName.localeCompare(b.checkName));
 }
