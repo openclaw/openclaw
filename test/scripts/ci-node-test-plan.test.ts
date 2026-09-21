@@ -267,8 +267,15 @@ function listAllToolingTestFiles(): string[] {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
-  it("keeps Gateway boot plans serial without adding jobs or changing ordinary packing", () => {
-    vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
+  it("packs ordinary work more densely while retaining the serial Gateway budget", () => {
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({
+      "agentic-gateway-server-isolated": 200,
+      "agentic-agents-core-models": 160,
+      "agentic-agents-core-runtime": 160,
+      "ordinary-a": 150,
+      "ordinary-b": 150,
+      "ordinary-c": 150,
+    });
     vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
     vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
     const original = fullSuiteVitestShards.slice();
@@ -279,8 +286,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         ...[
           ["agentic-gateway-server-isolated", "gateway-server-isolated"],
           ["agentic-agents-core-models", "unit-support"],
+          ["agentic-agents-core-runtime", "unit-fast-isolated"],
           ["ordinary-a", "hooks"],
           ["ordinary-b", "secrets"],
+          ["ordinary-c", "logging"],
         ].map(([name, config]) => ({
           name: name!,
           config: `fixture-${name}.config.ts`,
@@ -306,16 +315,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "agentic-gateway-server-isolated",
       ]);
       expect(gateway.env).toEqual({ OPENCLAW_VITEST_MAX_WORKERS: "2" });
+      expect(gateway.predictedSeconds).toBe(360);
       const ordinary = expectDefined(
-        jobs.find((job) => job !== gateway),
+        jobs.find((job) => job.groups.some((group) => group.shard_name === "ordinary-a")),
         "ordinary job",
       );
       expect(ordinary.planConcurrency).toBe(2);
       expect(ordinary.groups.map((group) => group.shard_name).toSorted()).toEqual([
         "ordinary-a",
         "ordinary-b",
+        "ordinary-c",
       ]);
-      expect(jobs).toHaveLength(2);
+      expect(ordinary.predictedSeconds).toBe(450);
+      expect(jobs).toHaveLength(3);
     } finally {
       fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
     }
@@ -1402,7 +1414,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           runner: EXTRA_LARGE_NODE_TEST_RUNNER,
         });
         expect(shard.pretestBuildMode).toBeUndefined();
-        expect(shard.predictedSeconds).toBeLessThanOrEqual(360);
+        expect(shard.predictedSeconds).toBeLessThanOrEqual(500);
       }
     },
   );
@@ -1422,7 +1434,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .every(
           (shard) =>
             (shard.predictedSeconds ?? Infinity) <=
-            (usesParallelPacking(shard) ? 360 : isCombinedUnbuiltCliJob(shard) ? 250 : 210),
+            (usesParallelPacking(shard) ? 500 : isCombinedUnbuiltCliJob(shard) ? 250 : 210),
         ),
     ).toBe(true);
     // Slow process files retain singleton envelopes without inheriting the
@@ -1490,7 +1502,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       shard.groups.some((group) => group.shard_name === "agentic-gateway-core-3"),
     );
     expect(tail?.predictedSeconds).toBeGreaterThanOrEqual(140);
-    expect(tail?.predictedSeconds).toBeLessThanOrEqual(usesParallelPacking(tail) ? 360 : 210);
+    expect(tail?.predictedSeconds).toBeLessThanOrEqual(usesParallelPacking(tail) ? 500 : 210);
   });
 
   it("preserves unmeasured Gateway stripes when another cohort's measurement changes", async () => {
@@ -2252,7 +2264,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
               ? EXTRA_LARGE_NODE_TEST_RUNNER
               : nativeFullCli
                 ? "blacksmith-16vcpu-ubuntu-2404"
-                : shard.groups[0]?.runner,
+                : !githubPullRequestCompact.includes(shard) &&
+                    shard.groups[0]?.runner === BUNDLED_NODE_TEST_RUNNER
+                  ? DEFAULT_NODE_TEST_RUNNER
+                  : shard.groups[0]?.runner,
         );
       }
     }

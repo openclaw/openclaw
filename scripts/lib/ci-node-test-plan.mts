@@ -287,11 +287,13 @@ const COMPACT_EMBEDDED_GROUP_NAMES = [
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Compact bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// Two-slot Blacksmith placements admit 360s of aggregate work. Serial jobs retain
+// Two-slot Blacksmith placements admit 500s of aggregate work. Serial jobs retain
 // 200s/276s caps; expanded serial jobs retain 210s and their existing estimates.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 360;
+const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 500;
+// Gateway owners acquire the host serially after packing; keep their old ceiling.
+const COMPACT_GATEWAY_NODE_TEST_JOB_SECONDS = 360;
 const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 210;
 // Includes the existing 100s runtime build; reserve 40s of the eight-minute
 // objective for checkout/setup. This is admission, never a test deadline.
@@ -3743,7 +3745,11 @@ function createCompactNodeTestShardBundles(
         usesBlacksmithRunner &&
         combined.every(isParallelCompactGroup) &&
         combined.every((entry) => estimateBinSeconds([entry]) <= serialSecondsCap);
-      const secondsCap = parallel ? COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS : serialSecondsCap;
+      const secondsCap = parallel
+        ? combined.some((entry) => entry.configs.some(isExclusiveCiTestConfig))
+          ? COMPACT_GATEWAY_NODE_TEST_JOB_SECONDS
+          : COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS
+        : serialSecondsCap;
       return (
         isExclusiveCompactGroup(candidate[0]) === exclusive &&
         admitsCompactBin(combined, secondsCap, estimateBinSeconds, {
@@ -3847,6 +3853,7 @@ function createCompactNodeTestShardBundles(
         : 1;
     // Tooling and the full CLI need host capacity while keeping serial isolation.
     // Promote only the emitted runner so packing, names and timing keys stay stable.
+    // The 4/8 classes both deliver two CPUs; prefer 8 to avoid the 4-class queue.
     const capacityRunner =
       runner === EXTRA_LARGE_NODE_TEST_RUNNER ||
       planConcurrency === 2 ||
@@ -3859,7 +3866,9 @@ function createCompactNodeTestShardBundles(
         ? EXTRA_LARGE_NODE_TEST_RUNNER
         : usesBlacksmithCapacity(runner) && bin.some((group) => group.shard_name === "agentic-cli")
           ? CAPACITY_NODE_TEST_RUNNER
-          : runner;
+          : usesBlacksmithCapacity(runner) && runner === BUNDLED_NODE_TEST_RUNNER
+            ? DEFAULT_NODE_TEST_RUNNER
+            : runner;
     compactJobs.push({
       checkName,
       groups: bin,

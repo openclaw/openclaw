@@ -1008,6 +1008,8 @@ function runCiManifestFixture(options: {
         OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: String(
           options.nodeFastPluginContracts ?? false,
         ),
+        GITHUB_REF: "refs/heads/main",
+        OPENCLAW_CI_HOSTED_HEALTHY: "",
         OPENCLAW_CI_AUTHOR_ASSOCIATION: "CONTRIBUTOR",
         OPENCLAW_CI_HEAD_REPOSITORY: options.repository ?? "openclaw/openclaw",
         OPENCLAW_CI_RUNNER_BACKEND: options.runnerBackend ?? options.runnerProfile ?? "",
@@ -3160,7 +3162,7 @@ NODE
     expect(changedScopeStep.run).toContain(
       'node scripts/ci-changed-scope.mjs --base "$BASE" --head "$HEAD_SHA"',
     );
-    expect(workflow.jobs.preflight.permissions).toEqual({ contents: "read" });
+    expect(workflow.jobs.preflight.permissions).toEqual({ contents: "read", actions: "read" });
     expect(workflow.jobs.preflight.outputs.run_ios_screenshots).toBe(
       "${{ steps.changed_scope.outputs.run_ios_screenshots }}",
     );
@@ -4744,6 +4746,186 @@ NODE
       }
     });
 
+    it("runs the hosted health step from the current checkout without a sparse harness helper", () => {
+      const step = readCiWorkflow().jobs.preflight.steps.find(
+        (candidate: WorkflowStep) => candidate.id === "hosted_health",
+      );
+      const root = tempDirs.make("openclaw-hosted-health-step-");
+      const helper = "scripts/lib/ci-hybrid-hosted-health.mts";
+      mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
+      copyFileSync(helper, path.join(root, helper));
+      const output = path.join(root, "output");
+      const summary = path.join(root, "summary");
+      const result = runWorkflowShellScript(step.run, {
+        cwd: root,
+        env: {
+          GITHUB_OUTPUT: output,
+          GITHUB_STEP_SUMMARY: summary,
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          GITHUB_RUN_ID: "1",
+          // Missing credentials exercise the real fail-closed entry point without network.
+          GH_TOKEN: "",
+        },
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe("healthy=false\n");
+      expect(readFileSync(summary, "utf8")).toContain("hosted-health-unavailable");
+      for (const eventName of ["workflow_dispatch", "push", "pull_request"] as const) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerBackend: "hybrid",
+            ref: "refs/heads/main",
+            steps: {
+              changed_scope: {
+                outputs: {
+                  run_node: "true",
+                  run_node_fast_only: "false",
+                  run_windows: "true",
+                },
+              },
+            },
+          }),
+        ).toBe(eventName !== "workflow_dispatch");
+      }
+    });
+
+    it.each([
+      { eventName: "push" as const, ref: "refs/heads/main", windows: false, admitted: true },
+      { eventName: "push" as const, ref: "refs/heads/feature", windows: false, admitted: false },
+      {
+        eventName: "pull_request" as const,
+        ref: "refs/pull/1/merge",
+        windows: false,
+        admitted: false,
+      },
+      {
+        eventName: "pull_request" as const,
+        ref: "refs/pull/1/merge",
+        windows: true,
+        admitted: true,
+      },
+    ])(
+      "requires a measured workload with slack ($eventName, Windows=$windows, $ref)",
+      ({ eventName, ref, windows, admitted }) => {
+        const manifest = manifestWithHostedNodeRows(0, {
+          eventName,
+          changedPaths: ["src/infra/example.ts"],
+          scopeEnv: {
+            GITHUB_REF: ref,
+            OPENCLAW_CI_RUN_WINDOWS: String(windows),
+            OPENCLAW_CI_HOSTED_HEALTHY: "true",
+          },
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        expect(manifest.outputs.run_check).toBe("true");
+        expect(manifest.outputs.run_checks_windows).toBe(String(windows));
+        expect(manifest.outputs.hybrid_hosted_checks).toBe(String(admitted));
+        expect(manifest.outputs.hybrid_hosted_main_checks).toBe(
+          String(admitted && eventName === "push"),
+        );
+        const checkRunner = readCiWorkflow().jobs["check-shard"]["runs-on"];
+        for (const task of ["lint", "test-types"]) {
+          expect(
+            evaluateWorkflowExpression(checkRunner, {
+              eventName,
+              ref,
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              runnerBackend: "hybrid",
+              preflightOutputs: manifest.outputs,
+              matrix: { task, runner: "blacksmith-16vcpu-ubuntu-2404" },
+            }),
+          ).toBe(
+            admitted && eventName === "push" ? "ubuntu-24.04" : "blacksmith-16vcpu-ubuntu-2404",
+          );
+        }
+        const step = readCiWorkflow().jobs.preflight.steps.find(
+          (candidate: WorkflowStep) => candidate.id === "hosted_health",
+        );
+        expect(
+          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+            eventName,
+            ref,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerBackend: "hybrid",
+            steps: {
+              changed_scope: {
+                outputs: {
+                  run_node: "true",
+                  run_node_fast_only: "false",
+                  run_windows: String(windows),
+                },
+              },
+            },
+          }),
+        ).toBe(admitted);
+      },
+    );
+
+    it("admits measured checks only with healthy assignment and space inside the existing budget", () => {
+      const preflight = readCiWorkflow().jobs.preflight;
+      const manifestStep = preflight.steps.find((step: WorkflowStep) => step.id === "manifest");
+      expect(manifestStep.env.OPENCLAW_CI_HOSTED_HEALTHY).toBe(
+        "${{ steps.hosted_health.outputs.healthy }}",
+      );
+      expect(preflight.outputs.hybrid_hosted_checks).toBe(
+        "${{ steps.manifest.outputs.hybrid_hosted_checks }}",
+      );
+      expect(preflight.outputs.hybrid_hosted_main_checks).toBe(
+        "${{ steps.manifest.outputs.hybrid_hosted_main_checks }}",
+      );
+      const baseline = manifestWithHostedNodeRows(0);
+      const originalBase = Number(baseline.outputs.hybrid_hosted_base_rows);
+      for (const healthy of ["true", "false", ""]) {
+        for (const baseRows of [33, 34, 35, 36, 40, 41, 45, 46]) {
+          const manifest = manifestWithHostedNodeRows(baseRows - originalBase, {
+            scopeEnv: { OPENCLAW_CI_HOSTED_HEALTHY: healthy },
+          });
+          expect(manifest.status, manifest.output).toBe(0);
+          const admitted = healthy === "true" && baseRows <= 35;
+          const mainAdmitted = admitted && baseRows <= 33;
+          expect(manifest.outputs.hybrid_hosted_checks).toBe(String(admitted));
+          expect(manifest.outputs.hybrid_hosted_main_checks).toBe(String(mainAdmitted));
+          const hosted = emittedHostedRows(manifest.outputs);
+          const withoutChecks = emittedHostedRows({
+            ...manifest.outputs,
+            hybrid_hosted_checks: "false",
+            hybrid_hosted_main_checks: "false",
+          });
+          expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);
+          expect(hosted.length - withoutChecks.length).toBe(
+            (admitted ? 5 : 0) + (mainAdmitted ? 2 : 0),
+          );
+          expect(
+            hosted.filter((name) => name === "check-test-types-hosted-core-shard"),
+          ).toHaveLength(admitted ? 2 : 0);
+          for (const name of ["check-shard", "check-additional-shard"]) {
+            expect(
+              hosted.filter((row) => row === name).length -
+                withoutChecks.filter((row) => row === name).length,
+            ).toBe(admitted ? (name === "check-shard" ? 1 + (mainAdmitted ? 2 : 0) : 2) : 0);
+          }
+          // The old UI/security decision remains independent of the new check admission.
+          expect(manifest.outputs.hybrid_hosted_offload).toBe(String(baseRows <= 40));
+          for (const name of [
+            "build-artifacts",
+            "checks-node-core-test-nondist-shard",
+            "qa-smoke-ci-profile",
+            "checks-ui-e2e-real-gateway",
+            "android",
+          ]) {
+            expect(hosted.filter((row) => row === name)).toEqual(
+              withoutChecks.filter((row) => row === name),
+            );
+          }
+        }
+      }
+    });
+
     it.each([
       {
         label: "same-repo PR",
@@ -4804,9 +4986,14 @@ NODE
     ])(
       "leaves $label routing outside optional offload admission",
       ({ label: _label, ...options }) => {
-        const manifest = manifestWithHostedNodeRows(0, options);
+        const manifest = manifestWithHostedNodeRows(0, {
+          ...options,
+          scopeEnv: { OPENCLAW_CI_HOSTED_HEALTHY: "true", ...options.scopeEnv },
+        });
         expect(manifest.status, manifest.output).toBe(0);
         expect(manifest.outputs.hybrid_hosted_offload).toBe("false");
+        expect(manifest.outputs.hybrid_hosted_checks).toBe("false");
+        expect(manifest.outputs.hybrid_hosted_main_checks).toBe("false");
       },
     );
 
