@@ -511,7 +511,12 @@ export function createSessionReconciliation(host: Host) {
       const select = roster.observeFields(
         source,
         fields,
-        createSessionWriteObservation(eventObservation.revision, rowInfo.updatedAt),
+        createSessionWriteObservation(
+          eventObservation.revision,
+          rowInfo.updatedAt,
+          undefined,
+          rowInfo.snapshotAt,
+        ),
         ownerAgentId,
       );
       const projected = projectRowFields(source, ownerAgentId, projection.projectFields);

@@ -38,7 +38,7 @@ export async function runLegacyPluginSourceCapturesHealth(
 ): Promise<void> {
   const { noteLegacyPluginSourceCaptures } =
     await import("../commands/doctor-plugin-source-captures.js");
-  await noteLegacyPluginSourceCaptures(ctx.env ?? process.env);
+  await noteLegacyPluginSourceCaptures(ctx.env ?? process.env, ctx.prompter.shouldRepair);
 }
 
 export async function runReleaseConfiguredPluginInstallsHealth(

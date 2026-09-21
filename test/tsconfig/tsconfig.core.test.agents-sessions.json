@@ -5,6 +5,8 @@
   },
   "include": [
     "../../src/agents/sessions/**/*.test.ts",
-    "../../src/agents/sessions/**/*.test.tsx"
+    "../../src/agents/sessions/**/*.test.tsx",
+    "../../src/config/sessions/**/*.test.ts",
+    "../../src/config/sessions/**/*.test.tsx"
   ]
 }

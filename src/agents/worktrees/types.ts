@@ -113,4 +113,16 @@ export type ManagedWorktreeGcResult = {
   removed: string[];
   orphansDeleted: number;
   snapshotsPruned: number;
+  outcome: "completed" | "deferred" | "partial";
+  /** Bounded per-worktree cleanup disposition; issueCount includes omitted entries. */
+  issues: {
+    id?: string;
+    stage: "idle" | "templates" | "limits" | "size" | "orphans" | "snapshots";
+    outcome: "failed" | "deferred";
+    reason: string;
+  }[];
+  issueCount: number;
+  protectedCount: number;
+  /** Null when incomplete inventory or size measurements prevent a conclusion. */
+  limitsSatisfied: boolean | null;
 };

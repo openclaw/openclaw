@@ -60,7 +60,7 @@ scripts/pr review-checkout-pr <pr>
 scripts/pr review-artifacts-init <pr>
 # Complete .local/review.json for this exact head.
 scripts/pr review-validate-artifacts <pr>
-# Requires completed local and ClawSweeper reviews.
+# After local review and a completed ClawSweeper review, submit with enforced GitHub gates.
 OPENCLAW_PR_GATES_REMOTE=github scripts/pr prepare-run <pr>
 scripts/pr merge-run <pr> --auto-merge
 ```
@@ -78,11 +78,22 @@ auto-merge request, rejecting known failed required checks without admin bypass.
 GitHub waits for `openclaw/ci-gate` (CI plus applicable security review) and
 required reviews; a clean, mergeable PR lands immediately.
 
-After accepted auto-merge, report pending; do not start watchers or poll checks or `merge-run`.
-Reconcile through `merge-run` on a completion/failure notification or explicit
-status request, then follow closeout below. The head precondition applies at
-submission; collaborator pushes can leave auto-merge enabled. A changed head
-requires new review.
+Once GitHub accepts auto-merge, keep the task active until the merge and closeout
+are verified, the user pauses it, or a concrete blocker requires user input.
+Poll the exact PR head, required checks, and mergeability every two to three
+minutes with narrow JSON reads. Use one watcher or polling owner; avoid tight
+loops and repeated unchanged status messages. Reconcile through `merge-run`
+when the remote state changes, then use the existing closeout below.
+
+Investigate failed checks from the exact run and fetch failed logs once. Repair
+task-related defects and confirmed flakes, then rerun the affected proof; rerun
+transient infrastructure failures only after identifying the cause. Resolve
+conflicts and refresh review, preparation, and CI for a changed head under the
+existing landing authority. Preserve any accepted merge receipt and use native
+recovery before replacing its head; never erase an outcome or blindly resubmit
+an accepted or uncertain request. GitHub's head precondition applies only when
+the request is submitted, and a collaborator push can leave auto-merge enabled.
+Treat a changed head as new review work, never as the original approved head.
 
 When completed hosted evidence is specifically needed, use
 `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>` after CI is green, then ordinary

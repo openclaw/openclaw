@@ -365,6 +365,7 @@ jobs:
           PARENT_WORKFLOW_SHA="$(jq -er '.tooling.sha' <<< "$RELEASE_REQUEST")"
           WINDOWS_NODE_TAG="$(jq -r '.inputs.windows_node_tag // ""' <<< "$RELEASE_REQUEST")"
           WINDOWS_NODE_INSTALLER_DIGESTS="$(jq -r '.inputs.windows_node_installer_digests // ""' <<< "$RELEASE_REQUEST")"
+          RELEASE_NPM_DIST_TAG="$(jq -er '.inputs.npm_dist_tag' <<< "$RELEASE_REQUEST")"
           source scripts/lib/release-publish-children.sh
           jq -n --arg tag "$RELEASE_TAG" --arg source "$WINDOWS_NODE_TAG" \
             --arg digests "$WINDOWS_NODE_INSTALLER_DIGESTS" \

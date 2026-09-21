@@ -30,6 +30,7 @@ import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-own
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
 import {
   validClawsweeperReviewCommentPages,
   validReview,
@@ -2728,25 +2729,38 @@ describePosix("scripts/pr per-PR operation lock", () => {
       ") &",
       'wait "$!"',
     ]);
-    const controller = spawn(
-      process.execPath,
-      ["--require", createProcessGroupTimingPreload(), processGroupRunner, repoDir, fixture],
-      {
-        cwd: repoDir,
-        stdio: "ignore",
-      },
-    );
+    const controller = spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
+      cwd: repoDir,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    let stderrOverflow = false;
+    controller.stderr.setEncoding("utf8");
+    controller.stderr.on("data", (chunk: string) => {
+      if (stderrOverflow || Buffer.byteLength(stderr) + Buffer.byteLength(chunk) > 16 * 1024) {
+        stderrOverflow = true;
+        return;
+      }
+      stderr += chunk;
+    });
     let pgid: number | undefined;
     try {
       expect(await waitFor(() => existsSync(pidFile) && existsSync(childReady))).toBe(true);
       pgid = await waitForProcessId(pidFile);
-      expect(refExists(repoDir)).toBe(true);
-      controller.kill("SIGTERM");
-      await waitForExit(controller, 12_000);
-      expect(controller.exitCode).toBe(143);
-      expect(processGroupExists(pgid!)).toBe(false);
-      expect(refExists(repoDir)).toBe(true);
       const ownerOid = refOid(repoDir);
+      const closed = once(controller, "close", { signal: AbortSignal.timeout(12_000) });
+      controller.kill("SIGTERM");
+      await closed;
+      expect(stderrOverflow, "supervisor stderr exceeded 16 KiB").toBe(false);
+      expect(controller.exitCode, stderr).toBe(143);
+      expect(stderr).toContain("child exited with code 143; wrapper received SIGTERM");
+      expect(stderr).not.toMatch(
+        /operation lifetime did not drain|after drain deadline|process-group state became indeterminate|Unable to signal scripts\/pr process group/u,
+      );
+      assertFixtureProcessGroupStopped(pgid!);
+      // The joined fixture is stopped; retire its PGID before cleanup can signal a reused ID.
+      goneProcessGroups.add(pgid!);
+      expect(refOid(repoDir)).toBe(ownerOid);
       recoverOperationLock(repoDir, ownerOid);
     } finally {
       await cleanupController(repoDir, controller, pidFile);

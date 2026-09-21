@@ -1348,55 +1348,12 @@ openclaw-tooltip.chat-tasks-status__preview {
   color: var(--accent);
 }
 
-.chat-subagent-activity__indicator--completed {
-  animation: chatSubagentCompleted 3s ease-out;
-}
-
-.chat-subagent-activity__indicator--cancelled {
-  opacity: 0.55;
-}
-
-.chat-subagent-activity__badge {
-  position: absolute;
-  right: -2px;
-  bottom: -1px;
-  display: inline-flex;
-  padding: 1px;
-  border-radius: 50%;
-  background: var(--bg);
-  color: var(--warn);
-}
-
-.chat-subagent-activity__badge > svg {
-  width: 9px;
-  height: 9px;
-}
-
-.chat-subagent-activity__indicator--completed .chat-subagent-activity__badge {
-  color: var(--ok);
-}
-
-.chat-subagent-activity__indicator--failed .chat-subagent-activity__badge {
-  color: var(--destructive);
-}
-
 .chat-subagent-activity__label {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-@keyframes chatSubagentCompleted {
-  0%,
-  50% {
-    color: var(--ok);
-  }
-
-  100% {
-    color: var(--muted);
-  }
 }
 
 .chat-subagent-activity__snippet--updated {

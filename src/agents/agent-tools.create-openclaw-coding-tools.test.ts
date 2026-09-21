@@ -3080,21 +3080,16 @@ describe("createOpenClawCodingTools read behavior", () => {
   });
 
   it("applies sandbox path guards to canonical path", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-"));
-    const outsidePath = path.join(os.tmpdir(), "openclaw-outside.txt");
+    const tmpDir = tempDirs.make("openclaw-sbx-");
+    const outsidePath = path.join(tempDirs.make("openclaw-sbx-outside-"), "outside.txt");
     await fs.writeFile(outsidePath, "outside", "utf8");
-    try {
-      const readTool = createSandboxedReadTool({
-        root: tmpDir,
-        bridge: createHostSandboxFsBridge(tmpDir),
-      });
-      await expect(readTool.execute("sandbox-1", { path: outsidePath })).rejects.toThrow(
-        /sandbox root/i,
-      );
-    } finally {
-      await fs.rm(outsidePath, { force: true });
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    const readTool = createSandboxedReadTool({
+      root: tmpDir,
+      bridge: createHostSandboxFsBridge(tmpDir),
+    });
+    await expect(readTool.execute("sandbox-1", { path: outsidePath })).rejects.toThrow(
+      /sandbox root/i,
+    );
   });
 
   it("rejects sandbox directory reads before calling the bridge read operation", async () => {

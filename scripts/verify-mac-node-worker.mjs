@@ -335,9 +335,17 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
   // a present-but-incomplete closure fails before the app is signed.
   await proveServiceChildRuntime(home);
   await proveGitWorkerRuntime(home);
-  for (const nativeFirst of [false, true]) {
+  for (const { nativeFirst, desktopSharingEnabled } of [false, true].flatMap((nativeFirstEnabled) =>
+    [undefined, true, false].map((sharingEnabled) => ({
+      nativeFirst: nativeFirstEnabled,
+      desktopSharingEnabled: sharingEnabled,
+    })),
+  )) {
     const appGatedComputer = !nativeFirst;
-    const proofHome = path.join(home, nativeFirst ? "native-first" : "absent");
+    const proofHome = path.join(
+      home,
+      `${nativeFirst ? "native-first" : "absent"}-${desktopSharingEnabled ?? "default"}`,
+    );
     const stateDir = path.join(proofHome, "state");
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     fs.mkdirSync(proofHome, { recursive: true });
@@ -362,7 +370,15 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
     let diagnostic = "";
     const exitCode = await runManagedCommand({
       bin: node,
-      args: [path.join(packageRoot, "dist/mac-node-worker.js"), "node", "worker"],
+      args: [
+        path.join(packageRoot, "dist/mac-node-worker.js"),
+        ...(nativeFirst ? ["--profile", "mac-worker-proof"] : []),
+        "node",
+        "worker",
+        ...(desktopSharingEnabled === undefined
+          ? []
+          : [desktopSharingEnabled ? "--desktop-sharing" : "--no-desktop-sharing"]),
+      ],
       cwd: proofHome,
       env: {
         HOME: proofHome,
@@ -412,6 +428,8 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
             !message.manifest?.commands?.includes("browser.proxy") ||
             !message.manifest?.commands?.includes("browser.proxy.upload.v1") ||
             !message.manifest?.commands?.includes("mcp.tools.call.v1") ||
+            (desktopSharingEnabled !== undefined &&
+              message.manifest?.commands?.includes("desktop.stream") !== desktopSharingEnabled) ||
             (appGatedComputer &&
               (!message.manifest?.commands?.includes("screen.snapshot") ||
                 !message.manifest?.commands?.includes("computer.act")))
@@ -424,7 +442,7 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
           }
           ready = true;
           process.stdout.write(
-            `${JSON.stringify({ architecture: process.arch, nativeFirst, build: actual, nativeFiles, databasePath, manifest: message.manifest })}\n`,
+            `${JSON.stringify({ architecture: process.arch, nativeFirst, desktopSharingEnabled, build: actual, nativeFiles, databasePath, manifest: message.manifest })}\n`,
           );
           if (appGatedComputer) {
             // The readiness lease uses a harmless executable, not a live MCP

@@ -213,6 +213,13 @@ GitHub-hosted planning and other timing-sensitive groups retain it. Gateway
 plans still run exclusively. When core-2 shares a serial bin, its unproven
 siblings retain their two-worker caps at group scope.
 
+Agents-core files share the configured worker pool, including local scheduling
+and its one-worker throttle. Compact agents-core groups retain a two-worker cap.
+Their initial estimates divide serial timing history by the effective file
+workers, preserving the cost of an indivisible file. Separate parallel timing
+keys let subsequent measurements replace those estimates without being divided
+again. The file inventory and import-heavy CLI stripes remain unchanged.
+
 The [September 19 probe](https://github.com/openclaw/openclaw/actions/runs/35441442486)
 ran two predefined samples per cell on eight CPUs, 30.95 GiB, and Node 24.19.0.
 All twelve samples passed. Single-plan cells ran all 293 core-2 files; two-plan
@@ -307,6 +314,12 @@ main and release proofs; no committed weight baseline was changed for tiering.
 | Windows                         | All 133 native unit/boundary/process files in measured whole-file rows                                  | Same inventory, historical targets retain their package commands                |
 
 ## Measured shard weights
+
+Infrastructure and host-owned SQLite test consumers also follow the existing
+worker ceiling, retaining isolated forks and fixture-owned home/state directories.
+Directory-sensitive regressions run in joined child processes, and backup command
+fixtures consume the invocation's prepared runtime. File parallelism does not add
+compact groups, runner registrations, or a separate worker budget.
 
 Gateway core, database-worker, methods, methods-isolated, server, and
 server-isolated configs run with exclusive plan admission. Cold in-process

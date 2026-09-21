@@ -1,3 +1,4 @@
+import { composedParent } from "../lib/navigation-click.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 
 const CARD_GAP = 10;
@@ -391,18 +392,45 @@ function mountPortaledHovercard(params: {
   params.trigger.setAttribute("aria-controls", params.card.id);
   params.trigger.setAttribute("aria-expanded", "true");
   const position = () => positionPortaledHovercard(params.anchor, params.card, params.placement);
-  window.addEventListener("resize", position);
-  window.addEventListener("scroll", position, true);
+  let frame: number | null = null;
+  const schedulePosition = () => {
+    if (frame === null) {
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        position();
+      });
+    }
+  };
+  const handleScroll = (event: Event) => {
+    const source = event.composedPath()[0];
+    if (source === window || source === document) {
+      schedulePosition();
+      return;
+    }
+    // Transcript auto-scroll and scrolling inside the card cannot move a
+    // sidebar trigger. Only a scroll in its rendered ancestry needs geometry.
+    for (let node: Element | null = params.anchor; node; node = composedParent(node)) {
+      if (node === source) {
+        schedulePosition();
+        return;
+      }
+    }
+  };
+  window.addEventListener("resize", schedulePosition);
+  window.addEventListener("scroll", handleScroll, true);
   if (params.observeVisualViewport !== false) {
-    window.visualViewport?.addEventListener("resize", position);
-    window.visualViewport?.addEventListener("scroll", position);
+    window.visualViewport?.addEventListener("resize", schedulePosition);
+    window.visualViewport?.addEventListener("scroll", schedulePosition);
   }
   position();
   return () => {
-    window.removeEventListener("resize", position);
-    window.removeEventListener("scroll", position, true);
-    window.visualViewport?.removeEventListener("resize", position);
-    window.visualViewport?.removeEventListener("scroll", position);
+    if (frame !== null) {
+      cancelAnimationFrame(frame);
+    }
+    window.removeEventListener("resize", schedulePosition);
+    window.removeEventListener("scroll", handleScroll, true);
+    window.visualViewport?.removeEventListener("resize", schedulePosition);
+    window.visualViewport?.removeEventListener("scroll", schedulePosition);
   };
 }
 

@@ -257,7 +257,7 @@ describe("extended-stable npm release request", () => {
     ["main a year-plus ahead", "2028.12.32", "2028.11"],
   ])("rejects %s", (_label, mainPackageVersion, expectedMonth) => {
     expect(() => validateExtendedStableNpmReleaseRequest({ ...valid, mainPackageVersion })).toThrow(
-      `Extended-stable publishes only the trailing completed month: protected main ${mainPackageVersion} allows ${expectedMonth}.PATCH, not 2026.6.33. Retire the older line or dispatch with BYPASS_EXTENDED_STABLE_GUARD for an explicitly approved exception.`,
+      `Extended-stable publishes only the trailing completed month: protected main ${mainPackageVersion} allows ${expectedMonth}.PATCH, not 2026.6.33. Retire the older line; publishing a retired line requires an explicit maintainer decision.`,
     );
   });
 
@@ -489,6 +489,48 @@ describe("extended-stable npm run identity", () => {
           npmDistTag: "extended-stable",
           expectedBranch: branch,
           expectedSha: sha,
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("accepts a plugin run dispatched by the trusted protected-tag orchestrator for the exact target", () => {
+    const workflowSha = "c".repeat(40);
+    const toolingRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
+    const pluginRun = {
+      workflowName: "Plugin NPM Release",
+      displayTitle: `Plugin NPM Release [extended-stable] ${sha}`,
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+      headBranch: toolingRef,
+      headSha: workflowSha,
+    };
+    expect(() =>
+      validateExtendedStableRunIdentity({
+        run: pluginRun,
+        kind: "plugin",
+        npmDistTag: "extended-stable",
+        expectedBranch: branch,
+        expectedSha: sha,
+        expectedOrchestratorBranch: toolingRef,
+        expectedOrchestratorSha: workflowSha,
+      }),
+    ).not.toThrow();
+    for (const changes of [
+      { headBranch: "release/2026.6.35" },
+      { headSha: "not-a-sha" },
+      { displayTitle: `Plugin NPM Release [extended-stable] ${"b".repeat(40)}` },
+    ]) {
+      expect(() =>
+        validateExtendedStableRunIdentity({
+          run: { ...pluginRun, ...changes },
+          kind: "plugin",
+          npmDistTag: "extended-stable",
+          expectedBranch: branch,
+          expectedSha: sha,
+          expectedOrchestratorBranch: toolingRef,
+          expectedOrchestratorSha: workflowSha,
         }),
       ).toThrow();
     }

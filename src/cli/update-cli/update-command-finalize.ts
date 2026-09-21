@@ -18,6 +18,7 @@ import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post
 import {
   acknowledgeAbandonedUpdateRun,
   getUpdateRun,
+  recordUpdateRunStep,
   reconcileAbandonedUpdateRuns,
 } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
@@ -73,6 +74,7 @@ import {
   UpdateFinalizationLifecycle,
   type UpdateFinalizationPhase,
 } from "./update-finalization-lifecycle.js";
+import { deferUpdateFinalizationForServingGateway } from "./update-finalization-maintenance.js";
 
 export async function updateFinalizeCommand(
   opts: UpdateFinalizeOptions,
@@ -97,12 +99,13 @@ export async function updateFinalizeCommand(
   await withCommandProcessScope(async (stopChildren) => {
     const lifecycle = new UpdateFinalizationLifecycle(Boolean(opts.json), timeoutMs, stopChildren);
     try {
-      const { root, installKind, runId } = await withUpdateAdmissionReporting(
+      const { root, installKind, runId, maintenanceWarning } = await withUpdateAdmissionReporting(
         opts,
         () =>
           withCommandProcessScope(() =>
             withUpdateInProgressEnv(invocationCwd, () =>
               lifecycle.run("preflight", async (phase) => {
+                const deadlineMs = lifecycle.startedAt + lifecycle.budget("preflight");
                 // Refused invocations cannot create a ledger or write failure-triage artifacts.
                 // A missing canonical path can be an interrupted publication, not a
                 // fresh installation. Only the recovery executor may reconcile it.
@@ -128,6 +131,11 @@ export async function updateFinalizeCommand(
                   root: resolvedRoot,
                   installKind: resolvedInstallKind,
                   runId: admittedRunId,
+                  maintenanceWarning: await deferUpdateFinalizationForServingGateway({
+                    root: resolvedRoot,
+                    deadlineMs,
+                    ...phase,
+                  }),
                 };
               }),
             ),
@@ -135,6 +143,28 @@ export async function updateFinalizeCommand(
         recoveryRunIds === undefined ? "finalize" : "unknown",
       );
       lifecycle.root = root;
+      if (maintenanceWarning) {
+        recordUpdateRunStep(runId, {
+          step: "finalize:doctor",
+          status: "skipped",
+          endedAtMs: Date.now(),
+          detail: maintenanceWarning,
+        });
+        lifecycle.recordWarnings([maintenanceWarning]);
+        defaultRuntime.error(maintenanceWarning);
+        if (opts.json) {
+          defaultRuntime.writeJson({
+            status: "warning",
+            mode: "finalize",
+            root,
+            restart: false,
+            phaseTimings: lifecycle.phaseTimings,
+            postUpdate: { doctor: { status: "warning", warnings: [maintenanceWarning] } },
+          });
+        }
+        lifecycle.complete(0);
+        return;
+      }
       const target: UpdateTriageTarget = {
         root,
         env: {

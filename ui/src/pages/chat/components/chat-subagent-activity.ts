@@ -7,10 +7,9 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
-import { isActiveTask, partitionTasks, taskTimestampMs } from "../../../lib/tasks/data.ts";
+import { partitionTasks } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import {
-  backgroundTaskDeliveryLabel,
   backgroundTaskIsExecuting,
   backgroundTaskStatusLabel,
 } from "./chat-background-tasks-shared.ts";
@@ -18,26 +17,20 @@ import {
 registerBackgroundTasksEnglish();
 
 const SUBAGENT_ACTIVITY_LIMIT = 5;
-const SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS = 60_000;
 
 export type SubagentActivityPresentation = {
   rows: TaskSummary[];
   overflowCount: number;
   taskIds: ReadonlySet<string>;
-  nextExpiryAt: number | null;
 };
 
 export function deriveSubagentActivity(params: {
   tasks: readonly TaskSummary[];
   sessionKey: string;
-  terminalObservedAtByTask: ReadonlyMap<string, number>;
   canonicalizeSessionKey: (sessionKey: string | undefined) => string;
-  now?: number;
 }): SubagentActivityPresentation {
-  const now = params.now ?? Date.now();
   const requesterSessionKey = params.canonicalizeSessionKey(params.sessionKey);
-  let nextExpiryAt: number | null = null;
-  const eligible = params.tasks.filter((task) => {
+  const children = params.tasks.filter((task) => {
     const taskRequesterSessionKey = params.canonicalizeSessionKey(task.sessionKey);
     const childSessionKey = params.canonicalizeSessionKey(task.childSessionKey);
     const isChild =
@@ -45,43 +38,21 @@ export function deriveSubagentActivity(params: {
       (task.runtime === "cli" &&
         Boolean(childSessionKey) &&
         childSessionKey !== taskRequesterSessionKey);
-    if (!isChild || !requesterSessionKey || taskRequesterSessionKey !== requesterSessionKey) {
-      return false;
-    }
-    if (isActiveTask(task)) {
-      return true;
-    }
-    const terminalAt =
-      params.terminalObservedAtByTask.get(task.id) ??
-      taskTimestampMs(task.endedAt ?? task.updatedAt);
-    const expiresAt = terminalAt + SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS;
-    if (terminalAt <= 0 || expiresAt <= now) {
-      return false;
-    }
-    nextExpiryAt = nextExpiryAt === null ? expiresAt : Math.min(nextExpiryAt, expiresAt);
-    return true;
+    return (
+      isChild && Boolean(requesterSessionKey) && taskRequesterSessionKey === requesterSessionKey
+    );
   });
-  const { active, recent } = partitionTasks(eligible);
-  // Share the Tasks panel's stable lifecycle order. Reserve one result slot,
-  // but let ongoing work keep the rest during a burst of completions.
-  const visibleActive = active.slice(0, SUBAGENT_ACTIVITY_LIMIT - Math.min(recent.length, 1));
-  const rows = [
-    ...recent.slice(0, SUBAGENT_ACTIVITY_LIMIT - visibleActive.length),
-    ...visibleActive,
-  ];
-  const overflowCount = Math.max(0, eligible.length - SUBAGENT_ACTIVITY_LIMIT);
+  const { active } = partitionTasks(children);
+  const ongoing = active.filter((task) => task.execution?.state !== "finished");
   return {
-    rows,
-    overflowCount,
-    taskIds: new Set(eligible.map((task) => task.id)),
-    nextExpiryAt,
+    rows: ongoing.slice(0, SUBAGENT_ACTIVITY_LIMIT),
+    overflowCount: Math.max(0, ongoing.length - SUBAGENT_ACTIVITY_LIMIT),
+    // Finished children belong in Tasks history, including when other work keeps the aggregate visible.
+    taskIds: new Set(children.map((task) => task.id)),
   };
 }
 
 function subagentActivitySnippet(task: TaskSummary): string | undefined {
-  if (!isActiveTask(task)) {
-    return task.terminalSummary?.trim() || task.error?.trim() || undefined;
-  }
   return (
     task.lastActivity?.trim() ||
     task.progressSummary?.trim() ||
@@ -93,32 +64,14 @@ function subagentActivitySnippet(task: TaskSummary): string | undefined {
 }
 
 function renderSubagentActivityIndicator(task: TaskSummary): TemplateResult {
-  const indicatorStatus =
-    task.status === "completed" &&
-    (task.deliveryStatus === "failed" || task.deliveryStatus === "parent_missing")
-      ? "failed"
-      : task.status;
-  const badge =
-    indicatorStatus === "completed"
-      ? icons.check
-      : indicatorStatus === "failed"
-        ? icons.alertTriangle
-        : indicatorStatus === "timed_out"
-          ? icons.clock
-          : nothing;
   return html`<span
-    class="chat-subagent-activity__indicator chat-subagent-activity__indicator--${indicatorStatus}"
+    class="chat-subagent-activity__indicator chat-subagent-activity__indicator--${task.status}"
     aria-hidden="true"
   >
     <span
       class="chat-subagent-activity__claw ${backgroundTaskIsExecuting(task) ? "chat-reading-indicator" : ""}"
       >${icons.claw}</span
     >
-    ${
-      badge === nothing
-        ? nothing
-        : html`<span class="chat-subagent-activity__badge">${badge}</span>`
-    }
   </span>`;
 }
 
@@ -144,9 +97,7 @@ function renderSubagentActivityRow(
     : undefined;
   const title = task.title?.trim();
   const label = title || t("chat.backgroundTasks.subagentActivity.untitled");
-  const statusLabel = backgroundTaskStatusLabel(task);
-  const deliveryLabel = backgroundTaskDeliveryLabel(task);
-  const statusDescription = deliveryLabel ? `${statusLabel} — ${deliveryLabel}` : statusLabel;
+  const statusDescription = backgroundTaskStatusLabel(task);
   const content = html`
     ${renderSubagentActivityIndicator(task)}
     <span class="chat-subagent-activity__label">${label}</span>

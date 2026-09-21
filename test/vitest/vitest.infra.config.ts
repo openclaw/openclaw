@@ -7,7 +7,6 @@ export function createInfraVitestConfig(env?: Record<string, string | undefined>
   return createScopedVitestConfig(["src/infra/**/*.test.ts", ...databaseWorkerCoreTestFiles], {
     env,
     exclude: boundaryTestFiles,
-    fileParallelism: false,
     isolate: true,
     name: "infra",
     passWithNoTests: true,

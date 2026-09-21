@@ -41,6 +41,15 @@ canonical-branch dispatch is valid only when its head is also the trusted
 workflow implementation. Current extended-stable validation uses distinct
 trusted-main tooling and therefore requires the immutable helper.
 
+The shared publisher requires this canonical `release-ci/*` producer and binds
+its trusted workflow SHA separately from the exact candidate SHA. Its protected
+`release-publish/*` ref does not replace the canonical candidate branch. Retain
+the complete `rerun_group=all` manifest, exact run ID and successful attempt;
+reject direct canonical-branch/main producers, narrow runs, stale attempts, and
+mismatched targets. If a reviewed tooling repair changes the publication SHA,
+the validation tooling must remain reachable from current `main` and all
+candidate and evidence identities must still match.
+
 Backport product failures; make the smallest behavior-preserving repair for
 frozen-target tooling; retry provider, approval, or runner failures without a
 source change. Any branch change needs a complete new run. Do not omit required

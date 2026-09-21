@@ -351,6 +351,23 @@ count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
 
+If `update finalize` finds a live Gateway holding maintenance ownership, it uses
+the existing restart readiness wait within the remaining finalization allowance.
+When that exact process is verified serving the installed version and build,
+finalization leaves it running and exits successfully with a warning. The history
+records `finalize:doctor` as skipped and identifies the holder. Doctor, config
+changes, and plugin convergence remain pending until the next maintenance window:
+stop the Gateway through its owner, run `openclaw update repair`, then start it
+through the same owner. Deferred finalization does not resolve earlier interrupted
+updates. A dead process releases its physical maintenance lock; its stale lease
+does not qualify for this warning path. Ordinary maintenance admission and lease
+reclamation still apply, including refusals for unsafe or unreadable state.
+
+This behavior lives in the installed finalizer, so published updaters can use it
+when they invoke the new version's `update finalize`. Older parents may omit the
+warning from their own summary; the finalizer prints it and records it in update
+history.
+
 <a id="durable-serving-recovery" />
 
 ### Recovery limits

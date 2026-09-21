@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { formatCliOperatorError } from "../cli/failure-output.js";
@@ -10,6 +9,7 @@ import { backupGitCreateCommand, backupGitLogCommand } from "../commands/backup-
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { clearRuntimeConfigSnapshot } from "../config/config.js";
 import { executeGitCommand, requireGitCommand as requireGit } from "../infra/git-exec.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { spawnCommand } from "../process/exec-spawn.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -26,6 +26,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
+import { gitBackupCommandRuntimeEntrypoint } from "./git-backup-command-runtime.test-support.js";
 import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
 import {
   createAgentFixture,
@@ -290,9 +291,9 @@ describe("Git-backed SQLite snapshots", () => {
             spawnCommand(
               [
                 process.execPath,
-                "--import",
-                "tsx",
-                fileURLToPath(new URL("./git-backup-command.test-support.ts", import.meta.url)),
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeWorkerUrl(gitBackupCommandRuntimeEntrypoint),
+                ),
                 repositoryPath,
                 ...(agentId ? [agentId] : []),
               ],

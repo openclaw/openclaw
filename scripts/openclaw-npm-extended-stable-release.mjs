@@ -186,7 +186,14 @@ export function validateExtendedStableNpmReleaseRequest(request) {
     };
   }
 
-  const mainVersion = parseReleaseVersion(request.mainPackageVersion);
+  validateActiveExtendedStableLine(releaseVersion, request.mainPackageVersion);
+  return { extendedStable: true, releaseVersion, extendedStableBranch };
+}
+
+// Core admission, parent dispatch, and plugin mutation share one retirement policy.
+export function validateActiveExtendedStableLine(releaseVersion, mainPackageVersion) {
+  const releaseVersionParsed = validateNpmPublishBoundary(releaseVersion, "extended-stable");
+  const mainVersion = parseReleaseVersion(mainPackageVersion);
   if (
     mainVersion === null ||
     mainVersion.channel !== "stable" ||
@@ -195,19 +202,18 @@ export function validateExtendedStableNpmReleaseRequest(request) {
     throw new Error("Protected main package version must be an exact final YYYY.M.P version.");
   }
   const mainCalendarMonth = mainVersion.year * 12 + mainVersion.month;
-  const releaseCalendarMonth = taggedVersion.year * 12 + taggedVersion.month;
+  const releaseCalendarMonth = releaseVersionParsed.year * 12 + releaseVersionParsed.month;
   // Keep one active trailing-month line; advancing main another month retires the older line.
   if (mainCalendarMonth - releaseCalendarMonth !== 1) {
     const expectedYear = mainVersion.month === 1 ? mainVersion.year - 1 : mainVersion.year;
     const expectedMonth = mainVersion.month === 1 ? 12 : mainVersion.month - 1;
     throw new Error(
-      `Extended-stable publishes only the trailing completed month: protected main ${request.mainPackageVersion} allows ${expectedYear}.${expectedMonth}.PATCH, not ${releaseVersion}. Retire the older line or dispatch with BYPASS_EXTENDED_STABLE_GUARD for an explicitly approved exception.`,
+      `Extended-stable publishes only the trailing completed month: protected main ${mainPackageVersion} allows ${expectedYear}.${expectedMonth}.PATCH, not ${releaseVersion}. Retire the older line; publishing a retired line requires an explicit maintainer decision.`,
     );
   }
   if (classifyReleaseTrain(mainVersion) !== "stable") {
     throw new Error("Protected main must remain on a daily patch below 33.");
   }
-  return { extendedStable: true, releaseVersion, extendedStableBranch };
 }
 
 export function validateExtendedStableRunIdentity({
@@ -221,6 +227,8 @@ export function validateExtendedStableRunIdentity({
   fullReleaseRunId = "",
   fullReleaseRunAttempt = "",
   workflowPath = "",
+  expectedOrchestratorBranch = "",
+  expectedOrchestratorSha = "",
   trustedPluginWorkflowSha = "",
 }) {
   const fullReleasePreflight =
@@ -260,6 +268,15 @@ export function validateExtendedStableRunIdentity({
       );
     }
   }
+  const directTargetIdentity = run.headBranch === expectedBranch && run.headSha === expectedSha;
+  const orchestratedPluginIdentity =
+    kind === "plugin" &&
+    typeof expectedOrchestratorBranch === "string" &&
+    expectedOrchestratorBranch.length > 0 &&
+    typeof expectedOrchestratorSha === "string" &&
+    expectedOrchestratorSha.length > 0 &&
+    run.headBranch === expectedOrchestratorBranch &&
+    run.headSha === expectedOrchestratorSha;
   // FRV runs trusted tooling against a separately pinned release source; its
   // qualified manifest, not the workflow head, binds that source SHA.
   // A main-branch plugin recovery likewise separates tooling from source. The
@@ -277,7 +294,8 @@ export function validateExtendedStableRunIdentity({
     !fullReleasePreflight &&
     !trustedPluginRecovery &&
     npmDistTag === "extended-stable" &&
-    (run.headBranch !== expectedBranch || run.headSha !== expectedSha)
+    !directTargetIdentity &&
+    !orchestratedPluginIdentity
   ) {
     throw new Error(
       `Referenced extended-stable ${kind} run must have headBranch=${expectedBranch} and headSha=${expectedSha}; got ${run.headBranch ?? "<missing>"} and ${run.headSha ?? "<missing>"}.`,
@@ -539,6 +557,20 @@ function appendOutput(values) {
 
 async function main() {
   const command = process.argv[2];
+  if (command === "validate-active-line") {
+    const repository = process.env.GITHUB_REPOSITORY ?? "";
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
+      throw new Error("GITHUB_REPOSITORY must identify the publication repository.");
+    }
+    const content = execFileSync(
+      "gh",
+      ["api", `repos/${repository}/contents/package.json?ref=refs/heads/main`, "--jq", ".content"],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    const mainPackageVersion = JSON.parse(Buffer.from(content, "base64").toString("utf8")).version;
+    validateActiveExtendedStableLine(process.env.PACKAGE_VERSION ?? "", mainPackageVersion);
+    return;
+  }
   if (command === "validate-request") {
     const result = validateRequestFromRepository();
     console.log(
@@ -573,6 +605,8 @@ async function main() {
       fullReleaseRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
       fullReleaseRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
       workflowPath: process.env.RUN_WORKFLOW_PATH,
+      expectedOrchestratorBranch: process.env.EXPECTED_ORCHESTRATOR_BRANCH,
+      expectedOrchestratorSha: process.env.EXPECTED_ORCHESTRATOR_SHA,
       trustedPluginWorkflowSha: process.env.TRUSTED_PLUGIN_WORKFLOW_SHA,
     });
     console.log(`Verified referenced ${process.env.RUN_KIND} run.`);
