@@ -117,6 +117,7 @@ describe("native dynamics spawn boundary", () => {
           params: Record<string, unknown>,
         ) => {
           requests.push({ method, params });
+          // SAFETY: this fixture supplies the accepted Gateway response shape for the generic T.
           return { runId: "native-dynamics-run", status: "accepted" } as T;
         },
       });
