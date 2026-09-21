@@ -5,6 +5,7 @@ describe("sessions tool sidebar settings", () => {
   it("patches and clears title, icon, group, status, attention, and archive state", async () => {
     const callGateway = vi.fn(async () => ({ ok: true }));
     const tool = createSessionsTool({
+      senderIsOwner: true,
       agentSessionKey: "agent:main:main",
       agentSessionId: "session-main",
       config: {},

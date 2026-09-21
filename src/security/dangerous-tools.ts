@@ -61,7 +61,8 @@ export const GATEWAY_CONTROL_PLANE_TOOLS = [AUTOMATIONS_TOOL_NAME, "gateway", "p
  */
 export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
   ...GATEWAY_CONTROL_PLANE_TOOLS,
-  "sessions",
+  // `sessions` gates privileged actions itself; responsibility assignment is
+  // available to trusted agent callers without granting settings or group writes.
   "screen",
   "terminal",
   "portal",

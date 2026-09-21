@@ -1,4 +1,12 @@
 import { expect } from "vitest";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../admitted-run-context.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 
 const overlongUnicode = (unit: string, maxLength: number) => `${unit.repeat(maxLength - 1)}🦞tail`;
 
@@ -60,4 +68,29 @@ export function expectOmittedResolvedAcknowledgement(result: {
   expect(text).not.toContain('"path"');
   expect(text).not.toContain("skillsSnapshot");
   expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
+}
+
+export async function withSessionToolTestCaller<T>(run: () => Promise<T>): Promise<T> {
+  const admission = prepareAgentRunAdmission({
+    cfg: {},
+    facts: {
+      runId: "session-tool-test",
+      agentId: "main",
+      ingress: { kind: "system", boundary: "session-tool-test", state: "present" },
+    },
+    operationalRunInstance: createOperationalRunInstanceRef("session-tool-test"),
+  });
+  try {
+    const admittedRunContext = await admission.admit("gateway", "session-tool-test");
+    return await withGatewayToolCallerIdentity(
+      createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      }),
+      run,
+    );
+  } finally {
+    admission.close();
+  }
 }

@@ -5235,9 +5235,6 @@ describe("prepareCliRunContext", () => {
   });
 
   it("keeps runtime toolsAllow canonical and bounds the backend-independent MCP grant", async () => {
-    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
-      ...context.baseArgs,
-    ]);
     const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
     const resolveMcpLoopbackPolicyTools = vi.fn((_scope: McpProjectionParams) => ({
       agentId: "main",
@@ -5250,7 +5247,7 @@ describe("prepareCliRunContext", () => {
       bundleMcpMode: "claude-config-file",
       nativeToolMode: "selectable",
       toolAvailabilityEnforcement: "execution-args",
-      resolveExecutionArgs,
+      resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
       config: {
         command: "claude",
         args: ["--print"],
@@ -5324,6 +5321,7 @@ describe("prepareCliRunContext", () => {
       } = expectDefined(projected, "projected tool context");
       const { toolsAllow: grantedTools, ...grantTrustedContext } = grantContext ?? {};
       expect(projectedPolicy).toEqual(["write"]);
+      expect(projected?.admittedRunContext).toBe(context.params.admittedRunContext);
       expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });
       expect(authProfileStoreAgentDir).toEqual(expect.any(String));
       expect(grantedTools).toEqual(["write", "apply_patch"]);

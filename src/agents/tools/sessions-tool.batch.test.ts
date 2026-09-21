@@ -67,6 +67,7 @@ function createStoredSessionTool(config: OpenClawConfig = {}) {
     return payload as T;
   };
   return createSessionsTool({
+    senderIsOwner: true,
     agentSessionKey: currentKey,
     agentSessionId: "current-session",
     config,
@@ -89,7 +90,12 @@ describe("sessions tool batch patch", () => {
       expect(isAgentSessionModelPatchOrigin()).toBe(true);
       return { outcomes: [{ ok: true, key: targetKeys[0] }] } as T;
     };
-    const tool = createSessionsTool({ agentSessionKey: currentKey, config: {}, callGateway });
+    const tool = createSessionsTool({
+      senderIsOwner: true,
+      agentSessionKey: currentKey,
+      config: {},
+      callGateway,
+    });
     const result = await tool.execute("batch-model", {
       action: "patch",
       targets: [{ sessionKey: targetKeys[0] }],
@@ -253,7 +259,12 @@ describe("sessions tool batch patch", () => {
     { name: "different action", args: { action: "reset", targets: [{ sessionKey: currentKey }] } },
   ])("rejects $name before dispatch", async ({ args }) => {
     const callGateway = vi.fn();
-    const tool = createSessionsTool({ agentSessionKey: currentKey, config: {}, callGateway });
+    const tool = createSessionsTool({
+      senderIsOwner: true,
+      agentSessionKey: currentKey,
+      config: {},
+      callGateway,
+    });
     await expect(
       tool.execute("invalid-batch", { action: "patch", pinned: true, ...args }),
     ).rejects.toThrow();
@@ -269,6 +280,7 @@ describe("sessions tool batch patch", () => {
       })),
     }));
     const tool = createSessionsTool({
+      senderIsOwner: true,
       agentSessionKey: currentKey,
       config: {},
       callGateway: callGateway as AgentToolGatewayRequestCaller,

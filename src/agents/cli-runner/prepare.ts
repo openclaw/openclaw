@@ -1261,9 +1261,7 @@ async function prepareCliRunContextWithinReadFence(
           modelId,
         })
       : undefined;
-  const mcpToolAuthAgentDir = mcpContextBase
-    ? resolveRuntimeAuthProfileAgentDir(agentDir)
-    : undefined;
+  const mcpToolAuthAgentDir = mcpContextBase && resolveRuntimeAuthProfileAgentDir(agentDir);
   const mcpToolAuth = mcpContextBase
     ? {
         ...(mcpToolAuthAgentDir ? { agentDir: mcpToolAuthAgentDir } : {}),
@@ -1290,6 +1288,7 @@ async function prepareCliRunContextWithinReadFence(
             cfg: runConfig,
             signal: params.abortSignal,
             context: mcpProjectionContext,
+            admittedRunContext: (await admitPreparedParams(params)).admittedRunContext,
             rootedExecution,
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
             ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),

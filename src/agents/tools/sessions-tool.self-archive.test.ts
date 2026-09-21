@@ -30,6 +30,7 @@ describe("sessions tool self-archive", () => {
         return { ok: true };
       });
       const tool = createSessionsTool({
+        senderIsOwner: true,
         agentSessionKey: sessionKey,
         agentSessionId: sessionId,
         config,
@@ -97,6 +98,7 @@ describe("sessions tool self-archive", () => {
       );
       const callGateway = vi.fn(async () => ({ ok: true }));
       const tool = createSessionsTool({
+        senderIsOwner: true,
         agentSessionKey: sessionKey,
         agentSessionId: sessionId,
         config,
@@ -154,6 +156,7 @@ describe("sessions tool self-archive", () => {
       );
       const callGateway = vi.fn(async () => ({ ok: true }));
       const tool = createSessionsTool({
+        senderIsOwner: true,
         agentSessionKey: sessionKey,
         agentSessionId: sessionId,
         config,
@@ -217,6 +220,7 @@ describe("sessions tool self-archive", () => {
       );
       const callGateway = vi.fn(async () => ({ ok: true }));
       const tool = createSessionsTool({
+        senderIsOwner: true,
         agentSessionKey: sessionKey,
         agentSessionId: sessionId,
         config,
@@ -275,6 +279,7 @@ describe("sessions tool self-archive", () => {
       );
       const callGateway = vi.fn(async () => ({ ok: true }));
       const tool = createSessionsTool({
+        senderIsOwner: true,
         agentSessionKey: sessionKey,
         agentSessionId: sessionId,
         config,
@@ -346,6 +351,7 @@ describe("sessions tool self-archive", () => {
         return { ok: true };
       });
       const tool = createSessionsTool({
+        senderIsOwner: true,
         agentSessionKey: sessionKey,
         agentSessionId: sessionId,
         config,
@@ -415,6 +421,7 @@ describe("sessions tool self-archive", () => {
         return { ok: true };
       });
       const tool = createSessionsTool({
+        senderIsOwner: true,
         agentSessionKey: sessionKey,
         agentSessionId: sessionId,
         config,
@@ -466,6 +473,7 @@ describe("sessions tool self-archive", () => {
         .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
         .mockResolvedValue({ ok: true });
       const tool = createSessionsTool({
+        senderIsOwner: true,
         agentSessionKey: sessionKey,
         agentSessionId: sessionId,
         config: { session: { store: storePath } },
@@ -526,6 +534,7 @@ describe("sessions tool self-archive", () => {
           return { ok: true };
         });
         const tool = createSessionsTool({
+          senderIsOwner: true,
           agentSessionKey: sessionKey,
           agentSessionId: sessionId,
           config,
@@ -577,6 +586,7 @@ describe("sessions tool self-archive", () => {
       );
       const callGateway = vi.fn(async () => ({ ok: true }));
       const tool = createSessionsTool({
+        senderIsOwner: true,
         agentSessionKey: sessionKey,
         agentSessionId: sessionId,
         config,

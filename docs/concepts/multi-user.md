@@ -51,7 +51,7 @@ In the Control UI, the session context menu (kebab or right-click on a sidebar r
 - **Assign to me**: take responsibility for the session yourself.
 - **Assign to…**: pick any registered person or configured agent, including offline people and people who have not owned a session. Choices refresh when you open the menu and do not depend on session filters or archive status.
 
-Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups). Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
+Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups), including non-owner agent turns when tool policy permits it. Those turns receive only the assignment action, not session settings, reset/delete, or global group controls. Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
 
 Both paths call the Gateway method `sessions.assignOwner` (`operator.write`). Assignment requires an identified caller — an authenticated Gateway profile or a trusted agent identity — and is authorized by session visibility. Agent owner ids must name a configured agent. After assignment the avatar tooltip switches from "Created by" to "Owned by".
 

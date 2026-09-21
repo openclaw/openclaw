@@ -20,6 +20,7 @@ beforeEach(() => {
 
 function createTool() {
   return createSessionsTool({
+    senderIsOwner: true,
     agentSessionKey: "agent:main:main",
     config: {},
     hasInProcessGatewayContext: () => true,

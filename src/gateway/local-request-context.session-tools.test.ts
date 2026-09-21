@@ -499,6 +499,7 @@ describe("built-in session tool role authority", () => {
               () =>
                 admission.run(() =>
                   createSessionsTool({
+                    senderIsOwner: true,
                     config: cfg,
                     agentSessionKey: REQUESTER,
                     agentSessionId: sessionId,
@@ -588,7 +589,7 @@ describe("built-in session tool role authority", () => {
 
   it("lists then archives a visible session through built-in tools with roles enabled", async () => {
     await withSessionToolsFixture(async (cfg) => {
-      const options = { config: cfg, agentSessionKey: REQUESTER };
+      const options = { senderIsOwner: true, config: cfg, agentSessionKey: REQUESTER };
       const listed = await createSessionsListTool(options).execute("discover", {});
       // Keep archive in the same reproduction even if discovery regresses to an empty result.
       expect.soft(listed.details).toMatchObject({
@@ -624,6 +625,7 @@ describe("built-in session tool role authority", () => {
   it("keeps tool visibility and incognito boundaries under system-backed dispatch", async () => {
     await withSessionToolsFixture(async (cfg) => {
       const options = {
+        senderIsOwner: true,
         config: { ...cfg, tools: { sessions: { visibility: "self" as const } } },
         agentSessionKey: REQUESTER,
       };
@@ -641,10 +643,11 @@ describe("built-in session tool role authority", () => {
         }),
       ).rejects.toThrow(/visibility|restricted|not visible/i);
       await expect(
-        createSessionsTool({ config: cfg, agentSessionKey: REQUESTER }).execute(
-          "denied-incognito",
-          { action: "patch", sessionKey: INCOGNITO, pinned: true },
-        ),
+        createSessionsTool({
+          senderIsOwner: true,
+          config: cfg,
+          agentSessionKey: REQUESTER,
+        }).execute("denied-incognito", { action: "patch", sessionKey: INCOGNITO, pinned: true }),
       ).rejects.toThrow(/not visible/i);
       expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.archivedAt).toBeUndefined();
     });
@@ -686,15 +689,16 @@ describe("built-in session tool role authority", () => {
         },
         async () => {
           await expect(
-            createSessionsTool({ config: cfg, agentSessionKey: REQUESTER }).execute(
-              "denied-reader",
-              {
-                action: "patch",
-                sessionKey: TARGET,
-                expectedSessionId: TARGET_ID,
-                archived: true,
-              },
-            ),
+            createSessionsTool({
+              senderIsOwner: true,
+              config: cfg,
+              agentSessionKey: REQUESTER,
+            }).execute("denied-reader", {
+              action: "patch",
+              sessionKey: TARGET,
+              expectedSessionId: TARGET_ID,
+              archived: true,
+            }),
           ).rejects.toThrow(/missing scope: operator.write/i);
         },
       );
