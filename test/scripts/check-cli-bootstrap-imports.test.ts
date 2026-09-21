@@ -25,6 +25,7 @@ const workerDeployArtifactNames = [
   "image-processor.worker.mjs",
   "service-child-group-anchor.mjs",
   "service-child-relay.mjs",
+  "sqlite-store.worker.mjs",
   "worker.mjs",
   "workspace-rsync-receiver.mjs",
 ];
@@ -418,6 +419,7 @@ describe("check-cli-bootstrap-imports", () => {
     ["default", "github-exec-launcher.mjs"],
     ["default", "service-child-group-anchor.mjs"],
     ["default", "service-child-relay.mjs"],
+    ["default", "sqlite-store.worker.mjs"],
   ] as const)(
     "enforces the %s-artifact worker deployment contract with missing artifact %s",
     (contract, missingArtifact) => {
