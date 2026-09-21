@@ -705,18 +705,35 @@ describe("session branch diff stats", () => {
     expect(result.branch).toBeUndefined();
   });
 
-  it("suppresses the row when the local checkout trails the merged remote tip", async () => {
-    const staleHead = await initializeFeatureHead();
-    // This checkout's HEAD trails the final commit pushed and merged elsewhere.
-    await appendCommit("a.txt", "review fix\n", "review fix");
-    await trackRemote("feature");
-    const mergedHead = await resolveRevision("HEAD");
-    await git("reset", "--hard", staleHead);
+  it.each(["lowercase", "uppercase"])(
+    "suppresses the row when the local checkout trails the merged remote tip with %s ref text",
+    async (refCase) => {
+      const olderMergedHead = await initializeFeatureHead();
+      await appendCommit("a.txt", "second PR\n", "second PR");
+      const staleHead = await resolveRevision("HEAD");
+      // Four commits: default -> older merge -> local HEAD -> newer merge.
+      await appendCommit("a.txt", "review fix\n", "review fix");
+      await trackRemote("feature");
+      const mergedHead = await resolveRevision("HEAD");
+      await git("reset", "--hard", staleHead);
+      if (refCase === "uppercase") {
+        await fs.writeFile(
+          path.join(root, ".git", "refs", "heads", "feature"),
+          `${staleHead.toUpperCase()}\n`,
+        );
+      }
+      expect(await resolveRevision("HEAD")).toBe(staleHead);
 
-    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
-    // The clean, fully merged stale checkout must not replay a landed subset.
-    expect(result.branch).toBeUndefined();
-  });
+      const result = await loadBranchState({
+        pullRequests: [
+          mergedPull(olderMergedHead, { number: 1 }),
+          mergedPull(mergedHead, { number: 2 }),
+        ],
+      });
+      // The clean, fully merged stale checkout must not replay a landed subset.
+      expect(result.branch).toBeUndefined();
+    },
+  );
 
   it("restores Create PR for a branch rebased past the landing with new work", async () => {
     const mergedHead = await initializeFeatureHead({ trackMain: false });

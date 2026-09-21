@@ -37,6 +37,8 @@ export function readCheckoutHead(root: string): { sha: string; branch?: string |
     ) {
       return null;
     }
+    // Git prints lowercase object IDs even when a ref file uses uppercase.
+    const sha = head.value.toLowerCase();
     const refsBase = head.refsBase ?? resolveGitRefsBase(head.headPath);
     if (
       fs.existsSync(path.join(refsBase, "reftable")) ||
@@ -73,13 +75,13 @@ export function readCheckoutHead(root: string): { sha: string; branch?: string |
       return null;
     }
     if (branch === null) {
-      return { sha: head.value, branch };
+      return { sha, branch };
     }
     // rev-parse uses a qualified name when another ref makes the short name ambiguous.
     const ambiguous =
       fs.existsSync(path.join(refsBase, branch)) ||
       branchAliases.some((ref) => aliases.get(ref) !== null);
-    return { sha: head.value, ...(ambiguous ? {} : { branch }) };
+    return { sha, ...(ambiguous ? {} : { branch }) };
   } catch {
     return null;
   }
