@@ -1,21 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
   recordLegacyMigrationReceipt,
 } from "../infra/state-migrations.receipts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { reconstructAgentDeletionJournalSchema } from "./openclaw-state-db-schema-additive.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import {
   resolveOpenClawAgentDatabaseStoredPath,
   resolveOpenClawRegisteredAgentDatabasePath,
 } from "./openclaw-state-db.paths.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export type HeldAgentDatabase = { agentId: string; path: string };
 type RecoveryDatabase = Pick<OpenClawStateDatabase, "db" | "path">;
@@ -73,13 +70,7 @@ export function reconstructAgentDeletionJournal(
     throw new Error("Agent deletion journal reconstruction requires a shared-state transaction.");
   }
   const previous = readReport(database);
-  const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, JOURNAL_TABLE);
-  const existed = tableExists(database.db, JOURNAL_TABLE);
-  if (!existed) {
-    database.db.exec(schema);
-  }
-  assertSqliteSchemaContains(database.db, database.path, schema);
-  if (existed) {
+  if (!reconstructAgentDeletionJournalSchema(database.db, database.path)) {
     return decodeHolds(database, previous?.held ?? []);
   }
   const entries = new Map<string, HeldAgentDatabase>();

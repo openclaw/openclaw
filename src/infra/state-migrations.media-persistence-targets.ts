@@ -43,20 +43,27 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   registeredAgentDatabases?: readonly { agentId: string; path: string }[];
   deletionJournal?: AgentDeletionJournalDisposition;
+  preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
 }): PreparedAgentDatabaseMigrationDiscovery {
+  const stateDir = resolveStateDir(params.env);
+  const preparedJournal =
+    params.preparedDiscovery?.stateDir === stateDir &&
+    params.preparedDiscovery.discovery.deletionJournal.status === "unavailable"
+      ? params.preparedDiscovery.discovery.deletionJournal
+      : params.deletionJournal;
   const snapshot =
-    params.registeredAgentDatabases && params.deletionJournal
+    params.registeredAgentDatabases && preparedJournal
       ? undefined
       : readAgentDatabaseDeletionSnapshot(params.env);
   const registeredAgentDatabases =
     params.registeredAgentDatabases ?? snapshot?.registeredAgentDatabases ?? [];
-  const deletionJournal: AgentDeletionJournalDisposition = params.deletionJournal ??
+  const deletionJournal: AgentDeletionJournalDisposition = preparedJournal ??
     snapshot?.retainedDeletions ?? {
       status: "unavailable",
       reason: "shared state database missing",
     };
   return {
-    stateDir: resolveStateDir(params.env),
+    stateDir,
     configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets,
     registeredAgentDatabases,
     discovery: discoverAgentDatabaseMigrationTargets({

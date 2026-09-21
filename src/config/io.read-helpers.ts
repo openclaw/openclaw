@@ -19,7 +19,11 @@ import {
   resolveConfigIncludeWritePath,
   resolveConfigIncludes,
 } from "./includes.js";
-import type { ConfigIoDeps, NormalizedConfigIoDeps, ParseConfigJson5Result } from "./io.types.js";
+import type {
+  ConfigIoDeps,
+  NormalizedConfigIoDeps,
+  ParseConfigJson5Result,
+} from "./io.read.types.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
 import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
