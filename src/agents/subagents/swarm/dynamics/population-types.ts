@@ -23,18 +23,20 @@ export const COGNITIVE_PHASES = [
 
 export type CognitivePhase = (typeof COGNITIVE_PHASES)[number];
 
+export type DynamicsMetric = number | null;
+
 export type LocalDynamicsObservation = {
   replicaId: string;
-  candidateEntropy: number;
-  coherence: number;
-  mobility: number;
-  evidenceCompleteness: number;
-  verifierDisagreement: number;
-  resourcePressure: number;
-  contextPressure: number;
-  debtPressure: number;
-  branchingRatio: number;
-  progressRate: number;
+  candidateEntropy: DynamicsMetric;
+  coherence: DynamicsMetric;
+  mobility: DynamicsMetric;
+  evidenceCompleteness: DynamicsMetric;
+  verifierDisagreement: DynamicsMetric;
+  resourcePressure: DynamicsMetric;
+  contextPressure: DynamicsMetric;
+  debtPressure: DynamicsMetric;
+  branchingRatio: DynamicsMetric;
+  progressRate: DynamicsMetric;
 };
 
 export type LocalPhaseAssessment = {
