@@ -227,6 +227,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/audit/audit-event-store.message.test.ts",
   "src/audit/audit-event-writer.test.ts",
   "src/audit/audit-event-writer.worker.test.ts",
+  "src/audit/execution-decision-cursors.test.ts",
   "src/audit/execution-decision-work.test.ts",
   "src/audit/execution-identity-context.test.ts",
   "src/agents/tools/sessions-access.test.ts",

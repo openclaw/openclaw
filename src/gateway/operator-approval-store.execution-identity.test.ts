@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -14,6 +15,11 @@ import {
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
 import { insertOperatorApprovalInDatabase as insertOperatorApprovalNative } from "./operator-approval-store.kernel.js";
+import {
+  getOperatorApprovalDetailed as getOlderOperatorApproval,
+  OLDER_OPERATOR_APPROVAL_SCHEMA_SQL,
+  resolveOperatorApproval as resolveOlderOperatorApproval,
+} from "./operator-approval-store.older-reader.test-support.js";
 
 type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -258,5 +264,87 @@ describe("operator approval execution identity", () => {
         record: { decision: "allow-once", consumedBy: "consumer" },
       });
     }
+  });
+
+  it("preserves companion identity through an older approval reader write and candidate reopen", async () => {
+    const options = databaseOptions();
+    await insertOperatorApproval({
+      approval: approval("older-reader", token()),
+      databaseOptions: options,
+    });
+    const candidate = openOpenClawStateDatabase(options);
+    const version = candidate.db.prepare("PRAGMA user_version").get();
+    const binding = candidate.db
+      .prepare("SELECT * FROM operator_approval_execution_identities")
+      .all();
+    expect(binding).toEqual([
+      {
+        approval_id: "older-reader",
+        source_context_id: "context-1",
+        source_execution_id: "execution-1",
+      },
+    ]);
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+
+    // The pinned reader predates companion identities. Its original decoder and
+    // decision transition reopen through the current shared database owner.
+    expect(
+      getOlderOperatorApproval({ id: "older-reader", nowMs: 2_000, databaseOptions: options }),
+    ).toMatchObject({ outcome: "found", record: { status: "pending", decision: null } });
+    const older = openOpenClawStateDatabase(options);
+    assertSqliteSchemaContains(older.db, older.path, OLDER_OPERATOR_APPROVAL_SCHEMA_SQL);
+    expect(
+      resolveOlderOperatorApproval({
+        id: "older-reader",
+        decision: "allow-once",
+        resolver: { kind: "device", id: "older-reviewer" },
+        expectedKind: "exec",
+        runtimeEpoch: "runtime-a",
+        nowMs: 2_000,
+        databaseOptions: options,
+      }),
+    ).toMatchObject({ outcome: "resolved", record: { decision: "allow-once" } });
+    expect(
+      getOlderOperatorApproval({ id: "older-reader", nowMs: 2_000, databaseOptions: options }),
+    ).toMatchObject({ outcome: "found", record: { status: "allowed", decision: "allow-once" } });
+    expect(older.db.prepare("PRAGMA user_version").get()).toEqual(version);
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+
+    expect(
+      await getOperatorApprovalDetailed({
+        id: "older-reader",
+        nowMs: 3_000,
+        databaseOptions: options,
+      }),
+    ).toMatchObject({
+      outcome: "found",
+      record: { decision: "allow-once", resolver: { id: "older-reviewer" } },
+    });
+    expect(
+      await consumeOperatorApprovalAllowOnce({
+        id: "older-reader",
+        consumerId: "candidate-consumer",
+        expectedKind: "exec",
+        runtimeEpoch: "runtime-a",
+        nowMs: 3_000,
+        databaseOptions: options,
+      }),
+    ).toMatchObject({ outcome: "consumed" });
+    expect(
+      await getOperatorApprovalDetailed({
+        id: "older-reader",
+        nowMs: 3_000,
+        databaseOptions: options,
+      }),
+    ).toMatchObject({ outcome: "found", record: { consumedBy: "candidate-consumer" } });
+    const reopened = openOpenClawStateDatabase(options).db;
+    expect(reopened.prepare("SELECT * FROM operator_approval_execution_identities").all()).toEqual(
+      binding,
+    );
+    expect(reopened.prepare("PRAGMA user_version").get()).toEqual(version);
+    expect(reopened.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+    expect(reopened.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 });
