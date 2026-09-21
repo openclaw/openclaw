@@ -17,6 +17,8 @@ permissions:
 
 # Use the event's trusted default-branch checkout in both jobs. An explicit SHA
 # can be mistaken for fork code after a merge when it matches merge_commit_sha.
+# Sparse checkout also enables blobless fetches. PR contents come from the API,
+# so neither job needs the product source tree.
 jobs:
   resolve:
     if: >-
@@ -38,6 +40,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          sparse-checkout: |
+            /scripts/github/
+            /scripts/lib/
+          sparse-checkout-cone-mode: false
 
       - name: Setup supported Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -76,6 +82,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          sparse-checkout: |
+            /scripts/github/
+            /scripts/lib/
+            /.github/security-review-policy.yml
+            /.github/actions/setup-security-review/
+          sparse-checkout-cone-mode: false
 
       - name: Setup trusted policy runtime
         uses: ./.github/actions/setup-security-review
