@@ -807,6 +807,20 @@ test("joins a crashed reused Worker, releases its exact lease, and preserves the
 
 test("retains a crashed Worker's mismatched lease and retries only its restored receipt", async () => {
   const fixture = createFixture();
+  let closeRetained: (() => Promise<void>) | undefined;
+  const withWorker = reclamationWorker.withSqliteReclamationWorker;
+  vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
+    (options, claim, run, assertCurrent) =>
+      withWorker(
+        options,
+        claim,
+        async (worker) => {
+          closeRetained = worker.close.bind(worker);
+          return run(worker);
+        },
+        assertCurrent,
+      ),
+  );
   const received: { receipt?: OpenClawAgentDatabaseWorkerLeaseReceipt } = {};
   const spawned = observeReclamationWorkers((worker) => {
     worker.on("message", (message: reclamationWorker.SqliteReclamationWorkerMessage) => {
@@ -817,8 +831,9 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
   });
   await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
   const retainedReceipt = received.receipt;
-  if (!retainedReceipt) {
-    throw new Error("Expected the real Worker's admitted lease receipt");
+  const retireWorker = closeRetained;
+  if (!retainedReceipt || !retireWorker) {
+    throw new Error("Expected the real Worker's admitted lease receipt and retirement owner");
   }
   const child = spawned[0]!;
   await child.terminate();
@@ -852,7 +867,24 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
     state
       .prepare("UPDATE agent_database_leases SET owner_pid = ? WHERE lease_id = ?")
       .run(retainedReceipt.ownerPid, retainedReceipt.leaseId);
-    await closeOpenClawAgentDatabaseByPathAsync(fixture.database.path);
+    try {
+      // A live snapshot can still own this connection during native Worker retirement.
+      const hostWrites = vi.spyOn(state, "exec").mockImplementation(() => {
+        throw new Error("Reclamation cleanup accessed the live snapshot connection");
+      });
+      try {
+        await retireWorker();
+        expect(hostWrites).not.toHaveBeenCalled();
+      } finally {
+        hostWrites.mockRestore();
+      }
+      expect(readLeases()).toEqual(
+        before.filter((row) => row.lease_id !== retainedReceipt.leaseId),
+      );
+      expect(fixture.database.db.isOpen).toBe(true);
+    } finally {
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.database.path);
+    }
   }
   expect(readLeases()).toEqual(before.filter((row) => row.path === kept.path));
   expect(kept.db.isOpen).toBe(true);

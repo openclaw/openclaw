@@ -14,11 +14,9 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
-import {
-  releaseExitedOpenClawAgentDatabaseWorkerLease,
-  type OpenClawAgentDatabaseWorkerLeaseReceipt,
-} from "../../state/openclaw-agent-db-lease.js";
+import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
+import { cleanupRetiredAgentDatabaseLease } from "../../state/openclaw-agent-execution-cleanup.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -602,7 +600,23 @@ export class SqliteReclamationWorker {
       }
       // Native exit is joined before exact receipt cleanup; PID-wide cleanup is never safe.
       if (this.lease && this.nativeExitProven) {
-        releaseExitedOpenClawAgentDatabaseWorkerLease(this.lease);
+        const lease = this.lease;
+        await cleanupRetiredAgentDatabaseLease({
+          context: this.stateContext,
+          stopped: this.ended!,
+          lease,
+          assertOwned: () => {
+            if (
+              !this.revoked ||
+              this.retired ||
+              !this.nativeExitProven ||
+              this.transport !== transport ||
+              this.lease !== lease
+            ) {
+              throw new Error("SQLite reclamation Worker no longer owns its retired lease");
+            }
+          },
+        });
       } else if (
         transport &&
         (!this.cleanup?.settled || (transport.kind === "pooled" && !this.taskCustodyReleased))
