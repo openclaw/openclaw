@@ -85,24 +85,15 @@ function createDoctorChangesPanelSink(shouldRepair: boolean): DoctorChangesPanel
 }
 
 async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
-  try {
-    await callGateway({
-      method: "secrets.reload",
-      params: {},
-      timeoutMs: 3000,
-    });
-  } catch {
-    // Best-effort only: doctor --fix must still succeed when no gateway is running
-    // or the live gateway cannot reload unrelated secret-backed channels.
-  }
-  try {
-    await callGateway({
-      method: "models.authStatus",
-      params: { refresh: true },
-      timeoutMs: 3000,
-    });
-  } catch {
-    // Best-effort only: doctor --fix must still succeed when no gateway is running.
+  for (const request of [
+    { method: "secrets.reload", params: {} },
+    { method: "models.authStatus", params: { refresh: true } },
+  ]) {
+    try {
+      await callGateway({ ...request, timeoutMs: 3000 });
+    } catch {
+      // Doctor repair remains best effort when the Gateway is stopped or cannot reload.
+    }
   }
 }
 
@@ -212,6 +203,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
+  const configRepairWarnings: string[] = [];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     options: { fixHint: string; sanitize?: boolean; emitWarnings?: boolean },
@@ -219,6 +211,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     changesPanelSink.emit(mutation.changes, options.sanitize ? { sanitize: true } : {});
     if (options.emitWarnings && mutation.warnings?.length) {
       emitDoctorNotes({ note, warningNotes: mutation.warnings });
+      configRepairWarnings.push(...mutation.warnings);
     }
     state = applyDoctorConfigMutation({
       state,
@@ -722,6 +715,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(pluginInstallConfigImport ? { pluginInstallConfigImport } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
+    ...(configRepairWarnings.length ? { warnings: [...new Set(configRepairWarnings)] } : {}),
     ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),
     sourceConfigValid: snapshot.valid,
     ...(legacyStep.partiallyValid === true ? { skipPluginValidationOnWrite: true } : {}),

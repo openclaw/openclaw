@@ -48,7 +48,10 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
-import { collectPostCorePluginAdvisories } from "./update-command-plugins-internals.js";
+import {
+  collectPostCorePluginAdvisories,
+  type PluginUpdateWarning,
+} from "./update-command-plugins-internals.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -261,6 +264,16 @@ async function resumePostCoreUpdateInternal(
   try {
     outcome = {
       pluginUpdate: await withCommandProcessScope(async () => {
+        const doctorWarnings: PluginUpdateWarning[] = [];
+        const onDoctorWarnings = (warnings: string[]) => {
+          doctorWarnings.push(
+            ...warnings.map((message) => ({
+              reason: "doctor-advisory",
+              message,
+              guidance: ["Run `openclaw doctor --fix` after repairing the plugin."],
+            })),
+          );
+        };
         if (!parentOwnsCompletion) {
           const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
           assertCurrent?.();
@@ -274,7 +287,7 @@ async function resumePostCoreUpdateInternal(
           await maintenance?.releaseState();
           // Shipped parents expect the child to prepare migration plugins and settle
           // Doctor before plugin config writes; Doctor owns that preparation and its guards.
-          await runUpdateFinalizationDoctorInFreshProcess({
+          const warning = await runUpdateFinalizationDoctorInFreshProcess({
             opts: params.opts,
             phase: "post-plugin",
             assertCurrent,
@@ -282,7 +295,11 @@ async function resumePostCoreUpdateInternal(
             yes: params.opts.yes === true,
             json: params.opts.json === true,
             timeoutMs: params.timeoutMs,
+            onWarnings: onDoctorWarnings,
           });
+          if (warning) {
+            doctorWarnings.push(warning);
+          }
         }
 
         const configSnapshot = await readConfigFileSnapshot({
@@ -323,6 +340,7 @@ async function resumePostCoreUpdateInternal(
             yes: params.opts.yes === true,
             json: params.opts.json === true,
             timeoutMs: params.timeoutMs,
+            onWarnings: onDoctorWarnings,
           });
           pluginUpdate = completed.pluginUpdate;
         }
@@ -331,7 +349,13 @@ async function resumePostCoreUpdateInternal(
         assertCurrent?.();
         await persistValidatedDowngradeConfig(finalSnapshot, assertCurrent);
         assertCurrent?.();
-        return pluginUpdate;
+        return doctorWarnings.length
+          ? {
+              ...pluginUpdate,
+              status: pluginUpdate.status === "error" ? "error" : "warning",
+              warnings: [...(pluginUpdate.warnings ?? []), ...doctorWarnings],
+            }
+          : pluginUpdate;
       }),
     };
   } catch (error) {

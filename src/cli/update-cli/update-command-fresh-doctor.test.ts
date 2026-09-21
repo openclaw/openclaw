@@ -662,6 +662,50 @@ describe("post-plugin update readiness", () => {
     expect(result.pluginUpdate).toMatchObject({ status: "error", failureFacts });
   });
 
+  it("records a failed plugin Doctor process as a warning after config and readiness pass", async () => {
+    mocks.runExec.mockRejectedValueOnce(
+      Object.assign(new Error("Doctor exited"), {
+        exitCode: 1,
+        stderr: "Plugin example: optional repair needs a running Gateway.",
+      }),
+    );
+
+    const result = await completePostCorePluginUpdate(updateOptions);
+
+    expect(result.pluginUpdate).toMatchObject({
+      status: "warning",
+      warnings: [
+        expect.objectContaining({
+          reason: "doctor-advisory",
+          message: expect.stringContaining(
+            "Plugin example: optional repair needs a running Gateway.",
+          ),
+        }),
+      ],
+    });
+    expect(result.pluginUpdate.failureFacts).toBeUndefined();
+    expect(result.configSnapshot.valid).toBe(true);
+    expect(mocks.runUtf8).toHaveBeenCalledOnce();
+  });
+
+  it.each(["settlement", "startup"])(
+    "blocks further work when Doctor %s leaves write custody unsettled",
+    async (phase) => {
+      mocks.runExec.mockRejectedValueOnce(
+        phase === "settlement"
+          ? new CommandProcessCleanupError()
+          : Object.assign(new Error("Command timed out during startup"), { cleanup: "uncertain" }),
+      );
+
+      await expect(completePostCorePluginUpdate(updateOptions)).rejects.toThrow(
+        "Command cleanup could not confirm that owned work stopped",
+      );
+      expect(mocks.runExec).toHaveBeenCalledOnce();
+      expect(mocks.readConfig).not.toHaveBeenCalled();
+      expect(mocks.runUtf8).not.toHaveBeenCalled();
+    },
+  );
+
   it("requires the lifecycle owner before starting fresh Doctor maintenance", async () => {
     const beforeDoctor = vi.fn(async () => undefined);
     await completePostCorePluginUpdate({

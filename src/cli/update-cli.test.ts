@@ -3793,25 +3793,25 @@ describe("update-cli", () => {
     expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledTimes(1);
   });
 
-  it("returns a structured error when the fresh plugin doctor cannot run", async () => {
+  it("records diagnostics as a warning when the fresh plugin doctor cannot run", async () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
     );
     vi.mocked(runExec).mockRejectedValueOnce(
       Object.assign(new Error("Command failed: " + "long-argv-prefix ".repeat(100)), {
-        stderr: "doctor process failed: config migration refused",
+        stderr: "doctor process failed: optional plugin repair unavailable",
         stdout: "doctor diagnostic output",
       }),
     );
     const result = await completeChangedPostCorePluginUpdate();
 
     expect(result.pluginUpdate).toMatchObject({
-      status: "error",
+      status: "warning",
       reason: "post-plugin-doctor-execution-failed",
     });
-    expect(result.pluginUpdate.warnings?.at(-1)?.reason).toContain("doctor process failed");
-    expect(result.pluginUpdate.warnings?.at(-1)?.reason).toContain("doctor diagnostic output");
-    expect(result.pluginUpdate.warnings?.at(-1)?.reason).not.toContain("long-argv-prefix");
+    expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor process failed");
+    expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor diagnostic output");
+    expect(result.pluginUpdate.warnings?.at(-1)?.message).not.toContain("long-argv-prefix");
   });
 
   it("keeps an invalid config authoritative after a fresh plugin doctor failure", async () => {

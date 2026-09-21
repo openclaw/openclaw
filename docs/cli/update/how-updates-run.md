@@ -144,7 +144,11 @@ root. This keeps staged assets and validation independent of the old checkout.
 Doctor warnings do not block update checks or readiness after plugin updates.
 The updater retains them in the run report shown by `openclaw update status`,
 including when an intentional open channel policy requires no configuration change.
-Error findings and failed check execution still refuse the update.
+Required config, state-safety, and readiness failures still refuse the update.
+After the package is installed, a failed post-plugin Doctor process is a recorded
+warning when it has no explicit writer or migration refusal. The updater still
+validates the final config and readiness, then starts the Gateway. A child whose
+termination cannot be confirmed remains blocking because it may still write state.
 
 These checks do not run an agent turn or require a usable model-auth route.
 OAuth-only installations and installations without provider credentials can update.
@@ -821,9 +825,17 @@ continues. An invalid config snapshot still returns
 `postUpdate.plugins.status: "error"`, makes the top-level update `status`
 `"error"`, and exits nonzero. Invalid state, ownership errors, failed required
 Doctor or readiness checks also remain errors. Disabled plugins are skipped unless their records are trusted official
-sync targets. A changed plugin snapshot completes fresh Doctor and, when restart
+sync targets. A changed plugin snapshot attempts fresh Doctor and, when restart
 is requested, the Gateway restart and core runtime verification described above
 before the run succeeds.
+
+Post-plugin Doctor execution failures retain their exit reason and available
+plugin diagnostics as warnings in the run record and `openclaw update status`.
+If another step later fails, the generated failure report includes a sanitized
+**Warnings** section. A throwing plugin config-repair hook preserves its input
+and reports the plugin name and repair command. The core update can succeed with
+these warnings; required state migrations, refused config writes, and unresolved
+Doctor write custody still block completion.
 
 When the updated Gateway starts, plugin loading is verify-only: startup does not run package managers or mutate dependency trees. Package-manager `update.run` restarts are handed to the CLI managed-service path, so the package swap happens outside the old Gateway process and the service health checks decide whether the update can be reported as complete.
 </Note>
