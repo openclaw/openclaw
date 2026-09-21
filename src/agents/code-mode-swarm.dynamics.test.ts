@@ -114,10 +114,15 @@ beforeEach(() => {
   state.existing = undefined;
 });
 
-describe("dynamics through the actual native spawn bridge", () => {
+describe("generic dynamics through the actual native spawn bridge", () => {
   it("dispatches a filtered sandbox-required verifier through the existing native tool", async () => {
     const fixture = setup({
-      profile: "independent-verifier",
+      boundary: "artifact-only",
+      requirements: {
+        sandbox: "require",
+        candidateDigest: "required",
+        artifactRefs: "required",
+      },
       handoff: {
         candidateDigest: "candidate:a",
         artifactRefs: ["artifact:a"],
@@ -146,7 +151,7 @@ describe("dynamics through the actual native spawn bridge", () => {
   });
 
   it("does not dispatch on disabled swarm, denied policy, or revoked source", async () => {
-    const fixture = setup({ profile: "explorer" });
+    const fixture = setup({ boundary: "isolated" });
     state.enabled = false;
     await expect(codeModeSwarmHandlers.agentSpawn(fixture.params)).rejects.toThrow();
     state.enabled = true;
@@ -161,7 +166,7 @@ describe("dynamics through the actual native spawn bridge", () => {
   });
 
   it("rechecks the source after awaited dispatch", async () => {
-    const fixture = setup({ profile: "explorer" });
+    const fixture = setup({ boundary: "isolated" });
     fixture.callExactId.mockImplementation(async () => {
       state.blocked = true;
       return { result: { details: { status: "accepted", runId: "child-run" } } };
@@ -171,17 +176,22 @@ describe("dynamics through the actual native spawn bridge", () => {
     );
   });
 
-  it("rejects an inherited profile before dispatch", async () => {
-    const fixture = setup({ profile: "constructor" });
+  it("rejects an invalid boundary before dispatch", async () => {
+    const fixture = setup({ boundary: "constructor" });
     await expect(codeModeSwarmHandlers.agentSpawn(fixture.params)).rejects.toThrow(
-      "Unknown cognitive dynamics profile",
+      "dynamics.boundary",
     );
     expect(fixture.callExactId).not.toHaveBeenCalled();
   });
 
   it("does not silently downgrade a sandbox-required spawn rejected by the owner", async () => {
     const fixture = setup({
-      profile: "independent-verifier",
+      boundary: "artifact-only",
+      requirements: {
+        sandbox: "require",
+        candidateDigest: "required",
+        artifactRefs: "required",
+      },
       handoff: {
         candidateDigest: "candidate:a",
         artifactRefs: ["artifact:a"],
