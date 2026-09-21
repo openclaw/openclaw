@@ -435,10 +435,10 @@ export async function completePostCorePluginUpdate(params: {
   }
 
   assertCurrent();
-  // Only the target runtime may write state after a version switch: observing
-  // config here could migrate its database back to the parent's newer schema.
+  // The target owns state writes and its version stamp. Read context without
+  // migrating target stores or warning about this parent's expected version skew.
   const configSnapshot = await withNormalConfigValidation(() =>
-    readConfigFileSnapshot({ observe: false }),
+    readConfigFileSnapshot({ observe: false, suppressFutureVersionWarning: true }),
   );
   assertCurrent();
   if (entryPath) {

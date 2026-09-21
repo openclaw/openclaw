@@ -566,6 +566,41 @@ describe("post-plugin update readiness", () => {
     expect(mocks.runUtf8).toHaveBeenCalledOnce();
   });
 
+  it("keeps expected post-update version skew quiet while normal reads still warn", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ meta: { lastTouchedVersion: "9999.1.0" }, gateway: { mode: "local" } }),
+      );
+      const configOwner =
+        await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+      mocks.readConfig.mockImplementation(configOwner.readConfigFileSnapshot);
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const result = await completePostCorePluginUpdate({
+          ...updateOptions,
+          freshDoctorRequired: false,
+        });
+        expect(result.pluginUpdate.status).toBe("ok");
+        expect(warning).not.toHaveBeenCalledWith(
+          expect.stringContaining("config was written by version 9999.1.0"),
+        );
+
+        vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "0");
+        await configOwner.readConfigFileSnapshot({ observe: false });
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringContaining("config was written by version 9999.1.0"),
+        );
+      } finally {
+        warning.mockRestore();
+      }
+    });
+  });
+
   it("preserves the older target database when reading post-update config context", async () => {
     const stateDir = tempDirs.make("openclaw-post-update-target-schema-");
     const configPath = path.join(stateDir, "openclaw.json");
