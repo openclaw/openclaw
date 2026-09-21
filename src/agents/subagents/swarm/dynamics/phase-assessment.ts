@@ -85,11 +85,7 @@ export function assessLocalPhase(observation: LocalDynamicsObservation): LocalPh
     phase = "glass";
     confidence = (1 - mobility + (1 - progressRate)) / 2;
     reason = "low mobility and low progress without sufficient evidence";
-  } else if (
-    candidateEntropy !== null &&
-    candidateEntropy >= 0.45 &&
-    candidateEntropy <= 0.65
-  ) {
+  } else if (candidateEntropy !== null && candidateEntropy >= 0.45 && candidateEntropy <= 0.65) {
     phase = "critical";
     confidence = 1 - Math.abs(candidateEntropy - 0.55);
     reason = "candidate entropy is in the experimental transition band";
@@ -115,12 +111,7 @@ export function assessLocalPhase(observation: LocalDynamicsObservation): LocalPh
     phase = "gas";
     confidence = (candidateEntropy + (1 - coherence)) / 2;
     reason = "high candidate entropy with low coherence";
-  } else if (
-    mobility !== null &&
-    coherence !== null &&
-    mobility >= 0.35 &&
-    coherence >= 0.45
-  ) {
+  } else if (mobility !== null && coherence !== null && mobility >= 0.35 && coherence >= 0.45) {
     phase = "liquid";
     confidence = (mobility + coherence) / 2;
     reason = "productive mobility with moderate coherence";
