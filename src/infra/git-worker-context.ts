@@ -24,6 +24,7 @@ type PendingHostRequest = {
 };
 type GitWorkerContext = {
   channel: WorkerTaskChannel;
+  filesystemRefs: boolean;
   pending: PendingHostRequest[];
   drain?: Promise<void>;
   closed: boolean;
@@ -63,11 +64,16 @@ export function hasGitWorkerContext(): boolean {
   return context.getStore() !== undefined;
 }
 
+export function canReadGitFilesystemRefs(): boolean {
+  return context.getStore()?.filesystemRefs === true;
+}
+
 export async function withGitWorkerContext<T>(
   channel: WorkerTaskChannel,
   operation: () => Promise<T>,
+  filesystemRefs = false,
 ): Promise<T> {
-  const state: GitWorkerContext = { channel, pending: [], closed: false };
+  const state: GitWorkerContext = { channel, filesystemRefs, pending: [], closed: false };
   return await context.run(state, async () => {
     try {
       return await operation();
