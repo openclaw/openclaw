@@ -4813,6 +4813,17 @@ NODE
         const manifest = manifestWithHostedNodeRows(0, {
           eventName,
           changedPaths: ["src/infra/example.ts"],
+          nodeTestShards: [
+            {
+              checkName: "native-tail",
+              shardName: "native-tail",
+              configs: [],
+              requiresDist: false,
+              runner: "blacksmith-16vcpu-ubuntu-2404",
+              planConcurrency: 1,
+              predictedSeconds: 500,
+            },
+          ],
           scopeEnv: {
             GITHUB_REF: ref,
             OPENCLAW_CI_RUN_WINDOWS: String(windows),
@@ -4863,6 +4874,41 @@ NODE
             },
           }),
         ).toBe(admitted);
+      },
+    );
+
+    it.each([
+      { seconds: 499, concurrency: 1, changedPath: "src/infra/example.ts" },
+      { seconds: 500, concurrency: 2, changedPath: "src/infra/example.ts" },
+      { seconds: 500, concurrency: 1, changedPath: "src/focused.ts" },
+    ])(
+      "retains PR check capacity without a serial compact latency floor (%#)",
+      ({ seconds, concurrency, changedPath }) => {
+        const nativeTail = {
+          checkName: "native-tail",
+          shardName: "native-tail",
+          configs: [],
+          requiresDist: false,
+          runner: "blacksmith-16vcpu-ubuntu-2404",
+          planConcurrency: concurrency,
+          predictedSeconds: seconds,
+        };
+        const manifest = manifestWithHostedNodeRows(0, {
+          eventName: "pull_request",
+          changedPaths: [changedPath],
+          nodeTestShards: [nativeTail],
+          changedPlannerSource:
+            changedPath === "src/focused.ts"
+              ? `export const createChangedNodeTestShards = () => [${JSON.stringify(nativeTail)}];
+               export const createChangedExtensionFallbackShards = () => [];`
+              : undefined,
+          scopeEnv: {
+            OPENCLAW_CI_RUN_WINDOWS: "true",
+            OPENCLAW_CI_HOSTED_HEALTHY: "true",
+          },
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        expect(manifest.outputs.hybrid_hosted_checks).toBe("false");
       },
     );
 

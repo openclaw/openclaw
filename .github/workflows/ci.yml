@@ -2101,11 +2101,15 @@ jobs:
             ).length : 0);
           const hybridHostedExistingRows = hybridHostedBaseRows +
             (hybridHostedOffload ? hybridHostedOffloadRows : 0);
-          // Precise PR plans can finish before hosted compiler checks. Keep unknown
-          // headroom on Blacksmith; main and the fixed Windows workload are measured.
+          // R1's slowest admitted hosted check took 496s including setup. A full
+          // compact plan must retain at least 500s of serial Node work plus setup;
+          // aggregate two-slot estimates and the shortened Windows shards are not a floor.
+          const hybridHostedPullRequestHasSlack = changedNodeTestShards === null &&
+            rawNodeTestShards.some((shard) => !shard.requiresDist &&
+              shard.planConcurrency === 1 && (shard.predictedSeconds ?? 0) >= 500);
           const hybridHostedChecks = hybridHostedEligible &&
             ((eventName === "push" && process.env.GITHUB_REF === "refs/heads/main") ||
-              (eventName === "pull_request" && manifest.run_checks_windows)) &&
+              (eventName === "pull_request" && manifest.run_checks_windows && hybridHostedPullRequestHasSlack)) &&
             process.env.OPENCLAW_CI_HOSTED_HEALTHY === "true" &&
             hybridHostedExistingRows + hybridHostedCheckRows <= HYBRID_HOSTED_ROW_LIMIT;
           const hybridHostedRowsWithChecks = hybridHostedExistingRows +
