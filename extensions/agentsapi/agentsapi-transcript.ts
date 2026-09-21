@@ -5,9 +5,11 @@ import {
 import type {
   AgentHarnessAttemptParamsV2,
   AgentMessage,
+  AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { appendSessionTranscriptMessageByIdentityStrict } from "openclaw/plugin-sdk/session-transcript-runtime";
-import type { AgentsApiItem } from "./agentsapi-client.js";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { AgentsApiFunctionCall, AgentsApiItem } from "./agentsapi-client.js";
 import {
   agentsApiNativeTool,
   agentsApiNativeToolDetails,
@@ -110,6 +112,45 @@ export async function recordAgentsApiNativeToolInvocation(
     assertCurrent,
   );
   return true;
+}
+
+/** Persist host tool evidence before its result is acknowledged by the native session. */
+export async function recordAgentsApiToolTranscript(
+  params: AgentHarnessAttemptParamsV2,
+  call: AgentsApiFunctionCall,
+  result: Awaited<ReturnType<AnyAgentTool["execute"]>>,
+  isError: boolean,
+  assertCurrent: () => void,
+): Promise<void> {
+  const identity = `agentsapi:tool:${call.turn_id}:${call.call_id}`;
+  const attribution = {
+    api: "openai-responses" as const,
+    provider: "openai",
+    modelId: params.model.id,
+  };
+  const toolCall = {
+    ...createAgentHarnessToolCallMessage(
+      attribution,
+      { id: call.call_id, name: call.name, arguments: asOptionalRecord(call.arguments) ?? {} },
+      Date.now(),
+    ),
+    idempotencyKey: `${identity}:call`,
+  };
+  const toolResult = {
+    ...createAgentHarnessToolResultMessage(
+      {
+        id: call.call_id,
+        name: call.name,
+        content: result.content,
+        details: result.details,
+        isError,
+      },
+      Date.now(),
+    ),
+    idempotencyKey: `${identity}:result`,
+  };
+  await appendAgentsApiTranscriptMessage(params, toolCall, assertCurrent);
+  await appendAgentsApiTranscriptMessage(params, toolResult, assertCurrent);
 }
 
 export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMessage>(

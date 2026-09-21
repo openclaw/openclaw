@@ -174,6 +174,8 @@ OpenClaw and plugin functions. Gateway functions retain the normal tool policy,
 hooks, current-run authority, and delivery receipts; shell and file operations
 remain in the hosted VM. Tools such as memory search are available when their
 existing plugin and configuration enable them.
+OpenClaw records host function calls, arguments, results, and error status in
+its normal transcript before acknowledging the result to the native session.
 
 Apps, connectors, file transfer, image generation, custom context engines, and
 self-hosted executors are outside this prototype's scope. Admitted turns are

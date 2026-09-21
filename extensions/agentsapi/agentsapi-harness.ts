@@ -24,6 +24,7 @@ import {
   resolveAgentDir,
   runAgentEndSideEffects,
   runAgentHarnessLlmOutputHook,
+  sanitizeToolArgs,
   setActiveEmbeddedRun,
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessAttemptResult,
@@ -37,6 +38,7 @@ import {
   resolveOpenAIReasoningEffortMapping,
 } from "openclaw/plugin-sdk/llm";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { createAgentsApiMessageProjection } from "./agentsapi-messages.js";
@@ -404,10 +406,18 @@ async function runAgentsApiSession(
         startedToolCount++;
         await emitEvent({
           stream: "tool",
-          data: { phase: "start", name: call.name, toolCallId: call.call_id },
+          data: {
+            phase: "start",
+            name: call.name,
+            toolCallId: call.call_id,
+            args: asOptionalRecord(sanitizeToolArgs(call.arguments)),
+          },
         });
         assertCurrent();
-        return surface.execute(call);
+        const result = await surface.execute(call);
+        assertCurrent();
+        projection!.recordGatewayTranscriptReceipt(call.turn_id, call.call_id);
+        return result;
       },
       onFunctionResult: async (call, result) => {
         completedToolCount++;
@@ -418,8 +428,12 @@ async function runAgentsApiSession(
             name: call.name,
             toolCallId: call.call_id,
             isError: !result.success,
+            result: {
+              content: [{ type: "text", text: result.success ? result.output : result.error }],
+            },
           },
         });
+        assertCurrent();
       },
       onEvent: async (event) => {
         await projection!.observe(event);

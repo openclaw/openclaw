@@ -20,6 +20,8 @@ import {
   readTextParts,
 } from "./agentsapi-transcript.js";
 
+export { recordAgentsApiToolTranscript } from "./agentsapi-transcript.js";
+
 type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
 type NativeTurn = SDKTurn | AgentsApiTurn | NonNullable<AgentsApiEvent["turn"]>;
 type AgentsApiReply = {

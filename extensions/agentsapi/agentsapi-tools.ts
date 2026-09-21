@@ -51,6 +51,7 @@ import {
   sliceToolResultTextToBudget,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AgentsApiFunctionCall, AgentsApiFunctionDeclaration } from "./agentsapi-client.js";
+import { recordAgentsApiToolTranscript } from "./agentsapi-messages.js";
 
 type ToolDelivery = AgentHarnessMessagingDeliveryFacts &
   AgentHarnessToolMediaFacts &
@@ -371,7 +372,11 @@ export function buildAgentsApiToolSurface(
         replyToMode: params.replyToMode,
         hasRepliedRef: params.hasRepliedRef ? { value: params.hasRepliedRef.value } : undefined,
       };
-      return runAgentHarnessToolInvocation<AgentsApiToolExecutionResult>({
+      const { transcriptResult, ...nativeResult } = await runAgentHarnessToolInvocation<
+        AgentsApiToolExecutionResult & {
+          transcriptResult: Awaited<ReturnType<AnyAgentTool["execute"]>>;
+        }
+      >({
         tool: entry?.tool,
         unavailableToolMessage: `OpenClaw tool is not available for this turn: ${call.name}`,
         call: {
@@ -482,6 +487,7 @@ export function buildAgentsApiToolSurface(
           dispatchAfterHook(presented);
           const text = serializeToolText(presented.content, maxChars);
           return {
+            transcriptResult: observed,
             ...(isError
               ? { success: false as const, error: text }
               : { success: true as const, output: text }),
@@ -515,6 +521,7 @@ export function buildAgentsApiToolSurface(
           assertCurrent();
           dispatchAfterHook(undefined, message);
           return {
+            transcriptResult: failed,
             success: false,
             error: sliceToolResultTextToBudget(message, maxChars),
             ...(sourceReplyDelivered ? { sourceReplyDelivered: true } : {}),
@@ -522,6 +529,14 @@ export function buildAgentsApiToolSurface(
           };
         },
       });
+      await recordAgentsApiToolTranscript(
+        params,
+        call,
+        transcriptResult,
+        !nativeResult.success,
+        assertCurrent,
+      );
+      return nativeResult;
     },
   };
 }
