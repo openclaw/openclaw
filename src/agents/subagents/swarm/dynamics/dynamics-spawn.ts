@@ -11,6 +11,7 @@ function readRecord(value: unknown, name: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${name} must be an object`);
   }
+  // SAFETY: the guards above exclude null, arrays, and all non-object values.
   return value as Record<string, unknown>;
 }
 
