@@ -24,7 +24,6 @@ enum AppKitTestSupport {
     }
 
     static func startApplication() async throws {
-        FileHandle.standardError.write(Data("[appkit-test] preparing application\n".utf8))
         let application = self.application
         guard !application.isRunning else { return }
         await withCheckedContinuation { continuation in
@@ -32,9 +31,7 @@ enum AppKitTestSupport {
             // Otherwise macOS 27 can stop Swift's outer loop and exit before test completion.
             RunLoop.main.perform(inModes: [.common]) {
                 MainActor.assumeIsolated {
-                    FileHandle.standardError.write(Data("[appkit-test] entering application loop\n".utf8))
                     let started = Timer(timeInterval: 0, repeats: false) { _ in
-                        FileHandle.standardError.write(Data("[appkit-test] startup timer fired\n".utf8))
                         continuation.resume()
                     }
                     RunLoop.main.add(started, forMode: .common)
@@ -42,84 +39,7 @@ enum AppKitTestSupport {
                 }
             }
         }
-        FileHandle.standardError.write(Data("[appkit-test] application startup resumed\n".utf8))
         try #require(application.isRunning)
-    }
-
-    nonisolated static func sampleStalledProcess() -> DispatchWorkItem {
-        let pid = ProcessInfo.processInfo.processIdentifier
-        let diagnostic = DispatchWorkItem {
-            guard ProcessInfo.processInfo.environment["CI"] == "true" else { return }
-            FileHandle.standardError.write(Data("[appkit-test] sampling stalled rendered test\n".utf8))
-            self.runDiagnostic(
-                name: "thread sample", executable: "/usr/bin/sample", arguments: [String(pid), "1", "1"])
-            self.runDiagnostic(
-                name: "concurrency dump", executable: "/usr/bin/sudo",
-                arguments: ["-n", "/usr/bin/swift-inspect", "dump-concurrency", String(pid)],
-                requiresTaskDump: true)
-        }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 60, execute: diagnostic)
-        return diagnostic
-    }
-
-    private nonisolated static func runDiagnostic(
-        name: String,
-        executable: String,
-        arguments: [String],
-        requiresTaskDump: Bool = false)
-    {
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-native-diagnostic-\(UUID().uuidString).log")
-        var retainOutput = false
-        defer {
-            if !retainOutput { try? FileManager.default.removeItem(at: outputURL) }
-        }
-        do {
-            try Data().write(to: outputURL, options: .withoutOverwriting)
-            let output = try FileHandle(forWritingTo: outputURL)
-            defer { try? output.close() }
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            process.standardOutput = output
-            process.standardError = output
-            let exited = DispatchSemaphore(value: 0)
-            process.terminationHandler = { _ in exited.signal() }
-            try process.run()
-            let timedOut = exited.wait(timeout: .now() + 15) != .success
-            if timedOut {
-                if process.isRunning { _ = kill(process.processIdentifier, SIGTERM) }
-                if exited.wait(timeout: .now() + 2) != .success {
-                    if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
-                    guard exited.wait(timeout: .now() + 2) == .success else {
-                        retainOutput = true
-                        FileHandle.standardError
-                            .write(
-                                Data(
-                                    "[appkit-test] \(name) cleanup unverified for owned PID \(process.processIdentifier); retained \(outputURL.path)\n"
-                                        .utf8))
-                        return
-                    }
-                }
-            }
-            try output.close()
-            let data = try Data(contentsOf: outputURL)
-            let text = String(decoding: data, as: UTF8.self)
-            FileHandle.standardError
-                .write(Data("[appkit-test] \(name): exit=\(process.terminationStatus) timedOut=\(timedOut)\n".utf8))
-            FileHandle.standardError.write(data)
-            if requiresTaskDump,
-               timedOut || process.terminationStatus != 0 ||
-               !text.split(separator: "\n").contains("TASKS") ||
-               !(text.contains("async backtrace:") || text.contains("resume function:"))
-            {
-                FileHandle.standardError
-                    .write(Data("[appkit-test] concurrency dump unavailable; exit status alone is not task evidence\n"
-                            .utf8))
-            }
-        } catch {
-            FileHandle.standardError.write(Data("[appkit-test] \(name) unavailable: \(error)\n".utf8))
-        }
     }
 
     static func accessibilityElements(in root: AnyObject) async throws -> [AnyObject] {
@@ -143,6 +63,20 @@ enum AppKitTestSupport {
         return elements
     }
 
+    static func accessibilityTitle(of element: AnyObject) -> String? {
+        // SwiftUI menu titles may be attributed strings; the typed String getter raises an ObjC exception.
+        let selector = NSSelectorFromString("accessibilityTitle")
+        guard let object = element as? NSObject, object.responds(to: selector),
+              let value = object.perform(selector)?.takeUnretainedValue() else { return nil }
+        if let attributed = value as? NSAttributedString { return attributed.string }
+        return value as? String
+    }
+
+    static func accessibilityName(of element: AnyObject) -> String? {
+        if let label = element.accessibilityLabel?(), !label.isEmpty { return label }
+        return self.accessibilityTitle(of: element)
+    }
+
     static func waitForAccessibilityElement(
         in window: NSWindow,
         description: String,
@@ -164,7 +98,7 @@ enum AppKitTestSupport {
         }.joined(separator: "\n")
         let accessibility: String = observedElements.map {
             let role = String(describing: $0.accessibilityRole?())
-            let title = String(describing: $0.accessibilityTitle?())
+            let title = String(describing: self.accessibilityTitle(of: $0))
             let label = String(describing: $0.accessibilityLabel?())
             let value: Any? = $0.accessibilityValue?()
             let identifier = String(describing: $0.accessibilityIdentifier?())
@@ -208,7 +142,7 @@ enum AppKitTestSupport {
         print("""
         Before menu dispatch at \(file):\(line)
         node=\(ObjectIdentifier(button)) type=\(text(controlType)) role=\(String(describing: role))
-        identifier=\(text(button.accessibilityIdentifier?())) title=\(text(button.accessibilityTitle?())) label=\(text(button.accessibilityLabel?())) value=\(text(valueText))
+        identifier=\(text(button.accessibilityIdentifier?())) title=\(text(self.accessibilityTitle(of: button))) label=\(text(button.accessibilityLabel?())) value=\(text(valueText))
         enabled=\(String(describing: enabled)) frame=\(String(describing: frame)) window=\(window.windowNumber) windowMatches=\(windowMatches)
         pressAllowed=\(String(describing: pressAllowed)) showMenuAllowed=\(String(describing: showMenuAllowed)) remaining=\(ContinuousClock.now.duration(to: tracking.expiresAt)) appRunning=\(NSApp.isRunning)
         """)

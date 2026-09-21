@@ -9,21 +9,15 @@ import Testing
 @MainActor
 struct QuickChatCatalogPresentationTests {
     @Test func `rendered Quick Chat preserves catalog disclosure and shortcut behavior in order`() async throws {
-        let diagnostic = AppKitTestSupport.sampleStalledProcess()
-        defer { diagnostic.cancel() }
         try await TestIsolation.withIsolatedState {
             try await AppKitTestSupport.startApplication()
             let application = AppKitTestSupport.application
             let previousAppearance = application.appearance
             defer { application.appearance = previousAppearance }
-            FileHandle.standardError.write(Data("[quickchat-proof] catalog started\n".utf8))
             try await self.checkRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed()
-            FileHandle.standardError.write(Data("[quickchat-proof] catalog finished; disclosure started\n".utf8))
             let presentation = QuickChatPresentationTests()
             try await presentation.checkConversationDisclosurePreservesOneComposerAndItsDraft()
-            FileHandle.standardError.write(Data("[quickchat-proof] disclosure finished; shortcut started\n".utf8))
             try await presentation.checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership()
-            FileHandle.standardError.write(Data("[quickchat-proof] shortcut finished\n".utf8))
         }
     }
 
@@ -147,24 +141,15 @@ struct QuickChatCatalogPresentationTests {
                 let unknown = try #require(choices.items.firstIndex { $0.title == "Unknown fixture" })
                 choices.performActionForItem(at: unknown)
             }
-            FileHandle.standardError.write(Data("[quickchat-proof] final catalog selection waiting\n".utf8))
             try await self.waitForModel { !model.isUpdatingModel }
-            FileHandle.standardError
-                .write(Data("[quickchat-proof] final catalog selection settled; reading patches\n".utf8))
             #expect(model.displayedModelSelectionID == "fixture/unknown")
             let patches = await fixture.patches
             #expect(patches == ["model=fixture/allowed", "fast=true", "fast=null", "model=fixture/unknown"])
-            FileHandle.standardError.write(Data("[quickchat-proof] catalog stopping controller\n".utf8))
             controller.stop()
-            FileHandle.standardError.write(Data("[quickchat-proof] catalog shutting down gateway\n".utf8))
             await gateway.shutdown()
-            FileHandle.standardError.write(Data("[quickchat-proof] catalog gateway stopped\n".utf8))
         } catch {
-            FileHandle.standardError.write(Data("[quickchat-proof] catalog failed; stopping controller\n".utf8))
             controller.stop()
-            FileHandle.standardError.write(Data("[quickchat-proof] failed catalog shutting down gateway\n".utf8))
             await gateway.shutdown()
-            FileHandle.standardError.write(Data("[quickchat-proof] failed catalog gateway stopped\n".utf8))
             throw error
         }
     }

@@ -75,40 +75,30 @@ struct QuickChatPresentationTests {
         #expect(self.composerCount(in: content) == 1)
 
         model.text = "Clean up the confirmed test sessions."
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure initial send starting\n".utf8))
         let accepted = await model.send()
-        FileHandle.standardError
-            .write(Data("[quickchat-proof] disclosure initial send finished accepted=\(accepted)\n".utf8))
         #expect(accepted)
         controller.handleSendAcceptedForTesting(openChat: false)
         let reply = try #require(controller.replyBinding.viewModel)
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure reply readiness waiting\n".utf8))
         try await self.waitUntil {
             reply.messages.count == 2 && !reply.isLoading &&
                 reply.contextUsage != nil && reply.progressCard?.steps?.count == 2
         }
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure reply readiness wait finished\n".utf8))
         #expect(reply.contextUsage?.percentUsed == 46)
         #expect(reply.progressCard?.steps?.count == 2)
         #expect(reply.modelCatalogMessage == nil)
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure context accessibility waiting\n".utf8))
         let contextControl = try await AppKitTestSupport.waitForAccessibilityElement(
             in: panel, description: "the context usage control")
         { elements in
-            elements.first { $0.accessibilityLabel?() == "Context usage" }
+            elements.first { AppKitTestSupport.accessibilityName(of: $0) == "Context usage" }
         }
         let contextValue: Any? = contextControl.accessibilityValue?()
         #expect(contextValue as? String == "46 percent of the context window used")
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure context accessibility ready\n".utf8))
         model.text = "Can you show me what changed?"
         try await self.captureQuickChat(content, name: "expanded")
         #expect(self.composerCount(in: content) == 1, "Expanded Quick Chat must keep a single composer")
         #expect(reply.sessionKey == "agent:main:main")
-
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure streaming event starting\n".utf8))
         await transport.beginThinking()
         try await self.waitUntil { reply.streamingAssistantText != nil }
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure streaming text ready\n".utf8))
         let streamingText = try #require(reply.streamingAssistantText)
         _ = try await AppKitTestSupport.waitForAccessibilityElement(
             in: panel, description: "the live reply before collapsing")
@@ -121,23 +111,15 @@ struct QuickChatPresentationTests {
         }
         let releaseHistory = AsyncTestGate()
         defer { releaseHistory.open() }
-        FileHandle.standardError
-            .write(Data("[quickchat-proof] disclosure live accessibility ready; holding history\n".utf8))
         await transport.holdHistory(until: releaseHistory)
-
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure collapsing\n".utf8))
         controller.toggleReply()
         try await self.waitForDisclosure(in: panel, expanded: false)
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure collapsed\n".utf8))
         #expect(controller.replyBinding.viewModel === reply)
         #expect(model.text == "Can you show me what changed?")
         try await self.captureQuickChat(content, name: "collapsed-with-draft")
         #expect(self.composerCount(in: content) == 1)
-
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure reopening\n".utf8))
         controller.toggleReply()
         try await self.waitForDisclosure(in: panel, expanded: true)
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure reopened\n".utf8))
         #expect(controller.replyBinding.viewModel === reply)
         #expect(model.text == "Can you show me what changed?")
         #expect(
@@ -145,7 +127,6 @@ struct QuickChatPresentationTests {
             "Reopening must retain the live reply while history is unavailable")
         #expect(!reply.isLoading, "Reopening must not restart history bootstrap")
         releaseHistory.open()
-        FileHandle.standardError.write(Data("[quickchat-proof] disclosure history hold released\n".utf8))
 
         try await self.captureQuickChat(content, name: "thinking")
         #expect(model.text == "Can you show me what changed?")
@@ -162,12 +143,8 @@ struct QuickChatPresentationTests {
         }
         let followupAccepted: Bool
         do {
-            FileHandle.standardError
-                .write(Data("[quickchat-proof] disclosure follow-up provider receipt waiting\n".utf8))
             var iterator = sendEvents.stream.makeAsyncIterator()
             let event = await iterator.next()
-            FileHandle.standardError
-                .write(Data("[quickchat-proof] disclosure follow-up receipt=\(String(describing: event))\n".utf8))
             if event != .entered {
                 FileHandle.standardError.write(Data("""
                 [quickchat-proof] follow-up rejected before provider: visible=\(controller.isVisible) activePresentation=\(model.activePresentationID != nil) canSend=\(model.canSend) routeEmpty=\(model.sessionKey.isEmpty) draftEmpty=\(model.text.isEmpty) sendState=\(model.sendState)

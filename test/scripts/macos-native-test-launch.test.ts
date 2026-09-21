@@ -326,6 +326,7 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
         expect(test.env.SWIFT_BACKTRACE).toBe(
           "enable=yes,interactive=no,color=no,sanitize=yes,threads=crashed,registers=none,images=mentioned",
         );
+        expect(test.env.NSUnbufferedIO).toBe("YES");
         for (const key of [
           "DEVELOPER_DIR",
           "DYLD_FRAMEWORK_PATH",
