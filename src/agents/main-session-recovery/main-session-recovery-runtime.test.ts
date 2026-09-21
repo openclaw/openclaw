@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 
@@ -80,6 +81,67 @@ it.each(["admitted", "read-error", "failed", "failed-read-error", "failed-cancel
       read.mockReturnValue({ ...initial, abortedLastRun: false, status: "failed" });
       cleanup.resolve();
       sessionChanges.emit(scope);
+      await pending;
+    }
+  },
+);
+
+it.each([false, true])(
+  "waits for both physical stores sharing a session key (reverse=%s)",
+  async (reverse) => {
+    vi.useFakeTimers();
+    const scopes = ["ops", " ops "].map((directory) => ({
+      storePath: `/fixture/agents/${directory}/sessions/sessions.json`,
+      sessionKey: "agent:ops:main",
+    }));
+    const entries = new Map<string, SessionEntry>(
+      scopes.map((scope, index) => [
+        scope.storePath,
+        { sessionId: `session-${index}`, updatedAt: 1, status: "running", abortedLastRun: true },
+      ]),
+    );
+    vi.mocked(loadSessionEntry).mockImplementation((scope) => {
+      if (!scope.storePath) {
+        throw new Error("Expected a physical recovery store");
+      }
+      return entries.get(scope.storePath);
+    });
+    const runtime = createRecoveryRuntimeFixture({
+      callGateway: vi.fn(async () => {
+        throw new Error("Unexpected Gateway call");
+      }),
+      getDispatchSettlement: async () => {},
+      sendRecoveryNotice: async () => ({ suppressed: false }),
+    });
+    const cancellation = new AbortController();
+    const stop = vi.fn(async () => {});
+    const observed = vi.fn();
+    const pending = runtime
+      .expectFailedRecovery(0, { stop }, cancellation.signal, ...scopes)
+      .then(observed);
+    const complete = (scope: (typeof scopes)[number]) => {
+      const entry = entries.get(scope.storePath);
+      if (!entry) {
+        throw new Error("Missing recovery fixture row");
+      }
+      entries.set(scope.storePath, { ...entry, status: "failed", abortedLastRun: false });
+      sessionChanges.emit(scope);
+    };
+    try {
+      const ordered = reverse ? scopes.toReversed() : scopes;
+      for (const [index, scope] of ordered.entries()) {
+        complete(scope);
+        await vi.advanceTimersByTimeAsync(0);
+        if (index === 0) {
+          expect(observed).not.toHaveBeenCalled();
+          expect(stop).not.toHaveBeenCalled();
+        }
+      }
+      await pending;
+      expect(observed).toHaveBeenCalledOnce();
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      scopes.forEach(complete);
       await pending;
     }
   },
