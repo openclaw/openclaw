@@ -75,14 +75,19 @@ struct QuickChatPresentationTests {
         #expect(self.composerCount(in: content) == 1)
 
         model.text = "Clean up the confirmed test sessions."
+        FileHandle.standardError.write(Data("[quickchat-proof] disclosure initial send starting\n".utf8))
         let accepted = await model.send()
+        FileHandle.standardError
+            .write(Data("[quickchat-proof] disclosure initial send finished accepted=\(accepted)\n".utf8))
         #expect(accepted)
         controller.handleSendAcceptedForTesting(openChat: false)
         let reply = try #require(controller.replyBinding.viewModel)
+        FileHandle.standardError.write(Data("[quickchat-proof] disclosure reply readiness waiting\n".utf8))
         try await self.waitUntil {
             reply.messages.count == 2 && !reply.isLoading &&
                 reply.contextUsage != nil && reply.progressCard?.steps?.count == 2
         }
+        FileHandle.standardError.write(Data("[quickchat-proof] disclosure reply readiness wait finished\n".utf8))
         #expect(reply.contextUsage?.percentUsed == 46)
         #expect(reply.progressCard?.steps?.count == 2)
         #expect(reply.modelCatalogMessage == nil)
@@ -130,20 +135,45 @@ struct QuickChatPresentationTests {
             "Reopening must retain the live reply while history is unavailable")
         #expect(!reply.isLoading, "Reopening must not restart history bootstrap")
         releaseHistory.open()
+        FileHandle.standardError.write(Data("[quickchat-proof] disclosure history hold released\n".utf8))
 
         try await self.captureQuickChat(content, name: "thinking")
         #expect(model.text == "Can you show me what changed?")
 
-        let sendEntered = AsyncTestGate()
+        let sendEvents = AsyncStream.makeStream(of: QuickChatPresentationSendEvent.self)
         let acknowledgeSend = AsyncTestGate()
         defer { acknowledgeSend.open() }
-        await transport.holdNextSend(entered: sendEntered, acknowledgement: acknowledgeSend)
-        let pendingSend = Task { await model.send() }
-        await sendEntered.wait()
-        controller.toggleReply()
-        try await self.waitForDisclosure(in: panel, expanded: false)
-        acknowledgeSend.open()
-        let followupAccepted = await pendingSend.value
+        await transport.holdNextSend(entered: sendEvents.continuation, acknowledgement: acknowledgeSend)
+        let pendingSend = Task {
+            defer { sendEvents.continuation.finish() }
+            let accepted = await model.send()
+            sendEvents.continuation.yield(.completed(accepted))
+            return accepted
+        }
+        let followupAccepted: Bool
+        do {
+            FileHandle.standardError
+                .write(Data("[quickchat-proof] disclosure follow-up provider receipt waiting\n".utf8))
+            var iterator = sendEvents.stream.makeAsyncIterator()
+            let event = await iterator.next()
+            FileHandle.standardError
+                .write(Data("[quickchat-proof] disclosure follow-up receipt=\(String(describing: event))\n".utf8))
+            if event != .entered {
+                FileHandle.standardError.write(Data("""
+                [quickchat-proof] follow-up rejected before provider: visible=\(controller.isVisible) activePresentation=\(model.activePresentationID != nil) canSend=\(model.canSend) routeEmpty=\(model.sessionKey.isEmpty) draftEmpty=\(model.text.isEmpty) sendState=\(model.sendState)
+
+                """.utf8))
+            }
+            try #require(event == .entered, "The follow-up send must enter its provider before disclosure changes")
+            controller.toggleReply()
+            try await self.waitForDisclosure(in: panel, expanded: false)
+            acknowledgeSend.open()
+            followupAccepted = await pendingSend.value
+        } catch {
+            acknowledgeSend.open()
+            _ = await pendingSend.value
+            throw error
+        }
         #expect(followupAccepted)
         controller.handleSendAcceptedForTesting(openChat: false)
         try await self.waitForDisclosure(in: panel, expanded: false)
@@ -288,11 +318,18 @@ struct QuickChatPresentationTests {
     }
 }
 
+private enum QuickChatPresentationSendEvent: Equatable, Sendable {
+    case entered
+    case completed(Bool)
+}
+
 private actor QuickChatPresentationTransport: OpenClawChatTransport {
     nonisolated let stream: AsyncStream<OpenClawChatTransportEvent>
     private let continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation
     private var acceptedKey = ""
-    private var heldSend: (entered: AsyncTestGate, acknowledgement: AsyncTestGate)?
+    private var heldSend: (
+        entered: AsyncStream<QuickChatPresentationSendEvent>.Continuation,
+        acknowledgement: AsyncTestGate)?
     private var historyRelease: AsyncTestGate?
 
     init() {
@@ -303,12 +340,15 @@ private actor QuickChatPresentationTransport: OpenClawChatTransport {
         self.acceptedKey = key
         if let heldSend = self.heldSend {
             self.heldSend = nil
-            heldSend.entered.open()
+            heldSend.entered.yield(.entered)
             await heldSend.acknowledgement.wait()
         }
     }
 
-    func holdNextSend(entered: AsyncTestGate, acknowledgement: AsyncTestGate) {
+    func holdNextSend(
+        entered: AsyncStream<QuickChatPresentationSendEvent>.Continuation,
+        acknowledgement: AsyncTestGate)
+    {
         self.heldSend = (entered, acknowledgement)
     }
 
