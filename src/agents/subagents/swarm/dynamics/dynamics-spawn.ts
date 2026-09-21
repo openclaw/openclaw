@@ -72,11 +72,18 @@ export function prepareDynamicsSpawn(params: {
     boundary: profile.contextBoundary,
     payload,
   });
-  if (
-    profile.id === "independent-verifier" &&
-    (!handoff.candidateDigest || handoff.artifactRefs.length === 0)
-  ) {
-    throw new Error("independent-verifier requires a candidate digest and artifact references");
+  const missingRequirements = [
+    ...(profile.requirements.candidateDigest === "required" && !handoff.candidateDigest
+      ? ["candidate digest"]
+      : []),
+    ...(profile.requirements.artifactRefs === "required" && handoff.artifactRefs.length === 0
+      ? ["artifact references"]
+      : []),
+  ];
+  if (missingRequirements.length > 0) {
+    throw new Error(
+      `${profile.id} profile requires ${missingRequirements.join(" and ")} for this handoff`,
+    );
   }
   const instructions =
     profile.mutationBudget === 0
@@ -95,6 +102,6 @@ export function prepareDynamicsSpawn(params: {
   return {
     task,
     context: "isolated",
-    ...(profile.id === "independent-verifier" ? { sandbox: "require" as const } : {}),
+    ...(profile.requirements.sandbox === "require" ? { sandbox: "require" as const } : {}),
   };
 }
