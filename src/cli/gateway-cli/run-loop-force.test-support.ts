@@ -128,7 +128,7 @@ export function registerGatewayForcedRestartTests({
         return drain.promise;
       });
       await withIsolatedSignals(async ({ captureSignal }) => {
-        const closing = createDeferredCore<void>();
+        const closing = createDeferredCore();
         const close = createCloseMock();
         if (stallClose) {
           close.mockImplementationOnce(() => closing.promise);
@@ -142,7 +142,10 @@ export function registerGatewayForcedRestartTests({
         const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
         if (refreshMs) {
           systemctl.mockImplementationOnce(
-            () => new Promise((resolve) => setTimeout(() => resolve(nativeReply), refreshMs)),
+            () =>
+              new Promise((resolve) => {
+                setTimeout(() => resolve(nativeReply), refreshMs);
+              }),
           );
         }
         try {
