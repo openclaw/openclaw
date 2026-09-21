@@ -47,7 +47,15 @@ export const ThemeDefinitionSchema = closedObject({
   critters: Type.Optional(
     Type.Array(Type.Union([Type.Literal("penguin"), Type.Literal("fedora")]), { maxItems: 8 }),
   ),
-  avatarHat: Type.Optional(Type.Union([Type.Literal("fedora")])),
+  avatarHat: Type.Optional(
+    Type.Union([
+      Type.Literal("fedora"),
+      Type.Literal("crown"),
+      Type.Literal("santa"),
+      Type.Literal("party"),
+      Type.Literal("pumpkin"),
+    ]),
+  ),
   light: Type.Optional(ThemePaletteSchema),
   dark: Type.Optional(ThemePaletteSchema),
 });

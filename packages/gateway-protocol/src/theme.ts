@@ -43,7 +43,7 @@ export type ThemeCritterId = (typeof THEME_CRITTER_IDS)[number];
 export function isThemeCritterId(value: unknown): value is ThemeCritterId {
   return THEME_CRITTER_IDS.some((id) => id === value);
 }
-export const THEME_AVATAR_HAT_IDS = ["fedora"] as const;
+export const THEME_AVATAR_HAT_IDS = ["fedora", "crown", "santa", "party", "pumpkin"] as const;
 export type ThemeAvatarHatId = (typeof THEME_AVATAR_HAT_IDS)[number];
 export const THEME_WORKING_PHRASES_MAX = 24;
 export const THEME_WORKING_PHRASE_MAX_LENGTH = 24;
