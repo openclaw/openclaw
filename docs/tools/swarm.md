@@ -173,14 +173,65 @@ starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
 They do not delay the script if the UI is unavailable.
 
-The optional `dynamics` field selects an experimental, host-owned cognitive profile for
-the collector launch. It changes search guidance and the explicit handoff bytes prepared
-for that child; it does not grant tools, change approvals, or set the model sampling
-temperature. `independent-verifier` requires a candidate digest plus artifact
-references and asks the existing spawn owner for a required sandbox. If that sandbox
-cannot be provided, the launch fails rather than retrying unsandboxed. Handoff filtering
-only controls the explicit `dynamics.handoff` payload; it is not a security boundary for
-the original task, workspace, memory, or tool visibility.
+The optional `dynamics` field selects an experimental, host-owned cognitive
+profile for the collector launch. It changes search guidance and the explicit
+handoff bytes prepared for that child; it does not grant tools, change approvals,
+or set the model sampling temperature. `independent-verifier` requires a
+candidate digest plus artifact references and asks the existing spawn owner for a
+required sandbox. If that sandbox cannot be provided, the launch fails rather
+than retrying unsandboxed. Handoff filtering only controls the explicit
+`dynamics.handoff` payload; it is not a security boundary for the original task,
+workspace, memory, or tool visibility.
+
+## Liquid Swarm: mixed-phase cognition
+
+The dynamics model uses soft-matter language as an operational vocabulary for
+heterogeneous agent search, not as a claim that model behavior obeys literal
+thermodynamics. The important idea is that one Swarm does not need one global
+"thinking mode." Different replicas can occupy different search regimes at the
+same time.
+
+- **Gas**: high candidate diversity and low coherence. Keep exploration bounded
+  and decorrelated.
+- **Liquid**: useful mobility with rising coherence while evidence is still
+  incomplete. This is the preferred operating regime for productive search.
+- **Critical**: disagreement or sensitivity is high enough that another
+  implementation is less useful than a discriminating measurement.
+- **Crystal**: one exact candidate has low entropy, high coherence, and enough
+  evidence to freeze for independent verification. A crystal is a candidate
+  state, not a whole-Swarm stop condition and not permission to publish.
+- **Glass**: mobility and progress are low without enough evidence. Use a
+  bounded fresh-context perturbation instead of repeating the same trajectory.
+- **Jam**: resource, context, or cleanup pressure dominates. Drain before
+  spawning more work.
+
+These regimes may coexist. A group can keep hot explorers running while a
+different candidate is frozen and cold verifiers measure it. The controller is
+therefore local and mixed-phase rather than one global temperature schedule.
+
+`effectiveTemperature` is policy-level exploration freedom: it can describe
+mutation allowance, context inheritance, role diversity, and fan-out posture.
+It is not an LLM sampling-temperature knob unless a future runtime explicitly
+binds it to one.
+
+Sandbox and session boundaries are the execution medium around each replica.
+Explicit handoffs describe what crosses between trajectories; required sandbox
+admission is still enforced by the existing spawn owner. The analogy does not
+upgrade a handoff filter into an isolation boundary.
+
+The authority invariant is stricter than the search policy: cognitive dynamics
+may choose or narrow how the Swarm searches, but they never expand what the
+Swarm is allowed to do. Existing admission, tool policy, sandbox, cancellation,
+and approval owners remain authoritative. Later layers can add host-owned phase
+observations, exact-candidate evidence, and request-only effects without
+changing that rule.
+
+What this adds to ordinary multi-agent fan-out is the combination of local
+phase coexistence, host-observed control signals, explicit information
+boundaries, evidence-bound convergence, and an exact candidate that remains
+request-only after verification. The goal is not more agents; it is more
+independent information during exploration and more deterministic convergence
+before an external effect.
 
 ### Fan out in parallel with structured results
 
