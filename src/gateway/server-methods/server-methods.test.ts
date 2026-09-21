@@ -4390,17 +4390,18 @@ describe("exec approval handlers", () => {
   });
 
   it("sends iOS cleanup delivery on resolve", async (testContext) => {
-    const iosPushDelivery = createIosPushDelivery();
+    const delivered = createDeferredCore();
+    const iosPushDelivery = createIosPushDelivery(
+      vi.fn(async () => {
+        delivered.resolve();
+        return true;
+      }),
+    );
     const fixture = createForwardingExecApprovalFixture(testContext, {
       iosPushDelivery,
     });
     return await fixture.run(async () => {
       const { handlers, respond, context } = fixture;
-      const delivered = createDeferredCore();
-      iosPushDelivery.handleRequested.mockImplementationOnce(async () => {
-        delivered.resolve();
-        return true;
-      });
       const requestPromise = fixture.track(
         requestExecApproval({
           handlers,
@@ -4434,17 +4435,18 @@ describe("exec approval handlers", () => {
   });
 
   it("sends Web Push terminal replacement on resolve", async (testContext) => {
-    const webPushDelivery = createWebPushDelivery();
+    const delivered = createDeferredCore();
+    const webPushDelivery = createWebPushDelivery(
+      vi.fn(async () => {
+        delivered.resolve();
+        return true;
+      }),
+    );
     const fixture = createForwardingExecApprovalFixture(testContext, {
       webPushDelivery,
     });
     return await fixture.run(async () => {
       const { handlers, respond, context } = fixture;
-      const delivered = createDeferredCore();
-      webPushDelivery.handleRequested.mockImplementationOnce(async () => {
-        delivered.resolve();
-        return true;
-      });
       const requestPromise = fixture.track(
         requestExecApproval({
           handlers,
