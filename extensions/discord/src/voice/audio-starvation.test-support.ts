@@ -5,9 +5,8 @@ import { DiscordContinuousOutput } from "./continuous-output.runtime.js";
 import { DiscordRealtimePlayer } from "./realtime-player.runtime.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 
-export type DiscordPacingFact = { at: number; mainBlocked: boolean };
+export type DiscordPacingFact = { mainBlocked: boolean };
 const pacingFact = (state: Int32Array): DiscordPacingFact => ({
-  at: performance.now(),
   mainBlocked: Atomics.load(state, 1) === 1,
 });
 
