@@ -913,7 +913,10 @@ describe("doctor lint state isolation", () => {
     const databasePath = resolveOpenClawStateSqlitePath(process.env);
     await closeOpenClawStateDatabaseByPathAsync(databasePath);
     const lock = new DatabaseSync(databasePath);
-    // Initialize WAL artifacts before hashing; Windows rejects raw reads under a write lock.
+    // Windows enforces SQLite's byte-range locks on ordinary file reads. Hash
+    // outside the write transaction; the actual inspection still runs while a
+    // writer holds the database, and rollback must leave its bytes unchanged.
+    // Prime the fixture's own WAL/SHM files before taking that baseline.
     lock.exec("BEGIN IMMEDIATE; ROLLBACK");
     const before = snapshotDoctorLintSqliteFamily(databasePath);
     let resolvedToken: string | undefined;
@@ -925,6 +928,8 @@ describe("doctor lint state isolation", () => {
         async detect() {
           const privateDatabasePath = resolveOpenClawStateSqlitePath(process.env);
           expect(privateDatabasePath).not.toBe(databasePath);
+          // The private snapshot can exceed MAX_PATH on Windows. Use the same
+          // filesystem-location boundary as the inspected state owner.
           const competingWriter = openNodeSqliteDatabase(privateDatabasePath);
           competingWriter.exec("BEGIN IMMEDIATE");
           const signal = AbortSignal.timeout(250);
@@ -953,34 +958,34 @@ describe("doctor lint state isolation", () => {
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
       lock.exec("BEGIN IMMEDIATE");
-      const exitCode = await runDoctorLintCli(runtime, {
-        json: true,
-        onlyIds: ["core/doctor/runtime-tool-schemas"],
-      });
-      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
-        ok: true,
-        checksRun: 1,
-        findings: [],
-        warnings: [
-          {
-            checkId: "core/doctor/runtime-tool-schemas",
-            severity: "info",
-            errorCode: "OPENCLAW_STATE_LEASE_ABORTED",
-            message: expect.stringMatching(
-              /^state lease inspection not performed: aborted after \d+ ms by the caller's signal$/,
-            ),
-          },
-        ],
-      });
-      lock.exec("ROLLBACK");
-      expect(exitCode).toBe(0);
-      expect(resolvedToken).toBeUndefined();
+      try {
+        const exitCode = await runDoctorLintCli(runtime, {
+          json: true,
+          onlyIds: ["core/doctor/runtime-tool-schemas"],
+        });
+        expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+          ok: true,
+          checksRun: 1,
+          findings: [],
+          warnings: [
+            {
+              checkId: "core/doctor/runtime-tool-schemas",
+              severity: "info",
+              errorCode: "OPENCLAW_STATE_LEASE_ABORTED",
+              message: expect.stringMatching(
+                /^state lease inspection not performed: aborted after \d+ ms by the caller's signal$/,
+              ),
+            },
+          ],
+        });
+        expect(exitCode).toBe(0);
+        expect(resolvedToken).toBeUndefined();
+      } finally {
+        lock.exec("ROLLBACK");
+      }
       expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
     } finally {
       stdout.mockRestore();
-      if (lock.isTransaction) {
-        lock.exec("ROLLBACK");
-      }
       lock.close();
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
       fs.rmSync(rootDir, { recursive: true, force: true });

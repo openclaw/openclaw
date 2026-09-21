@@ -47,6 +47,7 @@ Options:
 }
 
 $script:InstallExitCode = 0
+$script:ValidatedNodePath = $null
 
 function Fail-Install {
     param([int]$Code = 1)
@@ -324,12 +325,24 @@ function Test-NodeSqliteSupported {
 function Check-Node {
     param([string]$NodePath)
 
+    $script:ValidatedNodePath = $null
+
     try {
         if ([string]::IsNullOrWhiteSpace($NodePath)) {
             $nodeCommand = Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1
             $NodePath = $nodeCommand.Source
         }
+        if ([string]::IsNullOrWhiteSpace($NodePath)) {
+            throw "Node.js not found"
+        }
+        $NodePath = [System.IO.Path]::GetFullPath($NodePath)
+        if (-not (Test-Path -LiteralPath $NodePath -PathType Leaf)) {
+            throw "Node.js not found"
+        }
         $nodeVersion = (& $nodePath -v 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            return $false
+        }
         $sqliteProbe = @'
 const result = { available: false, version: null, text: false, blob: false, json: false };
 let db;
@@ -370,6 +383,7 @@ process.stdout.write(JSON.stringify(result));
                 $sqlite.text -and $sqlite.blob -and $sqlite.json -and -not $sqlite.error
             ) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
+                $script:ValidatedNodePath = $NodePath
                 return $true
             } elseif ($sqlite.available -and -not $sqlite.text -and -not $sqlite.error) {
                 Write-Host "[!] Node $nodeVersion`: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix" -ForegroundColor Yellow
@@ -1716,30 +1730,138 @@ function Test-NpmLifecycleCompleted {
     return (Test-Path -LiteralPath $entryPath -PathType Leaf) -and -not (Test-Path -LiteralPath $pendingPath) -and -not (Test-Path -LiteralPath $legacyGuardPath)
 }
 
-function Format-OpenClawGitWrapper {
-    param([string]$EntryPath)
-    return "@echo off`r`nnode `"$EntryPath`" %*`r`n"
-}
-
-function Publish-TextFileAtomically {
+function Install-GitLauncher {
     param(
-        [string]$Path,
-        [string]$Contents
+        [string]$NodePath,
+        [string]$EntryPath
     )
-    $directory = Split-Path -Parent $Path
-    New-Item -ItemType Directory -Force -Path $directory | Out-Null
-    $temporaryPath = Join-Path $directory (".openclaw-wrapper-" + [guid]::NewGuid().ToString("N") + ".cmd")
-    $encoding = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($temporaryPath, $Contents, $encoding)
-    try {
-        if (Test-Path -LiteralPath $Path) {
-            [System.IO.File]::Replace($temporaryPath, $Path, $null)
-        } else {
-            [System.IO.File]::Move($temporaryPath, $Path)
+
+    function Publish-RetainedGitLauncher {
+        # Published checkouts selected with -NoGitUpdate (or a dirty tree) cannot
+        # acquire this PR's hidden command. Keep this compatibility bridge until
+        # those supported retained releases all provide install-git-launcher.
+        if (-not (Test-Path -LiteralPath $EntryPath -PathType Leaf) -or -not (Check-Node -NodePath $NodePath)) { return $false }
+        $runtime = [IO.Path]::GetFullPath($script:ValidatedNodePath)
+        $entry = [IO.Path]::GetFullPath($EntryPath)
+        foreach ($value in @($runtime, $entry)) {
+            if ($value.IndexOfAny([char[]]@([char]0, [char]10, [char]13, [char]34)) -ge 0) { throw 'Git launcher paths cannot contain NUL, quotes, CR, or LF.' }
         }
+        $previous = $null
+        if (Test-Path -LiteralPath $wrapper) {
+            if (-not (Test-PreviousGitWrapper -Path $wrapper -EntryPath $entry)) { return $false }
+            $previous = [Convert]::ToBase64String([IO.File]::ReadAllBytes($wrapper))
+        }
+        $runtime = $runtime.Replace('%', '%%')
+        $entry = $entry.Replace('%', '%%')
+        # Use the same recognized body as the current CLI. An explicit UTF-8
+        # preamble keeps non-ASCII paths valid without depending on the old build.
+        $contents = @(
+            '@chcp 65001 >nul',
+            '@rem openclaw-launcher-encoding=utf-8',
+            '@echo off',
+            'rem OpenClaw Git launcher',
+            'setlocal DisableDelayedExpansion',
+            "if exist `"$runtime`" goto openclaw_runtime_ready",
+            'echo [!] OpenClaw''s validated Node.js runtime is missing. 1>&2',
+            'echo [i] Re-run the OpenClaw installer to repair this Git installation. 1>&2',
+            'exit /b 1',
+            ':openclaw_runtime_ready',
+            "`"$runtime`" `"$entry`" %*",
+            ''
+        ) -join "`r`n"
+        $directory = Split-Path -Parent $wrapper
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        $temporary = Join-Path $directory ('.openclaw-launcher-' + [guid]::NewGuid().ToString('N') + '.tmp')
+        $claimed = $null
+        try {
+            $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+            try {
+                $bytes = [Text.UTF8Encoding]::new($false).GetBytes($contents)
+                $stream.Write($bytes, 0, $bytes.Length)
+                $stream.Flush($true)
+            } finally { $stream.Dispose() }
+            if ($null -ne $previous) {
+                # Claim the old file without overwriting anything. Validate the
+                # claimed object, not a path another publisher can replace between
+                # inspection and commit. The public path may briefly be absent.
+                $claimPath = Join-Path $directory ('.openclaw-launcher-recovery-' + [guid]::NewGuid().ToString('N'))
+                [IO.File]::Move($wrapper, $claimPath)
+                $claimed = $claimPath
+                if (-not (Test-PreviousGitWrapper -Path $claimed -EntryPath $EntryPath) -or [Convert]::ToBase64String([IO.File]::ReadAllBytes($claimed)) -cne $previous) { throw 'Git launcher changed before publication.' }
+            }
+            # Never overwrite a publisher that appeared after inspection/claim.
+            [IO.File]::Move($temporary, $wrapper)
+            if ($claimed) { Remove-Item -LiteralPath $claimed -Force; $claimed = $null }
+            return $true
+        } finally {
+            if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+            if ($claimed) {
+                try { [IO.File]::Move($claimed, $wrapper) } catch {
+                    throw "Git launcher publication failed; recovery retained at $claimed. The current launcher was not overwritten. $($_.Exception.Message)"
+                }
+            }
+        }
+    }
+
+    # Help is non-mutating on released CLIs. Only a recognized missing-command
+    # contract enables compatibility; arbitrary CLI failures remain fatal.
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $helpOutput = @(& $NodePath $EntryPath update install-git-launcher --help 2>&1)
+        $helpExit = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousErrorAction }
+    $helpText = ($helpOutput | ForEach-Object { $_.ToString() }) -join "`n"
+    $hasLauncherCommand = $helpExit -eq 0 -and $helpText -match '(?m)^Usage:\s+openclaw update install-git-launcher(?:\s|\[|$)'
+    $retainedCheckout = -not $hasLauncherCommand -and (
+        ($helpExit -eq 0 -and $helpText -match '(?m)^Usage:\s+openclaw update(?:\s|\[|$)') -or
+        ($helpExit -eq 1 -and $helpText -match '(?m)^error: unknown command ''install-git-launcher''\s*$')
+    )
+    if (-not $hasLauncherCommand -and -not $retainedCheckout) {
+        $helpOutput | Out-Host
+        return $false
+    }
+
+    $wrapper = Join-Path (Join-Path $env:USERPROFILE ".local\bin") "openclaw.cmd"
+    $backup = $null
+    try {
+        # A same-prefix npm shim is still the working owner until this call succeeds.
+        # Move only the verified npm-owned shim aside; foreign files stay for the
+        # reconciler to refuse. The npm package itself is retired later by Main.
+        if ((Test-Path -LiteralPath $wrapper -PathType Leaf) -and -not (Test-PreviousGitWrapper)) {
+            $npmCommand = Get-NpmCommandPath
+            if ($npmCommand) {
+                $prefixOutput = @(Invoke-NpmCommand -CommandPath $npmCommand -Arguments @("config", "get", "prefix") 2>$null)
+                if ($LASTEXITCODE -eq 0 -and $prefixOutput.Count -gt 0) {
+                    $npmShim = Join-Path $prefixOutput[-1].ToString().Trim() "openclaw.cmd"
+                    if ([string]::Equals([IO.Path]::GetFullPath($npmShim), [IO.Path]::GetFullPath($wrapper), [StringComparison]::OrdinalIgnoreCase)) {
+                        $rootOutput = @(Invoke-NpmCommand -CommandPath $npmCommand -Arguments @("root", "-g") 2>$null)
+                        if ($LASTEXITCODE -eq 0 -and $rootOutput.Count -gt 0) {
+                            $expectedLauncher = Join-Path $rootOutput[-1].ToString().Trim() "openclaw\openclaw.mjs"
+                            if (Test-NpmOpenClawCmdShim -Path $wrapper -ExpectedLauncher $expectedLauncher) {
+                                $backup = Start-NpmShimBackup -Path $wrapper -ExpectedLauncher $expectedLauncher
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        # Current CLIs own publication; retained releases use the bounded compatibility bridge.
+        # USERPROFILE selects the same bin directory in the reconciler; leave HOME alone.
+        if ($retainedCheckout) {
+            $installed = Publish-RetainedGitLauncher
+        } else {
+            & $NodePath $EntryPath update install-git-launcher | Out-Host
+            $installed = ($LASTEXITCODE -eq 0)
+        }
+        if ($installed) {
+            Complete-NpmShimBackup -Backup $backup
+            $backup = $null
+        }
+        return $installed
     } finally {
-        if (Test-Path -LiteralPath $temporaryPath) {
-            Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        if ($backup) {
+            Restore-NpmShimBackup -Backup $backup -ExpectedGitEntry $EntryPath -ExpectedGitNode $NodePath
         }
     }
 }
@@ -2076,14 +2198,21 @@ function Install-OpenClawFromGit {
     if (-not (Test-Path $binDir)) {
         New-Item -ItemType Directory -Force -Path $binDir | Out-Null
     }
-    node $entryPath --version 2>$null | Out-Null
+    $nodePath = $script:ValidatedNodePath
+    if ([string]::IsNullOrWhiteSpace($nodePath) -or -not (Test-Path -LiteralPath $nodePath -PathType Leaf)) {
+        Write-Host "[!] Validated Node.js runtime not found after build" -ForegroundColor Red
+        return $false
+    }
+    & $nodePath $entryPath --version 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[!] Git replacement failed CLI verification" -ForegroundColor Red
         return $false
     }
     $cmdPath = Join-Path $binDir "openclaw.cmd"
-    $cmdContents = Format-OpenClawGitWrapper -EntryPath $entryPath
-    Publish-TextFileAtomically -Path $cmdPath -Contents $cmdContents
+    if (-not (Install-GitLauncher -NodePath $nodePath -EntryPath $entryPath)) {
+        Write-Host "[!] Failed to install the OpenClaw Git launcher" -ForegroundColor Red
+        return $false
+    }
 
     if (Add-ToUserPath $binDir) {
         Write-Host "[!] Added $binDir to user PATH (restart terminal if command not found)" -ForegroundColor Yellow
@@ -2171,9 +2300,53 @@ function Remove-LegacySubmodule {
 }
 
 function Test-PreviousGitWrapper {
-    $wrapper = Join-Path (Join-Path $env:USERPROFILE ".local\bin") "openclaw.cmd"
-    if (-not (Test-Path -LiteralPath $wrapper -PathType Leaf)) { return $false }
-    return ([System.IO.File]::ReadAllText($wrapper) -match '^@echo off\r?\nnode ".+[\\/]dist[\\/]entry\.js" %\*\r?\n?$')
+    param(
+        [string]$Path = (Join-Path (Join-Path $env:USERPROFILE ".local\bin") "openclaw.cmd"),
+        [string]$EntryPath,
+        [string]$NodePath
+    )
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    $item = Get-Item -LiteralPath $Path -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $item.Length -gt 16384) { return $false }
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    # The CLI encoder declares its OEM page in ASCII before non-ASCII paths.
+    # Decode that wire format without invoking a runtime that may have been removed.
+    $encoded = [regex]::Match([Text.Encoding]::ASCII.GetString($bytes), '^(?:@chcp (?<page>\d{3,5}) >nul\r?\n)?@rem openclaw-launcher-encoding=(?<encoding>[a-z0-9_-]+)\r?\n')
+    if ($encoded.Success) {
+        $label = $encoded.Groups['encoding'].Value
+        # iconv-lite's labels are not all .NET aliases (notably euc-kr means CP949).
+        $aliases = @{ 'utf-8' = 65001; 'windows-874' = 874; 'shift_jis' = 932; 'gbk' = 936; 'euc-kr' = 949; 'big5' = 950; 'windows-1258' = 1258 }
+        $page = $aliases[$label]
+        if (-not $page -and $label -match '^cp(\d{3})$') {
+            $candidate = [int]$Matches[1]
+            if (@(437, 720, 737, 775, 850, 852, 855, 857, 858, 860, 861, 862, 863, 865, 866, 869) -contains $candidate) { $page = $candidate }
+        }
+        if (-not $page -or $encoded.Length -ge $bytes.Length -or ($encoded.Groups['page'].Success -and [int]$encoded.Groups['page'].Value -ne $page)) { return $false }
+        try {
+            $decoder = [Text.Encoding]::GetEncoding($page, [Text.EncoderFallback]::ExceptionFallback, [Text.DecoderFallback]::ExceptionFallback)
+            $body = [byte[]]$bytes[$encoded.Length..($bytes.Length - 1)]
+            $contents = $decoder.GetString($body)
+            if ([Convert]::ToBase64String($decoder.GetBytes($contents)) -cne [Convert]::ToBase64String($body)) { return $false }
+        } catch { return $false }
+    } else {
+        $reader = [IO.StreamReader]::new([IO.MemoryStream]::new($bytes), [Text.Encoding]::UTF8, $true)
+        try { $contents = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    }
+    $legacy = [regex]::Match($contents, '^@echo off\r?\nnode "(?<entry>[^"\r\n]+[\\/]dist[\\/]entry\.js)" %\*\r?\n?$')
+    if ($legacy.Success) {
+        if ($NodePath) { return $false }
+        $actualEntry = $legacy.Groups['entry'].Value
+    } else {
+        # Recognize the complete owner format, not just its marker, when retiring a
+        # Git installation. Rendering and runtime validation stay with the CLI owner.
+        $managed = [regex]::Match($contents, '^@echo off\r?\nrem OpenClaw Git launcher\r?\nsetlocal DisableDelayedExpansion\r?\nif exist "(?<node>[^"\r\n]+)" goto openclaw_runtime_ready\r?\necho \[!\] OpenClaw''s validated Node\.js runtime is missing\. 1>&2\r?\necho \[i\] Re-run the OpenClaw installer to repair this Git installation\. 1>&2\r?\nexit /b 1\r?\n:openclaw_runtime_ready\r?\n"\k<node>" "(?<entry>[^"\r\n]+[\\/]dist[\\/]entry\.js)" %\*\r?\n$')
+        if (-not $managed.Success) { return $false }
+        $actualEntry = $managed.Groups['entry'].Value.Replace('%%', '%')
+        $actualNode = $managed.Groups['node'].Value.Replace('%%', '%')
+        if ($actualEntry.Replace('%', '%%') -cne $managed.Groups['entry'].Value -or $actualNode.Replace('%', '%%') -cne $managed.Groups['node'].Value) { return $false }
+        if ($NodePath -and -not [string]::Equals([IO.Path]::GetFullPath($actualNode), [IO.Path]::GetFullPath($NodePath), [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    }
+    return (-not $EntryPath -or [string]::Equals([IO.Path]::GetFullPath($actualEntry), [IO.Path]::GetFullPath($EntryPath), [StringComparison]::OrdinalIgnoreCase))
 }
 
 function Remove-PreviousGitWrapper {
@@ -2232,11 +2405,20 @@ function Test-NpmOpenClawCmdShim {
 }
 
 function Restore-NpmShimBackup {
-    param([object]$Backup)
+    param(
+        [object]$Backup,
+        [string]$ExpectedGitEntry,
+        [string]$ExpectedGitNode
+    )
     if (-not $Backup -or -not (Test-Path -LiteralPath $Backup.BackupPath -PathType Leaf)) { return }
     if (Test-Path -LiteralPath $Backup.Path) {
-        if (-not (Test-NpmOpenClawCmdShim -Path $Backup.Path -ExpectedLauncher $Backup.ExpectedLauncher)) {
-            throw "Refusing to replace an unrelated file while restoring $($Backup.Path)."
+        $ownedCandidate = if ($ExpectedGitEntry -and $ExpectedGitNode) {
+            Test-PreviousGitWrapper -Path $Backup.Path -EntryPath $ExpectedGitEntry -NodePath $ExpectedGitNode
+        } else {
+            Test-NpmOpenClawCmdShim -Path $Backup.Path -ExpectedLauncher $Backup.ExpectedLauncher
+        }
+        if (-not $ownedCandidate) {
+            throw "Refusing to replace an unrelated file while restoring $($Backup.Path). Backup retained at $($Backup.BackupPath)."
         }
         Remove-Item -LiteralPath $Backup.Path -Force
     }

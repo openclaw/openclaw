@@ -487,6 +487,44 @@ describe("Windows command execution", () => {
     },
   );
 
+  it("keeps Windows cleanup live after the root and graceful helper finish", async () => {
+    const command = createMockSubprocess({ autoFinish: false });
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const nativeSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      const timer = nativeSetTimeout(callback, delay, ...args);
+      if (delay === 137) {
+        timers.push(timer);
+      }
+      return timer;
+    });
+    execaMock
+      .mockImplementationOnce(() => command)
+      .mockImplementation(() => {
+        const helper = createMockSubprocess();
+        void helper.then(() => command.finish({ signal: "SIGTERM" }));
+        return helper;
+      });
+
+    await withMockedWindowsPlatform(async () => {
+      const result = runCommandWithTimeout(["node", "idle.js"], {
+        killProcessTree: true,
+        killGraceMs: 137,
+        timeoutMs: 10,
+      });
+      try {
+        await vi.waitFor(() => expect(timers).toHaveLength(1), { interval: 1 });
+        expect(command.signalCode).toBe("SIGTERM");
+        // The command and helper no longer own handles. Their awaited grace period
+        // must still retain process liveness, including outside a test runner.
+        expect(timers[0]?.hasRef()).toBe(true);
+      } finally {
+        await expect(result).resolves.toMatchObject({ code: 124, termination: "timeout" });
+      }
+      expect(execaMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("keeps forced Windows tree escalation after graceful taskkill returns nonzero", async () => {
     vi.useFakeTimers();
     const command = createMockSubprocess({ autoFinish: false });

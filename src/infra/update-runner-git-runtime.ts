@@ -57,6 +57,43 @@ async function collectRuntimeDirectories(
   );
 }
 
+/** Make candidate-owned directory links safe for already-published Windows updaters. */
+export async function prepareGitRuntimePromotionSource(
+  candidateRoot: string,
+  runCommand: CommandRunner,
+  timeoutMs: number,
+): Promise<void> {
+  if (process.platform !== "win32") {
+    return;
+  }
+  const root = await fs.realpath(candidateRoot);
+  const directories = await collectRuntimeDirectories(root, runCommand, timeoutMs);
+  const roots = new Set(directories.map((relative) => path.join(root, relative)));
+  for (const directory of roots) {
+    if (path.basename(directory) !== "node_modules") {
+      continue;
+    }
+    const contents = await readRuntimeModulesManifest(path.join(directory, ".modules.yaml"));
+    const virtualStoreDir = contents?.manifest.virtualStoreDir;
+    if (typeof virtualStoreDir === "string") {
+      const store = await fs.realpath(path.resolve(directory, virtualStoreDir));
+      // Only normalize this candidate's own entries, never an external store's
+      // payload. The relocation walker also stops at every directory symlink.
+      if (isPathInside(root, store)) {
+        roots.add(store);
+      }
+    }
+  }
+  for (const directory of roots) {
+    if (![...roots].some((other) => other !== directory && isPathInside(other, directory))) {
+      // Identity relocation converts relative Windows directory links to absolute
+      // junctions. The v2026.9.5 driver then takes its existing rebinding path
+      // instead of returning early for unchanged relative target strings.
+      await relocateRuntimeTree(directory, directory, directory, []);
+    }
+  }
+}
+
 async function collectDisposableRuntimeCaches(
   modulesDirs: string[],
   runtimeRoots: string[],

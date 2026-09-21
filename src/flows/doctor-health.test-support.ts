@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<(typeof import("../cli/daemon-cli/restart-health.js"))["inspectGatewayRestart"]>(),
   waitForGatewayHealthyRestart:
     vi.fn<(typeof import("../cli/daemon-cli/restart-health.js"))["waitForGatewayHealthyRestart"]>(),
+  repairWindowsGitLauncher:
+    vi.fn<(typeof import("../commands/doctor-install.js"))["repairWindowsGitLauncher"]>(),
   packageRoot: vi.fn<() => string | undefined>(),
   runtimeTmpDir: vi.fn<() => string>(),
   restartedHealthy: true,
@@ -43,6 +45,7 @@ const mocks = vi.hoisted(() => ({
 
 const runtimeDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  mocks.repairWindowsGitLauncher.mockReset().mockResolvedValue(undefined);
   mocks.resident.mockReset();
   mocks.runtimeTmpDir.mockReturnValue(runtimeDirs.make("openclaw-doctor-runtime-"));
   mocks.inspectGatewayRestart.mockReset().mockImplementation(async (params) => ({
@@ -100,9 +103,19 @@ vi.mock("@clack/prompts", () => ({
   outro: mocks.outro,
 }));
 
-vi.mock("../commands/doctor-prompter.js", () => ({
-  createDoctorPrompter: () => ({ confirm: async () => true }),
-}));
+vi.mock("../commands/doctor-prompter.js", async () => {
+  const { resolveDoctorRepairMode } = await import("../commands/doctor-repair-mode.js");
+  return {
+    createDoctorPrompter: ({
+      options,
+    }: {
+      options: import("../commands/doctor-prompter.js").DoctorOptions;
+    }) => ({
+      confirm: async () => true,
+      shouldRepair: resolveDoctorRepairMode(options).shouldRepair,
+    }),
+  };
+});
 
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
@@ -187,6 +200,7 @@ vi.mock("../commands/doctor-ui.js", () => ({
 
 vi.mock("../commands/doctor-install.js", () => ({
   noteSourceInstallIssues: () => undefined,
+  repairWindowsGitLauncher: mocks.repairWindowsGitLauncher,
 }));
 
 vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({

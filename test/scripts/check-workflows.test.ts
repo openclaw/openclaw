@@ -326,9 +326,53 @@ describe("check-workflows", () => {
       "blacksmith-16vcpu-windows-2025",
     );
     expect(native).not.toBe(probe);
-    expect(native.if).toBe("${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning }}");
+    expect(native.if).toBe(
+      "${{ !inputs.run_private_node_provisioning && !inputs.run_windows_git_installer_only && inputs.run_windows_ci }}",
+    );
     expect(native["runs-on"]).toBe("windows-2025");
-    expect(probe.if).toBeUndefined();
+    expect(workflow.on.workflow_dispatch.inputs.run_windows_git_installer_only).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    expect(workflow.on.workflow_dispatch.inputs.windows_git_installer_case).toMatchObject({
+      default: "all",
+      type: "choice",
+      options: ["all", "published-driver"],
+    });
+    const installer = workflow.jobs["native-git-installer"]!;
+    expect(installer.if).toBe(
+      "${{ !inputs.run_private_node_provisioning && (inputs.run_windows_launcher_integration || inputs.run_windows_git_installer_only) }}",
+    );
+    expect(installer["runs-on"]).toBe("windows-2025");
+    for (const entry of [installer, ...installer.steps]) {
+      expect(entry["continue-on-error"]).toBeUndefined();
+    }
+    // Supplier proofs own separate opt-in runners; the default and launcher paths still run both proofs.
+    expect(workflow.on.workflow_dispatch.inputs.run_winget_acceptance).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    expect(probe.if).toBe(
+      "${{ inputs.run_private_node_provisioning || (!inputs.run_windows_git_installer_only && !inputs.run_winget_acceptance && !inputs.run_portable_node_recovery) }}",
+    );
+    expect(workflow.jobs["winget-acceptance"]?.if).toBe(
+      "${{ !inputs.run_private_node_provisioning && !inputs.run_windows_git_installer_only && inputs.run_winget_acceptance }}",
+    );
+    expect(workflow.on.workflow_dispatch.inputs.run_portable_node_recovery).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const portable = workflow.jobs["portable-node-recovery"]!;
+    expect(portable.if).toBe(
+      "${{ !inputs.run_private_node_provisioning && !inputs.run_windows_git_installer_only && inputs.run_portable_node_recovery }}",
+    );
+    expect(portable["runs-on"]).toBe("windows-2025");
+    expect(
+      portable.steps.find((step) => step.name === "Checkout immutable proof tooling")?.with?.ref,
+    ).toBe("${{ github.workflow_sha }}");
+    expect(
+      portable.steps.find((step) => step.name === "Checkout exact installer candidate")?.with?.ref,
+    ).toBe("${{ inputs.target_ref }}");
     expect(probe["runs-on"]).toBe("${{ inputs.runner_label }}");
     for (const job of [probe, native]) {
       expect(job.needs).toBeUndefined();
@@ -390,7 +434,7 @@ describe("check-workflows", () => {
     });
     expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
       REQUESTED_NODE_VERSION:
-        "${{ inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
+        "${{ inputs.installed_startup_package != '' && inputs.startup_node_version || (inputs.run_windows_launcher_integration && '24.20.0' || '24.x') }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
       "./.github/actions/setup-pnpm-store-cache",
@@ -398,6 +442,74 @@ describe("check-workflows", () => {
     expect(native.steps.find((step) => step.name === "Install dependencies")?.run).toContain(
       "pnpm install --frozen-lockfile --prefer-offline",
     );
+  });
+
+  it("rejects mixed private Node proofs before setup and keeps private provisioning opt-in", () => {
+    const { workflow, probe } = readWindowsProbe();
+    expect(workflow.on.workflow_dispatch.inputs.run_private_node_provisioning).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const validation = probe.steps[1]!;
+    expect(validation.name).toBe("Validate private Node proof inputs");
+    expect(validation.if).toBe("${{ inputs.run_private_node_provisioning }}");
+    expect(validation.env).toMatchObject({
+      TARGET_REF: "${{ inputs.target_ref }}",
+      WORKFLOW_SHA: "${{ github.workflow_sha }}",
+      RUNNER_LABEL: "${{ inputs.runner_label }}",
+      KEEPALIVE_MINUTES: "${{ inputs.keepalive_minutes }}",
+    });
+    // Every incompatible proof must reach validation instead of allocating another job.
+    expect(validation.env?.MIXED_PROOF).toBe(
+      "${{ inputs.run_windows_ci || inputs.run_windows_git_installer_only || inputs.run_windows_launcher_integration || inputs.run_winget_acceptance || inputs.run_portable_node_recovery || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}",
+    );
+    expect(validation.run).toContain('$env:MIXED_PROOF -eq "true"');
+    expect(validation.run).toContain('$env:RUNNER_LABEL -ne "windows-2025"');
+    expect(validation.run).toContain('$env:KEEPALIVE_MINUTES -ne "0"');
+    expect(validation.run).toContain("$env:TARGET_REF -cnotmatch '^[0-9a-f]{40}$'");
+    expect(validation.run).toContain("$env:WORKFLOW_SHA -cne $env:TARGET_REF");
+    expect(validation.run).toContain("$checkoutSha -cne $env:TARGET_REF");
+    const proof = probe.steps.find(
+      (step) => step.name === "Prove private Node provisioning and portable authorization",
+    )!;
+    expect(proof.if).toBe("${{ inputs.run_private_node_provisioning }}");
+    expect(proof.run).toContain("update-command-node-runtime.live.test.ts");
+    for (const name of [
+      "Setup Node.js",
+      "Setup pnpm",
+      "Runtime versions",
+      "Capture node path",
+      "Install dependencies",
+    ]) {
+      expect(probe.steps.find((step) => step.name === name)?.if).toBe(
+        "${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning }}",
+      );
+    }
+  });
+
+  it("rejects checks that isolated proof modes would otherwise silently skip", () => {
+    const { workflow } = readWindowsProbe();
+    const winget = workflow.jobs["winget-acceptance"]!.steps[0]!;
+    const portable = workflow.jobs["portable-node-recovery"]!.steps[0]!;
+    for (const validation of [winget, portable]) {
+      expect(validation.env?.WSL_PROOF).toBe(
+        "${{ inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}",
+      );
+      expect(validation.run).toContain("$env:WSL_PROOF -eq 'true'");
+      expect(validation.run).toContain("throw");
+    }
+    expect(winget.env?.RUN_PORTABLE).toBe("${{ inputs.run_portable_node_recovery }}");
+    expect(winget.run).toContain("$env:RUN_PORTABLE -eq 'true'");
+    const installer = workflow.jobs["native-git-installer"]!.steps[0]!;
+    expect(installer.name).toBe("Validate full installer selection");
+    expect(installer.if).toBeUndefined();
+    expect(installer.env?.MIXED_INSTALLER_ONLY).toBe(
+      "${{ inputs.run_windows_git_installer_only && (inputs.run_windows_launcher_integration || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features) }}",
+    );
+    expect(installer.run).toContain("$env:MIXED_INSTALLER_ONLY -eq 'true'");
+    expect(installer.run).toContain("$env:RUN_WINDOWS_CI -ne 'true'");
+    expect(installer.run).toContain("$env:RUN_PORTABLE -eq 'true'");
+    expect(installer.run).toContain("$env:RUN_WINGET -eq 'true'");
   });
 
   it("keeps installed startup measurement opt-in and binds the package independently from tooling", () => {

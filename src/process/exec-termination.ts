@@ -68,9 +68,10 @@ export function createCommandTerminationController(params: {
     windowsTerminationPromise = (async () => {
       if (graceful) {
         taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T"]));
+        // This wait owns cleanup even after the command and taskkill handles close.
+        // Unreferencing it can let an awaited command exit with unsettled work.
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, params.killGraceMs);
-          timer.unref();
+          setTimeout(resolve, params.killGraceMs);
         });
         if (isDirectChildAlive()) {
           taskkills.push(spawnTaskkill(["/PID", String(childPid), "/T", "/F"]));

@@ -1,12 +1,14 @@
 // Install Ps1 tests cover install ps1 script behavior.
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
-import { join, parse } from "node:path";
+import { join, parse, resolve as resolvePath } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
+import { registerRetainedGitLauncherTests } from "./install-ps1.retained-launcher.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install.ps1";
@@ -509,13 +511,9 @@ try {
         name: "node-capabilities",
         source: [
           scriptWithoutEntryPoint,
-          "function Get-Command { [pscustomobject]@{ Source = 'Invoke-FixtureNode' } }",
-          "function Invoke-FixtureNode {",
-          "  $global:LASTEXITCODE = 0",
-          "  if ($args[0] -eq '-v') { return $script:FixtureVersion }",
-          "  $input | Out-Null",
-          "  return $script:FixtureSqlite",
-          "}",
+          '$fixtureNode = Join-Path $script:InstallerTempDirectory ("node-capabilities-" + [guid]::NewGuid().ToString("N") + ".ps1")',
+          "function Get-Command { [pscustomobject]@{ Source = $fixtureNode } }",
+          "try {",
           "foreach ($case in @(",
           "  @{ version = 'v24.19.0'; text = $true; expected = $true },",
           "  @{ version = 'v24.19.0'; text = $false; expected = $false },",
@@ -526,9 +524,13 @@ try {
           ")) {",
           "  $script:FixtureVersion = $case.version",
           "  $script:FixtureSqlite = @{ available = $true; version = '3.51.3'; text = $case.text; blob = $true; json = $true } | ConvertTo-Json -Compress",
+          String.raw`  [IO.File]::WriteAllText($fixtureNode, ("$" + "global:LASTEXITCODE = 0${"`"}nif ($" + "args[0] -eq '-v') { '" + $script:FixtureVersion + "'; return }${"`"}n$" + "input | Out-Null${"`"}n'" + $script:FixtureSqlite + "'"))`,
           "  $actual = Check-Node",
           '  if ($actual -ne $case.expected) { throw "Version=$($case.version) Text=$($case.text) Actual=$actual" }',
+          "  if ($case.expected -and $script:ValidatedNodePath -ne $fixtureNode) { throw 'validated runtime not captured' }",
+          "  if (-not $case.expected -and $null -ne $script:ValidatedNodePath) { throw 'failed runtime retained authority' }",
           "}",
+          "} finally { Remove-Item -LiteralPath $fixtureNode -Force }",
         ].join("\n"),
       },
       {
@@ -648,12 +650,8 @@ try {
         source: [
           scriptWithoutEntryPoint,
           "",
-          "function private-node-fixture {",
-          "  $global:LASTEXITCODE = 0",
-          "  if ($args[0] -eq '-v') { return 'v26.1.0' }",
-          "  $input | Out-Null",
-          "  return (@{ available = $true; version = $script:FixtureSqliteVersion; text = $true; blob = $true; json = $true } | ConvertTo-Json -Compress)",
-          "}",
+          '$fixtureNode = Join-Path $script:InstallerTempDirectory ("node-sqlite-" + [guid]::NewGuid().ToString("N") + ".ps1")',
+          "try {",
           "function Get-Command { throw 'unexpected ambient runtime lookup' }",
           "$cases = @{",
           "  '3.44.5' = $false",
@@ -670,9 +668,13 @@ try {
           "  $actual = Test-NodeSqliteSupported -Version $entry.Key",
           '  if ($actual -ne $entry.Value) { throw "Version=$($entry.Key) Actual=$actual" }',
           "  $script:FixtureSqliteVersion = $entry.Key",
-          "  $actual = Check-Node -NodePath 'private-node-fixture'",
+          "  $script:FixtureVersion = 'v26.1.0'",
+          "  $script:FixtureSqlite = @{ available = $true; version = $entry.Key; text = $true; blob = $true; json = $true } | ConvertTo-Json -Compress",
+          String.raw`  [IO.File]::WriteAllText($fixtureNode, ("$" + "global:LASTEXITCODE = 0${"`"}nif ($" + "args[0] -eq '-v') { '" + $script:FixtureVersion + "'; return }${"`"}n$" + "input | Out-Null${"`"}n'" + $script:FixtureSqlite + "'"))`,
+          "  $actual = Check-Node -NodePath $fixtureNode",
           '  if ($actual -ne $entry.Value) { throw "Explicit runtime SQLite=$($entry.Key) Actual=$actual" }',
           "}",
+          "} finally { Remove-Item -LiteralPath $fixtureNode -Force }",
           "",
         ].join("\n"),
       },
@@ -1196,12 +1198,14 @@ function Main { throw 'unexpected installer entrypoint' }
 function Run-Doctor { throw 'unexpected doctor' }
 function Refresh-GatewayServiceIfLoaded { throw 'unexpected gateway refresh' }
 function Invoke-OpenClawCommand { throw 'unexpected live CLI' }
-function Publish-TextFileAtomically {
-    param([string]$Path, [string]$Contents)
-    $expectedPath = Join-Path $env:USERPROFILE '.local\bin\openclaw.cmd'
-    # Duplicate separators can name the same Windows wrapper; require the exact normalized path.
-    if ([IO.Path]::GetFullPath($Path) -ne [IO.Path]::GetFullPath($expectedPath)) { throw 'publication escaped fixture' }
+# This fixture tests caller routing, not production launcher rendering.
+function Install-GitLauncher {
+    param([string]$NodePath, [string]$EntryPath)
+    $expectedEntry = Join-Path $env:USERPROFILE 'target\dist\entry.js'
+    if ([IO.Path]::GetFullPath($EntryPath) -ne [IO.Path]::GetFullPath($expectedEntry)) { throw 'publication escaped fixture' }
+    if ($NodePath -cne $nodeExe) { throw 'caller lost the captured Node runtime' }
     $script:Published += 1
+    return $true
 }
 function Add-ToUserPath { param([string]$Path); $script:PathPublished += 1; return $false }
 $commandSource = @'
@@ -1353,13 +1357,14 @@ try {
         $script:Published = 0
         $script:PathPublished = 0
         $outsideRejected = try {
-            Publish-TextFileAtomically -Path (Join-Path $caseRoot '..\openclaw.cmd') -Contents ''
+            Install-GitLauncher -NodePath $nodeExe -EntryPath (Join-Path $caseRoot '..\entry.js')
             $false
         } catch {
             if ($_.Exception.Message -ne 'publication escaped fixture') { throw }
             $true
         }
         if (-not $outsideRejected -or $script:Published -ne 0) { throw 'outside publication was accepted' }
+        $script:ValidatedNodePath = $nodeExe
         $caught = $null
         $ownerOutput = @()
         try { $ownerOutput = @(Install-OpenClawFromGit -RepoDir $target -SkipUpdate) } catch { $caught = $_ }
@@ -2195,10 +2200,298 @@ try {
     expect(gitInstallBody).toContain('$entryPath = Join-Path $RepoDir "dist\\\\entry.js"');
     expect(gitInstallBody).toContain("Test-Path $entryPath");
     expect(gitInstallBody).toContain('Write-Host "[!] OpenClaw build did not produce $entryPath"');
-    expect(gitInstallBody).toContain("node $entryPath --version");
-    expect(gitInstallBody).toContain("Format-OpenClawGitWrapper -EntryPath $entryPath");
+    expect(gitInstallBody).toContain("& $nodePath $entryPath --version");
+    expect(gitInstallBody).toContain("$nodePath = $script:ValidatedNodePath");
+    expect(gitInstallBody).toContain(
+      "Install-GitLauncher -NodePath $nodePath -EntryPath $entryPath",
+    );
+    expect(gitInstallBody.indexOf("& $nodePath $entryPath --version")).toBeLessThan(
+      gitInstallBody.indexOf("Install-GitLauncher -NodePath"),
+    );
+    expect(source).not.toContain("function Format-OpenClawGitWrapper");
+    expect(source).not.toContain("function Publish-TextFileAtomically");
     expect(gitInstallBody).not.toContain("& $pnpmCommand -C $RepoDir install");
   });
+
+  runIfPowerShell("routes launcher arguments without changing HOME or hiding child failure", () => {
+    const tempDir = harness.createTempDir("openclaw-launcher-routing-");
+    const childPath = join(tempDir, "child with spaces.ps1");
+    const scriptPath = join(tempDir, "caller.ps1");
+    writeFileSync(
+      childPath,
+      [
+        "param([string]$Entry, [string]$Verb, [string]$Leaf, [string]$HelpFlag)",
+        "if ($HelpFlag -eq '--help') { Write-Output 'Usage: openclaw update install-git-launcher [options]'; $global:LASTEXITCODE = 0; return }",
+        "if ($Entry -ne 'entry with spaces.js' -or $Verb -ne 'update' -or $Leaf -ne 'install-git-launcher') { throw 'argument routing changed' }",
+        "if ($env:HOME -cne $global:OpenClawLauncherExpectedHome) { throw 'HOME changed' }",
+        "Write-Output 'child diagnostic'",
+        "$global:LASTEXITCODE = $global:OpenClawLauncherChildExit",
+      ].join("\n"),
+    );
+    writeFileSync(
+      scriptPath,
+      [
+        ...["Install-GitLauncher", "Complete-NpmShimBackup"].map(
+          (name) => `function ${name} {\n${extractFunctionBody(source, name)}\n}`,
+        ),
+        `$env:USERPROFILE = ${toPowerShellSingleQuotedLiteral(join(tempDir, "private-profile"))}`,
+        "$ErrorActionPreference = 'Stop'",
+        "$global:OpenClawLauncherExpectedHome = $env:HOME",
+        "foreach ($code in @(0, 47)) {",
+        "  $global:OpenClawLauncherChildExit = $code",
+        `  $result = @(Install-GitLauncher -NodePath ${toPowerShellSingleQuotedLiteral(childPath)} -EntryPath 'entry with spaces.js')`,
+        "  if ($result.Count -ne 1 -or $result[0] -isnot [bool] -or $result[0] -ne ($code -eq 0)) { throw 'child diagnostic hid the exit status' }",
+        "  if ($env:HOME -cne $global:OpenClawLauncherExpectedHome) { throw 'HOME changed' }",
+        "}",
+      ].join("\n"),
+    );
+    const result = runPowerShell(["-NoLogo", "-NoProfile", "-File", scriptPath]);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
+  for (const engine of bootstrapShells.length > 0
+    ? bootstrapShells
+    : [powershell ?? "unavailable"]) {
+    registerRetainedGitLauncherTests({
+      source,
+      engine,
+      enabled: engine !== "unavailable",
+      createTempDir: (prefix) => harness.createTempDir(prefix),
+      extractFunctionBody,
+      quote: toPowerShellSingleQuotedLiteral,
+      runPowerShell: (args) => spawnSync(engine, args, { encoding: "utf8" }),
+    });
+  }
+
+  // Opt-in native acceptance consumes a built, published candidate. This is not the
+  // mocked pnpm/caller control above: no CLI, reconciler, or runtime identity mocks.
+  const runNativeGitLauncher =
+    process.platform === "win32" && process.env.OPENCLAW_TEST_WINDOWS_LAUNCHER_INTEGRATION === "1"
+      ? it
+      : it.skip;
+  runNativeGitLauncher(
+    "installs and repairs a launcher through the real hidden CLI",
+    () => {
+      const expectedSha = process.env.OPENCLAW_TEST_WINDOWS_LAUNCHER_SHA;
+      const expectedEntryHash = process.env.OPENCLAW_TEST_WINDOWS_LAUNCHER_ENTRY_SHA256;
+      expect(expectedSha).toMatch(/^[a-f0-9]{40}$/);
+      expect(expectedEntryHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(powershell).toBeTruthy();
+      const head = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" });
+      expect(head.status, head.stderr).toBe(0);
+      expect(head.stdout.trim()).toBe(expectedSha);
+      const clean = spawnSync(
+        "git",
+        [
+          "diff",
+          "--exit-code",
+          "HEAD",
+          "--",
+          SCRIPT_PATH,
+          "src/cli/update-cli.ts",
+          "src/infra/windows-git-launcher.ts",
+          "src/infra/node-runtime-info.ts",
+          "test/scripts/install-ps1.test.ts",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(clean.status, `${clean.stdout}\n${clean.stderr}`).toBe(0);
+      const entryPath = resolvePath("dist", "entry.js");
+      expect(createHash("sha256").update(readFileSync(entryPath)).digest("hex")).toBe(
+        expectedEntryHash,
+      );
+      const tempDir = harness.createTempDir("openclaw-native-git-launcher-");
+      const scriptPath = join(tempDir, "real-cli.ps1");
+      writeFileSync(
+        scriptPath,
+        [
+          ...[
+            "Test-NodeVersionSupported",
+            "Test-NodeSqliteSupported",
+            "Check-Node",
+            "Install-GitLauncher",
+            "Test-PreviousGitWrapper",
+            "Test-NpmOpenClawCmdShim",
+            "Start-NpmShimBackup",
+            "Restore-NpmShimBackup",
+            "Complete-NpmShimBackup",
+          ].map((name) => `function ${name} {\n${extractFunctionBody(source, name)}\n}`),
+          `$testRoot = ${toPowerShellSingleQuotedLiteral(tempDir)}`,
+          `$sourceNode = ${toPowerShellSingleQuotedLiteral(process.execPath)}`,
+          `$entryPath = ${toPowerShellSingleQuotedLiteral(entryPath)}`,
+          String.raw`
+$ErrorActionPreference = 'Stop'
+# Record nonzero native diagnostics; the exit code, not PowerShell's stderr adapter,
+# is the oracle for refusal and missing-runtime controls on both PS5.1 and PS7.
+$PSNativeCommandUseErrorActionPreference = $false
+# The outer PowerShell-to-CMD dispatch expands %VARIABLE% in a batch filename
+# before that batch starts. The workflow records a plain-batch control for that
+# shell boundary; keep literal percent coverage in the runtime path rendered below.
+$fixtureProfile = Join-Path $testRoot 'profile ^caret^ !bang!'
+# Force the production encoder's marked OEM branch using a character representable
+# on this actual Windows locale, without changing the machine's console settings.
+$oemPage = [int](Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\CodePage' -Name OEMCP).OEMCP
+$oemEncoding = [Text.Encoding]::GetEncoding($oemPage, [Text.EncoderFallback]::ExceptionFallback, [Text.DecoderFallback]::ExceptionFallback)
+$nonAscii = $null
+foreach ($codePoint in @(0x00e9, 0x0416, 0x4e2d, 0xd55c, 0x05d0, 0x0391, 0x0e01, 0x0627)) {
+    try {
+        $candidate = ([char]$codePoint).ToString()
+        if ($oemEncoding.GetString($oemEncoding.GetBytes($candidate)) -ceq $candidate) { $nonAscii = $candidate; break }
+    } catch {}
+}
+if (-not $nonAscii) { throw 'no representable non-ASCII path fixture for the Windows OEM page' }
+$nodeDir = Join-Path $testRoot ("runtime $nonAscii ^caret^ %OPENCLAW_TEST_PERCENT% !bang!")
+$shadowDir = Join-Path $testRoot 'shadow'
+foreach ($directory in @($fixtureProfile, $nodeDir, $shadowDir)) {
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+}
+$env:USERPROFILE = $fixtureProfile
+$originalHome = $env:HOME
+$approvedNode = Join-Path $nodeDir 'node.exe'
+Copy-Item -LiteralPath $sourceNode -Destination $approvedNode
+if (-not (Check-Node -NodePath $approvedNode)) { throw 'real Node capability check failed' }
+if ($script:ValidatedNodePath -cne $approvedNode) { throw 'runtime capture differs' }
+$version = (& $approvedNode $entryPath --version | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) { throw 'built CLI verification failed' }
+$shadowMarker = Join-Path $shadowDir 'executed'
+[IO.File]::WriteAllText((Join-Path $shadowDir 'node.cmd'), ('@echo off' + [Environment]::NewLine + 'echo shadow> "' + $shadowMarker + '"' + [Environment]::NewLine + 'exit /b 47' + [Environment]::NewLine))
+$env:PATH = "$shadowDir;$env:PATH"
+$env:OPENCLAW_TEST_PERCENT = 'expanded-away'
+if (-not (Install-GitLauncher -NodePath $script:ValidatedNodePath -EntryPath $entryPath)) { throw 'real hidden CLI failed' }
+if ($env:HOME -cne $originalHome) { throw 'installer changed HOME' }
+$wrapperPath = Join-Path $fixtureProfile '.local\bin\openclaw.cmd'
+$created = [IO.File]::ReadAllBytes($wrapperPath)
+if (-not [Text.Encoding]::ASCII.GetString($created).StartsWith(("@chcp $oemPage >nul" + [Environment]::NewLine + '@rem openclaw-launcher-encoding='))) { throw 'real CLI did not produce an encoded launcher' }
+if (-not (Test-PreviousGitWrapper -NodePath $approvedNode -EntryPath $entryPath)) { throw 'encoded Git wrapper is invisible to npm transition or lost its runtime binding' }
+if (Test-PreviousGitWrapper -NodePath (Join-Path $nodeDir 'foreign.exe') -EntryPath $entryPath) { throw 'encoded wrapper matched a foreign runtime' }
+# Earlier released encoders emitted the marker without the chcp preamble. Keep
+# the production-generated marker/body intact when checking that legacy format.
+$firstLineEnd = [Array]::IndexOf($created, [byte]10)
+$markerOnly = [byte[]]$created[($firstLineEnd + 1)..($created.Length - 1)]
+[IO.File]::WriteAllBytes($wrapperPath, $markerOnly)
+if (-not (Test-PreviousGitWrapper -NodePath $approvedNode -EntryPath $entryPath)) { throw 'marker-only encoded Git wrapper was not recognized' }
+# A mismatched declaration is foreign input, never accepted renderer output.
+$mismatched = [byte[]]([Text.Encoding]::ASCII.GetBytes(("@chcp 99999 >nul" + [Environment]::NewLine)) + $markerOnly)
+[IO.File]::WriteAllBytes($wrapperPath, $mismatched)
+if (Test-PreviousGitWrapper) { throw 'mismatched code-page preamble was accepted' }
+$previousErrorAction = $ErrorActionPreference
+try {
+    $ErrorActionPreference = 'Continue'
+    $encodingRefusal = (& $approvedNode $entryPath update install-git-launcher 2>&1 | Out-String)
+    $encodingRefusalExit = $LASTEXITCODE
+} finally { $ErrorActionPreference = $previousErrorAction }
+if ($encodingRefusalExit -ne 1 -or $encodingRefusal -notmatch 'Refusing to replace an unrecognized Windows Git launcher') { throw 'real reconciler accepted mismatched code-page declarations' }
+if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($wrapperPath)) -cne [Convert]::ToBase64String($mismatched)) { throw 'ownership inspection changed foreign bytes' }
+[IO.File]::WriteAllBytes($wrapperPath, $created)
+Push-Location -LiteralPath (Split-Path -Parent $wrapperPath)
+try {
+    $actualVersion = (& $wrapperPath --version | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $actualVersion -cne $version) { throw 'PowerShell wrapper did not run real CLI' }
+    $cmdVersion = (& $env:ComSpec /d /v:on /c 'openclaw.cmd --version' | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $cmdVersion -cne $version) { throw 'CMD wrapper did not run real CLI' }
+    # Only this legacy input is hand-authored; all accepted output is production-generated.
+    [IO.File]::WriteAllText($wrapperPath, ('@echo off' + [Environment]::NewLine + 'node "' + $entryPath + '" %*' + [Environment]::NewLine))
+    if (-not (Install-GitLauncher -NodePath $approvedNode -EntryPath $entryPath)) { throw 'legacy migration failed' }
+    if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($wrapperPath)) -cne [Convert]::ToBase64String($created)) { throw 'legacy migration differed from production creation' }
+    # Model the old npm discovery boundary, not the production CLI or reconciler.
+    $script:FixtureNpmPrefix = Split-Path -Parent $wrapperPath
+    $script:FixtureNpmRoot = Join-Path $script:FixtureNpmPrefix 'node_modules'
+    function Get-NpmCommandPath { return 'fixture-npm' }
+    function Invoke-NpmCommand {
+        param([string]$CommandPath, [string[]]$Arguments)
+        $global:LASTEXITCODE = 0
+        if ($Arguments[0] -eq 'config') { return $script:FixtureNpmPrefix }
+        if ($Arguments[0] -eq 'root') { return $script:FixtureNpmRoot }
+        throw 'unexpected npm operation'
+    }
+    $npmShim = @('@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', 'node "%dp0%\node_modules\openclaw\openclaw.mjs" %*', '') -join [Environment]::NewLine
+    [IO.File]::WriteAllText($wrapperPath, $npmShim)
+    if (Test-PreviousGitWrapper) { throw 'npm shim misclassified as Git' }
+    if (-not (Install-GitLauncher -NodePath $approvedNode -EntryPath $entryPath)) { throw 'same-prefix npm-to-Git transition failed' }
+    if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($wrapperPath)) -cne [Convert]::ToBase64String($created)) { throw 'same-prefix transition changed the production wrapper' }
+    # A genuine child entry failure must restore the exact working npm bytes.
+    [IO.File]::WriteAllText($wrapperPath, $npmShim)
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $failedInstall = Install-GitLauncher -NodePath $approvedNode -EntryPath (Join-Path $testRoot 'missing-entry.js')
+    } finally { $ErrorActionPreference = $previousErrorAction }
+    if ($failedInstall -or [IO.File]::ReadAllText($wrapperPath) -cne $npmShim) { throw 'failed Git transition lost the npm owner' }
+    [IO.File]::WriteAllText($wrapperPath, '@echo foreign-owner')
+    $foreign = [IO.File]::ReadAllBytes($wrapperPath)
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $refusal = (& $approvedNode $entryPath update install-git-launcher 2>&1 | Out-String)
+        $refusalExit = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousErrorAction }
+    if ($refusalExit -ne 1 -or $refusal -notmatch 'Refusing to replace an unrecognized Windows Git launcher') { throw 'foreign refusal was not the ownership diagnostic' }
+    if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($wrapperPath)) -cne [Convert]::ToBase64String($foreign)) { throw 'foreign launcher changed' }
+    # Restore only the bytes generated by the real reconciler for the missing-runtime cell.
+    [IO.File]::WriteAllBytes($wrapperPath, $created)
+    Remove-Item -LiteralPath $approvedNode -Force
+    foreach ($shell in @('powershell', 'cmd')) {
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $missing = if ($shell -eq 'cmd') {
+                (& $env:ComSpec /d /v:on /c 'openclaw.cmd --version' 2>&1 | Out-String)
+            } else { (& $wrapperPath --version 2>&1 | Out-String) }
+            $missingExit = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $previousErrorAction }
+        if ($missingExit -ne 1 -or $missing -notmatch 'validated Node.js runtime is missing') { throw 'missing runtime did not fail closed' }
+    }
+    Copy-Item -LiteralPath $sourceNode -Destination $approvedNode
+    if (-not (Install-GitLauncher -NodePath $approvedNode -EntryPath $entryPath)) { throw 'reinstall did not recover the missing pinned runtime' }
+    $recoveredVersion = (& $wrapperPath --version | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $recoveredVersion -cne $version) { throw 'reinstalled launcher did not restore the real CLI' }
+    if (Test-Path -LiteralPath $shadowMarker) { throw 'PATH shadow executed' }
+    if ($env:HOME -cne $originalHome) { throw 'HOME changed' }
+    if (@(Get-ChildItem -LiteralPath (Split-Path -Parent $wrapperPath) -Force).Count -ne 1) { throw 'atomic publication left temporary files' }
+} finally { Pop-Location }
+`,
+        ].join("\n"),
+      );
+      const env: NodeJS.ProcessEnv = {};
+      for (const key of [
+        "SystemRoot",
+        "WINDIR",
+        "ComSpec",
+        "PATH",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "HOME",
+      ]) {
+        if (process.env[key] !== undefined) {
+          env[key] = process.env[key];
+        }
+      }
+      Object.assign(env, {
+        USERPROFILE: join(tempDir, "initial-profile"),
+        APPDATA: join(tempDir, "appdata"),
+        LOCALAPPDATA: join(tempDir, "localappdata"),
+        OPENCLAW_STATE_DIR: join(tempDir, "state"),
+        OPENCLAW_CONFIG_PATH: join(tempDir, "state", "openclaw.json"),
+      });
+      const result = spawnSync(
+        powershell!,
+        [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          scriptPath,
+        ],
+        { encoding: "utf8", env },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    },
+    300_000,
+  );
 
   it("cleans legacy git submodules only from the selected git checkout", () => {
     const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");

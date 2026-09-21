@@ -10,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   updateFinalizeCommand: vi.fn(async (_opts: unknown) => {}),
   updateStatusCommand: vi.fn(async (_opts: unknown) => {}),
   updateWizardCommand: vi.fn(async (_opts: unknown) => {}),
+  reconcileWindowsGitLauncher: vi.fn(async (_opts: unknown) => ({
+    status: "created",
+    launcherPath: "C:\\Users\\alice\\.local\\bin\\openclaw.cmd",
+  })),
   defaultRuntime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -49,6 +53,15 @@ vi.mock("./update-cli/wizard.js", () => ({
   updateWizardCommand: (opts: unknown) => mocks.updateWizardCommand(opts),
 }));
 
+vi.mock("./update-cli/shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-cli/shared.js")>()),
+  resolveUpdateRoot: async () => "C:\\Users\\alice\\openclaw",
+}));
+
+vi.mock("../infra/windows-git-launcher.js", () => ({
+  reconcileWindowsGitLauncher: (opts: unknown) => mocks.reconcileWindowsGitLauncher(opts),
+}));
+
 vi.mock("../runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../runtime.js")>();
   return {
@@ -70,6 +83,58 @@ type UpdateFinalizeCommandOptions = {
 };
 
 describe("update cli option collisions", () => {
+  it("routes the hidden Git launcher command to its canonical owner", async () => {
+    await runRegisteredCli({
+      register: registerUpdateCli,
+      argv: ["update", "install-git-launcher"],
+    });
+    expect(mocks.reconcileWindowsGitLauncher).toHaveBeenCalledExactlyOnceWith({
+      root: "C:\\Users\\alice\\openclaw",
+      repair: true,
+      create: true,
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    const program = new Command();
+    registerUpdateCli(program);
+    expect(
+      program.commands.find((command) => command.name() === "update")?.helpInformation(),
+    ).not.toContain("install-git-launcher");
+  });
+
+  it.each(["--dry-run", "--reapply-local-overrides"])(
+    "rejects %s before installing a Git launcher",
+    async (flag) => {
+      await runRegisteredCli({
+        register: registerUpdateCli,
+        argv: ["update", flag, "install-git-launcher"],
+      });
+      expect(mocks.reconcileWindowsGitLauncher).not.toHaveBeenCalled();
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
+  it.each([
+    { status: "needs-reinstall", diagnostic: "current Node runtime is not supported" },
+    { status: "skipped", reason: "foreign", diagnostic: "unrecognized Windows Git launcher" },
+    { status: "skipped", reason: "missing", diagnostic: "unrecognized Windows Git launcher" },
+    { status: "skipped", reason: "not-windows", diagnostic: "only available on Windows" },
+  ])(
+    "refuses launcher reconciliation result $status $reason",
+    async ({ diagnostic, ...result }) => {
+      mocks.reconcileWindowsGitLauncher.mockResolvedValueOnce({
+        ...result,
+        launcherPath: "C:\\Users\\alice\\.local\\bin\\openclaw.cmd",
+      });
+      await runRegisteredCli({
+        register: registerUpdateCli,
+        argv: ["update", "install-git-launcher"],
+      });
+      expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(diagnostic));
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
   it.each(
     Array.from({ length: 8 }, (_value, mask) => {
       const flags = ["--dry-run", "--json", "--yes"];
@@ -163,6 +228,11 @@ describe("update cli option collisions", () => {
   });
 
   beforeEach(() => {
+    mocks.reconcileWindowsGitLauncher.mockReset();
+    mocks.reconcileWindowsGitLauncher.mockResolvedValue({
+      status: "created",
+      launcherPath: "C:\\Users\\alice\\.local\\bin\\openclaw.cmd",
+    });
     mocks.updateCleanupCommand.mockClear();
     updateCommand.mockClear();
     updateFinalizeCommand.mockClear();

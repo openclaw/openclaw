@@ -250,6 +250,33 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
   registerUpdateFinalizationCommand(update, "finalize", true);
 
   update
+    .command("install-git-launcher", { hidden: true })
+    .description("Install the Windows Git launcher")
+    .action(
+      createUpdateLeafAction(async () => {
+        const { reconcileWindowsGitLauncher } = await import("../infra/windows-git-launcher.js");
+        const { resolveUpdateRoot } = await import("./update-cli/shared.js");
+        const result = await reconcileWindowsGitLauncher({
+          root: await resolveUpdateRoot(),
+          repair: true,
+          create: true,
+        });
+        if (result.status === "needs-reinstall") {
+          throw new Error(
+            "The current Node runtime is not supported for a durable Windows Git launcher; re-run the OpenClaw installer",
+          );
+        }
+        if (result.status === "skipped") {
+          throw new Error(
+            result.reason === "not-windows"
+              ? "The Windows Git launcher is only available on Windows"
+              : "Refusing to replace an unrecognized Windows Git launcher",
+          );
+        }
+      }),
+    );
+
+  update
     .command("migration-plan", { hidden: true })
     .description("Plan Doctor-owned state migrations against an isolated snapshot")
     .requiredOption("--snapshot-home <path>", "Copied environment home")

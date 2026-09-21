@@ -631,9 +631,22 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   if (args?.help) {
     console.log(buildAllUsage());
   } else {
-    const result = await withDistArtifactOwnership(process.cwd(), () =>
-      runBuildAllSteps(args.profile),
-    );
+    const result = await withDistArtifactOwnership(process.cwd(), async () => {
+      const buildResult = await runBuildAllSteps(args.profile);
+      // Installed drivers cannot be patched. Their existing marker lets this
+      // candidate prepare its links before the old driver copies the runtime.
+      if (
+        buildResult.exitCode === 0 &&
+        process.platform === "win32" &&
+        process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1"
+      ) {
+        const { prepareGitRuntimePromotionSource } =
+          await import("../src/infra/update-runner-git-runtime.ts");
+        const { runCommandWithTimeout } = await import("../src/process/exec.ts");
+        await prepareGitRuntimePromotionSource(process.cwd(), runCommandWithTimeout, 60_000);
+      }
+      return buildResult;
+    });
     if (result.exitCode !== 0) {
       process.exit(result.exitCode);
     }

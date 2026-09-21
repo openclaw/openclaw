@@ -37,13 +37,17 @@ export async function relocateRuntimeSymlink(
   const replacement = path.isAbsolute(link)
     ? target
     : path.relative(path.dirname(destinationFile), target);
-  if (replacement === link) {
+  if (replacement === link && (process.platform !== "win32" || path.isAbsolute(link))) {
     return;
   }
-  // Copied relative links still describe their original location. Inspect that
-  // source before rebinding; Windows junctions require the final absolute target.
+  // fs.cp can create a Windows file symlink when a relative directory target
+  // has not been copied yet. Retain the source kind even if its text is unchanged.
+  // Inspect the source before rebinding; junctions require the final absolute target.
   const type =
     process.platform === "win32" && (await fs.stat(sourceFile)).isDirectory() ? "junction" : "file";
+  if (replacement === link && type !== "junction") {
+    return;
+  }
   await fs.unlink(file);
   await fs.symlink(type === "junction" ? target : replacement, file, type);
 }

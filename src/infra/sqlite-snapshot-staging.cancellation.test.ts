@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -35,6 +36,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 type Worker = { child: ChildProcess; closed: Promise<void>; settled: boolean; stderr: string };
 const workers = new Map<string, Worker>();
+const reclaimerReady = new Map<string, () => void>();
+const readyMessage = "OPENCLAW_TEST_RECLAIMER_READY\n";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     await Promise.all([...workers.values()].map((worker) => worker.closed));
@@ -46,6 +49,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 beforeEach(async () => {
   workers.clear();
+  reclaimerReady.clear();
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   processMocks.execFile.mockReset().mockImplementation((file, args, options, callback) => {
     const child = actual.execFile(file, args, options, callback);
@@ -55,6 +59,9 @@ beforeEach(async () => {
       const worker: Worker = { child, settled: false, closed: Promise.resolve(), stderr: "" };
       child.stderr?.on("data", (chunk: Buffer | string) => {
         worker.stderr = `${worker.stderr}${String(chunk)}`.slice(-4000);
+        if (worker.stderr.includes(readyMessage)) {
+          reclaimerReady.get(path.resolve(root))?.();
+        }
       });
       worker.closed = new Promise<void>((resolve) => {
         child.once("close", () => {
@@ -119,6 +126,7 @@ function fixture(count = 3, payloadBytes = 4096) {
             claimedRoot: path.join(${JSON.stringify(cache)}, relative.split(path.sep)[0]), file: String(file),
           }));
           fs.renameSync(${JSON.stringify(`${marker}.partial`)}, ${JSON.stringify(marker)});
+          fs.writeSync(2, ${JSON.stringify(readyMessage)});
           const gate = new DatabaseSync(${JSON.stringify(gatePath)});
           try { gate.exec('PRAGMA busy_timeout=10000; BEGIN IMMEDIATE; ROLLBACK;'); }
           finally { gate.close(); }
@@ -131,26 +139,27 @@ function fixture(count = 3, payloadBytes = 4096) {
   );
   vi.stubEnv("XDG_CACHE_HOME", cacheHome);
   vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(harness));
-  let watcher: fs.FSWatcher;
-  let timer: ReturnType<typeof setTimeout>;
-  const entered = new Promise<{ claimedRoot: string; file: string }>((resolve, reject) => {
-    watcher = fs.watch(root, () => {
-      if (fs.existsSync(marker)) {
-        resolve(JSON.parse(fs.readFileSync(marker, "utf8")));
-      }
-    });
-    watcher.once("error", reject);
-    timer = setTimeout(
-      () =>
-        reject(
-          new Error(
-            `Reclaimer did not reach the directory gate: ${workers.get(path.resolve(cache))?.stderr ?? "no child stderr"}`,
-          ),
+  const ready = createDeferredCore<{ claimedRoot: string; file: string }>();
+  // The owned child acknowledges its published marker before entering the SQLite
+  // gate. Directory-watch notifications can be coalesced or lost under build load.
+  reclaimerReady.set(path.resolve(cache), () => {
+    try {
+      ready.resolve(JSON.parse(fs.readFileSync(marker, "utf8")));
+    } catch (error) {
+      ready.reject(error);
+    }
+  });
+  const timer = setTimeout(
+    () =>
+      ready.reject(
+        new Error(
+          `Reclaimer did not reach the directory gate: ${workers.get(path.resolve(cache))?.stderr ?? "no child stderr"}`,
         ),
-      30_000,
-    );
-  }).finally(() => {
-    watcher.close();
+      ),
+    30_000,
+  );
+  const entered = ready.promise.finally(() => {
+    reclaimerReady.delete(path.resolve(cache));
     clearTimeout(timer);
   });
   const release = () => {
@@ -174,7 +183,7 @@ function fixture(count = 3, payloadBytes = 4096) {
     close() {
       release();
       gate.close();
-      watcher.close();
+      reclaimerReady.delete(path.resolve(cache));
       clearTimeout(timer);
     },
   };
@@ -217,6 +226,15 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
     const reason = new DOMException(`${mode} caller stopped`, "AbortError");
     const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
     const entered = await f.entered;
+    let cancellationStarted: number | undefined;
+    const cancelAdmittedRead = (read: Promise<unknown>) => {
+      // Abort in the same turn as admission. An async readiness handshake lets
+      // update metadata children launch and measures their required Windows
+      // process-tree grace instead of independence from idle reclamation.
+      cancellationStarted = performance.now();
+      controller.abort(reason);
+      return read;
+    };
     // Establish the native owner before measuring cancellation of its snapshot.
     if (owned) {
       vi.stubEnv("XDG_CACHE_HOME", owned.bootstrapCache);
@@ -226,13 +244,15 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
       : undefined;
     const operation = withSqliteReadOnlyWorkerScope(async () => {
       if (mode === "snapshot") {
-        await readSnapshot(f.source, controller.signal);
+        await cancelAdmittedRead(readSnapshot(f.source, controller.signal));
       } else if (mode === "update") {
-        await readUpdateStateSchemaVersions({
-          stateDir: path.dirname(f.source),
-          config: {},
-          signal: controller.signal,
-        });
+        await cancelAdmittedRead(
+          readUpdateStateSchemaVersions({
+            stateDir: path.dirname(f.source),
+            config: {},
+            signal: controller.signal,
+          }),
+        );
       } else {
         if (!owned || !owner) {
           throw new Error("Owned database fixture is unavailable");
@@ -243,7 +263,7 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
           await owner.mutate(owner.assertCurrent, async () => {
             openOpenClawStateDatabase(owned.options);
             vi.stubEnv("XDG_CACHE_HOME", path.dirname(f.cache));
-            await readSnapshot(owned.options.path, controller.signal);
+            await cancelAdmittedRead(readSnapshot(owned.options.path, controller.signal));
           });
         } finally {
           owner.release();
@@ -254,10 +274,11 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
       (error: unknown) => error,
     );
     try {
-      const started = performance.now();
-      controller.abort(reason);
       const error = await operation;
-      const cancellationMs = performance.now() - started;
+      if (cancellationStarted === undefined) {
+        throw new Error("Caller finished before reaching the cancellation gate", { cause: error });
+      }
+      const cancellationMs = performance.now() - cancellationStarted;
       const workerWasRunning = !f.worker().settled;
       const directoryWasPresent = fs.existsSync(entered.file);
       f.release();

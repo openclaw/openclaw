@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseDocument } from "yaml";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { reconcileWindowsGitLauncher } from "../infra/windows-git-launcher.js";
 
 /** Emits install warnings when a source checkout looks npm-installed or lacks source-run deps. */
 export function noteSourceInstallIssues(root: string | null) {
@@ -98,4 +100,36 @@ function detectSelfLinkWarnings(root: string): string[] {
   }
 
   return warnings;
+}
+
+/** Migrates the installer-owned Windows Git launcher through Doctor/update repair. */
+export async function repairWindowsGitLauncher(root: string | null, shouldRepair: boolean) {
+  if (!root) {
+    return;
+  }
+  let result: Awaited<ReturnType<typeof reconcileWindowsGitLauncher>>;
+  try {
+    result = await reconcileWindowsGitLauncher({ root, repair: shouldRepair });
+  } catch (error) {
+    // Launcher maintenance is advisory in Doctor, including its post-update path.
+    // The install command still calls the reconciler directly and fails publication.
+    note(
+      `- Windows Git launcher maintenance could not finish: ${formatErrorMessage(error)}. Check launcher permissions and re-run the OpenClaw installer to repair it. Other Doctor checks will continue.`,
+      "Install",
+    );
+    return;
+  }
+  if (result.status === "needs-repair") {
+    note(
+      `- ${result.launcherPath} does not use the current validated Node runtime. Run: openclaw doctor --fix`,
+      "Install",
+    );
+  } else if (result.status === "needs-reinstall") {
+    note(
+      `- ${result.launcherPath} cannot be safely migrated from the current Node runtime. Re-run the OpenClaw installer.`,
+      "Install",
+    );
+  } else if (result.status === "updated") {
+    note(`- Updated ${result.launcherPath} to use the validated Node runtime.`, "Install");
+  }
 }

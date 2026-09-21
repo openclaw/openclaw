@@ -4,7 +4,13 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { noteSourceInstallIssues } from "./doctor-install.js";
+import { noteSourceInstallIssues, repairWindowsGitLauncher } from "./doctor-install.js";
+
+const reconcileWindowsGitLauncher = vi.hoisted(() => vi.fn());
+
+vi.mock("../infra/windows-git-launcher.js", () => ({
+  reconcileWindowsGitLauncher,
+}));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
@@ -223,6 +229,107 @@ describe("self-link target and diagnostic accuracy", () => {
         expect(warning).toContain("can break frozen pnpm installs");
         expect(warning).toContain("If the link is unintended");
       });
+    },
+  );
+});
+
+describe("repairWindowsGitLauncher", () => {
+  beforeEach(() => {
+    vi.mocked(note).mockReset();
+    reconcileWindowsGitLauncher.mockReset();
+  });
+
+  it("warns without changing a legacy launcher outside repair mode", async () => {
+    reconcileWindowsGitLauncher.mockResolvedValue({
+      status: "needs-repair",
+      launcherPath: "C:\\Users\\alice\\.local\\bin\\openclaw.cmd",
+    });
+
+    await repairWindowsGitLauncher("C:\\Users\\alice\\openclaw", false);
+
+    expect(reconcileWindowsGitLauncher).toHaveBeenCalledWith({
+      root: "C:\\Users\\alice\\openclaw",
+      repair: false,
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Run: openclaw doctor --fix"),
+      "Install",
+    );
+  });
+
+  it("reports a launcher migrated by repair mode", async () => {
+    reconcileWindowsGitLauncher.mockResolvedValue({
+      status: "updated",
+      launcherPath: "C:\\Users\\alice\\.local\\bin\\openclaw.cmd",
+    });
+
+    await repairWindowsGitLauncher("C:\\Users\\alice\\openclaw", true);
+
+    expect(reconcileWindowsGitLauncher).toHaveBeenCalledWith({
+      root: "C:\\Users\\alice\\openclaw",
+      repair: true,
+    });
+    expect(note).toHaveBeenCalledWith(expect.stringContaining("Updated"), "Install");
+  });
+
+  it("directs unsupported legacy-launcher runtimes to the installer", async () => {
+    reconcileWindowsGitLauncher.mockResolvedValue({
+      status: "needs-reinstall",
+      launcherPath: "C:\\Users\\alice\\.local\\bin\\openclaw.cmd",
+    });
+
+    await repairWindowsGitLauncher("C:\\Users\\alice\\openclaw", true);
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Re-run the OpenClaw installer"),
+      "Install",
+    );
+  });
+});
+
+describe("Windows launcher repair boundaries", () => {
+  beforeEach(() => {
+    vi.mocked(note).mockReset();
+    reconcileWindowsGitLauncher.mockReset();
+  });
+
+  it("does not inspect or create a launcher without an install root", async () => {
+    await repairWindowsGitLauncher(null, true);
+    expect(reconcileWindowsGitLauncher).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "skipped", reason: "not-windows" },
+    { status: "skipped", reason: "missing" },
+    { status: "skipped", reason: "foreign" },
+    { status: "unchanged", launcherPath: "C:\\openclaw.cmd" },
+  ])("leaves $status $reason outcomes quiet without requesting creation", async (result) => {
+    reconcileWindowsGitLauncher.mockResolvedValue(result);
+    await repairWindowsGitLauncher("C:\\openclaw", true);
+    expect(reconcileWindowsGitLauncher).toHaveBeenCalledExactlyOnceWith({
+      root: "C:\\openclaw",
+      repair: true,
+    });
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it.each(["EACCES", "EPERM", "EBUSY"])(
+    "reports %s launcher failures without aborting Doctor or claiming repair success",
+    async (code) => {
+      reconcileWindowsGitLauncher.mockRejectedValue(
+        Object.assign(new Error("launcher replacement failed"), { code }),
+      );
+      await expect(repairWindowsGitLauncher("C:\\openclaw", true)).resolves.toBeUndefined();
+      expect(note).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("launcher replacement failed"),
+        "Install",
+      );
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining("Other Doctor checks will continue"),
+        "Install",
+      );
+      expect(note).not.toHaveBeenCalledWith(expect.stringContaining("Updated"), "Install");
     },
   );
 });

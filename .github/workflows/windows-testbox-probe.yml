@@ -42,6 +42,32 @@ on:
         required: false
         default: false
         type: boolean
+      run_windows_git_installer_only:
+        description: "Run only full Windows Git installer and published-driver proof"
+        required: false
+        default: false
+        type: boolean
+      windows_git_installer_case:
+        description: "Installer proof cases: all, or only missing released-driver continuity"
+        required: false
+        default: all
+        type: choice
+        options: [all, published-driver]
+      run_windows_launcher_integration:
+        description: "Build the exact target SHA and require the real Windows Git launcher cell"
+        required: false
+        default: false
+        type: boolean
+      run_winget_acceptance:
+        description: "Run real PR112055 Winget/MSI acceptance on fresh Windows VMs"
+        required: false
+        default: false
+        type: boolean
+      run_portable_node_recovery:
+        description: "Prove real portable Node recovery on disposable Windows VMs (both engines)"
+        required: false
+        default: false
+        type: boolean
       run_private_node_provisioning:
         description: "Prove private Node installation and portable updater authorization on native Windows"
         required: false
@@ -71,6 +97,7 @@ env:
 
 jobs:
   probe:
+    if: ${{ inputs.run_private_node_provisioning || (!inputs.run_windows_git_installer_only && !inputs.run_winget_acceptance && !inputs.run_portable_node_recovery) }}
     name: Windows probe
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 75
@@ -96,17 +123,39 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
           RUNNER_LABEL: ${{ inputs.runner_label }}
           KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
-          MIXED_PROOF: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
+          MIXED_PROOF: ${{ inputs.run_windows_ci || inputs.run_windows_git_installer_only || inputs.run_windows_launcher_integration || inputs.run_winget_acceptance || inputs.run_portable_node_recovery || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
         run: |
           $ErrorActionPreference = "Stop"
           if ($env:RUNNER_LABEL -ne "windows-2025" -or $env:KEEPALIVE_MINUTES -ne "0" -or $env:MIXED_PROOF -eq "true") {
-            throw "Private Node proof requires windows-2025, keepalive 0, and no startup, broad CI, or WSL proof."
+            throw "Private Node proof requires windows-2025, keepalive 0, and no other proof selections."
           }
           if ($env:TARGET_REF -cnotmatch '^[0-9a-f]{40}$' -or $env:WORKFLOW_SHA -cne $env:TARGET_REF) {
             throw "Private Node proof requires the same immutable workflow and target SHA."
           }
           $checkoutSha = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $checkoutSha -cne $env:TARGET_REF) { throw "Private Node proof checkout differs from target_ref." }
+
+      - name: Validate Windows launcher inputs
+        id: launcher_input
+        if: ${{ inputs.run_windows_launcher_integration }}
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          RUN_WINDOWS_CI: ${{ inputs.run_windows_ci }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          STARTUP_PACKAGE: ${{ inputs.installed_startup_package }}
+          CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:RUNNER_OS -ne "Windows" -or $env:RUN_WINDOWS_CI -ne "true") { throw "Launcher integration requires native Windows CI." }
+          if ($env:STARTUP_PACKAGE -ne "" -or $env:CPU_DIAGNOSTIC -eq "true") { throw "Launcher integration and installed startup are separate runs." }
+          if ($env:TARGET_REF -cnotmatch '^[0-9a-f]{40}$') { throw "Launcher integration requires an exact published target_ref." }
+          if ($env:WORKFLOW_SHA -cne $env:TARGET_REF) { throw "Dispatch the workflow from the same published commit as target_ref." }
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:TARGET_REF) { throw "Launcher checkout differs from target_ref." }
+          $status = @(git status --porcelain=v1 --untracked-files=all)
+          if ($LASTEXITCODE -ne 0 -or $status.Count -ne 0) { throw "Launcher checkout is not clean." }
+          if (Test-Path -LiteralPath dist) { throw "Launcher proof requires a fresh source checkout without dist." }
+          "source_sha=$head" >> $env:GITHUB_OUTPUT
 
       - name: Validate installed startup inputs
         id: startup_input
@@ -135,7 +184,7 @@ jobs:
             $packages = [ordered]@{ baseline = $selection.baseline; candidate = $selection.candidate }
           }
           $evidence = Join-Path $env:GITHUB_WORKSPACE ".artifacts/windows-installed-startup"
-          New-Item -ItemType Directory -Path $evidence | Out-Null
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
           foreach ($arm in $packages.Keys) {
             $binding = $packages[$arm]
             foreach ($field in @("runId", "runAttempt", "artifactId")) {
@@ -346,7 +395,7 @@ jobs:
         if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning }}
         shell: bash
         env:
-          REQUESTED_NODE_VERSION: ${{ inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
+          REQUESTED_NODE_VERSION: ${{ inputs.installed_startup_package != '' && inputs.startup_node_version || (inputs.run_windows_launcher_integration && '24.20.0' || '24.x') }}
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -358,7 +407,7 @@ jobs:
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
-          node-version: ${{ inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
+          node-version: ${{ inputs.installed_startup_package != '' && inputs.startup_node_version || (inputs.run_windows_launcher_integration && '24.20.0' || '24.x') }}
 
       - &windows_versions
         name: Runtime versions
@@ -490,6 +539,153 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Diagnose literal batch path dispatch
+        if: ${{ inputs.run_windows_launcher_integration }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP ('batch-path-control-' + [guid]::NewGuid().ToString('N'))
+          $literal = Join-Path $root 'profile %OPENCLAW_SHELL_PATH_CONTROL%'
+          $saved = $env:OPENCLAW_SHELL_PATH_CONTROL
+          New-Item -ItemType Directory -Path $literal -Force | Out-Null
+          $batch = Join-Path $literal 'control.cmd'
+          [IO.File]::WriteAllText($batch, "@echo off`r`necho plain-batch-started`r`n", [Text.Encoding]::ASCII)
+          $env:OPENCLAW_SHELL_PATH_CONTROL = 'expanded-away'
+          Push-Location -LiteralPath $literal
+          try {
+            $ErrorActionPreference = 'Continue'
+            $direct = (& $batch 2>&1 | Out-String).Trim()
+            $directExit = $LASTEXITCODE
+            $relative = (& $env:ComSpec /d /v:off /c 'control.cmd' 2>&1 | Out-String).Trim()
+            $relativeExit = $LASTEXITCODE
+            $ErrorActionPreference = 'Stop'
+            New-Item -ItemType Directory -Path (Join-Path $env:GITHUB_WORKSPACE '.artifacts/windows-launcher') -Force | Out-Null
+            @{ scope = 'plain batch before OpenClaw runs'; directExit = $directExit; directOutput = $direct; relativeExit = $relativeExit; relativeOutput = $relative; literalVariableInPath = $true } | ConvertTo-Json | Set-Content (Join-Path $env:GITHUB_WORKSPACE '.artifacts/windows-launcher/shell-path-control.json')
+            if ($relativeExit -ne 0 -or $relative -cne 'plain-batch-started') { throw 'Relative plain-batch control failed.' }
+          } finally {
+            Pop-Location
+            if ($null -eq $saved) { Remove-Item Env:OPENCLAW_SHELL_PATH_CONTROL -ErrorAction SilentlyContinue } else { $env:OPENCLAW_SHELL_PATH_CONTROL = $saved }
+            Remove-Item -LiteralPath $root -Recurse -Force
+          }
+
+      - name: Build exact Windows launcher source
+        id: launcher_build
+        if: ${{ inputs.run_windows_launcher_integration }}
+        env:
+          CI: true
+          EXPECTED_HEAD: ${{ steps.launcher_input.outputs.source_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          OPENCLAW_BUILD_COMMIT: ${{ steps.launcher_input.outputs.source_sha }}
+          OPENCLAW_BUILD_CACHE: "0"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $evidence = Join-Path $env:GITHUB_WORKSPACE ".artifacts/windows-launcher"
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_HEAD) { throw "Launcher source identity changed." }
+          $status = @(git status --porcelain=v1 --untracked-files=all)
+          if ($LASTEXITCODE -ne 0 -or $status.Count -ne 0) { throw "Install changed launcher source." }
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Cannot bind full source tree." }
+          git ls-tree -r --full-tree HEAD | Set-Content -LiteralPath (Join-Path $evidence "source-tree.txt")
+          if ($LASTEXITCODE -ne 0) { throw "Cannot inventory full source." }
+          $nodePath = (node -p 'process.execPath').Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Cannot identify Node." }
+          $nodeVersion = (node --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $nodeVersion -cne "v24.20.0") { throw "Launcher Node pin differs." }
+          $pnpmVersion = (pnpm --version).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Cannot identify pnpm." }
+          $packageManager = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).packageManager
+          if ($packageManager -notmatch '^pnpm@([^+]+)' -or $pnpmVersion -cne $Matches[1]) { throw "Repository pnpm pin differs." }
+          $lockHash = (Get-FileHash -LiteralPath pnpm-lock.yaml -Algorithm SHA256).Hash.ToLowerInvariant()
+          $started = [DateTime]::UtcNow.ToString("o")
+          pnpm build:package 2>&1 | Tee-Object -FilePath (Join-Path $evidence "build.log")
+          if ($LASTEXITCODE -ne 0) { throw "Full launcher source build failed." }
+          $status = @(git status --porcelain=v1 --untracked-files=all)
+          if ($LASTEXITCODE -ne 0 -or $status.Count -ne 0) { throw "Build changed launcher source." }
+          $builtHead = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $builtHead -cne $head) { throw "Build changed source identity." }
+          if (-not (Test-Path -LiteralPath dist/entry.js -PathType Leaf)) { throw "Build did not emit the CLI entry." }
+          $distRoot = (Resolve-Path -LiteralPath dist).Path
+          $manifest = @(Get-ChildItem -LiteralPath $distRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
+            @{ path = [IO.Path]::GetRelativePath($distRoot, $_.FullName).Replace('\', '/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+          })
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidence "dist-manifest.json")
+          $entryHash = (Get-FileHash -LiteralPath dist/entry.js -Algorithm SHA256).Hash.ToLowerInvariant()
+          [ordered]@{
+            sourceSha = $head; sourceTree = $tree; workflowSha = $env:WORKFLOW_SHA
+            sourceManifestSha256 = (Get-FileHash -LiteralPath (Join-Path $evidence "source-tree.txt") -Algorithm SHA256).Hash.ToLowerInvariant()
+            lockSha256 = $lockHash; packageManager = $packageManager; pnpm = $pnpmVersion
+            node = $nodeVersion; nodePath = $nodePath; nodeSha256 = (Get-FileHash -LiteralPath $nodePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            powershell = $PSVersionTable.PSVersion.ToString(); runner = $env:RUNNER_NAME; runnerOS = $env:RUNNER_OS
+            install = "pnpm install --frozen-lockfile (maintained Windows install step)"
+            build = "pnpm build:package"; buildCache = $false; started = $started; completed = [DateTime]::UtcNow.ToString("o")
+            distManifestSha256 = (Get-FileHash -LiteralPath (Join-Path $evidence "dist-manifest.json") -Algorithm SHA256).Hash.ToLowerInvariant()
+            distFiles = $manifest.Count; entrySha256 = $entryHash; runId = $env:GITHUB_RUN_ID; runAttempt = $env:GITHUB_RUN_ATTEMPT
+          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $evidence "build-provenance.json")
+          "entry_sha256=$entryHash" >> $env:GITHUB_OUTPUT
+
+      - name: Require real Windows launcher integration
+        id: launcher_test
+        if: ${{ inputs.run_windows_launcher_integration }}
+        timeout-minutes: 10
+        env:
+          CI: true
+          OPENCLAW_TEST_WINDOWS_LAUNCHER_INTEGRATION: "1"
+          OPENCLAW_TEST_WINDOWS_LAUNCHER_SHA: ${{ steps.launcher_input.outputs.source_sha }}
+          OPENCLAW_TEST_WINDOWS_LAUNCHER_ENTRY_SHA256: ${{ steps.launcher_build.outputs.entry_sha256 }}
+          TEMP: ${{ runner.temp }}\openclaw-launcher-${{ github.run_id }}-${{ github.run_attempt }}
+          TMP: ${{ runner.temp }}\openclaw-launcher-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
+          node scripts/run-vitest.mjs run src/infra/windows-git-launcher.concurrent.test.ts --reporter=default --reporter=json --outputFile=.artifacts/windows-launcher/concurrency.json 2>&1 | Tee-Object -FilePath .artifacts/windows-launcher/concurrency.log
+          if ($LASTEXITCODE -ne 0) { throw "Launcher ownership concurrency regression failed." }
+          $concurrency = Get-Content -LiteralPath .artifacts/windows-launcher/concurrency.json -Raw | ConvertFrom-Json
+          if ($concurrency.success -ne $true -or $concurrency.numPassedTests -ne 6 -or $concurrency.numPendingTests -ne 0 -or $concurrency.numFailedTests -ne 0) { throw "Expected six non-skipped launcher publication regressions." }
+          node scripts/run-vitest.mjs run test/scripts/install-ps1.test.ts -t 'installs and repairs a launcher through the real hidden CLI' --reporter=default --reporter=json --outputFile=.artifacts/windows-launcher/vitest.json 2>&1 | Tee-Object -FilePath .artifacts/windows-launcher/test.log
+          if ($LASTEXITCODE -ne 0) { throw "Real launcher integration failed." }
+          $report = Get-Content -LiteralPath .artifacts/windows-launcher/vitest.json -Raw | ConvertFrom-Json
+          $suites = @($report.testResults | Where-Object { $_.name.Replace('\', '/') -match '/test/scripts/install-ps1\.test\.ts$' })
+          $cells = @($suites.assertionResults | Where-Object { $_.title -ceq "installs and repairs a launcher through the real hidden CLI" })
+          if ($report.success -ne $true -or $report.numFailedTests -ne 0 -or $report.numPassedTests -ne 1 -or $suites.Count -ne 1 -or $suites[0].status -ne "passed" -or $cells.Count -ne 1 -or $cells[0].status -ne "passed") { throw "Expected one genuinely executed, non-skipped launcher cell." }
+          $status = @(git status --porcelain=v1 --untracked-files=all)
+          if ($LASTEXITCODE -ne 0 -or $status.Count -ne 0) { throw "Test changed source." }
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:OPENCLAW_TEST_WINDOWS_LAUNCHER_SHA) { throw "Test changed source identity." }
+          $manifest = Get-Content -LiteralPath .artifacts/windows-launcher/dist-manifest.json -Raw | ConvertFrom-Json
+          $distFiles = @(Get-ChildItem -LiteralPath dist -File -Recurse)
+          if ($distFiles.Count -ne $manifest.Count) { throw "Test changed build inventory." }
+          foreach ($file in $manifest) {
+            $hash = (Get-FileHash -LiteralPath (Join-Path dist $file.path) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -cne $file.sha256) { throw "Test changed built file: $($file.path)" }
+          }
+          @{ result = "passed"; title = $cells[0].title; sourceSha = $head; entrySha256 = $env:OPENCLAW_TEST_WINDOWS_LAUNCHER_ENTRY_SHA256; nonSkipped = $true; scope = "Install-GitLauncher -> real built hidden CLI -> reconciler; not full installer or updater" } | ConvertTo-Json | Set-Content -LiteralPath .artifacts/windows-launcher/result.json
+
+      - name: Clean Windows launcher fixture
+        id: launcher_cleanup
+        if: ${{ always() && inputs.run_windows_launcher_integration && contains(fromJSON('["success","failure","cancelled"]'), steps.launcher_test.outcome) }}
+        env:
+          TEST_ROOT: ${{ runner.temp }}\openclaw-launcher-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $consumers = @(Get-CimInstance Win32_Process | Where-Object {
+            ($_.CommandLine -and $_.CommandLine.Contains($env:TEST_ROOT)) -or ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($env:TEST_ROOT + '\', [StringComparison]::OrdinalIgnoreCase))
+          })
+          if ($consumers.Count -ne 0) { throw "Launcher fixture still has live consumers; retain it and fail acceptance." }
+          if (Test-Path -LiteralPath $env:TEST_ROOT) { Remove-Item -LiteralPath $env:TEST_ROOT -Recurse -Force }
+          if (Test-Path -LiteralPath $env:TEST_ROOT) { throw "Launcher fixture cleanup incomplete." }
+          @{ root = $env:TEST_ROOT; absent = $true; remainingConsumers = 0; forcedTermination = $false } | ConvertTo-Json | Set-Content -LiteralPath .artifacts/windows-launcher/cleanup.json
+
+      - name: Upload Windows launcher evidence
+        if: ${{ always() && inputs.run_windows_launcher_integration }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-launcher-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/windows-launcher/
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Run Windows CI tests
         if: ${{ inputs.run_windows_ci }}
         shell: bash
@@ -535,7 +731,7 @@ jobs:
   # Native session qualification must not depend on headless CI or WSL results.
   native-schtasks:
     name: Native Scheduled Task proof
-    if: ${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning }}
+    if: ${{ !inputs.run_private_node_provisioning && !inputs.run_windows_git_installer_only && inputs.run_windows_ci }}
     runs-on: windows-2025
     timeout-minutes: 75
     steps:
@@ -791,3 +987,215 @@ jobs:
           $profile = "schtasks-int-$env:TEST_ID"
           Remove-Item -LiteralPath (Join-Path $env:USERPROFILE ".openclaw-$profile") -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item -LiteralPath $env:TEST_ROOT -Recurse -Force -ErrorAction SilentlyContinue
+
+  winget-acceptance:
+    name: Native Winget acceptance (${{ matrix.scenario }})
+    if: ${{ !inputs.run_private_node_provisioning && !inputs.run_windows_git_installer_only && inputs.run_winget_acceptance }}
+    runs-on: windows-2025
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        scenario: [healthy, stale-msi, failed-repair, unsupported-node, non-msi]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Validate isolated acceptance request
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          RUN_CI: ${{ inputs.run_windows_ci }}
+          RUN_LAUNCHER: ${{ inputs.run_windows_launcher_integration }}
+          RUN_PORTABLE: ${{ inputs.run_portable_node_recovery }}
+          WSL_PROOF: ${{ inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
+          STARTUP: ${{ inputs.installed_startup_package }}
+          CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          if ($env:TARGET_REF -cne 'a32b79e73b358fbcd068bbf86ef8032333d8d7c8') { throw 'Requires the reviewed PR112055 head.' }
+          if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Requires a fresh disposable hosted VM.' }
+          if ($env:WSL_PROOF -eq 'true' -or $env:RUN_PORTABLE -eq 'true' -or $env:RUN_CI -eq 'true' -or $env:RUN_LAUNCHER -eq 'true' -or $env:STARTUP -ne '' -or $env:CPU_DIAGNOSTIC -eq 'true') { throw 'Winget qualification is a separate run.' }
+          $destinations = @($env:GITHUB_WORKSPACE,$env:RUNNER_TEMP,$env:ProgramFiles,$env:TEMP)
+          $driveNames = @($destinations | ForEach-Object { (Split-Path -Path $_ -Qualifier).TrimEnd(':') } | Sort-Object -Unique)
+          foreach ($driveName in $driveNames) {
+            $disk = Get-PSDrive -Name $driveName
+            if ($disk.Free -lt 8GB) { throw "Native setup needs 8 GiB free on destination drive $driveName for checkout, bootstrap, MSI/ZIP and logs." }
+          }
+      - name: Checkout reviewed acceptance harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: harness
+          persist-credentials: false
+          sparse-checkout: scripts/ci/windows-winget-acceptance.ps1
+          sparse-checkout-cone-mode: false
+      - name: Checkout exact installer candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref }}
+          path: candidate
+          persist-credentials: false
+          sparse-checkout: scripts/install.ps1
+          sparse-checkout-cone-mode: false
+      - name: Record immutable workflow and harness provenance
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          $head = (& git -C harness rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $env:WORKFLOW_SHA -cnotmatch '^[0-9a-f]{40}$' -or $head -cne $env:WORKFLOW_SHA) { throw 'Harness checkout must match the immutable workflow SHA.' }
+          $tree = (& git -C harness rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Could not bind harness source tree.' }
+          $proof = Join-Path $env:RUNNER_TEMP 'winget-proof'
+          New-Item -ItemType Directory -Force -Path $proof | Out-Null
+          [ordered]@{
+            workflowSha = $env:WORKFLOW_SHA
+            workflowRef = $env:WORKFLOW_REF
+            harnessHead = $head
+            harnessTree = $tree
+            harnessSha256 = (Get-FileHash ./harness/scripts/ci/windows-winget-acceptance.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
+            runId = $env:RUN_ID
+            runAttempt = $env:RUN_ATTEMPT
+          } | ConvertTo-Json | Set-Content (Join-Path $proof 'workflow-provenance.json')
+      - name: Exercise native package lifecycle and clean owned state
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          & ./harness/scripts/ci/windows-winget-acceptance.ps1 -Scenario $env:SCENARIO -CandidateRoot "$env:GITHUB_WORKSPACE/candidate" -ExpectedHead $env:EXPECTED_HEAD -ProofRoot "$env:RUNNER_TEMP/winget-proof" -WorkRoot "$env:RUNNER_TEMP/winget-owned"
+      - name: Upload native evidence including failed qualification
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: winget-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/winget-proof
+          if-no-files-found: error
+          retention-days: 7
+
+  portable-node-recovery:
+    name: Portable Node recovery (${{ matrix.engine }})
+    if: ${{ !inputs.run_private_node_provisioning && !inputs.run_windows_git_installer_only && inputs.run_portable_node_recovery }}
+    runs-on: windows-2025
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [powershell, pwsh]
+    steps:
+      - name: Validate portable recovery selection
+        shell: pwsh
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          RUN_WINDOWS_CI: ${{ inputs.run_windows_ci }}
+          RUN_LAUNCHER: ${{ inputs.run_windows_launcher_integration }}
+          RUN_WINGET: ${{ inputs.run_winget_acceptance }}
+          WSL_PROOF: ${{ inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
+          STARTUP_PACKAGE: ${{ inputs.installed_startup_package }}
+          CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
+        run: |
+          if ($env:TARGET_REF -cnotmatch '^[0-9a-f]{40}$') { throw "Portable proof requires an exact published candidate." }
+          if ($env:WSL_PROOF -eq 'true' -or $env:RUN_WINDOWS_CI -eq 'true' -or $env:RUN_LAUNCHER -eq 'true' -or $env:RUN_WINGET -eq 'true' -or $env:STARTUP_PACKAGE -ne '' -or $env:CPU_DIAGNOSTIC -eq 'true') { throw "Portable recovery must run separately from the other acceptance jobs." }
+      - name: Checkout immutable proof tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: tooling
+          persist-credentials: false
+          submodules: false
+      - name: Checkout exact installer candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref }}
+          path: candidate
+          persist-credentials: false
+          submodules: false
+      - name: Bind immutable tooling provenance
+        shell: pwsh
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          TARGET_SHA: ${{ inputs.target_ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tooling = (git -C tooling rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $tooling -cne $env:WORKFLOW_SHA) { throw 'Tooling differs from published workflow.' }
+          $harness = 'scripts/ci/prove-portable-node-recovery.ps1'
+          $expected = (git -C tooling rev-parse "HEAD:$harness").Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Missing committed harness.' }
+          $actual = (git -C tooling hash-object -- $harness).Trim()
+          if ($LASTEXITCODE -ne 0 -or $expected -cne $actual) { throw 'Harness differs from published workflow.' }
+          New-Item -ItemType Directory -Force -Path .artifacts | Out-Null
+          @{ workflowSha = $tooling; targetSha = $env:TARGET_SHA; harnessSha256 = (Get-FileHash "tooling/$harness" -Algorithm SHA256).Hash.ToLowerInvariant(); runId = $env:GITHUB_RUN_ID; runAttempt = $env:GITHUB_RUN_ATTEMPT; runnerOS = $env:RUNNER_OS; runnerEnvironment = $env:RUNNER_ENVIRONMENT; imageVersion = $env:ImageVersion } | ConvertTo-Json | Set-Content .artifacts/portable-node-provenance.json
+      - name: Prove real portable recovery and owned cleanup (PowerShell 5.1)
+        if: ${{ matrix.engine == 'powershell' }}
+        shell: powershell
+        env:
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+          EXPECTED_ENGINE: ${{ matrix.engine }}
+        run: |
+          & ./tooling/scripts/ci/prove-portable-node-recovery.ps1 `
+            -CandidateRoot (Join-Path $env:GITHUB_WORKSPACE 'candidate') `
+            -ExpectedHead $env:EXPECTED_HEAD -ExpectedEngine $env:EXPECTED_ENGINE `
+            -EvidencePath (Join-Path $env:GITHUB_WORKSPACE '.artifacts/portable-node-recovery.json')
+      - name: Prove real portable recovery and owned cleanup (PowerShell 7)
+        if: ${{ matrix.engine == 'pwsh' }}
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+          EXPECTED_ENGINE: ${{ matrix.engine }}
+        run: |
+          & ./tooling/scripts/ci/prove-portable-node-recovery.ps1 `
+            -CandidateRoot (Join-Path $env:GITHUB_WORKSPACE 'candidate') `
+            -ExpectedHead $env:EXPECTED_HEAD -ExpectedEngine $env:EXPECTED_ENGINE `
+            -EvidencePath (Join-Path $env:GITHUB_WORKSPACE '.artifacts/portable-node-recovery.json')
+      - name: Upload portable recovery evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: portable-node-recovery-${{ matrix.engine }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/portable-node-recovery.json
+            .artifacts/portable-node-provenance.json
+          if-no-files-found: error
+          retention-days: 7
+
+  native-git-installer:
+    name: Full Windows Git installer and published-driver proof
+    if: ${{ !inputs.run_private_node_provisioning && (inputs.run_windows_launcher_integration || inputs.run_windows_git_installer_only) }}
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Validate full installer selection
+        shell: pwsh
+        env:
+          RUN_WINDOWS_CI: ${{ inputs.run_windows_ci }}
+          RUN_PORTABLE: ${{ inputs.run_portable_node_recovery }}
+          RUN_WINGET: ${{ inputs.run_winget_acceptance }}
+          MIXED_INSTALLER_ONLY: ${{ inputs.run_windows_git_installer_only && (inputs.run_windows_launcher_integration || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features) }}
+        run: |
+          if ($env:RUN_WINDOWS_CI -ne 'true' -or $env:RUN_PORTABLE -eq 'true' -or $env:RUN_WINGET -eq 'true' -or $env:MIXED_INSTALLER_ONLY -eq 'true') { throw 'Full Git proof requires Windows-CI setup and no conflicting proof selections.' }
+      - *windows_checkout
+      - *windows_defender
+      - *windows_node
+      - name: Prove full installer and published-driver continuity
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ inputs.target_ref }}
+          PROOF_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PROOF_CASE: ${{ inputs.windows_git_installer_case }}
+        run: |
+          & ./scripts/ci/prove-windows-git-install.ps1 -CandidateRoot $env:GITHUB_WORKSPACE -ExpectedHead $env:EXPECTED_HEAD -EvidenceRoot (Join-Path $env:RUNNER_TEMP 'full-git-install-evidence') -ProofCase $env:PROOF_CASE
+          $result = Get-Content (Join-Path $env:RUNNER_TEMP 'full-git-install-evidence/result.json') -Raw | ConvertFrom-Json
+          $expectedCases = if ($env:PROOF_CASE -eq 'all') { 4 } elseif ($env:PROOF_CASE -eq 'published-driver') { 2 } else { throw 'Invalid installer proof selection.' }
+          if ($result.result -cne 'passed' -or $result.sourceSha -cne $env:EXPECTED_HEAD -or $result.selection -cne $env:PROOF_CASE -or $result.cases.Count -ne $expectedCases -or $result.cleanup -cne 'restored-and-removed') { throw 'Installer acceptance did not execute every selected case.' }
+      - name: Upload full installer evidence including failures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: full-windows-git-installer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/full-git-install-evidence
+          if-no-files-found: error
+          retention-days: 7

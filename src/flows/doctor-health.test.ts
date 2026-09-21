@@ -52,6 +52,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
+import { registerDoctorWindowsLauncherTests } from "./doctor-health.windows-launcher.test-support.js";
 
 const support = await import("./doctor-health.test-support.js");
 const { mocks, registerDoctorConfigReceiptTests, postInstallAdvisory } = support;
@@ -74,6 +75,8 @@ describe("runDoctorHealthFlow", () => {
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
     mocks.writeUpdatePostInstallDoctorResult.mockClear();
   });
+
+  registerDoctorWindowsLauncherTests(runDoctorHealthFlow);
 
   it.each(support.doctorServiceInspectionCases)(
     "admits state repair without claiming unavailable service authority: $kind (update=$updateParent)",
@@ -224,8 +227,7 @@ describe("runDoctorHealthFlow", () => {
           (kind.includes("stopped-loaded") && process.platform !== "darwin") ||
           kind === "absent" ||
           kind === "windows-ready" ||
-          kind === "windows-disabled" ||
-          (kind.endsWith("loaded-disabled") && process.platform !== "darwin")
+          kind === "windows-disabled"
         ) {
           await run;
           expect(
