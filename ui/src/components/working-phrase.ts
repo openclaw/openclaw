@@ -42,16 +42,16 @@ const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
  * list (currently 19) every stride cycles through all phrases before
  * repeating. Must stay O(1) in bucket — ChatItem.startedAt can be an
  * arbitrarily old timestamp, and this runs on a one-second poll. */
-function displayedPhraseIndex(seed: string, bucket: number): number {
-  const length = PHRASE_KEYS.length;
+function displayedPhraseIndex(seed: string, bucket: number, length: number): number {
   const offset = fnv1aUtf16(`${seed}:offset`) % length;
-  const stride = 1 + (fnv1aUtf16(`${seed}:stride`) % (length - 1));
+  const stride = length === 1 ? 0 : 1 + (fnv1aUtf16(`${seed}:stride`) % (length - 1));
   return (offset + bucket * stride) % length;
 }
 
 class WorkingPhrase extends OpenClawLightDomContentsElement {
   @property({ type: Number }) startMs: number | null = null;
   @property() seed = "";
+  @property({ attribute: false }) phrases: readonly string[] | undefined;
 
   private readonly polling = new PollController(this, 1_000, () => this.requestUpdate(), false);
 
@@ -65,7 +65,7 @@ class WorkingPhrase extends OpenClawLightDomContentsElement {
   }
 
   private syncTimer() {
-    if (this.isConnected && this.startMs != null) {
+    if (this.isConnected && this.startMs != null && this.phrases?.length !== 0) {
       this.polling.start();
     } else {
       this.polling.stop();
@@ -73,7 +73,7 @@ class WorkingPhrase extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    if (this.startMs == null) {
+    if (this.startMs == null || this.phrases?.length === 0) {
       return nothing;
     }
     const elapsed = Date.now() - this.startMs;
@@ -82,8 +82,15 @@ class WorkingPhrase extends OpenClawLightDomContentsElement {
     }
     const sinceShown = elapsed - WORKING_PHRASE_SHOW_AFTER_MS;
     const bucket = Math.floor(sinceShown / WORKING_PHRASE_ROTATE_EVERY_MS);
-    const index = displayedPhraseIndex(this.seed, bucket);
-    return html`<span>·</span> ${t(`chat.progressLabels.${PHRASE_KEYS[index]}`)}…`;
+    const index = displayedPhraseIndex(
+      this.seed,
+      bucket,
+      this.phrases?.length ?? PHRASE_KEYS.length,
+    );
+    const phrase = this.phrases
+      ? this.phrases[index]
+      : t(`chat.progressLabels.${PHRASE_KEYS[index]}`);
+    return html`<span>·</span> ${phrase}…`;
   }
 }
 

@@ -321,6 +321,7 @@ export function projectChatTranscript(
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
+    branding: props.branding,
     assistant: assistantIdentity,
     startupLabel: props.startupLabel,
     waitingApproval: props.waitingApproval,
@@ -605,6 +606,8 @@ export function projectChatTranscript(
   }
   trackTranscriptRenderDependencies(state, [
     locale,
+    props.branding?.mascot,
+    props.branding?.workingPhrases,
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,

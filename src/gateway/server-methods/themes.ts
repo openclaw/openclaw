@@ -92,6 +92,12 @@ function catalogForPreferences(entries: Record<string, unknown>): ThemeCatalogEn
       id: `user/${localId}`,
       name: definition.name,
       description: definition.description,
+      ...(definition.mascot !== undefined ? { mascot: definition.mascot } : {}),
+      ...(definition.workingPhrases !== undefined
+        ? { workingPhrases: definition.workingPhrases }
+        : {}),
+      ...(definition.critters !== undefined ? { critters: definition.critters } : {}),
+      ...(definition.avatarHat !== undefined ? { avatarHat: definition.avatarHat } : {}),
       source: "user",
       modes: (["light", "dark"] as const).filter((mode) => Boolean(definition[mode])),
       definition,

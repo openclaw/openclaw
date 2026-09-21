@@ -6,6 +6,8 @@ import {
   THEME_NAME_MAX_LENGTH,
   THEME_DESCRIPTION_MAX_LENGTH,
   THEME_TOKEN_MAX_LENGTH,
+  THEME_WORKING_PHRASES_MAX,
+  THEME_WORKING_PHRASE_MAX_LENGTH,
 } from "../theme.js";
 import { closedObject } from "./closed-object.js";
 
@@ -36,6 +38,16 @@ export const ThemePaletteSchema = closedObject({
 export const ThemeDefinitionSchema = closedObject({
   name: Type.String({ minLength: 1, maxLength: THEME_NAME_MAX_LENGTH }),
   description: Type.String({ minLength: 1, maxLength: THEME_DESCRIPTION_MAX_LENGTH }),
+  mascot: Type.Optional(Type.Union([Type.Literal("claw"), Type.Literal("none")])),
+  workingPhrases: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: THEME_WORKING_PHRASE_MAX_LENGTH }), {
+      maxItems: THEME_WORKING_PHRASES_MAX,
+    }),
+  ),
+  critters: Type.Optional(
+    Type.Array(Type.Union([Type.Literal("penguin"), Type.Literal("fedora")]), { maxItems: 8 }),
+  ),
+  avatarHat: Type.Optional(Type.Union([Type.Literal("fedora")])),
   light: Type.Optional(ThemePaletteSchema),
   dark: Type.Optional(ThemePaletteSchema),
 });

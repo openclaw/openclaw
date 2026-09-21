@@ -461,6 +461,11 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   height: 22px;
 }
 
+.login-gate__logo--neutral svg {
+  width: 100%;
+  height: 100%;
+}
+
 .login-gate__brand-name {
   font-weight: 700;
   letter-spacing: -0.01em;

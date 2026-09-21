@@ -21,6 +21,12 @@ export function listPluginThemes(): ThemeCatalogEntry[] {
         id: `${plugin.id}/${id}`,
         name: definition.name,
         description: definition.description,
+        ...(definition.mascot !== undefined ? { mascot: definition.mascot } : {}),
+        ...(definition.workingPhrases !== undefined
+          ? { workingPhrases: definition.workingPhrases }
+          : {}),
+        ...(definition.critters !== undefined ? { critters: definition.critters } : {}),
+        ...(definition.avatarHat !== undefined ? { avatarHat: definition.avatarHat } : {}),
         source: "plugin",
         pluginId: plugin.id,
         modes: (["light", "dark"] as const).filter((mode) => Boolean(definition[mode])),

@@ -6,6 +6,7 @@
 // every new session hatches a slightly different lobster.
 import { LitElement, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
 import { patchSettings } from "../app/settings.ts";
 import * as dex from "./lobster-dex.ts";
@@ -35,6 +36,8 @@ class LobsterPet extends LitElement {
   @property({ attribute: false }) mode: contract.LobsterPetMode = "idle";
 
   @property({ attribute: false }) visitsEnabled = true;
+  @property({ attribute: false }) residentEnabled = true;
+  @property({ attribute: false }) critters: readonly ThemeCritterId[] | undefined;
   @property({ attribute: false }) floorEnabled = false;
   @property({ attribute: false }) runOutcome: contract.LobsterRunOutcome = "ok";
   @property({ attribute: false }) soundsEnabled = false;
@@ -48,7 +51,10 @@ class LobsterPet extends LitElement {
   @state() private entrance: contract.LobsterPetEntrance = "walk";
   @state() private presence: "out" | "in" | "leaving" = "out";
   @state() private anchor: plans.LobsterPetAnchor = "top";
-  private readonly geometry = new LobsterComposerGeometry(this, () => this.twinPlanned);
+  private readonly geometry = new LobsterComposerGeometry(
+    this,
+    () => this.residentEnabled && this.twinPlanned,
+  );
   private travel: LobsterSceneTravel | null = null;
   private travelScene = this.geometry.scene;
   private motionRng: () => number = lobsterLook.mulberry32(0);
@@ -72,6 +78,7 @@ class LobsterPet extends LitElement {
   // Passers and the bottle run on their own clocks beside the resident.
   private readonly traffic = new LobsterLedgeTraffic(this, {
     visitsEnabled: () => this.visitsEnabled && !this.dismissed,
+    passerOptions: () => ({ critters: this.critters, strangers: this.residentEnabled }),
     onPasserStart: (plan) => {
       this.passerAnchor =
         plan.floor && this.floorEnabled && this.geometry.scene.floor ? "floor" : "top";
@@ -159,6 +166,7 @@ class LobsterPet extends LitElement {
   private wantsVisible(): boolean {
     return (
       this.visitsEnabled &&
+      this.residentEnabled &&
       !this.dismissed &&
       (this.mode === "offline" ||
         this.vigil ||
@@ -226,17 +234,33 @@ class LobsterPet extends LitElement {
         this.performAct(finished ? finishAct : "startle", presenceOwner);
       }
     }
-    if (changed.has("visitsEnabled")) {
-      if (!this.visitsEnabled) {
-        this.dismissMenuPosition = null;
-      } else if (changed.get("visitsEnabled") === false) {
+    if (changed.has("visitsEnabled") || changed.has("residentEnabled")) {
+      if (this.visitsEnabled && changed.get("visitsEnabled") === false) {
         this.dismissed = false;
         this.traffic.reset(this.seed);
       }
+      if (!this.visitsEnabled || !this.residentEnabled) {
+        this.suspendResident();
+      } else if (
+        changed.get("visitsEnabled") === false ||
+        changed.get("residentEnabled") === false
+      ) {
+        this.scheduleVisits();
+        this.trackVigil();
+      }
     }
-    // Moving day latches once per load, as soon as the gateway version is
-    // known (the hello can land after the first render).
-    if (!this.movingDayChecked && this.gatewayVersion) {
+    const previousCritters = changed.get("critters") ?? [];
+    const critters = this.critters ?? [];
+    const crittersChanged =
+      changed.has("critters") &&
+      (previousCritters.length !== critters.length ||
+        previousCritters.some((kind, index) => kind !== critters[index]));
+    if (!seedChanged && (changed.has("residentEnabled") || crittersChanged)) {
+      this.traffic.replanPasser(this.seed);
+      this.geometry.scheduleMeasure();
+    }
+    // A theme without the resident leaves its upgrade marker for a later visit.
+    if (this.residentEnabled && !this.movingDayChecked && this.gatewayVersion) {
       this.movingDayChecked = true;
       this.movingDay = plans.detectLobsterMovingDay(this.gatewayVersion);
     }
@@ -244,7 +268,10 @@ class LobsterPet extends LitElement {
     // being out; the visits setting and dismissals silence it too.
     this.toggleAttribute(
       "data-dex-complete",
-      (this.identity?.dexComplete ?? false) && this.visitsEnabled && !this.dismissed,
+      (this.identity?.dexComplete ?? false) &&
+        this.visitsEnabled &&
+        this.residentEnabled &&
+        !this.dismissed,
     );
     // Losing an empty floor is immediate: never animate back through newly
     // entered text, an attachment, or a newly widened footer control.
@@ -440,7 +467,7 @@ class LobsterPet extends LitElement {
       window.clearTimeout(this.vigilTimer);
       this.vigilTimer = null;
     }
-    if (this.mode === "busy") {
+    if (this.mode === "busy" && this.visitsEnabled && this.residentEnabled && !this.dismissed) {
       this.vigilTimer = window.setTimeout(() => {
         this.vigilTimer = null;
         this.vigil = true;
@@ -476,6 +503,9 @@ class LobsterPet extends LitElement {
   };
 
   private readonly openDismissMenu = (event: MouseEvent) => {
+    if (!this.residentEnabled || !this.visitsEnabled) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     this.handleHoldCancel();
@@ -515,11 +545,38 @@ class LobsterPet extends LitElement {
     this.leaveTimer = null;
   }
 
+  private suspendResident() {
+    this.clearActTimers();
+    this.clearVisitTimers();
+    this.handleHoldCancel();
+    for (const timer of [this.shellTimer, this.grumpyTimer, this.vigilTimer]) {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    }
+    this.shellTimer = null;
+    this.grumpyTimer = null;
+    this.vigilTimer = null;
+    this.shellVisible = false;
+    this.grumpy = false;
+    this.vigil = false;
+    this.outcomePresenceOwner = null;
+    this.dismissMenuPosition = null;
+    this.scheduledVisiting = false;
+    this.presence = "out";
+    this.act = null;
+    this.entering = false;
+    this.restartPending = false;
+  }
+
   // ---- Visit schedule ----
 
   private scheduleVisits() {
     this.clearVisitTimers();
     this.scheduledVisiting = false;
+    if (!this.visitsEnabled || !this.residentEnabled) {
+      return;
+    }
     // A shy share of loads never visits on their own; offline still summons.
     if (this.visitRng() < plans.VISIT_SHY_CHANCE) {
       return;
@@ -535,7 +592,7 @@ class LobsterPet extends LitElement {
   }
 
   private armArrival(delayMs: number) {
-    if (!this.isConnected) {
+    if (!this.isConnected || !this.visitsEnabled || !this.residentEnabled) {
       return;
     }
     this.visitTimer = window.setTimeout(() => {
@@ -600,6 +657,8 @@ class LobsterPet extends LitElement {
     // must also stay inert for reduced-motion users and departed pets.
     if (
       !this.isConnected ||
+      !this.visitsEnabled ||
+      !this.residentEnabled ||
       !this.look ||
       this.presence !== "in" ||
       this.vigil ||
@@ -637,6 +696,9 @@ class LobsterPet extends LitElement {
   }
 
   private performAct(act: plans.LobsterPetAct, presenceOwner: "vigil" | null = null) {
+    if (!this.visitsEnabled || !this.residentEnabled || this.presence !== "in") {
+      return;
+    }
     this.clearActTimers();
     // The active outcome chain carries its sole presence owner across linked
     // acts; overrides, forced departures, and the terminal act release it.
@@ -748,6 +810,7 @@ class LobsterPet extends LitElement {
       travel: this.travel,
       floorEnabled: this.floorEnabled,
       visitsEnabled: this.visitsEnabled,
+      residentEnabled: this.residentEnabled,
       dismissed: this.dismissed,
       passer: this.traffic.passer
         ? {

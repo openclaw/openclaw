@@ -14,6 +14,10 @@ import {
   type ResolvedIdentityAvatar,
 } from "../lib/identity-avatar.ts";
 import "../styles/identity-avatar.css";
+import { resolveAvatarHat } from "./agent-avatar-hat.ts";
+import { icons } from "./icons.ts";
+import { currentThemeBranding } from "./neutral-mark.ts";
+import { AVATAR_HAT_SPRITES } from "./theme-flair-sprites.ts";
 
 type IdentityAvatarFallback = Extract<ResolvedIdentityAvatar, { kind: "initials" }>;
 
@@ -229,7 +233,17 @@ export function renderAgentIdentityAvatar(
   className = "",
   onImageError?: () => void,
 ) {
+  const branding = currentThemeBranding();
   if (isReservedSystemAgentId(agent.id)) {
+    if (branding.mascot === "none") {
+      return html`<span
+        class=${`identity-avatar--agent identity-avatar--neutral ${className}`}
+        role=${agent.name ? "img" : nothing}
+        aria-label=${agent.name ?? nothing}
+        aria-hidden=${agent.name ? nothing : "true"}
+        >${icons.mark}</span
+      >`;
+    }
     return html`<img
       class=${`identity-avatar--agent ${className}`}
       src=${inferControlUiPublicAssetPath("favicon.svg")}
@@ -244,6 +258,7 @@ export function renderAgentIdentityAvatar(
     sourceUrl: agent.avatar ?? undefined,
     pending: agent.pending ?? imageUrl !== null,
   };
+  const hat = agent.pending ? null : resolveAvatarHat(agent.id, branding);
   return html`<span
     class=${identityAvatarClass(`identity-avatar--agent ${className}`, view)}
     role=${agent.name ? "img" : nothing}
@@ -263,5 +278,12 @@ export function renderAgentIdentityAvatar(
         ),
       )}
     </span>
+    ${
+      hat
+        ? html`<span class=${`identity-avatar__hat identity-avatar__hat--${hat}`} aria-hidden="true"
+            >${AVATAR_HAT_SPRITES[hat]}</span
+          >`
+        : nothing
+    }
   </span>`;
 }

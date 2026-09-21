@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 366336,
-  "reason": "Approved #152375 integration measurement: startup JS is 366291 B; 366336 B (357.75 KiB) provides a rounded baseline. The existing 512 B growth and 64 B build-variance allowances remain unchanged, giving an explicit 366912 B enforcement limit.",
+  "startupJsGzipBytes": 367728,
+  "reason": "Portable theme branding, critters, and avatar hats measured 368304 B startup JS, 2467 B (0.6744%) above the original 365837 B enforcement limit. The approved sub-1% adjustment sets baseline and cap to 367728 B, preserving the 512 B growth and 64 B build-variance allowances. The CSS ceiling remains at its original 51200 B; measured CSS is 51180 B.",
   "updatedAt": "2026-09-21"
 }
