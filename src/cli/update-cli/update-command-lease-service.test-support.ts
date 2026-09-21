@@ -65,6 +65,10 @@ export async function mockRepairManagedService(
     await fs.writeFile(serviceState, "running");
     return { outcome: "completed" as const };
   });
+  const readRuntime: gatewayService.GatewayService["readRuntime"] = async () =>
+    (await fs.readFile(serviceState, "utf8")) === "running"
+      ? { status: "running", pid: process.pid + 1 }
+      : { status: "stopped" };
   vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
     createMockGatewayService({
       isLoaded: async () => true,
@@ -75,14 +79,30 @@ export async function mockRepairManagedService(
           OPENCLAW_CONFIG_PATH: state.configPath,
         },
       }),
+      readRuntime,
       restart,
     }),
   );
-  vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockResolvedValue({
-    healthy: true,
-    staleGatewayPids: [],
-    runtime: { status: "running" },
-    portUsage: { port: 19003, status: "busy", listeners: [], hints: [] },
+  // Restoration and failure observation read the same fixture-owned service;
+  // no real Gateway listens on the fixture port.
+  const readHealth = async (): Promise<restartHealth.GatewayRestartSnapshot> => {
+    const runtime = await readRuntime(process.env);
+    const running = runtime.status === "running";
+    return {
+      healthy: running,
+      waitOutcome: running ? "healthy" : "stopped-free",
+      staleGatewayPids: [],
+      runtime,
+      gatewayVersion: running ? "1.0.0" : undefined,
+      gatewayBootId: running ? "repair-service" : undefined,
+      portUsage: { port: 19003, status: running ? "busy" : "free", listeners: [], hints: [] },
+    };
+  };
+  vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockImplementation(readHealth);
+  vi.spyOn(restartHealth, "inspectGatewayRestart").mockImplementation(readHealth);
+  vi.spyOn(restartHealth, "waitForGatewayHttpReadiness").mockImplementation(async () => {
+    const running = (await readRuntime(process.env)).status === "running";
+    return { healthz: running ? 200 : null, readyz: running ? 200 : null };
   });
   return { serviceState, stop, restart };
 }

@@ -321,13 +321,22 @@ it.each([
       expect(listUpdateRuns()[0]).toMatchObject({
         status: "failed",
         reason: "doctor-gateway-restoration-failed",
+        verification: { serviceRunning: false, readyz: false },
       });
       const diagnostics = vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n");
       expect(diagnostics).toContain("managed Gateway could not be restored");
       expect(diagnostics).toContain("openclaw gateway restart");
       expect(getUpdateRun(recovery.runId)).toEqual(recovery);
     } else if (failDoctor) {
-      expect(listUpdateRuns()[0]).toMatchObject({ status: "failed", reason: "doctor-failed" });
+      expect(listUpdateRuns()[0]).toMatchObject({
+        status: "failed",
+        reason: "doctor-failed",
+        verification: {
+          serviceRunning: true,
+          readyz: true,
+          recovery: { service: "healthy" },
+        },
+      });
       expect(getUpdateRun(recovery.runId)).toEqual(recovery);
     } else {
       expectSuccess("repair");
@@ -1023,18 +1032,36 @@ describe("update orchestration lifecycle ownership", () => {
     if (lane === "resume") {
       await invoke(lane);
       expectSuccess(lane, false);
+    } else if (valid) {
+      await invoke(lane);
+      expect(reportedResult(lane)).toMatchObject({
+        status: lane === "repair" ? "warning" : "ok",
+        postUpdate: {
+          plugins: {
+            status: "warning",
+            reason: "post-plugin-doctor-execution-failed",
+            warnings: [
+              expect.objectContaining({
+                reason: "doctor-advisory",
+                message: expect.stringContaining("doctor fixture failure"),
+              }),
+            ],
+          },
+        },
+      });
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expectDoctorDiagnostics();
     } else {
       await invokeReportedFailure(lane);
       expect(reportedResult(lane)).toMatchObject({
         status: "error",
         postUpdate: {
           plugins: {
-            reason: valid
-              ? "post-plugin-doctor-execution-failed"
-              : "post-plugin-doctor-invalid-config",
+            reason: "post-plugin-doctor-invalid-config",
           },
         },
       });
+      expect(mocks.restart).not.toHaveBeenCalled();
     }
     const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
     expect(persisted.meta?.lastTouchedVersion).toBe(valid ? VERSION : futureVersion);

@@ -6618,7 +6618,7 @@ describe("update-cli", () => {
           throw new Error("listener check failed after stop");
         });
       }
-      if (failure) {
+      if (failure && failure !== "doctor") {
         await expect(updateCommand({ yes: true, restart, json: true })).rejects.toEqual(
           new ExitError(1),
         );
@@ -6644,7 +6644,16 @@ describe("update-cli", () => {
         postUpdate: {
           plugins: {
             changed: true,
-            warnings: [],
+            status: failure === "doctor" ? "warning" : "ok",
+            warnings:
+              failure === "doctor"
+                ? [
+                    expect.objectContaining({
+                      reason: "doctor-advisory",
+                      message: expect.stringContaining("plugin Doctor failed"),
+                    }),
+                  ]
+                : [],
             npm: { outcomes: [expect.objectContaining({ pluginId: "brave", status: "updated" })] },
           },
         },
@@ -6653,6 +6662,19 @@ describe("update-cli", () => {
       expect(freshRestartCalls()).toHaveLength(restart && running ? 1 : 0);
       expect(packageInstallCommandCall()).toBeUndefined();
       expect(candidateValidation).not.toHaveBeenCalled();
+      if (failure === "doctor") {
+        expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({
+          status: "succeeded",
+          verification: { serviceRunning: true, readyz: true },
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: "warning:finalize:plugins:0",
+              status: "completed",
+              detail: expect.stringContaining("plugin Doctor failed"),
+            }),
+          ]),
+        });
+      }
       if (!restart) {
         expect(lastWriteJsonCall()).toMatchObject({
           run: {
@@ -10711,55 +10733,6 @@ describe("update-cli", () => {
     );
     expect(getLogOutput()).toContain("OpenClaw update failed: post-update-plugins.");
     expect(getErrorOutput()).not.toContain("Update failed during plugin post-update sync.");
-  });
-
-  it("keeps the core stopped for plugin Doctor and never restarts after Doctor fails", async () => {
-    // This path exercises delegated Doctor ownership, independent of repository build artifacts.
-    vi.spyOn(doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue(true);
-    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
-    mockRunningManagedGateway(["node", serviceEntrypoint, "gateway", "run"]);
-    mockGitUpdateAfterMutation();
-    mockNpmPluginOutcomes([], true);
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(serviceEntrypoint);
-    const runFixtureCommand = requireValue(
-      vi.mocked(runCommandWithTimeout).getMockImplementation(),
-      "command effect fixture",
-    );
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
-      if (argv.at(-1) === "--doctor") {
-        return commandResult({ code: 1, stderr: "doctor process failed" });
-      }
-      return runFixtureCommand(argv, options);
-    });
-    await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
-
-    expect(serviceStop).toHaveBeenCalledOnce();
-    expect(runRestartScript).not.toHaveBeenCalled();
-    const packageOrder = requireValue(
-      updateNpmInstalledPlugins.mock.invocationCallOrder[0],
-      "plugin packages",
-    );
-    const stopOrder = requireValue(serviceStop.mock.invocationCallOrder[0], "core stop");
-    const doctorCallIndex = commandCalls().findIndex(([argv]) => argv.at(-1) === "--doctor");
-    const doctorOrder = requireValue(
-      vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[doctorCallIndex],
-      "plugin Doctor",
-    );
-    expect(stopOrder).toBeLessThan(packageOrder);
-    expect(packageOrder).toBeLessThan(doctorOrder);
-    expect(
-      vi
-        .mocked(runExec)
-        .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? ""))
-        .map(([, args]) => args.slice(1)),
-    ).toEqual([["config", "validate", "--json"]]);
-    expectDelegatedPluginDoctorInput(commandCalls()[doctorCallIndex]?.[1].input);
-    expect(serviceRestart).not.toHaveBeenCalled();
-    expect(freshRestartCalls()).toHaveLength(0);
-
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(getLogOutput()).toContain("OpenClaw update failed: post-update-plugins.");
-    expect(getLogOutput()).not.toContain("OpenClaw updated");
   });
 
   it("keeps managed service stop output off stdout during json package updates", async () => {
