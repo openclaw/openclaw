@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 367983,
-  "reason": "Portable theme branding after CI and review fixes measured 368359 B startup JS locally. Add 200 B for the Linux build and subtract the unchanged 512 B growth and 64 B variance allowances: baseline and cap 367983 B, enforcement limit 368559 B. This is 2722 B (0.744%) above the original 365837 B limit, below the approved 1% increase. CSS remains 51180 B under its unchanged 51200 B ceiling.",
+  "startupJsGzipBytes": 368058,
+  "reason": "CI run 35574071280 measured 368634 B startup JS gzip on Linux, 275 B above the local 368359 B measurement. Subtract the unchanged 512 B growth and 64 B variance allowances: baseline and cap 368058 B, enforcement limit 368634 B. The series increase is 2797 B (0.765%) over the original 365837 B limit, inside the approved 1%. Startup CSS remains 51180 B under its unchanged 51200 B ceiling.",
   "updatedAt": "2026-09-21"
 }

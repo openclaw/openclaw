@@ -157,7 +157,7 @@ describe("favicon presentation ownership", () => {
         expect(svgDocument().documentElement.lastElementChild?.getAttribute("fill")).toBe(color),
       );
     const changePresentation = async (change: () => void) => {
-      const changed = createDeferred<void>();
+      const changed = createDeferred();
       const observer = new MutationObserver(() => changed.resolve());
       observer.observe(svgIcon, { attributes: true, attributeFilter: ["href"] });
       try {
