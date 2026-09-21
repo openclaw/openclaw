@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { joinClawHubPluginCatalog } from "./catalog-discovery.js";
 import {
   emptyMetadataSnapshot,
@@ -59,6 +62,7 @@ function mockHostedOfficialCatalog(entries: unknown[]) {
 }
 
 describe("managed plugin catalog", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
@@ -474,20 +478,31 @@ describe("managed plugin catalog", () => {
   });
 
   it("keeps installed plugins uncategorized when ClawHub enrichment is unavailable", async () => {
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        enabled: true,
-        id: "community-tool",
-        name: "Community Tool",
-        origin: "global",
-        packageVersion: "1.0.0",
-        installRecord: {
-          source: "clawhub",
-          clawhubPackage: "community/tool",
-          version: "1.0.0",
-        },
-      }),
+    const rootDir = tempDirs.make("managed-catalog-enrichment-");
+    fs.writeFileSync(
+      path.join(rootDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/community-tool", version: "1.0.0" }),
     );
+    const metadata = metadataSnapshot({
+      enabled: true,
+      id: "community-tool",
+      name: "Community Tool",
+      origin: "global",
+      packageVersion: "1.0.0",
+      installRecord: {
+        source: "clawhub",
+        installPath: rootDir,
+        clawhubPackage: "community/tool",
+        version: "1.0.0",
+      },
+    });
+    expectDefined(metadata.index.plugins[0], "installed plugin").rootDir = rootDir;
+    Object.assign(expectDefined(metadata.plugins[0], "installed manifest"), {
+      rootDir,
+      source: path.join(rootDir, "index.ts"),
+      manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+    });
+    mocks.metadata.mockReturnValue(metadata);
     mocks.pluginVersionCategories.mockRejectedValue(new Error("ClawHub offline"));
 
     const catalog = await listManagedPlugins({

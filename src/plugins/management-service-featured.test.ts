@@ -643,10 +643,16 @@ describe("plugin management Featured authority", () => {
       origin: "global" as const,
       installRecord: { source: "npm", spec: "@openclaw/diffs" },
     },
-    { id: "memory-wiki", name: "Memory Wiki", origin: "bundled" as const },
+    { id: "published-plugin", name: "Published bundled plugin", origin: "bundled" as const },
   ])(
     "clears local curation when declared catalog counterpart $name is omitted from a live feed",
     async (plugin) => {
+      mocks.bundledEntries = [
+        compositionEntry(plugin.id, {
+          clawhubSpec: `clawhub:@openclaw/${plugin.id}`,
+          npmSpec: `@openclaw/${plugin.id}`,
+        }),
+      ];
       mocks.metadata.mockReturnValue(metadataSnapshot(plugin));
       mocks.officialCatalog.mockResolvedValue(hostedCatalog([]));
 
