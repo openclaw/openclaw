@@ -537,6 +537,7 @@ export class ChatPane extends ChatPaneLayoutRender {
             composerState.capabilityMenuView.startsWith("tools:"),
             composerState.capabilityMenuOpen &&
               (composerState.capabilityMenuView === "skills" ||
+                composerState.capabilityMenuView === "library-add" ||
                 composerState.capabilityMenuView.startsWith("library:")),
           ),
       swarm: readTarget ? { ...readTarget, sessions: this.swarmHydrator?.rows ?? [] } : undefined,

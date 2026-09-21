@@ -351,7 +351,6 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
             loading: false,
             busy: false,
             error: "Library unavailable",
-            notice: null,
             canWrite: false,
             onReload: () => {},
             onRead: () => {},

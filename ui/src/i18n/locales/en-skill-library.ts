@@ -43,16 +43,15 @@ const enSkillLibrary = {
     defaultLimit:
       "New sessions select up to {count} default skills. Existing sessions keep their selected revisions.",
     session: {
-      selected: "Selected for this session",
-      attachable: "Add from your libraries",
+      add: "Add skill…",
+      full: "This chat has {count} library skills. Remove one before adding another.",
+      noMore: "No more skills to add.",
       pin: "Selected revision {revision}",
-      read: "Read selected revision",
-      empty: "No managed skills selected.",
-      refresh: "Refresh revision",
+      read: "View instructions",
+      refresh: "Use latest version",
       attachNamed: "Attach {name} · {owner}",
-      detach: "Detach",
-      queued:
-        "Skill selections updated for the next turn. An active turn keeps its current revision.",
+      detach: "Remove from chat",
+      queued: "Skills updated for the next message.",
       readOnly:
         "This is the exact revision selected for this session. Session access allows reading this pin, not editing its library or browsing other revisions.",
     },

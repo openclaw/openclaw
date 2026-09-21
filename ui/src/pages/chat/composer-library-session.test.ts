@@ -67,7 +67,6 @@ describe("composer session library ownership", () => {
       await pending;
       expect(library.result).toBeNull();
       expect(library.read).toBeNull();
-      expect(library.notice).toBeNull();
       expect(library.busy).toBe(false);
       expect(library.loading).toBe(false);
       expect(request).toHaveBeenCalledTimes(1);

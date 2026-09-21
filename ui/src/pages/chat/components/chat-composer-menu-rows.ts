@@ -7,6 +7,19 @@ export function menuDivider(): TemplateResult {
   return html`<div class="agent-chat__capability-menu-divider" role="separator"></div>`;
 }
 
+export function renderCapabilitySkeletonRows() {
+  return html`
+    <div
+      class="agent-chat__capability-menu-skeleton"
+      role="status"
+      aria-label=${t("common.loading")}
+    >
+      <span class="skeleton skeleton-line skeleton-line--long" aria-hidden="true"></span>
+      <span class="skeleton skeleton-line skeleton-line--medium" aria-hidden="true"></span>
+    </div>
+  `;
+}
+
 export function renderBackRow() {
   return html`
     <wa-dropdown-item class="agent-chat__capability-menu-item" value="back">

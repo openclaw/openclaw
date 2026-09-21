@@ -305,6 +305,7 @@
 }
 
 .agent-chat__capability-menu-item {
+  flex-shrink: 0;
   --wa-color-text-normal: var(--text);
 
   display: flex;
@@ -412,6 +413,14 @@
 .agent-chat__capability-menu-state {
   padding: 10px 12px;
   line-height: 1.4;
+}
+
+.agent-chat__capability-menu-skeleton {
+  display: grid;
+  flex-shrink: 0;
+  grid-auto-rows: var(--chat-composer-menu-row-height);
+  align-items: center;
+  padding: 0 12px;
 }
 
 .agent-chat__capability-menu-switch {

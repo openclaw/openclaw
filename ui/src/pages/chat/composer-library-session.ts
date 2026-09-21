@@ -10,6 +10,7 @@ import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { revalidateChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { showToast } from "../../lib/toast.ts";
 import { invalidateSessionSlashCommands } from "./chat-commands.ts";
 
 registerSkillLibraryEnglish();
@@ -26,7 +27,6 @@ export type ComposerLibraryProps = {
   loading: boolean;
   busy: boolean;
   error: string | null;
-  notice: string | null;
   canWrite: boolean;
   onReload: () => void;
   onRead: (skillId: string, revision: string) => void;
@@ -43,7 +43,6 @@ export class ComposerLibrarySession {
   loading = false;
   busy = false;
   error: string | null = null;
-  notice: string | null = null;
   read: SkillsLibraryReadResult | null = null;
   selectedFile = "SKILL.md";
   private target: LibrarySessionTarget | null = null;
@@ -66,7 +65,6 @@ export class ComposerLibrarySession {
     this.loading = false;
     this.busy = false;
     this.error = null;
-    this.notice = null;
     this.closeRead();
   }
   private current(target: LibrarySessionTarget) {
@@ -148,7 +146,6 @@ export class ComposerLibrarySession {
     }
     this.busy = true;
     this.error = null;
-    this.notice = null;
     this.notify();
     try {
       await target.client.request<SkillsLibraryActivateResult>("skills.library.activate", {
@@ -160,7 +157,7 @@ export class ComposerLibrarySession {
       if (!this.current(target)) {
         return;
       }
-      this.notice = t("skillLibrary.session.queued");
+      showToast({ message: t("skillLibrary.session.queued") });
       this.result = null;
       this.closeRead();
       // Both catalog owners must retire their previous pins after an explicit activation.

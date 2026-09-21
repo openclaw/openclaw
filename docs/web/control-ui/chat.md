@@ -89,10 +89,12 @@ an invalid source folder.
 
 Select **+** beside the chat composer to open attachments and session capabilities in one menu:
 
-- **Skills** enables or disables individual skills for this session.
+- **Skills** enables or disables individual skills for this session. Selected personal or team skills appear by name and owner; open one to view its instructions, use a newer accessible version, or remove it from this chat. **Add skill…** appears when you have write access and your libraries contain skills that are not selected for this chat. Empty library sections and new-session defaults stay out of the picker; selection limits appear only when adding would exceed them. Changes apply to the next message, without replacing an active run’s selected revision.
 - **Connectors** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration. **Browse connectors** opens the Plugins page on **Discover**.
 - **Web search** enables or disables managed web search plus native OpenAI and Codex search for this session.
 - **Manage plugins** opens the Plugins page.
+
+The Skills picker uses a compact skeleton only while an initial list is unknown. Refreshes keep loaded rows visible, and skill actions use their existing disabled controls rather than loading paragraphs or replacement skeletons.
 
 These controls are sparse session overrides, like the model and thinking settings in the chat header. A capability with no override inherits the current agent or global configuration, and OpenClaw applies the resolved values when the next run materializes its tools and skills. The **N session overrides** pill in the composer footer reopens the menu; select its clear action to remove all capability overrides in one click.
 

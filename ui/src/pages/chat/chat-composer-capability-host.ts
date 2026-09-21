@@ -627,7 +627,6 @@ export class ChatComposerCapabilityHost {
         loading: this.library.loading,
         busy: this.library.busy,
         error: this.library.error,
-        notice: this.library.notice,
         canWrite: canWriteLibrary,
         onReload: () => {
           if (current()) {

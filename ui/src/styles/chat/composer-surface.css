@@ -622,7 +622,7 @@
   background: var(--bg-hover);
 }
 
-.agent-chat__attach-menu::part(menu) {
+.agent-chat__attach-menu:not(.agent-chat__capability-menu)::part(menu) {
   width: 176px;
   min-width: 176px;
   max-width: min(176px, calc(100vw - 24px));
