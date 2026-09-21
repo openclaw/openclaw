@@ -81,8 +81,8 @@ Publication revalidates immediately before each Git/GraphQL write, after transpo
 preparation, and compares the successful publication observation before acquisition.
 
 Ordinary immediate squash prefers REST. Admission reads switch transports only
-for confirmed primary quota exhaustion or unsupported REST policy; secondary
-throttles and access failures never authorize a switch. REST requires proven absence
+for confirmed primary quota exhaustion or unsupported REST policy or mergeability
+projections, including UNKNOWN; secondary throttles and access failures never authorize a switch. REST requires proven absence
 of classic protection and merge queues, supported effective rules, exact-head publisher-bound
 checks, and the retained-outcome lifecycle. It preserves configured message content
 from pinned published commits or the PR body and leaves the title to GitHub.

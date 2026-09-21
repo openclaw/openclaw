@@ -230,6 +230,7 @@ export function createMergeOutcomeFixtureHarness() {
       // Preserve GraphQL lifecycle fixtures through an explicit unsupported REST policy.
       restPolicy: "classic",
       restReadFailure: "",
+      restDispatchChange: "",
       pooledMergeBlocked: false,
       restReadFailuresRemaining: 0,
       restReadFailureAtMainReads: [] as number[],
@@ -443,6 +444,17 @@ else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(a
   if(!args.includes("Cache-Control: max-age=0")) fail("missing live repository header");
   if(!args.includes("--hostname")) fail("missing repository hostname");
   if(s.repoAuthorityUnavailable) fail("repository metadata unavailable");
+  if(s.restDispatchChange) {
+    const retained=spawnSync("git",["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"],{cwd:process.env.FIXTURE_REPO,encoding:"utf8"});
+    if(retained.status===0) {
+      const intent=JSON.parse(retained.stdout);
+      if(intent.phase==="intent"&&intent.accepted===false) {
+        if(s.restDispatchChange==="identity") s.pr.headRefOid=git(["rev-parse",s.pr.headRefOid+"^"]);
+        if(s.restDispatchChange==="policy") s.restContexts=["Reconfigured CI"];
+        s.restDispatchChange="";save();
+      }
+    }
+  }
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(s.repoAuthority):s.repoAuthority);
 }
 else if(args[0]==="api"&&args.includes("user")) {
