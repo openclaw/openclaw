@@ -5,6 +5,10 @@ import {
   assertProviderReviewAcknowledgment,
   type ProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
+import {
+  INCOGNITO_SESSION_LIFETIME_MS,
+  isIncognitoSessionKey,
+} from "../../shared/incognito-session-key.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
@@ -28,6 +32,8 @@ type SessionLifecycleEntry = Pick<
 type SessionWorkStartEntry = Pick<
   InternalSessionEntry,
   | "archivedAt"
+  | "createdAt"
+  | "incognito"
   | "initializationPending"
   | "mainRestartRecovery"
   | "modelSelectionLocked"
@@ -108,7 +114,7 @@ export class SessionRestartRecoveryTombstoneError extends Error {
   }
 }
 
-/** Lifecycle-owned initializing, restart-tombstoned, and archived sessions reject new work. */
+/** Lifecycle-owned expired, initializing, restart-tombstoned, and archived sessions reject work. */
 export function resolveSessionWorkStartError(
   sessionKey: string,
   entry: SessionWorkStartEntry | null | undefined,
@@ -119,6 +125,13 @@ export function resolveSessionWorkStartError(
   }
   if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
     return `Session "${sessionKey}" changed while starting work. Retry.`;
+  }
+  if (
+    (entry?.incognito || isIncognitoSessionKey(sessionKey)) &&
+    entry?.createdAt !== undefined &&
+    Date.now() >= entry.createdAt + INCOGNITO_SESSION_LIFETIME_MS
+  ) {
+    return `Incognito session "${sessionKey}" expired. Start a new Incognito session.`;
   }
   if (entry?.initializationPending === true) {
     return `Session "${sessionKey}" is still initializing. Retry after initialization completes.`;

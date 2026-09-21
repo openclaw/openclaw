@@ -1,0 +1,248 @@
+import fs from "node:fs";
+import { afterEach, expect, it, vi } from "vitest";
+import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
+import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntryReadOnly,
+  loadTranscriptEvents,
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  resetSessionEntryLifecycle,
+} from "../config/sessions/session-accessor.sqlite-lifecycle.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-lifecycle.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
+import { handleChatSend } from "./server-methods/chat-send-handler.js";
+import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import * as deletion from "./server-methods/sessions-delete.js";
+import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+
+const DAY_MS = 24 * 60 * 60_000;
+const config = { agents: { entries: { main: {} } } };
+const ordinary = { agentId: "main", sessionKey: "agent:main:dashboard:ordinary" };
+const originalDelete = deletion.deleteGatewaySession;
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+async function withLifetime(
+  run: (fixture: {
+    owner: ReturnType<typeof createGatewaySidecarStopOwner>;
+    context: ReturnType<typeof createDirectChatContext>;
+    logWarning: ReturnType<typeof vi.fn>;
+    scope: { agentId: string; sessionKey: string; sessionId: string; storePath: string };
+  }) => Promise<void>,
+) {
+  await withOpenClawTestState({ label: "incognito-lifetime" }, async (state) => {
+    await state.writeConfig(config);
+    await upsertSessionEntryCore(ordinary, { sessionId: "ordinary", updatedAt: Date.now() });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(new Date("2026-09-01T00:00:00Z"));
+    const owner = createGatewaySidecarStopOwner();
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => config,
+      getSessionEventSubscriberConnIds: () => new Set(["observer"]),
+    });
+    const logWarning = vi.fn();
+    await attachInitialGatewayLifetimeSidecars({
+      chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+      gatewayRequestContext: context,
+      flushPendingSessionsChangedEvents,
+      minimalTestGateway: true,
+      logWarning,
+      publishSidecars: owner.publish,
+    });
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-lifetime",
+      sessionId: "incognito-lifetime",
+      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    };
+    try {
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        incognito: true,
+      });
+      await run({ owner, context, logWarning, scope });
+    } finally {
+      await owner.stop();
+      vi.useRealTimers();
+    }
+  });
+}
+
+it("expires Incognito at creation plus 24 hours, cancels work, and deletes without an archive", async () => {
+  await withLifetime(async ({ context, logWarning, scope }) => {
+    const deleted = createDeferredCore<Awaited<ReturnType<typeof originalDelete>>>();
+    const deletes = vi.spyOn(deletion, "deleteGatewaySession").mockImplementation((params) => {
+      const operation = originalDelete(params);
+      void operation.then(deleted.resolve, deleted.reject);
+      return operation;
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "private-input",
+      message: { role: "user", content: "Ephemeral conversation", timestamp: Date.now() },
+    });
+    await vi.advanceTimersByTimeAsync(23 * 60 * 60_000);
+    await patchSessionEntryCore(scope, () => ({ label: "Recent activity", updatedAt: Date.now() }));
+    await resetSessionEntryLifecycle({
+      ...scope,
+      target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+      buildNextEntry: ({ currentEntry }) => ({ ...currentEntry!, lifecycleRevision: "rewound" }),
+    });
+    await vi.advanceTimersByTimeAsync(60 * 60_000 - 1);
+    expect(loadSessionEntryReadOnly(scope)).toBeDefined();
+    const active = replyRunRegistry.begin({ ...scope, resetTriggered: false });
+    try {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(deletes).toHaveBeenCalledOnce();
+      await expect(deleted.promise).resolves.toMatchObject({
+        ok: true,
+        result: { deleted: true, archived: [] },
+      });
+      expect(active.abortSignal.aborted).toBe(true);
+      expect(replyRunRegistry.isActive(scope.sessionKey)).toBe(false);
+      await flushPendingSessionsChangedEvents(context);
+      expect(logWarning).not.toHaveBeenCalled();
+      expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+      expect(await loadTranscriptEvents(scope)).toEqual([]);
+      expect(loadSessionEntryReadOnly(ordinary)?.sessionId).toBe("ordinary");
+      expect(fs.existsSync(scope.storePath)).toBe(false);
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({ sessionKey: scope.sessionKey, reason: "delete" }),
+        expect.any(Set),
+        expect.any(Object),
+      );
+    } finally {
+      active.complete();
+    }
+  });
+});
+
+it.each(["session replacement", "database replacement", "Gateway stop"] as const)(
+  "revokes a pending expiry across %s before cancellation or deletion",
+  async (replacement) => {
+    await withLifetime(async ({ owner, scope, logWarning }) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const finished = createDeferredCore();
+      const deletes = vi
+        .spyOn(deletion, "deleteGatewaySession")
+        .mockImplementation(async (params) => {
+          entered.resolve();
+          await release.promise;
+          try {
+            return await originalDelete(params);
+          } finally {
+            finished.resolve();
+          }
+        });
+      let stopping: Promise<void> | undefined;
+      try {
+        await vi.advanceTimersByTimeAsync(DAY_MS);
+        await entered.promise;
+        if (replacement === "session replacement") {
+          await deleteSessionEntryLifecycle({
+            agentId: scope.agentId,
+            storePath: scope.storePath,
+            target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+            archiveTranscript: false,
+            deleteTranscriptWithoutArchive: true,
+          });
+        } else if (replacement === "database replacement") {
+          closeOpenClawAgentDatabaseByPath(scope.storePath);
+        } else {
+          stopping = owner.stop();
+        }
+        const successor = {
+          sessionId: replacement === "session replacement" ? "successor" : scope.sessionId,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          incognito: true as const,
+        };
+        if (replacement !== "Gateway stop") {
+          await upsertSessionEntryCore(scope, successor);
+        }
+        const before = loadSessionEntryReadOnly(scope);
+        release.resolve();
+        await finished.promise;
+        await Promise.allSettled(deletes.mock.results.map((result) => result.value));
+        await stopping;
+        expect(loadSessionEntryReadOnly(scope)).toEqual(before);
+        expect(logWarning).not.toHaveBeenCalled();
+        if (replacement === "Gateway stop") {
+          await vi.advanceTimersByTimeAsync(DAY_MS);
+          expect(deletes).toHaveBeenCalledOnce();
+        }
+      } finally {
+        release.resolve();
+        await stopping;
+      }
+    });
+  },
+);
+
+it("retries a refused cleanup without renewing the expired session", async () => {
+  await withLifetime(async ({ scope, context, logWarning }) => {
+    const failed = createDeferredCore();
+    const deleted = createDeferredCore<Awaited<ReturnType<typeof originalDelete>>>();
+    const deletes = vi
+      .spyOn(deletion, "deleteGatewaySession")
+      .mockImplementationOnce(async () => {
+        failed.resolve();
+        return { ok: false, error: { code: "UNAVAILABLE", message: "Cleanup still draining" } };
+      })
+      .mockImplementation((params) => {
+        const operation = originalDelete(params);
+        void operation.then(deleted.resolve, deleted.reject);
+        return operation;
+      });
+    await vi.advanceTimersByTimeAsync(DAY_MS);
+    await failed.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(logWarning).toHaveBeenCalledOnce();
+    expect(loadSessionEntryReadOnly(scope)).toBeDefined();
+    expect(resolveSessionWorkStartError(scope.sessionKey, loadSessionEntryReadOnly(scope))).toBe(
+      `Incognito session "${scope.sessionKey}" expired. Start a new Incognito session.`,
+    );
+    const respond = vi.fn();
+    await handleChatSend({
+      params: {
+        sessionKey: scope.sessionKey,
+        message: "Must not start work while expiry cleanup retries",
+        idempotencyKey: "expired-incognito-send",
+      },
+      req: { type: "req", id: "expired-send", method: "chat.send" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: `Incognito session "${scope.sessionKey}" expired. Start a new Incognito session.`,
+      }),
+    );
+    expect(await loadTranscriptEvents(scope)).toEqual([]);
+    expect(context.chatAbortControllers.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(deleted.promise).resolves.toMatchObject({ ok: true, result: { deleted: true } });
+    expect(deletes).toHaveBeenCalledTimes(2);
+    expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+  });
+});
