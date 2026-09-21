@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string-array name="hosts_allowlist" translatable="false">
+        <item>com.google.android.projection.gearhead</item>
+        <item>com.google.android.apps.automotive.inputmethod</item>
+        <item>com.android.car.carlauncher</item>
+    </string-array>
+</resources>

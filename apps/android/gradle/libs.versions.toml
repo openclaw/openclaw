@@ -5,6 +5,7 @@ androidx-appcompat = "1.8.0"
 androidx-benchmark = "1.4.1"
 androidx-camera = "1.6.2"
 androidx-compose-bom = "2026.08.00"
+androidx-car-app = "1.7.0"
 androidx-core = "1.19.0"
 androidx-exifinterface = "1.4.2"
 androidx-lifecycle = "2.11.0"
@@ -54,6 +55,7 @@ androidx-compose-ui = { module = "androidx.compose.ui:ui" }
 androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
 androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+androidx-car-app = { module = "androidx.car.app:app", version.ref = "androidx-car-app" }
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
 androidx-exifinterface = { module = "androidx.exifinterface:exifinterface", version.ref = "androidx-exifinterface" }
 androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "androidx-lifecycle" }
