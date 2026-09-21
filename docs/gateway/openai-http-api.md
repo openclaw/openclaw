@@ -338,6 +338,8 @@ Provider failures use the same error mapping as chat completions: missing provid
 
 For models that support it, a positive integer `dimensions` requests the output vector size. It overrides the selected agent's active `memory.search.outputDimensionality` and also applies when memory search is disabled. Omitting it keeps the configured or provider default size.
 
+Responses always include an OpenAI-style `usage` object with `prompt_tokens` and `total_tokens`. When the backing embedding provider reports token usage (for example the bundled OpenAI-compatible and OpenAI remote providers), the reported values are passed through; otherwise the Gateway estimates tokens from the input text.
+
 ## Related
 
 - [Configuration reference](/gateway/configuration-reference)

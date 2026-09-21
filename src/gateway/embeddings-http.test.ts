@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import path from "node:path";
+import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
@@ -305,6 +306,63 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(lastCall.provider).toBe("openai");
     expect(lastCall.model).toBe("text-embedding-3-small");
     expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 3);
+  });
+
+  it("estimates usage when the provider does not report it", async () => {
+    // The default mock provider only implements embedBatch, so the gateway must
+    // fall back to a char-based estimate and always emit both usage fields.
+    const res = await postEmbeddings({
+      model: "openclaw/default",
+      input: "hello",
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      usage?: { prompt_tokens?: number; total_tokens?: number };
+    };
+    const estimated = estimateTokensFromChars("hello".length);
+    expect(estimated).toBeGreaterThan(0);
+    expect(json.usage).toEqual({ prompt_tokens: estimated, total_tokens: estimated });
+  });
+
+  it("passes through provider-reported usage", async () => {
+    const configPath = createConfigIO().configPath;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    try {
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            memory: {
+              search: {
+                provider: "openai-compatible",
+                model: "nomic-embed-text",
+                remote: { baseUrl: genericEmbeddingBaseUrl },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+      resetConfigRuntimeState();
+
+      // The generic mock upstream reports usage={prompt_tokens:777,total_tokens:777}.
+      const res = await postEmbeddings({
+        model: "openclaw/default",
+        input: ["a", "b"],
+      });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as {
+        usage?: { prompt_tokens?: number; total_tokens?: number };
+      };
+      expect(json.usage).toEqual({ prompt_tokens: 777, total_tokens: 777 });
+    } finally {
+      // Later cases expect the default mock provider routing; restore the
+      // fileless default config this suite started with.
+      await fs.rm(configPath, { force: true });
+      resetConfigRuntimeState();
+    }
   });
 
   it("supports base64 encoding and agent-scoped auth/config resolution", async () => {

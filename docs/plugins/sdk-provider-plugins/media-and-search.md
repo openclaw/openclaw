@@ -55,6 +55,16 @@ plugins](/plugins/sdk-provider-plugins) guide.
     `"query"` or `"document"` requests, such as `dimensions` or `input_type`.
     The shared factory always supplies the client's `model` and the original
     `input` array after those fields, preserving response-count validation.
+    The returned provider also implements the optional `embedBatchDetailed`
+    method, which resolves `{ embeddings, usage }` and passes through the
+    upstream `usage` (`{ promptTokens, totalTokens }`) when the endpoint
+    reports it.
+
+    Providers can implement `embedBatchDetailed` themselves to surface
+    provider-reported token usage to callers such as the OpenAI-compatible
+    `/v1/embeddings` Gateway endpoint, which falls back to a char-based
+    estimate when a provider omits it. It is additive and optional:
+    `embedBatch` stays the canonical vector-only contract.
 
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for
