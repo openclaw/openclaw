@@ -88,8 +88,7 @@ vi.mock("../src/talk/client-voice-session.js", async (importOriginal) => ({
   createOrResumeClientVoiceSession: () => "test-voice-session",
   closeStaleClientVoiceSessions: async () => 0,
 }));
-vi.mock("../ui/src/pages/chat/talk/transport.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../ui/src/pages/chat/talk/transport.js")>()),
+vi.mock("../ui/src/pages/chat/talk/transport.runtime.js", () => ({
   createRealtimeTalkTransport: (): RealtimeTalkTransport => ({
     start: async () => "ready",
     stop: () => undefined,
