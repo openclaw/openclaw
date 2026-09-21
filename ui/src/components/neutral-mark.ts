@@ -13,7 +13,7 @@ const MARK = {
   strokeWidth: 11,
 } as const;
 
-export const neutralMark = svg`<svg viewBox=${MARK.viewBox} fill="none" aria-hidden="true">
+export const neutralMark = svg`<svg viewBox=${MARK.viewBox} width="100%" height="100%" fill="none" aria-hidden="true">
   <rect
     x=${MARK.inset}
     y=${MARK.inset}

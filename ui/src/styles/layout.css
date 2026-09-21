@@ -3462,11 +3462,6 @@ a:is(
   flex: none;
 }
 
-.sidebar-workspace-header__mark--neutral svg {
-  width: 100%;
-  height: 100%;
-}
-
 .sidebar-agent-card__avatar {
   position: relative;
   display: inline-flex;
