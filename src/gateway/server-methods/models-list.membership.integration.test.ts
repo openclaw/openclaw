@@ -4,8 +4,9 @@ import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 
-it.each([
+it.for([
   {
     allow: ["membership-fixture/manual"],
     agentPolicy: false,
@@ -27,7 +28,8 @@ it.each([
   },
 ])(
   "models.list recomposes fetched membership after config.patch from $allow (agent override: $agentPolicy, second hook: $secondHook) without discovery",
-  async ({ allow, agentPolicy, secondHook, expected }) => {
+  { timeout: 60_000 },
+  async ({ allow, agentPolicy, secondHook, expected }, { signal }) => {
     const state = await createOpenClawTestState({
       label: "catalog-membership",
       env: {
@@ -146,14 +148,22 @@ it.each([
       });
       try {
         await server.startupSettled;
-        const list = async (refresh = false) => {
-          const result = await client.request<ModelsListResult>("models.list", {
+        const read = (refresh = false) =>
+          client.request<ModelsListResult>("models.list", {
             agentId: "main",
             refresh,
           });
+        const list = async () => {
+          const result = await read();
           return result.models.filter((row) => row.provider === provider).map((row) => row.id);
         };
-        expect(await list(true)).toEqual(["manual"]);
+        await waitForCatalogPublication({
+          signal,
+          start: () => read(true),
+          read,
+          ready: (result) => !result.pendingProviders?.length,
+        });
+        expect(await list()).toEqual(["manual"]);
         expect(requests).toBeGreaterThan(0);
         const acquired = requests;
         expect(await list()).toEqual(["manual"]);
@@ -187,5 +197,4 @@ it.each([
       await state.cleanup();
     }
   },
-  60_000,
 );

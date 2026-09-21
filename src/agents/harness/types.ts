@@ -361,6 +361,13 @@ export type AgentHarnessDeliveryDefaults = {
 export type DevicePlacementRequirement = {
   requiredNodeCommands: readonly string[];
   consumesWorkerSlot: boolean;
+  /** Optional plugin-owned presentation; never used to decide command authority. */
+  setup?: {
+    /** Short integration name, at most 80 characters. */
+    label: string;
+    /** Recovery guidance when the node does not declare a required command, at most 500 characters. */
+    missingCommandHint: string;
+  };
 };
 
 type AgentHarnessRunCapability<

@@ -415,7 +415,7 @@ suite.define(() => {
       );
       await pollLocatorText(
         page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
-      ).toBe("Local");
+      ).toBe("OpenClaw server");
       await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
       await placeTrigger.click();
       await expect

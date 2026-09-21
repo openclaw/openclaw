@@ -1519,8 +1519,12 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 .new-session-page__environment-option[aria-disabled="true"] {
-  opacity: 0.5;
+  color: var(--muted);
   cursor: default;
+}
+
+.new-session-page__environment-warning {
+  color: var(--warn);
 }
 
 .new-session-page__environment-heading {

@@ -22,6 +22,7 @@ export type DevicePlacementOption = Readonly<
 export type DevicePlacementRequirement = Readonly<{
   requiredNodeCommands: readonly string[];
   consumesWorkerSlot: boolean;
+  setup?: Readonly<{ label: string; missingCommandHint: string }>;
 }>;
 
 const DEFAULT_DEVICE_PLACEMENT: DevicePlacementRequirement = {
@@ -52,12 +53,28 @@ function unavailableReason(
       return t("newSession.placementNotReady");
     }
     if (requiredCommand.state === "pending-approval") {
+      if (requirement.setup) {
+        return t("newSession.nodeIntegrationPendingApproval", {
+          integration: requirement.setup.label,
+        });
+      }
       return t("newSession.nodeCommandPendingApproval", { command: requiredCommand.command });
     }
     if (requiredCommand.state === "undeclared") {
+      if (requirement.setup) {
+        return t("newSession.nodeIntegrationUnavailable", {
+          integration: requirement.setup.label,
+          hint: requirement.setup.missingCommandHint,
+        });
+      }
       return t("newSession.nodeCommandUndeclared", { command: requiredCommand.command });
     }
     if (requiredCommand.state === "unauthorized") {
+      if (requirement.setup) {
+        return t("newSession.nodeIntegrationUnauthorized", {
+          integration: requirement.setup.label,
+        });
+      }
       return t("newSession.nodeCommandUnauthorized", { command: requiredCommand.command });
     }
   }

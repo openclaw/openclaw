@@ -15,6 +15,12 @@ export const GatewayAgentRuntimeSchema = closedObject({
         uniqueItems: true,
       }),
       consumesWorkerSlot: Type.Boolean(),
+      setup: Type.Optional(
+        closedObject({
+          label: Type.String({ minLength: 1, maxLength: 80 }),
+          missingCommandHint: Type.String({ minLength: 1, maxLength: 500 }),
+        }),
+      ),
     }),
   ),
   devicePlacementSupported: Type.Optional(Type.Boolean()),

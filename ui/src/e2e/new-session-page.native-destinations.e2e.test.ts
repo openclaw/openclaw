@@ -205,7 +205,7 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}new?agent=main&catalog=${id}`);
         await pollLocatorText(page.locator(".new-session-page__runtime")).toContain(label);
-        const destination = page.getByRole("combobox", { name: "Where", exact: true });
+        const destination = page.getByRole("combobox", { name: "Computer", exact: true });
         expect(await destination.count()).toBe(0);
         expect(await page.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
         const message = page.locator(".new-session-page__message");
@@ -286,7 +286,7 @@ suite.define(() => {
       expect(folderBox!.width).toBeGreaterThan(80);
       expect(folderBox!.x).toBeGreaterThanOrEqual(0);
       expect(folderBox!.x + folderBox!.width).toBeLessThanOrEqual(320);
-      expect(await page.getByRole("combobox", { name: "Where", exact: true }).count()).toBe(0);
+      expect(await page.getByRole("combobox", { name: "Computer", exact: true }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
     } finally {
       await context.close();

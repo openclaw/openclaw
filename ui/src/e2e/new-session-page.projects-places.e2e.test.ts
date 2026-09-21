@@ -135,10 +135,12 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       const trigger = page.locator("#new-session-where-trigger");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+        "OpenClaw server",
+      );
       await trigger.click();
       const place = page.locator("wa-popover.new-session-page__where-popover");
-      await place.getByRole("button", { name: "Local" }).waitFor();
+      await place.getByRole("button", { name: "OpenClaw server" }).waitFor();
       expect(await place.locator('[data-value^="device:"]').count()).toBe(0);
       expect(await place.locator('[data-value^="cloud:"]').count()).toBe(0);
       expect(await place.locator('[data-value="auto-device"]').count()).toBe(0);
@@ -197,7 +199,7 @@ suite.define(() => {
         await gateway.waitForRequest("system.info");
         const trigger = page.locator("#new-session-where-trigger");
         await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
-          late === "system info" ? "Local" : "QA-Gateway",
+          late === "system info" ? "OpenClaw server" : "QA-Gateway",
         );
         const place = page.locator("wa-popover.new-session-page__where-popover");
         const local = place.locator('[data-value="gateway"]');

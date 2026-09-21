@@ -467,6 +467,9 @@ export function renderWhereChip(params: {
                   {
                     value: `device:${device.deviceId}`,
                     label: device.label,
+                    description: device.selectable
+                      ? undefined
+                      : t("newSession.computerUnavailable"),
                     sub: device.subtitle,
                     icon: environmentDeviceIcon(device),
                     platform: device.platform ? prettifyPlatform(device.platform) : undefined,

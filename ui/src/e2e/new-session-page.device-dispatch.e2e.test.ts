@@ -639,7 +639,7 @@ suite.define(() => {
       await expect.poll(() => where.getAttribute("data-device-id")).toBeNull();
       await expect
         .poll(() => where.locator(".new-session-page__trigger-label").textContent())
-        .toBe("Local");
+        .toBe("OpenClaw server");
       await captureDeviceRuntimeUiProof(
         suite,
         page,

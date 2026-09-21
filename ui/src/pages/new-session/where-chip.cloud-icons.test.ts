@@ -88,7 +88,7 @@ describe("Cloud backend picker presentation", () => {
         expect(element.textContent).toContain("Linux");
         expect(element.textContent).toContain("Standard");
       }
-      expect(trigger.getAttribute("aria-label")).toBe(`Where: ${id}, Linux · Standard`);
+      expect(trigger.getAttribute("aria-label")).toBe(`Computer: ${id}, Linux · Standard`);
       expect(row.hasAttribute("aria-label")).toBe(false);
       expect(
         row.querySelector(".session-menu__text")?.textContent?.replace(/\s+/g, " ").trim(),
@@ -106,6 +106,9 @@ describe("Cloud backend picker presentation", () => {
           '[data-value="cloud:' + id + '"] [data-provider-icon="' + brand + '"]',
         ),
       ).not.toBeNull();
+      const blockedRow = disabled.querySelector('[data-value="cloud:' + id + '"]')!;
+      const warning = blockedRow.closest<HTMLElement & { content: string }>("openclaw-tooltip");
+      expect(warning?.content).toBe(`Cloud worker provider: ${label}, Unavailable`);
     },
   );
 });

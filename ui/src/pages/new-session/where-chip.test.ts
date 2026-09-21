@@ -8,11 +8,11 @@ import { renderPicker } from "./where-chip.test-support.ts";
 import { resolveWhereChip } from "./where-chip.ts";
 
 function hoverDetails(row: Element | null | undefined) {
-  return [
-    ...(row
-      ?.closest("openclaw-tooltip")
-      ?.querySelectorAll('[slot="content"] > div, [slot="content"] > span') ?? []),
-  ]
+  const tooltip = row?.closest("openclaw-tooltip");
+  if (tooltip?.content) {
+    return tooltip.content;
+  }
+  return [...(tooltip?.querySelectorAll('[slot="content"] > div, [slot="content"] > span') ?? [])]
     .map((detail) => detail.textContent?.trim())
     .join(" · ");
 }
@@ -142,7 +142,7 @@ describe("Where chip", () => {
   );
 
   it.each([
-    { query: "  local  ", expected: ["gateway"] },
+    { query: "  OpenClaw server  ", expected: ["gateway"] },
     { query: "STUDIO", expected: ["gateway"] },
     { query: "device", expected: ["device:runner", "device:alpha-device", "device:beta-device"] },
     { query: "beta-device", expected: ["device:beta-device"] },
@@ -377,7 +377,7 @@ describe("Where chip", () => {
       { onEnvironmentQueryInput, onSelectDevice },
     );
     const input = container.querySelector<HTMLInputElement>(
-      'input[placeholder="Search environments"]',
+      'input[placeholder="Search computers"]',
     )!;
 
     input.value = "cloud";
@@ -806,7 +806,9 @@ describe("Where chip", () => {
 
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
     expect(device?.matches(':disabled, [aria-disabled="true"]')).toBe(true);
-    expect(device?.querySelector(".session-menu__description")).toBeNull();
+    expect(device?.querySelector(".session-menu__description")?.textContent?.trim()).toBe(
+      "Unavailable",
+    );
     // Unavailable cards show only the actionable reason.
     expect(capacityCaption(device)).toBeUndefined();
     expect(hoverDetails(device)).toContain("This runtime does not support paired devices");

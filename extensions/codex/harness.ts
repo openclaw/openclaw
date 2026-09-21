@@ -111,6 +111,11 @@ export function createCodexAppServerAgentHarness(
       devicePlacement: {
         requiredNodeCommands: ["codex.exec-server.stdio.v1"],
         consumesWorkerSlot: false,
+        setup: {
+          label: "Codex",
+          missingCommandHint:
+            "Install or enable the OpenClaw Codex plugin in this computer's node service, then reconnect. Update OpenClaw first if the plugin requires a newer version. The model connection stays on the OpenClaw server.",
+        },
       },
     },
     delegatedExecutionPluginIds: ["voice-call"],

@@ -265,6 +265,69 @@ describe("DraftSubmissionFlow submit gates", () => {
     expect(fixture.flow.blockedSubmitNotice()).toBeUndefined();
   });
 
+  it.each(["undeclared", "pending-approval", "unauthorized"] as const)(
+    "blocks a saved computer with a %s required command without silently moving work locally",
+    async (state) => {
+      const { context, flow, gateway, place, request } = createDraftFixture({
+        methods: ["environments.list", "sessions.create", "sessions.dispatch"],
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+        agents: [
+          {
+            id: "main",
+            workspace: "/workspace",
+            workspaceGit: false,
+            model: { primary: "example/model" },
+            agentRuntime: {
+              id: "example",
+              devicePlacementSupported: true,
+              devicePlacement: {
+                requiredNodeCommands: ["example.remote"],
+                consumesWorkerSlot: false,
+                setup: { label: "Example", missingCommandHint: "Enable the Example plugin." },
+              },
+              source: "model",
+            },
+          },
+        ],
+        request: async (method) =>
+          method === "environments.list"
+            ? {
+                environments: [
+                  {
+                    id: "node:build-mac",
+                    type: "node",
+                    label: "Build Mac",
+                    status: "available",
+                    sessionHost: true,
+                    capabilities: ["system.run"],
+                    invocableCommands: ["system.run"],
+                    requiredNodeCommand: { command: "example.remote", state },
+                  },
+                ],
+                profiles: [],
+              }
+            : {},
+      });
+      vi.spyOn(gateway, "readPreference").mockReturnValue({
+        where: { kind: "device", id: "build-mac" },
+      });
+      place.adoptAgentDefaults();
+      await gateway.refreshCloudProfiles();
+      place.restorePreferenceSelections();
+      flow.setMessage("Keep this task on my saved computer");
+
+      expect(place.deviceId).toBe("build-mac");
+      expect(flow.submitBlock()).toMatchObject({ gate: "device" });
+      expect(flow.submitDisabledReason()).toContain("Example");
+      expect(flow.canSubmit()).toBe(false);
+      await flow.submit();
+
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      expect(request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
+      expect(place.deviceId).toBe("build-mac");
+    },
+  );
+
   it("blocks a retained device choice when the selected runtime cannot dispatch there", async () => {
     const fixture = createDraftFixture({
       methods: ["environments.list", "sessions.create", "sessions.dispatch"],

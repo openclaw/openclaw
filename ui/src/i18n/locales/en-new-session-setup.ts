@@ -25,6 +25,7 @@ const enNewSessionSetup = {
       "Session setup was interrupted and the temporary session was cleaned up. Your prompt is kept here.",
     discardUnsavedAndReload: en.newSession.discardUnsavedAndReload,
     yourDevices: "Your devices",
+    computerUnavailable: "Unavailable",
     autoDeviceSub: "Least-busy device",
     autoDeviceSubEligible: "First eligible device",
     cloud: "Cloud",
@@ -44,7 +45,7 @@ const enNewSessionSetup = {
       "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
     agent: "Agent",
     agents: "Agents",
-    where: "Where",
+    where: "Computer",
     gatewayNamed: "Gateway · {name}",
     cloudWorker: "Cloud · {profile}",
     cloudWorkerProvider: "Cloud worker provider: {provider}",
@@ -64,6 +65,11 @@ const enNewSessionSetup = {
       "Ask an administrator to approve the pending {command} request, or pick another device.",
     nodeCommandUndeclared:
       "Make {command} available on this device, then reconnect, or pick another device.",
+    nodeIntegrationUnavailable: "{integration} integration unavailable. {hint}",
+    nodeIntegrationPendingApproval:
+      "{integration} access is awaiting approval. Ask an administrator to approve this computer’s pending request.",
+    nodeIntegrationUnauthorized:
+      "{integration} remote execution is not allowed. Ask an administrator to allow it in the OpenClaw server’s node command policy.",
     nodeCommandUnauthorized:
       "Authorize {command} in the Gateway node command policy, or pick another device.",
     capabilityCamera: "Camera",
@@ -137,7 +143,7 @@ const enNewSessionSetup = {
     checkoutRepository: "Remote checkout",
     checkoutRepositoryFrom: "Remote checkout from {branch}",
     checkoutRemoteLocked: "Devices and cloud run in a worktree",
-    local: "Local",
+    local: "OpenClaw server",
     folderPlaceholder: "Agent workspace",
     projects: "Projects",
     projectsAdminHint: "Admins can register projects from Browse folders",
@@ -152,7 +158,7 @@ const enNewSessionSetup = {
     newWorkspaceDescription: "Start in an empty folder for this session.",
     remoteSourceUnavailable:
       "This folder cannot provide a Git checkout. Select New workspace to start empty, or choose a repository.",
-    environmentSearchPlaceholder: "Search environments",
+    environmentSearchPlaceholder: "Search computers",
     environmentSearchEmpty: "No matching environments",
     gatewayHost: "Gateway host",
     device: "Device",

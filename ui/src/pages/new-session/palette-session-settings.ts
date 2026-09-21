@@ -1,4 +1,5 @@
 import { html, nothing, svg } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
@@ -223,18 +224,21 @@ export class PaletteSessionSettings {
     const groups = machines
       .map((machine) => ({
         machine,
-        choices: [
-          {
-            id: "",
-            label: machine.remote
-              ? t("newSession.newWorkspace")
-              : folderDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
-          },
-          ...draft.browser.projects.map((project) => ({
-            id: project.id,
-            label: project.displayName,
-          })),
-        ].filter(
+        choices: (machine.disabledReason
+          ? [{ id: "", label: t("newSession.computerUnavailable") }]
+          : [
+              {
+                id: "",
+                label: machine.remote
+                  ? t("newSession.newWorkspace")
+                  : folderDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
+              },
+              ...draft.browser.projects.map((project) => ({
+                id: project.id,
+                label: project.displayName,
+              })),
+            ]
+        ).filter(
           (choice) =>
             !query || (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
         ),
@@ -303,11 +307,49 @@ export class PaletteSessionSettings {
                     }}
                   />
                   <div class="palette-session-settings__choices">
-                    ${groups.map(
+                    ${repeat(
+                      groups,
+                      ({ machine }) => machine.id,
                       ({ machine, choices }) => html` <section aria-label=${machine.label}>
                         <div class="palette-session-settings__machine">${machine.label}</div>
-                        ${choices.map((choice) => html`<button type="button" class="palette-session-settings__row" data-machine=${machine.id} data-project=${choice.id} aria-pressed=${String(machine.selected && (choice.id ? draft.browser.projectId === choice.id : !draft.browser.projectId && (machine.remote ? place.freshWorkspace : place.folder === place.workspacePath())))} title=${machine.disabledReason ?? nothing} ?disabled=${locked || Boolean(machine.disabledReason)} @click=${() => choose(machine, choice.id)}><span class="palette-session-settings__icon">${choice.id ? icons.gitBranch : icons.folder}</span><span class="palette-session-settings__label">${choice.label}</span><span class="palette-session-settings__check">${machine.selected && (choice.id ? draft.browser.projectId === choice.id : !draft.browser.projectId && (machine.remote ? place.freshWorkspace : place.folder === place.workspacePath())) ? icons.check : nothing}</span></button>`)}
-                        ${machine.disabledReason ? html`<div class="palette-session-settings__unavailable">${machine.disabledReason}</div>` : nothing}
+                        ${choices.map((choice) => {
+                          const selected =
+                            machine.selected &&
+                            (choice.id
+                              ? draft.browser.projectId === choice.id
+                              : !draft.browser.projectId &&
+                                (machine.remote
+                                  ? place.freshWorkspace
+                                  : place.folder === place.workspacePath()));
+                          const row = html`<button
+                            type="button"
+                            class="palette-session-settings__row"
+                            data-machine=${machine.id}
+                            data-project=${choice.id}
+                            aria-pressed=${String(selected)}
+                            aria-disabled=${machine.disabledReason ? "true" : nothing}
+                            aria-description=${machine.disabledReason ?? nothing}
+                            ?disabled=${locked}
+                            @click=${() => choose(machine, choice.id)}
+                          >
+                            <span class="palette-session-settings__icon" aria-hidden="true"
+                              >${choice.id ? icons.gitBranch : icons.folder}</span
+                            ><span class="palette-session-settings__label">${choice.label}</span
+                            ><span
+                              class="palette-session-settings__check ${machine.disabledReason ? "palette-session-settings__warning" : ""}"
+                              aria-hidden="true"
+                              >${machine.disabledReason ? icons.alertTriangle : selected ? icons.check : nothing}</span
+                            >
+                          </button>`;
+                          return machine.disabledReason
+                            ? html`<openclaw-tooltip
+                                .content=${machine.disabledReason}
+                                placement="right-start"
+                                open-on-click
+                                >${row}</openclaw-tooltip
+                              >`
+                            : row;
+                        })}
                       </section>`,
                     )}
                     ${!groups.length ? html`<div class="palette-session-settings__unavailable">${t("newSession.environmentSearchEmpty")}</div>` : nothing}

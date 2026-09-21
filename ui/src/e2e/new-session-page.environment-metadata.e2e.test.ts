@@ -157,7 +157,7 @@ suite.define(() => {
       await expect.poll(() => modelSelect.textContent()).toContain("Claude Opus 4.6");
       await whereTrigger.click();
       await expect.poll(() => device.isDisabled()).toBe(true);
-      expect(await device.locator(".session-menu__description").count()).toBe(0);
+      expect(await device.locator(".session-menu__description").textContent()).toBe("Unavailable");
       await expect
         .poll(() => tooltipTitleText(device))
         .toBe("This runtime does not support paired devices");
@@ -262,7 +262,9 @@ suite.define(() => {
 
       expect(await row("alpha-device").isEnabled()).toBe(true);
       const details = (id: string) =>
-        row(id).locator("xpath=ancestor::openclaw-tooltip[1]").locator('[slot="content"]');
+        row(id)
+          .locator("xpath=ancestor::openclaw-tooltip[1]")
+          .locator('[slot="content"], .tooltip-content:not(:empty)');
       await row("alpha-device").hover();
       await expect.poll(() => details("alpha-device").textContent()).toContain("macOS");
       expect(await details("alpha-device").textContent()).toContain("2 of 4 session slots in use");
@@ -277,7 +279,9 @@ suite.define(() => {
       ).toBe(0);
       expect(await row("missing-capacity").isDisabled()).toBe(true);
       expect(await row("offline").isDisabled()).toBe(true);
-      expect(await row("offline").locator(".session-menu__description").count()).toBe(0);
+      expect(await row("offline").locator(".session-menu__description").textContent()).toBe(
+        "Unavailable",
+      );
       expect(
         await row("offline")
           .locator("..")

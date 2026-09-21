@@ -29,7 +29,9 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       const trigger = page.locator("#new-session-where-trigger");
-      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+        "OpenClaw server",
+      );
       await trigger.click();
       await page.locator('[data-value="gateway"]').waitFor();
     } finally {
@@ -300,7 +302,7 @@ suite.define(() => {
       const runner = page.locator('[data-value="device:runner"]');
       const details = runner
         .locator("xpath=ancestor::openclaw-tooltip[1]")
-        .locator('[slot="content"]');
+        .locator(".tooltip-content");
       await runner.waitFor();
       expect(await runner.isEnabled()).toBe(true);
 
@@ -327,7 +329,7 @@ suite.define(() => {
       await expect
         .poll(() => details.textContent())
         .toContain("No worker slots are available. Wait for a slot or pick another device.");
-      expect(await runner.locator(".session-menu__description").count()).toBe(0);
+      expect(await runner.locator(".session-menu__description").textContent()).toBe("Unavailable");
       expect(await details.locator(".new-session-page__capacity-caption").count()).toBe(0);
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
     } finally {

@@ -69,6 +69,7 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { UNREGISTERED_CODEX_RUNTIME } from "./agent-runtime.test-support.js";
 import { assertPluginMetadataSnapshotConsistency } from "./plugin-metadata.test-helpers.js";
 import {
   createChatVisionModelCatalogSnapshot,
@@ -2366,12 +2367,7 @@ describe("gateway server chat", () => {
                   id: "gpt-5.5",
                   name: "GPT-5.5",
                   provider: "openai",
-                  agentRuntime: {
-                    id: "codex",
-                    cloudPlacementSupported: false,
-                    devicePlacementSupported: false,
-                    source: "implicit",
-                  },
+                  agentRuntime: UNREGISTERED_CODEX_RUNTIME,
                   contextWindow: 400_000,
                   reasoning: false,
                   available: true,

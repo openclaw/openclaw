@@ -61,12 +61,13 @@
   text-align: start;
 }
 
-.palette-session-settings__row:hover:not(:disabled),
+.palette-session-settings__row:hover:not(:disabled, [aria-disabled="true"]),
 .palette-session-settings__back:hover {
   background: var(--bg-hover);
 }
 
-.palette-session-settings__row:disabled {
+.palette-session-settings__row:disabled,
+.palette-session-settings__row[aria-disabled="true"] {
   opacity: 0.5;
 }
 
@@ -258,4 +259,8 @@
   color: var(--danger);
   font-size: 12px;
   white-space: normal;
+}
+
+.palette-session-settings__warning {
+  color: var(--warn);
 }

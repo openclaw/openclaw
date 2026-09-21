@@ -123,6 +123,18 @@ visible but disabled with an actionable reason. Enable hosting with
 setting, then restart the node host. Update-required hosts must be upgraded and
 restarted before selection.
 
+New Session keeps unsupported computers visible and blocked with a warning
+indicator. Hover, focus, or tap the unavailable option to read the setup reason;
+it cannot select the computer or start a session. The command palette uses the
+same requirements. There is no command-only fallback or split execution option
+in these pickers.
+
+For Codex, installing the standalone CLI alone does not register OpenClaw's
+remote execution capability. Install and enable a compatible OpenClaw Codex
+plugin in the node service, then reconnect and approve the required command.
+See [Codex paired-device setup](/plugins/codex-harness/placement). A missing node
+integration does not disable a model that is usable on the OpenClaw server.
+
 While node inventory refreshes, or if that refresh fails, the picker keeps known
 devices visible but disables remote selection and Start until fresh inventory
 arrives. Local remains selectable; cached worker slots never authorize a new

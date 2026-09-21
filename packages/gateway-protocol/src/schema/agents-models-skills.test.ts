@@ -446,6 +446,43 @@ describe("ModelsListResultSchema", () => {
       },
     );
   });
+
+  it("accepts bounded optional plugin-owned device setup guidance", () => {
+    const setup = {
+      label: "Example runtime",
+      missingCommandHint: "Enable the execution plugin on this computer, then reconnect.",
+    };
+    const withSetup = (value: unknown) => ({
+      models: [
+        {
+          id: "example-model",
+          name: "Example model",
+          provider: "example",
+          agentRuntime: {
+            id: "example-runtime",
+            source: "model",
+            devicePlacement: {
+              requiredNodeCommands: ["runtime.exec-server.v1"],
+              consumesWorkerSlot: false,
+              setup: value,
+            },
+          },
+        },
+      ],
+    });
+
+    expectAccepted(ModelsListResultSchema, withSetup(setup));
+    for (const invalid of [
+      { label: setup.label },
+      { ...setup, label: "" },
+      { ...setup, label: "x".repeat(81) },
+      { ...setup, missingCommandHint: "" },
+      { ...setup, missingCommandHint: "x".repeat(501) },
+      { ...setup, commandAuthorized: true },
+    ]) {
+      expectRejected(ModelsListResultSchema, withSetup(invalid));
+    }
+  });
 });
 
 describe("ModelsProbe schemas", () => {

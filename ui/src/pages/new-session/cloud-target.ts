@@ -89,7 +89,7 @@ function detailRow(icon: TemplateResult, text: string) {
 
 export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting: boolean) {
   const unavailableReason = params.disabled ? params.title || params.description : undefined;
-  const description = params.compact ? undefined : params.description;
+  const description = params.compact && !params.disabled ? undefined : params.description;
   const accessibleBlocker = params.compact && params.disabled && !params.hideDetails;
   const touchDetails = params.compact && !params.disabled && !params.hideDetails;
   const accessibilityHints = [
@@ -100,12 +100,11 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
   ]
     .filter(Boolean)
     .join(", ");
-  const accessibleDescription = [
-    accessibilityHints,
-    params.accessibleProvider ? unavailableReason : undefined,
-  ]
-    .filter(Boolean)
-    .join(", ");
+  const accessibleDescription = [accessibilityHints, unavailableReason].filter(Boolean).join(", ");
+  // Informational warnings use the non-interactive text tooltip, so a narrow
+  // popup cannot intercept taps on another destination. Keep provider/default
+  // hints in the tooltip description; command cards stay rich.
+  const warningText = unavailableReason && !params.remediation ? accessibleDescription : undefined;
   const row = html`
     <button
       type="button"
@@ -170,8 +169,10 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
           : nothing
       }
 
-      <span class="session-menu__check" aria-hidden="true"
-        >${params.checked ? icons.check : nothing}</span
+      <span
+        class="session-menu__check ${params.compact && params.disabled ? "new-session-page__environment-warning" : ""}"
+        aria-hidden="true"
+        >${params.compact && params.disabled ? icons.alertTriangle : params.checked ? icons.check : nothing}</span
       >
       ${
         params.hasSubmenu
@@ -186,6 +187,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
     ? html`<openclaw-tooltip
         class="new-session-page__environment-details"
         placement="right-start"
+        .content=${warningText ?? ""}
         ?open-on-click=${accessibleBlocker || touchDetails}
       >
         <div class="new-session-page__environment-detail-trigger">
@@ -203,58 +205,64 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
               : nothing
           }
         </div>
-        <div slot="content" class="new-session-page__environment-card">
-          ${accessibilityHints ? html`<span hidden>${accessibilityHints}, </span>` : nothing}
-          ${
-            unavailableReason
-              ? html`<span>${formatUnavailableReason(unavailableReason, params.remediation)}</span>`
-              : html`
-                  <strong>${params.label}</strong>
-                  ${params.summary ? detailRow(icons.info, params.summary) : nothing}
-                  ${params.platform ? detailRow(icons.layers, params.platform) : nothing}
-                  ${params.sub ? detailRow(icons.info, params.sub) : nothing}
-                  ${
-                    params.capabilityLabels?.length
-                      ? detailRow(icons.info, params.capabilityLabels.join(", "))
-                      : nothing
-                  }
-                  ${
-                    params.trust
-                      ? detailRow(
-                          params.trust === "persistent" ? icons.repeat : icons.clock,
-                          t(
-                            params.trust === "persistent"
-                              ? "newSession.persistentEnvironmentHint"
-                              : "newSession.disposableEnvironmentHint",
+        ${
+          warningText
+            ? nothing
+            : html`<div slot="content" class="new-session-page__environment-card">
+                ${accessibilityHints ? html`<span hidden>${accessibilityHints}, </span>` : nothing}
+                ${
+                  unavailableReason
+                    ? html`<span
+                        >${formatUnavailableReason(unavailableReason, params.remediation)}</span
+                      >`
+                    : html`
+                        <strong>${params.label}</strong>
+                        ${params.summary ? detailRow(icons.info, params.summary) : nothing}
+                        ${params.platform ? detailRow(icons.layers, params.platform) : nothing}
+                        ${params.sub ? detailRow(icons.info, params.sub) : nothing}
+                        ${
+                          params.capabilityLabels?.length
+                            ? detailRow(icons.info, params.capabilityLabels.join(", "))
+                            : nothing
+                        }
+                        ${
+                          params.trust
+                            ? detailRow(
+                                params.trust === "persistent" ? icons.repeat : icons.clock,
+                                t(
+                                  params.trust === "persistent"
+                                    ? "newSession.persistentEnvironmentHint"
+                                    : "newSession.disposableEnvironmentHint",
+                                ),
+                              )
+                            : nothing
+                        }
+                        ${params.provider ? detailRow(icons.server, params.provider) : nothing}
+                        ${params.hardware ? detailRow(icons.info, params.hardware) : nothing}
+                        ${[
+                          ...new Set(
+                            [
+                              params.description,
+                              ...(params.facts ?? []),
+                              params.provider && !params.disabled ? undefined : params.title,
+                            ].filter(Boolean),
                           ),
-                        )
-                      : nothing
-                  }
-                  ${params.provider ? detailRow(icons.server, params.provider) : nothing}
-                  ${params.hardware ? detailRow(icons.info, params.hardware) : nothing}
-                  ${[
-                    ...new Set(
-                      [
-                        params.description,
-                        ...(params.facts ?? []),
-                        params.provider && !params.disabled ? undefined : params.title,
-                      ].filter(Boolean),
-                    ),
-                  ].map((detail) => detailRow(icons.info, detail!))}
-                  ${
-                    params.capacityLabel
-                      ? html`<div class="new-session-page__card-row">
-                          <span class="new-session-page__card-icon" aria-hidden="true"
-                            >${icons.activity}</span
-                          ><span class="new-session-page__capacity-caption"
-                            >${params.capacityLabel}</span
-                          >
-                        </div>`
-                      : nothing
-                  }
-                `
-          }
-        </div>
+                        ].map((detail) => detailRow(icons.info, detail!))}
+                        ${
+                          params.capacityLabel
+                            ? html`<div class="new-session-page__card-row">
+                                <span class="new-session-page__card-icon" aria-hidden="true"
+                                  >${icons.activity}</span
+                                ><span class="new-session-page__capacity-caption"
+                                  >${params.capacityLabel}</span
+                                >
+                              </div>`
+                            : nothing
+                        }
+                      `
+                }
+              </div>`
+        }
       </openclaw-tooltip>`
     : row;
 }

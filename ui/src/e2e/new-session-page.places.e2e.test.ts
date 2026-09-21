@@ -380,10 +380,10 @@ suite.define(() => {
       const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
       const whereTrigger = page.locator("#new-session-where-trigger");
       await whereTrigger.click();
-      const environmentSearch = whereSelect.getByRole("searchbox", { name: "Search environments" });
+      const environmentSearch = whereSelect.getByRole("searchbox", { name: "Search computers" });
       await expect
         .poll(() => environmentSearch.getAttribute("placeholder"))
-        .toBe("Search environments");
+        .toBe("Search computers");
       await expect
         .poll(() => environmentSearch.evaluate((element) => element === document.activeElement))
         .toBe(true);
@@ -395,7 +395,7 @@ suite.define(() => {
         .getByText("No matching environments", { exact: true })
         .waitFor();
       expect(await whereTrigger.locator(".new-session-page__trigger-label").textContent()).toBe(
-        "Local",
+        "OpenClaw server",
       );
       await environmentSearch.fill("");
       await expect.poll(() => localEnvironment.isVisible()).toBe(true);

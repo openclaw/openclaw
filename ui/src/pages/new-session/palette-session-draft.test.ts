@@ -71,6 +71,86 @@ afterEach(() => {
 });
 
 describe("PaletteSessionDraft", () => {
+  it("keeps unsupported computers blocked with a warning and no split alternative", async () => {
+    const { host, context } = await mount({
+      scopes: ["operator.admin"],
+      methods: ["sessions.create", "environments.list", "projects.list"],
+      agents: [{ id: "main", workspace: "/workspace", model: { primary: "example/model" } }],
+      modelCatalog: async () => ({
+        models: [
+          {
+            id: "model",
+            name: "Example model",
+            provider: "example",
+            available: true,
+            agentRuntime: {
+              id: "example-runtime",
+              source: "model",
+              devicePlacementSupported: true,
+              devicePlacement: {
+                requiredNodeCommands: ["example.exec"],
+                consumesWorkerSlot: false,
+                setup: {
+                  label: "Example",
+                  missingCommandHint: "Enable the Example plugin, then reconnect.",
+                },
+              },
+            },
+          },
+        ],
+      }),
+      request: async (method) =>
+        method === "environments.list"
+          ? {
+              environments: [
+                {
+                  id: "node:runner",
+                  type: "node",
+                  label: "Build runner",
+                  status: "available",
+                  sessionHost: true,
+                  invocableCommands: ["system.run"],
+                  requiredNodeCommand: { command: "example.exec", state: "undeclared" },
+                },
+              ],
+            }
+          : method === "projects.list"
+            ? {
+                projects: [
+                  { id: "one", displayName: "Project one", rootPath: "/one" },
+                  { id: "two", displayName: "Project two", rootPath: "/two" },
+                ],
+              }
+            : {},
+    });
+    expectDefined(
+      host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
+      "workspace picker",
+    ).click();
+    await host.updateComplete;
+    await vi.waitFor(() =>
+      expect(
+        host.querySelector('[data-machine="device:runner"]')?.getAttribute("aria-disabled"),
+      ).toBe("true"),
+    );
+    const row = expectDefined(
+      host.querySelector<HTMLButtonElement>('[data-machine="device:runner"]'),
+      "blocked computer",
+    );
+    await vi.waitFor(() =>
+      expect(row.getAttribute("aria-description")).toContain("Example integration unavailable."),
+    );
+    expect(row.closest("openclaw-tooltip")?.hasAttribute("open-on-click")).toBe(true);
+    expect(row.querySelector(".palette-session-settings__warning")).not.toBeNull();
+    expect(host.querySelector('[data-machine^="node-tools:"]')).toBeNull();
+    expect(host.querySelectorAll('[data-machine="device:runner"]')).toHaveLength(1);
+    expect(row.textContent).toContain("Unavailable");
+    row.click();
+    await host.updateComplete;
+    expect(row.getAttribute("aria-pressed")).toBe("false");
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+  });
+
   it.each(["connection", "account"] as const)(
     "retires a locked prompt when the %s owner changes",
     async (change) => {
@@ -811,7 +891,9 @@ describe("palette-only remembered settings", () => {
     ).click();
     await host.updateComplete;
     expect(
-      host.querySelector('section[aria-label="Local"] [data-machine="local"][data-project=""]'),
+      host.querySelector(
+        'section[aria-label="OpenClaw server"] [data-machine="local"][data-project=""]',
+      ),
     ).not.toBeNull();
     const search = expectDefined(
       host.querySelector<HTMLInputElement>(".palette-session-settings__search"),

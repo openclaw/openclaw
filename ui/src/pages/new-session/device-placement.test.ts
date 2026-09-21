@@ -32,6 +32,40 @@ describe("device placement projection", () => {
 
   it.each([
     {
+      state: "undeclared" as const,
+      text: "Example integration unavailable. Install the Example plugin in the node service, then reconnect.",
+    },
+    { state: "pending-approval" as const, text: "Example access is awaiting approval." },
+    { state: "unauthorized" as const, text: "Example remote execution is not allowed." },
+    { state: "invocable" as const, text: undefined },
+  ])("uses plugin guidance without changing $state eligibility", ({ state, text }) => {
+    const [device] = projectDevicePlacements(
+      [
+        node({
+          invocableCommands: ["system.run"],
+          requiredNodeCommand: { command: "example.exec", state },
+        }),
+      ],
+      {
+        requiredNodeCommands: ["example.exec"],
+        consumesWorkerSlot: false,
+        setup: {
+          label: "Example",
+          missingCommandHint: "Install the Example plugin in the node service, then reconnect.",
+        },
+      },
+    );
+    expect(device?.selectable).toBe(state === "invocable");
+    if (text) {
+      expect(device?.disabledReason).toContain(text);
+      expect(device?.disabledReason).not.toContain("example.exec");
+    } else {
+      expect(device?.disabledReason).toBeUndefined();
+    }
+  });
+
+  it.each([
+    {
       name: "available host",
       environment: node({}),
       selectable: true,

@@ -235,7 +235,7 @@ it.each([
     await expect
       .element(
         page.getByRole("button", {
-          name: `Where: ${profileId}, Windows (WSL2) · Large`,
+          name: `Computer: ${profileId}, Windows (WSL2) · Large`,
           exact: true,
         }),
       )

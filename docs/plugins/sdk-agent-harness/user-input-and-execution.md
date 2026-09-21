@@ -279,6 +279,13 @@ plugin do not inherit that permission. An absent declaration or an unlisted
 command returns `undefined`, so the policy must use its ordinary approval or
 denial path. Mutating the declaration during the attempt cannot widen authority.
 
+Optionally provide `cloudPlacement.devicePlacement.setup` with a short `label`
+(up to 80 characters) and `missingCommandHint` (up to 500 characters). The picker
+uses this plugin-owned guidance when a node does not declare a required command.
+Describe how to restore the integration without assuming the executable itself
+is missing. Core trims and bounds this presentation metadata; it never grants
+authority or changes placement eligibility.
+
 This declaration narrows authority; it does not grant it. Pairing, command
 allowlisting, hosting consent, node-local policy, and the exact live session,
 placement, and turn remain independently enforced. Plugins remain trusted code,

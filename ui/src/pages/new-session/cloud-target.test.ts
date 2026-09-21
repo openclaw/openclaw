@@ -137,9 +137,10 @@ describe("cloud target menu", () => {
       ),
       container,
     );
-    const card = container.querySelector('[slot="content"]');
-    expect(card?.textContent?.trim()).toBe("Device unavailable");
-    expect(card?.querySelector("strong, svg, .new-session-page__capacity-caption")).toBeNull();
+    const tooltip = container.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
+    expect(tooltip?.content).toBe("Device unavailable");
+    expect(tooltip?.querySelector('[slot="content"]')).toBeNull();
+    expect(tooltip?.querySelector("strong, .new-session-page__capacity-caption")).toBeNull();
   });
 
   it.each([
