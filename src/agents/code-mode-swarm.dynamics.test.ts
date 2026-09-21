@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { codeModeSwarmHandlers } from "./code-mode-swarm.runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
+import { waitForCollectorCompletion } from "./tools/agents-wait-tool.js";
 
 const state = vi.hoisted(() => ({
   enabled: true,
@@ -113,6 +114,7 @@ beforeEach(() => {
   state.enabled = true;
   state.blocked = false;
   state.existing = undefined;
+  vi.mocked(waitForCollectorCompletion).mockReset();
 });
 
 describe("dynamics through the actual native spawn bridge", () => {
@@ -178,6 +180,32 @@ describe("dynamics through the actual native spawn bridge", () => {
       "Unknown cognitive dynamics profile",
     );
     expect(fixture.callExactId).not.toHaveBeenCalled();
+  });
+
+  it("releases advisory tracking when the owning parent wait is aborted", async () => {
+    const fixture = setup({ profile: "explorer" });
+    await codeModeSwarmHandlers.agentSpawn(fixture.params);
+    vi.mocked(waitForCollectorCompletion)
+      .mockRejectedValueOnce(new Error("parent aborted"))
+      .mockResolvedValueOnce({
+        runId: "child-run",
+        status: "done",
+        result: "done",
+        sessionKey: "agent:main:child",
+      });
+
+    const waitParams = {
+      request: {
+        id: "wait-1",
+        method: "agentWait" as const,
+        args: ["child-run"],
+      },
+      ctx: fixture.ctx,
+    };
+    await expect(codeModeSwarmHandlers.agentWait(waitParams)).rejects.toThrow("parent aborted");
+    await expect(codeModeSwarmHandlers.agentWait(waitParams)).resolves.toMatchObject({
+      status: "done",
+    });
   });
 
   it("does not silently downgrade a sandbox-required spawn rejected by the owner", async () => {
