@@ -183,12 +183,13 @@ type CloudProfileIdentity = { providerId: string; providerDisplayId?: string };
 
 // Cloud backends are a separate identity domain: Google Cloud is not Gemini,
 // and AWS is not Bedrock. Map lookup also keeps prototype keys on the fallback.
-const CLOUD_PROVIDERS = new Map([
+const CLOUD_PROVIDERS = new Map<string, { label: string; brand?: string }>([
   ["aws", { label: "AWS", brand: "aws" }],
   ["azure", { label: "Azure", brand: "azure" }],
   ["daytona", { label: "Daytona", brand: "daytona" }],
   ["gcp", { label: "Google Cloud", brand: "gcp" }],
   ["hetzner", { label: "Hetzner", brand: "hetzner" }],
+  ["machine0", { label: "Machine0" }],
 ]);
 const CLOUD_ALIASES = new Map([
   ["google", "gcp"],
@@ -199,13 +200,30 @@ const CLOUD_ALIASES = new Map([
   ["local-podman", "local-container"],
 ]);
 
+function cloudProfileBackendId(profile?: CloudProfileIdentity): string {
+  const raw = (profile?.providerDisplayId ?? profile?.providerId ?? "").trim().toLowerCase();
+  return CLOUD_ALIASES.get(raw) ?? raw;
+}
+
+/** Known cloud services precede local/custom infrastructure, alphabetically within each group. */
+export function compareCloudProfiles(
+  left: CloudProfileIdentity & { id: string },
+  right: CloudProfileIdentity & { id: string },
+): number {
+  // Backend identity, not an editable profile name or the availability of a logo.
+  return (
+    Number(CLOUD_PROVIDERS.has(cloudProfileBackendId(right))) -
+      Number(CLOUD_PROVIDERS.has(cloudProfileBackendId(left))) || left.id.localeCompare(right.id)
+  );
+}
+
 /** One presentation resolver for cloud triggers, menus, and move-session rows. */
 export function resolveCloudProfileIcon(profile?: CloudProfileIdentity) {
-  const raw = (profile?.providerDisplayId ?? profile?.providerId ?? "").trim().toLowerCase();
-  const id = CLOUD_ALIASES.get(raw) ?? raw;
+  const id = cloudProfileBackendId(profile);
   const brand = CLOUD_PROVIDERS.get(id);
-  const label = brand?.label ?? (id === "machine0" ? "Machine0" : raw);
-  const icon = brand
+  const label =
+    brand?.label ?? (profile?.providerDisplayId ?? profile?.providerId ?? "").trim().toLowerCase();
+  const icon = brand?.brand
     ? renderBrandIcon(
         inferControlUiPublicAssetPath(`cloud-provider-icons/${brand.brand}.svg`),
         brand.brand,

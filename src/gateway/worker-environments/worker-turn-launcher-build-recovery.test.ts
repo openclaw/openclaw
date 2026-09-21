@@ -4,6 +4,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
@@ -31,7 +32,7 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 
 function createBuildRecoveryHarness(
   options: {
-    rejection?: "recorded" | "admission" | "launch" | "handoff";
+    rejection?: "recorded" | "admission" | "pending refresh" | "launch" | "handoff";
     repeated?: boolean;
     pendingResult?: boolean;
     refreshInPlace?: boolean;
@@ -118,6 +119,9 @@ function createBuildRecoveryHarness(
     acknowledgeCredentialDelivery: vi.fn(() => true),
     startTunnel: async () => {
       if (rejection !== "handoff" && rejection !== "launch" && (!replaced || options.repeated)) {
+        if (rejection === "pending refresh") {
+          throw new WorkerRuntimeRefreshPendingError("node was disconnected during startup");
+        }
         throw new StaleWorkerBuildError();
       }
       return {
@@ -284,33 +288,36 @@ describe("worker turn launcher build recovery", () => {
     },
   );
 
-  it("continues the submitted turn after refreshing the same machine", async () => {
-    const harness = createBuildRecoveryHarness({ refreshInPlace: true });
-    const before = placements.get(SESSION_ID);
-    const result = await harness.execute();
-    expect(result.payloads).toEqual([{ text: "Continued on the replacement worker" }]);
-    expect(harness.redispatchReclaimed).not.toHaveBeenCalled();
-    expect(harness.launchTurn).toHaveBeenCalledOnce();
-    expect(harness.onAdmitted).toHaveBeenCalledOnce();
-    expect(harness.launchTurn.mock.calls[0]?.[0].turnClaim.claimId).not.toBe(
-      harness.originalClaimIds[0],
-    );
-    expect(placements.get(SESSION_ID)).toMatchObject({
-      state: "active",
-      environmentId: before?.environmentId,
-      activeOwnerEpoch: before?.activeOwnerEpoch,
-      generation: before?.generation,
-      workerBundleHash: "b".repeat(64),
-      turnClaim: null,
-    });
-    expect(harness.environments.destroy).not.toHaveBeenCalled();
-    expect(harness.runLocal).not.toHaveBeenCalled();
-    expect(
-      openSessionManager()
-        .buildSessionContext()
-        .messages.filter((message) => message.role === "user"),
-    ).toHaveLength(1);
-  });
+  it.each(["admission", "pending refresh"] as const)(
+    "continues the submitted turn after %s by refreshing the same machine",
+    async (rejection) => {
+      const harness = createBuildRecoveryHarness({ rejection, refreshInPlace: true });
+      const before = placements.get(SESSION_ID);
+      const result = await harness.execute();
+      expect(result.payloads).toEqual([{ text: "Continued on the replacement worker" }]);
+      expect(harness.redispatchReclaimed).not.toHaveBeenCalled();
+      expect(harness.launchTurn).toHaveBeenCalledOnce();
+      expect(harness.onAdmitted).toHaveBeenCalledOnce();
+      expect(harness.launchTurn.mock.calls[0]?.[0].turnClaim.claimId).not.toBe(
+        harness.originalClaimIds[0],
+      );
+      expect(placements.get(SESSION_ID)).toMatchObject({
+        state: "active",
+        environmentId: before?.environmentId,
+        activeOwnerEpoch: before?.activeOwnerEpoch,
+        generation: before?.generation,
+        workerBundleHash: "b".repeat(64),
+        turnClaim: null,
+      });
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+      expect(harness.runLocal).not.toHaveBeenCalled();
+      expect(
+        openSessionManager()
+          .buildSessionContext()
+          .messages.filter((message) => message.role === "user"),
+      ).toHaveLength(1);
+    },
+  );
 
   it.each(["recorded", "admission"] as const)(
     "continues the same turn with a fresh claim after a %s build rejection",
@@ -380,11 +387,19 @@ describe("worker turn launcher build recovery", () => {
     },
   );
 
-  it.each([false, true])(
-    "attempts build recovery only once (refreshInPlace=%s)",
-    async (refreshInPlace) => {
-      const harness = createBuildRecoveryHarness({ repeated: true, refreshInPlace });
-      await expect(harness.execute()).rejects.toThrow(STALE_WORKER_BUILD_REASON);
+  it.each([
+    { refreshInPlace: false, rejection: "admission" },
+    { refreshInPlace: true, rejection: "admission" },
+    { refreshInPlace: true, rejection: "pending refresh" },
+  ] as const)(
+    "attempts build recovery only once after $rejection (refreshInPlace=$refreshInPlace)",
+    async ({ refreshInPlace, rejection }) => {
+      const harness = createBuildRecoveryHarness({ repeated: true, refreshInPlace, rejection });
+      await expect(harness.execute()).rejects.toThrow(
+        rejection === "pending refresh"
+          ? "Cloud worker runtime update is pending"
+          : STALE_WORKER_BUILD_REASON,
+      );
       expect(harness.redispatchReclaimed).toHaveBeenCalledTimes(refreshInPlace ? 0 : 1);
       expect(harness.onAdmitted).toHaveBeenCalledOnce();
       expect(harness.launchTurn).not.toHaveBeenCalled();

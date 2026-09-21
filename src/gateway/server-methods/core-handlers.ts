@@ -104,14 +104,6 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-abort.js").then((module) => module.sessionAbortHandlers),
   "sessions-compact": () =>
     import("./sessions-compact.js").then((module) => module.sessionCompactHandlers),
-  "sessions-compaction-checkpoints": () =>
-    import("./sessions-compaction-checkpoints.js").then(
-      (module) => module.sessionCheckpointHandlers,
-    ),
-  "sessions-compaction-queries": () =>
-    import("./sessions-compaction-queries.js").then(
-      (module) => module.sessionCheckpointQueryHandlers,
-    ),
   "sessions-create": () =>
     import("./sessions-create.js").then((module) => module.sessionCreateHandlers),
   "sessions-title": () =>

@@ -31,6 +31,12 @@ the running managed Gateway. This exact combination remains covered after
 ordinary PR/main runs adopt owner-path gates. Hosted manual CI splits QA Smoke
 into six parts; normal hybrid first attempts use four parts with the same coverage.
 
+For targets with [test runtime selection](/ci/pipeline#test-runtime-selection),
+`normal_ci` retains the complete Node test inventory and also runs each admitted
+Bun-compatible selection on Bun. Both results are required; they share existing
+jobs and execute sequentially within each worker slot. Older targets without this
+capability retain Node-only testing.
+
 Package Acceptance separately retains expanded published-upgrade scenarios:
 current unpublished candidates include native operator state, and stable/full
 profiles force the `reported-issues` soak. Its ordinary survivor restart mode

@@ -1,11 +1,13 @@
 /** Detached task-ledger integration for cron runs. */
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import {
   createExecutionStartedOwnerBinding,
   isRetainedExecutionOwnerBinding,
 } from "../../audit/execution-owner-binding.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import {
   createRunningTaskRunCore,
@@ -25,10 +27,8 @@ import {
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { cronStoreKey } from "../store/key.js";
-import {
-  bindCronRunReceiptExecution,
-  type CronRunReceiptHandle,
-} from "../store/run-receipt-store.js";
+import { bindCronRunReceiptExecution } from "../store/run-receipt-execution-binding.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
@@ -68,22 +68,33 @@ export function createCronOwnerExecutionIdentityAdmission(params: {
   taskId?: string;
   flowId?: string;
 }): CronExecutionIdentityAdmission {
-  const ownerBinding = createExecutionStartedOwnerBinding((admitted) => {
+  const ownerBinding = createExecutionStartedOwnerBinding(async (admitted) => {
+    const { taskId, flowId } = params;
     try {
-      const receiptResult = bindCronRunReceiptExecution({
+      if (!admitted.executionIdentityToken) {
+        return;
+      }
+      const assertCurrent = resolveAdmittedRunActiveAssertion(admitted);
+      if (!assertCurrent) {
+        throw new Error("Cron execution authority closed before owner binding");
+      }
+      const context = captureOpenClawStateWorkerContext();
+      const receiptResult = await bindCronRunReceiptExecution({
         admitted,
         handle: params.runReceipt,
+        context,
+        assertCurrent,
       });
-      const taskResult = params.taskId
+      const taskResult = taskId
         ? isRetainedExecutionOwnerBinding(receiptResult)
-          ? bindTaskRunExecution({ admitted, taskId: params.taskId })
+          ? await bindTaskRunExecution({ admitted, taskId, context, assertCurrent })
           : receiptResult
         : undefined;
-      const flowParentResult = params.taskId ? taskResult : receiptResult;
-      const flowResult = params.flowId
+      const flowParentResult = taskId ? taskResult : receiptResult;
+      const flowResult = flowId
         ? isRetainedExecutionOwnerBinding(receiptResult) &&
           isRetainedExecutionOwnerBinding(flowParentResult)
-          ? bindTaskFlowExecution({ admitted, flowId: params.flowId })
+          ? await bindTaskFlowExecution({ admitted, flowId, context, assertCurrent })
           : flowParentResult
         : undefined;
       if (

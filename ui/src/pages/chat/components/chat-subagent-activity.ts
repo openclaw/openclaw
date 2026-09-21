@@ -7,7 +7,7 @@ import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
-import { isActiveTask, sortTasks, taskTimestampMs } from "../../../lib/tasks/data.ts";
+import { isActiveTask, partitionTasks, taskTimestampMs } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import {
   backgroundTaskDeliveryLabel,
@@ -36,41 +36,39 @@ export function deriveSubagentActivity(params: {
 }): SubagentActivityPresentation {
   const now = params.now ?? Date.now();
   const requesterSessionKey = params.canonicalizeSessionKey(params.sessionKey);
-  const matching = sortTasks(
-    params.tasks.filter((task) => {
-      const taskRequesterSessionKey = params.canonicalizeSessionKey(task.sessionKey);
-      const childSessionKey = params.canonicalizeSessionKey(task.childSessionKey);
-      return (
-        (task.runtime === "subagent" ||
-          (task.runtime === "cli" &&
-            Boolean(childSessionKey) &&
-            childSessionKey !== taskRequesterSessionKey)) &&
-        Boolean(requesterSessionKey) &&
-        taskRequesterSessionKey === requesterSessionKey
-      );
-    }),
-  );
-  const active = matching.filter(isActiveTask);
-  const recentTerminal: TaskSummary[] = [];
   let nextExpiryAt: number | null = null;
-  for (const task of matching) {
+  const eligible = params.tasks.filter((task) => {
+    const taskRequesterSessionKey = params.canonicalizeSessionKey(task.sessionKey);
+    const childSessionKey = params.canonicalizeSessionKey(task.childSessionKey);
+    const isChild =
+      task.runtime === "subagent" ||
+      (task.runtime === "cli" &&
+        Boolean(childSessionKey) &&
+        childSessionKey !== taskRequesterSessionKey);
+    if (!isChild || !requesterSessionKey || taskRequesterSessionKey !== requesterSessionKey) {
+      return false;
+    }
     if (isActiveTask(task)) {
-      continue;
+      return true;
     }
     const terminalAt =
       params.terminalObservedAtByTask.get(task.id) ??
       taskTimestampMs(task.endedAt ?? task.updatedAt);
     const expiresAt = terminalAt + SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS;
     if (terminalAt <= 0 || expiresAt <= now) {
-      continue;
+      return false;
     }
-    recentTerminal.push(task);
     nextExpiryAt = nextExpiryAt === null ? expiresAt : Math.min(nextExpiryAt, expiresAt);
-  }
-  // Active children stay visible ahead of retained completions so a burst of
-  // terminal events cannot displace work that is still progressing.
-  const eligible = [...active, ...recentTerminal];
-  const rows = eligible.slice(0, SUBAGENT_ACTIVITY_LIMIT);
+    return true;
+  });
+  const { active, recent } = partitionTasks(eligible);
+  // Share the Tasks panel's stable lifecycle order. Reserve one result slot,
+  // but let ongoing work keep the rest during a burst of completions.
+  const visibleActive = active.slice(0, SUBAGENT_ACTIVITY_LIMIT - Math.min(recent.length, 1));
+  const rows = [
+    ...recent.slice(0, SUBAGENT_ACTIVITY_LIMIT - visibleActive.length),
+    ...visibleActive,
+  ];
   const overflowCount = Math.max(0, eligible.length - SUBAGENT_ACTIVITY_LIMIT);
   return {
     rows,
@@ -100,6 +98,14 @@ function renderSubagentActivityIndicator(task: TaskSummary): TemplateResult {
     (task.deliveryStatus === "failed" || task.deliveryStatus === "parent_missing")
       ? "failed"
       : task.status;
+  const badge =
+    indicatorStatus === "completed"
+      ? icons.check
+      : indicatorStatus === "failed"
+        ? icons.alertTriangle
+        : indicatorStatus === "timed_out"
+          ? icons.clock
+          : nothing;
   return html`<span
     class="chat-subagent-activity__indicator chat-subagent-activity__indicator--${indicatorStatus}"
     aria-hidden="true"
@@ -109,11 +115,9 @@ function renderSubagentActivityIndicator(task: TaskSummary): TemplateResult {
       >${icons.claw}</span
     >
     ${
-      indicatorStatus === "failed" || indicatorStatus === "timed_out"
-        ? html`<span class="chat-subagent-activity__badge"
-            >${indicatorStatus === "failed" ? icons.alertTriangle : icons.clock}</span
-          >`
-        : nothing
+      badge === nothing
+        ? nothing
+        : html`<span class="chat-subagent-activity__badge">${badge}</span>`
     }
   </span>`;
 }

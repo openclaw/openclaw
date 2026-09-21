@@ -29,9 +29,8 @@ vi.mock("../../agents/tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
   readGatewayCallOptions: vi.fn(),
 }));
-vi.mock("../server-plugins.js", () => ({
+vi.mock("../server-plugin-in-process-dispatch.js", () => ({
   getInProcessGatewayRequestContext: () => host.context,
-  hasInProcessGatewayContext: () => Boolean(host.context),
   dispatchGatewayMethodInProcess: async (_method: string, params: Record<string, unknown>) => {
     const { updateHandlers } = await import("./update.js");
     let response: unknown;
@@ -446,6 +445,7 @@ describe("update.run chat restart permission", () => {
       expect(payload.ackDelivered).toBe(true);
       expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
         expect.objectContaining({ message: expect.stringContaining("commands.restart") }),
+        expect.any(Object),
       );
     },
   );

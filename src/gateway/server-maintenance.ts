@@ -15,6 +15,7 @@ import {
   pruneExpiredDeliveryQueueTombstones,
 } from "../infra/delivery-queue-sqlite.js";
 import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
+import { formatErrorMessage as formatError } from "../infra/errors.js";
 import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkInspectors,
@@ -25,9 +26,11 @@ import { generateSecureInt } from "../infra/secure-random.js";
 import { checkTelemetryUpdate } from "../infra/telemetry.js";
 import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import {
+  getGatewayRestartDrainSignal,
   isGatewayWorkAdmissionClosed,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
 import {
@@ -61,7 +64,6 @@ import {
 } from "./server-media-cleanup-lifecycle.js";
 import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-active-runs.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
-import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
@@ -114,16 +116,14 @@ export function startGatewayMaintenanceTimers(params: {
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
 }): {
-  tickInterval: ReturnType<typeof setInterval>;
-  healthInterval: ReturnType<typeof setInterval>;
-  dedupeCleanup: ReturnType<typeof setInterval>;
+  stopPeriodicTasks: () => Promise<void>;
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
-  stopSessionColdStorageMaintenance: () => Promise<void>;
-  stopTelemetryChecks: () => Promise<void>;
-  worktreeCleanup: ReturnType<typeof setInterval>;
   skillUsageCleanup: () => Promise<void>;
 } {
+  const restartDrainSignal = getGatewayRestartDrainSignal();
+  const periodicWork = new AsyncWorkScope();
+  let periodicTasksStopPromise: Promise<void> | undefined;
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
       stateVersion: {
@@ -156,7 +156,10 @@ export function startGatewayMaintenanceTimers(params: {
       return { status: "retry", reason: "admission-closed" };
     }
     try {
-      const restarted = await params.restartRunningChannels(mode, () => !invalidated);
+      const restarted = await params.restartRunningChannels(
+        mode,
+        () => !invalidated && !periodicTasksStopPromise,
+      );
       return restarted
         ? { status: "completed" }
         : { status: "retry", reason: "channel-restart-incomplete" };
@@ -173,35 +176,35 @@ export function startGatewayMaintenanceTimers(params: {
     },
     refreshPresence: params.refreshPresence,
     resetEventLoopHealth: params.resetEventLoopHealth,
-    isAdmissionClosed: isGatewayWorkAdmissionClosed,
+    isAdmissionClosed: () => Boolean(periodicTasksStopPromise) || isGatewayWorkAdmissionClosed(),
     logger: params.logHealth,
   });
 
   let nextTelemetryCheckAtMs = Date.now() + generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS);
-  let telemetryStopped = false;
   let telemetryCheckInFlight: Promise<void> | undefined;
   const performTelemetryCheck = () => {
-    telemetryCheckInFlight ??= checkTelemetryUpdate(params.getRuntimeConfig, {
-      surface: "gateway",
-    })
+    telemetryCheckInFlight ??= periodicWork
+      .track(() => checkTelemetryUpdate(params.getRuntimeConfig, { surface: "gateway" }))
       .then(() => undefined)
       .catch(() => {})
       .finally(() => {
         telemetryCheckInFlight = undefined;
       });
   };
-  const stopTelemetryChecks = async () => {
-    telemetryStopped = true;
-    await telemetryCheckInFlight;
-  };
   // periodic keepalive
   const tickInterval = setInterval(() => {
-    void checkGatewayInstallationReplacement().catch((error: unknown) =>
-      params.logHealth.error(`installation check failed: ${formatError(error)}`),
-    );
-    void hostThawRecovery.tick();
+    void periodicWork
+      .track(checkGatewayInstallationReplacement)
+      .catch((error: unknown) =>
+        params.logHealth.error(`installation check failed: ${formatError(error)}`),
+      );
+    void periodicWork
+      .track(() => hostThawRecovery.tick())
+      .catch((error: unknown) =>
+        params.logHealth.error(`host thaw recovery failed: ${formatError(error)}`),
+      );
     const now = Date.now();
-    if (!telemetryStopped && !params.isNixMode && now >= nextTelemetryCheckAtMs) {
+    if (!params.isNixMode && now >= nextTelemetryCheckAtMs) {
       nextTelemetryCheckAtMs =
         now +
         TELEMETRY_MAINTENANCE_INTERVAL_MS +
@@ -216,15 +219,19 @@ export function startGatewayMaintenanceTimers(params: {
   // Keep cached health warm without request-time live channel probes. Explicit
   // status/doctor probe paths still pass probe=true when the operator asks.
   const healthInterval = setInterval(() => {
-    void params
-      .refreshGatewayHealthSnapshot({ probe: false })
+    void periodicWork
+      .track(() => params.refreshGatewayHealthSnapshot({ probe: false }))
       .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
   }, HEALTH_REFRESH_INTERVAL_MS);
 
   // Prime cache so first client gets a snapshot without waiting.
-  void params
-    .refreshGatewayHealthSnapshot({ probe: false })
-    .catch((err: unknown) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
+  if (!restartDrainSignal.aborted) {
+    void periodicWork
+      .track(() => params.refreshGatewayHealthSnapshot({ probe: false }))
+      .catch((err: unknown) =>
+        params.logHealth.error(`initial refresh failed: ${formatError(err)}`),
+      );
+  }
 
   const runWorktreeGc =
     params.runWorktreeGc ??
@@ -238,11 +245,13 @@ export function startGatewayMaintenanceTimers(params: {
       });
     });
   const performWorktreeGc = () =>
-    runWorktreeGc().catch((err: unknown) => {
+    periodicWork.track(runWorktreeGc).catch((err: unknown) => {
       params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
     });
   const worktreeCleanup = setInterval(() => void performWorktreeGc(), WORKTREE_GC_INTERVAL_MS);
-  void performWorktreeGc();
+  if (!restartDrainSignal.aborted) {
+    void performWorktreeGc();
+  }
 
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
@@ -293,7 +302,8 @@ export function startGatewayMaintenanceTimers(params: {
     if (devicePairSetupCompletionGcInFlight) {
       return devicePairSetupCompletionGcInFlight;
     }
-    devicePairSetupCompletionGcInFlight = pruneExpiredDevicePairSetupCompletions({ nowMs })
+    devicePairSetupCompletionGcInFlight = periodicWork
+      .track(() => pruneExpiredDevicePairSetupCompletions({ nowMs }))
       .then(() => undefined)
       .catch((error: unknown) => {
         params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
@@ -303,7 +313,9 @@ export function startGatewayMaintenanceTimers(params: {
       });
     return devicePairSetupCompletionGcInFlight;
   };
-  void performDevicePairSetupCompletionGc(Date.now());
+  if (!restartDrainSignal.aborted) {
+    void performDevicePairSetupCompletionGc(Date.now());
+  }
 
   const skillUsageCleanup = registerSkillUsageTracking();
 
@@ -584,15 +596,47 @@ export function startGatewayMaintenanceTimers(params: {
     onError: (message) => params.logHealth.error(`transcript cold storage failed: ${message}`),
   });
 
+  const stopPeriodicTasks = () => {
+    if (!periodicTasksStopPromise) {
+      restartDrainSignal.removeEventListener("abort", onRestartDrain);
+      clearInterval(tickInterval);
+      clearInterval(healthInterval);
+      clearInterval(dedupeCleanup);
+      clearInterval(worktreeCleanup);
+      periodicTasksStopPromise = Promise.allSettled([
+        // Retire producers first, then let admitted callbacks and their cleanup
+        // finish before closing their scope or aborting its cancellation signal.
+        AsyncWorkScope.runWhenAllIdle(
+          () => [periodicWork],
+          () => periodicWork.drain(),
+        ),
+        sessionColdStorageMaintenance.stop(),
+        stopMediaCleanup(),
+      ]).then((results) => {
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Gateway periodic maintenance failed to stop");
+        }
+      });
+      // Drain starts before shutdown joins; retain failures for its warning report.
+      void periodicTasksStopPromise.catch(() => {});
+    }
+    return periodicTasksStopPromise;
+  };
+  const onRestartDrain = () => {
+    void stopPeriodicTasks();
+  };
+  restartDrainSignal.addEventListener("abort", onRestartDrain, { once: true });
+  if (restartDrainSignal.aborted) {
+    onRestartDrain();
+  }
+
   return {
-    tickInterval,
-    healthInterval,
-    dedupeCleanup,
-    stopTelemetryChecks,
+    stopPeriodicTasks,
     startMediaCleanup,
     stopMediaCleanup,
-    stopSessionColdStorageMaintenance: sessionColdStorageMaintenance.stop,
-    worktreeCleanup,
     skillUsageCleanup,
   };
 }

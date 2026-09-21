@@ -245,12 +245,26 @@ export function syncChatModelSearch(details: Element | undefined): void {
   if (!(details instanceof HTMLDetailsElement) || !details.open) {
     return;
   }
+  const active = details.ownerDocument.activeElement;
+  const focusedRefresh =
+    active?.closest("[data-chat-model-refresh]") && details.contains(active) ? active : undefined;
   // Keyed catalog rows commit after the details binding; project the retained
   // query onto the new DOM without resetting a still-valid keyboard selection.
+  // A settled refresh can remove its focused control during that same commit.
   queueMicrotask(() => {
     const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
     if (input) {
       updateModelSearch(input, true);
+    }
+    if (
+      focusedRefresh &&
+      !focusedRefresh.isConnected &&
+      details.isConnected &&
+      details.open &&
+      details.ownerDocument.activeElement === details.ownerDocument.body
+    ) {
+      const target = input && !input.disabled ? input : details.querySelector("summary");
+      target?.focus({ preventScroll: true });
     }
   });
 }

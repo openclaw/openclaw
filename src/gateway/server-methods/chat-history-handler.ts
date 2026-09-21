@@ -13,7 +13,6 @@ import {
   listSessionPendingInputReceipts,
   resolveTranscriptSessionKeyBySessionId,
 } from "../../config/sessions/session-accessor.js";
-import { readRestoredSessionTranscript } from "../../config/sessions/session-cold-storage-read.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -614,7 +613,7 @@ export async function handleChatHistoryRequest({
       includeSession: true,
       activeRunState,
     });
-    let delta: ReturnType<typeof readChatHistoryDelta>;
+    let delta: Awaited<ReturnType<typeof readChatHistoryDelta>>;
     try {
       const scope = {
         agentId: sessionAgentId,
@@ -623,15 +622,17 @@ export async function handleChatHistoryRequest({
         sessionKey: canonicalKey,
         storePath,
       };
-      delta = await readRestoredSessionTranscript(scope, () =>
-        readChatHistoryDelta({
+      delta = await readChatHistoryDelta(
+        {
           agentId: sessionAgentId,
           cursor,
           maxBytes: maxHistoryBytes,
           scope,
           sessionKey: canonicalKey,
           sessionSnapshot,
-        }),
+          incognito: entry?.incognito,
+        },
+        signal,
       );
     } catch (error) {
       const unavailableMessage = resolveSessionHistoryUnavailableMessage(error);

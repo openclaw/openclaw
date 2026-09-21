@@ -119,7 +119,6 @@ export async function startGatewayCoreRuntime(input: {
     workerEnvironmentService,
     workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
-    workerDesktopObserveAvailable,
     desktopSessionRegistry,
     gatewayComputerService,
     listStartupChannelGatewayMethods,
@@ -157,6 +156,7 @@ export async function startGatewayCoreRuntime(input: {
         loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
           startGatewayEarlyRuntime({
             minimalTestGateway,
+            isClosing: () => runtime.lifecycle.closePreludeStarted,
             updateCanary: runtime.opts.updateCanary,
             cfgAtStart,
             port,
@@ -411,7 +411,7 @@ export async function startGatewayCoreRuntime(input: {
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
         (workerPlacementControlAvailable ||
           (descriptor.name !== "sessions.reclaim" && descriptor.name !== "sessions.move")) &&
-        (workerDesktopObserveAvailable ||
+        (workerEnvironmentService ||
           (descriptor.name !== "desktop.launch" &&
             descriptor.name !== "worker.desktop.observe" &&
             descriptor.name !== "worker.desktop.launch")),

@@ -4,7 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { GatewayAuthConfig } from "../config/types.gateway.js";
+import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createLazyPromise, getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveCachedGitHubIdentity } from "../state/user-profile-github-identity.js";
@@ -29,7 +29,7 @@ const GITHUB_ETAG_MAX_LENGTH = 1_024;
 type ResolvedGitHubUserIdentity = { accountId: number; login: string; name?: string };
 type ResolvedCloudflareAccessIdentity =
   | { provider: "github"; accountId: number; initialDisplayName?: string }
-  | { provider: "oidc"; email: string };
+  | { provider: "oidc"; accountId?: number };
 type GitHubIdentityLookup = { identity: ResolvedGitHubUserIdentity; refreshed: boolean };
 type GitHubIdentityMetadataCache = {
   values: Map<string, { identity: ResolvedGitHubUserIdentity; expiresAt: number; etag?: string }>;
@@ -82,6 +82,7 @@ function cloudflareAccessIssuer(assertion: string): URL {
 async function resolveCloudflareAccessIdentity(
   assertion: string,
   authenticatedPrincipal: string,
+  oidcConfig?: GatewayTrustedProxyConfig["cloudflareAccessOidc"],
 ): Promise<ResolvedCloudflareAccessIdentity> {
   const issuer = cloudflareAccessIssuer(assertion);
   let payload: unknown;
@@ -112,7 +113,25 @@ async function resolveCloudflareAccessIdentity(
     throw new Error("Cloudflare Access identity provider is invalid");
   }
   if (payload.idp.type === "oidc") {
-    return { provider: "oidc", email };
+    // A claim name is not an authority: Access must identify the selected issuer and IdP.
+    if (
+      !oidcConfig ||
+      issuer.origin !== oidcConfig.issuer ||
+      payload.idp.id !== oidcConfig.providerId ||
+      !isRecord(payload.oidc_fields) ||
+      !Object.hasOwn(payload.oidc_fields, oidcConfig.githubAccountIdClaim)
+    ) {
+      return { provider: "oidc" };
+    }
+    const claim = payload.oidc_fields[oidcConfig.githubAccountIdClaim];
+    if (
+      typeof claim !== "string" ||
+      !/^[1-9][0-9]*$/u.test(claim) ||
+      !Number.isSafeInteger(Number(claim))
+    ) {
+      throw new Error("Cloudflare Access OIDC GitHub account id is invalid");
+    }
+    return { provider: "oidc", accountId: Number(claim) };
   }
   if (payload.idp.type !== "github") {
     throw new Error("Cloudflare Access identity provider is unsupported");
@@ -295,18 +314,20 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     const accessIdentity = await resolveCloudflareAccessIdentity(
       access.assertion,
       access.principal,
+      params.authConfig?.trustedProxy?.cloudflareAccessOidc,
     );
-    if (accessIdentity.provider === "oidc") {
-      const profile = ensureProfileForEmail(accessIdentity.email);
+    const accountId = accessIdentity.accountId;
+    if (accountId === undefined) {
+      const profile = ensureProfileForEmail(access.principal);
       return { profileId: profile.id, updatedAt: profile.updatedAt };
     }
-    const identityBinding = { accountId: accessIdentity.accountId, email: access.principal };
+    const identityBinding = { accountId, email: access.principal };
     // Service auth raises public-data quota; Access still owns the signed-in account id.
     const token = githubApiToken();
     let lookup: GitHubIdentityLookup;
     try {
       lookup = await gitHubPublicApi.withOptionalGitHubAuth(token, (requestToken) =>
-        resolveGitHubUserIdentityById(accessIdentity.accountId, requestToken, fetch),
+        resolveGitHubUserIdentityById(accountId, requestToken, fetch),
       );
     } catch (error) {
       if (error instanceof gitHubPublicApi.ControlUiGitHubError && error.retryable) {
@@ -331,7 +352,9 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     const profile = syncGitHubIdentity({
       identity: lookup.identity,
       authenticationAlias: { kind: "email", email: access.principal },
-      initialDisplayName: accessIdentity.initialDisplayName,
+      initialDisplayName:
+        accessIdentity.provider === "github" ? accessIdentity.initialDisplayName : undefined,
+      preserveEmailProfile: accessIdentity.provider === "oidc",
     });
     return { profileId: profile.id, updatedAt: profile.updatedAt };
   });

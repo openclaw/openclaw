@@ -77,7 +77,6 @@ export async function prepareGatewayKernelState(params: {
   } = params;
   const {
     pluginBootstrap,
-    gatewayPluginConfigAtStart,
     workerEnvironmentStartup,
     startupTrace,
     cfgAtStart,
@@ -93,14 +92,6 @@ export async function prepareGatewayKernelState(params: {
   });
   const listGatewayStartupChannelPlugins = (registry = pluginRuntime.registry) =>
     listLoadedChannelPluginsForRegistry(registry);
-  // The core device provider is configuration-free, so every full Gateway owns the
-  // worker service even when no plugin-backed cloud profile has been configured.
-  const shouldStartWorkerEnvironmentService = Boolean(workerEnvironmentStartup);
-  const hostDesktopConfig = gatewayPluginConfigAtStart.desktop?.host;
-  const hostDesktopEnabled = hostDesktopConfig?.enabled === true;
-  const workerDesktopObserveAvailable =
-    shouldStartWorkerEnvironmentService &&
-    gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
   // Policy can enable an already-approved node without restarting the Gateway.
   // These owners allocate streams only when an authorized observation starts.
   const desktopSessionRegistry = createDesktopSessionRegistry();
@@ -110,18 +101,15 @@ export async function prepareGatewayKernelState(params: {
       () => import("./desktop/node-stream-broker.js"),
     )
   ).createNodeDesktopStreamBroker();
-  const hostDesktopService =
-    hostDesktopConfig && hostDesktopEnabled
-      ? (
-          await startupTrace.measure(
-            "host-desktop.runtime-import",
-            () => import("./desktop/host-source.js"),
-          )
-        ).createHostDesktopService({
-          config: hostDesktopConfig,
-          registry: desktopSessionRegistry,
-        })
-      : undefined;
+  const hostDesktopService = (
+    await startupTrace.measure(
+      "host-desktop.runtime-import",
+      () => import("./desktop/host-source.js"),
+    )
+  ).createHostDesktopService({
+    getConfig: () => getRuntimeConfig().desktop?.host,
+    registry: desktopSessionRegistry,
+  });
   const gatewayComputerService = (
     await startupTrace.measure(
       "computer.runtime-import",
@@ -272,7 +260,7 @@ export async function prepareGatewayKernelState(params: {
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
         (workerPlacementControlAvailable ||
           (method !== "sessions.reclaim" && method !== "sessions.move")) &&
-        (workerDesktopObserveAvailable ||
+        (workerEnvironmentService ||
           (method !== "desktop.launch" &&
             method !== "worker.desktop.observe" &&
             method !== "worker.desktop.launch")),
@@ -534,7 +522,6 @@ export async function prepareGatewayKernelState(params: {
     githubPublicationService: githubPublicationRuntime?.coordinator,
     workerPlacementControlAvailable,
     workerPlacementDispatchAvailable,
-    workerDesktopObserveAvailable,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     hostDesktopService,

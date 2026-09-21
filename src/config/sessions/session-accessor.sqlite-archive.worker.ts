@@ -518,7 +518,7 @@ if (isSqliteTranscriptArchiveWorkerData(workerData)) {
   }
   const operation = (workerData as { operation?: unknown }).operation;
   if (operation === "canonical-validation-pool") {
-    const { serveWorkerTasks } = await import("../../infra/worker-task-pool.js");
+    const { serveWorkerTasks } = await import("../../infra/worker-task-server.js");
     const { runReclamationWorkerPort } =
       await import("./session-accessor.sqlite-mutation-worker.runtime.js");
     // Coordination actor IDs remain unique even when the previous task retained failed cleanup.

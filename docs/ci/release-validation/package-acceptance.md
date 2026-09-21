@@ -69,6 +69,14 @@ different bytes; preserving published dist-tags alone does not isolate them.
 After those baseline commands, candidate installs keep using the verified
 candidate registry, including its exact-version dependencies.
 
+The `legacy-operator-state` and `msteams-polls` companion fixtures preserve the
+published archive for its package name/version across both registry phases.
+When the candidate companion has that same version, installation assertions
+require the retained published bytes. A different version selects and verifies
+the prepared candidate archive. This keeps same-version core update proof from
+simulating an npm republish; testing changed companion bytes requires a distinct
+companion version.
+
 Expanded release qualification requires the candidate's `YYYY.M.PATCH` base version
 to be at least the trusted workflow package's base version, ignoring prerelease
 suffixes for this comparison. It then reads immutable source-directory metadata for

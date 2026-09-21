@@ -448,7 +448,6 @@
   letter-spacing: 0;
   user-select: none;
 }
-
 .chat-divider__rule {
   display: flex;
   align-items: center;
@@ -506,31 +505,6 @@
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
-}
-
-.chat-divider__details-separator {
-  color: var(--muted);
-}
-
-.chat-divider__action {
-  padding: 0;
-  border: 0;
-  border-bottom: 1px solid currentColor;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  line-height: inherit;
-  white-space: nowrap;
-  cursor: var(--cursor-action);
-}
-
-.chat-divider__action:hover {
-  color: var(--muted-strong);
-}
-
-.chat-divider__action:focus-visible {
-  outline: 1px solid var(--muted-strong);
-  outline-offset: 3px;
 }
 
 .chat-notice {

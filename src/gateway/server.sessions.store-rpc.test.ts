@@ -23,8 +23,7 @@ import {
   getSessionsHandlers,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, defaultAgentWorkspace, openClient } =
-  setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
 type SessionPatchResponse = { ok: true; key: string; entry: Record<string, unknown> };
 
@@ -823,6 +822,10 @@ test("write-scoped operators manage chat organization but not admin session sett
     expect(reordered.payload?.groups.map((group) => group.name)).toEqual(["Someday", "Travel"]);
     expect(reordered.payload?.sectionOrder).toEqual(["work", "category:Travel", "ungrouped"]);
 
+    const defaultAgentWorkspace = expectDefined(
+      (await getGatewayConfigModule()).getRuntimeConfig().agents?.defaults?.workspace,
+      "configured default agent workspace",
+    );
     const canonicalDefaultAgentWorkspace = await fs.realpath(defaultAgentWorkspace);
     const defaultsUpdated = await rpcReq<{
       ok: true;
@@ -832,7 +835,7 @@ test("write-scoped operators manage chat organization but not admin session sett
       cwd: defaultAgentWorkspace,
       worktree: true,
     });
-    expect(defaultsUpdated.ok).toBe(true);
+    expect(defaultsUpdated.ok, JSON.stringify(defaultsUpdated)).toBe(true);
     expect(defaultsUpdated.payload?.defaults).toContainEqual({
       name: "Travel",
       cwd: canonicalDefaultAgentWorkspace,

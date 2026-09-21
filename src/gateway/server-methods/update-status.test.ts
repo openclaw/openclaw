@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as snapshots from "../../infra/sqlite-readonly-location.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -65,6 +66,29 @@ afterEach(async () => {
 });
 
 describe("update history RPCs", () => {
+  it("reads fresh status concurrently without copying the shared database", async () => {
+    const run = createUpdateRun({ trigger: "api" });
+    const backup = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationFromOwnedDatabase");
+    for (const respond of await Promise.all([
+      requestUpdateRead("update.status"),
+      requestUpdateRead("update.status"),
+    ])) {
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ activeRun: run, lastRun: run }),
+      );
+    }
+    const completed = finishUpdateRun(run.runId, { status: "succeeded" });
+    const respond = await requestUpdateRead("update.status");
+    expect(respond).toHaveBeenCalledWith(true, {
+      sentinel: null,
+      lastRun: completed,
+      updateAvailable: null,
+      effectiveChannel: "stable",
+    });
+    expect(backup).not.toHaveBeenCalled();
+  });
+
   it.each(["update.status", "update.runs.get"] as const)(
     "preserves readable history when reconciliation is refused through %s",
     async (method) => {

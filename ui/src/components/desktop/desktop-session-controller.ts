@@ -94,7 +94,11 @@ export class DesktopSessionController {
             }
             return;
           }
-          if (event.event === "presence" || event.event === "node.pair.resolved") {
+          if (
+            event.event === "presence" ||
+            event.event === "node.pair.resolved" ||
+            event.event === "config.changed"
+          ) {
             this.onInventoryChange();
             return;
           }

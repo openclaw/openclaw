@@ -176,6 +176,16 @@ export function execPrGhJson(args, options = {}, route = "read") {
 }
 
 function repositoryLocator(explicit, route, readOptions = () => ({})) {
+  const selected = explicit || process.env.GH_REPO;
+  const qualified =
+    /^(?:https:\/\/)?([A-Za-z0-9.-]+(?::[0-9]+)?)\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(
+      selected ?? "",
+    );
+  // A host-qualified locator already names the API target. Its ensuing REST
+  // read verifies the repository; another browse HEAD adds no authority.
+  if (qualified) {
+    return { host: qualified[1], name: qualified[2] };
+  }
   // gh browse shares PR commands' SmartBaseRepoFunc and preserves the configured
   // default and host. --no-browser only verifies it with REST HEAD and prints its URL.
   const value = execPrGh(
@@ -250,7 +260,10 @@ function readPr(repo, pr, fields, route, options = {}) {
   if (!/^[1-9][0-9]*$/.test(pr)) {
     throw new Error("Expected a positive PR number.");
   }
-  const record = api(repo, `repos/${repo.name}/pulls/${pr}`, route, false, options);
+  // These reads bind source acquisition and publication to the live PR head.
+  // Revalidate each observation through the relay, including both sides of a fetch.
+  const freshOptions = { ...options, revalidate: true };
+  const record = api(repo, `repos/${repo.name}/pulls/${pr}`, route, false, freshOptions);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("GitHub did not return one PR JSON object.");
   }
@@ -301,7 +314,7 @@ function readPr(repo, pr, fields, route, options = {}) {
   };
   if (fields.includes("files")) {
     result.files = pageItems(
-      api(repo, `repos/${repo.name}/pulls/${pr}/files?per_page=100`, "plain", true, options),
+      api(repo, `repos/${repo.name}/pulls/${pr}/files?per_page=100`, "plain", true, freshOptions),
     ).map((file) => ({
       path: file.filename,
       additions: file.additions,

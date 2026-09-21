@@ -596,6 +596,8 @@ it.each([
   "userProfiles.avatar.reconcile",
   "onboardingRecommendations.read",
   "workspace.snapshot",
+  "pluginBlob.lookup",
+  "pluginBlob.entries",
   "sandboxRegistry.get",
   "sandboxRegistry.runtimeIds",
   "updateRuns.get",
@@ -613,12 +615,16 @@ it.each([
             ? { type, profileId: selector }
             : type === "onboardingRecommendations.read"
               ? { type, configKey: selector }
-              : type === "workspace.snapshot"
-                ? { type, workspaceDir: selector }
-                : type === "sandboxRegistry.get"
-                  ? { type, containerName: selector }
-                  : { type, backendId: selector, scopeKey: selector };
-    const expected = { ...command };
+              : type === "pluginBlob.lookup"
+                ? { type, input: { pluginId: selector, namespace: selector, key: selector } }
+                : type === "pluginBlob.entries"
+                  ? { type, input: { pluginId: selector, namespace: selector } }
+                  : type === "workspace.snapshot"
+                    ? { type, workspaceDir: selector }
+                    : type === "sandboxRegistry.get"
+                      ? { type, containerName: selector }
+                      : { type, backendId: selector, scopeKey: selector };
+    const expected = structuredClone(command);
     const dispatch = createDeferredCore();
     const task = queueTask(dispatch.promise);
     const result = executeExistingOpenClawStateRead(options, command);
@@ -632,6 +638,12 @@ it.each([
       command.profileId = "different profile after admission";
     } else if (command.type === "onboardingRecommendations.read") {
       command.configKey = "different key after admission";
+    } else if (command.type === "pluginBlob.lookup" || command.type === "pluginBlob.entries") {
+      command.input.pluginId = "different plugin after admission";
+      command.input.namespace = "different namespace after admission";
+      if (command.type === "pluginBlob.lookup") {
+        command.input.key = "different key after admission";
+      }
     } else if (command.type === "sandboxRegistry.get") {
       command.containerName = "different container after admission";
     } else if (command.type === "sandboxRegistry.runtimeIds") {
@@ -650,24 +662,34 @@ it.each([
             ? { ok: true, type, sourceAdmitted: true, profile: undefined }
             : type === "onboardingRecommendations.read"
               ? { ok: true, type, sourceAdmitted: true, record: null }
-              : type === "sandboxRegistry.get"
-                ? { ok: true, type, sourceAdmitted: true, entry: null }
-                : type === "sandboxRegistry.runtimeIds"
-                  ? { ok: true, type, sourceAdmitted: true, runtimeIds: [] }
-                  : {
-                      ok: true,
-                      type,
-                      sourceAdmitted: true,
-                      snapshot: {
-                        identity: createWorkspaceStateIdentity(selector),
-                        setup: { version: 1 },
-                        setupExists: false,
-                      },
-                    };
+              : type === "pluginBlob.lookup"
+                ? { ok: true, type, sourceAdmitted: true, value: undefined }
+                : type === "pluginBlob.entries"
+                  ? { ok: true, type, sourceAdmitted: true, value: [] }
+                  : type === "sandboxRegistry.get"
+                    ? { ok: true, type, sourceAdmitted: true, entry: null }
+                    : type === "sandboxRegistry.runtimeIds"
+                      ? { ok: true, type, sourceAdmitted: true, runtimeIds: [] }
+                      : {
+                          ok: true,
+                          type,
+                          sourceAdmitted: true,
+                          snapshot: {
+                            identity: createWorkspaceStateIdentity(selector),
+                            setup: { version: 1 },
+                            setupExists: false,
+                          },
+                        };
     try {
       expect(Number.isSafeInteger(submitted.inputBytes)).toBe(true);
+      const selectorCount =
+        type === "pluginBlob.lookup"
+          ? 3
+          : type === "pluginBlob.entries" || type === "sandboxRegistry.runtimeIds"
+            ? 2
+            : 1;
       expect(submitted.inputBytes).toBeGreaterThanOrEqual(
-        Buffer.byteLength(selector) * (type === "sandboxRegistry.runtimeIds" ? 2 : 1),
+        Buffer.byteLength(selector) * selectorCount,
       );
       dispatch.resolve();
       const request = await task.captured;

@@ -15,6 +15,30 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
 
+const auditMaintenance = vi.hoisted(() => ({
+  gate: undefined as { entered: () => void; release: Promise<void> } | undefined,
+}));
+
+vi.mock("../audit/audit-event-writer.js", async (importOriginal) => {
+  const { createAuditEventWriter } =
+    await importOriginal<typeof import("../audit/audit-event-writer.js")>();
+  return {
+    createAuditEventWriter: (...args: Parameters<typeof createAuditEventWriter>) => {
+      const writer = createAuditEventWriter(...args);
+      const gate = auditMaintenance.gate;
+      return gate
+        ? {
+            ...writer,
+            ready: writer.ready.then(async () => {
+              gate.entered();
+              await gate.release;
+            }),
+          }
+        : writer;
+    },
+  };
+});
+
 it.each(["static catalog", "synthetic auth"] as const)(
   "Gateway shutdown joins degraded %s acquisition and registered plugin cleanup outcomes",
   async (phase) => {
@@ -203,3 +227,49 @@ it.each(["static catalog", "synthetic auth"] as const)(
     }
   },
 );
+
+it("joins initial audit maintenance before metadata fixture callers replace timers", async () => {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const gatewayReady = createDeferredCore();
+  auditMaintenance.gate = { entered: () => entered.resolve(), release: release.promise };
+  const fixture = await createGatewayMetadataCloseFixture("audit-ready-before-clock");
+  const serverModule = await import("./server-start.js");
+  const start = serverModule.startGatewayServerCore;
+  const nativeStartup = vi
+    .spyOn(serverModule, "startGatewayServerCore")
+    .mockImplementation(async (...args) => {
+      const server = await start(...args);
+      await server.startupSettled;
+      gatewayReady.resolve();
+      return server;
+    });
+  let starting: ReturnType<typeof fixture.start> | undefined;
+  let returned = false;
+  try {
+    const port = await fixture.reservePort();
+    starting = fixture.start(port).then((server) => {
+      returned = true;
+      return server;
+    });
+    await Promise.race([
+      Promise.all([entered.promise, gatewayReady.promise]),
+      starting.then(() => {
+        throw new Error("Gateway fixture returned before audit maintenance readiness");
+      }),
+    ]);
+    await nextTurn();
+    expect(returned).toBe(false);
+    release.resolve();
+    await starting;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+    release.resolve();
+    await Promise.allSettled([starting]);
+    auditMaintenance.gate = undefined;
+    nativeStartup.mockRestore();
+    await fixture.cleanup();
+  }
+});

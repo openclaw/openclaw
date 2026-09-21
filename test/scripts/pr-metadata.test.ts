@@ -23,7 +23,16 @@ type Fixture = {
   finalPatch?: Record<string, unknown>;
   failure?: "empty" | "exit" | "non-json" | "null" | "quota" | "forbidden";
   failureCount?: number;
-  failureTarget?: "pull" | "reread" | "files" | "user" | "permission" | "browse" | "checks";
+  failureTarget?:
+    | "pull"
+    | "reread"
+    | "files"
+    | "user"
+    | "permission"
+    | "browse"
+    | "checks"
+    | "repository";
+  cacheUntilRevalidated?: boolean;
   notify?: boolean;
   ghRepo?: string;
   ghHost?: string;
@@ -84,8 +93,11 @@ const fixture = JSON.parse(process.env.FAKE_GH_FIXTURE);
 fs.appendFileSync(path.join(root, "trace"), JSON.stringify(args) + "\\n");
 const out = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 const defaultHost = process.env.GH_HOST || fixture.configuredHost || "github.com";
-const qualifyRepository = (repository) => repository.startsWith("https://") ? repository
-  : "https://" + (repository.split("/").length === 3 ? repository : defaultHost + "/" + repository);
+const qualifyRepository = (repository) => {
+  repository = repository.replace(/\\.git$/, "");
+  return repository.startsWith("https://") ? repository
+    : "https://" + (repository.split("/").length === 3 ? repository : defaultHost + "/" + repository);
+};
 if (args[0] === "browse" && args[1] === "--no-browser") {
   if (fixture.failure === "quota" && fixture.failureTarget === "browse") {
     console.error("HTTP 403: API rate limit exceeded");
@@ -136,7 +148,7 @@ const isPull = endpoint === "repos/base-owner/base-repo/pulls/42";
 let count = Number(fs.readFileSync(path.join(root,"count"),"utf8"));
 if (isPull) fs.writeFileSync(path.join(root,"count"), String(++count));
 const failureTarget = fixture.failureTarget || "pull";
-const fail = failureTarget === "pull" ? isPull : failureTarget === "reread" ? isPull && count > 1 : failureTarget === "user" ? endpoint === "user" : failureTarget === "permission" ? endpoint.includes("/collaborators/") : endpoint.includes("/files?");
+const fail = failureTarget === "pull" ? isPull : failureTarget === "reread" ? isPull && count > 1 : failureTarget === "user" ? endpoint === "user" : failureTarget === "permission" ? endpoint.includes("/collaborators/") : failureTarget === "repository" ? endpoint === "repos/base-owner/base-repo" : endpoint.includes("/files?");
 if (fixture.failure && fail && (fixture.failureCount === undefined || count <= fixture.failureCount)) {
   if (fixture.failure === "forbidden") {
     console.error("HTTP 403: Resource not accessible by integration; secret-response-must-not-escape");
@@ -162,7 +174,8 @@ if (endpoint === "repos/base-owner/base-repo") {
     base:{sha:"${base}",ref:"main",repo:{id:1}},
     head:{sha:"${head}",ref:"topic",repo:{id:2,name:"fork-repo",full_name:"fork-owner/fork-repo",html_url:"https://"+apiHost+"/fork-owner/fork-repo",owner:{login:"fork-owner"}}},
     user:{login:"contributor"},changed_files:fixture.changedFiles === undefined ? 101 : fixture.changedFiles};
-  out({...record,...(count === 1 ? fixture.initialPatch : fixture.finalPatch)});
+  const stale = fixture.cacheUntilRevalidated && !args.includes("Cache-Control: max-age=0");
+  out({...record,...(count === 1 || stale ? fixture.initialPatch : fixture.finalPatch)});
 } else if (endpoint.includes("/files?")) {
   if (!args.includes("--paginate") || !args.includes("--slurp")) throw new Error("Files must be paginated");
   const count = fixture.changedFiles === undefined ? 101 : fixture.changedFiles || 0;
@@ -360,14 +373,14 @@ describe("PR metadata through REST", () => {
       ghRepo: "base-owner/base-repo",
       command:
         "pr_gh_plain repo view --json url --repo https://github.enterprise.invalid/base-owner/base-repo",
-      failureTarget: "browse",
+      failureTarget: "repository",
       host: "github.enterprise.invalid",
     },
     {
       name: "qualified GH_REPO",
       ghRepo: "github.enterprise.invalid/base-owner/base-repo",
       command: "pr_gh_plain repo view --json url",
-      failureTarget: "browse",
+      failureTarget: "repository",
       host: "github.enterprise.invalid",
     },
     {
@@ -467,8 +480,6 @@ describe("PR metadata through REST", () => {
     expect(result.calls.filter((args) => args[0] === "browse")).toEqual([
       ["browse", "--no-browser"],
       ["browse", "--no-browser"],
-      ["browse", "--no-browser"],
-      ["browse", "--no-browser"],
     ]);
     expect(result.calls).toContainEqual([
       "pr",
@@ -480,23 +491,29 @@ describe("PR metadata through REST", () => {
       "https://github.com/base-owner/base-repo",
     ]);
   });
-  it.each(["environment", "explicit"])(
+  it.each(["environment", "explicit", "explicit-git-suffix"])(
     "preserves the %s repository override before gh's default",
     (mode) => {
-      const explicit = mode === "explicit" ? " --repo=https://github.com/base-owner/base-repo" : "";
+      const explicit =
+        mode === "environment"
+          ? ""
+          : ` --repo=https://github.com/base-owner/base-repo${mode === "explicit-git-suffix" ? ".git" : ""}`;
       const result = readPrMetadata(
         {
-          ghRepo: mode === "explicit" ? "ignored/repo" : "base-owner/base-repo",
+          ghRepo: explicit ? "ignored/repo" : "base-owner/base-repo",
           defaultRepoURL: "https://github.com/ignored/default",
         },
         `pr_gh pr view 42 --json number,headRefOid${explicit}; pr_gh_plain pr edit 42 --add-assignee contributor${explicit}`,
       );
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({ number: 42, headRefOid: head });
-      expect(result.calls).toContainEqual(
-        mode === "explicit"
-          ? ["browse", "--no-browser", "--repo", "https://github.com/base-owner/base-repo"]
-          : ["browse", "--no-browser"],
+      expect(result.calls.filter((args) => args[0] === "browse")).toEqual(
+        explicit
+          ? []
+          : [
+              ["browse", "--no-browser"],
+              ["browse", "--no-browser"],
+            ],
       );
     },
   );
@@ -744,8 +761,11 @@ describe("PR metadata through REST", () => {
     );
   });
 
-  it("rejects files collected while the PR head moves", () => {
-    const result = readPrMetadata({ finalPatch: { head: { sha: "b".repeat(40), ref: "topic" } } });
+  it("revalidates both observations and rejects files collected while the PR head moves", () => {
+    const result = readPrMetadata({
+      cacheUntilRevalidated: true,
+      finalPatch: { head: { sha: "b".repeat(40), ref: "topic" } },
+    });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("PR head changed while collecting file metadata");
   });

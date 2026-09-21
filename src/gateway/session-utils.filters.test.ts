@@ -51,6 +51,66 @@ it("accepts the metadata query contract and rejects mistyped selectors", () => {
   }
 });
 
+it("keeps system provenance and named conversations distinct in projected lists", async () => {
+  const cases: { key: string; fields: Partial<SessionEntry>; visible: boolean }[] = [
+    {
+      key: "agent:main:system",
+      fields: { createdActor: { type: "system" }, label: "Named probe" },
+      visible: false,
+    },
+    {
+      key: "agent:main:human",
+      fields: { createdVia: "run", createdActor: { type: "human", source: "unknown" } },
+      visible: true,
+    },
+    {
+      key: "agent:main:label",
+      fields: { createdVia: "run", label: "Operator label" },
+      visible: true,
+    },
+    {
+      key: "agent:main:display-name",
+      fields: { createdVia: "internal", displayName: "Operator title" },
+      visible: true,
+    },
+    {
+      key: "agent:main:subject",
+      fields: { createdVia: "run", subject: "Conversation subject" },
+      visible: true,
+    },
+    {
+      key: "agent:main:whitespace",
+      fields: { createdVia: "internal", label: " ", displayName: "\t", subject: "\n" },
+      visible: false,
+    },
+    { key: "agent:main:legacy", fields: {}, visible: true },
+    {
+      key: "agent:main:cron:nightly",
+      fields: { createdVia: "internal", createdActor: { type: "system" } },
+      visible: true,
+    },
+  ];
+  const store = Object.fromEntries(
+    cases.map(({ key, fields }, index) => [
+      key,
+      entry({ sessionId: key, updatedAt: cases.length - index, ...fields }),
+    ]),
+  );
+  for (const excludeSystem of [true, false, undefined]) {
+    const result = await listSessionFixture({
+      cfg,
+      storePath,
+      store,
+      opts: { excludeSystem },
+    });
+    const expected = cases
+      .filter(({ visible }) => excludeSystem !== true || visible)
+      .map(({ key }) => key);
+    expect(result.sessions.map((row) => row.key)).toEqual(expected);
+    expect(result.totalCount).toBe(expected.length);
+  }
+});
+
 it.each([
   { opts: { projectId: "project-one" }, matches: ["selected", "workspace-root"] },
   { opts: { workspaceDir: "/workspace/task" }, matches: ["selected"] },

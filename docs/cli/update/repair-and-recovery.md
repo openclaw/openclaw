@@ -242,6 +242,17 @@ successfully when required checks pass. Failed required Doctor execution,
 invalid configuration or state, ownership errors, and failed required readiness
 checks still exit nonzero.
 
+After post-update or finalization work fails and its child processes settle,
+OpenClaw probes the installed Gateway using the normal startup and readiness
+budget. Update history and failure reports record the observed serving version
+and readiness, including for a foreground Gateway. A failed finalization step
+can therefore report **verified serving** while retaining its original failure
+and repair guidance. The observation does not restart the Gateway or grant
+maintenance authority. Failed probes retain their specific diagnostic; a
+Gateway that is still starting keeps that outcome instead of being restarted.
+If command cleanup remains uncertain, the run stays open and retains its recovery
+artifacts instead of publishing completion or starting another repair.
+
 Doctor repair uses the same enabled-plugin and default-check selection as
 ordinary Doctor lint. Opt-in checks, including the managed Codex version probe,
 do not run during routine finalization. Explicit candidate checks still run

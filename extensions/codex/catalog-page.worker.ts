@@ -1,4 +1,4 @@
-import { serveWorkerTasks } from "openclaw/plugin-sdk/process-runtime";
+import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import {
   createCodexCatalogDecoder,
   type CodexCatalogDecodeInput,

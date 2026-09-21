@@ -17,7 +17,8 @@ A pasted ref is context, not permission to publish or expand the task.
 - **Fix only:** investigate, repair locally, and validate. Publishing still
   requires ship/land or equivalent scoped authority.
 - **Land/ship or autonomous repair:** finish the authorized scope through current
-  source proof, review, exact-head CI, native merge, and remote verification.
+  source proof, review, native auto-merge handoff, and remote verification.
+  GitHub waits for required CI; an accepted pending request ends active polling.
   Preserve contributor credit and unrelated work. Routine steps need no repeated
   permission; security, schema, product, release, and other root gates remain.
 - **Queue/discovery:** read [triage](references/triage.md). Batch live reads and

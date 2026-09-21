@@ -16,6 +16,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
+import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import { WorkerRunnerCapacityError, WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import {
@@ -400,7 +401,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             assertRunCurrent: remoteExec ? assertRunCurrent : assertAdmissionCurrent,
           });
         } catch (error) {
-          if (error instanceof StaleWorkerBuildError) {
+          if (
+            error instanceof StaleWorkerBuildError ||
+            error instanceof WorkerRuntimeRefreshPendingError
+          ) {
             const canRecoverBuild =
               !handedOff &&
               options.placements.validateTurnClaim(turnClaim) &&

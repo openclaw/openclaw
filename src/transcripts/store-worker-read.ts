@@ -2,7 +2,9 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
+import { createPreparedTranscriptDateReader } from "./store-date-preparation.js";
 import {
+  queryTranscriptReadEntries,
   readLatestTranscriptEntry,
   readStoredTranscriptNotes,
   readTranscriptEntry,
@@ -36,6 +38,15 @@ export function executeTranscriptRead(
   const database = target.database.db;
   try {
     switch (command.type) {
+      case "transcripts.readEntries":
+        return {
+          ok: true,
+          value: queryTranscriptReadEntries(
+            database,
+            command.input.params,
+            createPreparedTranscriptDateReader(),
+          ),
+        };
       case "transcripts.summarySnapshot":
         return {
           ok: true,

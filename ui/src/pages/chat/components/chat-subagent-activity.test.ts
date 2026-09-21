@@ -67,9 +67,9 @@ function renderStatusRow(overrides: Partial<BackgroundTasksProps>) {
   return container;
 }
 
-function createHost(task: TaskSummary) {
+function createHost(...tasks: TaskSummary[]) {
   const requestUpdate = vi.fn();
-  const request = vi.fn(() => Promise.resolve({ tasks: [task] }));
+  const request = vi.fn(() => Promise.resolve({ tasks }));
   const host: BackgroundTasksHost = {
     sessionKey: "agent:main:current",
     client: { request } as unknown as GatewayBrowserClient,
@@ -280,9 +280,8 @@ describe("subagent activity rows", () => {
       expect(row?.querySelector(".chat-subagent-activity__label")?.textContent).toBe(label);
       expect(row?.textContent?.replace(/\s+/g, " ").trim()).toBe(`${label} Checking spacing`);
       expect(row?.querySelector(".chat-reading-indicator") !== null).toBe(moving);
-      if (warning) {
-        expect(row?.querySelector(".chat-subagent-activity__badge")).not.toBeNull();
-      }
+      const hasBadge = warning || ["completed", "failed", "timed_out"].includes(task.status);
+      expect(row?.querySelector(".chat-subagent-activity__badge") !== null).toBe(hasBadge);
       expect(container.querySelector("openclaw-tooltip")?.content).toBe(
         `${label}\n${description}\nChecking spacing`,
       );
@@ -360,10 +359,10 @@ describe("subagent activity rows", () => {
     });
 
     expect(subagentActivity.rows.map((task) => task.id)).toEqual([
-      "current-subagent",
       "recent-subagent",
+      "current-subagent",
     ]);
-    expect([...subagentActivity.taskIds]).toEqual(["current-subagent", "recent-subagent"]);
+    expect(subagentActivity.taskIds).toEqual(new Set(["recent-subagent", "current-subagent"]));
 
     const container = renderStatusRow({
       tasks: [current, recent, otherRuntime],
@@ -414,43 +413,124 @@ describe("subagent activity rows", () => {
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });
 
-  it.each([
-    [11_000, 2_000],
-    ["1970-01-01T00:00:11.000Z", "1970-01-01T00:00:02.000Z"],
-    ["1970-01-01T00:00:11.000Z", 2_000],
-    [11_000, "1970-01-01T00:00:02.000Z"],
-  ] as const)(
-    "keeps the most recently active child in the visible five when its lifecycle is older (%s, %s)",
-    (freshActivityAt, quietActivityAt) => {
+  it.each([false, true])(
+    "keeps creation order through activity and wait changes (ISO dates: %s)",
+    async (isoDates) => {
       const tasks = Array.from({ length: 6 }, (_, index) =>
         makeTask({
           id: `running-${index}`,
-          updatedAt: 10_000 - index * 1_000,
-          execution: {
-            state: "running",
-            lastActivityAt: index === 5 ? freshActivityAt : quietActivityAt,
-          },
+          createdAt: isoDates ? new Date(1_000 + index).toISOString() : 1_000 + index,
+          updatedAt: 10_000 - index,
+          status: index === 2 ? "queued" : "running",
         }),
       );
-      const subagentActivity = deriveSubagentActivity({
-        tasks,
-        sessionKey: "agent:main:current",
-        terminalObservedAtByTask: new Map(),
-        canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
-        now: 20_000,
-      });
-      const container = renderStatusRow({ tasks, subagentActivity });
-
-      expect(
+      const { host } = createHost(...tasks.toReversed());
+      createBackgroundTasksProps(host);
+      await flushAsync();
+      const container = document.createElement("div");
+      document.body.append(container);
+      const renderCurrent = () =>
+        render(
+          html`${renderBackgroundTasksStatusRow(createBackgroundTasksProps(host))}`,
+          container,
+        );
+      const rowIds = () =>
         Array.from(container.querySelectorAll("[data-subagent-task-id]"), (row) =>
           row.getAttribute("data-subagent-task-id"),
-        ),
-      ).toEqual(["running-5", "running-0", "running-1", "running-2", "running-3"]);
+        );
+      const expected = tasks.slice(0, 5).map((task) => task.id);
+      renderCurrent();
+      expect(rowIds()).toEqual(expected);
+      const firstRow = container.querySelector("[data-subagent-task-id]");
+      for (const index of [5, 2, 1]) {
+        const task = tasks[index];
+        handleBackgroundTasksEvent(host, {
+          action: "upserted",
+          task: {
+            ...task,
+            status: "running",
+            updatedAt: 20_000 + index,
+            execution: {
+              state: "waiting",
+              lastActivityAt: 30_000 + index,
+              wait: { kind: "approval" },
+            },
+            lastActivity: "Waiting for approval",
+          },
+        });
+        renderCurrent();
+        expect(rowIds()).toEqual(expected);
+        expect(container.querySelector("[data-subagent-task-id]")).toBe(firstRow);
+      }
       expect(
         container.querySelector(".chat-subagent-activity__overflow")?.textContent?.trim(),
       ).toBe("+1 more subagents");
     },
   );
+
+  it.each(["completed", "failed", "cancelled", "timed_out"] as const)(
+    "promotes a %s result once without letting later delivery updates reorder it",
+    async (status) => {
+      const tasks = Array.from({ length: 3 }, (_, index) =>
+        makeTask({ id: String(index), createdAt: 1_000 + index, updatedAt: 2_000 + index }),
+      );
+      const { host } = createHost(...tasks);
+      createBackgroundTasksProps(host);
+      await flushAsync();
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(100_000);
+      const ids = () =>
+        createBackgroundTasksProps(host).subagentActivity.rows.map((task) => task.id);
+      const finishedFirst = { ...tasks[1], status, endedAt: 100_000, updatedAt: 100_000 };
+      handleBackgroundTasksEvent(host, { action: "upserted", task: finishedFirst });
+      expect(ids()).toEqual(["1", "0", "2"]);
+      vi.advanceTimersByTime(1_000);
+      handleBackgroundTasksEvent(host, {
+        action: "upserted",
+        task: { ...tasks[2], status: "completed", endedAt: 101_000, updatedAt: 101_000 },
+      });
+      expect(ids()).toEqual(["2", "1", "0"]);
+      handleBackgroundTasksEvent(host, {
+        action: "upserted",
+        task: { ...finishedFirst, updatedAt: 102_000, deliveryStatus: "delivered" },
+      });
+      expect(ids()).toEqual(["2", "1", "0"]);
+      vi.advanceTimersByTime(TERMINAL_RETENTION_MS - 1_000);
+      expect(ids()).toEqual(["2", "0"]);
+      vi.advanceTimersByTime(1_000);
+      expect(ids()).toEqual(["0"]);
+    },
+  );
+
+  it("keeps ongoing work visible during a completion burst and counts every overflow row", () => {
+    const active = Array.from({ length: 6 }, (_, index) =>
+      makeTask({ id: `active-${index}`, createdAt: 1_000 + index }),
+    );
+    const finished = Array.from({ length: 55 }, (_, index) =>
+      makeTask({
+        id: `finished-${index}`,
+        status: "completed",
+        endedAt: 90_000 + index,
+        updatedAt: 100_000 - index,
+      }),
+    );
+    const presentation = deriveSubagentActivity({
+      tasks: [...active, ...finished],
+      sessionKey: "agent:main:current",
+      terminalObservedAtByTask: new Map(),
+      canonicalizeSessionKey: (key) => key ?? "",
+      now: 100_000,
+    });
+    expect(presentation.rows.map((task) => task.id)).toEqual([
+      "finished-54",
+      "active-0",
+      "active-1",
+      "active-2",
+      "active-3",
+    ]);
+    expect(presentation.overflowCount).toBe(56);
+    expect(presentation.taskIds.size).toBe(61);
+  });
 
   it("retires live text but retains diff stats through terminal activity", async () => {
     const running = makeTask({

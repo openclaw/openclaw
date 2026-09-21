@@ -14,6 +14,7 @@ import {
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,7 +24,7 @@ const fixture = () => createMainRefreshFixture(tempDirs.make("openclaw-pr-main-r
 function recoverFixtureLock(f: ReturnType<typeof fixture>, oid: string) {
   const pgid = Number(/^pgid=(\d+)$/m.exec(f.git(f.canonical, "cat-file", "blob", oid))?.[1]);
   expect(pgid).toBeGreaterThan(1);
-  expect(() => process.kill(-pgid, 0)).toThrowError(expect.objectContaining({ code: "ESRCH" }));
+  assertFixtureProcessGroupStopped(pgid);
   const result = f.run(["lock-recover", "42", oid, "--confirmed-no-running-tools"]);
   expect(result.status, result.stdout + result.stderr).toBe(0);
   expect(

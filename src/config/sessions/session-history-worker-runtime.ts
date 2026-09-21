@@ -10,6 +10,7 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.js";
+import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
 import {
   resolveSqliteTranscriptReadScope,
   resolveSqliteScope,
@@ -89,10 +90,14 @@ export function readSessionHistoryPageInWorker(
   request: Extract<SessionHistoryWorkerRequest, { kind: "http" }>,
   signal?: AbortSignal,
 ): Promise<SessionHistorySnapshot>;
+export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "delta" }>,
+  signal?: AbortSignal,
+): Promise<SessionTranscriptDisplayDeltaResult>;
 export async function readSessionHistoryPageInWorker(
   request: SessionHistoryWorkerRequest,
   signal?: AbortSignal,
-): Promise<ChatHistoryPage | SessionHistorySnapshot> {
+): Promise<ChatHistoryPage | SessionHistorySnapshot | SessionTranscriptDisplayDeltaResult> {
   signal?.throwIfAborted();
   const scope: SessionTranscriptReadScope =
     request.kind === "rpc"
@@ -188,7 +193,11 @@ export async function readSessionHistoryPageInWorker(
     if (result.kind !== request.kind) {
       throw new Error("Session history worker returned the wrong page type");
     }
-    return result.kind === "rpc" ? result.page : result.snapshot;
+    return result.kind === "rpc"
+      ? result.page
+      : result.kind === "http"
+        ? result.snapshot
+        : result.delta;
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       startSessionTranscriptIndexReconcile({

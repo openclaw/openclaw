@@ -91,6 +91,11 @@ export function isGraphqlQuotaExhausted(error) {
   if (body) {
     return primary(body.message);
   }
+  // PR commands render GraphQL errors as one comma-separated line, without JSON.
+  const rendered = /^GraphQL: ([^\r\n]+)\s*$/i.exec(stderr);
+  if (rendered) {
+    return rendered[1].split(", ").every(primary);
+  }
   // gh emits this exact prefix; arbitrary error messages and supplemental quota
   // probes cannot establish which credential or budget rejected the request.
   return /^gh: API rate limit (?:already )?exceeded[^\r\n]*\s*$/i.test(stderr);

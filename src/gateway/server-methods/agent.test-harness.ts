@@ -1087,12 +1087,10 @@ export function applyGatewaySubagentRegistryTestDeps(
   overrides?: Parameters<typeof setSubagentRegistryDepsForTest>[0],
 ) {
   setSubagentRegistryDepsForTest({
-    // Direct handler tests have no live Gateway owner. Keep registry polling
-    // deterministic so a real connection timeout cannot cross test boundaries.
+    // Registration alone does not complete a child. Completion fixtures supply
+    // their own terminal observation before exercising cleanup or announcement.
     callGateway: (async () => ({
-      status: "ok",
-      startedAt: Date.now(),
-      endedAt: Date.now(),
+      status: "pending",
     })) as SubagentRegistryDeps["callGateway"],
     loadAgentRuntimePluginRegistryHandle: () => undefined,
     // Handler fixtures own no browser sessions; lifecycle cleanup has separate coverage.

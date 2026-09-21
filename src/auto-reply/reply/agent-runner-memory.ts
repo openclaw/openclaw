@@ -70,6 +70,7 @@ import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-sess
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
+import { isRenderablePayload } from "../reply-payload.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -91,7 +92,6 @@ import { resolveContextTokens } from "./model-selection-context.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
-import { isRenderablePayload } from "./reply-payloads-base.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 

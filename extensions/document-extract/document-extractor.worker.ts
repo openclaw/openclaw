@@ -2,7 +2,7 @@ import type {
   DocumentExtractionRequest,
   DocumentExtractionResult,
 } from "openclaw/plugin-sdk/document-extractor";
-import { serveWorkerTasks } from "openclaw/plugin-sdk/process-runtime";
+import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import { extractPdfContent } from "./document-extractor.runtime.js";
 
 export type DocumentExtractorWorkerRequest = Omit<

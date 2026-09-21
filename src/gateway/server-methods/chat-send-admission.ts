@@ -23,6 +23,10 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
+  isProgressCardRefreshInputProvenance,
+  progressCardRefreshRunProjection,
+} from "../../sessions/input-provenance.js";
+import {
   beginSessionWorkAdmission,
   interruptSessionWorkAdmissions,
   isCompetingSessionWorkAdmissionActive,
@@ -78,6 +82,7 @@ export async function admitChatSend(params: {
   params.assertCurrent?.();
   const { request, session, respond, context, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind } = request;
+  const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
   const {
     rawSessionKey,
     sessionLoadKey,
@@ -390,6 +395,7 @@ export async function admitChatSend(params: {
       isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
       kind: "chat-send",
       turnKind,
+      ...(progressRefresh ? { controlUiVisible: false, projectSessionActive: false } : {}),
       lifecycleGeneration,
     });
   };
@@ -614,7 +620,8 @@ export async function admitChatSend(params: {
       !acquiredGatewayWorkAdmission.isActive() ||
       !isChatAbortControllerEntryAbortable(sessionBinding) ||
       sessionBinding.registrationCleanupRequested ||
-      sessionBinding.projectSessionActive === false ||
+      // Refresh starts hidden; its presentation bit is not admission liveness.
+      (sessionBinding.projectSessionActive === false && !progressRefresh) ||
       sessionBinding.projectSessionTerminalPending ||
       sessionBinding.projectSessionTerminalPersisted
     ) {
@@ -664,6 +671,7 @@ export async function admitChatSend(params: {
     sessionKey,
     sessionId: admittedSessionId,
     lifecycleGeneration,
+    ...progressCardRefreshRunProjection(request.systemInputProvenance),
   });
 
   return {

@@ -33,6 +33,9 @@ full check even when runtime proof remains in memory.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway
 after they finish.
+Native execution workers can also borrow retained host proof after the host handle
+closes or is evicted. The receiving opener rechecks the physical file identity and
+shared revocation cell; a closed handle alone does not discard valid proof.
 
 Cached opens, including later opens after startup, queue checks in the existing
 Gateway verifier. Background success is logged; only the full-check lease owner

@@ -106,7 +106,7 @@ vi.mock("../src/config.js", async (importOriginal) => {
 });
 
 import { resolveFaceTimeConfig } from "../src/config.js";
-export { FaceTimeHelperActionError } from "../src/helper-rpc.js";
+export { FaceTimeHelperActionError } from "../src/helper-results.js";
 import { createFaceTimeRuntime } from "../src/runtime.js";
 
 export function completeAction(owner: Record<string, unknown>) {
@@ -280,9 +280,6 @@ export function createTalkDriver(params: {
     suspendMedia: vi.fn(async () => {
       realtimeActive = false;
     }),
-    failClosed: vi.fn(async () => {
-      realtimeActive = false;
-    }),
     close: vi.fn(async () => {
       realtimeActive = false;
     }),
@@ -301,8 +298,16 @@ export function resetRuntimeTestState() {
   mocks.helper.connectedSockets = 2;
   mocks.helper.connectedHelperBundles = ["com.apple.FaceTime", "com.apple.mobilephone"];
   mocks.carrierProcessAlive = false;
+  const exitedCarrierPids = new Set<string>();
   mocks.systemRun.mockImplementation(async (argv: string[]) => {
+    const pid = argv[2];
+    if (!pid) {
+      throw new Error("Expected a carrier process ID");
+    }
     if (argv[0] === "/bin/ps") {
+      if (exitedCarrierPids.has(pid)) {
+        return { code: 1, stdout: "", stderr: "" };
+      }
       return argv.includes("lstart=")
         ? { code: 0, stdout: "Tue Nov 14 22:13:20 2023\n", stderr: "" }
         : {
@@ -311,8 +316,8 @@ export function resetRuntimeTestState() {
             stderr: "",
           };
     }
-    if (argv[0] === "/bin/kill" && argv[1] === "-0") {
-      return { code: mocks.carrierProcessAlive ? 0 : 1, stdout: "", stderr: "" };
+    if (argv[0] === "/bin/kill" && !mocks.carrierProcessAlive) {
+      exitedCarrierPids.add(pid);
     }
     return { code: 0, stdout: "", stderr: "" };
   });

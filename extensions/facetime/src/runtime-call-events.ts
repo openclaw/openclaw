@@ -117,6 +117,19 @@ export function createFaceTimeCallEventHandler(params: {
     }
     call.carrierCallUUIDs.add(String(event.data.call_uuid));
   };
+  const retainPendingDial = (call: ActiveFaceTimeCall, pending: PendingFaceTimeDial) => {
+    params.calls.retainAlias(call, pending.dialID);
+    if (pending.proxyIdentifier) {
+      params.calls.retainAlias(call, pending.proxyIdentifier);
+    }
+    for (const alias of pending.callUUIDAliases ?? []) {
+      params.calls.retainAlias(call, alias);
+      call.carrierCallUUIDs.add(alias);
+    }
+    for (const carrierPeer of params.outboundCarrierPeers.values()) {
+      call.carrierPeers.set(carrierPeer.processId, carrierPeer);
+    }
+  };
   const answerIncoming = async (
     event: FaceTimeCallStatusEvent,
     owner: AuthenticatedFaceTimeOwner,
@@ -181,6 +194,7 @@ export function createFaceTimeCallEventHandler(params: {
     event: FaceTimeCallStatusEvent,
     owner?: AuthenticatedFaceTimeOwner,
     peer?: FaceTimeHelperPeer,
+    pending?: PendingFaceTimeDial,
   ) => {
     const callUUID = readCallUUID(event);
     if (params.isDriverInstallPending()) {
@@ -207,6 +221,9 @@ export function createFaceTimeCallEventHandler(params: {
       params.calls.create(call);
       retainAliases(call, event);
     }
+    if (pending) {
+      retainPendingDial(call, pending);
+    }
     if (peer) {
       call.carrierPeers.set(peer.processId, peer);
     }
@@ -232,6 +249,7 @@ export function createFaceTimeCallEventHandler(params: {
     }
     const callUUID = readCallUUID(event);
     const existingCall = resolveEventCall(event);
+    const pending = params.getPendingDial();
     if (existingCall) {
       if (peer) {
         existingCall.carrierPeers.set(peer.processId, peer);
@@ -247,6 +265,15 @@ export function createFaceTimeCallEventHandler(params: {
       await params.callControl.attemptCarrierHangup(existingCall, "transport-verification-lost");
       return;
     }
+    if (
+      pending &&
+      !existingCall &&
+      event.data.is_outgoing !== true &&
+      (isIncomingRingingCall(event) || isActiveCall(event))
+    ) {
+      params.logger.info("[facetime] ignored incoming call; an outbound FaceTime call is pending");
+      return;
+    }
     if (isIncomingRingingCall(event)) {
       const owner = resolveAuthorizedFaceTimeOwner({
         event,
@@ -259,7 +286,6 @@ export function createFaceTimeCallEventHandler(params: {
       }
       return;
     }
-    const pending = params.getPendingDial();
     if (isOutgoingRingingCall(event)) {
       if (verifiedTransport && pending && doesFaceTimeCallMatchPendingDial({ event, pending })) {
         const owner = await authorizePendingDial(event, pending);
@@ -278,13 +304,7 @@ export function createFaceTimeCallEventHandler(params: {
           updateCallStatus(ringingCall, event);
           params.calls.create(ringingCall);
           retainAliases(ringingCall, event);
-          params.calls.retainAlias(ringingCall, pending.dialID);
-          if (pending.proxyIdentifier) {
-            params.calls.retainAlias(ringingCall, pending.proxyIdentifier);
-          }
-          for (const carrierPeer of params.outboundCarrierPeers.values()) {
-            ringingCall.carrierPeers.set(carrierPeer.processId, carrierPeer);
-          }
+          retainPendingDial(ringingCall, pending);
         }
         if (ringingCall) {
           try {
@@ -328,30 +348,20 @@ export function createFaceTimeCallEventHandler(params: {
       if (authorizedPending && (!owner || !canPromotePendingDial(authorizedPending))) {
         return;
       }
-      if (authorizedPending && params.calls.active) {
-        params.calls.retainAlias(params.calls.active, callUUID);
+      const pendingCall = authorizedPending && params.calls.get(authorizedPending.dialID);
+      if (pendingCall) {
+        params.calls.retainAlias(pendingCall, callUUID);
       }
       if (!resolveEventCall(event) && !owner) {
         params.logger.info("[facetime] ignored unauthorized active FaceTime call");
         return;
       }
-      await activate(event, owner, peer);
+      await activate(event, owner, peer, authorizedPending);
       if (
         authorizedPending &&
         canPromotePendingDial(authorizedPending) &&
         params.calls.has(callUUID)
       ) {
-        const activeCall = resolveEventCall(event);
-        if (activeCall) {
-          params.calls.retainAlias(activeCall, authorizedPending.dialID);
-          if (authorizedPending.proxyIdentifier) {
-            params.calls.retainAlias(activeCall, authorizedPending.proxyIdentifier);
-          }
-          for (const alias of authorizedPending.callUUIDAliases ?? []) {
-            params.calls.retainAlias(activeCall, alias);
-            activeCall.carrierCallUUIDs.add(alias);
-          }
-        }
         params.clearPendingDial();
       }
       return;

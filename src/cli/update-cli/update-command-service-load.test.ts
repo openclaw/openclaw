@@ -1,7 +1,13 @@
 import { expect, it } from "vitest";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { formatCliProcessFailure, runCliProcessChild } from "../cli-process-child.test-helpers.js";
+import { updateServiceRuntimeEntrypoints } from "./update-command-legacy-finalize-entrypoint.test-support.js";
+
+const serviceCommand = resolveRuntimeWorkerUrl(updateServiceRuntimeEntrypoints.command);
+const serviceLoad = resolveRuntimeWorkerUrl(updateServiceRuntimeEntrypoints.load);
+const sourceArgs = serviceCommand.pathname.endsWith(".ts") ? ["--import", "./scripts/tsx.mjs"] : [];
 
 it.each([
   "sealed",
@@ -24,7 +30,7 @@ it.each([
           import path from "node:path";
           import { mock } from "node:test";
           import { pathToFileURL } from "node:url";
-          import { runUpdatedInstallGatewayCommand } from ${JSON.stringify(new URL("./update-command-service-command.ts", import.meta.url).href)};
+          import { runUpdatedInstallGatewayCommand } from ${JSON.stringify(serviceCommand.href)};
           const scenario = ${JSON.stringify(scenario)};
           const timedSeal = scenario === "slow-seal" || scenario === "short-budget";
           const originalTimeout = AbortSignal.timeout;
@@ -40,7 +46,7 @@ it.each([
           const staged = path.join(root, "staged");
           const loaded = path.join(root, "loaded");
           const sealed = path.join(root, "sealed");
-          const waitModule = ${JSON.stringify(new URL("../daemon-cli/install-load.ts", import.meta.url).href)};
+          const waitModule = ${JSON.stringify(serviceLoad.href)};
           await fs.mkdir(path.join(root, "dist"), { recursive: true });
           const files = { files: [{ sourcePath: staged, before: null, after: {
             sha256: "a".repeat(64), mode: 384, dev: 1, ino: 2, size: 1, mtimeMs: 1, ctimeMs: 1,
@@ -115,7 +121,7 @@ it.each([
         `;
       const result = await runCliProcessChild({
         nodeExecutable: resolveTestNodeExecPath(),
-        nodeArgs: ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
+        nodeArgs: [...sourceArgs, "--input-type=module", "--eval", script],
         env: { PATH: process.env.PATH, ...state.envVars },
       });
       const failure = formatCliProcessFailure({ reason: "Staged-load child failed", ...result });

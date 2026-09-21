@@ -27,6 +27,7 @@ type CodexNativeSearchActivation = {
   inactiveReason?:
     | "globally_disabled"
     | "codex_not_enabled"
+    | "managed_provider_selected"
     | "model_not_eligible"
     | "codex_auth_missing"
     | "tool_policy_denied";
@@ -123,17 +124,23 @@ export function resolveCodexNativeSearchActivation(params: {
     params.modelApi !== "openai-chatgpt-responses" ||
     !isOpenAIAuthProviderId(params.modelProvider) ||
     hasAvailableCodexAuth(params);
+  const searchProvider = params.config?.tools?.web?.search?.provider?.trim().toLowerCase();
+  const managedProviderSelected = Boolean(
+    searchProvider && searchProvider !== "auto" && searchProvider !== "openai",
+  );
   const inactiveReason = !globalWebSearchEnabled
     ? "globally_disabled"
     : !codexConfig.enabled
       ? "codex_not_enabled"
-      : !nativeEligible
-        ? "model_not_eligible"
-        : !hasRequiredAuth
-          ? "codex_auth_missing"
-          : !isNativeWebSearchAllowedByToolPolicy(params)
-            ? "tool_policy_denied"
-            : undefined;
+      : managedProviderSelected
+        ? "managed_provider_selected"
+        : !nativeEligible
+          ? "model_not_eligible"
+          : !hasRequiredAuth
+            ? "codex_auth_missing"
+            : !isNativeWebSearchAllowedByToolPolicy(params)
+              ? "tool_policy_denied"
+              : undefined;
 
   return {
     globalWebSearchEnabled,
@@ -153,7 +160,7 @@ export function isNativeWebSearchAllowedByToolPolicy(
 }
 
 /** Builds the OpenAI Responses `web_search` tool payload from config. */
-export function buildCodexNativeWebSearchTool(
+function buildCodexNativeWebSearchTool(
   config: OpenClawConfig | undefined,
 ): Record<string, unknown> {
   const nativeConfig = resolveCodexNativeWebSearchConfig(config);
@@ -200,11 +207,4 @@ export function patchCodexNativeWebSearchPayload(params: {
   tools.push(buildCodexNativeWebSearchTool(params.config));
   payload.tools = tools;
   return { status: "injected" };
-}
-
-/** Returns whether the managed OpenClaw web-search tool should be hidden. */
-export function shouldSuppressManagedWebSearchTool(
-  params: Parameters<typeof resolveCodexNativeSearchActivation>[0],
-): boolean {
-  return resolveCodexNativeSearchActivation(params).state === "native_active";
 }

@@ -214,7 +214,12 @@ the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 
 When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source
-database and its sidecar files.
+database and its sidecar files. The Gateway's `update.status` reads its two run
+records through the already-open database when available, avoiding full-database
+copies on each poll. Cold status reads prepare one private snapshot. When
+diagnostics are enabled, status requests lasting at least one second log phase
+durations for sentinel refresh, checkout refresh, install identity, reconciliation,
+history, and response.
 
 Native service-stop observations do not advance the update's recorded phase.
 If the Control UI cannot read fresh progress, it shows the read error alongside

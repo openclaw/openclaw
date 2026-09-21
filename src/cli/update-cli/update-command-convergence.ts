@@ -61,6 +61,16 @@ export async function convergeUpdatePlugins(params: {
   const assertCurrent = params.assertCurrent ?? params.opts.run?.executorFence?.assertCurrent;
   assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
+  // Uncommitted target finalization cannot authorize a detached helper restart.
+  const failedTargetRuntime = (): UpdateRunResult => ({
+    ...params.result,
+    status: "error",
+    reason: "post-core-update-failed",
+    recovery:
+      params.result.recovery?.serviceRestartSafe === false
+        ? params.result.recovery
+        : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+  });
   const preUpdateConfig = params.configSnapshot.valid
     ? {
         sourceConfig: params.configSnapshot.sourceConfig,
@@ -197,9 +207,7 @@ export async function convergeUpdatePlugins(params: {
         if (freshProcessResult.exitCode !== undefined) {
           return {
             resultWithPostUpdate: {
-              ...params.result,
-              status: "error" as const,
-              reason: "post-core-update-failed",
+              ...failedTargetRuntime(),
               ...(freshProcessResult.failureFacts?.length
                 ? {
                     steps: [
@@ -227,11 +235,7 @@ export async function convergeUpdatePlugins(params: {
 
       if (retainedDifferentRuntime && !targetRuntimeConverged) {
         return {
-          resultWithPostUpdate: {
-            ...params.result,
-            status: "error" as const,
-            reason: "post-core-update-failed",
-          },
+          resultWithPostUpdate: failedTargetRuntime(),
           detail:
             "The installed target could not resume plugin convergence. Run openclaw update using the installed target executable.",
         };

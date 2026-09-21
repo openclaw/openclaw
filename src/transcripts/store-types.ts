@@ -8,6 +8,11 @@ export type TranscriptSummarySnapshot = {
   utterances: TranscriptUtterance[];
 };
 
+export type TranscriptSummaryWriteGuard = Pick<
+  TranscriptSummarySnapshot,
+  "inputRevision" | "nextSequence" | "summaryRevision"
+> & { allowAppends: boolean };
+
 export type TranscriptsSessionEntry = {
   session: TranscriptSessionDescriptor;
   sessionDir: string;

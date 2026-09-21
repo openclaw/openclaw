@@ -660,9 +660,6 @@ class OpenClawShell
       context: primaryContext,
       attentionCount: context.overlays.snapshot.approvalQueue.length,
       gatewayDisconnected,
-      ...(gatewayDisconnected && {
-        queuedCount: this.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost).total,
-      }),
     });
     const environment = context.config?.current.environment;
     if (environment) {

@@ -554,6 +554,8 @@ describe("visible yielded session continuation", () => {
             tools: {
               profile: "full",
               codeMode: false,
+              // The scripted lifecycle proof also asserts direct publication tools after resume.
+              toolSearch: false,
               allow: [
                 "sessions_spawn",
                 "sessions_yield",

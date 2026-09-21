@@ -4798,7 +4798,6 @@ describe("buildCachedChatItems", () => {
     ).toContainEqual({ type: "text", text: "\n\nReady." });
     expect(assistant).toEqual(original);
   });
-
   it("deduplicates a Gateway Canvas copy that matches only by URL", () => {
     const viewId = "cv_url_match";
     const result = toolResultMessage(
@@ -4966,7 +4965,7 @@ describe("buildCachedChatItems", () => {
     expect(preview.title).toBe("Streamed demo");
   });
 
-  it("explains compaction boundaries and exposes the checkpoint action", () => {
+  it("explains compaction boundaries without a recovery action", () => {
     const items = buildCachedChatItems(
       createProps({
         messages: [compactionMessage("checkpoint-1")],
@@ -4978,10 +4977,10 @@ describe("buildCachedChatItems", () => {
     expect(divider.kind).toBe("divider");
     expect(divider.label).toBe("Context compacted");
     expect(divider.compaction).toBe("complete");
-    expect(divider.description).toBe("The compacted transcript is preserved as a checkpoint.");
-    const action = requireRecord(divider.action);
-    expect(action.kind).toBe("session-checkpoints");
-    expect(action.label).toBe("Open checkpoints");
+    expect(divider.description).toBe(
+      "Earlier messages were summarized to make room in the context window.",
+    );
+    expect(divider).not.toHaveProperty("action");
   });
 
   it("shows the token savings recorded on a compaction boundary", () => {
@@ -5597,11 +5596,7 @@ describe("thread item cache", () => {
     expect(updated).toBe(first);
     expect(reads.count).toBe(0);
     expect(updated).toContainEqual(
-      expect.objectContaining({
-        kind: "stream",
-        text: "complete reply",
-        isStreaming: true,
-      }),
+      expect.objectContaining({ kind: "stream", text: "complete reply", isStreaming: true }),
     );
   });
 

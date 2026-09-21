@@ -12,13 +12,10 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
-import {
-  getGatewayTestPort,
-  installGatewayTestHooks,
-  startTestGatewayServer,
-} from "./test-helpers.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 
 const AGENT_ID = "recreated-agent";
 const EXTERNAL_STATE_AGENT_ID = "external-state-agent";
@@ -31,10 +28,10 @@ describe("agent database recreation product proof", () => {
     "recreates and registers a deleted agent database through one real Gateway process",
     { timeout: 180_000 },
     async () => {
-      const port = await getGatewayTestPort();
       const token = "agent-database-recreation-product-proof-token";
-      const url = `ws://127.0.0.1:${port}`;
-      const server = await startTestGatewayServer(port, {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const url = `ws://127.0.0.1:${portClaim.port}`;
+      const server = await startTestGatewayServer(portClaim, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
@@ -129,9 +126,7 @@ describe("agent deletion product proof with a state dir outside home and the tem
       const realTmp = await fs.realpath(os.tmpdir());
       const tmpOverride = await fs.mkdtemp(path.join(realTmp, "openclaw-tmp-override-"));
       const stateDir = await fs.mkdtemp(path.join(realTmp, "openclaw-external-state-"));
-      const port = await getGatewayTestPort();
       const token = "agent-delete-external-state-dir-token";
-      const url = `ws://127.0.0.1:${port}`;
       try {
         await withEnvAsync(
           {
@@ -143,7 +138,8 @@ describe("agent deletion product proof with a state dir outside home and the tem
           async () => {
             expect(isPathInside(await fs.realpath(os.homedir()), stateDir)).toBe(false);
             expect(isPathInside(await fs.realpath(os.tmpdir()), stateDir)).toBe(false);
-            const server = await startTestGatewayServer(port, {
+            const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+            const server = await startTestGatewayServer(portClaim, {
               bind: "loopback",
               auth: { mode: "token", token },
               controlUiEnabled: false,
@@ -151,7 +147,7 @@ describe("agent deletion product proof with a state dir outside home and the tem
             let client: GatewayClient | undefined;
             try {
               client = await connectGatewayClient({
-                url,
+                url: `ws://127.0.0.1:${portClaim.port}`,
                 token,
                 role: "operator",
                 scopes: ["operator.admin", "operator.read", "operator.write"],

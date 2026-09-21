@@ -123,6 +123,7 @@ function includeUiTests(patterns: string[], env = process.env): string[] {
 
 const sharedUiTestConfig = {
   ...loadVitestPerformanceConfig(process.env, process.platform, here),
+  server: sharedVitestConfig.test.server,
   // Preserve calls recorded during shared setup and beforeAll hooks.
   clearMocks: false,
   isolate: false,

@@ -401,10 +401,13 @@ export async function runEmbeddedAttempt(
             preparedToolCatalog.refreshTools();
             preparedSessionRuntime.agentSession.refreshTools();
             promptToolPolicy.refresh();
-            const preparePermissionPrompt = preparedSystemPrompt.preparePermissionPrompt;
+            const prepareToolPrompt = preparedSystemPrompt.prepareToolPrompt;
             preparedSessionRuntime.agentSession.setPermissionPromptPreparation(
-              preparePermissionPrompt
-                ? () => preparePermissionPrompt(promptToolPolicy.current.effectiveTools)
+              prepareToolPrompt
+                ? () =>
+                    prepareToolPrompt(promptToolPolicy.current.effectiveTools, {
+                      permissionChanged: true,
+                    })
                 : undefined,
             );
             params.permissionChange?.recordApplied(mode);

@@ -12,6 +12,7 @@ import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-stat
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { updateRecoverySchema } from "../../infra/update-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 
@@ -101,7 +102,13 @@ export async function expectActiveRollbackIdentity(params: {
     before: { version: "2026.9.1" },
     after: { version: "2026.9.3" },
   };
-  if (failure === "restart-threw") {
+  const cleanup = new AggregateError(
+    [new CommandProcessCleanupError()],
+    "rollback inspection cleanup uncertain",
+  );
+  if (failure === "restart-cleanup") {
+    restart.mockRejectedValueOnce(cleanup);
+  } else if (failure === "restart-threw") {
     restart.mockRejectedValueOnce(new Error("Service restart transport failed"));
   } else {
     restart.mockImplementationOnce(async ({ onVerificationFailure }) => {
@@ -116,7 +123,7 @@ export async function expectActiveRollbackIdentity(params: {
           : "failed";
     });
   }
-  const outcome = await rollbackFailedUpdate({
+  const pending = rollbackFailedUpdate({
     definitionRecovery: {},
     result,
     previousRoot,
@@ -145,6 +152,11 @@ export async function expectActiveRollbackIdentity(params: {
       })),
     },
   });
+  if (failure === "restart-cleanup") {
+    await expect(pending).rejects.toBe(cleanup);
+    return;
+  }
+  const outcome = await pending;
   expect(outcome.result).toMatchObject({
     root: activePackageRoot ?? undefined,
     after: activePackageRoot === null ? undefined : restoredPackage ? result.before : result.after,

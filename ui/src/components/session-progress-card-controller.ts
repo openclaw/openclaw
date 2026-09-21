@@ -45,6 +45,21 @@ export class SessionProgressCardController implements ReactiveController {
     return this.target ? this.store?.getError(this.target) : undefined;
   }
 
+  get refreshState() {
+    return this.target ? this.store?.getRefreshState(this.target) : undefined;
+  }
+
+  refresh = (card: ProgressCard): void => {
+    if (!this.connected) {
+      return;
+    }
+    // A click retained across a route/connection change must not use the old watch.
+    this.synchronize();
+    if (this.target) {
+      this.store?.refresh(this.target, card);
+    }
+  };
+
   dismiss = (card: ProgressCard): Promise<boolean> =>
     this.target
       ? (this.store?.dismiss(this.target, card) ?? Promise.resolve(false))

@@ -26,6 +26,7 @@ import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
@@ -153,6 +154,9 @@ export function createChatSendMessageInjectionStarter(params: {
         assertCurrent: params.assertCurrent,
         steeringMode: "all",
         isInboundUserMessage: true,
+        ...(isProgressCardRefreshInputProvenance(ctx.InputProvenance)
+          ? { allowPendingUserInputAnswer: false as const, debounceMs: 0 }
+          : {}),
         toolAuthorityOverlay: resolveInboundReplyToolAuthorityOverlay({
           ctx,
           sessionEntry: {
@@ -168,7 +172,9 @@ export function createChatSendMessageInjectionStarter(params: {
         ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
         waitForTranscriptCommit: true,
         abortSignal: params.abortSignal,
-        ...(debounceMs !== undefined ? { debounceMs } : {}),
+        ...(!isProgressCardRefreshInputProvenance(ctx.InputProvenance) && debounceMs !== undefined
+          ? { debounceMs }
+          : {}),
         taskSuggestionDeliveryMode: supportsTaskSuggestions ? "gateway" : undefined,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
       },
@@ -226,10 +232,12 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
   const { context, ctx, session } = params;
   const { agentId, cfg, clientRunId, entry, sessionKey, storePath } = session;
   const finalizedCtx = finalizeInboundContext(ctx);
+  const progressRefresh = isProgressCardRefreshInputProvenance(ctx.InputProvenance);
   const finalization = await finalizeReplyMessageInjectionAttempt({
     attempt: params.attempt,
     target: params.target,
     inboundAudio: hasInboundAudio(finalizedCtx),
+    ...(progressRefresh ? { abortOnUnconfirmedTranscript: false as const } : {}),
   });
   if (finalization.status === "rejected") {
     // Rejection also covers withdrawing a canceled queued steer. Fallback
@@ -247,10 +255,18 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
     finalizedCtx.MessageSidFirst ??
     finalizedCtx.MessageSidLast;
   const indeterminate =
-    finalization.status === "indeterminate" ? finalization.outcome.errorMessage : undefined;
+    finalization.status === "indeterminate"
+      ? finalization.outcome.errorMessage
+      : progressRefresh &&
+          finalization.status === "accepted" &&
+          finalization.outcome.result?.transcriptCommit === "unconfirmed"
+        ? finalization.outcome.result.errorMessage
+        : undefined;
   const steerAborted = finalization.status === "accepted" && finalization.aborted;
   const outcomeReason = indeterminate
-    ? "question_response_indeterminate"
+    ? progressRefresh
+      ? "progress_refresh_receipt_unconfirmed"
+      : "question_response_indeterminate"
     : steerAborted
       ? "reply_operation_aborted"
       : "active_run_injected";
@@ -317,13 +333,17 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
       session: captureAgentJobSession(params.sessionBinding),
       entry: {
         ts: Date.now(),
-        ok: !indeterminate,
+        ok: progressRefresh || !indeterminate,
         payload: {
           runId: clientRunId,
-          status: indeterminate ? "error" : "ok",
+          // An accepted refresh steer is not a completed status turn, even if
+          // its transcript receipt is unconfirmed. Retrying must not replay it.
+          status: progressRefresh ? "accepted" : indeterminate ? "error" : "ok",
           ...(indeterminate ? { summary: indeterminate } : {}),
         },
-        ...(indeterminate ? { error: errorShape(ErrorCodes.UNAVAILABLE, indeterminate) } : {}),
+        ...(!progressRefresh && indeterminate
+          ? { error: errorShape(ErrorCodes.UNAVAILABLE, indeterminate) }
+          : {}),
       },
     });
     if (indeterminate) {

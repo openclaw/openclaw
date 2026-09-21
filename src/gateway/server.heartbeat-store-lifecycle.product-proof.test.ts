@@ -183,7 +183,8 @@ describe("heartbeat notification store ownership through the Gateway", () => {
               },
             },
             session: { store: oldStore },
-            tools: { profile: "coding" },
+            // The provider scripts a direct spawn to isolate notification-store ownership.
+            tools: { profile: "coding", toolSearch: false },
             gateway: { auth: { mode: "token", token } },
             hooks: { enabled: false },
           };

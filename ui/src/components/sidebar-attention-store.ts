@@ -5,6 +5,7 @@ import type {
   SidebarAttentionStoreSources,
 } from "../app/sidebar-attention-store.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
 import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
@@ -63,6 +64,9 @@ export class SidebarAttentionStoreController implements StoreController {
   private readonly stopAgents: () => void;
   private readonly stopOverlays: () => void;
   private readonly stopMentions: () => void;
+  private readonly stopOutbox: () => void;
+  private outboxRuntime: typeof import("../pages/chat/chat-outbox-owner.ts") | null = null;
+  private disposed = false;
   private readonly idleRefreshTimer: ReturnType<typeof globalThis.setInterval>;
 
   constructor(
@@ -86,6 +90,20 @@ export class SidebarAttentionStoreController implements StoreController {
     this.stopAgents = sources.agents.subscribe(onChange);
     this.stopOverlays = sources.overlays.subscribe(onChange);
     this.stopMentions = this.mentions.subscribe(onChange);
+    this.stopOutbox = subscribeStoredChatOutboxChanges(onChange);
+    // Share the chat owner’s live overlays without putting its send graph in shell startup.
+    void import("../pages/chat/chat-outbox-owner.ts")
+      .then((runtime) => {
+        if (!this.disposed) {
+          this.outboxRuntime = runtime;
+          if (this.buildEntries().some((entry) => entry.type === "outbox")) {
+            this.onChange();
+          }
+        }
+      })
+      .catch(() => {
+        // Chat retains its existing recovery controls if its lazy runtime cannot load.
+      });
     document.addEventListener("visibilitychange", this.refreshIfStale);
     globalThis.addEventListener("storage", this.syncDismissalsFromStorage);
     this.idleRefreshTimer = globalThis.setInterval(this.refreshIfStale, IDLE_REFRESH_INTERVAL_MS);
@@ -159,8 +177,27 @@ export class SidebarAttentionStoreController implements StoreController {
 
   private buildEntries(): SidebarInboxEntry[] {
     const gateway = this.sources.gateway.snapshot;
+    const outbox: Extract<SidebarInboxEntry, { type: "outbox" }>[] =
+      this.outboxRuntime
+        ?.listChatOutboxAttention({
+          client: gateway.client,
+          connected: gateway.phase === "connected",
+          settings: { gatewayUrl: this.sources.gateway.connection.gatewayUrl },
+          assistantAgentId: gateway.assistantAgentId,
+          agentsList: this.sources.agents.state.agentsList,
+          hello: gateway.hello,
+        })
+        .map((item) =>
+          Object.assign(item, {
+            type: "outbox" as const,
+            category: "system" as const,
+            dismissal: null,
+            requiresAction: true,
+            severity: item.unconfirmed ? ("warning" as const) : ("error" as const),
+          }),
+        ) ?? [];
     if (gateway.phase !== "connected") {
-      return [];
+      return outbox;
     }
     const overlay = this.sources.overlays.snapshot;
     const updateState = resolveSidebarUpdateAttention(this.sources);
@@ -187,6 +224,7 @@ export class SidebarAttentionStoreController implements StoreController {
     return buildSidebarInboxEntries({
       approvals: overlay.approvalQueue,
       attention,
+      outbox,
       mentions: this.mentions.snapshot.items,
       scopeUpgrade,
       update,
@@ -448,6 +486,7 @@ export class SidebarAttentionStoreController implements StoreController {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.loadGeneration += 1;
     this.modelAuthRefreshAt = undefined;
     this.scheduleModelAuthRefresh();
@@ -457,6 +496,7 @@ export class SidebarAttentionStoreController implements StoreController {
     this.stopAgents();
     this.stopOverlays();
     this.stopMentions();
+    this.stopOutbox();
     this.mentions.dispose();
     document.removeEventListener("visibilitychange", this.refreshIfStale);
     globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);

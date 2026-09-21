@@ -80,7 +80,6 @@ function browserConfig(params: {
       profiles: {
         openclaw: {
           cdpPort: params.gatewayPort + 11,
-          color: "#FF4500",
         },
       },
     },
@@ -155,6 +154,58 @@ describe("browser.request local control state", () => {
     expect(status.executablePath).toBe("/usr/bin/google-chrome");
     expect(status.headless).toBe(true);
     expect(status.noSandbox).toBe(true);
+  });
+
+  it.each(["gateway request", "HTTP server"] as const)(
+    "honors runtime plugin activation on a cold %s while retaining fresh browser options",
+    async (entrypoint) => {
+      const source = {
+        ...browserConfig({ gatewayPort: controlPort - 2, headless: true }),
+        plugins: { allow: ["telegram"] },
+      };
+      const originalSource = structuredClone(source);
+      mocks.runtimeSourceConfig = source;
+      mocks.runtimeConfig = {
+        ...browserConfig({ gatewayPort: controlPort - 2, headless: false }),
+        plugins: { allow: ["telegram", "browser"], entries: { browser: { enabled: true } } },
+      };
+
+      if (entrypoint === "HTTP server") {
+        expect(await startBrowserControlServerFromConfig()).not.toBeNull();
+      }
+      expect(await browserRequestStatus()).toMatchObject({
+        enabled: true,
+        profile: "openclaw",
+        headless: true,
+      });
+      expect(source).toEqual(originalSource);
+    },
+  );
+
+  it.each([
+    { enabled: false },
+    { deny: ["browser"] },
+    { entries: { browser: { enabled: false } } },
+    { allow: ["telegram"] },
+  ])("retains effective plugin disablement at both cold entrypoints: %j", async (plugins) => {
+    const source = browserConfig({ gatewayPort: controlPort - 2 });
+    mocks.runtimeSourceConfig = source;
+    mocks.runtimeConfig = { ...source, plugins };
+    expect(await startBrowserControlServiceFromConfig()).toBeNull();
+    expect(await startBrowserControlServerFromConfig()).toBeNull();
+    expect(mocks.ensureBrowserControlAuth).not.toHaveBeenCalled();
+    expect(getBrowserControlState()).toBeNull();
+  });
+
+  it("retains a fresh browser disable even when the activated runtime options lag", async () => {
+    mocks.runtimeConfig = {
+      ...browserConfig({ gatewayPort: controlPort - 2 }),
+      plugins: { allow: ["browser"], entries: { browser: { enabled: true } } },
+    };
+    mocks.runtimeSourceConfig = { ...mocks.runtimeConfig, browser: { enabled: false } };
+    expect(await startBrowserControlServiceFromConfig()).toBeNull();
+    expect(await startBrowserControlServerFromConfig()).toBeNull();
+    expect(mocks.ensureBrowserControlAuth).not.toHaveBeenCalled();
   });
 
   it("retains port auth until a failed stop is retried successfully", async () => {

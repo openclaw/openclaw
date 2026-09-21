@@ -263,7 +263,7 @@ it.each([
   ["managed-pat", "configured_unavailable", "Configured, but unavailable"],
   ["managed-oauth", "available", "Verified"],
 ] as const)(
-  "shows %s %s without confusing native and managed lookup",
+  "shows %s %s without extra native-account explanation",
   async (credentialKind, credentialState, label) => {
     const request = vi.fn(async () => ({
       personal: disconnected,
@@ -278,12 +278,7 @@ it.each([
     const { element } = mount(["operator.read"], "profile-a", request);
     const row = () => element.querySelector('[data-github-connection="system"]');
     await waitForFast(() => expect(row()?.textContent).toContain(label));
-    if (credentialKind === "native") {
-      expect(row()?.textContent).toContain("OS account running the Gateway");
-      expect(row()?.textContent).toContain("Other OS users' logins are separate.");
-    } else {
-      expect(row()?.textContent).not.toContain("OS account running the Gateway");
-    }
+    expect(row()?.textContent).not.toContain("OS account running the Gateway");
     if (credentialState !== "unavailable") {
       expect(row()?.textContent).not.toContain("No credentials");
     }

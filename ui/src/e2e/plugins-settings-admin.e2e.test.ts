@@ -4,6 +4,7 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it } from "vitest";
 import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../../../src/plugins/manifest.ts";
 import { resolveBundledPluginPublicModulePath } from "../../../src/test-utils/bundled-plugin-public-surface.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -308,9 +309,18 @@ suite.define(() => {
               },
             },
           });
-          const reads = (await gateway.getRequests("config.get")).length;
+          await expect
+            .poll(() =>
+              page.evaluate(
+                () =>
+                  document.querySelector<HTMLElement & { context: ApplicationContext }>(
+                    "openclaw-plugins-page",
+                  )?.context.runtimeConfig.state.configAutoSaveStatus,
+              ),
+            )
+            .toBe("saved");
           await page.reload();
-          await gateway.waitForRequest("config.get", { after: reads });
+          await gateway.waitForRequest("config.get");
           await expect.poll(() => apiKey.inputValue()).toBe("synthetic-credential");
           expect(await reference.inputValue()).toBe("");
           expect(await reference.getAttribute("readonly")).not.toBeNull();

@@ -44,7 +44,6 @@ import {
   finishUpdateRunRecord,
   isAbandonedUpdateRun,
   isUnacknowledgedPackageOwnerRefusal,
-  type FinishUpdateRunResult,
   type UpdateRunRecord,
   type UpdateRunPhase,
   type UpdateRunStep,
@@ -65,11 +64,12 @@ export {
   getLatestUpdateFetchFailure,
   getUpdateRun,
   getUpdateRunAsync,
+  getUpdateRunStatusAsync,
   listUpdateRuns,
   listUpdateRunsAsync,
 } from "./update-run-reader.js";
 
-export { recordUpdateRunDiagnostics } from "./update-run-write.js";
+export { finishUpdateRun, recordUpdateRunDiagnostics } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 type RunPatch = Partial<
@@ -541,14 +541,6 @@ export function recordUpdateRunDiagnostic(
     },
     options,
   );
-}
-
-export function finishUpdateRun(
-  runId: string,
-  result: FinishUpdateRunResult,
-  options: LedgerOptions = {},
-): UpdateRunRecord {
-  return mutateRun(runId, (record) => finishUpdateRunRecord(record, result), options);
 }
 
 /** Correct the shipped refusal classification only after its install target was satisfied. */

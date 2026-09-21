@@ -1,3 +1,7 @@
+import type {
+  ExecutionOwnerBinding,
+  ExecutionOwnerBindingResult,
+} from "../audit/execution-owner-binding.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { TaskFlowView } from "../plugins/runtime/task-domain-types.js";
 import type {
@@ -43,6 +47,14 @@ type TaskFlowReadQuery = {
 
 export type TaskRegistryWorkerOperations = TaskInitialWorkerOperations &
   TaskAgentEventWorkerOperations & {
+    "tasks.bindExecution": {
+      input: { taskId: string; binding: ExecutionOwnerBinding };
+      output: ExecutionOwnerBindingResult;
+    };
+    "flows.bindExecution": {
+      input: { flowId: string; binding: ExecutionOwnerBinding };
+      output: ExecutionOwnerBindingResult;
+    };
     "tasks.restore": { input: undefined; output: TaskRegistryRestoreResult };
     "flows.syncMirroredTask": {
       input: { taskId: string; expectedParentFlowId?: string };
@@ -105,6 +117,8 @@ export function isTaskRegistryWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<TaskRegistryWorkerOperations> {
   switch (command.type) {
+    case "tasks.bindExecution":
+    case "flows.bindExecution":
     case "tasks.observeAgentEvent":
     case "tasks.createRecord":
     case "tasks.finalizeActive":

@@ -12,7 +12,6 @@ import {
 import type { FaceTimeDialRequest } from "./outbound-call.js";
 
 export {
-  FaceTimeHelperActionError,
   FaceTimeHelperAmbiguousError,
   FaceTimeHelperUnavailableError,
   projectCompleteFaceTimeAbsence,

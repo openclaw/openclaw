@@ -268,11 +268,7 @@ export class GitHubConnections extends OpenClawLightDomElement {
               title: t("githubConnections.system"),
               description: html`${system?.account ? `@${system.account.login} · ` : ""}${t(
                 "githubConnections.systemDescription",
-              )}${
-                system?.credentialKind === "native"
-                  ? html`<br />${t("agentTools.githubNativeAccountHint")}`
-                  : nothing
-              }`,
+              )}`,
               control: html`${renderGitHubHealth(system, {
                 loading: this.system.loading || this.personal.loading,
                 error: this.system.error ?? this.personal.error,

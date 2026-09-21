@@ -162,7 +162,14 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const canCompose = props.canSend;
   const questionState = getTranscriptState(props.paneId);
-  const asyncQuestions = createAsyncQuestionPresentation(questionState, props);
+  const asyncQuestions = createAsyncQuestionPresentation(questionState, {
+    ...props,
+    onReopen: (itemId, scope) => {
+      const composerState = getChatComposerState(props.paneId);
+      composerState.activeQuestionKey = JSON.stringify([scope, itemId]);
+      composerState.questionCollapsed = false;
+    },
+  });
   const openImage = props.onOpenImage
     ? (item: ImageLightboxItem, requestVersion?: number) =>
         requestVersion === undefined

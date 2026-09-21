@@ -628,7 +628,6 @@ describe("agent defaults schema", () => {
             enabled: true,
             runtime: "quickjs-wasi",
             timeoutMs: 5000,
-            languages: ["javascript"],
           },
         },
       }),
@@ -636,7 +635,7 @@ describe("agent defaults schema", () => {
     expectSchemaFailurePath(
       AgentEntrySchema.safeParse({
         id: "ops",
-        tools: { codeMode: { unknownKey: 1 } },
+        tools: { codeMode: { languages: ["javascript"] } },
       }),
       "tools.codeMode",
     );

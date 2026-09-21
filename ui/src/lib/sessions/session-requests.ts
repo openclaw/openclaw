@@ -11,9 +11,6 @@ import type {
   SessionBranch,
   SessionsBranchesListResult,
   SessionsBranchesSwitchResult,
-  SessionsCompactionBranchResult,
-  SessionsCompactionListResult,
-  SessionsCompactionRestoreResult,
   SessionsForkResult,
   SessionsListResult,
   SessionsPatchResult,
@@ -301,41 +298,6 @@ export function requestSessionFileSet(
     content,
     expectedHash: options.expectedHash,
     ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
-  });
-}
-
-export function requestSessionCheckpoints(
-  client: SessionRequestClient,
-  key: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsCompactionListResult> {
-  return client.request<SessionsCompactionListResult>(
-    "sessions.compaction.list",
-    buildSessionRequestParams(key, options.agentId),
-  );
-}
-
-export function requestSessionCheckpointBranch(
-  client: SessionRequestClient,
-  key: string,
-  checkpointId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsCompactionBranchResult> {
-  return client.request<SessionsCompactionBranchResult>("sessions.compaction.branch", {
-    ...buildSessionRequestParams(key, options.agentId),
-    checkpointId,
-  });
-}
-
-export function requestSessionCheckpointRestore(
-  client: SessionRequestClient,
-  key: string,
-  checkpointId: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionsCompactionRestoreResult> {
-  return client.request<SessionsCompactionRestoreResult>("sessions.compaction.restore", {
-    ...buildSessionRequestParams(key, options.agentId),
-    checkpointId,
   });
 }
 

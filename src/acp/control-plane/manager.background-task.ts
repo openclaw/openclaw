@@ -5,6 +5,7 @@ import { isRetainedExecutionOwnerBinding } from "../../audit/execution-owner-bin
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { recordSubagentTerminalState } from "../../sessions/session-state-events.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   createRunningTaskRun,
   completeTaskRunByRunId,
@@ -285,15 +286,31 @@ export function recordQueuedBackgroundTaskCancellation(params: {
 }
 
 /** Links ACP owner rows only when the runtime reaches its prompt-submitted boundary. */
-export function bindBackgroundTaskExecution(
+export async function bindBackgroundTaskExecution(
   record: BackgroundTaskRecord,
   admitted: AdmittedRunContext,
-): void {
+  assertCurrent?: () => void,
+): Promise<void> {
+  const { taskId, parentFlowId } = record;
   try {
-    const taskResult = bindTaskRunExecution({ admitted, taskId: record.taskId });
-    const flowResult = record.parentFlowId
+    if (!admitted.executionIdentityToken) {
+      return;
+    }
+    const context = captureOpenClawStateWorkerContext();
+    const taskResult = await bindTaskRunExecution({
+      admitted,
+      taskId,
+      context,
+      assertCurrent,
+    });
+    const flowResult = parentFlowId
       ? isRetainedExecutionOwnerBinding(taskResult)
-        ? bindTaskFlowExecution({ admitted, flowId: record.parentFlowId })
+        ? await bindTaskFlowExecution({
+            admitted,
+            flowId: parentFlowId,
+            context,
+            assertCurrent,
+          })
         : taskResult
       : undefined;
     if ([taskResult, flowResult].some((result) => result === "mismatch" || result === "missing")) {

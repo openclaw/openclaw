@@ -58,6 +58,9 @@ describe("GraphQL primary quota fallback", () => {
     { stdout: response(JSON.stringify({ message }), "", 403) },
     { stderr: `gh: ${message}\n` },
     { stderr: Buffer.from("gh: API rate limit exceeded for fixture-user (HTTP 403)\n") },
+    { stderr: `GraphQL: ${message}\n` },
+    { stderr: Buffer.from("GraphQL: API rate limit exceeded for user ID 123.\n") },
+    { stderr: `GraphQL: ${message}, ${message}\n` },
   ])("recognizes native gh primary exhaustion: %j", (failure) => {
     expect(isGraphqlQuotaExhausted({ status: 1, ...failure })).toBe(true);
   });
@@ -83,6 +86,14 @@ describe("GraphQL primary quota fallback", () => {
     })),
     { name: "generic forbidden", stderr: "gh: Resource not accessible by integration (HTTP 403)" },
     { name: "plain 429", stderr: `gh: ${message} (HTTP 429)` },
+    { name: "GraphQL secondary throttle", stderr: `GraphQL: ${message}, secondary rate limit` },
+    { name: "GraphQL forbidden", stderr: "GraphQL: Resource not accessible by integration" },
+    {
+      name: "mixed rendered GraphQL errors",
+      stderr: `GraphQL: ${message}, Resource not accessible by integration`,
+    },
+    { name: "multiline GraphQL errors", stderr: `GraphQL: ${message}\nAccess denied` },
+    { name: "unrecognized CLI prefix", stderr: `proxy: ${message}` },
     {
       name: "plain proxy failure",
       stderr: 'Post "https://api.github.com/graphql": Proxy Authentication Required',
@@ -464,7 +475,7 @@ describe("scripts/pr wrappers", () => {
 
     expect(script).toContain('base_json=$(read_pr_view_json "$pr" "baseRefName")');
     expect(common).toContain('pr_gh pr view "$pr" --json "$fields"');
-    expect(worktree).toContain('metadata=$(GH_REPO="$repo_nwo" read_pr_view_json "$pr"');
+    expect(worktree).toContain('metadata=$(GH_REPO="$repo_url" read_pr_view_json "$pr"');
     expect(review).toContain('pr_gh_plain assign-reviewer "$pr" "$reviewer"');
     expect(push).toContain('pr_gh_plain api graphql --input "$payload_file"');
     expect(push).not.toContain("pr_gh_plain api graphql --input -");
@@ -1194,7 +1205,7 @@ fi
   itPosix.each(["producer failure", "truncated archive", "reader failure"])(
     "refuses anchor extraction on %s",
     (failure) => {
-      const fixture = makeMismatchedWrapperRepo();
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
       parkCanonicalOffAnchor(fixture);
       const git = join(fixture.bin, "git");
       writeFileSync(
@@ -1744,7 +1755,7 @@ exit 99
   )(
     "refuses missing $dependency before handoff (matching=$matching) without installing",
     ({ dependency, matching }) => {
-      const fixture = makeMismatchedWrapperRepo();
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
       if (matching) {
         fixture.git(fixture.linked, ["reset", "--hard", "refs/remotes/origin/main"]);
       }
@@ -1780,7 +1791,7 @@ exit 99
   it.each(["handoff", "inventory"])(
     "keeps the refusal when the anchor lacks its %s",
     (contract) => {
-      const fixture = makeMismatchedWrapperRepo();
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
       fixture.git(fixture.canonical, ["checkout", "main"]);
       if (contract === "handoff") {
         const legacy = readScript(join(fixture.canonical, "scripts/pr")).replaceAll(
@@ -1810,7 +1821,7 @@ exit 99
 
   describe("alias wrapper trust delegation", () => {
     function makeAliasFixture() {
-      const fixture = makeMismatchedWrapperRepo({ realModules: true });
+      const fixture = makeMismatchedWrapperRepo({ realModules: true, toolingOnly: true });
       fixture.git(fixture.linked, ["checkout", "--detach", "refs/remotes/origin/main"]);
       // Keep the Node recorder at the supervisor handoff, after dependency preparation.
       linkPrWrapperDependencies(fixture.linked);

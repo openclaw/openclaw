@@ -4,7 +4,7 @@ import { dirname, join, sep } from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "../infra/fs-safe-defaults.js";
 import { buildClawProject } from "./project-build.js";
 import { ClawProjectError, createClawProject, validateClawProject } from "./project.js";
 
@@ -90,6 +90,7 @@ describe("Claw projects", () => {
   });
 
   it("refuses to publish and removes staging when a completed file fails to close", async () => {
+    const nativeConfig = getFsSafeNativeConfig();
     const outputDirectory = tempDirs.make("openclaw-claw-close-failure-");
     const output = join(outputDirectory, "claw.tgz");
     const closeError = Object.assign(new Error("staged file close failed"), { code: "EIO" });
@@ -111,14 +112,14 @@ describe("Claw projects", () => {
       return handle;
     });
     try {
-      await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
-        await expect(
-          buildClawProject(join(process.cwd(), "test", "fixtures", "claws", "project-v1"), output),
-        ).rejects.toBe(closeError);
-      });
+      configureFsSafeNative({ mode: "off" });
+      await expect(
+        buildClawProject(join(process.cwd(), "test", "fixtures", "claws", "project-v1"), output),
+      ).rejects.toBe(closeError);
       expect(closeAttempts).toBe(1);
       await expect(readdir(outputDirectory)).resolves.toEqual([]);
     } finally {
+      configureFsSafeNative(nativeConfig);
       vi.restoreAllMocks();
     }
   });

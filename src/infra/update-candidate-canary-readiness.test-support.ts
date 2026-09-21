@@ -4,6 +4,10 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
+import {
+  registerActiveManagedProxyUrl,
+  stopActiveManagedProxyRegistration,
+} from "./net/proxy/active-proxy-state.js";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import { FakeChild, stubHealthyGateway } from "./update-candidate-canary.test-support.js";
@@ -99,15 +103,17 @@ export function registerCanaryReadinessBudgetTests(
           });
           expect(requests).toEqual(["/startupz", "/readyz"]);
           expect(proxyRequests).toEqual([]);
-          // The canary releases its exception; unrelated traffic still uses the proxy.
-          for (const url of [
-            `http://127.0.0.1:${rehearsal.port}/readyz`,
-            "http://external.example/",
-          ]) {
+          // Default loopback stays direct for the managed proxy's whole lifetime.
+          for (const [url, status] of [
+            [`http://127.0.0.1:${rehearsal.port}/readyz`, 200],
+            ["http://external.example/", 502],
+          ] as const) {
             const response = await fetch(url);
-            expect(response.status).toBe(502);
+            expect(response.status).toBe(status);
             await response.body?.cancel();
           }
+          expect(requests).toEqual(["/startupz", "/readyz", "/readyz"]);
+          expect(proxyRequests).toEqual(["http://external.example/"]);
         } else if (loopbackMode === "proxy") {
           const message = `Readiness probe http://127.0.0.1:${rehearsal.port}/startupz failed: HTTP 502 (via proxy http://127.0.0.1:${address.port}). Check Gateway logs and proxy.loopbackMode; rerun openclaw update.`;
           expectCanaryReadinessWarning(result.steps.at(-1), "startupz", 502);
@@ -141,6 +147,8 @@ export function registerCanaryReadinessBudgetTests(
   );
 
   it("records transport causes without turning cancellation into an advisory", async () => {
+    const proxy = registerActiveManagedProxyUrl(new URL("http://proxy.example:3128"));
+    onTestFinished(() => stopActiveManagedProxyRegistration(proxy));
     const controller = new AbortController();
     vi.stubGlobal(
       "fetch",
@@ -153,6 +161,7 @@ export function registerCanaryReadinessBudgetTests(
     expect(unavailable.status).toBe("ok");
     expect(unavailable.logTail.join("\n")).toContain("Update checks reached their time limit");
     expect(unavailable.steps.at(-1)?.advisory?.message).toContain("ECONNREFUSED");
+    expect(unavailable.steps.at(-1)?.advisory?.message).not.toContain("via proxy");
     expect(unavailable.steps.at(-1)?.failureFacts).toEqual([
       {
         check: "startupz",

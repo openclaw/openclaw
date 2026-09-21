@@ -15,6 +15,7 @@ import {
   authorizePluginGatewayHttpRequestOrReply,
   resolveSharedSecretHttpOperatorScopes,
 } from "../../src/gateway/http-auth-utils.js";
+import { invalidateOperatorRolePolicy } from "../../src/gateway/operator-role-policy.js";
 import { createDirectChatContext } from "../../src/gateway/server-chat.agent-events.test-helpers.js";
 import { createGatewayTestRegistry } from "../../src/gateway/server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "../../src/gateway/server/plugins-http.js";
@@ -26,7 +27,11 @@ import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../src/logging/subsystem.js";
 import { sessionChanges } from "../../src/sessions/session-row-changes.js";
 import { trackAsyncWork } from "../../src/shared/async-work-scope.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../src/state/user-profiles.js";
+import {
+  ensureProfileForEmail,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "../../src/state/user-profiles.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 
@@ -64,6 +69,7 @@ async function withReports(
     rotate: () => void;
     expire: () => void;
     blockViewer: () => void;
+    blockViewerAfterDiscovery: () => void;
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -88,12 +94,26 @@ async function withReports(
       cfg,
       run: async () => {
         const reader = ensureProfileForEmail("reports-reader@example.test");
-        const owner = ensureProfileForEmail("reports-owner@example.test");
+        const owner = syncGitHubIdentity({
+          identity: { accountId: 101, login: "owner-alias" },
+          authenticationAlias: { kind: "email", email: "reports-owner@example.test" },
+        });
+        syncGitHubIdentity({
+          identity: { accountId: 102, login: "reader" },
+          authenticationAlias: { kind: "email", email: "reports-reader@example.test" },
+        });
         setUserProfileRole(reader.id, "reader");
         for (const row of [
           { name: "own-draft", owner: reader.id, visibility: "draft" as const },
           { name: "foreign-draft", owner: owner.id, visibility: "draft" as const },
           { name: "shared", owner: owner.id, visibility: "shared" as const },
+          ...Array.from({ length: 45 }, (_, i) => ({
+            name: `newer-${i}`,
+            owner: reader.id,
+            visibility: "shared" as const,
+          })),
+          { name: "archived", owner: owner.id, visibility: "shared" as const, archivedAt: 1 },
+          { name: "cron:excluded:run:one", owner: owner.id, visibility: "shared" as const },
           {
             name: "dashboard:incognito-reports",
             owner: reader.id,
@@ -107,6 +127,9 @@ async function withReports(
               sessionId: row.name,
               label: "REPORT-PROOF-" + row.name,
               updatedAt: Date.now(),
+              // Metadata upserts clamp updatedAt to now; activity paging uses its own durable clock.
+              lastActivityAt: row.name === "shared" ? 1 : row.name === "own-draft" ? 100 : 50,
+              ...("archivedAt" in row ? { archivedAt: row.archivedAt } : {}),
               visibility: row.visibility,
               ...(row.incognito ? { incognito: true } : {}),
               createdActor: { type: "human", source: "profile", id: row.owner },
@@ -143,6 +166,12 @@ async function withReports(
         };
         const issuedAt = Date.now();
         let discoveryStarted: ReturnType<typeof createDeferred<void>> | undefined;
+        let withdrawAfterDiscovery = false;
+        const blockViewer = () => {
+          setUserProfileRole(reader.id, "blocked");
+          // Match users.setRole: publish the committed assignment to the auth cache.
+          invalidateOperatorRolePolicy(reader.id);
+        };
         const handler = createGatewayPluginRequestHandler({
           registry: createGatewayTestRegistry({
             httpRoutes: [
@@ -157,15 +186,20 @@ async function withReports(
                   displayTimezone: "UTC",
                   assetsDir: "unused",
                   sessionRouting: () => ({ controlUiBasePath: "", mainKey: "main" }),
-                  workSessions: async (offset, limit) => {
+                  workSessions: async (offset, limit, profileId) => {
                     discoveryStarted?.resolve();
-                    return await listWorkSessions(offset, limit);
+                    const sessions = await listWorkSessions(offset, limit, profileId);
+                    if (withdrawAfterDiscovery) {
+                      withdrawAfterDiscovery = false;
+                      blockViewer();
+                    }
+                    return sessions;
                   },
                   getStore: () => store,
                   status: async () => ({}),
                   health: async () => ({ running: false, warnings: 0 }),
                   orgs: () => [],
-                  people: () => [],
+                  people: () => [{ github: ["owner", "OWNER-ALIAS"] }, { github: ["reader"] }],
                 }),
                 source: "reports-proof",
               },
@@ -212,8 +246,8 @@ async function withReports(
                 gatewayRequestOperatorScopes: authorized.operatorScopes,
               });
             }
-          })().catch((error) => {
-            res.destroy(error);
+          })().catch((error: unknown) => {
+            res.destroy(error instanceof Error ? error : new Error(String(error)));
           });
         });
         try {
@@ -241,15 +275,18 @@ async function withReports(
             expire: () => {
               vi.spyOn(Date, "now").mockReturnValue(issuedAt + CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS);
             },
-            blockViewer: () => {
-              setUserProfileRole(reader.id, "blocked");
+            blockViewer,
+            blockViewerAfterDiscovery: () => {
+              withdrawAfterDiscovery = true;
             },
           });
         } finally {
           gate?.resolve();
           server.closeAllConnections();
           if (server.listening) {
-            await new Promise<void>((resolve) => server.close(() => resolve()));
+            await new Promise<void>((resolve) => {
+              server.close(() => resolve());
+            });
           }
           await projection.ensureMaterialized();
           projection.dispose();
@@ -272,12 +309,26 @@ describe("Reports HTTP disclosure with production cookie auth and sessions.list"
           const response = await read(path);
           expect(response.status).toBe(200);
           expect(response.body).toContain("REPORT-PROOF-own-draft");
-          expect(response.body).toContain("REPORT-PROOF-shared");
+          expect(response.body).not.toContain("REPORT-PROOF-shared");
           expect(response.body).not.toContain("REPORT-PROOF-foreign-draft");
           expect(response.body).not.toContain("REPORT-PROOF-dashboard:incognito-reports");
         }
+        for (const path of ["/reports/people/owner/", "/reports/sessions/?person=OWNER-ALIAS"]) {
+          const response = await read(path);
+          expect(response.status).toBe(200);
+          expect(response.body).toContain("REPORT-PROOF-shared");
+          expect(response.body).not.toContain("REPORT-PROOF-foreign-draft");
+          expect(response.body).not.toContain("REPORT-PROOF-own-draft");
+          expect(response.body).not.toContain("REPORT-PROOF-archived");
+          expect(response.body).not.toContain("REPORT-PROOF-cron:");
+        }
+        const own = await read("/reports/people/reader/");
+        expect(own.body).not.toContain("REPORT-PROOF-dashboard:incognito-reports");
         if (roles) {
           blockViewer();
+          const owned = await read("/reports/people/owner/");
+          expect(owned.body).not.toContain("REPORT-PROOF-shared");
+          expect(owned.body).toContain("No work sessions are visible to you.");
           const response = await read();
           expect(response.status).toBe(200);
           expect(response.body).toContain("REPORT-PROOF-own-draft");
@@ -286,12 +337,21 @@ describe("Reports HTTP disclosure with production cookie auth and sessions.list"
       });
     },
   );
+  it("does not disclose prepared session rows after the viewer role narrows before HTTP delivery", async () => {
+    await withReports(true, async ({ read, blockViewerAfterDiscovery }) => {
+      blockViewerAfterDiscovery();
+      const response = await read("/reports/people/owner/");
+      expect(response.body).not.toContain("REPORT-PROOF-shared");
+      expect(response.status).toBe(401);
+    });
+  });
+
   it.each(["expiry", "generation"] as const)(
     "does not disclose after cookie %s during delayed discovery",
     async (invalidation) => {
       await withReports(false, async ({ read, blockDiscovery, expire, rotate }) => {
         const gate = blockDiscovery();
-        const pending = read();
+        const pending = read("/reports/people/owner/");
         try {
           await withTestTimeout(
             gate.entered,

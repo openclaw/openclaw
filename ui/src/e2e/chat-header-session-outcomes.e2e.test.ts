@@ -159,7 +159,7 @@ suite.define(() => {
           `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
         );
         await sidebarRow.hover();
-        await sidebarRow.getByRole("button", { name: "Open session menu" }).click();
+        await sidebarRow.click({ button: "right" });
         const sidebarMenu = page.locator("openclaw-session-menu");
         await sidebarMenu
           .getByRole("menuitem", { name: restartable ? "Restore session" : "Archive session" })

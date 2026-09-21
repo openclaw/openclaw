@@ -952,7 +952,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "    fi",
         '    printf "writer:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS"',
         '    printf \'HTTP/2.0 200 OK\\n\\n{"login":"fixture-user"}\\n\' ;;',
-        '  "api --hostname github.com repos/fixture/fixture/pulls/42")',
+        '  "api --hostname github.com repos/fixture/fixture/pulls/42 -H Cache-Control: max-age=0")',
         '    jq \'{number,title,html_url:.url,state:(.state|ascii_downcase),draft:.isDraft,user:.author,base:{ref:.baseRefName,sha:.baseRefOid,repo:{id:123}},head:{ref:.headRefName,sha:.headRefOid,repo:{id:123,name:.headRepository.name,full_name:.headRepository.nameWithOwner,html_url:.headRepository.url,owner:.headRepositoryOwner}},body,labels,assignees,changed_files:.changedFiles,additions,deletions}\' "$OPENCLAW_TEST_PR_METADATA"; printf "pull:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
         '  "api --hostname github.com repos/fixture/fixture/pulls/42/files?per_page=100 --paginate --slurp -H Cache-Control: max-age=0") printf "[[]]\\n" ;;',
         '  "api --hostname github.com repos/fixture/fixture/commits/"*"/check-runs?filter=latest&per_page=100 --paginate --slurp") printf \'[{"check_runs":[]}]\\n\' ;;',

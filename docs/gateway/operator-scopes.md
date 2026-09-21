@@ -52,13 +52,9 @@ and per-agent GitHub changes remain `operator.admin`. Publication remains
 Unknown future `operator.*` scopes require an exact match unless the caller
 already holds `operator.admin`.
 
-The same scope implications apply to RPC calls, event delivery, and internal
-tool calls from background continuations. A continuation admitted with
+RPCs, events, and background tools use the same scope rules. A continuation with
 `operator.write` can read its GitHub identity and session state without another
-interactive message. Narrowing evaluates requested scopes against the caller's
-current authority; read or write permission does not become admin, approval,
-pairing, or Talk-secret access. Session access and execution-lifetime checks
-still apply.
+interactive message. Session access and execution-lifetime checks still apply.
 
 ## Named operator roles
 
@@ -172,10 +168,16 @@ The ceiling uses the normal scope implications: `operator.admin` permits every
 operator scope, and `operator.write` permits `operator.read` and `operator.talk`.
 It only filters existing grants. It cannot add scopes the connection did not
 already receive.
+The ceiling intersects capabilities, including those implied by a broader grant.
+A write grant narrowed to a read-only role retains `operator.read`; an admin-only
+grant narrowed to a write role retains `operator.write`. The role cannot grant
+capabilities that the original credential did not allow, and an empty grant or
+role remains empty.
+
 This includes plugin HTTP requests and WebSocket upgrades: without a scope
 header, ordinary Gateway-authenticated plugin routes start with only
-`operator.write`, then apply the role ceiling. Read-only and empty roles
-therefore receive no runtime scopes on that default path.
+`operator.write`, then apply the role ceiling. A read-only role therefore retains
+`operator.read` on that path, while an empty role receives no runtime scopes.
 Control UI plugin grants carry the authenticated profile inside a signed
 cookie. Plugin HTTP requests reapply the profile's current role ceiling and
 reject grants without a matching durable identity when roles are enabled.

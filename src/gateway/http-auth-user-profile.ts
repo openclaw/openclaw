@@ -4,7 +4,7 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHostAccountName } from "../infra/host-account-name.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
@@ -96,14 +96,10 @@ export function resolveHttpProfile(profileId: string, updatedAt: number, cfg?: O
   };
 }
 
-export function applyHttpOperatorRoleScopeCeiling<Scope extends string>(
-  scopes: Scope[],
+export function applyHttpOperatorRoleScopeCeiling(
+  scopes: string[],
   auth: Pick<AuthenticatedHttpUserProfile, "operatorRolePolicy"> | undefined,
-): Scope[] {
+): string[] {
   const allowedScopes = auth?.operatorRolePolicy?.scopes;
-  return allowedScopes
-    ? scopes.filter((scope) =>
-        roleScopesAllow({ role: "operator", requestedScopes: [scope], allowedScopes }),
-      )
-    : scopes;
+  return allowedScopes ? intersectOperatorScopes(scopes, allowedScopes) : scopes;
 }

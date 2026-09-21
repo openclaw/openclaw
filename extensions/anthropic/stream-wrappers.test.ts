@@ -3,6 +3,7 @@ import { calculateUsageCost } from "@openclaw/llm-core";
 // Anthropic tests cover stream wrappers plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -13,6 +14,8 @@ import {
   resolveAnthropicFastMode,
   wrapAnthropicProviderStream,
 } from "./stream-wrappers.js";
+
+useProviderCatalogMetadata(new URL(".", import.meta.url));
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const OAUTH_BETA = "oauth-2025-04-20";

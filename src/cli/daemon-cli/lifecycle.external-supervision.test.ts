@@ -220,7 +220,7 @@ describe("external gateway supervision lifecycle", () => {
           ownerId: "gateway-owner-old",
           port: 19_455,
         },
-        restartIntent: { force: true },
+        restartIntent: { force: true, drainBudgetMs: 300_000 },
       },
       localPortOverride: 19_455,
       ignoreEnvUrlOverride: true,

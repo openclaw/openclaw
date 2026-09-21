@@ -20,8 +20,8 @@ type CodeModeErrorCode =
   | "internal_error";
 ```
 
-`invalid_input` covers bad `exec`/`wait` arguments, disabled languages,
-rejected module access, TypeScript transform failures, unknown/expired/
+`invalid_input` covers bad `exec`/`wait` arguments, including retired `language`
+and `typecheck` fields, rejected module access, unknown/expired/
 wrong-scope `runId` values, and too many suspended runs. `runtime_unavailable`
 covers a QuickJS worker that fails to start or exits non-zero.
 `aborted` means the caller cancelled an active `exec` or `wait`; OpenClaw
@@ -83,15 +83,10 @@ tool inputs beyond existing OpenClaw trajectory policy.
 ## Debugging
 
 JavaScript failure frames labeled `openclaw-code-mode:user.js` use line numbers
-from the submitted code, excluding internal wrappers and headless setup. For
-TypeScript, compiler diagnostics and source-mapped runtime frames labeled
-`openclaw-code-mode:user.ts` refer to the submitted TypeScript, including after
-`wait`. Source maps account for erased declarations and UTF-8 guest columns.
-An unmapped runtime frame retains the explicit `openclaw-code-mode:generated.js`
-label rather than pretending to identify original source. Internal wrapper and controller frames are
+from the submitted JavaScript, excluding internal wrappers and headless setup,
+including after `wait`. Internal wrapper and controller frames are
 omitted from new cells' failures; error messages still share the existing output
-budget. Resumed older snapshots without location metadata retain their previous
-stack format.
+budget. Code Mode does not accept TypeScript source or produce compiler diagnostics.
 
 Use targeted model transport logging when code mode behaves differently from
 a normal tool run:

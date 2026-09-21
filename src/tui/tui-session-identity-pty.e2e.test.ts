@@ -572,19 +572,22 @@ it("falls back after a remembered lookup error and retries on reconnect", async 
 it("shows the remembered session label during startup before remote validation", async () => {
   const stateDir = tempDirs.make("openclaw-tui-provisional-label-");
   await seedRememberedSession(stateDir);
-  // 10000 ms restore delay ensures describeSession is still pending when the
-  // first synchronized frame renders.  The predicate timeout of 8000 ms
-  // matches only frames rendered before validation completes — the pre-fix
-  // code renders "session main" first and would time out.
+  // Keep validation pending until the provisional session frame is observed.
   const fixture = await startTuiFixture({
+    holdSessionDescription: true,
     env: {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
-      OPENCLAW_TUI_PTY_RESTORE_DELAY_MS: "10000",
     },
   });
 
   try {
+    await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "sessionDescriptionPending" &&
+        objectFieldEquals(entry, "sessionKey", REMEMBERED_SESSION_KEY),
+      STARTUP_TIMEOUT_MS,
+    );
     const rows = await waitForSynchronizedFrameRows(
       fixture.run,
       (frame) =>
@@ -593,6 +596,11 @@ it("shows the remembered session label during startup before remote validation",
       8_000,
     );
     expect(rows.join("\n")).toContain("session picker-target");
+
+    expect(await readFixtureLog(fixture.logPath)).not.toContainEqual(
+      expect.objectContaining({ method: "sessionDescriptionReleased" }),
+    );
+    await fixture.releaseStartup();
 
     // After validation completes the confirmed session label persists.
     await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
@@ -612,15 +620,21 @@ it("clears the provisional label after a failed remembered-session lookup", asyn
   const stateDir = tempDirs.make("openclaw-tui-provisional-failure-");
   await seedRememberedSession(stateDir);
   const fixture = await startTuiFixture({
+    holdSessionDescription: true,
     env: {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
-      OPENCLAW_TUI_PTY_RESTORE_DELAY_MS: "10000",
       OPENCLAW_TUI_PTY_RESTORE_FAILURES: "1",
     },
   });
 
   try {
+    await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "sessionDescriptionPending" &&
+        objectFieldEquals(entry, "sessionKey", REMEMBERED_SESSION_KEY),
+      STARTUP_TIMEOUT_MS,
+    );
     // While validation is pending the header shows the remembered name.
     const earlyRows = await waitForSynchronizedFrameRows(
       fixture.run,
@@ -631,7 +645,12 @@ it("clears the provisional label after a failed remembered-session lookup", asyn
     );
     expect(earlyRows.join("\n")).toContain("session picker-target");
 
-    // After the delayed lookup fails the label must reconcile to the default.
+    expect(await readFixtureLog(fixture.logPath)).not.toContainEqual(
+      expect.objectContaining({ method: "sessionDescriptionReleased" }),
+    );
+    await fixture.releaseStartup();
+
+    // After the lookup fails the label must reconcile to the default.
     await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
     const readyRows = await waitForSynchronizedFrameRows(
       fixture.run,

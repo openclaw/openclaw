@@ -4,8 +4,9 @@ import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
-  upsertSessionEntryCore,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { mergeSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import {
@@ -152,15 +153,15 @@ export async function seedSessions(): Promise<OpenClawConfig> {
     ["main", "archived", 200, "viewer@example.com", { archivedAt: 200 }],
     ["work", "active", 100, "viewer@example.com", {}],
   ] as const) {
-    await upsertSessionEntryCore(
+    replaceSessionEntrySync(
       { agentId, sessionKey: `agent:${agentId}:${name}` },
-      {
+      mergeSessionEntry(undefined, {
         sessionId: `${agentId}-${name}`,
         updatedAt,
         createdActor: { type: "human", source: "profile", id: owner },
         visibility: "shared",
         ...overrides,
-      },
+      }),
     );
   }
   return config;

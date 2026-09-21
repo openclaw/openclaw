@@ -34,13 +34,10 @@ import {
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.runtime-state.js";
-import {
-  getGatewayTestPort,
-  installGatewayTestHooks,
-  startTestGatewayServer,
-} from "./test-helpers.server.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.server.js";
 
 installGatewayTestHooks();
 afterEach(() => {
@@ -275,7 +272,6 @@ it.each([
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let suppliedBroker: Awaited<ReturnType<typeof spawnBroker.startGatewaySpawnBroker>>;
     try {
-      const port = await getGatewayTestPort();
       if (outcome === "startup-failure") {
         const startupFailure = new Error("startup stopped before Gateway adoption");
         await expect(
@@ -290,7 +286,7 @@ it.each([
         expect(() => process.kill(pid, 0)).toThrow();
         return;
       }
-      server = await withAgentDatabaseStartupAdmission(async () => {
+      const started = await withAgentDatabaseStartupAdmission(async () => {
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
@@ -301,15 +297,20 @@ it.each([
             },
           });
         }
-        return spawnBroker.runWithSpawnBroker(suppliedBroker, () =>
-          startTestGatewayServer(port, { bind: "loopback", auth: { mode: "none" } }),
-        );
+        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        return {
+          port: portClaim.port,
+          server: await spawnBroker.runWithSpawnBroker(suppliedBroker, () =>
+            startTestGatewayServer(portClaim, { bind: "loopback", auth: { mode: "none" } }),
+          ),
+        };
       });
+      server = started.server;
       await server.startupSettled;
       if (brokerExpected) {
         expect(brokerPid).toBeTypeOf("number");
       }
-      expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+      expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
       expect(readAgentDatabaseAdmissionRefusal(healthyAgentId, { env })).toBeUndefined();
       if (paused) {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
@@ -459,13 +460,20 @@ it("recovers queued agents after both inspection slots expire without refusing a
   Object.assign(env, pause.env);
   let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
   try {
-    const port = await getGatewayTestPort();
-    server = await withAgentDatabaseStartupAdmission(async () => {
+    const started = await withAgentDatabaseStartupAdmission(async () => {
       await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
-      return startTestGatewayServer(port, { bind: "loopback", auth: { mode: "none" } });
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      return {
+        port: portClaim.port,
+        server: await startTestGatewayServer(portClaim, {
+          bind: "loopback",
+          auth: { mode: "none" },
+        }),
+      };
     });
+    server = started.server;
     await server.startupSettled;
-    expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+    expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
     await vi.waitFor(() => {
       for (const marker of pause.enteredPaths.slice(0, 2)) {
         expect(fs.existsSync(marker)).toBe(true);

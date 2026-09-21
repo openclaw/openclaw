@@ -180,32 +180,19 @@ function hasEventScope(
   }
   const role = client.connect.role ?? "operator";
   const scopes = Array.isArray(client.connect.scopes) ? client.connect.scopes : [];
-  if (explicitPluginScope) {
-    if (role !== "operator") {
-      return false;
-    }
-    return operatorScopeSatisfied(explicitPluginScope, scopes);
-  }
   const required = EVENT_SCOPE_GUARDS[event];
-  // Plugin-defined gateway broadcast events (plugin.* namespace) are allowed
-  // for operator.write and operator.admin scopes. Explicit plugin.* entries
-  // in EVENT_SCOPE_GUARDS take precedence (e.g., plugin.approval.*).
-  if (!required && event.startsWith("plugin.")) {
-    if (role !== "operator") {
-      return false;
-    }
-    return operatorScopeSatisfied(WRITE_SCOPE, scopes);
+  const pluginScope =
+    explicitPluginScope || (!required && event.startsWith("plugin.") ? WRITE_SCOPE : undefined);
+  if (pluginScope) {
+    return role === "operator" && operatorScopeSatisfied(pluginScope, scopes);
   }
   if (!required) {
     return false;
   }
-  if (required.length === 0) {
-    return true;
-  }
-  if (role !== "operator") {
-    return false;
-  }
-  return required.some((scope) => operatorScopeSatisfied(scope, scopes));
+  return (
+    required.length === 0 ||
+    (role === "operator" && required.some((scope) => operatorScopeSatisfied(scope, scopes)))
+  );
 }
 
 type FrameFields = {

@@ -88,6 +88,7 @@ export async function createCopilotSessionSetup(params: {
           return buildCopilotPromptGuidance({
             attempt: input,
             callableToolNames: promptPolicyResult.callableToolNames,
+            toolSchemaDirectoryPrompt: promptPolicyResult.toolSchemaDirectoryPrompt,
             requireExplicitMessageTarget: promptToolPolicy.requireExplicitMessageTarget,
             workspaceBootstrapInstructions: workspaceBootstrap.instructions,
           });

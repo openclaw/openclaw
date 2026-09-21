@@ -51,6 +51,10 @@ then replaces the previous app. `scripts/restart-mac.sh` uses
 the same path; `SKIP_TSC=1` does not bypass the runtime build. Existing
 content-checked build caches still avoid unnecessary declaration work.
 
+Worker pruning follows module imports, runtime launch descriptors, and named
+worker entrypoints transitively. Helpers launched by another retained worker
+remain packaged with their imports and runtime dependencies.
+
 Set `OPENCLAW_NODE_VERSION=<version>` when packaging to select a supported Node
 version for every private worker. If unset or empty, the CLI installer's default
 applies. Packaging installs and verifies the complete worker with that runtime.

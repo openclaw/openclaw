@@ -128,6 +128,14 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc":
+    "Optional verified GitHub identity from a selected Cloudflare Access OIDC provider. Requires the standard Access email and assertion headers. Missing claims keep email-only profiles; existing profile roles and co-author preferences are preserved.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.issuer":
+    "Exact HTTPS origin of the trusted Cloudflare Access team, such as https://example.cloudflareaccess.com, without a trailing slash. Claims from other issuers do not supply GitHub identity.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.providerId":
+    "Exact Access identity-provider ID for the trusted OIDC integration. A provider display name or a matching claim name alone does not establish trust.",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.githubAccountIdClaim":
+    "Exact forwarded OIDC claim whose value is a verified positive decimal-string GitHub account ID. Configure Access to forward it in oidc_fields; never use an unverified user-editable claim.",
   "gateway.auth.trustedProxy.deviceAutoApprove":
     "Optional policy for automatically approving new browser and native UI operator devices and same-key scope upgrades after trusted-proxy authentication. Grants are capped by deviceAutoApprove.scopes and the proxy's x-openclaw-scopes header when present.",
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":

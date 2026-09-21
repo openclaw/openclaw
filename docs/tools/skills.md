@@ -741,6 +741,8 @@ the total number of operating-system file watches.
   <Accordion title="Skills watcher">
     By default, OpenClaw watches skill folders and bumps the snapshot when
     `SKILL.md` files change, including skill roots first created after startup.
+    Removing and recreating a skill folder or its parent keeps discovery on the
+    configured path, including on Windows.
     Configure under `skills.load`:
 
     ```json5

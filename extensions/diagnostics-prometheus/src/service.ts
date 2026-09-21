@@ -20,152 +20,24 @@ import {
   formatLabelEntry,
   formatLabels,
   formatPrometheusNumber,
-  metricKey,
   sortedLabels,
   type LabelSet,
 } from "./prometheus-format.js";
+import {
+  createPrometheusMetricStore,
+  type PrometheusMetricStore,
+} from "./prometheus-metric-store.js";
 
-type ScalarSample = {
-  help: string;
-  labels: LabelSet;
-  value: number;
-};
-
-type HistogramSample = {
-  buckets: number[];
-  counts: number[];
-  count: number;
-  help: string;
-  labels: LabelSet;
-  sum: number;
-};
-
-type PrometheusMetricStore = ReturnType<typeof createPrometheusMetricStore>;
-
-const DURATION_BUCKETS_SECONDS = [
-  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600,
-];
 const TOKEN_BUCKETS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576];
 const BYTE_BUCKETS = [
   1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864, 268435456, 1073741824,
   4294967296, 17179869184,
 ];
 const RATIO_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 2, 4, 8, 16];
-const MAX_PROMETHEUS_SERIES = 2048;
-const DROPPED_SERIES_COUNTER_NAME = "openclaw_prometheus_series_dropped_total";
 
 function seconds(ms: number | undefined): number | undefined {
   const value = numericValue(ms);
   return value === undefined ? undefined : value / 1000;
-}
-
-function createPrometheusMetricStore() {
-  const counters = new Map<string, ScalarSample>();
-  const gauges = new Map<string, ScalarSample>();
-  const histograms = new Map<string, HistogramSample>();
-  let droppedSeries = 0;
-
-  const canCreateSeries = <T>(map: Map<string, T>, key: string): boolean => {
-    if (map.has(key)) {
-      return true;
-    }
-    if (counters.size + gauges.size + histograms.size < MAX_PROMETHEUS_SERIES) {
-      return true;
-    }
-    droppedSeries += 1;
-    return false;
-  };
-
-  const counter = (name: string, help: string, labels: LabelSet, amount = 1) => {
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return;
-    }
-    const key = metricKey(name, labels);
-    if (!canCreateSeries(counters, key)) {
-      return;
-    }
-    const existing = counters.get(key);
-    if (existing) {
-      existing.value += amount;
-      return;
-    }
-    counters.set(key, { help, labels, value: amount });
-  };
-
-  const gauge = (name: string, help: string, labels: LabelSet, value: number | undefined) => {
-    if (value === undefined || !Number.isFinite(value)) {
-      return;
-    }
-    const key = metricKey(name, labels);
-    if (!canCreateSeries(gauges, key)) {
-      return;
-    }
-    gauges.set(key, { help, labels, value });
-  };
-
-  const histogram = (
-    name: string,
-    help: string,
-    labels: LabelSet,
-    value: number | undefined,
-    buckets = DURATION_BUCKETS_SECONDS,
-  ) => {
-    if (value === undefined || !Number.isFinite(value) || value < 0) {
-      return;
-    }
-    const key = metricKey(name, labels);
-    if (!canCreateSeries(histograms, key)) {
-      return;
-    }
-    let sample = histograms.get(key);
-    if (!sample) {
-      sample = {
-        buckets,
-        counts: buckets.map(() => 0),
-        count: 0,
-        help,
-        labels,
-        sum: 0,
-      };
-      histograms.set(key, sample);
-    }
-    sample.count += 1;
-    sample.sum += value;
-    for (let index = 0; index < sample.buckets.length; index += 1) {
-      const bucket = sample.buckets[index];
-      if (bucket !== undefined && value <= bucket) {
-        sample.counts[index] = (sample.counts[index] ?? 0) + 1;
-      }
-    }
-  };
-
-  const snapshot = () => {
-    const counterSnapshot = [...counters];
-    if (droppedSeries > 0) {
-      counterSnapshot.push([
-        metricKey(DROPPED_SERIES_COUNTER_NAME, {}),
-        {
-          help: "Prometheus metric series dropped because the exporter series cap was reached.",
-          labels: {},
-          value: droppedSeries,
-        },
-      ]);
-    }
-    return {
-      counters: counterSnapshot,
-      gauges: [...gauges],
-      histograms: [...histograms],
-    };
-  };
-
-  const reset = () => {
-    counters.clear();
-    gauges.clear();
-    histograms.clear();
-    droppedSeries = 0;
-  };
-
-  return { counter, gauge, histogram, reset, snapshot };
 }
 
 function safeErrorMessage(err: unknown): string {
@@ -854,7 +726,7 @@ function recordDiagnosticEvent(
         numericValue(evt.count) ?? 0,
       );
       return;
-    case "diagnostic.memory.sample":
+    case "diagnostic.memory.sample": {
       for (const [kind, field] of [
         ["rss", "rssBytes"],
         ["heap_total", "heapTotalBytes"],
@@ -877,6 +749,23 @@ function recordDiagnosticEvent(
       ] as const) {
         store.gauge(name, "Worker isolate counts.", {}, numericValue(evt.memory[field]));
       }
+      // The resource owner supplies bounded script names and retires stale/exit samples.
+      const workerHeaps = new Map<string, number>();
+      for (const worker of evt.memory.workerHeaps ?? []) {
+        const heapUsed = numericValue(worker.heapUsed);
+        if (heapUsed !== undefined) {
+          workerHeaps.set(worker.script, (workerHeaps.get(worker.script) ?? 0) + heapUsed);
+        }
+      }
+      store.clearGauges("openclaw_worker_heap_used_bytes");
+      for (const [script, heapUsed] of workerHeaps) {
+        store.gauge(
+          "openclaw_worker_heap_used_bytes",
+          "Latest live Worker heap usage by bounded script basename.",
+          { script },
+          heapUsed,
+        );
+      }
       store.histogram(
         "openclaw_memory_rss_bytes",
         "RSS memory sample distribution in bytes.",
@@ -885,6 +774,7 @@ function recordDiagnosticEvent(
         BYTE_BUCKETS,
       );
       return;
+    }
     case "diagnostic.memory.pressure":
       store.counter(
         "openclaw_memory_pressure_total",

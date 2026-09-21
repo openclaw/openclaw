@@ -4,13 +4,13 @@
 import fs from "node:fs/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   loadGatewayConfig,
   openAuthenticatedGatewayWs,
   waitForGatewayWsClose,
 } from "./shared-auth.test-helpers.js";
 import {
-  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
   startTestGatewayServer,
@@ -35,7 +35,6 @@ beforeAll(async () => {
   if (!configPath) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
-  port = await getGatewayTestPort();
   testState.gatewayAuth = undefined;
   await fs.writeFile(
     configPath,
@@ -56,7 +55,9 @@ beforeAll(async () => {
     )}\n`,
     "utf-8",
   );
-  server = await startTestGatewayServer(port, { controlUiEnabled: true });
+  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+  port = portClaim.port;
+  server = await startTestGatewayServer(portClaim, { controlUiEnabled: true });
 
   const ws = await openAuthenticatedGatewayWs(port, OLD_TOKEN);
   try {

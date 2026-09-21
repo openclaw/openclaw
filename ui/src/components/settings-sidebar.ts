@@ -49,7 +49,6 @@ type SettingsSidebarProps = {
   activeSearch?: string;
   activeHash?: string;
   connectionStatus: GatewayStatus | null;
-  queuedOutboxCount?: number;
   lastError: string | null;
   gatewayVersion: string;
   searchQuery: string;
@@ -327,10 +326,9 @@ function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
       ${props.presentation === "embed-list" ? t("nav.settings") : settingsNavigationLabelForRoute(props.activeRouteId, props.nativeDeviceSettings?.snapshot)}
     </h1>
     ${
-      props.connectionStatus !== null || (props.queuedOutboxCount ?? 0) > 0
+      props.connectionStatus !== null
         ? renderGatewayStatus({
             kind: props.connectionStatus,
-            queuedOutboxCount: props.queuedOutboxCount ?? 0,
             lastError: props.lastError,
             onRetry: props.onRetryConnect,
           })
@@ -452,10 +450,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       ${navigation}
       <footer class="settings-sidebar__footer">
         ${
-          props.connectionStatus !== null || (props.queuedOutboxCount ?? 0) > 0
+          props.connectionStatus !== null
             ? renderGatewayStatus({
                 kind: props.connectionStatus,
-                queuedOutboxCount: props.queuedOutboxCount ?? 0,
                 lastError: props.lastError,
                 onRetry: props.onRetryConnect,
               })

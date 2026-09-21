@@ -736,10 +736,7 @@ const SOURCE_TEST_TARGETS = new Map([
   ["src/plugin-sdk/persistent-dedupe.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
   [
     "extensions/browser/src/browser/chrome-mcp-options.ts",
-    [
-      "extensions/browser/src/browser/chrome-mcp.test.ts",
-      "test/scripts/ci-chrome-mcp-prewarm.test.ts",
-    ],
+    ["extensions/browser/src/browser/chrome-mcp.test.ts"],
   ],
   [
     "scripts/prepare-apple-mermaid.mjs",
@@ -1046,10 +1043,11 @@ function listToolingFullSuiteTestTargets(cwd: string) {
       fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
     ),
   )
-    // Explicit leaf targets bypass the config's live-test exclusion and produce an empty shard.
+    // Match Vitest's fixture/live exclusions before forming explicit leaf chunks.
     .filter(
       (file) =>
         file.endsWith(".test.ts") &&
+        !file.startsWith("test/fixtures/") &&
         !file.endsWith(".live.test.ts") &&
         classifyTarget(file, cwd) === "tooling",
     )

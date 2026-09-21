@@ -429,6 +429,30 @@ describe("SQLite session row persistence", () => {
     expect(persisted).not.toHaveProperty("label");
   });
 
+  it("preserves legacy history references in storage without exposing checkpoint metadata", async () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-legacy-history-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const scope = { agentId: "main", env, sessionKey: "agent:main:legacy-history" };
+    const entry = {
+      sessionId: "current",
+      updatedAt: 42,
+      compactionCheckpoints: [
+        {
+          sessionId: "current",
+          preCompaction: { sessionId: "old" },
+          postCompaction: { sessionId: "current" },
+        },
+      ],
+    };
+    await upsertSessionEntryCore(scope, entry);
+    await patchSessionEntryCore(scope, () => ({ label: "Updated" }));
+    const stored = loadSessionEntry(scope);
+    expect(stored).toHaveProperty("compactionCheckpoints", entry.compactionCheckpoints);
+    expect(projectPublicSessionEntry(entry)).not.toHaveProperty("compactionCheckpoints");
+    expect(projectPublicSessionEntryPatch(entry)).not.toHaveProperty("compactionCheckpoints");
+    expect(entry.compactionCheckpoints).toHaveLength(1);
+  });
+
   it("persists private workspace intent but excludes runtime-only resolved skills from SQLite JSON", async () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-sqlite-session-skills-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

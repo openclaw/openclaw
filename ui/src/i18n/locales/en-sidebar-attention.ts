@@ -4,8 +4,6 @@ import { en } from "./en.ts";
 // Inbox diagnostics follow their lazy presenters; the loader label stays eager.
 const enSidebarAttention = {
   connection: {
-    outboxDescription:
-      "Outgoing messages saved in this browser: queued, failed, or awaiting confirmation. Failed messages need review or retry. Some may already have arrived. Open their conversations for details.",
     scopeUpgrade: {
       limited: "This browser has limited access.",
       guidance:
@@ -35,9 +33,7 @@ const enSidebarAttention = {
     failed: "Failed",
     overdue: "Overdue",
     dismissItem: "Dismiss {item}",
-    dismissShown: "Dismiss all shown",
-    dismissHelp:
-      "Dismiss clears notifications in this tab. It does not approve requests or stop work.",
+    dismissShown: "Dismiss shown",
     emptyTitle: "Nothing waiting",
     emptyBody: "New requests and alerts land here.",
     issues: "Inbox",
@@ -64,6 +60,21 @@ const enSidebarAttention = {
       unavailable: "Sign in and connect to the Gateway to see your mentions.",
       refresh: "Refresh mentions",
       error: "Mentions could not be updated. Refresh or try dismissing again.",
+    },
+    outbox: {
+      conversation: "Conversation",
+      failed: "Your message wasn’t sent",
+      unconfirmed: "Your message may not have arrived",
+      commandFailed: "Your command failed",
+      commandUnconfirmed: "Your command may not have run",
+      review: "Review in chat",
+      reviewShort: "Review",
+      reviewHint: "Open the conversation to review it before trying again.",
+      checkBeforeRetry: "Open the conversation to check whether it arrived before trying again.",
+      checkCommandBeforeRetry:
+        "The command may already have run. Review the conversation before retrying.",
+      offline: "Offline",
+      offlineHint: "Offline: reconnect before retrying.",
     },
     modelAuthExpired: "Model auth expired: {providers}",
     authExpired: "Auth expired",

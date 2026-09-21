@@ -307,6 +307,42 @@ function runPublisher(
 }
 
 describe("PR publication ownership", () => {
+  it.each([false, true])(
+    "binds deferred GitHub gates to verified publication (stale target=%s)",
+    (staleTarget) => {
+      const f = makePublisherRepo();
+      const gatesPath = join(f.local, "gates.env");
+      const gates = `PR_NUMBER=4242\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${staleTarget ? f.source : f.candidate}\n`;
+      writeFileSync(gatesPath, gates);
+      const result = runPublisher(f, "prepare_push 4242", [
+        "PR_HEAD_OWNER=fixture",
+        "PR_HEAD_REPO_NAME=repo",
+        "OPENCLAW_PR_PUSH_MODE=graphql",
+      ]);
+      expect(result.status, result.stdout + result.stderr).toBe(staleTarget ? 1 : 0);
+      const events = readFileSync(join(f.local, "events"), "utf8");
+      if (staleTarget) {
+        expect(events).toBe("");
+        expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
+        expect(readFileSync(gatesPath, "utf8")).toBe(gates);
+        expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+        return;
+      }
+      const hosted = f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic");
+      expect(events).toBe("graphql\n");
+      expect(hosted).not.toBe(f.candidate);
+      expect(readFileSync(gatesPath, "utf8")).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${hosted}\n`);
+      expect(readFileSync(gatesPath, "utf8")).not.toMatch(
+        /VERIFIED|PASSED|FULL_GATES|REMOTE_GATES/,
+      );
+      expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
+        `PREP_HEAD_SHA=${hosted}\n`,
+      );
+      expect(readFileSync(join(f.local, "prep.md"), "utf8")).toContain("GitHub gates deferred");
+      expect(readFileSync(join(f.local, "prep.md"), "utf8")).not.toContain("Gates passed");
+    },
+  );
+
   it.each(
     ["prepare_push", "prepare_sync_head"].flatMap((operation) =>
       ["advance", "rewind", "same-tree"].map((movement) => ({ operation, movement })),
@@ -572,6 +608,7 @@ describe("resolve_pr_gates_remote_mode", () => {
     { value: "", expected: "local" },
     { value: "testbox", expected: "testbox" },
     { value: "crabbox-aws", expected: "crabbox-aws" },
+    { value: "github", expected: "github" },
   ])("resolves OPENCLAW_PR_GATES_REMOTE=$value to $expected", ({ value, expected }) => {
     const env: NodeJS.ProcessEnv = {};
     if (value !== undefined) {
@@ -590,21 +627,16 @@ describe("resolve_pr_gates_remote_mode", () => {
     expect(result.stderr).toContain("Unsupported OPENCLAW_PR_GATES_REMOTE=azure");
   });
 
-  it("rejects the hosted-gates conflict before touching the worktree", () => {
-    const result = runGatesBash("prepare_gates 424242", {
-      env: { OPENCLAW_PR_GATES_REMOTE: "testbox", OPENCLAW_TESTBOX: "1" },
-    });
-    expect(result.status).toBe(2);
-    expect(result.stdout).toContain("conflicts with OPENCLAW_TESTBOX=1");
-  });
-
-  it("rejects the Crabbox AWS hosted-gates conflict before touching the worktree", () => {
-    const result = runGatesBash("prepare_gates 424242", {
-      env: { OPENCLAW_PR_GATES_REMOTE: "crabbox-aws", OPENCLAW_TESTBOX: "1" },
-    });
-    expect(result.status).toBe(2);
-    expect(result.stdout).toContain("OPENCLAW_PR_GATES_REMOTE=crabbox-aws conflicts");
-  });
+  it.each(["testbox", "crabbox-aws", "github"])(
+    "rejects the %s hosted-gates conflict before touching the worktree",
+    (mode) => {
+      const result = runGatesBash("prepare_gates 424242", {
+        env: { OPENCLAW_PR_GATES_REMOTE: mode, OPENCLAW_TESTBOX: "1" },
+      });
+      expect(result.status).toBe(2);
+      expect(result.stdout).toContain("conflicts with OPENCLAW_TESTBOX=1");
+    },
+  );
 });
 
 describe("remote Crabbox AWS gate contract", () => {
@@ -1456,7 +1488,7 @@ fi
     expect(result.stdout).not.toContain("tbx_stale");
   });
 
-  it("clears remote stamps when hosted gates replace remote proof", () => {
+  it.each(["hosted", "github"])("clears stale proof when %s gates replace remote proof", (mode) => {
     const { repoDir } = makeRetryRepo();
     spawnSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
     writeFileSync(join(repoDir, "changed.ts"), "export {};\n");
@@ -1472,6 +1504,8 @@ fi
       [
         "LAST_VERIFIED_HEAD_SHA=deadbeef",
         "FULL_GATES_HEAD_SHA=deadbeef",
+        "HOSTED_GATES_TARGET_HEAD_SHA=deadbeef",
+        "GATES_PASSED_AT=2026-09-01T00:00:00Z",
         "REMOTE_GATES_PROVIDER=blacksmith-testbox",
         "REMOTE_GATES_LEASE_ID=tbx_stale",
         "REMOTE_GATES_RUN_URL=https://example.test/runs/1",
@@ -1489,13 +1523,28 @@ fi
         "prepare_gates 4242",
         "cat .local/gates.env",
       ].join("\n"),
-      { cwd: repoDir, env: { OPENCLAW_TESTBOX: "1" } },
+      {
+        cwd: repoDir,
+        env: mode === "hosted" ? { OPENCLAW_TESTBOX: "1" } : { OPENCLAW_PR_GATES_REMOTE: "github" },
+      },
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("GATES_MODE=hosted_exact_or_recent_parent");
-    expect(result.stdout).toContain("HOSTED");
-    expect(result.stdout).toContain("REMOTE_GATES_LEASE_ID=''");
+    const gates = readFileSync(join(repoDir, ".local", "gates.env"), "utf8");
+    if (mode === "github") {
+      const currentHead = spawnSync("git", ["rev-parse", "HEAD"], {
+        cwd: repoDir,
+        encoding: "utf8",
+      }).stdout.trim();
+      expect(gates).toContain("GATES_MODE=github_pending\n");
+      expect(gates).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${currentHead}\n`);
+      expect(gates).not.toMatch(/VERIFIED|PASSED|FULL_GATES|REMOTE_GATES/);
+      expect(result.stdout).not.toMatch(/^HOSTED$/m);
+    } else {
+      expect(gates).toContain("GATES_MODE=hosted_exact_or_recent_parent");
+      expect(result.stdout).toMatch(/^HOSTED$/m);
+      expect(gates).toContain("REMOTE_GATES_LEASE_ID=''");
+    }
     expect(result.stdout).not.toContain("tbx_stale");
   });
 });

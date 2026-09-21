@@ -97,8 +97,13 @@ walk the home to completion without consuming a foreground request's budget.
 Explicit homes hydrate in the background when the plugin activates. An implicit
 process home waits for an authorized catalog request. A home without a valid,
 complete saved snapshot walks native `thread/list` pages once, yielding between
-pages. Its first list waits for a usable native page or confirmed empty inventory,
-within the existing app-server request timeout. That single request budget also
+pages. Progressive lists serve resident rows immediately. If a local home is still
+loading after 250 ms, the list returns that host as pending, preserving previously
+displayed rows; the existing progress callback publishes its page or error when ready.
+The page producer and publication remain owned by the list's background completion.
+One-shot lists, host-specific lookups, and pagination still wait for a usable native
+page or confirmed empty inventory within the existing app-server request timeout.
+That single request budget also
 covers loading saved state and draining earlier cache writes after a configuration
 reload. A timed-out caller leaves the shared write drain running. Partial results carry an opaque continuation cursor;
 a continuation that catches up with discovery waits for the next page within its

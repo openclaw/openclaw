@@ -305,7 +305,7 @@ describe("concurrent worker workspace results", () => {
                     sequence: 1,
                     retain,
                   },
-                  () => [],
+                  async () => [],
                 );
                 retained.resolve();
               } catch (error) {

@@ -2,10 +2,9 @@ import crypto from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import type { Selectable } from "kysely";
-import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
-import {
-  executionOwnerBindingFromAdmission,
-  type ExecutionOwnerBindingResult,
+import type {
+  ExecutionOwnerBinding,
+  ExecutionOwnerBindingResult,
 } from "../../audit/execution-owner-binding.js";
 import {
   bindExecutionOwnerLifecycleMetadata,
@@ -217,35 +216,26 @@ function withReceiptWrite<T>(
 }
 
 /** Binds the exact admitted execution to its authoritative receipt without changing lifecycle. */
-export function bindCronRunReceiptExecution(params: {
-  admitted: AdmittedRunContext;
-  handle: CronRunReceiptHandle;
-  options?: OpenClawStateDatabaseOptions;
-}): ExecutionOwnerBindingResult {
-  const binding = executionOwnerBindingFromAdmission(params.admitted);
-  if (!binding) {
-    return "disabled";
+export function bindCronRunReceiptExecutionInDatabase(
+  database: DatabaseSync,
+  handle: CronRunReceiptHandle,
+  binding: ExecutionOwnerBinding,
+): ExecutionOwnerBindingResult {
+  ensureCronRunReceiptSchema(database);
+  try {
+    assertCronRunReceiptOwnedInDatabase({ database, handle });
+  } catch (error) {
+    if (!(error instanceof CronRunReceiptRevisionError)) {
+      throw error;
+    }
+    return "missing";
   }
-  return withReceiptWrite(
-    "cron.run-receipt.execution-binding",
-    params.options ?? {},
-    (database) => {
-      try {
-        assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle });
-      } catch (error) {
-        if (!(error instanceof CronRunReceiptRevisionError)) {
-          throw error;
-        }
-        return "missing";
-      }
-      return bindExecutionOwnerLifecycleMetadata({
-        db: database,
-        ownerKind: "cron",
-        ownerId: params.handle.receiptId,
-        binding,
-      });
-    },
-  );
+  return bindExecutionOwnerLifecycleMetadata({
+    db: database,
+    ownerKind: "cron",
+    ownerId: handle.receiptId,
+    binding,
+  });
 }
 
 function isReceiptStatus(value: string): value is CronRunReceiptStatus {

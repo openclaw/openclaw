@@ -162,6 +162,17 @@ function normalizedText(element: Element | null | undefined): string | undefined
 
 beforeEach(async () => {
   vi.stubGlobal("localStorage", createStorageMock());
+  // JSDOM has no layout observation; browser tests exercise real panel geometry.
+  if (typeof ResizeObserver === "undefined") {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  }
   await i18n.setLocale("en");
 });
 
@@ -245,7 +256,7 @@ describe("renderDebug", () => {
       "Offline Connect to the Gateway to refresh diagnostics.",
     );
   });
-  it("shows in-card refresh progress without hiding last-good snapshots", () => {
+  it("keeps refresh progress in the button without hiding last-good snapshots", () => {
     const container = document.createElement("div");
     render(
       renderDebug(
@@ -256,9 +267,10 @@ describe("renderDebug", () => {
       ),
       container,
     );
-    expect(normalizedText(container.querySelector(".settings-section"))).toContain(
-      "Refreshing… Refreshing Gateway diagnostics.",
-    );
+    const refresh = container.querySelector<HTMLButtonElement>("button");
+    expect(refresh?.disabled).toBe(true);
+    expect(normalizedText(refresh)).toBe("Refreshing…");
+    expect(container.querySelector(".settings-section .settings-status")).toBeNull();
     expect(container.textContent).toContain("last-good");
   });
 

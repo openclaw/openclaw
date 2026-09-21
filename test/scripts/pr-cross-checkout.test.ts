@@ -268,14 +268,11 @@ describePosix("native PR wrapper repository ownership", () => {
             : "targets owner-release",
       );
       expect(f.readCalls()).toEqual([
-        ...(command === "review-init"
-          ? [
-              `${f.owner}\tbrowse --no-browser`,
-              `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
-            ]
-          : []),
         `${f.owner}\tbrowse --no-browser`,
-        `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123`,
+        ...(command === "review-init"
+          ? [`${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`]
+          : []),
+        `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0`,
         ...(command === "review-init"
           ? [
               `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123/files?per_page=100 --paginate --slurp -H Cache-Control: max-age=0`,

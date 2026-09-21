@@ -5,11 +5,34 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { gitNullConfigPath } from "./git-exec.js";
-import { classifyPartialCloneGitFailure } from "./update-runner-git-target.js";
+import {
+  classifyPartialCloneGitFailure,
+  withGitTargetInspectionRoot,
+} from "./update-runner-git-target.js";
 import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
 import type { CommandRunner, RunStepOptions, UpdateStepResult } from "./update-runner-types.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+
+it("rejects incomplete target inspection output even when Git exits zero", async () => {
+  const runCommand: CommandRunner = async (argv) => ({
+    code: 0,
+    stdout: "a".repeat(40),
+    stderr: "",
+    ...(argv.includes("for-each-ref") ? { killed: true, termination: "signal" as const } : {}),
+  });
+  await expect(
+    withGitTargetInspectionRoot(
+      {
+        root: temporary.make("incomplete-git-inspection-"),
+        runCommand,
+        timeoutMs: 1_000,
+        onWarning: () => {},
+      },
+      async () => {},
+    ),
+  ).rejects.toThrow("Git target inspection for-each-ref failed");
+});
 
 it.each([
   { state: "partial-clone", expected: "promised objects in this partial clone" },

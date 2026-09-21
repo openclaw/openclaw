@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   ServiceInspectionError,
   findServiceOwnershipRefusal,
+  hasGatewayServiceStopUnsafeError,
 } from "../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -21,8 +22,6 @@ import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-messag
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { UpdateDoctorError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
-import { inspectUpdateRepairDriverAdmission } from "../infra/update-run-activity.js";
-import { listUpdateRuns, recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -32,6 +31,7 @@ import {
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
 import { assertDoctorMaintenanceInspection } from "./doctor-maintenance-inspection.js";
 import {
   assertStaleDoctorGatewayStopped,
@@ -482,33 +482,7 @@ export async function beginDoctorMaintenance(params: {
         });
         assertDoctorMaintenanceInspection(inspection, env);
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
-          const inheritedRunId = env[UPDATE_RUN_ID_ENV]?.trim();
-          const readAdmission = () => {
-            const runs = listUpdateRuns(
-              { active: true, limit: 100, includeRunId: inheritedRunId },
-              { env },
-              openDoctorStateSchemaReadAdmission,
-            );
-            const admission = inspectUpdateRepairDriverAdmission(runs, inheritedRunId);
-            if (admission.kind === "conflict") {
-              throw new Error(admission.message);
-            }
-            return admission;
-          };
-          const admission = readAdmission();
-          assertUpdateAdmissionCurrent = () => {
-            readAdmission();
-          };
-          const continuation =
-            admission.kind === "continuation"
-              ? admission.run
-              : admission.runs.find((run) => run.runId === inheritedRunId);
-          if (continuation?.steps.some((step) => step.step === "finalize:repair-continuation")) {
-            assertUpdateAdmissionCurrent = () => {
-              readAdmission();
-              recordUpdateRunRepairContinuation(continuation.runId, inheritedRunId, { env });
-            };
-          }
+          assertUpdateAdmissionCurrent = resolveDoctorUpdateAdmission(env);
         }
         if (inspection.serviceUpdateVerdict?.kind === "owned" && inspection.serviceEnv) {
           assertDoctorServiceSelection(env, inspection.serviceEnv);
@@ -573,6 +547,10 @@ export async function beginDoctorMaintenance(params: {
                 expectedService: inspection,
                 retainNativeIdentity: true,
                 assertCurrent: assertUpdateAdmissionCurrent,
+                warn: (message) => {
+                  warnings.push(message);
+                  params.runtime.log(message);
+                },
                 onStopped: (before) => {
                   stopped = before;
                 },
@@ -672,7 +650,7 @@ export async function beginDoctorMaintenance(params: {
       throw error;
     }
     const refusal = new Error(
-      `Doctor could not enter maintenance. ${String(error)}${parentMustStopGateway ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
+      `Doctor could not enter maintenance. ${String(error)}${parentMustStopGateway || hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
       { cause: error },
     );
     const recovery = inspectingActivation

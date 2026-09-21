@@ -11,7 +11,7 @@ import type { CronJob } from "../../cron/types.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
-import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
+import { findTaskByRunId, listTaskRecords } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -109,7 +109,7 @@ function createDueScriptJob(params: {
 function findCronTaskByBaseRunId(baseRunId: string) {
   return (
     findTaskByRunId(baseRunId) ??
-    listTaskRecordsUnsorted().find((task) => task.runId?.startsWith(`${baseRunId}:`))
+    listTaskRecords().find((task) => task.runId?.startsWith(`${baseRunId}:`))
   );
 }
 

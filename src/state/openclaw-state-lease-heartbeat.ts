@@ -1,10 +1,11 @@
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   acquireStateDatabaseHandleLease,
   retainHeldStateDatabaseCoordinator,
 } from "../infra/state-database-coordinator.js";
+import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -52,28 +53,27 @@ export function startOpenClawStateLeaseHeartbeat(
   let worker: Worker;
   try {
     // Native stdio ports can outlive termination and retain their creation context.
-    worker = runInDetachedAsyncContext(
-      () =>
-        new Worker(url, {
-          workerData: {
-            path: params.path,
-            existingOnly: params.existingOnly,
-            ...(coordinator ? { parentCoordinatorRetained: true as const } : {}),
-            identity: {
-              scope: params.identity.scope,
-              key: params.identity.key,
-              owner: params.identity.owner,
-            },
-            leaseMs: params.leaseMs,
-            heartbeatMs: params.heartbeatMs,
-            processOwner: params.processOwner,
-            shared: shared.buffer,
-          } satisfies LeaseHeartbeatWorkerData,
-          env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
-          execArgv: workerArgv.slice(0, -1),
-          stdout: true,
-          stderr: true,
-        }),
+    worker = runInDetachedAsyncContext(() =>
+      createCpuTrackedWorker(url, {
+        workerData: {
+          path: params.path,
+          existingOnly: params.existingOnly,
+          ...(coordinator ? { parentCoordinatorRetained: true as const } : {}),
+          identity: {
+            scope: params.identity.scope,
+            key: params.identity.key,
+            owner: params.identity.owner,
+          },
+          leaseMs: params.leaseMs,
+          heartbeatMs: params.heartbeatMs,
+          processOwner: params.processOwner,
+          shared: shared.buffer,
+        } satisfies LeaseHeartbeatWorkerData,
+        env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
+        execArgv: workerArgv.slice(0, -1),
+        stdout: true,
+        stderr: true,
+      }),
     );
   } catch (error) {
     release();

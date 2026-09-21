@@ -6,6 +6,8 @@ import type { NodeWorkerLaunchReceipt, NodeWorkerLaunchStore } from "./node-work
 import { inspectNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import {
   nodeWorkerReceiptMatchesOwner,
+  type NodeWorkerActiveOwnership,
+  type NodeWorkerObservedTerminal,
   type NodeWorkerStopState,
 } from "./node-worker-supervisor-ownership.js";
 import {
@@ -14,6 +16,8 @@ import {
   signalOwnedNodeWorkerTree,
   waitForOwnedNodeWorkerTreeDeath,
 } from "./node-worker-tree-control.js";
+import { reconcileNodeWorkerTurnCancellation } from "./node-worker-turn-lifecycle.js";
+import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
 const STOP_GRACE_MS = 1_000;
 const FORCE_STOP_WAIT_MS = 4_000;
@@ -96,7 +100,7 @@ export function createNodeWorkerLaunchRecovery(
         return observed;
       }
       recovery.params.notifyCapacity = true;
-      return context.store.get(receipt.launchId) ?? receipt;
+      return (await context.store.get(receipt.launchId)) ?? receipt;
     } finally {
       clearTimeout(timer);
     }
@@ -114,21 +118,22 @@ async function recoverNodeWorkerLaunch(params: {
   isRecoveryActive: () => boolean;
 }): Promise<NodeWorkerLaunchReceipt> {
   const { receipt } = params;
-  const latest = () => params.store.get(receipt.launchId) ?? receipt;
-  const stillOwned = () => {
+  const latest = async () => (await params.store.get(receipt.launchId)) ?? receipt;
+  const stillOwned = async () => {
     // Shutdown abandons this observation while the old worker keeps its durable slot.
     if (!params.isRecoveryActive()) {
       return false;
     }
-    const current = params.store.getMatching(receipt);
+    const current = await params.store.getMatching(receipt);
     return (
+      params.isRecoveryActive() &&
       current?.state === receipt.state &&
       current.gatewayNamespace === receipt.gatewayNamespace &&
       current.workerCleanupMode === receipt.workerCleanupMode &&
       nodeWorkerReceiptMatchesOwner(current, receipt.supervisor, receipt.worker, receipt.container)
     );
   };
-  if ((receipt.state !== "pending" && receipt.state !== "running") || !stillOwned()) {
+  if ((receipt.state !== "pending" && receipt.state !== "running") || !(await stillOwned())) {
     return latest();
   }
   const previousSupervisor = inspectNodeWorkerProcessIdentity(receipt.supervisor);
@@ -139,7 +144,7 @@ async function recoverNodeWorkerLaunch(params: {
     // A pending container can exist before its identity reaches the journal.
     // Sweep it before releasing the reservation, then revalidate any pending adoption.
     await params.containerLifecycle.initialize();
-    if (!stillOwned()) {
+    if (!(await stillOwned())) {
       return latest();
     }
   }
@@ -148,7 +153,7 @@ async function recoverNodeWorkerLaunch(params: {
       throw new Error("node worker container isolation has no lifecycle owner");
     }
     const containerState = await params.containerLifecycle.inspect(receipt.container, receipt);
-    if (!stillOwned()) {
+    if (!(await stillOwned())) {
       return latest();
     }
     if (containerState === "unknown") {
@@ -173,12 +178,12 @@ async function recoverNodeWorkerLaunch(params: {
       return latest();
     }
     if (workerState === "live") {
-      if (!stillOwned()) {
+      if (!(await stillOwned())) {
         return latest();
       }
       const ownedAnchor = receipt.workerCleanupMode === "owned-anchor";
       if (ownedAnchor) {
-        signalOwnedNodeWorkerAnchor(receipt.worker, stillOwned);
+        await signalOwnedNodeWorkerAnchor(receipt.worker, stillOwned);
       } else {
         // Missing mode retains the released v2026.9.4 direct-worker group contract.
         await signalOwnedNodeWorkerTree(receipt.worker, "SIGTERM");
@@ -189,18 +194,20 @@ async function recoverNodeWorkerLaunch(params: {
       workerState = await waitForOwnedNodeWorkerTreeDeath(
         receipt.worker,
         ownedAnchor ? undefined : STOP_GRACE_MS,
-        () => stillOwned() && (!ownedAnchor || inspectNodeWorkerProcessIdentity(worker) === "live"),
+        async () =>
+          (await stillOwned()) &&
+          (!ownedAnchor || inspectNodeWorkerProcessIdentity(worker) === "live"),
       );
       if (
         ownedAnchor &&
         workerState === "live" &&
-        params.store.getMatching(receipt)?.workerLineageSettled === true
+        (await params.store.getMatching(receipt))?.workerLineageSettled === true
       ) {
         // Anchor exit can precede the kernel's final removal of its killed group.
         workerState = await waitForOwnedNodeWorkerTreeDeath(worker, undefined, stillOwned);
       }
       if (workerState === "live" && !ownedAnchor) {
-        if (!stillOwned()) {
+        if (!(await stillOwned())) {
           return latest();
         }
         await signalOwnedNodeWorkerTree(receipt.worker, "SIGKILL");
@@ -216,7 +223,7 @@ async function recoverNodeWorkerLaunch(params: {
     }
     if (
       receipt.workerCleanupMode === "owned-anchor" &&
-      params.store.getMatching(receipt)?.workerLineageSettled !== true
+      (await params.store.getMatching(receipt))?.workerLineageSettled !== true
     ) {
       log.warn(
         `Worker ${receipt.launchId} lost its cleanup anchor without recorded lineage completion; capacity remains reserved. Inspect remaining worker descendants and node-host logs; restarting alone cannot verify cleanup.`,
@@ -224,24 +231,91 @@ async function recoverNodeWorkerLaunch(params: {
       return latest();
     }
   }
-  if (!stillOwned()) {
-    return latest();
+  const recoveryClosed = new Error("node worker launch recovery is closed");
+  const recoveryCancelled = new Error("node worker launch recovery was cancelled before admission");
+  while (true) {
+    if (!(await stillOwned())) {
+      return latest();
+    }
+    const state = params.state ?? "interrupted";
+    try {
+      return await params.capacity.finish(
+        {
+          launchId: receipt.launchId,
+          planHash: receipt.planHash,
+          supervisor: receipt.supervisor,
+          worker: receipt.worker,
+          state,
+          errorText:
+            state === "cancelled"
+              ? "node worker launch cancelled"
+              : receipt.worker
+                ? "node host stopped before the worker launch completed"
+                : "node host stopped before the worker launch started",
+        },
+        params.notifyCapacity,
+        {
+          assertCurrent: () => {
+            // Journal admission can yield after the last durable ownership read.
+            if (!params.isRecoveryActive()) {
+              throw recoveryClosed;
+            }
+            if (state === "interrupted" && params.state === "cancelled") {
+              throw recoveryCancelled;
+            }
+          },
+        },
+      );
+    } catch (error) {
+      if (error === recoveryClosed) {
+        return latest();
+      }
+      // The journal only invokes this guard before its transaction grant. An exact
+      // refusal permits the one-way cancellation upgrade; delivery failures do not.
+      if (error === recoveryCancelled) {
+        continue;
+      }
+      throw error;
+    }
   }
-  const state = params.state ?? "interrupted";
-  return params.capacity.finish(
-    {
-      launchId: receipt.launchId,
-      planHash: receipt.planHash,
-      supervisor: receipt.supervisor,
-      worker: receipt.worker,
-      state,
-      errorText:
-        state === "cancelled"
-          ? "node worker launch cancelled"
-          : receipt.worker
-            ? "node host stopped before the worker launch completed"
-            : "node host stopped before the worker launch started",
-    },
-    params.notifyCapacity,
-  );
+}
+
+/** Persist the observed owner outcome before releasing its physical slot. */
+export function reconcileNodeWorkerTerminal(
+  context: {
+    active: Map<string, NodeWorkerActiveOwnership>;
+    turns: NodeWorkerTurnStore;
+    capacity: NodeWorkerCapacity;
+  },
+  active: NodeWorkerObservedTerminal,
+): Promise<NodeWorkerLaunchReceipt> {
+  if (active.reconciliation) {
+    return active.reconciliation;
+  }
+  const operation = (async () => {
+    await reconcileNodeWorkerTurnCancellation(active, context.turns);
+    const receipt = await context.capacity.finish({
+      launchId: active.launchId,
+      planHash: active.planHash,
+      supervisor: active.supervisor,
+      worker: active.worker,
+      ...active.outcome,
+    });
+    if (receipt.state === "pending" || receipt.state === "running") {
+      throw new Error(`node worker launch ${active.launchId} terminal state was not persisted`);
+    }
+    active.turn?.settle();
+    active.turn = undefined;
+    if (context.active.get(active.launchId) === active) {
+      context.active.delete(active.launchId);
+    }
+    return receipt;
+  })();
+  const pending = operation.finally(() => {
+    if (active.reconciliation === pending) {
+      active.reconciliation = undefined;
+    }
+  });
+  active.reconciliation = pending;
+  return pending;
 }

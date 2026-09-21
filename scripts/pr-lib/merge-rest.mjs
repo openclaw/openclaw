@@ -226,7 +226,7 @@ function beginRead(repo, pr, observe) {
   return { authority, main: mainSha, record, policy };
 }
 
-function finishRead(repo, pr, snapshot) {
+function finishRead(repo, pr, snapshot, requireStableMain) {
   const current = readPullRequest(repo, snapshot.authority, pr);
   const identity = (record) => {
     const {
@@ -242,7 +242,7 @@ function finishRead(repo, pr, snapshot) {
   );
   const mainSha = readMain(repo);
   requireEvidence(
-    current.merged || mainSha === snapshot.main,
+    !requireStableMain || current.merged || mainSha === snapshot.main,
     "main changed while reading evidence",
   );
   snapshot.main = mainSha;
@@ -533,7 +533,7 @@ function mergeBody(value) {
 
 function main([mode, repository, prValue, head, bodySnapshot, expectedObservation, ...extra]) {
   requireEvidence(
-    ["observe", "checks", "preview", "merge"].includes(mode) &&
+    ["observe", "observe-admission", "checks", "preview", "merge"].includes(mode) &&
       /^[1-9][0-9]*$/.test(prValue ?? "") &&
       Number.isSafeInteger(Number(prValue)) &&
       extra.length === 0 &&
@@ -546,10 +546,11 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
   );
   const repo = parseRepository(repository);
   const pr = Number(prValue);
+  const observing = mode === "observe" || mode === "observe-admission";
   const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
-  const snapshot = beginRead(repo, pr, mode === "observe");
+  const snapshot = beginRead(repo, pr, observing);
   const checks =
-    mode === "checks" || (["observe", "merge"].includes(mode) && snapshot.record.state === "open")
+    mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
       ? requiredChecks(repo, snapshot)
       : undefined;
   if (mode !== "checks" && checks !== undefined) {
@@ -559,7 +560,7 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
     );
     snapshot.policy.requiredChecks = checks;
   }
-  const current = finishRead(repo, pr, snapshot);
+  const current = finishRead(repo, pr, snapshot, mode === "observe");
   let result;
   if (mode === "checks") {
     result = checks;
@@ -583,7 +584,7 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
       },
       transport: "rest",
     };
-  } else if (mode === "observe") {
+  } else if (observing) {
     result = {
       data: {
         repository: {
@@ -608,16 +609,16 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
         nonemptyString(current.title),
       "immediate squash requires the prepared open, non-draft, clean PR head",
     );
+    const { main: _main, ...expectedFacts } = JSON.parse(expectedObservation);
     requireEvidence(
       JSON.stringify(
         canonical({
-          main: snapshot.main,
           pr: pullRequest(current),
           transport: "rest",
           restPolicy: snapshot.policy,
         }),
-      ) === JSON.stringify(canonical(JSON.parse(expectedObservation))),
-      "PR, main, or policy changed before merge dispatch",
+      ) === JSON.stringify(canonical(expectedFacts)),
+      "PR or policy changed before merge dispatch",
     );
     const suffix = ` (#${pr})`;
     const payload = {

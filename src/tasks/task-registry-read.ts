@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -5,7 +6,12 @@ import {
   captureTaskRegistryReadFence,
   hasPendingTaskRegistryEvents,
 } from "./task-registry-listener-state.js";
-import { cloneTaskRecord, selectTaskRecordsForOwnerTree } from "./task-registry-records.js";
+import {
+  cloneTaskRecord,
+  compareTasksNewestFirst,
+  listTasksFromIndex,
+  selectTaskRecordsForOwnerTree,
+} from "./task-registry-records.js";
 import {
   assertTaskRegistryOwnerCurrent,
   ensureTaskRegistryReadyAsync,
@@ -22,6 +28,7 @@ import {
 import { getTaskRegistryStore, type TaskRegistryStore } from "./task-registry.store.js";
 import type { TaskRegistryMutationScope } from "./task-registry.store.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { taskMatchesRelatedSession } from "./task-session-identity.js";
 
 export type TaskRegistryRead = {
   assertOwnerCurrent: () => void;
@@ -33,6 +40,8 @@ export type TaskRegistryRead = {
   getTasksByRunId: (runId: string) => TaskRecord[];
   listTaskRecordsForChildSessionKey: (childSessionKey: string) => TaskRecord[];
   listTaskRecordsForOwnerTree: (rootOwnerKeys: ReadonlySet<string>) => TaskRecord[];
+  listTasksForRelatedSessionKey: (sessionKey: string, sessionAgentId?: string) => TaskRecord[];
+  listTasksForAgentId: (agentId: string) => TaskRecord[];
 };
 
 function isTaskRegistryReadScopeCurrent(
@@ -97,6 +106,21 @@ type TaskRegistryReadOwner = {
   assertCurrent: () => void;
 };
 
+function canReadResidentTaskMetadata(): boolean {
+  const { projection } = getTaskRegistryProcessState();
+  if (projection.dirty || !hasPendingTaskRegistryEvents()) {
+    return false;
+  }
+  const preserved = new Set<TaskRegistryMutationScope>();
+  for (const pending of projection.pending) {
+    if (pending.readIdentity !== "preserved") {
+      return false;
+    }
+    preserved.add(pending.scope);
+  }
+  return [...projection.dirtyScopes].every((scope) => preserved.has(scope));
+}
+
 /** External readers join a fixed accepted prefix; persistence preparation must never use this fence. */
 export async function prepareTaskRegistryReadOwner(): Promise<TaskRegistryReadOwner> {
   const context = captureOpenClawStateWorkerContext();
@@ -123,7 +147,14 @@ export async function prepareTaskRegistryRead(
     store,
     assertCurrent: assertOwnerCurrent,
   } = owner ?? (await prepareTaskRegistryReadOwner());
-  if (!(await prepareTaskRegistryProjectionAsync(context, store, 3))) {
+  assertOwnerCurrent();
+  await ensureTaskRegistryReadyAsync(context);
+  assertOwnerCurrent();
+  // Later metadata preserves routing and access; its live owners still owe publication.
+  if (
+    !canReadResidentTaskMetadata() &&
+    !(await prepareTaskRegistryProjectionAsync(context, store, 3))
+  ) {
     return undefined;
   }
   const assertCurrent = () => {
@@ -194,6 +225,35 @@ export async function prepareTaskRegistryRead(
         }
         return cloneTaskRecord(task);
       });
+    },
+    listTasksForRelatedSessionKey(sessionKey, sessionAgentId) {
+      assertCurrent();
+      const key = normalizeOptionalString(sessionKey);
+      if (!key) {
+        return [];
+      }
+      return listTasksFromIndex(tasks, taskIdsByRelatedSessionKey, key).filter((task) => {
+        if (!isTaskCurrent(task.taskId)) {
+          throw new Error("Task registry read identity requires preparation");
+        }
+        return taskMatchesRelatedSession(task, key, sessionAgentId);
+      });
+    },
+    listTasksForAgentId(agentId) {
+      assertCurrent();
+      const lookup = agentId.trim();
+      if (!lookup) {
+        return [];
+      }
+      return [...tasks.values()]
+        .filter((task) => task.agentId?.trim() === lookup)
+        .map((task) => {
+          if (!isTaskCurrent(task.taskId)) {
+            throw new Error("Task registry read identity requires preparation");
+          }
+          return cloneTaskRecord(task);
+        })
+        .toSorted(compareTasksNewestFirst);
     },
   };
 }

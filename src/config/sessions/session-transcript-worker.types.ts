@@ -38,7 +38,22 @@ import type {
   SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
+import type {
+  SessionTranscriptSearchParams,
+  SessionTranscriptSearchResult,
+} from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+
+export type SessionTranscriptSearchWorkerInput = {
+  kind: "transcript-search";
+  database: { agentId: string; path: string };
+  params: SessionTranscriptSearchParams;
+};
+
+export type SessionTranscriptSearchWorkerResult = {
+  kind: "transcript-search";
+  result: SessionTranscriptSearchResult;
+};
 
 export type SessionModelContextWorkerInput = {
   kind: "model-context";
@@ -123,6 +138,7 @@ export type SessionBranchSummaryWorkerInput = {
 };
 
 export type SessionTranscriptWorkerValues = {
+  "transcript-search": SessionTranscriptSearchWorkerResult;
   "branch-summaries": SessionBranchSummaryReadResult;
   "history-page": SessionHistoryWorkerResult;
   "session-row-presence": boolean;

@@ -79,11 +79,6 @@ export function isNodeRoleMethod(method: string): boolean {
   return isCoreNodeGatewayMethod(method);
 }
 
-/** Resolves the required static operator scope for a gateway method, if one exists. */
-function resolveRequiredOperatorScopeForMethod(method: string): OperatorScope | undefined {
-  return resolveScopedMethod(method);
-}
-
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     return undefined;
@@ -211,9 +206,7 @@ function findMissingOperatorScope(
   requiredScopes: readonly OperatorScope[],
   scopes: readonly string[],
 ): OperatorScope | undefined {
-  return requiredScopes.find(
-    (scope) => !authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
-  );
+  return requiredScopes.find((scope) => !operatorScopeSatisfied(scope, scopes));
 }
 
 /** Returns the narrowest known operator scopes needed to call a gateway method. */
@@ -224,7 +217,7 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(
   if (isDynamicOperatorGatewayMethod(method)) {
     return resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params);
   }
-  const requiredScope = resolveRequiredOperatorScopeForMethod(method);
+  const requiredScope = resolveScopedMethod(method);
   if (requiredScope) {
     return [requiredScope];
   }
@@ -264,7 +257,7 @@ export function authorizeOperatorScopesForMethod(
     );
     return missingScope ? { allowed: false, missingScope } : { allowed: true };
   }
-  const requiredScope = resolveRequiredOperatorScopeForMethod(method) ?? ADMIN_SCOPE;
+  const requiredScope = resolveScopedMethod(method) ?? ADMIN_SCOPE;
   return authorizeOperatorScopesForRequiredScope(requiredScope, scopes);
 }
 
@@ -286,8 +279,5 @@ export function isGatewayMethodClassified(method: string): boolean {
   if (isDynamicOperatorGatewayMethod(method)) {
     return true;
   }
-  return (
-    isCoreGatewayMethodClassified(method) ||
-    resolveRequiredOperatorScopeForMethod(method) !== undefined
-  );
+  return isCoreGatewayMethodClassified(method) || resolveScopedMethod(method) !== undefined;
 }

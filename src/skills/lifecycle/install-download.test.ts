@@ -9,7 +9,7 @@ import { __setFsSafeTestHooksForTest, getFsSafeTestHooks } from "@openclaw/fs-sa
 import JSZip from "jszip";
 import * as tar from "tar";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "../../infra/fs-safe-defaults.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
 import { createInstallDownloadTestState } from "../test-support/install-download-test-utils.js";
@@ -871,10 +871,6 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
       const name = `tbz2-staged-${operation}-failure`;
       const targetDir = path.join(resolveSkillToolsRootDir(name), "target");
       mockArchiveResponse(TAR_BZIP2_FIXTURES.safe);
-      const nativeConfig = getFsSafeNativeConfig();
-      if (operation === "read") {
-        configureFsSafeNative({ mode: "off" });
-      }
       let extractedPath = "";
       const openedHandles: Array<{ handle: FileHandle; syncs: number; closes: number }> = [];
       __setFsSafeTestHooksForTest({
@@ -908,12 +904,16 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         },
       });
       try {
-        const result = await installDownloadSkill({
-          name,
-          url: "https://example.invalid/archive.tbz2",
-          archive: "tar.bz2",
-          targetDir,
-        });
+        const result = await withEnvAsync(
+          operation === "read" ? { FS_SAFE_NATIVE_MODE: "off" } : {},
+          () =>
+            installDownloadSkill({
+              name,
+              url: "https://example.invalid/archive.tbz2",
+              archive: "tar.bz2",
+              targetDir,
+            }),
+        );
 
         expect(result.ok).toBe(false);
         expect(result.stderr).toContain(`staged ${operation} failed`);
@@ -927,7 +927,6 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
         await expect(fileExists(extractedPath)).resolves.toBe(false);
       } finally {
         __setFsSafeTestHooksForTest(undefined);
-        configureFsSafeNative(nativeConfig);
         vi.restoreAllMocks();
       }
     },

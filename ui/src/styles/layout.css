@@ -4016,11 +4016,6 @@ button.gateway-status:focus-visible {
   white-space: nowrap;
 }
 
-.gateway-status__outbox {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
 .gateway-status--offline .gateway-status__icon {
   color: var(--danger);
 }
@@ -4261,24 +4256,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 .sidebar-identity-menu__header {
   min-height: 42px;
   padding: 3px 4px;
-}
-
-.sidebar-identity-menu__outbox {
-  box-sizing: border-box;
-  width: min(260px, calc(100dvw - 44px));
-  padding: 4px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.4;
-  white-space: normal;
-}
-
-.sidebar-identity-menu__outbox strong {
-  color: var(--text);
-}
-
-.sidebar-identity-menu__outbox p {
-  margin: 4px 0 0;
 }
 
 .sidebar-identity-menu__avatar {

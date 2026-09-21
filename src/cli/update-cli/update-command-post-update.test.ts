@@ -19,9 +19,11 @@ import {
   expectFailureReport,
   expectUpdateFailure,
   managedServiceState,
+  mockVerifiedGatewayRun,
   programArguments,
   registerForegroundFinalizationTests,
   registerManagedInstallEnvironmentTest,
+  recordVerifiedGatewayRun,
   successfulPluginUpdate,
   taskRecovery,
   validConfigSnapshot,
@@ -635,6 +637,11 @@ describe("successful update finalization ordering", () => {
       async ({ outcome, stoppedAtMs, downtimeMs }) => {
         const changed = outcome !== "unchanged";
         const restartFailed = outcome === "rolled-back" || outcome === "unverified";
+        const packageRoot = tempDirs.make("update-downtime-installed-runtime-");
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ version: "2026.4.24" }),
+        );
         const serviceEnv = {
           ...process.env,
           HOME: identity.home,
@@ -656,20 +663,6 @@ describe("successful update finalization ordering", () => {
         mocks.readServiceState.mockResolvedValue(
           managedServiceState(serviceEnv, { environment: serviceEnv }),
         );
-        const recordVerified = () => {
-          recordUpdateRunVerification(
-            run.runId,
-            {
-              serviceRunning: true,
-              versionMatch: true,
-              settled: true,
-              readyz: true,
-              channelsReady: true,
-              pluginErrors: [],
-            },
-            { env: serviceEnv },
-          );
-        };
         mocks.restartService.mockImplementation(async (params) => {
           events.push("start");
           clock.elapsed += events.length === 1 ? 500 : 200;
@@ -677,7 +670,7 @@ describe("successful update finalization ordering", () => {
             recordUpdateRunVerification(run.runId, { serviceRunning: false }, { env: serviceEnv });
             return "restart-health-failed";
           }
-          recordVerified();
+          recordVerifiedGatewayRun(run);
           params.onVerified?.(Date.now());
           return "ok";
         });
@@ -704,7 +697,11 @@ describe("successful update finalization ordering", () => {
             expect(getUpdateRun(run.runId, { env: serviceEnv })?.confirmedAtMs).toBeNull();
             clock.elapsed = 12_000;
             if (outcome === "rolled-back") {
-              recordVerified();
+              await fs.writeFile(
+                path.join(packageRoot, "package.json"),
+                JSON.stringify({ version: "2026.4.23" }),
+              );
+              mockVerifiedGatewayRun(run);
             }
             return {
               result: {
@@ -731,6 +728,7 @@ describe("successful update finalization ordering", () => {
         );
         const finishing = finishSuccessfulPackageSwitch(
           {
+            packageRoot,
             restartEnvironment: serviceEnv,
             sealed: true,
             stoppedAtMs: stoppedAtMs === 0 ? 0 : clock.origin + stoppedAtMs,

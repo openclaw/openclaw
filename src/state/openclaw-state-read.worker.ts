@@ -16,6 +16,11 @@ import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-co
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { readUpdateRunRecord, readUpdateRuns } from "../infra/update-run-read.kernel.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
+import {
+  pluginBlobLookupInDatabase,
+  pluginBlobEntriesInDatabase,
+} from "../plugin-state/plugin-blob-store.sqlite.js";
+import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
@@ -53,7 +58,8 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     isRecord(coordinatorRuntime) &&
     typeof coordinatorRuntime.directory === "string" &&
     typeof coordinatorRuntime.keepAlive === "boolean" &&
-    (input.command.type === "admit" ||
+    (isPluginBlobReadCommand(input.command) ||
+      input.command.type === "admit" ||
       input.command.type === "exec-approvals.read" ||
       input.command.type === "agentDatabaseRegistry.read" ||
       (input.command.type === "userProfiles.avatar.reconcile" &&
@@ -144,6 +150,30 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "pluginBlob.lookup") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: pluginBlobLookupInDatabase(db, {
+                      ...command.input,
+                      env: input.context.environment,
+                      path: input.databasePath,
+                    }),
+                  };
+                }
+                if (command.type === "pluginBlob.entries") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: pluginBlobEntriesInDatabase(db, {
+                      ...command.input,
+                      env: input.context.environment,
+                      path: input.databasePath,
+                    }),
+                  };
+                }
                 if (command.type === "updateRuns.get") {
                   return {
                     ok: true,

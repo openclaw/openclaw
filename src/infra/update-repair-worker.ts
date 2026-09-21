@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { createCommandTerminationController } from "../process/exec-termination.js";
 import { installationTargetEnv } from "./installation-target-context.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
@@ -100,6 +101,7 @@ export async function runUpdateRepairWorker(
   let commandSettled = false;
   let result: UpdateRepairResult | undefined;
   let failure: string | undefined;
+  let cleanupFailure: { error: unknown } | undefined;
   let stopping = false;
   let started = false;
   let requestId = 0;
@@ -116,6 +118,9 @@ export async function runUpdateRepairWorker(
   });
   cancelController.signal.addEventListener("abort", () => child.kill("SIGTERM"), { once: true });
   const stop = (error: unknown) => {
+    if (hasCommandProcessCleanupError(error)) {
+      cleanupFailure ??= { error };
+    }
     if (stopping) {
       return;
     }
@@ -198,8 +203,10 @@ export async function runUpdateRepairWorker(
             assertCurrent();
             finalValidation = { ...validation, summary: clean(validation.summary) };
             send({ type: "validation-result", id: message.id, validation: finalValidation });
-          } catch (error) {
-            if (!signal.aborted && child.connected) {
+          } catch (error: unknown) {
+            if (hasCommandProcessCleanupError(error)) {
+              stop(error);
+            } else if (!signal.aborted && child.connected) {
               send({ type: "validation-error", id: message.id, reason: clean(error) });
             }
           } finally {
@@ -258,6 +265,9 @@ export async function runUpdateRepairWorker(
     pending?.controller.abort(new Error("Update repair process exited."));
     await pending?.promise;
     await termination.settle();
+    if (cleanupFailure) {
+      throw cleanupFailure.error;
+    }
     assertCurrent();
     return result && code === 0 && !failure
       ? result
@@ -266,7 +276,17 @@ export async function runUpdateRepairWorker(
           failure ??
             "Update repair process exited without a result. Run openclaw triage to inspect the installation.",
         );
-  } catch (error) {
+  } catch (error: unknown) {
+    if (cleanupFailure && cleanupFailure.error !== error) {
+      throw new AggregateError(
+        [cleanupFailure.error, error],
+        "Repair validation and child settlement failed",
+        { cause: error },
+      );
+    }
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     return stopped("aborted", clean(error));
   } finally {
     clearTimeout(timer);

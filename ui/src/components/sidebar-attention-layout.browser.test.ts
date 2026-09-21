@@ -2,6 +2,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { client, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
@@ -55,7 +56,7 @@ function panelParams(
     context: {
       basePath: "",
       navigate: vi.fn(),
-      gateway: { snapshot: undefined },
+      gateway: createGatewayHarness(client(vi.fn(async () => ({})))).gateway,
     } as unknown as ApplicationContext,
     mentions: {
       snapshot: {
@@ -460,7 +461,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         <div class="sidebar-issues-panel__grabber"></div>
         <header class="sidebar-issues-panel__header">
           <div class="sidebar-issues-panel__header-actions">
-            <button class="sidebar-issues-panel__dismiss-shown" type="button">Dismiss all shown</button>
+            <button class="sidebar-issues-panel__dismiss-shown" type="button">Dismiss shown</button>
             <button class="sidebar-brand__icon sidebar-issues-panel__mobile-close" type="button">
               Close
             </button>

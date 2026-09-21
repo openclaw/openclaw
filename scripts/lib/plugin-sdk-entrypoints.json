@@ -137,6 +137,7 @@
   "host-runtime",
   "types",
   "process-runtime",
+  "worker-task-server",
   "windows-spawn",
   "acp-runtime",
   "acp-runtime-backend",

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 364912,
-  "reason": "PR153238 landing continuation approved the bounded 512 B cap increase for cold clipboard image custody; measured Node24 gzip baseline, preserving current main route-label changes. The 512 B growth and 64 B build-variance allowances are unchanged.",
+  "startupJsGzipBytes": 365261,
+  "reason": "Approved #153178 rebase measurement with frozen Pako 3.0.2: 365172 B rounds up to 365261 B (356.7 KiB), above the previous 364954 B baseline. The existing 512 B growth and 64 B build-variance allowances remain unchanged, giving an explicit 365837 B enforcement limit.",
   "updatedAt": "2026-09-20"
 }

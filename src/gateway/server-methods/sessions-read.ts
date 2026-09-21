@@ -81,70 +81,69 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       }
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const scope = resolveSessionSearchScope(cfg, params);
-    if (!scope.ok) {
-      respond(false, undefined, scope.error);
-      return;
-    }
-    const { agentId, configured, requestedAgentId, sessionKeys } = scope;
-    const restrictIncognito =
-      Boolean(gatewayClientSessionCreator(client)) && !isGatewayAdmin(client);
-    const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
-      ? createSessionListEntryFilter({ client, cfg })
-      : undefined;
-    const restrictVisibility = restrictIncognito || Boolean(roleVisibilityFilter);
-    const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-    const canSearchSessionKey = (
-      sessionKey: string,
-      prepared?: ReturnType<typeof prepareSessionSharingTargets>[number],
-    ) => {
-      if (
-        isIncognitoSessionKey(sessionKey) &&
-        !canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey, agentId })
-      ) {
-        return false;
+    const prepareSearch = () => {
+      const cfg = context.getRuntimeConfig();
+      const scope = resolveSessionSearchScope(cfg, params);
+      if (!scope.ok) {
+        respond(false, undefined, scope.error);
+        return undefined;
       }
-      if (!roleVisibilityFilter) {
-        return true;
+      const { agentId, configured, requestedAgentId, sessionKeys } = scope;
+      const restrictIncognito =
+        Boolean(gatewayClientSessionCreator(client)) && !isGatewayAdmin(client);
+      const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
+        ? createSessionListEntryFilter({ client, cfg })
+        : undefined;
+      const restrictVisibility = restrictIncognito || Boolean(roleVisibilityFilter);
+      const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+      const canSearchSessionKey = (
+        sessionKey: string,
+        prepared?: ReturnType<typeof prepareSessionSharingTargets>[number],
+      ) => {
+        if (
+          isIncognitoSessionKey(sessionKey) &&
+          !canAccessIncognitoSession({ cfg, client: client ?? null, sessionKey, agentId })
+        ) {
+          return false;
+        }
+        if (!roleVisibilityFilter) {
+          return true;
+        }
+        if (prepared && !prepared.ok) {
+          throw prepared.error;
+        }
+        const target = prepared
+          ? prepared.value
+          : resolveSessionSharingTarget({ cfg, sessionKey, agentId, targetDiscoveryCache });
+        return Boolean(target && roleVisibilityFilter(target.storeKey, target.entry));
+      };
+      if (requestedAgentId && !params.sessionKeys && configured) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "agentId requires sessionKeys"),
+        );
+        return undefined;
       }
-      if (prepared && !prepared.ok) {
-        throw prepared.error;
+      const scopedSessionKeys = (
+        configured
+          ? sessionKeys
+          : sessionKeys?.filter((sessionKey) => {
+              const sessionAgentId =
+                requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
+                  ? requestedAgentId
+                  : resolveSessionStoreAgentId(cfg, sessionKey);
+              return sessionAgentId === agentId;
+            })
+      )?.filter((sessionKey) => canSearchSessionKey(sessionKey));
+      const searchTargets = configured
+        ? [{ agentId, storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }) }]
+        : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId);
+      if (!configured && (searchTargets.length === 0 || scopedSessionKeys?.length === 0)) {
+        respond(true, { results: [] }, undefined);
+        return undefined;
       }
-      const target = prepared
-        ? prepared.value
-        : resolveSessionSharingTarget({ cfg, sessionKey, agentId, targetDiscoveryCache });
-      return Boolean(target && roleVisibilityFilter(target.storeKey, target.entry));
-    };
-    if (requestedAgentId && !params.sessionKeys && configured) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "agentId requires sessionKeys"),
-      );
-      return;
-    }
-    const scopedSessionKeys = (
-      configured
-        ? sessionKeys
-        : sessionKeys?.filter((sessionKey) => {
-            const sessionAgentId =
-              requestedAgentId && (sessionKey === "global" || sessionKey === "unknown")
-                ? requestedAgentId
-                : resolveSessionStoreAgentId(cfg, sessionKey);
-            return sessionAgentId === agentId;
-          })
-    )?.filter((sessionKey) => canSearchSessionKey(sessionKey));
-    const searchTargets = configured
-      ? [{ agentId, storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }) }]
-      : resolveExistingAgentSessionStoreTargetsSync(cfg, agentId);
-    if (!configured && (searchTargets.length === 0 || scopedSessionKeys?.length === 0)) {
-      respond(true, { results: [] }, undefined);
-      return;
-    }
-    try {
-      let archivedTranscriptsExcluded = 0;
-      const targetResults = searchTargets.flatMap((target) => {
+      return searchTargets.flatMap((target) => {
         const targetSessionKeys =
           scopedSessionKeys ??
           (restrictVisibility
@@ -183,43 +182,68 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         if (targetSessionKeys?.length === 0) {
           return [];
         }
-        const result = searchSessionTranscripts({
-          ...target,
-          query,
-          // Over-fetch retired multi-store searches so deduplication can still fill the caller's
-          // requested page when the same transcript was copied during a store migration.
-          limit: configured ? params.limit : 25,
-          ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
-        });
-        archivedTranscriptsExcluded += result.archivedTranscriptsExcluded ?? 0;
-        return [result];
+        return [
+          {
+            ...target,
+            query,
+            // Over-fetch retired multi-store searches so deduplication can still fill the caller's
+            // requested page when the same transcript was copied during a store migration.
+            limit: configured ? params.limit : 25,
+            ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
+          },
+        ];
       });
-      const limit = params.limit ?? 10;
-      const sortedHits = targetResults
-        .flatMap((result) => result.hits)
-        .toSorted(
-          (left, right) =>
-            right.score - left.score ||
-            right.timestamp - left.timestamp ||
-            left.messageId.localeCompare(right.messageId),
-        );
-      const seenHits = new Set<string>();
-      const hits = sortedHits.filter((hit) => {
-        const identity = `${hit.sessionKey}\u0000${hit.sessionId}\u0000${hit.messageId}`;
-        if (seenHits.has(identity)) {
-          return false;
+    };
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const requests = prepareSearch();
+        if (!requests) {
+          return;
         }
-        seenHits.add(identity);
-        return true;
-      });
-      respond(true, {
-        results: hits.slice(0, limit),
-        ...(archivedTranscriptsExcluded ? { archivedTranscriptsExcluded } : {}),
-        ...(targetResults.some((result) => result.indexing) ? { indexing: true } : {}),
-        ...(targetResults.some((result) => result.truncated) || hits.length > limit
-          ? { truncated: true }
-          : {}),
-      });
+        const targetResults = await Promise.all(
+          requests.map((request) => searchSessionTranscripts(request)),
+        );
+        // Current configuration, identity, and sharing must authorize the whole result page.
+        const current = prepareSearch();
+        if (!current) {
+          return;
+        }
+        if (JSON.stringify(current) !== JSON.stringify(requests)) {
+          continue;
+        }
+        const archivedTranscriptsExcluded = targetResults.reduce(
+          (count, result) => count + (result.archivedTranscriptsExcluded ?? 0),
+          0,
+        );
+        const limit = params.limit ?? 10;
+        const sortedHits = targetResults
+          .flatMap((result) => result.hits)
+          .toSorted(
+            (left, right) =>
+              right.score - left.score ||
+              right.timestamp - left.timestamp ||
+              left.messageId.localeCompare(right.messageId),
+          );
+        const seenHits = new Set<string>();
+        const hits = sortedHits.filter((hit) => {
+          const identity = `${hit.sessionKey}\u0000${hit.sessionId}\u0000${hit.messageId}`;
+          if (seenHits.has(identity)) {
+            return false;
+          }
+          seenHits.add(identity);
+          return true;
+        });
+        respond(true, {
+          results: hits.slice(0, limit),
+          ...(archivedTranscriptsExcluded ? { archivedTranscriptsExcluded } : {}),
+          ...(targetResults.some((result) => result.indexing) ? { indexing: true } : {}),
+          ...(targetResults.some((result) => result.truncated) || hits.length > limit
+            ? { truncated: true }
+            : {}),
+        });
+        return;
+      }
+      throw new Error("Session search scope changed while reading; retry the request");
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }

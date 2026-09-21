@@ -1,10 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createGitHubIdentityStatusTool } from "../agents/tools/github-identity-status-tool.js";
-import {
-  callAgentToolGatewayRequest,
-  callInProcessGatewayTool,
-} from "../agents/tools/in-process-gateway.js";
+import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -29,22 +26,14 @@ describe("typed in-process agent continuation authorization", () => {
     waitForTurn.mockReset();
   });
 
-  it.each([
-    { sourceTool: "sessions_send", readMethod: "sessions.list" },
-    { sourceTool: "subagent_announce", readMethod: "sessions.list" },
-    { sourceTool: "subagent_settle", readMethod: "sessions.list" },
-    { sourceTool: "subagent_settle", readMethod: "tools.github.status" },
-  ] as const)(
-    "preserves $readMethod access after $sourceTool admits a write-only continuation",
-    async ({ sourceTool, readMethod }) => {
+  it.each(["sessions_send", "subagent_announce", "subagent_settle"] as const)(
+    "preserves GitHub identity access after %s admits a write-only continuation",
+    async (sourceTool) => {
       const owner = createOperatorClient({
         profileId: "continuation-owner",
         scopes: ["operator.read", "operator.write"],
       });
-      const readResult =
-        readMethod === "tools.github.status"
-          ? { effective: { credentialState: "available", refreshState: "idle" } }
-          : { sessions: [] };
+      const readResult = { effective: { credentialState: "available", refreshState: "idle" } };
       const readHandler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
         expect(client?.connect.scopes).toEqual(["operator.read"]);
         expect(client?.authenticatedUserProfile?.profileId).toBe("continuation-owner");
@@ -54,7 +43,7 @@ describe("typed in-process agent continuation authorization", () => {
       context.getGatewayMethodRegistry = () =>
         createGatewayMethodRegistry([
           {
-            name: readMethod,
+            name: "tools.github.status",
             scope: "operator.read",
             owner: { kind: "core", area: "sessions" },
             handler: readHandler,
@@ -64,15 +53,11 @@ describe("typed in-process agent continuation authorization", () => {
       startTurn.mockImplementation(async ({ principal, io }) => {
         expect(principal.connect.scopes).toEqual(["operator.write"]);
         io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
-        if (readMethod === "tools.github.status") {
-          const result = await withGatewayToolCallerIdentity(
-            { agentId: "main", sessionKey: "agent:main:continuation" },
-            () => createGitHubIdentityStatusTool().execute("identity-status", {}),
-          );
-          expect(result.details).toEqual(readResult);
-        } else {
-          await expect(callInProcessGatewayTool(readMethod, {})).resolves.toEqual(readResult);
-        }
+        const result = await withGatewayToolCallerIdentity(
+          { agentId: "main", sessionKey: "agent:main:continuation" },
+          () => createGitHubIdentityStatusTool().execute("identity-status", {}),
+        );
+        expect(result.details).toEqual(readResult);
         io.emitFinal([true, { runId, status: "ok" }, undefined]);
       });
       const params = {

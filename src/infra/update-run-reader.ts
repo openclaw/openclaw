@@ -5,6 +5,7 @@ import type {
 } from "../state/openclaw-state-db-contract.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
 } from "../state/openclaw-state-db-readonly.js";
@@ -19,6 +20,7 @@ import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import {
   decodeRun,
   readActiveUpdateRun,
+  readLatestUpdateRun,
   readUpdateRunRecord,
   readUpdateRuns,
   type UpdateRunListInput,
@@ -107,6 +109,18 @@ export function listUpdateRuns(
       options,
       openStateSchemaReadAdmission,
     ) ?? []
+  );
+}
+
+/** The fixed two-row status projection reuses the live owner; cold reads prepare one snapshot. */
+export async function getUpdateRunStatusAsync(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<{ activeRun?: UpdateRunRecord; lastRun?: UpdateRunRecord }> {
+  return (
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      ({ db }) => ({ activeRun: readActiveUpdateRun(db), lastRun: readLatestUpdateRun(db) }),
+      options,
+    )) ?? {}
   );
 }
 

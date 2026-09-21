@@ -190,6 +190,9 @@ export function createSessionRowProjectionFixture(params: {
     dirtyRowCount: 0,
     needsMaterialization: false,
     state: {
+      get revision() {
+        return revision;
+      },
       cfg,
       modelCatalog,
       rowContext,
@@ -212,7 +215,10 @@ export function createSessionRowProjectionFixture(params: {
         ? { row: projection.present(record, options), lifecycleRunId: record.entry.lifecycleRunId }
         : { row: null };
     },
-    dispose: () => rows.clear(),
+    dispose: () => {
+      revision++;
+      rows.clear();
+    },
   };
   return Object.assign(projection, { setEntry });
 }

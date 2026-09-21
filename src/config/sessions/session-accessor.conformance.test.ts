@@ -56,10 +56,6 @@ import {
   type TranscriptUpdatePayload,
 } from "./session-accessor.js";
 import {
-  branchCompactionCheckpointSession,
-  restoreCompactionCheckpointSession,
-} from "./session-accessor.sqlite-checkpoint.js";
-import {
   listSessionChildEntriesReadOnly,
   listSessionEntryRows,
   replaceSessionEntrySync,
@@ -72,7 +68,7 @@ import {
 } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
-import type { InternalSessionEntry, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import type { SessionEntry } from "./types.js";
 
 // Keep accessor conformance independent of any real openclaw.json on the machine.
 vi.mock("../config.js", async () => ({
@@ -497,10 +493,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
           .split("\n")
           .map((line) => JSON.parse(line)),
       ).toEqual([
-        expect.objectContaining({
-          id: "removed-lifecycle-event",
-          marker: "lifecycle-marker-run",
-        }),
+        expect.objectContaining({ id: "removed-lifecycle-event", marker: "lifecycle-marker-run" }),
       ]);
     });
 
@@ -1998,7 +1991,6 @@ describe("sqlite session normalization", () => {
       sessionId: "dashboard-session",
       updatedAt: Date.now() - 10 * 24 * 60 * 60 * 1000,
     };
-
     for (const [sessionKey, sessionId] of [
       ["agent:main:slack:channel:c1", "channel-session-1"],
       ["agent:main:slack:channel:c2", "channel-session-2"],
@@ -2395,297 +2387,6 @@ describe("sqlite session normalization", () => {
       updatedAt: expect.any(Number),
     });
     expect(upsertRow?.updated_at).toBe(upsertEntry.updatedAt);
-  });
-
-  it("branches a checkpoint by copying SQLite rows and creating the entry transactionally", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const sourceScope = {
-      agentId: "main",
-      env,
-      sessionId: "source-session",
-      sessionKey: "agent:main:main",
-      storePath: paths.sqlitePath,
-    };
-    const preCompactionScope = {
-      ...sourceScope,
-      sessionId: "pre-compaction-session",
-    };
-    const sourceEntryScope = {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath: paths.sqlitePath,
-    };
-    const branchKey = "agent:main:checkpoint-branch";
-    const checkpoint: SessionCompactionCheckpoint = {
-      checkpointId: "checkpoint-branch",
-      sessionKey: sourceEntryScope.sessionKey,
-      sessionId: "source-session",
-      createdAt: Date.parse("2026-01-01T00:00:00.000Z"),
-      reason: "manual",
-      tokensBefore: 42,
-      tokensAfter: 84,
-      tokensVersion: 1,
-      preCompaction: {
-        sessionId: "pre-compaction-session",
-        leafId: "pre-msg",
-      },
-      postCompaction: {
-        sessionId: "source-session",
-        entryId: "msg-2",
-      },
-    };
-
-    await replaceTranscriptEvents(preCompactionScope, [
-      { type: "session", id: "pre-compaction-session", cwd: paths.tempDir },
-      { type: "message", id: "pre-msg", parentId: null, message: { content: "pre" } },
-    ]);
-    await replaceTranscriptEvents(sourceScope, [
-      { type: "session", id: "source-session", cwd: paths.tempDir },
-      { type: "message", id: "post-msg-1", parentId: null, message: { content: "post-one" } },
-      {
-        type: "message",
-        id: "post-msg-2",
-        parentId: "post-msg-1",
-        message: { content: "post-two" },
-      },
-    ]);
-    const sourceEntry: InternalSessionEntry = {
-      label: "Source",
-      sandboxMode: "off",
-      nativeRuntimeConsent: "native-fixture",
-      lifecycleRunId: "source-run",
-      lastRunId: "settled-source-run",
-      sessionId: "source-session",
-      updatedAt: 10,
-      compactionCheckpoints: [checkpoint],
-      transcriptByteCompactionLatch: {
-        activeBytes: 60_000,
-        sessionId: "source-session",
-        maxBytes: 50_000,
-      },
-    };
-    await upsertSessionEntryCore(sourceEntryScope, sourceEntry);
-
-    const notify = vi.fn();
-    const unsubscribe = onSessionIdentityMutation(notify);
-    onTestFinished(unsubscribe);
-    const result = await branchCompactionCheckpointSession({
-      agentId: "main",
-      env,
-      expectedState: sourceEntry,
-      storePath: paths.sqlitePath,
-      sourceKey: sourceEntryScope.sessionKey,
-      nextKey: branchKey,
-      checkpointId: checkpoint.checkpointId,
-    });
-    unsubscribe();
-    if (result.status !== "created") {
-      throw new Error(`expected branch creation, got ${result.status}`);
-    }
-
-    const branchScope = {
-      ...sourceScope,
-      sessionId: result.entry.sessionId,
-      sessionKey: branchKey,
-    };
-    expect(loadSessionEntry({ ...sourceEntryScope, sessionKey: branchKey })).toEqual(result.entry);
-    expect(result.entry.sandboxMode).toBeUndefined();
-    expect(loadSessionEntry(sourceEntryScope)?.sandboxMode).toBe("off");
-    expect(result.entry.nativeRuntimeConsent).toBeUndefined();
-    expect(loadSessionEntry(sourceEntryScope)?.nativeRuntimeConsent).toBe("native-fixture");
-    expect(notify).toHaveBeenCalledWith({
-      agentId: "main",
-      kind: "create",
-      previous: { sessionKeys: [] },
-      current: { sessionId: result.entry.sessionId, sessionKeys: [branchKey] },
-    });
-    expect(result.entry).toEqual(
-      expect.objectContaining({
-        label: "Source (checkpoint)",
-        parentSessionKey: sourceEntryScope.sessionKey,
-        totalTokens: 42,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      }),
-    );
-    expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
-    expect((result.entry as InternalSessionEntry).lastRunId).toBeUndefined();
-    expect((result.entry as InternalSessionEntry).transcriptByteCompactionLatch).toBeUndefined();
-    await expect(loadTranscriptEvents(branchScope)).resolves.toEqual([
-      expect.objectContaining({ type: "session", id: result.entry.sessionId }),
-      expect.objectContaining({ id: "pre-msg", type: "message" }),
-    ]);
-    expect(fs.existsSync(path.join(paths.tempDir, `${result.entry.sessionId}.jsonl`))).toBe(false);
-  });
-
-  it("falls back to post-compaction SQLite rows when no pre-compaction rows exist", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const sourceScope = {
-      agentId: "main",
-      env,
-      sessionId: "source-session",
-      sessionKey: "agent:main:main",
-      storePath: paths.sqlitePath,
-    };
-    const sourceEntryScope = {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath: paths.sqlitePath,
-    };
-    const checkpoint: SessionCompactionCheckpoint = {
-      checkpointId: "checkpoint-post-fallback",
-      sessionKey: sourceEntryScope.sessionKey,
-      sessionId: "source-session",
-      createdAt: Date.parse("2026-01-01T00:00:00.000Z"),
-      reason: "manual",
-      tokensBefore: 100,
-      tokensAfter: 25,
-      tokensVersion: 1,
-      preCompaction: {
-        sessionId: "missing-pre-session",
-        leafId: "missing-pre-msg",
-      },
-      postCompaction: {
-        sessionId: "source-session",
-        entryId: "post-msg",
-      },
-    };
-
-    await replaceTranscriptEvents(sourceScope, [
-      { type: "session", id: "source-session", cwd: paths.tempDir },
-      { type: "message", id: "post-msg", parentId: null, message: { content: "post" } },
-      { type: "message", id: "skipped-msg", parentId: "post-msg", message: { content: "skip" } },
-    ]);
-    await upsertSessionEntryCore(sourceEntryScope, {
-      sessionId: "source-session",
-      updatedAt: 10,
-      compactionCheckpoints: [checkpoint],
-    });
-
-    const result = await branchCompactionCheckpointSession({
-      agentId: "main",
-      env,
-      expectedState: { sessionId: "source-session", lifecycleRevision: undefined },
-      storePath: paths.sqlitePath,
-      sourceKey: sourceEntryScope.sessionKey,
-      nextKey: "agent:main:checkpoint-post-fallback",
-      checkpointId: checkpoint.checkpointId,
-    });
-    if (result.status !== "created") {
-      throw new Error(`expected fallback branch creation, got ${result.status}`);
-    }
-
-    await expect(
-      loadTranscriptEvents({
-        ...sourceScope,
-        sessionId: result.entry.sessionId,
-        sessionKey: "agent:main:checkpoint-post-fallback",
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({ type: "session", id: result.entry.sessionId }),
-      expect.objectContaining({ id: "post-msg", type: "message" }),
-    ]);
-    expect(result.entry.totalTokens).toBe(25);
-    expect(result.entry.totalTokensVersion).toBe(1);
-  });
-
-  it("restores a checkpoint by copying SQLite rows and replacing the entry transactionally", async () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
-    const sourceScope = {
-      agentId: "main",
-      env,
-      sessionId: "source-session",
-      sessionKey: "agent:main:main",
-      storePath: paths.sqlitePath,
-    };
-    const preCompactionScope = {
-      ...sourceScope,
-      sessionId: "pre-compaction-session",
-    };
-    const sourceEntryScope = {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath: paths.sqlitePath,
-    };
-    const checkpoint: SessionCompactionCheckpoint = {
-      checkpointId: "checkpoint-restore",
-      sessionKey: sourceEntryScope.sessionKey,
-      sessionId: "current-session",
-      createdAt: Date.parse("2026-01-01T00:00:00.000Z"),
-      reason: "manual",
-      tokensBefore: 12,
-      tokensAfter: 24,
-      tokensVersion: 1,
-      preCompaction: {
-        sessionId: "pre-compaction-session",
-        leafId: "pre-msg",
-      },
-      postCompaction: {
-        sessionId: "source-session",
-        entryId: "msg-1",
-      },
-    };
-
-    await replaceTranscriptEvents(preCompactionScope, [
-      { type: "session", id: "pre-compaction-session", cwd: paths.tempDir },
-      { type: "message", id: "pre-msg", parentId: null, message: { content: "restore" } },
-    ]);
-    await replaceTranscriptEvents(sourceScope, [
-      { type: "session", id: "source-session", cwd: paths.tempDir },
-      { type: "message", id: "post-msg-1", parentId: null, message: { content: "skip" } },
-      { type: "message", id: "post-msg-2", parentId: "post-msg-1", message: { content: "skip" } },
-    ]);
-    await upsertSessionEntryCore(sourceEntryScope, {
-      label: "Current",
-      sandboxMode: "off",
-      nativeRuntimeConsent: "native-fixture",
-      sessionId: "current-session",
-      updatedAt: 10,
-      compactionCheckpoints: [checkpoint],
-      transcriptByteCompactionLatch: {
-        activeBytes: 60_000,
-        sessionId: "current-session",
-        maxBytes: 50_000,
-      },
-    });
-
-    const result = await restoreCompactionCheckpointSession({
-      agentId: "main",
-      env,
-      expectedState: { sessionId: "current-session", lifecycleRevision: undefined },
-      storePath: paths.sqlitePath,
-      sessionKey: sourceEntryScope.sessionKey,
-      checkpointId: checkpoint.checkpointId,
-    });
-    if (result.status !== "created") {
-      throw new Error(`expected restore creation, got ${result.status}`);
-    }
-
-    const restoredScope = {
-      ...sourceScope,
-      sessionId: result.entry.sessionId,
-    };
-    expect(loadSessionEntry(sourceEntryScope)).toEqual(result.entry);
-    expect(result.entry.nativeRuntimeConsent).toBeUndefined();
-    expect(result.entry).toEqual(
-      expect.objectContaining({
-        label: "Current",
-        sandboxMode: "off",
-        compactionCheckpoints: [checkpoint],
-        totalTokens: 12,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      }),
-    );
-    expect((result.entry as InternalSessionEntry).transcriptByteCompactionLatch).toBeUndefined();
-    await expect(loadTranscriptEvents(restoredScope)).resolves.toEqual([
-      expect.objectContaining({ type: "session", id: result.entry.sessionId }),
-      expect.objectContaining({ id: "pre-msg", type: "message" }),
-    ]);
-    expect(fs.existsSync(path.join(paths.tempDir, `${result.entry.sessionId}.jsonl`))).toBe(false);
   });
 });
 

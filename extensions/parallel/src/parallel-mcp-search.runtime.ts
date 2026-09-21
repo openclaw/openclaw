@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import {
+  ProviderHttpError,
   readProviderTextResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
@@ -228,8 +229,9 @@ async function mcpCall(
     },
   });
   if (!init.ok) {
-    throw new Error(
+    throw new ProviderHttpError(
       `Parallel MCP initialize failed (${init.status}): ${init.text || init.statusText}`,
+      { status: init.status },
     );
   }
   // Only echo a server-assigned session id. Stateless Streamable HTTP servers
@@ -250,10 +252,11 @@ async function mcpCall(
     signal,
   });
   if (!initialized.ok) {
-    throw new Error(
+    throw new ProviderHttpError(
       `Parallel MCP notifications/initialized failed (${initialized.status}): ${
         initialized.text || initialized.statusText
       }`,
+      { status: initialized.status },
     );
   }
 
@@ -272,8 +275,9 @@ async function mcpCall(
     signal,
   });
   if (!call.ok) {
-    throw new Error(
+    throw new ProviderHttpError(
       `Parallel MCP tools/call failed (${call.status}): ${call.text || call.statusText}`,
+      { status: call.status },
     );
   }
   return extractMcpToolPayload(selectMcpEnvelope(call.text, callId));

@@ -77,6 +77,9 @@ The default artifact directory is `<stateDir>/models/onnx`. Set the plugin's
 accept `--model-dir <path>`. Artifacts are grouped by model ID. Downloads use fixed
 repository revisions, sizes, and SHA256 hashes. Existing mismatched files are
 refused rather than overwritten. `openclaw onnx verify <model>` checks an installation.
+Verification and cached-download checks stream the files, so checking a large
+graph does not require a graph-sized memory buffer. Inference still loads
+verified graph bytes into its worker.
 
 ## Models
 

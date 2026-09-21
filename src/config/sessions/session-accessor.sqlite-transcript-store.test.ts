@@ -32,7 +32,7 @@ import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
 } from "./session-transcript-projection-rebuild.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
 
 const tempDirs: string[] = [];
 

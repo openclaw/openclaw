@@ -3,7 +3,7 @@ import { Type, type Static, type TSchema } from "typebox";
 import { Compile } from "typebox/compile";
 import { Check } from "typebox/value";
 
-// Transport/CPU guards, not Jev token limits. Jev enforces its own context budget.
+// Transport/CPU guards; each server enforces its model's context budget.
 export const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_JSON_NODES = 262144;
 const MAX_JSON_DEPTH = 64;
@@ -31,7 +31,7 @@ const entry = Type.Union(
 const instructions = Type.Optional(
   Type.Union(entry.anyOf, {
     description:
-      "The complete judgment to make; question IDs are not read by Jev. Text, structured object/array, or null. May be omitted when criteria express the judgment.",
+      "The complete judgment to make; question IDs are not read by the model. Text, structured object/array, or null. May be omitted when criteria express the judgment.",
   }),
 );
 const model = Type.String({ minLength: 1, maxLength: 128, pattern: "^[a-zA-Z0-9._/-]+$" });
@@ -102,13 +102,13 @@ export const EvaluateInput = Type.Object(
     questions: map(question, {
       minProperties: 1,
       description:
-        "Nonempty map of question IDs to Choice, Score, or Noul questions. Mix types in one call. IDs only match answers; put all meaning in instructions/criteria. Questions are independent. Jev enforces token limits; plugin JSON guard is 4 MiB.",
+        "Nonempty map of question IDs to Choice, Score, or Noul questions. Mix types in one call. IDs only match answers; put all meaning in instructions/criteria. Questions are independent. The server enforces token limits; plugin JSON guard is 4 MiB.",
     }),
     model: Type.Optional(
       Type.String({
         ...model,
         description:
-          "Optional Jev model ID or alias for this explicit tool call; defaults to the plugin’s evaluation-tool model. Native decisions use the host-selected model.",
+          "Optional System One model ID or alias for this explicit tool call; defaults to the plugin’s evaluation-tool model. Native decisions use the host-selected model. A local Kev server uses its loaded checkpoint regardless of this label.",
       }),
     ),
   },

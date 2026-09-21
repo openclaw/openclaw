@@ -52,6 +52,7 @@ const runtimeConsumers = [
   })),
   ...[
     "extensions/deepinfra/provider.contract.test.ts",
+    "extensions/file-transfer/src/workspace-service.test.ts",
     "extensions/google-meet/src/transports/chrome-startup.test.ts",
   ].map((file) => ({
     file,

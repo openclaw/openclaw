@@ -394,6 +394,7 @@ function cloneMessageCutSessionEntry(params: {
   forkSource?: NonNullable<SessionEntry["forkSource"]>;
   nextSessionId: string;
 }): SessionEntry {
+  // Rewind keeps retired history references so cleanup cannot orphan old transcripts.
   const baseEntry = params.forked
     ? inheritSessionSelection(params.currentEntry)
     : params.currentEntry;
@@ -425,7 +426,6 @@ function cloneMessageCutSessionEntry(params: {
     contextBudgetStatus: undefined,
     compactionCount: undefined,
     transcriptByteCompactionLatch: undefined,
-    compactionCheckpoints: undefined,
     memoryFlush: undefined,
     cliSessionBindings: undefined,
     cliSessionIds: undefined,

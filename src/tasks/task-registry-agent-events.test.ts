@@ -24,6 +24,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator as holdCoordinator } from "../test-utils/state-database-contention.js";
 import { createTaskFlowForTask, getTaskFlowById } from "./task-flow-registry.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
+import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
 import { updateTask } from "./task-registry-mutation.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
 import { prepareTaskRegistryRead } from "./task-registry-read.js";
@@ -948,7 +949,11 @@ describe("task agent event persistence", () => {
         });
         emitTool(task.runId!, "stale");
         await entered.promise;
+        let fence: Promise<PromiseSettledResult<void>[]> | undefined;
         try {
+          fence = Promise.allSettled([
+            captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission),
+          ]);
           if (replacement === "task replacement") {
             const next = { ...task, runId: "replacement-run" };
             store.upsertTaskWithDeliveryState({ task: next });
@@ -958,6 +963,7 @@ describe("task agent event persistence", () => {
           }
         } finally {
           release.resolve();
+          await fence;
         }
         await joinEvents();
         expect(

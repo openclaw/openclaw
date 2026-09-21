@@ -144,7 +144,7 @@ import {
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
-import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { prepareCliBundleMcpConfig, resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { runCliCleanup } from "./cleanup.js";
 import {
@@ -1367,12 +1367,10 @@ async function prepareCliRunContextWithinReadFence(
       },
     };
   }
-  const projectedTools = params.cliToolAvailability
-    ? applyEmbeddedAttemptToolsAllow(
-        hookFilteredProjectedTools,
-        params.cliToolAvailability.openClaw,
-      )
-    : hookFilteredProjectedTools;
+  const projectedTools = applyEmbeddedAttemptToolsAllow(
+    hookFilteredProjectedTools,
+    params.cliToolAvailability?.openClaw,
+  );
   const nodeSkillWorkshop = nodeWorkshopEnabled
     ? projectedTools.find((tool) => tool.name === "skill_workshop")
     : undefined;
@@ -1565,10 +1563,9 @@ async function prepareCliRunContextWithinReadFence(
                         selected ? tools.filter((name) => selected.includes(name)) : tools,
                       );
                       assertNativeCronCreatorCapabilities(capabilities);
-                      const allowed = capabilities.filter(
-                        (name) =>
-                          name !== "web_search" || params.toolOverrides?.webSearch !== false,
-                      );
+                      const allowed = resolveCliNativeWebSearchEnabled(params, backendResolved)
+                        ? capabilities
+                        : capabilities.filter((name) => name !== "web_search");
                       if (!activeCapture.captureNativeToolAuthority(allowed)) {
                         throw new Error("Native tool authority capture is no longer active.");
                       }

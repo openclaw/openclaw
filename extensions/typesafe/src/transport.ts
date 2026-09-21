@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { localBaseUrl } from "./config.js";
 import { EvaluationError } from "./errors.js";
 import { MAX_JSON_BYTES, type EvaluationInput } from "./schema.js";
 
@@ -78,10 +79,13 @@ async function readBody(response: Response, signal?: AbortSignal): Promise<Buffe
 
 export async function requestEvaluation(params: {
   body: EvaluationInput & { model: string };
-  apiKey: string;
+  apiKey?: string;
+  baseUrl?: string;
   timeoutMs: number;
   signal?: AbortSignal;
 }): Promise<unknown> {
+  const baseUrl = localBaseUrl(params.baseUrl);
+  const endpoint = baseUrl ? `${baseUrl}/v1/systemone` : ENDPOINT;
   const body = JSON.stringify(params.body);
   if (Buffer.byteLength(body) > MAX_JSON_BYTES) {
     throw new EvaluationError("TypeSafe request exceeds its limit.", "unsupported-input");
@@ -94,16 +98,26 @@ export async function requestEvaluation(params: {
   try {
     signal?.throwIfAborted();
     const request = {
-      url: ENDPOINT,
+      url: endpoint,
       fetchImpl: globalThis.fetch,
-      requireHttps: true,
+      requireHttps: !baseUrl,
+      ...(baseUrl ? { policy: { allowedOrigins: [baseUrl] } } : {}),
+      ...(baseUrl && new URL(baseUrl).hostname === "localhost"
+        ? {
+            // Keep localhost local even when system DNS or hosts entries override its meaning.
+            lookupFn: async () => [
+              { address: "127.0.0.1", family: 4 },
+              { address: "::1", family: 6 },
+            ],
+          }
+        : {}),
       maxRedirects: 0,
       signal,
       beforeRequest: () => signal?.throwIfAborted(),
       init: {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${params.apiKey}`,
+          ...(!baseUrl ? { Authorization: `Bearer ${params.apiKey}` } : {}),
           Accept: "application/json",
           "Content-Type": "application/json",
         },
@@ -111,7 +125,7 @@ export async function requestEvaluation(params: {
       },
     };
     const guarded = await fetchWithSsrFGuard(
-      shouldUseEnvHttpProxyForUrl(ENDPOINT)
+      !baseUrl && shouldUseEnvHttpProxyForUrl(endpoint)
         ? withTrustedEnvProxyGuardedFetchMode(request)
         : request,
     );

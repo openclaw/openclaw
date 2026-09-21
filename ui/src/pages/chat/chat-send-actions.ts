@@ -1,5 +1,6 @@
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
@@ -38,6 +39,8 @@ import {
   QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
   QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
+
+registerChatGoalsEnglish();
 
 const resetRetryState = (
   entry: ChatQueueItem,

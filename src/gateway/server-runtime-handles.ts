@@ -7,13 +7,13 @@ import type {
   GatewayHotReloadStatus,
 } from "./config-reload-status.types.js";
 import type { GatewayDiscovery } from "./server-discovery-runtime.js";
+import type { GatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
 import {
   MEDIA_CLEANUP_STOP_TIMEOUT_MS,
   type MediaCleanupStopResult,
   waitForMediaCleanupDrains,
 } from "./server-media-cleanup-lifecycle.js";
 import { createNoopHeartbeatRunner } from "./server-runtime-service-shared.js";
-import type { GatewayMaintenanceHandles } from "./server-runtime-services.js";
 import {
   createGatewaySidecarStopOwner,
   type GatewaySidecarStopOwner,

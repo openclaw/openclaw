@@ -246,7 +246,7 @@ describe("session permission filesystem tools", () => {
               patch.execute("alias-patch-parent", {
                 input: `*** Begin Patch\n*** Add File: ${target}\n+created\n*** End Patch`,
               }),
-            ).rejects.toThrow(/Path alias under sandbox root/i);
+            ).rejects.toMatchObject({ name: "FsSafeError", code: "symlink" });
           }
           await expect(fs.readdir(path.join(root, "real"))).resolves.toEqual([]);
           await patch.execute("alias-patch-create", {

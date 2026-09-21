@@ -4,6 +4,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyBackendMessageInjectionV2 } from "./reply-run-registry.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
+  finalizeReplyMessageInjectionAttempt,
   createReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
@@ -203,5 +204,81 @@ it.each(["same-owner", "other-owner"])(
         expect(operation.phase).toBe("running");
       },
     );
+  },
+);
+
+it.each(["same-owner", "different-owner"])(
+  "status steering preserves question ownership and caller authority (%s)",
+  async (fingerprint) => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:refresh",
+      sessionId: "refresh-session",
+      resetTriggered: false,
+    });
+    const claim = vi.fn(async () => true);
+    const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+      async (_text, options, assertCurrent) => {
+        assertCurrent();
+        expect(options?.isInboundUserMessage).toBe(false);
+        expect(options?.toolAuthorityFingerprint).toBe("same-owner");
+      },
+    );
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "working-run",
+      toolAuthorityFingerprint: "same-owner",
+      cancel: vi.fn(),
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage,
+        claimPendingUserInputAnswer: claim,
+      },
+    });
+    operation.setPhase("running");
+    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+    const result = await beginReplyMessageInjectionTarget(target, "Refresh the card", {
+      isInboundUserMessage: true,
+      toolAuthorityFingerprint: fingerprint,
+      allowPendingUserInputAnswer: false,
+      assertCurrent: () => operation.abortSignal.throwIfAborted(),
+    }).outcome;
+    expect(result.status).toBe(fingerprint === "same-owner" ? "accepted" : "rejected");
+    expect(queueMessage).toHaveBeenCalledTimes(fingerprint === "same-owner" ? 1 : 0);
+    expect(claim).not.toHaveBeenCalled();
+  },
+);
+
+it.each([false, true])(
+  "only status-only callers preserve work on an uncertain steering receipt (statusOnly=%s)",
+  async (statusOnly) => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:receipt",
+      sessionId: "receipt-session",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "receipt-run",
+      cancel: vi.fn(),
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async () => ({
+          transcriptCommit: "unconfirmed",
+          errorMessage: "still awaiting commit",
+        }),
+      },
+    });
+    operation.setPhase("running");
+    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+    const attempt = beginReplyMessageInjectionTarget(target, "Queued guidance");
+    const result = await finalizeReplyMessageInjectionAttempt({
+      attempt,
+      target,
+      ...(statusOnly ? { abortOnUnconfirmedTranscript: false as const } : {}),
+    });
+    expect(result).toMatchObject({ status: "accepted", aborted: !statusOnly });
+    expect(operation.abortSignal.aborted).toBe(!statusOnly);
   },
 );

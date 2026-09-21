@@ -95,24 +95,22 @@ suite.define(() => {
           (
             await automation.getByRole("button", { name: "Dismiss Release digest" }).textContent()
           )?.trim(),
-        ).toBe("Dismiss");
+        ).toBe("");
         expect(
           (
             await mention.getByRole("button", { name: "Dismiss", exact: true }).textContent()
           )?.trim(),
         ).toBe("Dismiss");
-        expect(await panel.textContent()).toContain(
-          "Dismiss clears notifications in this tab. It does not approve requests or stop work.",
-        );
+        expect(await panel.locator(".sidebar-issues-panel__dismiss-help").count()).toBe(0);
 
         // A scoped bulk action must not acknowledge another tab's mention.
         await panel.getByRole("tab", { name: /Automations/ }).click();
-        await panel.getByRole("button", { name: "Dismiss all shown", exact: true }).click();
+        await panel.getByRole("button", { name: "Dismiss shown", exact: true }).click();
         await expect.poll(() => automation.count()).toBe(0);
         expect(await gateway.getRequests("mentions.dismiss")).toHaveLength(0);
         await panel.getByRole("tab", { name: /All/ }).click();
         await mention.waitFor();
-        await panel.getByRole("button", { name: "Dismiss all shown", exact: true }).click();
+        await panel.getByRole("button", { name: "Dismiss shown", exact: true }).click();
         await expect.poll(() => mention.count()).toBe(0);
         expect(
           (await gateway.getRequests("mentions.dismiss")).map((request) => request.params),

@@ -818,7 +818,7 @@ describe("runDaemonRestart health checks", () => {
         method: "gateway.restart.request",
         params: {
           reason: "gateway.restart",
-          ...(force ? { restartIntent: { force: true } } : {}),
+          ...(force ? { restartIntent: { force: true, drainBudgetMs: 300_000 } } : {}),
           target: {
             pid: 4200,
             ownerId: "gateway-owner-old",

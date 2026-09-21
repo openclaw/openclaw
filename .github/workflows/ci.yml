@@ -1692,6 +1692,7 @@ jobs:
             runNodeFull &&
             changedScopeHasQaImpact &&
             (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
+          const nodeMatrixLimit = compactPlanMode === "pull-request" ? 130 : 70;
           const rawNodeTestShards = runNodeFull
             ? changedNodeTestShards
               ? changedNodeTestShards
@@ -1703,6 +1704,7 @@ jobs:
                     // current planners use the event-specific mode.
                     compact: compactPlanMode !== undefined,
                     compactMode: compactPlanMode,
+                    compactNodeJobCap: nodeMatrixLimit - changedExtensionFallbackShards.filter((shard) => !shard.requiresDist).length,
                     runnerBackend: runnerProfile,
                   }),
                   ...changedExtensionFallbackShards,
@@ -1731,6 +1733,17 @@ jobs:
             shard_name,
             timing_key,
           }) => ({ configs, env, fallbackMaxWorkers, includePatterns, shard_name, timing_key });
+          const testRuntimePolicyPath = "./scripts/lib/ci-test-runtime.mts";
+          const testRuntimePolicy = existsSync(testRuntimePolicyPath)
+            ? await importTargetPlan(testRuntimePolicyPath)
+            : null;
+          const testRuntimeMode = testRuntimePolicy
+            ? eventName === "pull_request" || releaseGate
+              ? "bun-compatible"
+              : eventName === "workflow_dispatch"
+                ? "dual"
+                : "node"
+            : "node";
           const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
           const knownToolingConfigs = new Set([
             goToolingConfig,
@@ -1745,6 +1758,8 @@ jobs:
               return {
                 check_name: shard.checkName,
                 runtime: "node",
+                test_runtime_policy: testRuntimeMode,
+                requires_bun: !shard.requiresDist && Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
                 task: "test-shard",
                 shard_name: shard.shardName,
                 groups_gzip_base64:
@@ -1791,7 +1806,6 @@ jobs:
             });
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
-          const nodeMatrixLimit = compactPlanMode === "pull-request" ? 130 : 70;
           if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
             throw new Error(
               `Canonical ${eventName} Node matrix has ${nodeTestNonDistShards.length} jobs, exceeding limit ${nodeMatrixLimit}`,
@@ -2286,7 +2300,6 @@ jobs:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "true"
           node-compile-cache: "true"
-          node-compile-cache-scope: "build"
           build-all-cache-scope: full
           # The trusted warmer publishes exact dependencies for Blacksmith.
           # Gate on the actual runner so hybrid hosted retries stay store-only.
@@ -2834,32 +2847,6 @@ jobs:
       - *cache_playwright_chromium
       - *install_playwright_chromium
 
-      - name: Restore Chrome MCP npm cache
-        id: chrome-mcp-cache
-        if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_mode != 'off'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with: &chrome_mcp_npm_cache
-          path: |
-            ~/.npm/_cacache
-            ~/.npm/_npx
-          key: ${{ runner.os }}-${{ runner.arch }}-chrome-devtools-mcp@1.8.0-node24-v1
-
-      # Populate metadata and the executable before the 30-second MCP handshake.
-      - name: Pre-warm Chrome MCP
-        if: matrix.task == 'browser-extension' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
-        run: npx -y --audit=false chrome-devtools-mcp@1.8.0 --version
-
-      - name: Save Chrome MCP npm cache
-        if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with: *chrome_mcp_npm_cache
-
-      - name: Configure offline Chrome MCP
-        if: matrix.task == 'browser-extension'
-        # npx revalidates cached pins; MCP filters npm_config_* and Vitest changes
-        # HOME. Project config keeps the warmed cache reachable without the registry.
-        run: npm config set cache="$HOME/.npm" offline=true --location=project
-
       - name: Test Control UI end-to-end
         if: matrix.task == 'control-ui'
         env:
@@ -3345,10 +3332,8 @@ jobs:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          # Reader of build-artifacts' protected daily archive: warms tsdown
-          # tooling plus the repeated openclaw.mjs boots in the scenario loop.
+          # The trusted warmer seeds build tooling and Node orchestration together.
           node-compile-cache: "true"
-          node-compile-cache-scope: build
 
       - name: Build QA smoke runtime
         env:
@@ -3659,7 +3644,10 @@ jobs:
           vitest-fs-cache: "true"
           vitest-worker-cache: ${{ needs.preflight.outputs.frozen_target != 'true' && matrix.pretest_build_mode == null && (matrix.node_version == null || matrix.node_version == '24.x') && 'true' || 'false' }}
           node-compile-cache: "true"
-          node-compile-cache-scope: "test"
+
+      - name: Setup pinned Bun test runtime
+        if: matrix.requires_bun == true
+        uses: ./.ci-harness/.github/actions/setup-test-bun
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
@@ -3784,6 +3772,7 @@ jobs:
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ matrix.test_runtime_policy || 'node' }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ matrix.groups_gzip_base64 || '' }}
@@ -4703,12 +4692,10 @@ jobs:
     name: ${{ matrix.check_name || 'checks-windows' }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'windows-2025' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-windows-2025' || 'windows-2025') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'windows-2025' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-windows-2025' || 'windows-2025') }}
     timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=8192
-      # Keep total concurrency predictable on the smaller Windows runner.
-      OPENCLAW_VITEST_MAX_WORKERS: 1
       OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
     defaults:
       run:
@@ -4786,13 +4773,15 @@ jobs:
           which node
           node -v
           pnpm -v
-          # Persist Windows-native postinstall outputs in the pnpm store so restored
-          # caches can skip repeated rebuild/download work on later shards/runs.
+          # Reuse native postinstall outputs within this job's pnpm store.
+          # Windows setup does not restore or publish a shared dependency cache.
           pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           TASK: ${{ matrix.task }}
+          # The 16-class delivers four native CPUs; hosted fallback keeps its serial budget.
+          OPENCLAW_VITEST_MAX_WORKERS: ${{ runner.environment == 'self-hosted' && 4 || 1 }}
         shell: bash
         run: |
           set -euo pipefail
@@ -4804,14 +4793,14 @@ jobs:
             # Windows-native process/path wrappers so platform regressions fail fast.
             test-1)
               if node -e 'process.exit(require("./package.json").scripts?.["test:windows:ci:1"] ? 0 : 1)'; then
-                pnpm test:windows:ci:1
+                pnpm test:windows:ci:1 -- --fileParallelism
               else
                 pnpm test:windows:ci
               fi
               ;;
             test-2)
               if node -e 'process.exit(require("./package.json").scripts?.["test:windows:ci:2"] ? 0 : 1)'; then
-                pnpm test:windows:ci:2
+                pnpm test:windows:ci:2 -- --fileParallelism
               else
                 echo "[skip] target's combined Windows suite ran in test-1"
               fi

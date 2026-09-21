@@ -74,12 +74,17 @@ export function hasDialHelperConfirmation(results: HelperActionResult[]): boolea
   );
 }
 
-export function hasDefinitiveDialHelperAbsence(results: HelperActionResult[]): boolean {
-  return results.some(
-    (entry) =>
-      typeof entry.helperBundleIdentifier === "string" &&
-      OUTBOUND_DIAL_HELPER_BUNDLES.has(entry.helperBundleIdentifier) &&
-      entry.found === false &&
-      entry.retained_outbound_dial !== true,
+export function hasDefinitiveDialHelperAbsence(
+  result: HelperActionResult,
+  requiredPeerProcessIds: Iterable<number>,
+): boolean {
+  const results = readHelperResults(result);
+  const observedProcessIds = new Set(readHelperPeers(result).map((peer) => peer.processId));
+  return (
+    result.topologyComplete === true &&
+    results.length === result.helpersContacted &&
+    hasDialHelperConfirmation(results) &&
+    results.every((entry) => entry.found === false && entry.retained_outbound_dial !== true) &&
+    [...requiredPeerProcessIds].every((processId) => observedProcessIds.has(processId))
   );
 }

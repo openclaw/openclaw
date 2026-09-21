@@ -416,6 +416,8 @@ const rootBundledPluginRuntimeDependencies = [
   "@mozilla/readability",
   "@silvia-odwyer/photon-node",
   "@trycua/cua-driver",
+  // Root bundles the browser plugin's patched MCP server for npm installations.
+  "chrome-devtools-mcp",
   "grammy",
   "linkedom",
   "minimatch",

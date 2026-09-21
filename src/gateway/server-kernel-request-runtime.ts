@@ -137,6 +137,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   if (hostLifecycle) {
     gatewayRequestContext.hostLifecycle = {
       externalRestart: hostLifecycle.externalRestart,
+      getShutdownBudget: () => hostLifecycle.getShutdownBudget?.(),
       request: (action, assertCaller) =>
         hostLifecycle.request(action, () => {
           if (!gatewayInstanceRuntime.isAvailable()) {

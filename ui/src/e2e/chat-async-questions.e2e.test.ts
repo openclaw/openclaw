@@ -26,6 +26,137 @@ const questionMessage = {
 };
 
 suite.define(() => {
+  it.each([false, true])(
+    "archives an old reminder after a later completed run and can reopen it (recovery=%s)",
+    async (recovery) => {
+      const completedHistory = await suite.withPage(
+        createControlUiE2eContextOptions(),
+        async ({ page }) => {
+          const prompt = {
+            ...questionMessage,
+            ...(recovery ? {} : { runId: "question-run", phase: "final_answer" }),
+            __openclaw: {
+              id: "audience-prompt",
+              seq: 2,
+              ...(recovery ? {} : { runId: "question-run" }),
+              mirrorOrigin: "codex-app-server",
+            },
+          };
+          const ownFinal = {
+            role: "assistant",
+            content: "The draft is ready; you can still choose an audience.",
+            phase: "final_answer",
+            stopReason: "stop",
+            __openclaw: {
+              id: "draft-ready",
+              seq: 3,
+              runId: "question-run",
+              runTerminal: true,
+              mirrorOrigin: "codex-app-server",
+            },
+          };
+          const history = [
+            {
+              role: "user",
+              content: "Prepare a project summary.",
+              __openclaw: { id: "initial-request", seq: 1, runId: "question-run" },
+            },
+            prompt,
+            ...(recovery ? [] : [ownFinal]),
+          ];
+          const gateway = await installMockGateway(page, { historyMessages: history });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const dock = page.locator(".agent-chat__question-dock");
+          await expectBrowser(dock).toBeVisible();
+          const draft = dock.getByRole("textbox", { name: `Your own answer for ${title}` });
+          await draft.fill("New project contributors");
+          const nextFinal = {
+            role: "assistant",
+            content: "The summary is finalized and the task is complete.",
+            stopReason: "stop",
+            __openclaw: {
+              id: "summary-finalized",
+              seq: 5,
+              runId: "finishing-run",
+              runTerminal: true,
+              mirrorOrigin: "codex-app-server",
+            },
+          };
+          const nextRequest = {
+            role: "user",
+            content: recovery
+              ? "Resume work after the Gateway restart."
+              : "Use your best judgment and finalize it.",
+            ...(recovery
+              ? {
+                  provenance: {
+                    kind: "internal_system",
+                    sourceTool: "main_session_restart_recovery",
+                  },
+                }
+              : {}),
+            __openclaw: { id: "follow-up", seq: 4, runId: "finishing-run" },
+          };
+          const finalHistory = [...history, nextRequest, nextFinal];
+          await gateway.setHistoryMessages([...history, nextRequest]);
+          await gateway.emitGatewayEvent("session.message", {
+            sessionKey: "agent:main:main",
+            messageId: "follow-up",
+            messageSeq: 4,
+            message: nextRequest,
+          });
+          await expectBrowser(
+            page.getByText(recovery ? "System · restart recovery" : nextRequest.content, {
+              exact: true,
+            }),
+          ).toBeVisible();
+          await expectBrowser(dock).toBeVisible();
+          await gateway.setHistoryMessages(finalHistory);
+          await gateway.emitGatewayEvent("session.message", {
+            sessionKey: "agent:main:main",
+            messageId: "summary-finalized",
+            messageSeq: 5,
+            message: nextFinal,
+          });
+          await expectBrowser(dock).toHaveCount(0);
+          const summary = page.locator(".chat-question-summary").filter({ hasText: title });
+          await expectBrowser(summary).toContainText("No longer pending");
+          await summary.getByRole("button", { name: "Answer", exact: true }).click();
+          await expectBrowser(dock).toBeVisible();
+          await expectBrowser(draft).toHaveValue("New project contributors");
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+
+          return finalHistory;
+        },
+      );
+
+      // A fresh tab reconstructs archival from the saved transcript, not a
+      // remembered dismissal or the first tab's reopened draft.
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const gateway = await installMockGateway(page, { historyMessages: completedHistory });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const dock = page.locator(".agent-chat__question-dock");
+        const summary = page.locator(".chat-question-summary").filter({ hasText: title });
+        await expectBrowser(
+          page.getByText("The summary is finalized and the task is complete.", { exact: true }),
+        ).toBeVisible();
+        await expectBrowser(dock).toHaveCount(0);
+        await expectBrowser(summary).toContainText("No longer pending");
+        await page.reload();
+        await expectBrowser(summary).toContainText("No longer pending");
+        await expectBrowser(dock).toHaveCount(0);
+        await summary.getByRole("button", { name: "Answer", exact: true }).click();
+        await expectBrowser(dock).toBeVisible();
+        await dock.getByRole("button", { name: "Submit", exact: true }).click();
+        const sent = await gateway.waitForRequest("chat.send");
+        expect(requireRecord(sent.params).message).toBe(`> ${title}\n\nEngineers`);
+        await expectBrowser(dock).toHaveCount(0);
+        expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      });
+    },
+  );
+
   it.each(
     [390, 430].flatMap((width) => (["light", "dark"] as const).map((theme) => ({ width, theme }))),
   )(

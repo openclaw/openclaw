@@ -371,3 +371,37 @@ describe("Team Reports site behavior", () => {
     expect(html).toContain("Exact daily values");
   });
 });
+
+it("keeps quiet members' owned-session links inside their filterable section without changing counts", () => {
+  const report = document();
+  const quiet = {
+    ...report.members[0]!,
+    login: "quiet",
+    display: "Quiet member",
+    github: { ...githubCounts(), items: [] },
+    discord: { total: 0, channels: {}, excerpts: [] },
+  };
+  report.members.push(quiet);
+  const before = JSON.stringify(report);
+  const html = renderReportPage(
+    ctx,
+    report,
+    null,
+    [],
+    new Map([
+      [
+        "quiet",
+        {
+          available: true,
+          sessions: [{ key: "agent:main:quiet-work", label: "Quiet member current work" }],
+        },
+      ],
+    ]),
+  );
+  expect(html.split("data-maintainer-quiet")[1]?.split("</li>")[0]).toContain(
+    "Quiet member current work",
+  );
+  expect(html).toContain('data-work-session-key="agent:main:quiet-work"');
+  expect(html).toContain("Visible to you now, not activity from this report period.");
+  expect(JSON.stringify(report)).toBe(before);
+});

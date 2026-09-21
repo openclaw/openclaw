@@ -13,11 +13,14 @@ export function createDecisionProvider(getConfig: () => RuntimeConfig): Decision
   return {
     id: "typesafe",
     contractVersion: 1,
-    isReady: () => Boolean(getConfig().apiKey),
+    isReady: () => {
+      const config = getConfig();
+      return Boolean(config.baseUrl || config.apiKey);
+    },
     async evaluate(batch: DecisionBatch, context) {
       context.signal.throwIfAborted();
       const config = getConfig();
-      if (!config.apiKey) {
+      if (!config.baseUrl && !config.apiKey) {
         return { status: "unavailable", reason: "credentials-unavailable" };
       }
       const remaining = context.deadlineMonotonicMs - performance.now();

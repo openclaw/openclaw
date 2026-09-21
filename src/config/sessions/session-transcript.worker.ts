@@ -2,7 +2,7 @@ import type {
   UsageCostWorkerInput,
   UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
-import { serveWorkerTasks } from "../../infra/worker-task-pool.js";
+import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
@@ -26,6 +26,7 @@ import type {
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
   SessionUsageCacheWorkerInput,
+  SessionTranscriptSearchWorkerInput,
 } from "./session-transcript-worker.types.js";
 
 // Keep target switching within the existing serialized worker; no read snapshot survives a task.
@@ -95,6 +96,7 @@ serveWorkerTasks(
       | SessionRowPresenceWorkerInput
       | SessionMembersWorkerInput
       | SessionUsageCacheWorkerInput
+      | SessionTranscriptSearchWorkerInput
       | SessionBranchSummaryWorkerInput
       | UsageCostWorkerInput;
     if (request.kind === "usage-cost") {
@@ -127,6 +129,20 @@ serveWorkerTasks(
       }
     }
     try {
+      if (request.kind === "transcript-search") {
+        const { searchSessionTranscriptsReadOnlySync } =
+          await import("./session-transcript-search.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => ({
+            kind: "transcript-search" as const,
+            result: searchSessionTranscriptsReadOnlySync(request.params, {
+              ...request.database,
+              env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
+            }),
+          }))),
+        };
+      }
       if (request.kind === "session-target-inventory") {
         const { readSessionStoreTargetInventory } =
           await import("./session-store-target-inventory.js");
@@ -248,6 +264,14 @@ serveWorkerTasks(
                     deferProfileDisplay: true,
                     resolveCronJobName: () => undefined,
                   };
+                  if (request.request.kind === "delta") {
+                    return {
+                      kind: "delta",
+                      delta: options.readers.readTranscriptDisplayDelta(
+                        request.request.params.limits,
+                      ),
+                    };
+                  }
                   if (request.request.kind === "rpc") {
                     const { readChatHistoryPageKernel } =
                       await import("../../gateway/server-methods/chat-history-page-kernel.js");

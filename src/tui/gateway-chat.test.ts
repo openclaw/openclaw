@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 // Covers gateway-backed chat behavior used by the TUI backend.
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
@@ -212,13 +213,16 @@ describe("GatewayChatClient", () => {
 
   it("surfaces loopback block-mode start failures through disconnect handler", async () => {
     vi.useFakeTimers();
+    // The preceding mock test resets modules; keep client and proxy ownership together.
+    const { GatewayChatClient: CurrentGatewayChatClient } = await import("./gateway-chat.js");
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const proxyHandle = await startProxy({
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "block",
     });
-    const onDisconnected = vi.fn();
-    const client = new GatewayChatClient({
+    const disconnected = createDeferred<string>();
+    const onDisconnected = vi.fn(disconnected.resolve);
+    const client = new CurrentGatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
     });
@@ -228,10 +232,13 @@ describe("GatewayChatClient", () => {
       client.start();
       await vi.advanceTimersByTimeAsync(2);
 
-      expect(onDisconnected).toHaveBeenCalledWith(
-        "proxy: Gateway loopback control-plane connections are blocked by proxy.loopbackMode",
-      );
+      const message =
+        "proxy: Gateway loopback control-plane connections are blocked by proxy.loopbackMode; " +
+        "run openclaw config set proxy.loopbackMode gateway-only to allow local runtime traffic.";
+      await expect(disconnected.promise).resolves.toBe(message);
+      expect(onDisconnected).toHaveBeenCalledExactlyOnceWith(message);
     } finally {
+      await client.stop();
       await stopProxy(proxyHandle);
     }
   });

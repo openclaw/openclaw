@@ -2,6 +2,7 @@
  * Public SDK type surface for model provider and model definition config.
  */
 import type { ModelApi } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Private selected-request facts; omission means the host cannot establish applicability. */
 export type ProviderFastModePolicyContext = {
@@ -106,5 +107,14 @@ export type ProviderToolSearchPolicyContext = {
   provider: string;
   modelId: string;
   api: string;
+  baseUrl?: string;
+};
+
+/** Provider-owned hosted search eligibility for one resolved inference route. */
+export type ProviderNativeWebSearchPolicyContext = {
+  config?: OpenClawConfig;
+  provider: string;
+  modelId?: string;
+  api?: string;
   baseUrl?: string;
 };

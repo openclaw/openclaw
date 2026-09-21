@@ -160,6 +160,8 @@ export type GatewaySystemAgentSession = {
     dispose: () => Promise<void>;
   };
   welcome: string;
+  /** Passive creation entry, retained so reconnects do not append duplicate history. */
+  newAgentWelcome?: string;
   welcomeQuestion?: SystemAgentChatQuestion;
   /** Audit cursor captured with the pending caretaker welcome; cleared after delivery. */
   welcomeAuditSequence?: number;

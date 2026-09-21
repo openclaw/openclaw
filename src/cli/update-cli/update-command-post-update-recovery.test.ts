@@ -24,6 +24,20 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
+  verifyGateway: vi.fn<typeof import("./update-command-verification.js").verifyUpdatedGateway>(
+    async ({ result, expectedVersion }) => {
+      result.verification = {
+        serviceRunning: true,
+        runningVersion: expectedVersion,
+        versionMatch: true,
+        readyz: true,
+        settled: true,
+        channelsReady: true,
+        pluginErrors: [],
+      };
+      return { ok: true, score: 7, summary: "healthy" };
+    },
+  ),
   printResult: vi.fn(),
   gatewayCommand: vi.fn<
     typeof import("./update-command-service-command.js").runUpdatedInstallGatewayCommand
@@ -55,6 +69,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
+vi.mock("./update-command-verification.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-verification.js")>()),
+  verifyUpdatedGateway: mocks.verifyGateway,
+}));
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
   runUpdatedInstallGatewayCommand: mocks.gatewayCommand,
@@ -111,6 +129,10 @@ import { UpdateCommandFailure } from "./update-command-result.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeEach(() => {
+  mocks.verifyGateway.mockReset();
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -291,10 +313,18 @@ describe("failed update recovery restart", () => {
   )(
     "reports the terminal $service recovery for a $mode $status update",
     async ({ mode, status, reason, service }) => {
+      const root = tempDirs.make("update-terminal-installed-runtime-");
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "1.0.0" }));
       mocks.restart.mockResolvedValueOnce(service);
+      mocks.verifyGateway.mockResolvedValueOnce({
+        ok: service === "healthy",
+        score: service === "healthy" ? 7 : 0,
+        summary: service === "healthy" ? "healthy" : "stopped-free",
+      });
       const failure = await finishFailedUpdate(
         {
           ...failedResult({ serviceRestartSafe: true, version: "1.0.0" }),
+          root,
           mode,
           status,
           reason,
@@ -569,8 +599,10 @@ describe("failed update recovery restart", () => {
       }
       const version = pid === 7376 ? "2026.9.3" : undefined;
       expect(recorded.origin.nextAction).toContain(
-        `The gateway is running${version ? ` ${version}` : ""} but did not pass verification (readyz-unhealthy)`,
+        `The gateway is running${version ? ` ${version}` : ""} but did not pass verification`,
       );
+      expect(recorded.origin.nextAction).toContain("gateway-probe-failed");
+      expect(recorded.origin.nextAction).toContain("installed Gateway version could not be read");
       expect(recorded.origin.nextAction).not.toContain("gateway stopped");
       expect(recorded.origin.nextAction).not.toContain("remains stopped");
       expect(recorded.origin.nextAction).toContain("triage");
@@ -749,7 +781,11 @@ describe("failed package update recovery safety", () => {
         config: {},
         env,
       });
-      const originalRoot = "/managed/previous";
+      const originalRoot = tempDirs.make("update-restored-installed-runtime-");
+      await fs.writeFile(
+        path.join(originalRoot, "package.json"),
+        JSON.stringify({ version: "2026.9.1" }),
+      );
       mocks.stopCandidate.mockResolvedValue({
         stopped: true,
         inspected: true,

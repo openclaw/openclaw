@@ -8,6 +8,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { updateDeliveryQueueEntry } from "../delivery-queue-sqlite.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
 import { ackDeliveryInDatabase } from "./delivery-queue-ack.kernel.js";
 import { releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
@@ -567,49 +568,46 @@ describe("delivery-queue storage", () => {
     });
 
     it("preserves and renews the exact explicit owner after an ambiguous platform outcome", async () => {
-      vi.useFakeTimers();
-      try {
-        vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
-        const stateDir = tmpDir();
-        const id = "cron-direct-delivery:v1:unknown-owner-lease";
-        await enqueueDeliveryOnce(
-          {
-            channel: "forum",
-            to: "123",
-            payloads: [{ text: "test" }],
-            completionRetention: {
-              idPrefix: "cron-direct-delivery:v1:",
-              maxAgeMs: 24 * 60 * 60_000,
-              maxEntries: 2_000,
-            },
-            requiresProducerClaim: true,
+      const stateDir = tmpDir();
+      const id = "cron-direct-delivery:v1:unknown-owner-lease";
+      await enqueueDeliveryOnce(
+        {
+          channel: "forum",
+          to: "123",
+          payloads: [{ text: "test" }],
+          completionRetention: {
+            idPrefix: "cron-direct-delivery:v1:",
+            maxAgeMs: 24 * 60 * 60_000,
+            maxEntries: 2_000,
           },
-          id,
-          stateDir,
-        );
-        const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
-        if (!claimId) {
-          throw new Error("test invariant: explicit producer must own the stable row");
-        }
-        await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, claimId);
-        const started = readQueuedEntry(stateDir, id);
-        const originalExpiry = started.availableAt;
-        vi.setSystemTime(Date.now() + 1_000);
-
-        await markDeliveryPlatformOutcomeUnknown(id, stateDir, claimId);
-
-        expect(readQueuedEntry(stateDir, id)).toMatchObject({
-          recoveryState: "unknown_after_send",
-          platformSendAttemptId: claimId,
-          availableAt: originalExpiry,
-        });
-        await expect(renewDeliveryPlatformSendLease(id, stateDir, claimId)).resolves.toBe(
-          Date.now() + 60_000,
-        );
-        expect(readQueuedEntry(stateDir, id).availableAt).toBe(Date.now() + 60_000);
-      } finally {
-        vi.useRealTimers();
+          requiresProducerClaim: true,
+        },
+        id,
+        stateDir,
+      );
+      const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+      if (!claimId) {
+        throw new Error("test invariant: explicit producer must own the stable row");
       }
+      await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, claimId);
+      const originalExpiry = Date.now() + 10_000;
+      updateDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir, (entry) => ({
+        ...entry,
+        availableAt: originalExpiry,
+      }));
+
+      await markDeliveryPlatformOutcomeUnknown(id, stateDir, claimId);
+
+      expect(readQueuedEntry(stateDir, id)).toMatchObject({
+        recoveryState: "unknown_after_send",
+        platformSendAttemptId: claimId,
+        availableAt: originalExpiry,
+      });
+      const beforeRenewal = Date.now();
+      const renewedUntil = await renewDeliveryPlatformSendLease(id, stateDir, claimId);
+      expect(renewedUntil).toBeGreaterThanOrEqual(beforeRenewal + 60_000);
+      expect(renewedUntil).toBeLessThanOrEqual(Date.now() + 60_000);
+      expect(readQueuedEntry(stateDir, id).availableAt).toBe(renewedUntil);
     });
 
     it("refreshes the attempt timestamp immediately before provider I/O", async () => {

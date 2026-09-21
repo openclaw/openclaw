@@ -51,21 +51,10 @@ import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-pa
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
-const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDoctorResult"]> = {
-  status: "advisory",
-  advisory: {
-    kind: "package-post-install-doctor",
-    message: "recoverable plugin repair",
-    reason: "deferred-configured-plugin-repair",
-    details: ["plugin repair deferred"],
-  },
-};
-
 const support = await import("./doctor-health.test-support.js");
-const { mocks, registerDoctorConfigReceiptTests } = support;
+const { mocks, registerDoctorConfigReceiptTests, postInstallAdvisory } = support;
 
 describe("runDoctorHealthFlow", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -390,6 +379,8 @@ describe("runDoctorHealthFlow", () => {
         const agentBefore = fs.readFileSync(initial.path);
         const events: string[] = [];
         let running = outcome !== "update-no-restart-stopped";
+        const pid = outcome === "ancestor-blocked" ? process.pid : 4200;
+        mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
         const packageRoot = process.cwd();
         mocks.packageRoot.mockReturnValue(packageRoot);
         const command = {
@@ -430,7 +421,7 @@ describe("runDoctorHealthFlow", () => {
           readRuntime: async () => ({
             status: running ? "running" : "stopped",
             systemd: { managerUid: process.getuid?.() ?? 2001 },
-            ...(outcome === "ancestor-blocked" ? { pid: process.pid } : {}),
+            ...(running ? { pid } : {}),
           }),
           readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
           isLoaded: async () => running,
@@ -645,7 +636,7 @@ describe("runDoctorHealthFlow", () => {
     },
   );
 
-  registerDoctorConfigReceiptTests(runDoctorHealthFlow, postInstallAdvisory);
+  registerDoctorConfigReceiptTests(runDoctorHealthFlow);
 
   it.each([{ repair: true }, { yes: true }])(
     "refuses blocked required migration for %j, then completes after the writer releases",

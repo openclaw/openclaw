@@ -242,6 +242,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
       promptToolPolicy: {
         current: {
           activeToolNames: ["read"],
+          callableToolNames: ["read"],
           effectiveTools: [{ name: "read" }],
           uncompactedEffectiveTools: [{ name: "read" }],
           tools: [{ name: "read" }],

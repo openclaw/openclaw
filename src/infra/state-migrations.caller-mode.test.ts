@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createJiti } from "jiti";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
@@ -510,6 +511,31 @@ describe("legacy state migration caller mode", () => {
 
   it("keeps the adjacent automatic-only step out of a Doctor plan", async () => {
     const fixture = await makeFixture();
+    // Core caller-mode receipts must not depend on unrelated bundled Doctor runtimes.
+    const candidateRoot = path.join(fixture.root, "automatic-candidate");
+    fixture.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(candidateRoot, "extensions");
+    writeCandidateMigrationManifest({
+      candidateRoot,
+      pluginId: "caller-mode",
+      migrationId: "caller-mode-state",
+    });
+    const contractPath = path.join(
+      candidateRoot,
+      "extensions",
+      "caller-mode",
+      "doctor-contract-api.ts",
+    );
+    fs.writeFileSync(
+      contractPath,
+      `export const stateMigrations = [{
+        id: "caller-mode-state",
+        label: "Caller mode fixture",
+        detectLegacyState: () => null,
+        migrateLegacyState: () => { throw new Error("fixture has no legacy state"); },
+      }];\n`,
+    );
+    const pluginLoader = vi.fn(createJiti);
+    pluginDoctorContractRegistryLoaderState.moduleLoaderFactory = pluginLoader;
     const cfg: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { planner: {} } },
       plugins: { entries: { "candidate-plugin": { enabled: true } } },
@@ -532,7 +558,7 @@ describe("legacy state migration caller mode", () => {
     );
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "automatic",
-      candidate: candidateAt(fixture.root),
+      candidate: candidateAt(candidateRoot),
       snapshot: createCallerModeSnapshot(fixture),
       env: fixture.env,
     });
@@ -563,6 +589,10 @@ describe("legacy state migration caller mode", () => {
       legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     });
     expect(result.mode).toBe("automatic");
+    expect(new Set(pluginLoader.mock.calls.map(([modulePath]) => modulePath))).toEqual(
+      new Set([contractPath]),
+    );
+    expect(result.stepReceipts.filter((receipt) => receipt.refusal)).toEqual([]);
     expect(result.stepReceipts.map((receipt) => receipt.id)).toEqual(
       plan.steps.map((step) => step.id),
     );
@@ -589,9 +619,12 @@ describe("legacy state migration caller mode", () => {
       },
       receipts: result.stepReceipts,
     });
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "legacy-main-session-keys"),
-    ).toMatchObject({
+    const legacyKeys = result.stepReceipts.find(
+      (receipt) => receipt.id === "legacy-main-session-keys",
+    );
+    // Report the origin before a subset match can strip it from the failure.
+    expect(legacyKeys?.refusal, JSON.stringify(legacyKeys?.originatingRefusal)).toBeUndefined();
+    expect(legacyKeys).toMatchObject({
       source: [
         { kind: "path", path: legacySessionStorePath },
         { kind: "sqlite", path: agentDatabasePath },
@@ -603,9 +636,6 @@ describe("legacy state migration caller mode", () => {
       requiredness: "conditional",
       outcome: "skipped",
     });
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "legacy-main-session-keys")?.refusal,
-    ).toBeUndefined();
     expect(result.stepReceipts.find((receipt) => receipt.id === "shared-auth-store")).toMatchObject(
       {
         outcome: "skipped",

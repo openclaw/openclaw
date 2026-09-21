@@ -26,11 +26,11 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { createUpdateProgress } from "./progress.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { failUpdateCommandRun } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
   completeUpdateCommandRun,
   createUpdateRunProgress,
-  failUpdateCommandRun,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";

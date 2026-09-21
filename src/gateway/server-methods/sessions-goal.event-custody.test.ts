@@ -155,7 +155,11 @@ describe("Goal RPC event custody", () => {
       event.resolve();
       await pending;
       expect(respond).toHaveBeenCalledOnce();
-      expect(respond.mock.calls[0]?.[0]).toBe(!broadcastFails);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        { operationId: "operation-id", status: "updated" },
+        undefined,
+      );
       expect(edge.record).toHaveBeenCalledOnce();
     },
   );

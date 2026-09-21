@@ -52,7 +52,6 @@ use tauri::{
     WebviewWindowBuilder,
 };
 use tauri_plugin_deep_link::DeepLinkExt;
-use tauri_plugin_global_shortcut::{Code, Modifiers};
 use tauri_plugin_opener::OpenerExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
@@ -3177,14 +3176,10 @@ fn main() {
         builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        if quickchat_shortcut_state.matches_shortcut(shortcut) {
-                            quickchat::toggle_quickchat(app);
-                        } else if shortcut
-                            .matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyO)
-                        {
-                            tray::show_window(app);
-                        }
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed
+                        && quickchat_shortcut_state.matches_shortcut(shortcut)
+                    {
+                        quickchat::toggle_quickchat(app);
                     }
                 })
                 .build(),

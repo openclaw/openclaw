@@ -380,8 +380,12 @@ describe("FaceTime runtime call sequencing", () => {
       let startupReleased = false;
       let releaseStartup: Promise<boolean> | undefined;
       let confirmProcessAbsence = () => {};
+      let inspectProcessAbsence = () => {};
       const processAbsence = new Promise<void>((resolve) => {
         confirmProcessAbsence = resolve;
+      });
+      const processAbsenceInspected = new Promise<void>((resolve) => {
+        inspectProcessAbsence = resolve;
       });
       mocks.helper.inspectCall.mockRejectedValue(new Error("helper inspection unavailable"));
       mocks.startTalk.mockImplementationOnce(
@@ -419,15 +423,12 @@ describe("FaceTime runtime call sequencing", () => {
             .mockResolvedValueOnce({ code: 0, stdout: "Tue Nov 14 22:13:20 2023\n", stderr: "" })
             .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
             .mockImplementationOnce(async () => {
+              inspectProcessAbsence();
               await processAbsence;
               return { code: 1, stdout: "", stderr: "" };
             });
           stop = runtime.stop();
-          await vi.waitFor(() =>
-            expect(mocks.systemRun).toHaveBeenCalledWith(["/bin/kill", "-0", "4321"], {
-              timeoutMs: 500,
-            }),
-          );
+          await processAbsenceInspected;
           expect(startupReleased).toBe(false);
           expect((await runtime.status()).calls).toMatchObject([{ carrierMode: "closing" }]);
           confirmProcessAbsence();
@@ -660,7 +661,6 @@ describe("FaceTime runtime call sequencing", () => {
       expect(mocks.systemRun).toHaveBeenCalledWith(["/bin/kill", "-KILL", "4321"], {
         timeoutMs: 500,
       });
-      expect(talk.failClosed).not.toHaveBeenCalled();
       expect(talk.close).not.toHaveBeenCalled();
       expect((await runtime.status()).calls).toMatchObject([
         { carrierMode: "closing", carrierHangupPending: true },
@@ -689,14 +689,18 @@ describe("FaceTime runtime call sequencing", () => {
     const state = pendingDialState({ callUUIDAliases: ["approved-call"] });
     mocks.helper.cancelOutgoingCall.mockRejectedValue(new Error("helper cancel unavailable"));
     mocks.helper.findOutgoingCall.mockResolvedValue(pendingDialCarrierResult());
+    let processExited = false;
     mocks.systemRun.mockImplementation(async (argv: string[]) => {
       if (argv[0] === "/bin/ps") {
+        if (processExited) {
+          return { code: 1, stdout: "", stderr: "" };
+        }
         return argv.includes("lstart=")
           ? { code: 0, stdout: "Tue Nov 14 22:13:20 2023\n", stderr: "" }
           : { code: 0, stdout: processExecutable, stderr: "" };
       }
-      if (argv[0] === "/bin/kill" && argv[1] === "-0") {
-        return { code: 1, stdout: "", stderr: "" };
+      if (argv[0] === "/bin/kill") {
+        processExited = true;
       }
       return { code: 0, stdout: "", stderr: "" };
     });

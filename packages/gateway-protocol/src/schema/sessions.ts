@@ -166,17 +166,9 @@ export const SessionsCompanionResetResultSchema = closedObject({
  * Session protocol schemas.
  *
  * These requests and results cover transcript discovery, lifecycle control,
- * compaction checkpoints, per-session plugin state, and usage reporting. The
+ * compaction, per-session plugin state, and usage reporting. The
  * schemas are shared by dashboard, CLI, ACP, and gateway RPC callers.
  */
-
-/** Reason a compaction checkpoint was created. */
-const SessionCompactionCheckpointReasonSchema = Type.Union([
-  Type.Literal("manual"),
-  Type.Literal("auto-threshold"),
-  Type.Literal("overflow-retry"),
-  Type.Literal("timeout-retry"),
-]);
 
 /** Start/end event emitted while a session compaction operation runs. */
 export const SessionOperationEventSchema = closedObject({
@@ -188,30 +180,6 @@ export const SessionOperationEventSchema = closedObject({
   ts: Type.Integer({ minimum: 0 }),
   completed: Type.Optional(Type.Boolean()),
   reason: Type.Optional(Type.String()),
-});
-
-/** Reference to the transcript location before or after compaction. */
-const SessionCompactionTranscriptReferenceSchema = closedObject({
-  sessionId: NonEmptyString,
-  sessionFile: Type.Optional(NonEmptyString),
-  leafId: Type.Optional(NonEmptyString),
-  entryId: Type.Optional(NonEmptyString),
-});
-
-/** Stored compaction checkpoint metadata for branching or restoring a session. */
-export const SessionCompactionCheckpointSchema = closedObject({
-  checkpointId: NonEmptyString,
-  sessionKey: NonEmptyString,
-  sessionId: NonEmptyString,
-  createdAt: Type.Integer({ minimum: 0 }),
-  reason: SessionCompactionCheckpointReasonSchema,
-  tokensBefore: Type.Optional(Type.Integer({ minimum: 0 })),
-  tokensAfter: Type.Optional(Type.Integer({ minimum: 0 })),
-  tokensVersion: Type.Optional(Type.Literal(1)),
-  summary: Type.Optional(Type.String()),
-  firstKeptEntryId: Type.Optional(NonEmptyString),
-  preCompaction: SessionCompactionTranscriptReferenceSchema,
-  postCompaction: SessionCompactionTranscriptReferenceSchema,
 });
 
 /** Session file grouping used by the Control UI session workspace rail. */
@@ -616,26 +584,6 @@ export const SessionsCompactParamsSchema = closedObject({
   maxLines: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
-/** Lists compaction checkpoints for one session. */
-export const SessionsCompactionListParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-});
-
-/** Creates a new branch from a compaction checkpoint. */
-export const SessionsCompactionBranchParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  checkpointId: NonEmptyString,
-});
-
-/** Restores an existing session to a compaction checkpoint. */
-export const SessionsCompactionRestoreParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  checkpointId: NonEmptyString,
-});
-
 /** Repoints a session to the active-path state before one persisted user message. */
 export const SessionsRewindParamsSchema = closedObject({
   sessionKey: NonEmptyString,
@@ -692,44 +640,6 @@ export const SessionsBranchesSwitchParamsSchema = closedObject({
 });
 
 export const SessionsBranchesSwitchResultSchema = closedObject({});
-
-/** List response for session compaction checkpoints. */
-export const SessionsCompactionListResultSchema = closedObject({
-  ok: Type.Literal(true),
-  key: NonEmptyString,
-  checkpoints: Type.Array(SessionCompactionCheckpointSchema),
-});
-
-/** Branch response with the newly created session key and entry metadata. */
-export const SessionsCompactionBranchResultSchema = closedObject({
-  ok: Type.Literal(true),
-  sourceKey: NonEmptyString,
-  key: NonEmptyString,
-  sessionId: NonEmptyString,
-  checkpoint: SessionCompactionCheckpointSchema,
-  entry: Type.Object(
-    {
-      sessionId: NonEmptyString,
-      updatedAt: Type.Integer({ minimum: 0 }),
-    },
-    { additionalProperties: true },
-  ),
-});
-
-/** Restore response with updated session entry metadata. */
-export const SessionsCompactionRestoreResultSchema = closedObject({
-  ok: Type.Literal(true),
-  key: NonEmptyString,
-  sessionId: NonEmptyString,
-  checkpoint: SessionCompactionCheckpointSchema,
-  entry: Type.Object(
-    {
-      sessionId: NonEmptyString,
-      updatedAt: Type.Integer({ minimum: 0 }),
-    },
-    { additionalProperties: true },
-  ),
-});
 
 /** Usage report query across one session, one agent, or all agent sessions. */
 export const SessionsUsageParamsSchema = closedObject({
@@ -789,7 +699,6 @@ export const SessionsUsageParamsSchema = closedObject({
 export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
 export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsDescribeParams = Static<typeof SessionsDescribeParamsSchema>;
-export type SessionCompactionCheckpoint = Static<typeof SessionCompactionCheckpointSchema>;
 export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
 export type SessionObserverHealth = Static<typeof SessionObserverHealthSchema>;
 export type SessionObserverPlanProgress = Static<typeof SessionObserverPlanProgressSchema>;
@@ -807,12 +716,6 @@ export type SessionsCompanionStateParams = Static<typeof SessionsCompanionStateP
 export type SessionsCompanionStateResult = Static<typeof SessionsCompanionStateResultSchema>;
 export type SessionsCompanionResetParams = Static<typeof SessionsCompanionResetParamsSchema>;
 export type SessionsCompanionResetResult = Static<typeof SessionsCompanionResetResultSchema>;
-export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
-export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;
-export type SessionsCompactionRestoreParams = Static<typeof SessionsCompactionRestoreParamsSchema>;
-export type SessionsCompactionListResult = Static<typeof SessionsCompactionListResultSchema>;
-export type SessionsCompactionBranchResult = Static<typeof SessionsCompactionBranchResultSchema>;
-export type SessionsCompactionRestoreResult = Static<typeof SessionsCompactionRestoreResultSchema>;
 export type SessionsRewindParams = Static<typeof SessionsRewindParamsSchema>;
 export type SessionsForkParams = Static<typeof SessionsForkParamsSchema>;
 export type SessionsRewindResult = Static<typeof SessionsRewindResultSchema>;

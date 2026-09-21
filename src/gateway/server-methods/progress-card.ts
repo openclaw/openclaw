@@ -3,6 +3,7 @@ import {
   errorShape,
   validateProgressCardGetParams,
   validateProgressCardPutParams,
+  validateProgressCardRefreshParams,
   type ProgressCard,
   type ProgressCardGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -50,6 +51,38 @@ export function createProgressCardHandlers(
   store: ProgressCardStore = progressCardStore,
 ): GatewayRequestHandlers {
   return {
+    "progressCard.refresh": async (invocation) => {
+      const { params, respond, context, sessionMutationAuthorization } = invocation;
+      if (
+        !assertValidParams(
+          params,
+          validateProgressCardRefreshParams,
+          "progressCard.refresh",
+          respond,
+        )
+      ) {
+        return;
+      }
+      const session = resolveProgressCardSession(params, context, respond);
+      if (!session) {
+        return;
+      }
+      sessionMutationAuthorization?.assertCurrent();
+      const card = await store.get(session.sessionKey, session.agentId);
+      sessionMutationAuthorization?.assertCurrent();
+      if (!card) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "There is no progress card to refresh."),
+        );
+        return;
+      }
+      const { requestProgressCardRefresh } = await import("./progress-card-refresh.js");
+      invocation.sessionMutationCommitGuard?.();
+      sessionMutationAuthorization?.assertCurrent();
+      await requestProgressCardRefresh(invocation, session, card, params.idempotencyKey);
+    },
     "progressCard.get": async ({ params, respond, context, sessionMutationAuthorization }) => {
       if (!assertValidParams(params, validateProgressCardGetParams, "progressCard.get", respond)) {
         return;

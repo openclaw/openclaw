@@ -8,21 +8,16 @@ import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
 
 afterEach(() => vi.restoreAllMocks());
-const entry = (sourceWorkerName: string, distWorkerPath: string) =>
-  resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName,
-    distWorkerPath,
-  });
-const executor = entry("update-command-executor", "cli/update-cli/update-command-executor.js");
-const caller = entry("update-command-config", "cli/update-cli/update-command-config.js");
-const config = entry("../../config/config", "config/config.js");
+const executor = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
+const caller = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandConfig);
+const config = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.config);
 const sourceArgs = executor.pathname.endsWith(".ts")
   ? ["--import", path.resolve("scripts/tsx.mjs")]
   : [];

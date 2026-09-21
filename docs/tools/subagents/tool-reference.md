@@ -62,6 +62,29 @@ the provider prefix when the ref has one.
 
 ### Cloud placement
 
+`placement` is optional. Omit it to default to local execution, or select local
+execution explicitly with `{ "kind": "local" }`. Both forms support native
+subagents (including hidden review and test workers), visible sessions, and ACP
+runs under their existing runtime and visibility rules. Local placement does not
+accept cloud selectors. Do not supply dummy profile, OS, or machine identifiers.
+An existing local worktree needs only `cwd`, not `worktree: true`:
+
+```json
+{
+  "task": "Review the current changes and report findings",
+  "runtime": "subagent",
+  "mode": "run",
+  "cwd": "/path/to/existing/worktree",
+  "placement": { "kind": "local" },
+  "completionTarget": "parent"
+}
+```
+
+Omitting `placement` in this example has the same local behavior. For intentional
+cloud execution, use `visible: true`, `worktree: true`, and a real configured
+profile. Invalid placement, mixed local/cloud selectors, and failed cloud
+placement do not fall back to local execution.
+
 Discover configured profiles with `sessions({ action: "cloud_profiles" })`. The list returns at most 32 summaries and supplies `nextOffset` when another page is available. Pass that value as `offset`. Request `sessions({ action: "cloud_profiles", profileId: "build" })` for that profile's operating systems, availability, defaults, and per-OS machine classes. Discovery reads the same provider-authored catalog as the Control UI, not profile settings or credentials.
 
 Then start the child using the selected identifiers:
@@ -84,7 +107,7 @@ Cloud placement requires a live hosted Gateway session; standalone and local-emb
 
 An error with `childSessionKey` means the child was retained. `initialTaskStatus: "not-sent"` means the tool did not submit its initial task; `"unknown"` means task admission was attempted but not confirmed. Inspect that child and its placement before retrying. Do not repeat the spawn merely because provisioning or the initial reply timed out. An attempted task that cannot be registered is settled through exact-run cancellation; its session and worker are preserved for inspection.
 
-This option is for Gateway-side visible spawns. The restricted cloud-worker spawn tool keeps its existing parent-profile inheritance contract; it does not accept a different profile, OS, or size.
+Selecting a cloud profile is available only to Gateway-side visible spawns. The restricted cloud-worker spawn tool keeps its existing parent-profile inheritance contract; it does not accept a different profile, OS, or size.
 
 ### Delegation prompt mode
 
@@ -185,7 +208,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Create a persistent dashboard session only when the user requests a separate session or needs to return to and steer the work independently. Omit this flag or use `false` for internal QA, research, coding, review, and test workers supporting the parent task. Visible spawns support only `runtime: "subagent"` and always keep the created session.
 </ParamField>
 <ParamField path="placement" type="object">
-  Run a visible worktree session on a configured cloud profile. Requires `visible: true` and `worktree: true`. Use `{ kind: "profile", profileId, os?, machineClass? }`; OS and machine IDs come from cloud profile discovery. Omitted selectors use the profile defaults. The Gateway creates the child without starting its task, dispatches it, then admits its first task on the cloud worker. A failed or uncertain cloud start retains the child for inspection; it never starts the task locally or silently provisions a replacement.
+  Omit to default to local execution, or use `{ kind: "local" }` explicitly without cloud selectors. For a visible worktree session on a configured cloud profile, use `{ kind: "profile", profileId, os?, machineClass? }` with `visible: true` and `worktree: true`; OS and machine IDs come from cloud profile discovery. Omitted cloud selectors use the profile defaults. The Gateway creates the cloud child without starting its task, dispatches it, then admits its first task on the worker. Invalid placement and failed or uncertain cloud starts never silently fall back to local execution; a failed cloud start retains the child for inspection.
 </ParamField>
 <ParamField path="group" type="string">
   Optional custom sidebar group for a visible session; a new name creates the group. Omitted, empty, and whitespace-only values mean ungrouped and are also accepted for hidden or ACP runs. A nonempty group requires `visible: true`.

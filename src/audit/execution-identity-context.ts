@@ -1,8 +1,8 @@
 /** Immutable execution identity context storage and run-admission projection. */
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
-import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
+import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
+import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import { hasOperatorApprovalReceiptsForRunInDatabase } from "../gateway/operator-approval-store.js";
 import {
   executeSqliteQuerySync,

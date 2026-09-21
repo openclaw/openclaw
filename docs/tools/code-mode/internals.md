@@ -3,7 +3,7 @@ summary: "Code Mode scope, terms, nested tool execution, snapshots, the QuickJS-
 title: "Code Mode internals"
 read_when:
   - You need the runtime status, scope, or vocabulary
-  - You are reviewing the QuickJS-WASI sandbox, TypeScript transform, or snapshot lifecycle
+  - You are reviewing the QuickJS-WASI sandbox, typed tool discovery, or snapshot lifecycle
   - You are validating the security boundary for a high-risk deployment
 ---
 
@@ -25,7 +25,7 @@ does not own model selection, channel behavior, auth, tool policy, or tool
 implementations.
 
 In scope: model-visible control/direct tool definitions, hidden tool catalog
-construction, JavaScript/TypeScript guest execution, the QuickJS-WASI worker
+construction, JavaScript guest execution, the QuickJS-WASI worker
 runtime, host callbacks for search/describe/call, resumable state for
 suspended guest programs, output/timeout/memory/pending-call/snapshot limits,
 and telemetry/trajectory projection for nested tool calls.
@@ -123,7 +123,7 @@ Snapshot storage is bounded by `maxSnapshotBytes` per run, the per-process
 suspended-run cap above, and `snapshotTtlSeconds`. The worker checks the snapshot
 size, including QuickJS metadata, before handing pending work to the Gateway.
 These limits and `memoryLimitBytes` bound guest state, not total Gateway memory;
-warm worker threads and TypeScript compilers also retain memory.
+warm worker threads also retain memory.
 
 Explicit `results.save(value)` references keep normalized JSON in the existing
 admitted catalog lifetime, independently of each cell's VM and output budget.
@@ -147,9 +147,10 @@ successful partial result with a precise non-retention reason. Headless and
 restart-safe execution do not allocate automatic references.
 
 Catalog teardown, replacement, restriction, and the admitted run's abort clear
-saved data. Appended client tools preserve the same catalog lifetime. Each cell
-captures its catalog identity and entries before execution, so stale cells
-cannot use a replacement catalog or retain references after a permission change.
+saved data. Appended client tools preserve the same result-store lifetime, including
+for cells already parked in `wait`. Each cell captures that store before execution,
+so stale cells cannot adopt a replacement store or retain references after a
+permission change.
 Saved references are data snapshots and never execution authority. They do not
 survive Gateway restart and cannot be used by another run or session.
 
@@ -173,32 +174,17 @@ independent of guest code cooperating.
 
 ## TypeScript
 
-By default TypeScript is a source transform: one code string becomes JavaScript
-evaluated by QuickJS-WASI. Optional `exec({ code, language: "typescript",
-typecheck: true })` checks a bounded in-memory compiler program first, using the
-same effective tool declarations as `API.read` plus guest globals and the pinned
-TypeScript standard library. Unknown outputs stay unknown. Compiler input is
-bounded by the existing memory allowance and preparation shares the call deadline.
-No guest module resolution, filesystem access, or `import`/`require` is enabled.
-Preflight reports up to five errors together, with original `user.ts` coordinates.
-Each message retains at most 1024 UTF-8 bytes plus a truncation marker, and the
-response counts additional errors omitted from the batch. Diagnostics return
-`failed`/`invalid_input`;
-no guest or tool work has run when preflight rejects. This opt-in does not change
-JavaScript defaults or replace runtime JSON Schema validation.
+TypeScript-style signatures describe tool inputs and outputs to the model through
+the quick index, catalog handles, and `API.read` declaration files. Unknown
+outputs stay `unknown`, and declarations do not grant access to additional tools.
 
-Repeated checked cells reuse one bounded declaration string per catalog when
-current tool schemas, callable names, namespace globals, and API declarations
-still match. Mutable trusted schemas are fingerprinted again on each check;
-client schemas remain opaque. Custom JSON serialization cannot hide contract
-changes, and uncloneable metadata bypasses reuse. Catalog changes replace the prepared text. Each
-warm compiler worker also reuses the pinned standard-library text and its
-reference graph. Guest programs, syntax trees, and diagnostics remain per-cell,
-and cached declaration and library bytes still count against each check's
-existing input allowance.
-
-The TypeScript compiler is loaded lazily only for TypeScript cells; plain
-JavaScript cells and disabled code mode never load it.
+Executable cells are plain JavaScript. Code Mode does not load a TypeScript
+compiler, strip annotations, or typecheck the program. QuickJS parses and runs
+the JavaScript directly. Tool calls still use the existing runtime input and
+output validation, policy, and approval owners. A later call can fail after
+earlier calls have produced effects, so follow the
+[recovery guidance](/tools/code-mode/quickstart#recover-from-tool-errors) before
+retrying a failed cell.
 
 ## Security boundary
 

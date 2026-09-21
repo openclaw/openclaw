@@ -17,6 +17,10 @@ import type {
   readUpdateRuns,
   UpdateRunListInput,
 } from "../infra/update-run-read.kernel.js";
+import type {
+  PluginBlobReadCommand,
+  PluginBlobReadReply,
+} from "../plugin-state/plugin-blob-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { OnboardingRecommendationsRecord } from "./onboarding-recommendations.contract.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
@@ -39,6 +43,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | PluginBlobReadCommand
   | { type: "exec-approvals.read" }
   | { type: "agentDatabaseRegistry.read" }
   | { type: "onboardingRecommendations.read"; configKey: string }
@@ -64,6 +69,7 @@ export type OpenClawStateReadRequest = {
   command: OpenClawStateReadCommand | { type: "admit" };
 };
 export type OpenClawStateReadReply = (
+  | PluginBlobReadReply
   | {
       ok: true;
       type: "agentDatabaseRegistry.read";
@@ -148,7 +154,12 @@ export type OpenClawStateReadReply = (
 
 export type OpenClawStateReadOutcome =
   | { value: Extract<OpenClawStateReadReply, { ok: true }> }
-  | { error: unknown; sourceAdmitted?: true };
+  | { error: unknown; sourceAdmitted?: boolean };
+
+export type OpenClawStateReadPhase = "before-read" | "read" | "unobserved";
+export type OpenClawStateReadOptions = {
+  mapError?: (error: unknown, phase: OpenClawStateReadPhase) => unknown;
+};
 
 export type ReadResource = { close(): Promise<void> };
 export type RetainedReadScope = {

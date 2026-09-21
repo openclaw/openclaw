@@ -595,6 +595,7 @@ function runCiManifestFixture(options: {
   bundledPlanner: boolean;
   nodeTestShards?: Record<string, unknown>[];
   nodeTestGroupsCodec?: boolean;
+  bunTestRuntime?: boolean;
   startupCorpusCoverage?: boolean;
   changedPlannerSource?: string | null;
   changedPlannerDependencies?: string[];
@@ -632,6 +633,13 @@ function runCiManifestFixture(options: {
   try {
     const scriptsDir = path.join(root, "scripts", "lib");
     mkdirSync(scriptsDir, { recursive: true });
+    if (options.bunTestRuntime) {
+      writeFileSync(
+        path.join(scriptsDir, "ci-test-runtime.mts"),
+        `export const ciTestShardRequiresBun = (shard, policy) =>
+          policy !== "node" && shard.configs?.includes("fixture-bun.config.ts");`,
+      );
+    }
     for (const dependency of options.changedPlannerDependencies ?? []) {
       const destination = path.join(root, dependency);
       mkdirSync(path.dirname(destination), { recursive: true });
@@ -665,6 +673,7 @@ function runCiManifestFixture(options: {
             includePatterns: options.changedPaths,
             env: {
               OPENCLAW_CI_TEST_COMPACT_MODE: options.compactMode ?? "full",
+              OPENCLAW_CI_TEST_COMPACT_NODE_JOB_CAP: String(options.compactNodeJobCap ?? ""),
               OPENCLAW_CI_TEST_RUNNER_BACKEND: options.runnerBackend ?? "",
             },
             requiresDist: false,
@@ -5282,7 +5291,11 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
         }
       }
       expect(job.strategy["max-parallel"]).toBe(2);
-      expect(job.env.OPENCLAW_VITEST_MAX_WORKERS).toBe(1);
+      expect(runStep.env.OPENCLAW_VITEST_MAX_WORKERS).toBe(
+        "${{ runner.environment == 'self-hosted' && 4 || 1 }}",
+      );
+      expect(runStep.run).toContain("pnpm test:windows:ci:1 -- --fileParallelism");
+      expect(runStep.run).toContain("pnpm test:windows:ci:2 -- --fileParallelism");
     },
   );
 
@@ -7035,7 +7048,7 @@ setImmediate(() => {
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "check-test-types-hosted-core-shard": "blacksmith-16vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
-      "checks-windows": "blacksmith-8vcpu-windows-2025",
+      "checks-windows": "blacksmith-16vcpu-windows-2025",
     } as const;
     const expectedHybridForkRunners = {
       ...expectedHybridFirstAttemptRunners,
@@ -7501,7 +7514,7 @@ setImmediate(() => {
         caller.mode === "read-write" ||
         (typeof caller.mode === "string" && caller.mode.includes("'read-write'")),
     );
-    expect(writeAuthorizedCallers).toHaveLength(3);
+    expect(writeAuthorizedCallers).toHaveLength(4);
     expect(writeAuthorizedCallers).toEqual(
       expect.arrayContaining([
         {
@@ -7810,7 +7823,7 @@ setImmediate(() => {
     }
 
     const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
-    const dependencySave = warmer.jobs.warm.steps.find(
+    const dependencySave = warmer.jobs.dependencies.steps.find(
       (candidate: WorkflowStep) => candidate.name === "Save exact dependency cache",
     );
     expect(dependencySave).toMatchObject({
@@ -8396,6 +8409,12 @@ server.listen(0, "127.0.0.1", () => {
     expect(save.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
     expect(save.if).not.toMatch(/always\(|failure\(|cancelled\(/u);
     expect(warmerSteps.indexOf(prepare)).toBeLessThan(warmerSteps.indexOf(save));
+    for (const step of [prepare, save]) {
+      expect(step.if).toContain("matrix.platform == 'linux'");
+    }
+    expect(warmer.jobs.dependencies.steps.map((step: WorkflowStep) => step.name)).not.toContain(
+      "Prepare compiled Vitest workers",
+    );
     expect(warmerSteps.indexOf(save)).toBeLessThan(
       warmerSteps.findIndex((step) => step.name === "Prepare native SDK boundary cache"),
     );
@@ -8934,6 +8953,7 @@ server.listen(0, "127.0.0.1", () => {
                 "test/vitest/**",
                 "src/state/*.sql",
                 "!**/node_modules/**",
+                "!.ci-harness/**",
               ]);
               const prefix = `openclaw/openclaw-vitest-fs-v3-protected-${os}-X64-node-24.x-${generation}-`;
               expect(cacheInputs).toEqual({
@@ -8952,6 +8972,62 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  it("shares transform generations with the warmer after CI exports its harness", () => {
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const generationStep = (action.runs.steps as WorkflowStep[]).find(
+      (step) => step.name === "Resolve Vitest transform cache generation",
+    );
+    const expression = expectDefined(
+      generationStep?.run?.match(/\$\{\{(.*?)\}\}/u)?.[1],
+      "transform generation expression",
+    );
+    const sourceFiles = {
+      "pnpm-lock.yaml": "lockfileVersion: '9.0'",
+      "pnpm-workspace.yaml": "packages: ['packages/*']",
+      "package.json": '{"name":"fixture"}',
+      "packages/worker/package.json": '{"name":"worker"}',
+      "packages/worker/tsconfig.json": "{}",
+      "vitest.config.ts": "export default {}",
+      "test/vitest/shared.ts": "export const shared = {}",
+      "src/state/schema.sql": "CREATE TABLE fixture (id TEXT);",
+      ".github/actions/setup-security-review/package.json": '{"name":"review"}',
+      ".ci-harness-source/package.json": '{"name":"real-source"}',
+    };
+    const files: Record<string, string> = { ...sourceFiles };
+    const fingerprint = () =>
+      runInNewContext(expression, {
+        hashFiles: (...patterns: string[]) => {
+          const includes = patterns.filter((pattern) => !pattern.startsWith("!"));
+          const excludes = patterns
+            .filter((pattern) => pattern.startsWith("!"))
+            .map((pattern) => pattern.slice(1));
+          const hash = createHash("sha256");
+          for (const [file, contents] of Object.entries(files).toSorted(([left], [right]) =>
+            left.localeCompare(right),
+          )) {
+            if (
+              includes.some((pattern) => minimatch(file, pattern, { dot: true })) &&
+              !excludes.some((pattern) => minimatch(file, pattern, { dot: true }))
+            ) {
+              hash.update(createHash("sha256").update(contents).digest());
+            }
+          }
+          return hash.digest("hex");
+        },
+      });
+    const warmer = fingerprint();
+    files[".ci-harness/.github/actions/setup-security-review/package.json"] =
+      sourceFiles[".github/actions/setup-security-review/package.json"];
+    files[".ci-harness/tsconfig.json"] = "{}";
+    files["node_modules/dependency/package.json"] = '{"name":"dependency"}';
+    expect(fingerprint()).toBe(warmer);
+    for (const [file, contents] of Object.entries(sourceFiles)) {
+      files[file] = `${contents}\n`;
+      expect(fingerprint(), file).not.toBe(warmer);
+      files[file] = contents;
+    }
+  });
+
   it("persists isolated transform and compile caches through immutable protected archives", () => {
     const workflow = readCiWorkflow();
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
@@ -8964,9 +9040,6 @@ server.listen(0, "127.0.0.1", () => {
     );
     const configureStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Configure Vitest transform cache",
-    );
-    const compileEpochStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Select Node compile cache epoch",
     );
     const compileReaderStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Restore Node compile cache",
@@ -8991,7 +9064,6 @@ server.listen(0, "127.0.0.1", () => {
     expect(setupNodeStep.with).toMatchObject({
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
       "node-compile-cache": "true",
-      "node-compile-cache-scope": "test",
       "vitest-fs-cache": "true",
     });
     expect(setupNodeStep.with).not.toHaveProperty("save-node-compile-cache");
@@ -9001,7 +9073,7 @@ server.listen(0, "127.0.0.1", () => {
     expect(action.inputs["restore-test-caches"].default).toBe("false");
     expect(action.inputs).not.toHaveProperty("save-vitest-fs-cache");
     expect(action.inputs["node-compile-cache"].default).toBe("false");
-    expect(action.inputs["node-compile-cache-scope"].default).toBe("test");
+    expect(action.inputs).not.toHaveProperty("node-compile-cache-scope");
     expect(action.inputs).not.toHaveProperty("save-node-compile-cache");
     expect(
       action.runs.steps.some((step: WorkflowStep) =>
@@ -9027,15 +9099,10 @@ server.listen(0, "127.0.0.1", () => {
     expect(configureStep.run).not.toContain("protected Vitest transform seed");
     expect(configureStep.env.CACHE_WRITER).toBe("0");
     expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=");
-    expect(compileEpochStep.run).toContain('if [ "$CACHE_SCOPE" = "build" ]');
-    expect(compileEpochStep.run).toContain("date -u +%Y%m%d");
-    expect(compileEpochStep.run).toContain("GITHUB_RUN_ID");
-    expect(compileReaderStep.with.key).toContain(
-      "node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-",
-    );
-    expect(compileReaderStep.with.key).toContain("steps.node-compile-cache-epoch.outputs.value");
+    expect(compileReaderStep.with.key).toContain("node-compile-v3-test-protected-");
+    expect(compileReaderStep.with.key).toContain("github.run_id");
+    expect(compileReaderStep.with.key).toContain("github.run_attempt");
     expect(compileReaderStep.with.key).not.toContain("pull_request");
-    expect(compileEpochStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(compileReaderStep.if).toContain("inputs.cache-mode != 'off'");
     expect(compileReaderStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(compileConfigureStep.if).toContain("inputs.restore-test-caches == 'true'");
@@ -9045,12 +9112,16 @@ server.listen(0, "127.0.0.1", () => {
     expect(buildSetupNodeStep.with).toMatchObject({
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
       "node-compile-cache": "true",
-      "node-compile-cache-scope": "build",
       "build-all-cache-scope": "full",
     });
-    expect(buildSetupNodeStep.with["node-compile-cache-scope"]).not.toBe(
-      setupNodeStep.with["node-compile-cache-scope"],
-    );
+    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    for (const job of [...Object.values(workflow.jobs), ...Object.values(warmer.jobs)]) {
+      for (const step of (job as { steps?: WorkflowStep[] }).steps ?? []) {
+        if (step.uses?.endsWith("/.github/actions/setup-node-env")) {
+          expect(step.with, step.name).not.toHaveProperty("node-compile-cache-scope");
+        }
+      }
+    }
 
     for (const jobName of hostedTestCacheJobs) {
       const setup = workflow.jobs[jobName].steps.find(
@@ -9131,6 +9202,79 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  it("publishes dependencies independently of long backend-local code warming", () => {
+    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    expect(warmer).not.toHaveProperty("concurrency");
+    expect(warmer.on.push["paths-ignore"]).toEqual(readCiWorkflow().on.push["paths-ignore"]);
+    const dependencies = warmer.jobs.dependencies;
+    const code = warmer.jobs.warm;
+    expect(dependencies.concurrency["cancel-in-progress"]).toBe(false);
+    expect(code.concurrency["cancel-in-progress"]).toBe(false);
+    expect(code.concurrency.group).not.toBe(dependencies.concurrency.group);
+    for (const job of [dependencies, code]) {
+      expect(job).not.toHaveProperty("needs");
+      expect(job.concurrency.group).toContain("matrix.platform");
+      expect(job.concurrency.group).toContain("github.ref");
+      for (const repository of ["openclaw/openclaw", "example/fork"]) {
+        for (const ref of ["refs/heads/main", "refs/heads/feature"]) {
+          expect(
+            evaluateWorkflowExpression(job.if, {
+              eventName: "workflow_dispatch",
+              repository,
+              ref,
+              runAttempt: 1,
+            }),
+          ).toBe(repository === "openclaw/openclaw" && ref === "refs/heads/main");
+        }
+      }
+      const hosted = { eventName: "push" as const, repository: "openclaw/openclaw", runAttempt: 1 };
+      expect(
+        evaluateWorkflowExpression(job.concurrency.group, {
+          ...hosted,
+          runnerBackend: "hybrid",
+          matrix: { platform: "linux-hosted" },
+        }),
+      ).toBe(
+        evaluateWorkflowExpression(job.concurrency.group, {
+          ...hosted,
+          runnerBackend: "github",
+          matrix: { platform: "linux" },
+        }),
+      );
+    }
+    const dependencySaveNames = [
+      "Save Node toolchain cache",
+      "Save exact dependency cache",
+      "Save pnpm store cache",
+    ];
+    expect(
+      dependencies.steps
+        .filter((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@"))
+        .map((step: WorkflowStep) => step.name),
+    ).toEqual(dependencySaveNames);
+    expect(
+      code.steps.some((step: WorkflowStep) => dependencySaveNames.includes(step.name ?? "")),
+    ).toBe(false);
+    const setup = dependencies.steps.find(
+      (step: WorkflowStep) => step.name === "Setup Node environment",
+    );
+    for (const key of [
+      "vitest-fs-cache",
+      "vitest-worker-cache",
+      "node-compile-cache",
+      "build-all-cache-scope",
+    ]) {
+      expect(setup.with).not.toHaveProperty(key);
+    }
+    for (const save of dependencies.steps.filter((step: WorkflowStep) =>
+      dependencySaveNames.includes(step.name ?? ""),
+    )) {
+      expect(save.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
+      expect(save.if).not.toMatch(/\b(?:always|failure|cancelled)\(/u);
+      expect(dependencies.steps.indexOf(save)).toBeGreaterThan(dependencies.steps.indexOf(setup));
+    }
+  });
+
   it("warms protected caches without main-run cancellation", () => {
     const warmerSource = readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8");
     const warmer = parse(warmerSource);
@@ -9141,7 +9285,7 @@ server.listen(0, "127.0.0.1", () => {
       (step: WorkflowStep) => step.name === "Checkout",
     );
     const seedStep = warmer.jobs.warm.steps.find(
-      (step: WorkflowStep) => step.name === "Select broad cache seed",
+      (step: WorkflowStep) => step.name === "Select cache seed",
     );
     const warmStep = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Warm transform and compile caches",
@@ -9172,8 +9316,7 @@ server.listen(0, "127.0.0.1", () => {
       "final cache warming assertion",
     );
 
-    expect(warmer.concurrency["cancel-in-progress"]).toBe(false);
-    expect(warmer.concurrency.group).toBe("vitest-cache-warm-${{ github.ref }}");
+    expect(warmer.jobs.warm.concurrency["cancel-in-progress"]).toBe(false);
     // hosted-mode cache recovery needs a maintainer-operated fallback when the
     // scheduled seed is missing or stale.
     expect(warmer.on).toHaveProperty("workflow_dispatch");
@@ -9196,7 +9339,7 @@ server.listen(0, "127.0.0.1", () => {
               })
             : configuredPlatforms;
         expect(platforms).toEqual(
-          runnerBackend === "hybrid" ? ["linux", "linux-hosted", "macos"] : ["linux", "macos"],
+          runnerBackend === "hybrid" ? ["linux", "linux-hosted"] : ["linux"],
         );
         for (const platform of platforms as string[]) {
           const context = {
@@ -9229,23 +9372,35 @@ server.listen(0, "127.0.0.1", () => {
             "cache-mode": "read-write",
             "dependency-cache": String(full),
             "install-bun": "false",
-            "node-compile-cache-scope": "test",
-            "node-compile-cache": String(full),
-            "vitest-fs-cache": String(full),
+            "node-compile-cache": "true",
+            "vitest-fs-cache": "true",
             "vitest-worker-cache": String(full),
           });
-          for (const step of [
-            buildStep,
-            boundaryPrepareStep,
-            boundaryCleanupStep,
-            seedStep,
-            warmStep,
-            warmAssertionStep,
-          ]) {
+          for (const step of [buildStep, boundaryCleanupStep, seedStep]) {
             expect(evaluateWorkflowExpression(step.if, context), step.name).toBe(full);
           }
+          for (const step of [boundaryPrepareStep, warmStep]) {
+            expect(step.if, step.name).toBeUndefined();
+          }
+          expect(evaluateWorkflowExpression(warmAssertionStep.if, context)).toBe(true);
+          expect(evaluateWorkflowExpression(warmStep.env.CACHE_WARM_PLATFORM, context)).toBe(
+            platform,
+          );
         }
       }
+    }
+    for (const [platform, collector] of [
+      ["linux", "ci-run-node-test-shard"],
+      ["linux-hosted", "ci-warm-hosted-vitest-caches"],
+    ]) {
+      const invocation = runWorkflowShellScript(
+        `node() { printf '%s\\n' "$*"; return 23; }\n${warmStep.run}`,
+        { env: { ...process.env, CACHE_WARM_PLATFORM: platform } },
+      );
+      expect(invocation.stdout.trim(), invocation.stderr).toBe(
+        `--import tsx scripts/${collector}.mts`,
+      );
+      expect(invocation.status, invocation.stderr).toBe(23);
     }
     expect(warmer.on).not.toHaveProperty("workflow_run");
     expect(checkoutStep.with).toBeUndefined();
@@ -9277,9 +9432,6 @@ server.listen(0, "127.0.0.1", () => {
     }
     const saveSteps = warmerSteps.filter((step) => step.uses?.startsWith("actions/cache/save@"));
     expect(saveSteps.map((step) => step.name)).toEqual([
-      "Save Node toolchain cache",
-      "Save exact dependency cache",
-      "Save pnpm store cache",
       "Save compiled Vitest workers",
       "Save native SDK boundary cache",
       "Save build-all cache",
@@ -9294,18 +9446,11 @@ server.listen(0, "127.0.0.1", () => {
       expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeGreaterThan(
         warmerSteps.indexOf(warmerSetup),
       );
-      if (
-        saveStep.name === "Save Node toolchain cache" ||
-        saveStep.name === "Save exact dependency cache" ||
-        saveStep.name === "Save pnpm store cache" ||
-        saveStep.name === "Save compiled Vitest workers"
-      ) {
-        expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeLessThan(
-          warmerSteps.indexOf(buildStep),
+      if (saveStep.name === "Save compiled Vitest workers") {
+        expect(warmerSteps.indexOf(saveStep)).toBeLessThan(
+          warmerSteps.indexOf(boundaryPrepareStep),
         );
-        // A normal step condition retains Actions' implicit success() gate,
-        // so failed setup cannot publish even if it produced cache outputs.
-        expect(saveStep.if, saveStep.name).not.toMatch(/\b(?:always|failure|cancelled)\(/u);
+        expect(saveStep.if).not.toMatch(/always\(|failure\(|cancelled\(/u);
       } else if (
         saveStep.name === "Save build-all cache" ||
         saveStep.name === "Save dist build cache"
@@ -9331,7 +9476,7 @@ server.listen(0, "127.0.0.1", () => {
         warmerSteps.indexOf(warmAssertionStep),
       );
     }
-    expect(warmAssertionStep.if).toBe("${{ always() && matrix.platform == 'linux' }}");
+    expect(warmAssertionStep.if).toBe("${{ always() }}");
     expect(warmAssertionStep.run).toContain("steps.warm-caches.outcome");
     expect(warmAssertionStep.run).toContain("exit 1");
     expect(warmerSteps.at(-1)).toBe(warmAssertionStep);
@@ -9339,7 +9484,7 @@ server.listen(0, "127.0.0.1", () => {
     // old hosted-writer and warmer generations.
     expect(existsSync(".github/workflows/pr-cache-cleanup.yml")).toBe(false);
     expect(seedStep.if).toBe("${{ matrix.platform == 'linux' }}");
-    expect(warmStep.if).toBe("${{ matrix.platform == 'linux' }}");
+    expect(warmStep.if).toBeUndefined();
     const distSave = expectDefined(
       saveSteps.find((step) => step.name === "Save dist build cache"),
       "Linux dist publication",
@@ -9404,7 +9549,9 @@ server.listen(0, "127.0.0.1", () => {
     expect(existsSync(siblingOutput)).toBe(true);
     expect(existsSync(boundaryReceipt)).toBe(true);
     const storeSave = expectDefined(
-      saveSteps.find((step) => step.name === "Save pnpm store cache"),
+      warmer.jobs.dependencies.steps.find(
+        (step: WorkflowStep) => step.name === "Save pnpm store cache",
+      ),
       "platform pnpm store publication",
     );
     expect(storeSave.if).not.toContain("matrix.platform");
@@ -9422,7 +9569,8 @@ server.listen(0, "127.0.0.1", () => {
     expect(warmer.on).toHaveProperty("schedule");
     expect(warmer.on).toHaveProperty("workflow_dispatch");
     expect(warmer.concurrency.group).not.toBe(
-      parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8")).concurrency.group,
+      parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8")).jobs.warm.concurrency
+        .group,
     );
     const seed = warmer.jobs["warm-release-npm"];
     for (const repository of ["openclaw/openclaw", "example/fork"]) {
@@ -9557,7 +9705,7 @@ server.listen(0, "127.0.0.1", () => {
     });
     // The Windows matrix carries no per-row runner: both parts share one class.
     expect(workflow.jobs["checks-windows"]["runs-on"]).not.toContain("matrix.runner");
-    expect(source).toContain("blacksmith-8vcpu-windows-2025");
+    expect(source).toContain("blacksmith-16vcpu-windows-2025");
   });
 
   it("keeps the extension boundary sticky disk on one protected key", () => {
@@ -13166,6 +13314,56 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     55_000,
   );
 
+  it.each([
+    { eventName: "pull_request", capability: true, policy: "bun-compatible", bun: true },
+    { eventName: "workflow_dispatch", capability: true, policy: "dual", bun: true },
+    { eventName: "push", capability: true, policy: "node", bun: false },
+    { eventName: "workflow_dispatch", capability: false, policy: "node", bun: false },
+  ] as const)(
+    "routes test runtimes without adding jobs ($eventName, capability=$capability)",
+    ({ eventName, capability, policy, bun }) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        bunTestRuntime: capability,
+        eventName,
+        nodeTestShards: [
+          {
+            checkName: "runtime-proof",
+            shardName: "runtime-proof",
+            configs: ["fixture-bun.config.ts"],
+            requiresDist: false,
+            runner: "ubuntu-24.04",
+          },
+        ],
+        changedPaths: ["scripts/lib/ci-node-test-plan.mts"],
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const rows = JSON.parse(
+        expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "Node test matrix"),
+      ).include;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ test_runtime_policy: policy, requires_bun: bun });
+      const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
+      const context = {
+        eventName,
+        repository: "openclaw/openclaw",
+        matrix: rows[0],
+        runAttempt: 1,
+      };
+      const setup = job.steps.find((step: WorkflowStep) => step.name === "Setup Node environment");
+      const run = job.steps.find((step: WorkflowStep) => step.name === "Run Node test shard");
+      expect(setup.with["install-bun"]).toBe("false");
+      const bunSetup = job.steps.find(
+        (step: WorkflowStep) => step.name === "Setup pinned Bun test runtime",
+      );
+      expect(bunSetup.uses).toBe("./.ci-harness/.github/actions/setup-test-bun");
+      expect(evaluateWorkflowExpression(`\${{ ${bunSetup.if} }}`, context)).toBe(bun);
+      expect(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_RUNTIME_POLICY, context)).toBe(
+        policy,
+      );
+    },
+  );
+
   it("runs the startup corpus once when a canonical PR admits every complete Node file", () => {
     const revision = "a".repeat(40);
     const shards = createNodeTestShardBundles({
@@ -14324,6 +14522,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         check_name: "bundled-node-plan",
         env: {
           OPENCLAW_CI_TEST_COMPACT_MODE: "full",
+          OPENCLAW_CI_TEST_COMPACT_NODE_JOB_CAP: "70",
           OPENCLAW_CI_TEST_RUNNER_BACKEND: "blacksmith",
         },
         shard_name: "bundled-node-plan",
@@ -14349,6 +14548,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           check_name: "bundled-node-plan",
           env: {
             OPENCLAW_CI_TEST_COMPACT_MODE: "push",
+            OPENCLAW_CI_TEST_COMPACT_NODE_JOB_CAP: "70",
             OPENCLAW_CI_TEST_RUNNER_BACKEND: runnerBackend ?? "blacksmith",
           },
         }),
@@ -14413,6 +14613,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           check_name: "bundled-node-plan",
           env: {
             OPENCLAW_CI_TEST_COMPACT_MODE: "pull-request",
+            OPENCLAW_CI_TEST_COMPACT_NODE_JOB_CAP: "129",
             OPENCLAW_CI_TEST_RUNNER_BACKEND: "blacksmith",
           },
         }),

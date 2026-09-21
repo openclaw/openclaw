@@ -15,7 +15,6 @@ defineDiscordVoiceTests(
     createConnectionMock,
     joinVoiceChannelMock,
     entersStateMock,
-    createAudioPlayerMock,
     agentCommandMock,
     resolveVoiceIngressWithParticipantsMock,
     transcribeAudioFileMock,
@@ -717,7 +716,7 @@ defineDiscordVoiceTests(
             resolveConnect = () => resolve(undefined);
           }),
       );
-      const player = createAudioPlayerMock();
+      const audio = { on: vi.fn(), off: vi.fn(), send: vi.fn() };
       const session = new realtimeModule.DiscordRealtimeVoiceSession({
         accountId: "default",
         cfg: {},
@@ -727,7 +726,7 @@ defineDiscordVoiceTests(
           channelId: "1001",
           voiceSessionKey: "discord:g1:1001",
           route: { agentId: "agent-1", sessionKey: "discord:g1:1001" },
-          player,
+          audio,
         },
         mode: "agent-proxy",
         onTerminalError: vi.fn(),
@@ -746,6 +745,7 @@ defineDiscordVoiceTests(
       provider.onReady?.();
       expect(provider.audioSink.isOpen?.()).toBe(false);
       expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
+      expect(audio.send).toHaveBeenCalledExactlyOnceWith({ type: "output-shutdown" });
     });
 
     it("provider reset fences tool, playback, and consult completions", async () => {

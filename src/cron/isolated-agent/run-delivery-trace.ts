@@ -83,8 +83,8 @@ export function buildCronDeliveryTargetRuntimeContext(params: {
 }
 
 const cronDeliveryRuntimeLoader = createLazyImportLoader(() => import("./run-delivery.runtime.js"));
-const codexNativeWebSearchLoader = createLazyImportLoader(
-  () => import("../../agents/codex-native-web-search.js"),
+const nativeWebSearchLoader = createLazyImportLoader(
+  () => import("../../agents/native-web-search.js"),
 );
 const webToolRuntimeContextLoader = createLazyImportLoader(
   () => import("../../agents/tools/web-tool-runtime-context.js"),
@@ -95,8 +95,8 @@ export async function loadCronDeliveryRuntime() {
   return await cronDeliveryRuntimeLoader.load();
 }
 
-async function loadCodexNativeWebSearch() {
-  return await codexNativeWebSearchLoader.load();
+async function loadNativeWebSearch() {
+  return await nativeWebSearchLoader.load();
 }
 
 type CronDeliveryRuntime = typeof import("./run-delivery.runtime.js");
@@ -244,9 +244,9 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
     return undefined;
   }
   try {
-    const { shouldSuppressManagedWebSearchTool } = await loadCodexNativeWebSearch();
+    const { resolveNativeWebSearchRoute } = await loadNativeWebSearch();
     if (
-      shouldSuppressManagedWebSearchTool({
+      resolveNativeWebSearchRoute({
         config: params.cfg,
         modelProvider: params.provider,
         modelApi: params.modelApi,
@@ -254,7 +254,8 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         agentDir: params.agentDir,
-      })
+        runtimeToolAllowlist: toolsAllow,
+      }).kind === "native"
     ) {
       return undefined;
     }

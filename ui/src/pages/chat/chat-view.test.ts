@@ -151,11 +151,7 @@ const buildChatItemsMock = vi.fn(
           key: "divider:compaction:test",
           icon: "foldVertical",
           label: "Compacted history",
-          description: "The compacted transcript is preserved as a checkpoint.",
-          action: {
-            kind: "session-checkpoints",
-            label: "Open checkpoints",
-          },
+          description: "Earlier messages were summarized to make room in the context window.",
           timestamp: 1,
         },
       ] as ReturnType<typeof chatThread.buildCachedChatItems>;
@@ -1025,25 +1021,17 @@ describe("chat run error", () => {
 });
 
 describe("chat compaction divider", () => {
-  it("renders checkpoint recovery copy and action", () => {
-    const onOpenSessionCheckpoints = vi.fn();
+  it("renders compaction copy without a checkpoint action", () => {
     const container = renderChatView({
       messages: [{ testDividerMarker: "compaction" }],
-      onOpenSessionCheckpoints,
     });
 
     expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Compacted history");
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "The compacted transcript is preserved as a checkpoint.",
+      "Earlier messages were summarized to make room in the context window.",
     );
     expect(container.querySelector(".chat-divider__icon svg")).not.toBeNull();
-    const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
-    expect(button?.textContent?.trim()).toBe("Open checkpoints");
-
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    button!.click();
-
-    expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".chat-divider__action")).toBeNull();
   });
 
   it("renders the session reset divider title", () => {
@@ -3115,7 +3103,6 @@ describe("chat voice controls", () => {
       'video[aria-label="Camera preview"]',
       "camera preview",
     ) as HTMLVideoElement;
-
     expect(onToggleRealtimeCamera).toHaveBeenCalledTimes(2);
     expect(preview.srcObject).toBe(stream);
     expect(preview.autoplay).toBe(true);
@@ -3514,7 +3501,6 @@ describe("chat composer IME composition", () => {
     });
 
     textarea.dispatchEvent(arrowEvent);
-
     expect(arrowEvent.defaultPrevented).toBe(true);
     expect(onHistoryKeydown).toHaveBeenCalledOnce();
     expect(onRequestUpdate).toHaveBeenCalledOnce();
@@ -4315,7 +4301,6 @@ describe("chat slash menu accessibility", () => {
 
     inputDraftAtEnd(container, "Please /reset");
     keydownComposer(container, "Enter");
-
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/reset");
     expect(draft).toBe("Please ");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
@@ -8715,7 +8700,6 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-confirm-popover")).not.toBeNull();
 
     resetThreadPresentation("pane-a");
-
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
     expect(document.querySelector(".chat-confirm-popover")).toBeNull();
     expect(onRewindMessage).not.toHaveBeenCalled();

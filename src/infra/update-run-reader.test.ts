@@ -18,6 +18,7 @@ import {
   finishUpdateRun,
   getUpdateRun,
   getUpdateRunAsync,
+  getUpdateRunStatusAsync,
   listUpdateRuns,
   listUpdateRunsAsync,
   recordUpdateRunPhase,
@@ -78,6 +79,7 @@ describe("update run history reads", () => {
     expect(findActiveUpdateRun(options)).toBeUndefined();
     expect(await getUpdateRunAsync(runId, options)).toBeUndefined();
     expect(await listUpdateRunsAsync({}, options)).toEqual([]);
+    expect(await getUpdateRunStatusAsync(options)).toEqual({});
     expect(fs.existsSync(filename)).toBe(false);
     expect(fs.readdirSync(options.env.OPENCLAW_STATE_DIR)).toEqual([]);
 
@@ -119,7 +121,7 @@ describe("update run history reads", () => {
   });
 
   it.each(
-    (["get", "list", "active", "get-async", "list-async"] as const).flatMap((reader) =>
+    (["get", "list", "active", "get-async", "list-async", "status"] as const).flatMap((reader) =>
       [false, true].map((retainedWal) => ({ reader, retainedWal })),
     ),
   )(
@@ -175,8 +177,16 @@ describe("update run history reads", () => {
               ? await getUpdateRunAsync(created.runId, options)
               : reader === "list-async"
                 ? await listUpdateRunsAsync({}, options)
-                : findActiveUpdateRun(options);
-      expect(result).toEqual(reader === "list" || reader === "list-async" ? [expected] : expected);
+                : reader === "status"
+                  ? await getUpdateRunStatusAsync(options)
+                  : findActiveUpdateRun(options);
+      expect(result).toEqual(
+        reader === "status"
+          ? { activeRun: expected, lastRun: expected }
+          : reader === "list" || reader === "list-async"
+            ? [expected]
+            : expected,
+      );
       expect(nativeCalls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
       vi.restoreAllMocks();
       expect(snapshotDatabaseFiles(filename)).toEqual(before);
@@ -234,11 +244,15 @@ describe("update run history reads", () => {
       recordUpdateRunPhase(created.runId, "staging", {}, options);
       expect(await getUpdateRunAsync(created.runId, options)).toEqual(created);
       expect(await listUpdateRunsAsync({}, options)).toEqual([created]);
+      expect(await getUpdateRunStatusAsync(options)).toEqual({
+        activeRun: created,
+        lastRun: created,
+      });
     }, options);
     expect((await getUpdateRunAsync(created.runId, options))?.phase).toBe("staging");
   });
 
-  it("reads committed history without consuming the cached writer's transaction", () => {
+  it("reads committed history without consuming the cached writer's transaction", async () => {
     const options = isolatedOptions();
     const created = createUpdateRun({ trigger: "cli" }, options);
     const { db } = openOpenClawStateDatabase(options);
@@ -248,6 +262,10 @@ describe("update run history reads", () => {
       expect(getUpdateRun(created.runId, options)).toEqual(created);
       expect(listUpdateRuns({}, options)).toEqual([created]);
       expect(findActiveUpdateRun(options)).toEqual(created);
+      expect(await getUpdateRunStatusAsync(options)).toEqual({
+        activeRun: created,
+        lastRun: created,
+      });
       expect(db.isTransaction).toBe(true);
       expect(
         db.prepare("SELECT phase FROM update_runs WHERE run_id = ?").get(created.runId),

@@ -106,6 +106,9 @@ Native dependency policy:
       non-isolated runner across the root projects, e2e, and live configs.
     - The root UI lane keeps its `jsdom` setup and optimizer, but runs on the
       shared non-isolated runner too.
+    - Provider plugin shards reuse thread workers with the shared cleanup runner.
+      Track global replacements with `vi.stubGlobal` so cleanup can restore them
+      before the next file.
     - Each `pnpm test` shard inherits the same `threads` + `isolate: false`
       defaults from the shared Vitest config.
     - `scripts/run-vitest.mjs` adds `--no-maglev` for Vitest child Node

@@ -20,6 +20,22 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { buildStatusReplyParts } from "./status-text.js";
 
+vi.mock(import("../infra/session-cost-usage.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    loadSessionCostSummariesFromCache: async () => ({
+      summaries: [null],
+      cacheStatus: {
+        status: "partial",
+        cachedFiles: 0,
+        pendingFiles: 1,
+        staleFiles: 0,
+      },
+    }),
+  };
+});
+
 type StatusTextParams = Parameters<typeof buildStatusReplyParts>[0];
 
 describe("buildStatusText prepared context windows", () => {

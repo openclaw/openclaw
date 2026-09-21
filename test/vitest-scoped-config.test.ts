@@ -608,6 +608,7 @@ describe("scoped vitest configs", () => {
       defaultExtensionImessageConfig,
       defaultExtensionLineConfig,
       defaultExtensionProviderOpenAiConfig,
+      defaultExtensionProvidersConfig,
       defaultExtensionSignalConfig,
       defaultAutoReplyConfig,
       defaultAutoReplyCoreConfig,
@@ -627,7 +628,6 @@ describe("scoped vitest configs", () => {
 
     expectThreadedNonIsolatedRunner(defaultUiConfig);
     expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
-    expectThreadedIsolatedRunner(defaultExtensionProvidersConfig);
     expectForkedIsolatedRunner(defaultInfraConfig, diagnosticForksPool);
     expectForkedIsolatedRunner(defaultCliProcessConfig);
   });

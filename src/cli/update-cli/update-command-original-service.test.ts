@@ -267,6 +267,7 @@ afterEach(async () => {
 it.each([
   "healthy",
   "same-version",
+  "same-build-finalize",
   "package-root-missing",
   "windows-autostart",
   "windows-autostart-health-failed",
@@ -280,6 +281,28 @@ it.each([
   "readiness-failed",
 ] as const)("keeps B facts and current data through split-root failure: %s", async (scenario) => {
   mocks.windows = scenario.startsWith("windows-autostart");
+  const sameBuild = scenario === "same-build-finalize";
+  const originalVersion = sameBuild ? "2026.9.4" : "2026.9.3";
+  const originalBuild = sameBuild ? "build-B" : "build-A";
+  if (sameBuild) {
+    await fs.copyFile(path.join(rootB, "package.json"), path.join(rootA, "package.json"));
+    await fs.copyFile(
+      path.join(rootB, "dist", "build-info.json"),
+      path.join(rootA, "dist", "build-info.json"),
+    );
+    const observeOriginal = async () => ({
+      healthy: true,
+      runtime: { status: "running", pid: 4242 },
+      gatewayBootId: "original-service-boot",
+      gatewayVersion: originalVersion,
+      gatewayBuildId: originalBuild,
+      expectedVersion: originalVersion,
+      staleGatewayPids: [],
+      portUsage: { status: "busy", port: 18789, listeners: [], hints: [] },
+    });
+    mocks.health.mockImplementation(observeOriginal);
+    mocks.inspect.mockImplementation(observeOriginal);
+  }
   const run = {
     runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
     env: state.env,
@@ -302,7 +325,7 @@ it.each([
       path.join(rootB, "package.json"),
       JSON.stringify({
         name: "openclaw",
-        version: scenario === "same-version" ? "2026.9.4" : "2026.9.5",
+        version: scenario === "same-version" || sameBuild ? "2026.9.4" : "2026.9.5",
         type: "module",
         openclaw: { schemaVersions: schemas },
       }),
@@ -349,12 +372,12 @@ it.each([
       reason: "named-plugin-failure",
       before: { version: "2026.9.4", buildId: "build-B" },
       after: {
-        version: scenario === "same-version" ? "2026.9.4" : "2026.9.5",
-        buildId: "candidate-B",
+        version: scenario === "same-version" || sameBuild ? "2026.9.4" : "2026.9.5",
+        buildId: sameBuild ? "build-B" : "candidate-B",
       },
       recovery: {
         serviceRestartSafe: false,
-        reason: "deps-install-failed",
+        reason: sameBuild ? "runtime-verification-failed" : "deps-install-failed",
         packageRollbackVerified: false,
       },
       steps: [],
@@ -452,10 +475,10 @@ it.each([
         root: rootB,
         reason: "named-plugin-failure",
         before: { version: "2026.9.4" },
-        after: { buildId: "candidate-B" },
+        after: { buildId: sameBuild ? "build-B" : "candidate-B" },
         recovery: {
           serviceRestartSafe: false,
-          reason: "deps-install-failed",
+          reason: sameBuild ? "runtime-verification-failed" : "deps-install-failed",
           packageRollbackVerified: false,
         },
       },
@@ -466,9 +489,9 @@ it.each([
   } else {
     await work;
   }
-  const healthy = ["healthy", "same-version", "package-root-missing", "windows-autostart"].includes(
-    scenario,
-  );
+  const healthy =
+    sameBuild ||
+    ["healthy", "same-version", "package-root-missing", "windows-autostart"].includes(scenario);
   expect(mocks.restart).not.toHaveBeenCalled();
   expect(mocks.nativeRestart).toHaveBeenCalledTimes(
     healthy || scenario === "readiness-failed" || scenario === "windows-autostart-health-failed"
@@ -478,13 +501,13 @@ it.each([
   if (scenario !== "authority-lost" && scenario !== "no-restart") {
     expect(execution?.originalManagedServiceRuntime).toMatchObject({
       root: rootA,
-      version: "2026.9.3",
+      version: originalVersion,
       verified: true,
     });
   }
   if (healthy) {
     expect(mocks.health).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedVersion: "2026.9.3", expectedBuildId: "build-A" }),
+      expect.objectContaining({ expectedVersion: originalVersion, expectedBuildId: originalBuild }),
     );
   }
   if (scenario === "schema-newer") {

@@ -1422,17 +1422,17 @@ describe("task-registry store runtime", () => {
         expect(
           tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
         ).toBe(false);
-        expect(bindTaskRunExecution({ admitted, taskId: terminal.taskId })).toBe("missing");
-        expect(bindTaskRunExecution({ admitted, taskId: stale.taskId })).toBe("missing");
+        expect(await bindTaskRunExecution({ admitted, taskId: terminal.taskId })).toBe("missing");
+        expect(await bindTaskRunExecution({ admitted, taskId: stale.taskId })).toBe("missing");
         expect(
           tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
         ).toBe(false);
-        expect(bindTaskRunExecution({ admitted, taskId: active.taskId })).toBe("bound");
-        expect(bindTaskRunExecution({ admitted, taskId: retained.taskId })).toBe("bound");
+        expect(await bindTaskRunExecution({ admitted, taskId: active.taskId })).toBe("bound");
+        expect(await bindTaskRunExecution({ admitted, taskId: retained.taskId })).toBe("bound");
 
         const finished = { ...active, status: "succeeded" as const, endedAt: 210 };
         upsertTaskWithDeliveryStateToSqlite({ task: finished });
-        expect(bindTaskRunExecution({ admitted, taskId: finished.taskId })).toBe("missing");
+        expect(await bindTaskRunExecution({ admitted, taskId: finished.taskId })).toBe("missing");
         expect(
           openOpenClawStateDatabase()
             .db.prepare(

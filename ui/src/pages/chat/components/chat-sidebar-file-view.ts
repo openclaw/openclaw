@@ -189,7 +189,7 @@ export function renderSidebarFile(
                           }
                           <openclaw-tooltip .content=${t("chat.detailPanel.searchInFile")}>
                             <button
-                              class="btn btn--sm sidebar-file-view__action"
+                              class="btn btn--sm sidebar-file-view__action sidebar-file-view__search-toggle"
                               type="button"
                               aria-label=${t("chat.detailPanel.searchInFile")}
                               aria-pressed=${String(controls.searchOpen)}

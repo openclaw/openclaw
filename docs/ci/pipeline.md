@@ -74,6 +74,36 @@ the job's uploaded artifacts.
 | `openclaw-performance`           | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                      |
 | `docs-external-links`            | Separate workflow: Docs External Link Audit checks external documentation links with lychee and uploads a report; it reports findings without failing, so it never blocks a pull request                                                                                                                 | Scheduled and manual dispatch                      |
 
+### Test runtime selection
+
+Linux test shards select Bun through `scripts/lib/ci-test-runtime.mts`. The
+ordinary and isolated unit-fast lanes partition their existing file inventories: files with known Bun
+failures or additional skips stay on Node, and the compatible remainder runs on
+Bun. Those Node files still execute; they are not excluded from CI. The complete
+fake-timer lane also supports Bun. UI and other families retain Node until they
+pass on the pinned fork within their existing CI resource budgets. Precise PR targets use the existing
+test-project planner to find their owners. Mixed or ambiguous selections retain
+Node, and no tests are removed from the selected inventory.
+
+Pull requests and their release-gate fallback run compatible selections on Bun.
+Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
+the complete original selection on Node and its compatible portion on Bun
+within the same job and worker slot. Other selections run on Node. Main pushes retain Node. Historical targets
+without the runtime-selection capability keep their original Node behavior.
+
+The test-runtime setup action installs a checksum-pinned build of the Bun fork
+only for jobs that need it. The source commit, archive checksum, and executable
+checksum live together in `.github/actions/setup-test-bun/action.yml`.
+Node continues to own orchestration, builds, compiler preparation, and cleanup;
+Vitest and its workers use the selected runtime. Bun and Node have separate
+transform-cache directories and timing identities. Either runtime failing fails
+the job. This adds no matrix rows or runner registrations.
+
+`NODE_OPTIONS` continues to limit Node heaps; Bun does not use that V8 heap
+limit. Compare observed memory use alongside elapsed time before admitting more
+lanes. Compatibility evidence must use the exact fork build installed by CI;
+stock Bun results and different fork revisions are separate measurements.
+
 ### macOS Swift phases
 
 `macos-swift (tests)` builds and runs the app's complete default- and named-profile

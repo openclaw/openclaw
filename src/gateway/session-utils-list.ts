@@ -15,6 +15,7 @@ import type { GatewayClient, GatewayRequestContext } from "./server-methods/type
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
+  filterSessionCandidateEntries,
   filterSessionEntries,
   type SessionListFilteredEntries,
   type SessionListFilterParams,
@@ -261,6 +262,12 @@ export function filterAndSortSessionEntries(params: SessionListFilterParams): Se
   ).entries;
 }
 
+// One filter set per resident owner; never retain viewer decisions or time-dependent predicates.
+const sessionListCandidates = new WeakMap<
+  SessionRowProjection,
+  { revision: number; key: string; entries: SessionEntryPair[] }
+>();
+
 /** Shared synchronous membership policy for list pages and full-roster transcript search. */
 export function prepareProjectedSessionList(params: {
   projection: SessionRowProjection;
@@ -290,8 +297,25 @@ export function prepareProjectedSessionList(params: {
   const { getTarget } = prepared;
   const { active } = presentation;
   const identity = gatewayClientSessionCreator(client ?? null)?.id;
+  let candidates: SessionEntryPair[] | undefined;
+  // Person references resolve against the full visible roster before candidate filtering.
+  if (!opts.spawnedBy && !opts.involvingProfileId) {
+    const { revision } = projection.state;
+    const key = JSON.stringify([exactKey, opts]);
+    let cached = sessionListCandidates.get(projection);
+    if (cached?.revision !== revision || cached.key !== key) {
+      cached = {
+        revision,
+        key,
+        entries: runSynchronousWork(filterSessionCandidateEntries(prepared)),
+      };
+      sessionListCandidates.set(projection, cached);
+    }
+    candidates = cached.entries;
+  }
   const filters: SessionListFilterParams = {
     ...prepared,
+    ...(candidates ? { entries: candidates, candidatesPrepared: true } : {}),
     involvingActorId: opts.involvingMe ? identity : undefined,
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,

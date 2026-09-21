@@ -1372,6 +1372,10 @@ openclaw-tooltip.chat-tasks-status__preview {
   height: 9px;
 }
 
+.chat-subagent-activity__indicator--completed .chat-subagent-activity__badge {
+  color: var(--ok);
+}
+
 .chat-subagent-activity__indicator--failed .chat-subagent-activity__badge {
   color: var(--destructive);
 }

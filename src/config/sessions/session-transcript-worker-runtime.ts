@@ -53,9 +53,14 @@ import type {
   SessionIdentityEvidenceWorkerInput,
   SessionIdentityEvidenceWorkerResult,
   SessionUsageCacheWorkerInput,
+  SessionTranscriptSearchWorkerInput,
+  SessionTranscriptSearchWorkerResult,
 } from "./session-transcript-worker.types.js";
 
 export type SessionHistoryWorkerDatabase = {
+  searchTranscripts: (
+    params: SessionTranscriptSearchWorkerInput["params"],
+  ) => Promise<SessionTranscriptSearchWorkerResult["result"]>;
   generation: number;
   assertCurrent: () => void;
   run: (
@@ -170,6 +175,7 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
         | Omit<SessionMembersWorkerInput, "database">
         | Omit<SessionEntryListWorkerInput, "database">
         | Omit<SessionIdentityEvidenceWorkerInput, "database">
+        | Omit<SessionTranscriptSearchWorkerInput, "database">
         | Omit<SessionUsageCacheWorkerInput, "database">,
       inputBytes: number,
       receive: (
@@ -180,6 +186,7 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
           | SessionEntryListWorkerResult
           | SessionStoreTargetInventoryResult
           | SessionIdentityEvidenceWorkerResult
+          | SessionTranscriptSearchWorkerResult
           | SessionCostUsageCacheReadResult,
       ) => TResult,
     ): Promise<TResult> => {
@@ -206,6 +213,7 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
             | "session-target-inventory"
             | "session-identity-evidence"
             | "usage-cache"
+            | "transcript-search"
           >(reply),
         );
         if (reply.ok && reply.closedHistoryDatabase) {
@@ -226,6 +234,21 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
       }
     };
     const owner: SessionHistoryWorkerDatabase = {
+      searchTranscripts: async (params) =>
+        await runRequest(
+          () => ({ kind: "transcript-search", params }),
+          JSON.stringify(params).length * 2,
+          (value) => {
+            if (
+              typeof value === "boolean" ||
+              Array.isArray(value) ||
+              value.kind !== "transcript-search"
+            ) {
+              throw new Error("Session history worker returned another result instead of search");
+            }
+            return value.result;
+          },
+        ),
       generation: owned.generation,
       assertCurrent,
       run: async (prepare, inputBytes) =>
@@ -237,6 +260,7 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
             value.kind === "session-target-inventory" ||
             value.kind === "session-target-registry-required" ||
             value.kind === "session-identity-evidence" ||
+            value.kind === "transcript-search" ||
             value.kind === "usage-refresh-lock"
           ) {
             throw new Error("Session history worker returned metadata instead of history");

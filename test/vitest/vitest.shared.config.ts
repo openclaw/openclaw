@@ -32,9 +32,11 @@ export type { LocalVitestScheduling };
 
 export const jsdomOptimizedDeps = {
   optimizer: {
-    web: {
+    client: {
       enabled: true,
-      include: ["lit", "lit-html", "@lit/reactive-element"] as string[],
+      // Root and directives must share browser/development internals; native
+      // Node deep imports otherwise mix incompatible private Lit fields.
+      include: ["lit/**"] as string[],
     },
   },
 };
@@ -499,6 +501,9 @@ export const sharedVitestConfig = {
     },
     server: {
       deps: {
+        // Vite versions unoptimized imports; native transitive imports do not.
+        // Keep editor classes and parser properties in one module graph.
+        inline: [/@(?:codemirror|lezer)\//u],
         external: dependencyExternalPatterns,
       },
     },

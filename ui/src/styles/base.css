@@ -408,7 +408,17 @@
     corner-shape: superellipse(1.5);
   }
 
-  .code-block-wrapper.code-block-wrapper {
+  /* CRT owns its near-square geometry; rounded transcript bubbles share the fence shape. */
+  .code-block-wrapper.code-block-wrapper,
+  :where(:root:not([data-theme="crt"], [data-theme="crt-light"]))
+    :is(.chat-thread, .chat-session-rail__thread)
+    .chat-group.user
+    .chat-bubble,
+  :where(:root:not([data-theme="crt"], [data-theme="crt-light"]))
+    :is(.chat-thread, .chat-session-rail__thread)
+    .chat-group.user
+    :is(.chat-bubble--with-images, .chat-bubble--with-images > .chat-message-avatar-anchor)
+    > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
@@ -1154,7 +1164,9 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    /* A positive duration enables the default transition-property: all, even
+       on static controls. Keep reduced-motion updates immediate instead. */
+    transition-duration: 0ms !important;
     scroll-behavior: auto !important;
   }
 }

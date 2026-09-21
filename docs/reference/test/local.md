@@ -72,6 +72,19 @@ reconcile dependencies before the remote wrapper starts.
 Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged
 runtime floor. Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
+To compare the same Vitest selection on Node and Bun, use the existing wrapper:
+
+```sh
+OPENCLAW_VITEST_RUNTIME=node pnpm test <path-or-filter>
+OPENCLAW_VITEST_RUNTIME=bun pnpm test <path-or-filter>
+```
+
+Install the exact Bun fork build pinned by `.github/actions/setup-test-bun/action.yml`
+for comparable results. This selects the
+actual Vitest process and workers while retaining Node for orchestration and
+compiler preparation. It does not use Bun's native test runner. `bun run` alone
+does not select Bun for tests. Node remains the local default.
+
 Test processes and their CLI fixtures keep Sparkplug baseline compilation enabled
 but run it synchronously. This avoids a Node 24 shutdown deadlock where a
 background compiler waits for main-thread garbage collection while `process.exit`
@@ -94,6 +107,13 @@ Filesystem transform caching uses `test.fsModuleCache` and
 `test.fsModuleCachePath`; the existing `OPENCLAW_VITEST_FS_MODULE_CACHE` and
 `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` controls retain their ownership and
 disable behavior. Cache-key plugins use `defineCacheKeyGenerator`.
+The jsdom lanes optimize Lit and its exported subpaths together through
+`deps.optimizer.client`. CodeMirror and Lezer stay in Vite's module graph so
+editor classes and parser properties retain one dependency identity.
+When `NODE_COMPILE_CACHE` is configured, test launchers preserve it for Vitest
+and its workers. Vitest disables bytecode caching in workers and their child
+processes for V8 and custom coverage providers; explicit
+`NODE_DISABLE_COMPILE_CACHE=1` still disables caching for the entire invocation.
 Inline projects inherit root configuration in Vitest 5, including concatenated
 setup and include arrays. The four UI E2E resource projects declare
 `extends: false` because each supplies its complete inventory and setup.

@@ -56,6 +56,8 @@ export type ReplyBackendQueueMessageOptions = {
 };
 
 export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
+  /** User-authorized controls retain sender authority but are not answers to pending questions. */
+  allowPendingUserInputAnswer?: false;
   /** Consumed by reply ownership and never forwarded to the active backend. */
   toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
   /** Composed into V2's final admission assertion after asynchronous preparation. */

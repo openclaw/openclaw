@@ -21,7 +21,11 @@ const snapshotFlights = resolveGlobalSingleton(
   () => new Map<string, SnapshotFlight>(),
 );
 
-async function waitForFlight<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+async function waitForFlight<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  withdraw: () => void,
+): Promise<T> {
   signal?.throwIfAborted();
   if (!signal) {
     return promise;
@@ -30,6 +34,7 @@ async function waitForFlight<T>(promise: Promise<T>, signal?: AbortSignal): Prom
     const release = () => signal.removeEventListener("abort", abort);
     const abort = () => {
       release();
+      withdraw();
       reject(signal.reason instanceof Error ? signal.reason : new Error("SQLite snapshot aborted"));
     };
     signal.addEventListener("abort", abort, { once: true });
@@ -135,6 +140,7 @@ export async function prepareSingleFlightSqliteSnapshot(
     trackProducer?: (producer: Promise<PreparedSqliteReadOnlyLocation>) => void;
   },
 ): Promise<PreparedSqliteReadOnlyLocation> {
+  signal?.throwIfAborted();
   const identity = readDatabasePathIdentitySync(databasePath);
   const key = `${identity.key}:${operation}`;
   let flight = snapshotFlights.get(key);
@@ -205,19 +211,28 @@ export async function prepareSingleFlightSqliteSnapshot(
   }
   lifecycle?.trackProducer?.(flight.settled);
   flight.waiters += 1;
+  let waiting = true;
+  const withdraw = () => {
+    if (!waiting) {
+      return;
+    }
+    waiting = false;
+    flight.waiters -= 1;
+    if (flight.waiters === 0) {
+      flight.finishWaiters();
+    }
+    // Abort queued production before its microtask can allocate native resources.
+    cleanupUnleasedFlight(key, flight);
+  };
   let outcome: { value: PreparedSqliteReadOnlyLocation } | { error: unknown };
   try {
-    const base = await waitForFlight(flight.promise, signal);
+    const base = await waitForFlight(flight.promise, signal, withdraw);
     signal?.throwIfAborted();
     outcome = { value: leaseFlight(key, flight, base) };
   } catch (error) {
     outcome = { error };
   }
-  flight.waiters -= 1;
-  if (flight.waiters === 0) {
-    flight.finishWaiters();
-  }
-  cleanupUnleasedFlight(key, flight);
+  withdraw();
   if (flight.waiters === 0 && flight.leases === 0 && !lifecycle?.trackProducer) {
     // A standalone last caller is the cleanup owner. Only an explicit
     // enclosing lifecycle may take custody and let that caller detach.

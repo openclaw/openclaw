@@ -2,10 +2,10 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { prefetchLinkReader } from "./link-reader-hovercard-registration.ts";
+import { prefetchLinkReader } from "./link-reader-prefetch-request.ts";
 import { linkReaderPrefetch } from "./link-reader-prefetch.ts";
 
-vi.mock("./link-reader-hovercard-registration.ts", () => ({
+vi.mock("./link-reader-prefetch-request.ts", () => ({
   prefetchLinkReader: vi.fn().mockResolvedValue(undefined),
   previewTargetForAnchor: (anchor: HTMLAnchorElement) => {
     const url = new URL(anchor.href);

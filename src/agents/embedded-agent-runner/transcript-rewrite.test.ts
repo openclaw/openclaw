@@ -422,9 +422,13 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     expect(sessionManager.getBranch().map((entry) => entry.type)).toContain("label");
   });
 
-  it.each([undefined, { runId: "run-original", itemId: "compaction-original" }])(
-    "preserves compaction identity %j when rewriting keep markers",
-    (identity) => {
+  it.each([
+    { identity: undefined, tokensAfter: undefined },
+    { identity: { runId: "run-original", itemId: "compaction-original" }, tokensAfter: 45 },
+    { identity: undefined, tokensAfter: 0 },
+  ])(
+    "preserves compaction measurements and identity %j when rewriting keep markers",
+    ({ identity, tokensAfter }) => {
       // Re-appending entries changes ids; compaction records must follow the new
       // first-kept entry or future branch reconstruction points at stale ids.
       const {
@@ -439,6 +443,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         undefined,
         undefined,
         identity,
+        tokensAfter,
       );
       installSessionToolResultGuard(sessionManager, { runId: "run-rewrite" });
 
@@ -474,6 +479,8 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       expect(compaction.firstKeptEntryId).toBe(keptAssistant.id);
       expect(compaction.firstKeptEntryId).not.toBe(keptAssistantEntryId);
       expect(compaction.id).not.toBe(originalCompactionId);
+      expect(compaction.tokensBefore).toBe(123);
+      expect(compaction.tokensAfter).toBe(tokensAfter);
       const { __openclaw: rewrittenIdentity } = compaction;
       expect(rewrittenIdentity).toEqual(identity);
     },

@@ -127,9 +127,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.label === next.label &&
         previous.metric === next.metric &&
         previous.description === next.description &&
-        previous.timestamp === next.timestamp &&
-        previous.action?.kind === next.action?.kind &&
-        previous.action?.label === next.action?.label
+        previous.timestamp === next.timestamp
       );
     case "stream":
       return (

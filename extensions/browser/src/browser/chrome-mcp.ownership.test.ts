@@ -141,7 +141,7 @@ function createMarkerSession(options: { existingPage?: boolean; navigateError?: 
       withOperationLock: createSerialLock(),
       targetIdByPageId: new Map<number, string>(),
       nextTargetHandleId: 1,
-      snapshotRefById: new Map(),
+      snapshotsByTarget: new Map(),
       nextSnapshotRefId: 1,
     },
   };

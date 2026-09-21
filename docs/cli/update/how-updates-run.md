@@ -37,8 +37,24 @@ the selected channel or installation method, or the Git target SHA equals
 explicit `--channel` or installation-method change finishes successfully.
 Changed plugins restart a running managed Gateway unless `--no-restart` is set; retained exact pins produce the same advisories as a core update without requiring a restart.
 
+Linux updates also refresh outdated OpenClaw-managed systemd policy when the core
+is already current or `--no-restart` is set. This policy-only refresh confirms
+`daemon-reload` without stopping the Gateway and preserves operator drop-ins.
+Maintenance stops also read the resident Gateway's recorded shutdown budget.
+Published 2026.9.5 residents keep their startup budget even after `daemon-reload`;
+their first stop therefore uses the short/unknown-budget path. The Gateway's
+lifecycle owner fences admission and reports drain progress until idle or the
+existing update step deadline (30 minutes by default, 45 for automatic updates).
+At that deadline, remaining turns can be interrupted with a warning in update
+history; reported write custody refuses the stop and names its owner phase.
+Residents without the optional `writeCustody` observation cannot distinguish
+backup or migration custody from ordinary root/cron work. At the deadline, they
+stop with a warning naming those counts; missing custody information never blocks
+the update. The next Gateway starts with the refreshed service policy. An operator drop-in
+that still shortens the native timeout is preserved and reported.
+
 Explicit package artifacts, such as tarball paths and URLs, compare known build
-IDs before a same-version no-op. Matching known identity remains nonmutating;
+IDs before a same-version no-op. Matching known identity leaves the package unchanged;
 different or missing identity continues through normal update validation and
 installation because a matching version alone does not establish artifact
 equality. Registry requests retain their version-based same-version no-op.
@@ -617,6 +633,9 @@ the sentinel.
   </Step>
   <Step title="Resolve the target">
     Selects the channel's tag or branch and fetches upstream as needed. If the resolved target SHA equals `HEAD`, finishes `skipped` with reason `already-current` before staging or stopping the service.
+
+    Shallow and partial source checkouts retain their installed refs, shallow boundaries, and object database during target inspection. Missing objects are fetched into the private inspection repository through the checkout's configured remotes. This behavior belongs to the installed updater; an older updater that fails with `Git target inspection clone failed` needs its checkout's missing objects fetched before retrying.
+
   </Step>
   <Step id="build-a-candidate" title="Build the update">
     Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the staged checkout first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.

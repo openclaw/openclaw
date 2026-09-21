@@ -18,7 +18,7 @@ import {
   type BundleMcpConfig,
   type BundleMcpServerConfig,
 } from "../../plugins/bundle-mcp.js";
-import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
+import type { CliBackendConfig, CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import {
   acquireSessionMcpRuntime,
@@ -59,6 +59,21 @@ type PreparedCliBundleMcpConfig = {
   mcpResumeHash?: string;
   env?: Record<string, string>;
 };
+
+/** A managed provider pin replaces native search without disabling OpenClaw's MCP tool. */
+export function resolveCliNativeWebSearchEnabled(
+  params: { config?: OpenClawConfig; toolOverrides?: SessionToolOverrides },
+  backend: Pick<CliBackendPlugin, "bundleMcp" | "bundleMcpMode">,
+): boolean {
+  if (params.toolOverrides?.webSearch === false) {
+    return false;
+  }
+  if (!backend.bundleMcp && !backend.bundleMcpMode) {
+    return true;
+  }
+  const search = params.config?.tools?.web?.search;
+  return search?.enabled !== false && !search?.provider?.trim();
+}
 
 async function readExternalMcpConfig(configPath: string): Promise<BundleMcpConfig> {
   return { mcpServers: extractMcpServerMap(await tryReadJson<unknown>(configPath)) };
@@ -360,8 +375,12 @@ export async function prepareCliBundleMcpConfig(params: {
     runtimeToolsAllow?: string[];
   };
 }): Promise<PreparedCliBundleMcpConfig> {
+  const nativeWebSearchEnabled = resolveCliNativeWebSearchEnabled(params, {
+    bundleMcp: params.enabled,
+    bundleMcpMode: params.mode,
+  });
   if (!params.enabled) {
-    return params.toolOverrides?.webSearch === false
+    return !nativeWebSearchEnabled
       ? await prepareCliWebSearchDisabled({
           mode: params.mode ?? "claude-config-file",
           backend: params.backend,
@@ -381,7 +400,7 @@ export async function prepareCliBundleMcpConfig(params: {
       ),
       env: params.env,
       mcpToolsDeny: params.toolOverrides?.mcpToolsDeny,
-      webSearchEnabled: params.toolOverrides?.webSearch,
+      webSearchEnabled: nativeWebSearchEnabled,
     });
   }
   const resumeMcpConfigPaths =
@@ -527,7 +546,7 @@ export async function prepareCliBundleMcpConfig(params: {
     mergedConfig: effectiveConfig,
     env: effectiveEnv,
     mcpToolsDeny: effectiveDenials,
-    webSearchEnabled: params.toolOverrides?.webSearch,
+    webSearchEnabled: nativeWebSearchEnabled,
   });
 }
 

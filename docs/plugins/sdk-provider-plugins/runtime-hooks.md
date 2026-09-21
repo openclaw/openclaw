@@ -274,6 +274,13 @@ Runtime fallback notes:
 - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
 - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 
+Bundled HTTP adapters can preserve numeric response status with
+`createProviderHttpError` from the private-local `openclaw/plugin-sdk/provider-http`
+entrypoint. Adapters that already bound and redact their diagnostics can construct
+`ProviderHttpError(message, { status })`. Keep that error instance when adjusting
+its message so status and retry metadata survive; search tools use those fields
+for safe authentication and quota guidance without exposing response bodies.
+
 Bundled and trusted official provider policies can use
 `resolveEffortThinkingProfile(compat?.supportedReasoningEfforts)` from the
 private `openclaw/plugin-sdk/provider-thinking-runtime` helper. It accepts
@@ -294,6 +301,16 @@ or `undefined` to leave that decision to the host. The host records the
 result on the resolved runtime model rather than writing configuration.
 Explicit `tools.toolSearch` settings take precedence. This hook changes
 schema exposure, not tool permissions or availability.
+
+`resolveNativeWebSearch(ctx)` can be exported from the same policy artifact
+when a provider supplies hosted search. Its `ProviderNativeWebSearchPolicyContext`
+(from `openclaw/plugin-sdk/provider-model-types`) contains `config`, `provider`,
+optional `modelId`, `api`, and `baseUrl`. Return `true` only when that route
+will inject hosted search; share this policy with payload construction. Keep
+the hook synchronous and free of runtime activation or credential probes.
+The host applies tool permissions independently and removes managed
+`web_search` before building Tool Search and Code Mode catalogs. Explicit
+managed-provider selection must remain authoritative.
 
 `resolveFastModeSupport(ctx)` can be exported from the same policy artifact
 and registered on the provider. Return `false` only for a confirmed no-op

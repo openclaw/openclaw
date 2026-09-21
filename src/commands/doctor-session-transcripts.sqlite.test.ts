@@ -149,6 +149,7 @@ describe("doctor session transcript repair", () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     runDoctorSessionSqlite.mockResolvedValueOnce({
+      targets: [],
       totals: {
         archivedTranscriptFiles: 2,
         archivedUnreferencedJsonlFiles: 1,

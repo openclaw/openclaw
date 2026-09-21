@@ -1,9 +1,10 @@
 import type { ChildProcess } from "node:child_process";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { createServer, type Socket } from "node:net";
 import { createInterface } from "node:readline";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCommandFixture } from "../helpers/command-fixture.js";
+import { createFixtureDiagnostics } from "../helpers/fixture-diagnostics.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { createDeferred } from "../helpers/promise.js";
 
@@ -32,10 +33,20 @@ describe.skipIf(process.platform === "win32")("POSIX command fixture output drai
     async (mode, context) => {
       const stop = new AbortController();
       const signal = context.signal;
+      const diagnostics = vi.spyOn(console, "error").mockImplementation(() => {});
+      // Registered first so this observes the fixture's existing teardown hook, not only run().
+      context.onTestFinished(() => {
+        try {
+          expect(diagnostics).toHaveBeenCalledTimes(mode === "cancel" ? 1 : 0);
+        } finally {
+          diagnostics.mockRestore();
+        }
+      });
       const command = createCommandFixture({
         signal: AbortSignal.any([signal, stop.signal]),
         onTestFinished: context.onTestFinished,
       });
+      command.enableDiagnostics("command-fixture-drainage").stage(mode);
       try {
         await command.lifetime.run(async () => {
           signal.throwIfAborted();
@@ -142,4 +153,127 @@ child.once("message", () => {
       }
     },
   );
+});
+
+class ObservedChild extends EventEmitter {
+  pid = 42;
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  stdout = { closed: false };
+  stderr = { closed: false };
+  spawnargs = ["private command payload"];
+}
+
+describe("failure-only fixture diagnostics", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("keeps successful, expected nonzero, and expected signal settlements silent", () => {
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const diagnostics = createFixtureDiagnostics("fixture");
+    for (const signal of [null, "SIGKILL"] as const) {
+      const command = diagnostics.command("probe");
+      const child = new ObservedChild();
+      command.ready(child);
+      child.emit("spawn");
+      child.exitCode = signal ? null : 1;
+      child.signalCode = signal;
+      child.emit("exit");
+      child.stdout.closed = child.stderr.closed = true;
+      child.emit("close");
+      command.settled();
+      command.inputComplete();
+    }
+    expect(output).not.toHaveBeenCalled();
+  });
+
+  it("reports bounded safe metadata once without consuming output or inventing spawn", () => {
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const now = vi.spyOn(performance, "now").mockReturnValue(10);
+    const diagnostics = createFixtureDiagnostics("fixture");
+    diagnostics.stage("sparse-import");
+    const command = diagnostics.command("probe", true);
+    const child = new ObservedChild();
+    command.ready(child);
+    expect(child.listenerCount("data")).toBe(0);
+    now.mockReturnValue(25);
+    command.output("stdout", 3);
+    command.output("stderr", 7);
+    diagnostics.report("abort");
+    command.settled(Object.assign(new Error("private error payload"), { code: "ABORT_ERR" }));
+    command.inputComplete();
+    diagnostics.report("failure");
+    expect(output).toHaveBeenCalledTimes(1);
+    const text = String(output.mock.calls[0]?.[0]);
+    const report = JSON.parse(text.slice("[fixture-lifecycle] ".length));
+    expect(report.records.map((record: { event: string }) => record.event)).toEqual([
+      "stage",
+      "command-start",
+      "on-ready",
+    ]);
+    expect(report.current).toMatchObject({
+      id: 1,
+      role: "probe",
+      stage: "sparse-import",
+      pid: 42,
+      elapsedMs: 15,
+      stdoutClosed: false,
+      stderrClosed: false,
+      stdoutBytes: 3,
+      stderrBytes: 7,
+      input: "pending",
+    });
+    expect(text).not.toContain("private");
+    expect(text).not.toContain("spawnargs");
+  });
+
+  it("records native lifecycle order and the existing input completion boundary", () => {
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const diagnostics = createFixtureDiagnostics("fixture");
+    const command = diagnostics.command("probe", true);
+    const child = new ObservedChild();
+    command.ready(child);
+    child.emit("spawn");
+    child.exitCode = 0;
+    child.emit("exit");
+    child.stdout.closed = child.stderr.closed = true;
+    child.emit("close");
+    command.settled(Object.assign(new Error("failed"), { code: "ETIMEDOUT" }));
+    command.inputComplete();
+    diagnostics.report("failure");
+    const report = JSON.parse(
+      String(output.mock.calls[0]?.[0]).slice("[fixture-lifecycle] ".length),
+    );
+    expect(report.records.map((record: { event: string }) => record.event)).toEqual([
+      "command-start",
+      "on-ready",
+      "spawn",
+      "exit",
+      "close",
+      "managed-settled",
+      "input-complete",
+    ]);
+    expect(report.current).toMatchObject({
+      exitCode: 0,
+      errorCode: "ETIMEDOUT",
+      input: "settled",
+    });
+  });
+
+  it("bounds retained events and labels while keeping the latest stage and child", () => {
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    const diagnostics = createFixtureDiagnostics("n".repeat(300));
+    for (let index = 0; index < 100; index++) {
+      diagnostics.stage("s".repeat(300));
+    }
+    diagnostics.command("r".repeat(300)).settled({ code: "unsafe/path" });
+    diagnostics.report("failure");
+    const report = JSON.parse(
+      String(output.mock.calls[0]?.[0]).slice("[fixture-lifecycle] ".length),
+    );
+    expect(report.records).toHaveLength(48);
+    expect(report.dropped).toBe(54);
+    expect(report.name).toHaveLength(96);
+    expect(report.stage).toHaveLength(96);
+    expect(report.current.role).toHaveLength(96);
+    expect(report.current.errorCode).toBeUndefined();
+  });
 });

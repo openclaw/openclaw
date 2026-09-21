@@ -195,7 +195,7 @@ function resolveBrowserFetchOperatorHint(
   }
   const isLocal = !isAbsoluteHttp(url);
   return isLocal
-    ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
+    ? `Run \`${formatCliCommand("openclaw browser doctor")}\` and check the Gateway logs.`
     : "If this is a sandboxed session, ensure the sandbox browser is running.";
 }
 

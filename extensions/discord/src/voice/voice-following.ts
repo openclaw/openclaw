@@ -9,7 +9,6 @@ import {
 } from "../internal/discord.js";
 import type { VoicePlugin } from "../internal/voice.js";
 import { DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
-import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import { logVoiceVerbose, type VoiceOperationResult, type VoiceSessionEntry } from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
@@ -85,10 +84,6 @@ function logFollowUserReconcileVerbose(reason: string, message: string): void {
   logVoiceVerbose(message);
 }
 
-function resolveVoiceConnectionGroup(accountId: string): string {
-  return `openclaw:${accountId}`;
-}
-
 export class DiscordVoiceFollowing {
   private readonly followUserIds: Set<string>;
   readonly followedUserChannels = new Map<string, VoiceChannelResidency>();
@@ -110,11 +105,7 @@ export class DiscordVoiceFollowing {
       deleteRecoveryAttempt: (guildId: string) => void;
       destroyed: () => boolean;
       discordConfig: DiscordAccountConfig;
-      destroyVoiceConnection: (params: {
-        connection: ReturnType<ReturnType<typeof loadDiscordVoiceSdk>["joinVoiceChannel"]>;
-        voiceSdk: ReturnType<typeof loadDiscordVoiceSdk>;
-        reason: string;
-      }) => void;
+      stopTransport: (guildId: string) => Promise<void>;
       getRecoveryAttempt: (guildId: string) => number | undefined;
       getSession: (guildId: string) => VoiceSessionEntry | undefined;
       hasVoiceLifecycle: (guildId: string) => boolean;
@@ -173,18 +164,7 @@ export class DiscordVoiceFollowing {
     if (existing) {
       await this.params.leave({ guildId });
     } else {
-      const voiceSdk = loadDiscordVoiceSdk();
-      const connection = voiceSdk.getVoiceConnection(
-        guildId,
-        resolveVoiceConnectionGroup(this.params.accountId),
-      );
-      if (connection) {
-        this.params.destroyVoiceConnection({
-          connection,
-          voiceSdk,
-          reason: `non-allowed voice state guild ${guildId} channel ${channelId}`,
-        });
-      }
+      await this.params.stopTransport(guildId);
     }
 
     const target = this.resolveVoiceResidencyTarget(guildId);

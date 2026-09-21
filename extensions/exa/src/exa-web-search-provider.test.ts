@@ -471,10 +471,13 @@ describe("exa web search provider", () => {
     try {
       const failure = tool.execute({ query: "bounded Exa error" });
       await expect(failure).rejects.toThrow("exa upstream unavailable");
+      await expect(failure).rejects.toMatchObject({ status: 503, statusCode: 503 });
       await expect(failure).rejects.not.toThrow("tail");
-      await expect(tool.execute({ query: "short Exa error" })).rejects.toEqual(
-        new Error("Exa API error (503): short"),
-      );
+      await expect(tool.execute({ query: "short Exa error" })).rejects.toMatchObject({
+        message: "Exa API error (503): short",
+        status: 503,
+        statusCode: 503,
+      });
       expect(tracked.wasCanceled()).toBe(true);
       expect(textSpy).not.toHaveBeenCalled();
       expect(fetchMock).toHaveBeenCalledTimes(2);

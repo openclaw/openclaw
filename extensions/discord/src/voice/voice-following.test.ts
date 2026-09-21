@@ -9,7 +9,6 @@ defineDiscordVoiceTests(
     ChannelType,
     createDefaultVoiceStates,
     createConnectionMock,
-    getVoiceConnectionMock,
     joinVoiceChannelMock,
     agentCommandMock,
     realtimeSessionMock,
@@ -768,22 +767,6 @@ defineDiscordVoiceTests(
 
       expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
       expect(manager.status()).toEqual([]);
-    });
-
-    it("skips destroying stale tracked voice connections that are already destroyed", async () => {
-      const staleConnection = createConnectionMock();
-      staleConnection.state.status = "destroyed";
-      staleConnection.destroy.mockImplementation(() => {
-        throw new Error("Cannot destroy VoiceConnection - it has already been destroyed");
-      });
-      getVoiceConnectionMock.mockReturnValueOnce(staleConnection);
-      joinVoiceChannelMock.mockReturnValueOnce(createConnectionMock());
-      const manager = createManager();
-
-      const result = await manager.join({ guildId: "g1", channelId: "1001" });
-      expect(result.ok).toBe(true);
-
-      expect(staleConnection.destroy).not.toHaveBeenCalled();
     });
 
     it("skips destroying an already destroyed voice connection on leave", async () => {

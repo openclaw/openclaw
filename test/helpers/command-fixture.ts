@@ -3,6 +3,7 @@ import { finished as streamFinished } from "node:stream/promises";
 import { it, type TestContext } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createBoundedChildOutput } from "./bounded-child-output.js";
+import { createFixtureDiagnostics, type FixtureDiagnostics } from "./fixture-diagnostics.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 
 export function createCommandFixture(
@@ -13,8 +14,13 @@ export function createCommandFixture(
   const finished = new AbortController();
   const commandSignal = AbortSignal.any([signal, finished.signal]);
   const commands: Promise<unknown>[] = [];
-  onTestFinished(async () => {
+  let diagnostics: FixtureDiagnostics | undefined;
+  onTestFinished(async ({ task }) => {
     finished.abort();
+    // Normal teardown also aborts finished; only the test result/original signal means failure.
+    if (task.result?.state === "fail" || signal.aborted) {
+      diagnostics?.report(signal.aborted ? "abort" : "failure");
+    }
     await Promise.allSettled(commands);
   });
 
@@ -31,6 +37,7 @@ export function createCommandFixture(
     } = {},
   ) {
     commandSignal.throwIfAborted();
+    const observation = diagnostics?.command("command", options.input !== undefined);
     const completion = (async () => {
       // Match spawnSync's bounded UTF-8 capture while the managed owner joins
       // the process group before this case can remove its filesystem inputs.
@@ -73,6 +80,7 @@ export function createCommandFixture(
               pipe.on("data", (chunk: Buffer) => {
                 output.append(chunk);
                 bytes += chunk.byteLength;
+                observation?.output(name, chunk.byteLength);
                 if (bytes > maxBuffer && !failed.signal.aborted) {
                   error = Object.assign(new Error(`${name} maxBuffer length exceeded`), {
                     code: "ENOBUFS",
@@ -81,6 +89,7 @@ export function createCommandFixture(
                 }
               });
             }
+            observation?.ready(process);
           },
         });
       } catch (cause) {
@@ -90,8 +99,10 @@ export function createCommandFixture(
           error = new AggregateError([error, cause], "Command failed", { cause });
         }
       } finally {
+        observation?.settled(error);
         child?.stdin?.destroy();
         await inputComplete;
+        observation?.inputComplete();
       }
       // Signal-boundary cases assert the native null status and exact signal.
       return {
@@ -106,7 +117,14 @@ export function createCommandFixture(
     return lifetime.track(completion);
   }
 
-  return { lifetime, createTempDir: lifetime.createTempDir, run };
+  return {
+    lifetime,
+    createTempDir: lifetime.createTempDir,
+    run,
+    enableDiagnostics(name: string) {
+      return (diagnostics ??= createFixtureDiagnostics(name));
+    },
+  };
 }
 
 export type CommandFixture = ReturnType<typeof createCommandFixture>;

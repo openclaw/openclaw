@@ -5,6 +5,7 @@ import path from "node:path";
 import { isTransientBackupPath, isVolatileBackupPath } from "../infra/backup-volatile-filter.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
+import { walkDirectory } from "../infra/fs-safe.js";
 import { isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import type { ResolvedPluginBackupResource } from "../plugins/manifest-backup-resources.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -80,39 +81,9 @@ async function listDefaultAgentTemporaryRoots(
   const customAgentRoots = agentRoots.filter(
     ({ agentId, sourcePath }) => sourcePath !== path.join(stateDir, "agents", agentId, "agent"),
   );
+  const isCustomAgentPath = (candidate: string) =>
+    customAgentRoots.some(({ sourcePath }) => isPathWithin(candidate, sourcePath));
   const temporaryRoots: string[] = [];
-
-  const visit = async (directoryPath: string): Promise<void> => {
-    if (customAgentRoots.some(({ sourcePath }) => isPathWithin(directoryPath, sourcePath))) {
-      return;
-    }
-
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(directoryPath, { withFileTypes: true });
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
-        return;
-      }
-      throw error;
-    }
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const entryPath = path.join(directoryPath, entry.name);
-      if (customAgentRoots.some(({ sourcePath }) => isPathWithin(entryPath, sourcePath))) {
-        continue;
-      }
-      if (entry.name === "tmp" || entry.name === ".tmp") {
-        temporaryRoots.push(entryPath);
-        continue;
-      }
-      await visit(entryPath);
-    }
-  };
-
   let agentDirectories: Dirent[];
   try {
     agentDirectories = await fs.readdir(path.join(stateDir, "agents"), { withFileTypes: true });
@@ -123,9 +94,26 @@ async function listDefaultAgentTemporaryRoots(
     throw error;
   }
   for (const directory of agentDirectories) {
-    if (directory.isDirectory()) {
-      await visit(path.join(stateDir, "agents", directory.name, "agent"));
+    const agentRoot = path.join(stateDir, "agents", directory.name, "agent");
+    if (!directory.isDirectory() || isCustomAgentPath(agentRoot)) {
+      continue;
     }
+    const scan = await walkDirectory(agentRoot, {
+      symlinks: "skip",
+      include: (entry) =>
+        entry.kind === "directory" &&
+        (entry.name === "tmp" || entry.name === ".tmp") &&
+        !isCustomAgentPath(entry.path),
+      descend: (entry) =>
+        entry.name !== "tmp" && entry.name !== ".tmp" && !isCustomAgentPath(entry.path),
+    });
+    const failure = scan.failedDirs.find(
+      ({ error }) => !hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR"),
+    );
+    if (failure) {
+      throw failure.error;
+    }
+    temporaryRoots.push(...scan.entries.map((entry) => entry.path));
   }
   return temporaryRoots;
 }

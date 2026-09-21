@@ -1,7 +1,10 @@
 import { html } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
-import { readPanelHostedTabs } from "../../../components/panel-hosted-tabs.ts";
+import {
+  PANEL_HOSTED_TABS_CHANGE_EVENT,
+  readPanelHostedTabs,
+} from "../../../components/panel-hosted-tabs.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -558,5 +561,60 @@ describe("workspace file tabs", () => {
     expect(panel.querySelector("textarea")).toBe(textarea);
     await hosted.closeHostedTab("a");
     expect(getSessionWorkspace(state).previews).not.toContain(a);
+  });
+
+  it("announces hosted-tab changes without invalidating the header for file content updates", async () => {
+    const panel = document.createElement("openclaw-chat-files-panel");
+    const changed = vi.fn();
+    panel.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, changed);
+    panel.previews = [{ id: "notes", label: "notes.md", content: { kind: "loading" } }];
+    panel.activeId = "notes";
+    document.body.append(panel);
+    await panel.updateComplete;
+    expect(changed).toHaveBeenCalledOnce();
+
+    panel.browser = html`<div>Refreshed workspace</div>`;
+    panel.renderDetail = () => html`<div>File contents</div>`;
+    panel.onSelect = vi.fn();
+    panel.onClose = vi.fn();
+    await panel.updateComplete;
+    expect(changed).toHaveBeenCalledOnce();
+
+    const file = {
+      kind: "file" as const,
+      name: "notes.md",
+      path: "notes.md",
+      content: "Initial contents",
+    };
+    panel.previews = [{ id: "notes", label: "notes.md", content: file }];
+    await panel.updateComplete;
+    expect(changed).toHaveBeenCalledTimes(2);
+    expect(panel.hostedTabs[0]?.className).toBeUndefined();
+
+    file.content = "Updated contents";
+    panel.requestUpdate();
+    await panel.updateComplete;
+    expect(changed).toHaveBeenCalledTimes(2);
+
+    file.path = "docs/notes.md";
+    panel.requestUpdate();
+    await panel.updateComplete;
+    expect(changed).toHaveBeenCalledTimes(3);
+    expect(panel.hostedTabs[0]?.title).toBe("docs/notes.md");
+
+    panel.previews = [{ id: "notes", label: "renamed.md", content: file }];
+    await panel.updateComplete;
+    expect(changed).toHaveBeenCalledTimes(4);
+    expect(panel.hostedTabs[0]?.label).toBe("renamed.md");
+
+    panel.activeId = null;
+    await panel.updateComplete;
+    expect(changed).toHaveBeenCalledTimes(5);
+    expect(panel.activeHostedTabId).toBe("browse");
+
+    panel.previews = [];
+    await panel.updateComplete;
+    expect(changed).toHaveBeenCalledTimes(6);
+    expect(panel.hostedTabs).toEqual([]);
   });
 });

@@ -54,7 +54,7 @@ import {
 import * as sqliteTargets from "./session-sqlite-target.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
 
 afterEach(() => vi.restoreAllMocks());
 

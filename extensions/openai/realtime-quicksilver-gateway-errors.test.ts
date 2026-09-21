@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
+import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 import { emitSideband, FakeSocket } from "./realtime-quicksilver.test-helpers.js";
 
 const OPAQUE_MODEL = "gpt-live-test-canary";
@@ -32,10 +33,10 @@ function createDirectBridge(params?: {
           type: "api-key" as const,
           token: "platform-key",
         })),
-      webSocketFactory: () => {
+      mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
         socket = params?.socketFactory?.() ?? new FakeSocket();
         return socket;
-      },
+      }),
     },
     openAIRealtimeHost,
   );

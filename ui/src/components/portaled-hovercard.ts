@@ -284,7 +284,11 @@ export class PortaledHovercardController {
     if (!card) {
       return;
     }
-    if (exitDurationMs <= 0 || !card.isConnected) {
+    if (
+      exitDurationMs <= 0 ||
+      !card.isConnected ||
+      globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
       unmountContents?.();
       card.remove();
       return;

@@ -11,7 +11,7 @@ read_when:
 
 Swarm orchestrates many sub-agents from a
 [Code Mode](/tools/code-mode) script. It is enabled by default, with an explicit
-opt-out. Use normal JavaScript or TypeScript control flow such as `Promise.all`,
+opt-out. Use normal JavaScript control flow such as `Promise.all`,
 `while`, and `if` to fan out work, collect results, and make decisions.
 
 There is no graph DSL and no separate workflow format. The program is the

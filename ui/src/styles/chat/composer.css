@@ -2232,6 +2232,25 @@ html[dir="rtl"] .chat-attachment-loading > span {
   flex: 0 0 auto;
 }
 
+.chat-controls__model-refresh {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+
+.chat-controls__model-refresh-details {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+}
+
 .chat-controls__model-search {
   width: 100%;
   min-width: 0;

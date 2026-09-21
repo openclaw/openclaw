@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { loadSqliteVecExtensionFromPath } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { loadSqliteVecExtensionFromPath } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   assertTransactionUsable,
   openNodeSqliteDatabase,

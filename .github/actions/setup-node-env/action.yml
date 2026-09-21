@@ -43,10 +43,6 @@ inputs:
     description: Whether to restore Node's on-disk V8 compile cache.
     required: false
     default: "false"
-  node-compile-cache-scope:
-    description: Cache namespace for isolating workloads with different writer ownership.
-    required: false
-    default: "test"
   build-all-cache-scope:
     description: >
       Namespace for restoring build-all's content-addressed step cache.
@@ -209,12 +205,13 @@ runs:
     # hashFiles still traverses excluded dependency trees. Resolve before restore.
     # Embedded step env is evaluated before its condition; keep the scan guarded
     # and share its result across cache restore and configuration.
+    # CI exports actions into .ci-harness; its copied manifests are not cache inputs.
     - name: Resolve Vitest transform cache generation
       id: vitest-cache-generation
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       shell: bash
       run: |
-        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}" >> "$GITHUB_OUTPUT"
+        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**', '!.ci-harness/**') }}" >> "$GITHUB_OUTPUT"
 
     - name: Restore exact dependency cache
       id: dependency-cache
@@ -294,29 +291,17 @@ runs:
         echo "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root" >> "$GITHUB_ENV"
         echo "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=$CACHE_WRITER" >> "$GITHUB_ENV"
 
-    - name: Select Node compile cache epoch
-      id: node-compile-cache-epoch
-      if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
-      shell: bash
-      env:
-        CACHE_SCOPE: ${{ inputs.node-compile-cache-scope }}
-      run: |
-        set -euo pipefail
-        if [ "$CACHE_SCOPE" = "build" ]; then
-          echo "value=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
-        else
-          echo "value=${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}" >> "$GITHUB_OUTPUT"
-        fi
-
     - name: Restore Node compile cache
       id: node-compile-cache
       if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /var/tmp/openclaw-node-compile-cache
-        key: ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.node-compile-cache-epoch.outputs.value }}
+        # The warmer compiles build tools and test orchestration into one seed.
+        # Retain its existing namespace so readers can reuse published archives.
+        key: ${{ github.repository }}-node-compile-v3-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-node-compile-v3-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
+          ${{ github.repository }}-node-compile-v3-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Configure Node compile cache
       if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'

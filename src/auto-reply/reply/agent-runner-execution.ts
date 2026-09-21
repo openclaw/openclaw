@@ -46,6 +46,7 @@ import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { progressCardRefreshRunProjection } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -185,6 +186,7 @@ async function executeAgentTurnInternalLoop(
       verboseLevel: params.resolvedVerboseLevel,
       isHeartbeat: params.isHeartbeat,
       isControlUiVisible: shouldSurfaceToControlUi,
+      ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
       completionSource: params.completionSource,
     });
   }

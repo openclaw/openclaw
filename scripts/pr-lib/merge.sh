@@ -196,7 +196,7 @@ mainline_drift_requires_sync() (
 )
 
 merge_verify() {
-  local pr="$1" replacement_head="${2:-}"
+  local pr="$1" replacement_head="${2:-}" auto_merge_requested="${3:-false}"
   MERGE_USE_CRABBOX_ADMIN_BYPASS=false
   enter_worktree "$pr" false || return 1
 
@@ -206,6 +206,16 @@ merge_verify() {
   source .local/gates.env || return 1
   # shellcheck disable=SC1091
   source .local/prep.env || return 1
+  local github_pending=false
+  if [ "${GATES_MODE:-}" = github_pending ]; then
+    if [ "$auto_merge_requested" != true ] || [ -n "$replacement_head" ] ||
+      [ "${HOSTED_GATES_TARGET_HEAD_SHA:-}" != "$PREP_HEAD_SHA" ] ||
+      [ "${MERGE_TRANSPORT:-graphql}" != graphql ]; then
+      echo "Deferred GitHub gates require --auto-merge at the exact prepared head, without recovery or REST fallback." >&2
+      return 1
+    fi
+    github_pending=true
+  fi
   verify_prep_branch_matches_prepared_head "$pr" "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" || return 1
   # GitHub publication can preserve the tree while assigning a new commit ID.
   local local_tree hosted_tree
@@ -243,7 +253,9 @@ merge_verify() {
   require_clawsweeper_review "$pr" "$pr_head_sha" \
     "${MERGE_REPO_NAME:-}" "${MERGE_REPO_HOST:-}" || return 1
   mark_pr_operation_side_effects_started || return 1
-  if [ "${GATES_MODE:-}" = "hosted_exact_or_recent_parent" ]; then
+  if [ "$github_pending" = true ]; then
+    echo "GitHub will enforce required checks; submitting without a CI watcher."
+  elif [ "${GATES_MODE:-}" = "hosted_exact_or_recent_parent" ]; then
     # The stamp selects the owner, not proof. Revalidate before skipping the
     # PR-only watcher, which cannot observe accepted hosted release gates.
     derive_prepare_gate_change_plan "$PREP_HEAD_SHA" || return 1
@@ -273,6 +285,11 @@ merge_verify() {
     checks_exit_status=$?
   fi
   if pr_gh_quota_exhausted "$checks_json"; then
+    if [ "$github_pending" = true ]; then
+      echo "GitHub auto-merge requires GraphQL quota; no merge was requested." >&2
+      rm -f "$checks_err_file"
+      return 1
+    fi
     MERGE_TRANSPORT=rest
     echo "GraphQL quota exhausted; verifying required checks through REST."
     checks_json=$(merge_rest checks "$pr") || { rm -f "$checks_err_file"; return 1; }
@@ -310,6 +327,11 @@ merge_verify() {
   if [ "$required_count" -eq 0 ]; then
     echo "No required checks configured for this PR."
   fi
+  if [ "$github_pending" = true ] && ! printf '%s\n' "$checks_json" | jq -e \
+    'any(.[]; .name == "openclaw/ci-gate")' >/dev/null; then
+    echo "Deferred GitHub gates require the enforced openclaw/ci-gate context." >&2
+    return 1
+  fi
   printf '%s\n' "$checks_json" | jq -r '.[] | "\(.bucket)\t\(.name)\t\(.state)"' || return 1
 
   local failed_required
@@ -317,12 +339,16 @@ merge_verify() {
   local pending_required
   pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length') || return 1
 
-  if [ "$pending_required" -gt 0 ]; then
+  if [ "$pending_required" -gt 0 ] && [ "$github_pending" != true ]; then
     echo "Required checks are still pending."
     exit 1
   fi
 
   if [ "$failed_required" -gt 0 ]; then
+    if [ "$github_pending" = true ]; then
+      echo "Required checks are failing; fix them before requesting auto-merge." >&2
+      return 1
+    fi
     if [ "${MERGE_TRANSPORT:-graphql}" = rest ]; then
       echo "Required checks are failing; REST fallback does not authorize an admin bypass." >&2
       return 1
@@ -344,8 +370,8 @@ merge_verify() {
       "${PREP_MAINLINE_BASE_SHA:-${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}}" \
       "$PREP_HEAD_SHA"
     then
-      # Relevant drift is advisory by default: required checks are already
-      # green at the prepared head and GitHub's mergeable state still blocks
+      # Relevant drift is advisory by default: GitHub enforces required checks
+      # at the prepared head and its mergeable state still blocks
       # true conflicts. The hard fail serialized every landing behind a full
       # CI cycle per merged sibling, which collapses under multi-session
       # traffic. Set OPENCLAW_PR_STRICT_DRIFT=1 to restore the hard gate.
@@ -553,7 +579,7 @@ merge_run() {
   fi
   validate_review_artifact_data || return 1
   require_ready_review_recommendation || return 1
-  merge_verify "$pr" "$replacement_head" || return 1
+  merge_verify "$pr" "$replacement_head" "$auto_merge_requested" || return 1
   # shellcheck disable=SC1091
   source .local/prep.env
 
@@ -633,7 +659,7 @@ merge_run() {
   local MERGE_ADMISSION_ACTIVE=true
   local admission_attempt previous_observation=""
   # Only fresh admission waits for calculation; retained intent reconciles immediately.
-  # Pin all other facts and each projection as soon as it becomes known.
+  # Pin PR/policy facts and each projection as soon as it becomes known.
   for admission_attempt in 1 2 3; do
     merge_outcome_observe "$pr" || return 1
     if [ "$MERGE_TRANSPORT" = rest ] &&
@@ -653,11 +679,12 @@ merge_run() {
       merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
       return 1
     fi
-    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" '
+    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" --argjson admin "$MERGE_USE_CRABBOX_ADMIN_BYPASS" '
+      def facts: del(.pr.mergeable,.pr.mergeStateStatus) |
+        if $admin then . else del(.main) end;
       (if .transport == "rest" and ($previous.transport // "graphql") == "graphql" then
-         del(.transport,.restPolicy,.pr.mergeable,.pr.mergeStateStatus) ==
-           ($previous | del(.transport,.restPolicy,.pr.mergeable,.pr.mergeStateStatus))
-       else del(.pr.mergeable,.pr.mergeStateStatus) == ($previous | del(.pr.mergeable,.pr.mergeStateStatus)) end) and
+         (facts | del(.transport,.restPolicy)) == ($previous | facts | del(.transport,.restPolicy))
+       else facts == ($previous | facts) end) and
       ($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and
       ($previous.pr.mergeStateStatus == "UNKNOWN" or .pr.mergeStateStatus == $previous.pr.mergeStateStatus)
     ' >/dev/null; then
@@ -712,13 +739,13 @@ merge_run() {
     # can authorize a second route or request.
     case "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r '.pr | .mergeable + "/" + .mergeStateStatus')" in
       MERGEABLE/CLEAN) ;;
-      MERGEABLE/BEHIND)
+      MERGEABLE/BEHIND|MERGEABLE/BLOCKED)
         route=auto
         merge_args=(--auto "${merge_args[@]}")
         ;;
       *)
-        merge_outcome_diagnose "$pr" "$MERGE_OBSERVATION" null "CLEAN|BEHIND" "MERGEABLE"
-        merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN or BEHIND status"; return 1 ;;
+        merge_outcome_diagnose "$pr" "$MERGE_OBSERVATION" null "CLEAN|BEHIND|BLOCKED" "MERGEABLE"
+        merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN, BEHIND, or BLOCKED status"; return 1 ;;
     esac
   fi
   if [ -n "$captured_body" ] && [ "$route" = queue ]; then

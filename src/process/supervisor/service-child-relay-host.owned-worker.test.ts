@@ -6,20 +6,24 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { NodeWorkerJournalWorker } from "../../node-host/node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "../../node-host/node-worker-launch-store.js";
 import { requireNodeWorkerProcessIdentity } from "../../node-host/node-worker-process-identity.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
 import type { ProcessExtinctionResult } from "./types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 it
   .runIf(process.platform === "linux" || process.platform === "darwin")
@@ -39,7 +43,7 @@ it
       OPENCLAW_STATE_DIR: path.join(home, "state"),
       OPENCLAW_CONFIG_PATH: path.join(home, "openclaw.json"),
     };
-    const store = new NodeWorkerLaunchStore({ env });
+    const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
     const supervisor = requireNodeWorkerProcessIdentity(process.pid);
     const claim = {
       launchId: "owned-worker",
@@ -51,8 +55,8 @@ it
       placementGeneration: 1,
       runId: "test-run",
     };
-    expect(store.claim(claim, supervisor, 1).action).toBe("start");
-    const cleanupBinding = store.cleanupBinding({ ...claim, supervisor });
+    expect((await store.claim(claim, supervisor, 1)).action).toBe("start");
+    const cleanupBinding = await store.cleanupBinding({ ...claim, supervisor });
     const marker = path.join(home, "started.txt");
     const onWorkerMessage = vi.fn<(message: unknown) => void>();
     let adapter: Awaited<ReturnType<typeof createServiceChildRelayAdapter>>["adapter"] | undefined;
@@ -114,7 +118,7 @@ it
         stderr = (stderr + chunk).slice(-8192);
       });
       const ownerPid = adapter.pid;
-      store.markRunning({
+      await store.markRunning({
         ...claim,
         supervisor,
         worker: requireNodeWorkerProcessIdentity(ownerPid!),
@@ -177,7 +181,7 @@ it
         expect(output).toBe("");
       }
       await adapter.waitForExtinction();
-      expect(store.get(claim.launchId)).toMatchObject({
+      expect(await store.get(claim.launchId)).toMatchObject({
         workerCleanupMode: "owned-anchor",
         workerLineageSettled: action !== "journal-write-failed",
       });

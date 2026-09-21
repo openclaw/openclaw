@@ -6,10 +6,12 @@ import {
   readSessionEntryRow,
 } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
+import { readTranscriptDisplayDeltaFromProjection } from "../config/sessions/session-accessor.sqlite-history-query.js";
 import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
 } from "../config/sessions/session-accessor.sqlite-projection-read.js";
+import type { SessionTranscriptRawDeltaLimits } from "../config/sessions/session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
@@ -174,6 +176,8 @@ export function createReadonlySessionHistoryReader(target: PreparedSessionHistor
     return result.value.value;
   };
   return {
+    readTranscriptDisplayDelta: (limits: SessionTranscriptRawDeltaLimits) =>
+      readSnapshot((projection) => readTranscriptDisplayDeltaFromProjection(projection, limits)),
     ...createSessionTranscriptReader({
       resolveTarget: async () => target.transcript,
       readSnapshot: async (_transcript, read) => readSnapshot(read),

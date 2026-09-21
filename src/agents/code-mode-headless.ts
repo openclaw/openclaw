@@ -125,7 +125,7 @@ async function runHeadlessWorkerLeg(params: {
   const remainingMs = remainingHeadlessMs(params.deadline);
   const executionTimeoutMs = Math.max(1, Math.min(params.config.timeoutMs, remainingMs));
   // Initial source preparation uses the wall-clock allowance; the guest keeps
-  // its separate CPU budget after compilation. Resumes need no preparation.
+  // its separate CPU budget after source validation. Resumes need no preparation.
   const timeoutMs = params.input.kind === "exec" ? remainingMs : executionTimeoutMs;
   // Let the headless abort scope own the wall-clock deadline. Capping the host
   // watchdog to the same deadline makes its internal timeout message race the scope.
@@ -210,7 +210,6 @@ function headlessNamespaceFreezePrelude(descriptors: CodeModeNamespaceDescriptor
 export async function runCodeModeScriptHeadless(params: {
   ctx: ToolSearchToolContext;
   code: string;
-  language?: "javascript" | "typescript";
   overrides?: Partial<
     Pick<
       CodeModeConfig,
@@ -308,6 +307,7 @@ export async function runCodeModeScriptHeadless(params: {
     };
     let boundaryFailure: Error | undefined;
     const inlineHost: CodeModeWorkerInlineHost = {
+      onNetworkContent: () => runtime.observeNetworkContent(parentToolCallId),
       onBoundary: async (boundary, context) => {
         output.append(boundary.output);
         cancelPendingBridgeStatesById(pending, boundary.canceledRequestIds);
@@ -365,7 +365,6 @@ export async function runCodeModeScriptHeadless(params: {
       input: {
         kind: "exec",
         source: params.code,
-        language: params.language,
         prelude: headlessNamespaceFreezePrelude(namespaces),
         catalog: catalogProjection.guestBindings,
         apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),

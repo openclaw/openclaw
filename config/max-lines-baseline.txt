@@ -613,7 +613,6 @@ src/gateway/server.sessions.compaction.test.ts
 src/gateway/server.sessions.create.test.ts
 src/gateway/server.sessions.list-changed.test.ts
 src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts
-src/gateway/session-compaction-checkpoints.ts
 src/gateway/session-create-service.ts
 src/gateway/session-message-events.test.ts
 src/gateway/session-reset-service.ts

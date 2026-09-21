@@ -11,7 +11,7 @@ export {
   restartGatewayProcessWithFreshPid,
 } from "../../infra/process-respawn.js";
 export {
-  resolveGatewayRestartDeferralTimeoutMs,
+  resolveGatewayRestartDrainTimeoutMs,
   consumeGatewayRestartIntent,
   consumeGatewayRestartAuthorization,
   isGatewayRestartExternallyAllowed,

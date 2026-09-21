@@ -13,9 +13,6 @@ import type { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
-import { isHardlinkFallbackError } from "../infra/directory-durability.js";
-import { hasErrnoCode } from "../infra/errno.js";
-import { tempFile } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, pathExists, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
@@ -42,6 +39,11 @@ import {
   normalizeWorkspacePatternPath,
   resolveGlobWalkRoot,
 } from "./workspace-bootstrap-policy.js";
+import {
+  publishAgentInstructions,
+  publishBootstrapFile,
+  WorkspaceBootstrapSeedConflictError,
+} from "./workspace-bootstrap-publish.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace-bootstrap-read.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import {
@@ -176,83 +178,6 @@ const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
  */
 export function isExpectedAbsentBootstrapFile(name: string): boolean {
   return OPTIONAL_BOOTSTRAP_FILENAMES.has(name) || name === DEFAULT_MEMORY_FILENAME;
-}
-
-export async function publishBootstrapFile(
-  filePath: string,
-  content: string | Buffer,
-  beforePersistentApply?: () => void,
-): Promise<boolean> {
-  const dir = await fs.realpath(path.dirname(filePath));
-  const targetPath = path.join(dir, path.basename(filePath));
-  // Existing entries, including dangling symlinks, need no staging writes.
-  // Preserve the exclusive-create no-op on read-only established workspaces.
-  const existing = await fs.lstat(targetPath).catch((error: unknown) => {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-  });
-  beforePersistentApply?.();
-  if (existing) {
-    return false;
-  }
-  let cleanupError: unknown;
-  const staging = await tempFile({
-    rootDir: dir,
-    prefix: "openclaw-bootstrap",
-    fileName: path.basename(filePath),
-    onCleanupError: (error) => {
-      cleanupError = error;
-    },
-  });
-  let outcome: { kind: "created" } | { kind: "exists" } | { kind: "failed"; error: unknown };
-  try {
-    beforePersistentApply?.();
-    await fs.writeFile(staging.path, content, { flag: "wx", flush: true });
-    beforePersistentApply?.();
-    let linked = false;
-    try {
-      // No await may split these operations: safe readers reject the temporary
-      // two-link inode, so publication must reach one link in the same turn.
-      syncFs.linkSync(staging.path, targetPath);
-      linked = true;
-      syncFs.unlinkSync(staging.path);
-      outcome = { kind: "created" };
-    } catch (error) {
-      if (!linked && hasErrnoCode(error, "EEXIST")) {
-        outcome = { kind: "exists" };
-      } else if (!linked && isHardlinkFallbackError(error)) {
-        outcome = {
-          kind: "failed",
-          error: new Error(
-            "Workspace filesystem does not support atomic bootstrap publication. Use a workspace on a filesystem with hard-link support.",
-            { cause: error },
-          ),
-        };
-      } else {
-        outcome = { kind: "failed", error };
-      }
-    }
-  } catch (error) {
-    outcome = { kind: "failed", error };
-  }
-  await staging.cleanup();
-  if (cleanupError !== undefined) {
-    if (outcome.kind !== "failed") {
-      throw new Error("Workspace bootstrap staging cleanup failed after publication.", {
-        cause: cleanupError,
-      });
-    }
-    throw new AggregateError(
-      [outcome.error, cleanupError],
-      "Workspace bootstrap publication and staging cleanup failed. Remove the incomplete staging directory, then retry.",
-      { cause: cleanupError },
-    );
-  }
-  if (outcome.kind === "failed") {
-    throw outcome.error;
-  }
-  return outcome.kind === "created";
 }
 
 async function fileContentDiffersFromTemplate(
@@ -646,13 +571,6 @@ export async function resolveWorkspaceBootstrapStatus(
   return "pending";
 }
 
-export class WorkspaceBootstrapSeedConflictError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "WorkspaceBootstrapSeedConflictError";
-  }
-}
-
 export async function seedWorkspaceBootstrap(params: {
   dir: string;
   content: Buffer;
@@ -838,6 +756,8 @@ async function ensureGitRepo(
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
+  /** Approved custom-agent instructions; never replaces an existing AGENTS.md. */
+  purpose?: string;
   /** Creation-time role content; existing workspace files are still preserved. */
   templates?: Partial<Record<"AGENTS.md" | "SOUL.md" | "IDENTITY.md", string>>;
   /** Guard each new mutation after async preparation; admitted effects may settle. */
@@ -868,6 +788,12 @@ export async function ensureAgentWorkspace(params?: {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
   const beforePersistentApply = params?.beforePersistentApply;
+  const purpose = params?.purpose?.trim();
+  if (purpose && (params?.templates || getAgentWorkspaceAccess(dir))) {
+    throw new WorkspaceBootstrapSeedConflictError(
+      "A custom agent purpose requires a local workspace without a bundled role.",
+    );
+  }
   if (getAgentWorkspaceAccess(dir)) {
     // Remote workspace initialization belongs to the host that provisions it.
     // Do not seed a second workspace or Git repository on Gateway.
@@ -939,7 +865,15 @@ export async function ensureAgentWorkspace(params?: {
         throw new WorkspaceVanishedError({ workspaceDir: dir });
       }
     }
-    if (hasContentEvidence) {
+    if (purpose) {
+      await publishAgentInstructions(
+        path.join(dir, DEFAULT_AGENTS_FILENAME),
+        await loadTemplate(DEFAULT_AGENTS_FILENAME),
+        purpose,
+        beforePersistentApply,
+      );
+    }
+    if (hasContentEvidence || purpose) {
       await maybeWriteWorkspaceAttestation(dir, beforePersistentApply);
     }
     return { dir, bootstrapPending: false };
@@ -1033,7 +967,7 @@ export async function ensureAgentWorkspace(params?: {
     }
   }
 
-  const agentsTemplate =
+  const defaultAgentsTemplate =
     params?.templates?.[DEFAULT_AGENTS_FILENAME] ?? (await loadTemplate(DEFAULT_AGENTS_FILENAME));
   const soulTemplate =
     params?.templates?.[DEFAULT_SOUL_FILENAME] ?? (await loadTemplate(DEFAULT_SOUL_FILENAME));
@@ -1057,7 +991,7 @@ export async function ensureAgentWorkspace(params?: {
   const shouldWriteBootstrapFile = (fileName: string): boolean =>
     !OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName) || !skipOptionalBootstrapFiles.has(fileName);
 
-  await publishBootstrapFile(agentsPath, agentsTemplate, beforePersistentApply);
+  await publishAgentInstructions(agentsPath, defaultAgentsTemplate, purpose, beforePersistentApply);
   if (shouldWriteBootstrapFile(DEFAULT_SOUL_FILENAME)) {
     await publishBootstrapFile(soulPath, soulTemplate, beforePersistentApply);
   }

@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart.js";
 import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { appendGatewayLifecycleAudit } from "./lifecycle-audit.js";
@@ -24,7 +25,7 @@ export function resolveGatewayRestartIntentOptions(
     throw new Error("--force cannot be combined with --wait");
   }
   if (opts.force) {
-    return { force: true };
+    return { force: true, waitMs: resolveGatewayRestartDeferralTimeoutMs() };
   }
   return opts.wait === undefined ? undefined : { waitMs: parseDurationMs(opts.wait) };
 }
