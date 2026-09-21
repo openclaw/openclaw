@@ -171,7 +171,7 @@ it("does not credit a late earlier-run terminal to a newer user turn for an unow
   expect(present(messages).pending).toHaveLength(0);
 });
 
-it("retires the unowned mirrored prompt only after its canonical restart recovery succeeds", () => {
+it("retires the unowned mirrored prompt only after its canonical restart recovery succeeds", async () => {
   const old = {
     ...question("old"),
     phase: undefined,
@@ -212,7 +212,7 @@ it("retires the unowned mirrored prompt only after its canonical restart recover
       (entry) => entry.itemId,
     ),
   ).toEqual(["fresh"]);
-  archived.reopen("old");
+  await archived.reopen("old");
   expect(present(completed, state).pending).toHaveLength(1);
   expect(present([...completed, terminal("next-run")], state).pending).toHaveLength(0);
   expect(present([...messages.slice(0, -1), recovered]).pending).toHaveLength(1);
