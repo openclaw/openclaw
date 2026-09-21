@@ -3478,7 +3478,7 @@ function resolvePackageFixtureTargets(changedPath: string, cwd: string) {
 }
 
 function resolveAppcastTargets(changedPath: string) {
-  return changedPath === "appcast.xml" ? APPCAST_TEST_TARGETS : null;
+  return /^appcast(?:-(?:arm64|x86_64))?\.xml$/u.test(changedPath) ? APPCAST_TEST_TARGETS : null;
 }
 
 function resolveKovaSchemaTestTargets(changedPath: string) {

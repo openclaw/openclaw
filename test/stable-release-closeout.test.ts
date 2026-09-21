@@ -230,6 +230,22 @@ describe("stable release closeout", () => {
     expect(JSON.stringify(result.manifest)).toBe(JSON.stringify(manifest));
   });
 
+  it("preserves the last pre-thin v2026.9.5 receipt byte-for-byte after upgrade", () => {
+    const { manifest, params } = shippedReplayFixture("2026.9.5", "2026.9.6", false);
+    const serializedReceipt = JSON.stringify(manifest);
+
+    const result = verifyStableMainCloseout({
+      ...params,
+      mainAppcast: "<rss>current feed without the historical release</rss>",
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(JSON.stringify(result.manifest)).toBe(serializedReceipt);
+    expect(
+      result.manifest?.githubReleaseAssets.map((asset: { name: string }) => asset.name),
+    ).toEqual(["OpenClaw-2026.9.5.zip", "OpenClaw-2026.9.5.dmg", "OpenClaw-2026.9.5.dSYM.zip"]);
+  });
+
   it("rejects replay with a noncanonical recorded appcast hash", () => {
     const { manifest, params } = shippedSeptemberReplayFixture;
     const result = verifyStableMainCloseout({
@@ -326,6 +342,41 @@ describe("stable release closeout", () => {
 
     expect(result.errors).toEqual([]);
     expect(result.manifest).toMatchObject({ apps: "attached", appcast: "verified" });
+  });
+
+  it("requires all thin macOS assets and architecture-specific feeds from 2026.9.6", () => {
+    const version = "2026.9.6";
+    const tag = `v${version}`;
+    const macAssets = ["", "-arm64", "-x86_64"].flatMap((suffix) =>
+      ["zip", "dmg", "dSYM.zip"].map((extension) => `OpenClaw-${version}${suffix}.${extension}`),
+    );
+    const futureChangelog = `# Changelog\n\n## ${version}\n\n- Shipped thin macOS releases.\n`;
+    const result = verifyStableMainCloseout({
+      ...validCloseoutParams,
+      tag,
+      mainPackageJson: { version },
+      tagPackageJson: { version },
+      mainChangelog: futureChangelog,
+      tagChangelog: futureChangelog,
+      release: {
+        tagName: tag,
+        isDraft: false,
+        isPrerelease: false,
+        assets: macAssets.map((name, index) => ({
+          name,
+          digest: `sha256:${index.toString(16).repeat(64)}`,
+        })),
+      },
+      mainAppcast: `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}.zip`,
+      mainArm64Appcast: `https://github.com/openclaw/openclaw/releases/download/${tag}/OpenClaw-${version}-arm64.zip`,
+      mainX86_64Appcast: "<rss>stale Intel feed</rss>",
+      nowMs: Date.parse("2026-09-21T00:00:00Z"),
+    });
+
+    expect(result.errors).toContain(
+      `main appcast-x86_64.xml does not point at OpenClaw-${version}-x86_64.zip from ${tag}.`,
+    );
+    expect(result.manifest).toBeNull();
   });
 
   it("validates the main appcast snapshot recorded by fresh closeout", () => {

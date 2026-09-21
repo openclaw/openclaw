@@ -3260,19 +3260,22 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.some((command) => command.args[0] === "test:macos:ci")).toBe(macosCi);
   });
 
-  it("routes appcast changes to appcast owner tests", () => {
-    const result = detectChangedLanes(["appcast.xml"]);
-    const plan = createChangedCheckPlan(result);
+  it.each(["appcast.xml", "appcast-arm64.xml", "appcast-x86_64.xml"])(
+    "routes %s changes to appcast owner tests",
+    (appcast) => {
+      const result = detectChangedLanes([appcast]);
+      const plan = createChangedCheckPlan(result);
 
-    expect(shouldRunAppcastOwnerTest(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "appcast owner tests",
-        args: ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
-      }),
-    );
-    expect(plan.commands.map((command) => command.name)).not.toContain("macOS app CI tests");
-  });
+      expect(shouldRunAppcastOwnerTest(result.paths)).toBe(true);
+      expect(plan.commands).toContainEqual(
+        expect.objectContaining({
+          name: "appcast owner tests",
+          args: ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
+        }),
+      );
+      expect(plan.commands.map((command) => command.name)).not.toContain("macOS app CI tests");
+    },
+  );
 
   it.each<[string, NodeJS.Platform, boolean, boolean]>([
     ["apps/ios/Sources/RootTabs.swift", "darwin", true, false],
@@ -3363,21 +3366,24 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it.each(["apps/.i18n/native-source.json", "apps/web/index.ts", "appcast.xml"])(
-    "keeps non-native app assets out of native lint: %s",
-    (changedPath) => {
-      const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
-        platform: "linux",
-        swiftlintAvailable: false,
-      });
+  it.each([
+    "apps/.i18n/native-source.json",
+    "apps/web/index.ts",
+    "appcast.xml",
+    "appcast-arm64.xml",
+    "appcast-x86_64.xml",
+  ])("keeps non-native app assets out of native lint: %s", (changedPath) => {
+    const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+      platform: "linux",
+      swiftlintAvailable: false,
+    });
 
-      expect(plan.commands.map((command) => command.args[0])).not.toContain("android:lint");
-      expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
-      expect(plan.commands.map((command) => command.name)).not.toContain(
-        "lint apps (swiftlint unavailable on this host)",
-      );
-    },
-  );
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("android:lint");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+    expect(plan.commands.map((command) => command.name)).not.toContain(
+      "lint apps (swiftlint unavailable on this host)",
+    );
+  });
 
   it("routes A2UI bundle source changes as extension changes", () => {
     const result = detectChangedLanes([
