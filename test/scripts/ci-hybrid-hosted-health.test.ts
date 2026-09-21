@@ -48,8 +48,24 @@ const inspect = () =>
 afterEach(() => vi.restoreAllMocks());
 
 describe("hybrid hosted assignment health", () => {
-  it("excludes preflight dependency time and shares one bounded request deadline", async () => {
-    const fetch = mockActions([preflight(), sentinel()]);
+  it("bounds the history query, excludes dependency time, and shares one request deadline", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const created = ">=2026-09-19T16:30:00.000Z";
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      return Response.json(
+        url.pathname.endsWith("/jobs")
+          ? { jobs: [preflight(), sentinel()] }
+          : {
+              workflow_runs: [
+                // An unrestricted high-volume listing can omit recent matches.
+                run({
+                  updated_at: url.searchParams.get("created") === created ? at(10) : at(86_400),
+                }),
+              ],
+            },
+      );
+    });
     const timeout = vi.spyOn(AbortSignal, "timeout");
     await expect(inspect()).resolves.toEqual({
       healthy: true,
@@ -58,7 +74,7 @@ describe("hybrid hosted assignment health", () => {
       maxWaitSeconds: 5,
     });
     expect(fetch.mock.calls[0]?.[0]).toBe(
-      "https://api.github.com/repos/openclaw/openclaw/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=10",
+      "https://api.github.com/repos/openclaw/openclaw/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=10&created=%3E%3D2026-09-19T16%3A30%3A00.000Z",
     );
     expect(fetch.mock.calls[1]?.[0]).toBe(
       "https://api.github.com/repos/openclaw/openclaw/actions/runs/10/attempts/2/jobs?per_page=100",

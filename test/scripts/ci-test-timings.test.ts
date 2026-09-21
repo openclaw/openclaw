@@ -468,9 +468,12 @@ describe("runtime placement observations", () => {
             true,
           );
         }
+        const originalOwners = new Map(
+          before.flatMap((job) => job.groups.map((group) => [group.shard_name, job.checkName])),
+        );
         const crossing = changed.flatMap((job) =>
           job.groups
-            .filter((group) => group.runner !== job.runner)
+            .filter((group) => originalOwners.get(group.shard_name) !== job.checkName)
             .map((group) => Object.assign({}, group, { env: { ...job.env, ...group.env } })),
         );
         expect(crossing.length).toBeGreaterThan(0);

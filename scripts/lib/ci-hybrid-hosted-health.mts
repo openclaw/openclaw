@@ -67,9 +67,15 @@ export async function inspectHybridHostedHealth({
     return body[key].map(record);
   };
   try {
-    const runs = (
-      await readRows("workflows/ci.yml/runs?branch=main&event=push&per_page=10", "workflow_runs")
-    )
+    // Bound the server-side history too: an unrestricted high-volume listing
+    // can omit recent matches even though individual fresh runs are available.
+    const query = new URLSearchParams({
+      branch: "main",
+      event: "push",
+      per_page: "10",
+      created: `>=${new Date(now - 24 * 60 * 60 * 1_000).toISOString()}`,
+    });
+    const runs = (await readRows(`workflows/ci.yml/runs?${query}`, "workflow_runs"))
       .filter(
         (run) =>
           String(run.id) !== runId &&
