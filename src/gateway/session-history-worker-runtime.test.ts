@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -137,50 +138,92 @@ it("discards a rejected queued read so a later request can succeed", async () =>
   });
 });
 
-it("bounds coalesced waiters and releases their capacity without cloning cancelled replies", async () => {
-  const controller = new AbortController();
-  const readers = Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, (_, index) =>
-    readSessionHistoryPageInWorker(request(), index === 0 ? controller.signal : undefined),
-  );
-  const settled = Promise.allSettled(readers);
-  expect(queued).toHaveLength(1);
-  await expect(readSessionHistoryPageInWorker(request())).rejects.toMatchObject({
-    code: "overloaded",
-  });
-  const cancelled = new Error("caller closed");
-  controller.abort(cancelled);
-  // The cancelled callback remains retained by the shared promise until its job settles.
-  await expect(readSessionHistoryPageInWorker(request())).rejects.toMatchObject({
-    code: "overloaded",
-  });
-  expect(queued).toHaveLength(1);
-
-  const clone = vi.spyOn(globalThis, "structuredClone");
-  try {
-    queued[0]!.prepare();
-    queued[0]!.result.resolve(page("shared result"));
-    const results = await settled;
-    expect(results[0]).toEqual({ status: "rejected", reason: cancelled });
-    expect(results.slice(1).every((result) => result.status === "fulfilled")).toBe(true);
-    expect(clone).toHaveBeenCalledTimes(DEFAULT_WORKER_PENDING_TASKS - 1);
-  } finally {
-    clone.mockRestore();
-  }
-
-  const fresh = Promise.all(
-    Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, () =>
-      readSessionHistoryPageInWorker(request()),
-    ),
-  );
-  expect(queued).toHaveLength(2);
-  queued[1]!.prepare();
-  queued[1]!.result.resolve(page("capacity released"));
-  for (const result of await fresh) {
-    expect(result).toEqual({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "capacity released" }] }],
+it.each([0, DEFAULT_WORKER_PENDING_TASKS - 1])(
+  "bounds coalesced waiters when reader %i cancels",
+  async (cancelledIndex) => {
+    const controller = new AbortController();
+    const readers = Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, (_, index) =>
+      readSessionHistoryPageInWorker(
+        request(),
+        index === cancelledIndex ? controller.signal : undefined,
+      ),
+    );
+    const settled = Promise.allSettled(readers);
+    expect(queued).toHaveLength(1);
+    await expect(readSessionHistoryPageInWorker(request())).rejects.toMatchObject({
+      code: "overloaded",
     });
-  }
-});
+    const cancelled = new Error("caller closed");
+    controller.abort(cancelled);
+    // The cancelled callback remains retained by the shared promise until its job settles.
+    await expect(readSessionHistoryPageInWorker(request())).rejects.toMatchObject({
+      code: "overloaded",
+    });
+    expect(queued).toHaveLength(1);
+
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      queued[0]!.prepare();
+      queued[0]!.result.resolve(page("shared result"));
+      const results = await settled;
+      expect(results[cancelledIndex]).toEqual({ status: "rejected", reason: cancelled });
+      expect(
+        results
+          .filter((_, index) => index !== cancelledIndex)
+          .every((result) => result.status === "fulfilled"),
+      ).toBe(true);
+      expect(clone).toHaveBeenCalledTimes(
+        DEFAULT_WORKER_PENDING_TASKS - (cancelledIndex === 0 ? 2 : 1),
+      );
+    } finally {
+      clone.mockRestore();
+    }
+
+    const fresh = Promise.all(
+      Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, () =>
+        readSessionHistoryPageInWorker(request()),
+      ),
+    );
+    expect(queued).toHaveLength(2);
+    queued[1]!.prepare();
+    queued[1]!.result.resolve(page("capacity released"));
+    for (const result of await fresh) {
+      expect(result).toEqual({
+        messages: [{ role: "assistant", content: [{ type: "text", text: "capacity released" }] }],
+      });
+    }
+  },
+);
+
+it.runIf(process.env.OPENCLAW_BENCH_HISTORY_HANDOFF === "1")(
+  "measures coalesced history handoff",
+  async () => {
+    const text = "x".repeat(1024 * 1024);
+    const samples = [];
+    for (let sample = 0; sample < 7; sample++) {
+      const start = performance.now();
+      const cpu = process.cpuUsage();
+      for (let iteration = 0; iteration < 20; iteration++) {
+        const first = readSessionHistoryPageInWorker(request());
+        const second = readSessionHistoryPageInWorker(request());
+        expect(queued).toHaveLength(1);
+        queued[0]!.prepare();
+        queued[0]!.result.resolve(page(text));
+        const [a, b] = await Promise.all([first, second]);
+        expect(a.messages[0]).not.toBe(b.messages[0]);
+        queued.length = 0;
+      }
+      const used = process.cpuUsage(cpu);
+      samples.push({
+        msPerGroup: (performance.now() - start) / 20,
+        cpuMsPerGroup: (used.user + used.system) / 1000 / 20,
+      });
+    }
+    console.log(
+      JSON.stringify({ readers: 2, textBytes: text.length, groupsPerSample: 20, samples }),
+    );
+  },
+);
 
 it.each([
   {

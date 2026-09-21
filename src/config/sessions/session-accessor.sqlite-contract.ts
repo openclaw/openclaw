@@ -16,6 +16,12 @@ export type {
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
+export type SessionTranscriptContextVersion = {
+  generation: string | null;
+  rawSeq: number | null;
+  updatedAt: number | null;
+};
+
 export type CanonicalSessionValidationResult = {
   validatedRows: number;
   certifiedRows: number;

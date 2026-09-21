@@ -8,6 +8,7 @@ import {
 import { clearAllCliSessions } from "./cli-session-binding.js";
 import type {
   SessionTranscriptAccessScope,
+  SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
   TranscriptEvent,
@@ -49,7 +50,6 @@ import {
 import {
   readTranscriptGenerationInTransaction,
   readTranscriptContextVersionInTransaction,
-  type SessionTranscriptContextVersion,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
@@ -367,6 +367,7 @@ export function appendTranscriptEventSnapshotSync(
   scope: SessionTranscriptWriteScope,
   event: TranscriptEvent,
   options: TranscriptEventAppendOptions = {},
+  projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded: () => void },
 ): Result<TranscriptWriteSnapshot<TranscriptEventAppendResult>, TranscriptAppendRefusal> {
   assertNonMessageTranscriptEvent(event);
   return runTranscriptWriteSnapshotSync(
@@ -378,7 +379,9 @@ export function appendTranscriptEventSnapshotSync(
         event,
         options,
       );
-      if (appendTranscriptEventInTransaction(database, resolved, resolvedEvent) === false) {
+      if (
+        appendTranscriptEventInTransaction(database, resolved, resolvedEvent, projection) === false
+      ) {
         return { appended: false };
       }
       if (

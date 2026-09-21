@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { statSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
@@ -104,6 +105,8 @@ const retained = resolveGlobalSingleton<ReclamationWorkerSlot>(
   Symbol.for("openclaw.sessionReclamationWorker"),
   () => ({}),
 );
+
+channel("openclaw.memory.critical").subscribe(() => retained.worker?.retireIfIdle());
 
 /** The global archive FIFO bounds ordinary reclamation's whole-buffer heaps. */
 export function withSqliteReclamationWorker<T>(
@@ -276,6 +279,12 @@ class SqliteReclamationWorker {
         this.idle = setTimeout(this.beforeExit, SQLITE_IDLE_HANDLE_TTL_MS);
         this.idle.unref();
       }
+    }
+  }
+
+  retireIfIdle(): void {
+    if (this.transport && this.idle && !this.active && !this.revoked) {
+      void this.close().catch((error: unknown) => log.error(String(error)));
     }
   }
 

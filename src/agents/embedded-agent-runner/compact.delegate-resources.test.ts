@@ -547,8 +547,8 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
           };
           await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
           const manager = SessionManager.open(target, state.workspaceDir);
-          manager.appendModelChange(model.provider, model.id);
-          manager.appendThinkingLevelChange("off");
+          await manager.appendModelChange(model.provider, model.id);
+          await manager.appendThinkingLevelChange("off");
           for (const text of [
             "Review the deployment checklist.",
             "Compare the remaining options.",

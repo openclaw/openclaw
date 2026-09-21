@@ -36,6 +36,7 @@ import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 export function createSqliteTranscriptArchiveWorker(workerData: object): Worker {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
   return createCpuTrackedWorker(workerUrl, {
+    resourceLimits: { maxOldGenerationSizeMb: 512 },
     workerData,
     execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
   });

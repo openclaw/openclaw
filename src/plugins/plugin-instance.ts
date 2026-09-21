@@ -2,6 +2,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { releasePluginCacheInstance } from "./plugin-cache.js";
 import {
   PluginInstanceDrainTimeoutError,
   PluginInstanceUnavailableError,
@@ -693,6 +694,9 @@ export class PluginInstance {
     }
     if (hostFailure) {
       throw hostFailure.error;
+    }
+    if (failures.length === 0) {
+      releasePluginCacheInstance(this);
     }
     return { errors: failures };
   }

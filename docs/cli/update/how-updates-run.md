@@ -127,6 +127,11 @@ classification. The live plugin files and host links stay unchanged. Channels,
 cron, automatic updates, background task maintenance, and other side services are
 suppressed in this canary. Copied task records remain available for startup
 validation without recovery or pruning.
+The canary also defers session catalog hydration, worker recovery, and startup
+maintenance until activation, recording a warning. Required configuration,
+database ownership, schema, and migration checks still run before readiness;
+plugin runtime loading remains part of validation. The serving Gateway prepares
+its session catalogs and maintenance normally after activation.
 
 Update build and validation processes resolve source-linked plugin SDKs from
 the staged installation root, even when the serving source launcher passed its own checkout
@@ -350,6 +355,23 @@ plugin convergence, and any required full Doctor migrations. Downloads therefore
 count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
+
+If `update finalize` finds a live Gateway holding maintenance ownership, it uses
+the existing restart readiness wait within the remaining finalization allowance.
+When that exact process is verified serving the installed version and build,
+finalization leaves it running and exits successfully with a warning. The history
+records `finalize:doctor` as skipped and identifies the holder. Doctor, config
+changes, and plugin convergence remain pending until the next maintenance window:
+stop the Gateway through its owner, run `openclaw update repair`, then start it
+through the same owner. Deferred finalization does not resolve earlier interrupted
+updates. A dead process releases its physical maintenance lock; its stale lease
+does not qualify for this warning path. Ordinary maintenance admission and lease
+reclamation still apply, including refusals for unsafe or unreadable state.
+
+This behavior lives in the installed finalizer, so published updaters can use it
+when they invoke the new version's `update finalize`. Older parents may omit the
+warning from their own summary; the finalizer prints it and records it in update
+history.
 
 <a id="durable-serving-recovery" />
 
@@ -578,8 +600,34 @@ instructions.
 If restart cannot run, the command prints `Gateway: restart skipped (...)` or
 `Gateway: restart failed: ...` with guidance to inspect the service and restart manually.
 With `--no-restart`, package replacement or git rebuild still runs, but the
-managed service is not stopped or restarted, so the running Gateway keeps old
-code until you restart it manually.
+updater does not stop or restart the Gateway. A running Gateway can still exit
+when it detects that its installation was replaced; restart it through its
+service or foreground process owner afterward.
+
+When updater-owned Doctor reaches maintenance before that foreground Gateway
+finishes shutting down, it waits for the same process to release state, up to
+the installation-check interval plus the existing restart-drain and service-stop
+allowances. Doctor retains the updater's live authority and still acquires its
+normal maintenance locks before repairing state.
+If shutdown has already removed the process identity, Doctor allows only the
+existing ten-second cleanup reserve and refuses any newly appearing owner.
+A different Gateway owner, lost update authority, or unresolved contention stops
+maintenance with recovery guidance. Ordinary Doctor commands and older update
+drivers without delegated Doctor authority retain their immediate refusal.
+
+Published 2026.9.5 Gateways do not have an installation-replacement watcher.
+Installing a newer candidate cannot add that behavior to the process already
+running. For that first foreground update, stop the Gateway through its foreground
+process owner and wait for it to exit, run `openclaw update`, then launch the
+Gateway again. Keep the same installation, profile, and state/config overrides.
+`--no-restart` does not authorize Doctor to stop that process or skip required
+state maintenance.
+
+If the package was already replaced and Doctor failed on the live Gateway lock,
+wait for the updater to exit, stop the foreground Gateway through its owner, and
+run `openclaw update repair --yes --no-restart --json` from the updated installation.
+Verify the repair result before starting the Gateway again. Preserve the existing
+state and recovery backups; replacing files alone does not complete maintenance.
 
 ### Control-plane response shape
 

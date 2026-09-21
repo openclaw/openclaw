@@ -335,6 +335,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           owner: diagnosticOwner,
         });
         session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
+          config: params.config,
           runId: diagnosticCompactionRunId,
           ...(params.sessionKey && { sessionKey: params.sessionKey }),
           sessionId: params.sessionId,
@@ -656,12 +657,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           },
         };
       } catch (err) {
-        assertActive();
         const failure = resolveCompactionFailure({
           error: err,
           safeguardCancellation: getCompactionSafeguardRuntime(sessionManager)?.cancellation,
           abortSignal: params.abortSignal,
         });
+        assertActive();
         const fallbackThinking = pickFallbackThinkingLevel({
           message: formatErrorMessage(failure.error),
           attempted: attemptedThinking,

@@ -351,6 +351,7 @@ describe("native hook relay registry", () => {
 
   it("rejects a bound pre-tool policy result after exact host authority closes", async () => {
     let active = true;
+    const admitExecution = vi.fn();
     let resolvePolicy:
       | ((value: { blocked: false; params: Record<string, unknown> }) => void)
       | undefined;
@@ -360,13 +361,14 @@ describe("native hook relay registry", () => {
           resolvePolicy = resolve;
         }),
     );
-    const relay = registerNativeHookRelay({
+    const relay = registerOwnedNativeHookRelay({
       provider: "codex",
       relayId: "codex-bound-authority-close",
       sessionId: "session-1",
       runId: "run-1",
       allowedEvents: ["pre_tool_use"],
       runBeforeToolCall,
+      executionAdmission: { toolNames: ["exec"], admit: admitExecution },
       assertActive: () => {
         if (!active) {
           throw new Error("agent harness host capability is no longer active");
@@ -391,6 +393,7 @@ describe("native hook relay registry", () => {
     resolvePolicy?.({ blocked: false, params: { command: "git status" } });
 
     await expect(invocation).rejects.toThrow("agent harness host capability is no longer active");
+    expect(admitExecution).not.toHaveBeenCalled();
     expect(runBeforeToolCall).toHaveBeenCalledWith(
       expect.objectContaining({
         approvalMode: "defer",
@@ -493,6 +496,7 @@ describe("native hook relay registry", () => {
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
     );
     const approvalRequester = vi.fn(async () => "allow" as const);
+    const admitExecution = vi.fn();
     testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
     let retainChild = true;
     const relay = registerOwnedNativeHookRelay({
@@ -503,6 +507,7 @@ describe("native hook relay registry", () => {
       allowedEvents: ["pre_tool_use", "permission_request", "post_tool_use"],
       runBeforeToolCall: hostCapabilities.runBeforeToolCall,
       assertActive: hostCapabilities.assertActive,
+      executionAdmission: { toolNames: ["exec"], admit: admitExecution },
       retention: {
         readClaim: readTestNativeAgentId,
         shouldRetainAfterForegroundClose: () => retainChild,
@@ -510,26 +515,20 @@ describe("native hook relay registry", () => {
         onDispose: () => {},
       },
     });
+    const invoke = (
+      event: Parameters<typeof invokeNativeHookRelay>[0]["event"],
+      rawPayload: unknown,
+    ) => invokeNativeHookRelay({ provider: "codex", relayId: relay.relayId, event, rawPayload });
 
     await expect(
-      invokeNativeHookRelay({
-        provider: "codex",
-        relayId: relay.relayId,
-        event: "pre_tool_use",
-        rawPayload: { tool_name: "Bash", tool_input: { command: "true" } },
-      }),
+      invoke("pre_tool_use", { tool_name: "Bash", tool_input: { command: "true" } }),
     ).resolves.toMatchObject({ exitCode: 0 });
 
-    const permission = await invokeNativeHookRelay({
-      provider: "codex",
-      relayId: relay.relayId,
-      event: "permission_request",
-      rawPayload: {
-        agent_id: "child-thread",
-        hook_event_name: "PermissionRequest",
-        tool_name: "Bash",
-        tool_input: { command: "true" },
-      },
+    const permission = await invoke("permission_request", {
+      agent_id: "child-thread",
+      hook_event_name: "PermissionRequest",
+      tool_name: "Bash",
+      tool_input: { command: "true" },
     });
     expect(JSON.parse(permission.stdout)).toEqual({
       hookSpecificOutput: {
@@ -540,18 +539,13 @@ describe("native hook relay registry", () => {
     expect(approvalRequester).toHaveBeenCalledOnce();
 
     await expect(
-      invokeNativeHookRelay({
-        provider: "codex",
-        relayId: relay.relayId,
-        event: "post_tool_use",
-        rawPayload: {
-          agent_id: "child-thread",
-          hook_event_name: "PostToolUse",
-          tool_name: "Bash",
-          tool_input: { command: "true" },
-          tool_response: { output: "ok" },
-          tool_use_id: "child-post-tool",
-        },
+      invoke("post_tool_use", {
+        agent_id: "child-thread",
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "true" },
+        tool_response: { output: "ok" },
+        tool_use_id: "child-post-tool",
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
     expect(afterToolCall).toHaveBeenCalledOnce();
@@ -576,70 +570,52 @@ describe("native hook relay registry", () => {
     ).toBe(false);
     relay.unregister();
     await expect(
-      invokeNativeHookRelay({
-        provider: "codex",
-        relayId: relay.relayId,
-        event: "pre_tool_use",
-        rawPayload: {
-          agent_id: "child-thread",
-          tool_name: "Bash",
-          tool_input: { command: "true" },
-        },
+      invoke("pre_tool_use", {
+        agent_id: "child-thread",
+        tool_name: "Bash",
+        tool_input: { command: "true" },
       }),
     ).resolves.toMatchObject({ exitCode: 0 });
     await expect(
-      invokeNativeHookRelay({
-        provider: "codex",
-        relayId: relay.relayId,
-        event: "permission_request",
-        rawPayload: {
-          agent_id: "child-thread",
-          hook_event_name: "PermissionRequest",
-          tool_name: "Bash",
-          tool_input: { command: "true" },
-        },
+      invoke("permission_request", {
+        agent_id: "child-thread",
+        hook_event_name: "PermissionRequest",
+        tool_name: "Bash",
+        tool_input: { command: "true" },
       }),
     ).rejects.toThrow("foreground invocation not allowed");
     await expect(
-      invokeNativeHookRelay({
-        provider: "codex",
-        relayId: relay.relayId,
-        event: "post_tool_use",
-        rawPayload: {
-          agent_id: "child-thread",
-          hook_event_name: "PostToolUse",
-          tool_name: "Bash",
-          tool_input: { command: "true" },
-          tool_response: { output: "ok" },
-          tool_use_id: "child-post-tool-after-close",
-        },
+      invoke("post_tool_use", {
+        agent_id: "child-thread",
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "true" },
+        tool_response: { output: "ok" },
+        tool_use_id: "child-post-tool-after-close",
       }),
     ).rejects.toThrow("foreground invocation not allowed");
     await expect(
-      invokeNativeHookRelay({
-        provider: "codex",
-        relayId: relay.relayId,
-        event: "pre_tool_use",
-        rawPayload: {
-          agent_id: "unknown-child",
-          tool_name: "Bash",
-          tool_input: { command: "true" },
-        },
+      invoke("pre_tool_use", {
+        agent_id: "unknown-child",
+        tool_name: "Bash",
+        tool_input: { command: "true" },
       }),
     ).rejects.toThrow("retained invocation not allowed");
     await expect(
-      invokeNativeHookRelay({
-        provider: "codex",
-        relayId: relay.relayId,
-        event: "pre_tool_use",
-        rawPayload: {
-          agent: { agent_id: "child-thread" },
-          tool_name: "Bash",
-          tool_input: { command: "true" },
-        },
+      invoke("pre_tool_use", {
+        agent: { agent_id: "child-thread" },
+        tool_name: "Bash",
+        tool_input: { command: "true" },
       }),
     ).rejects.toThrow("foreground invocation not allowed");
 
+    expect(admitExecution).toHaveBeenCalledTimes(2);
+    expect(admitExecution).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        rawPayload: expect.objectContaining({ agent_id: "child-thread" }),
+      }),
+      expect.any(Function),
+    );
     retainChild = false;
     relay.unregister();
   });

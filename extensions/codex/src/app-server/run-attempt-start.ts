@@ -115,13 +115,14 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeHookRelayRequired:
-        connection.options.nativeHookRelay?.enabled !== false &&
-        params.pluginHarnessToolPolicyRestricted !== true &&
-        connection.nativeHookRelayEvents.includes("pre_tool_use") &&
-        (hasBeforeToolCallPolicy() ||
-          (appServer.loopDetectionPreToolUseRelay &&
-            Boolean(connection.sandboxSessionKey) &&
-            loopDetectionEnabled)),
+        Boolean(resources.nativeProcessAuthority && nativeToolSurfaceEnabled) ||
+        (connection.options.nativeHookRelay?.enabled !== false &&
+          params.pluginHarnessToolPolicyRestricted !== true &&
+          connection.nativeHookRelayEvents.includes("pre_tool_use") &&
+          (hasBeforeToolCallPolicy() ||
+            (appServer.loopDetectionPreToolUseRelay &&
+              Boolean(connection.sandboxSessionKey) &&
+              loopDetectionEnabled))),
       bundleMcpThreadConfig,
       configuredMcpDynamicSurface: attemptTools.configuredMcp !== undefined,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,

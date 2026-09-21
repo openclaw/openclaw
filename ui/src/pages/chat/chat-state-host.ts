@@ -120,6 +120,7 @@ export type ChatPageHost = ChatHost &
     chatFollowLocked: boolean;
     chatReadingHistory: boolean;
     chatIsProgrammaticScroll?: () => boolean;
+    chatIsManualScroll?: () => boolean;
     chatIsMaintenanceScroll?: () => boolean;
     chatScrollElement?: () => HTMLElement | null;
     chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;

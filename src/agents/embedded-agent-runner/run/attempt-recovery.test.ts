@@ -1,8 +1,14 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "@openclaw/ai/diagnostics";
 import { APIError } from "openai/core/error";
-import { describe, expect, it, vi } from "vitest";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
+import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
+import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import {
   buildEmbeddedRunnerAssistant,
   createMockUsage,
@@ -24,6 +30,10 @@ vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/backoff.js")>()),
   sleepWithAbort: vi.fn(async () => {}),
 }));
+
+const tempDirs = createTempDirTracker();
+const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
+afterEach(() => tempDirs.cleanup());
 
 function handleAssistantFailureAfterRecovery(
   fixture: Awaited<ReturnType<typeof recoverAfterTransportDrop>>,
@@ -83,6 +93,58 @@ const outputLimitScenario = {
 } satisfies TransportDropScenario;
 
 describe("recoverEmbeddedRunAttempt", () => {
+  it.each([
+    { retryAvailable: true, decision: "accepted", reason: "transient_retry" },
+    { retryAvailable: false, decision: "rejected", reason: "replay_unsafe" },
+  ] as const)(
+    "records $decision recovery with prior tool settlement but no private content",
+    async ({ retryAvailable, decision, reason }) => {
+      const path = join(tempDirs.make("openclaw-recovery-timeline-"), "timeline.jsonl");
+      await withEnvAsync(
+        {
+          OPENCLAW_DIAGNOSTICS: undefined,
+          OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: path,
+        },
+        async () => {
+          await recoverAfterTransportDrop({
+            config: { diagnostics: { flags: ["timeline"] } },
+            retryAvailable,
+            errorMessage: "WebSocket error: private-provider-payload",
+          });
+          flushDiagnosticsTimeline();
+        },
+      );
+      const written = readFileSync(path, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => requireRecord(JSON.parse(line), "recovery timeline event"));
+      expect(written.filter((event) => event.name === "model.retry.decision")).toEqual([
+        expect.objectContaining({
+          attributes: {
+            decision: retryAvailable ? "accepted" : "rejected",
+            reason: retryAvailable ? "backoff_completed" : "retry_budget_exhausted",
+            retryCount: 0,
+          },
+        }),
+      ]);
+      const events = written.filter((event) => event.name === "model.recovery.decision");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        type: "mark",
+        runId: "run:transport-drop",
+        attributes: {
+          decision,
+          reason,
+          allToolsProvenSettled: true,
+          allToolCallsRecorded: true,
+          replaySafe: false,
+        },
+      });
+      expect(JSON.stringify(events)).not.toMatch(
+        /private-provider-payload|synthetic-model|sessionFile|toolName|messagesSnapshot/,
+      );
+    },
+  );
   it("continues an output-limited response before any tool executes", async () => {
     const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
       ...outputLimitScenario,

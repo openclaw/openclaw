@@ -15,12 +15,22 @@ export function createCommandFixture(
   const commandSignal = AbortSignal.any([signal, finished.signal]);
   const commands: Promise<unknown>[] = [];
   let diagnostics: FixtureDiagnostics | undefined;
+  // Register before managed commands so timeout evidence precedes their cancellation.
+  commandSignal.addEventListener(
+    "abort",
+    () => {
+      if (signal.aborted) {
+        diagnostics?.report("abort");
+      }
+    },
+    { once: true },
+  );
   onTestFinished(async ({ task }) => {
-    finished.abort();
     // Normal teardown also aborts finished; only the test result/original signal means failure.
     if (task.result?.state === "fail" || signal.aborted) {
       diagnostics?.report(signal.aborted ? "abort" : "failure");
     }
+    finished.abort();
     await Promise.allSettled(commands);
   });
 

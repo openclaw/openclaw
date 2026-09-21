@@ -76,6 +76,7 @@ describe("Testbox lease freshness", () => {
       "scripts/crabbox-source-capsule.mts",
       "scripts/crabbox-source-receiver.mts",
       ".github/actions/prepare-testbox-shell/action.yml",
+      ".github/actions/prepare-testbox-shell/preserve-command-cwd.py",
       workflow,
     ];
     for (const owner of owners) {

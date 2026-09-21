@@ -28,8 +28,12 @@ vi.mock("../../scripts/lib/managed-child-process.mts", async (importOriginal) =>
 });
 
 describe.skipIf(process.platform === "win32")("POSIX command fixture output drainage", () => {
-  it.for(["drain", "cancel"] as const)(
-    "settles a descendant after leader exit through %s",
+  const modes =
+    process.platform === "linux"
+      ? (["drain", "cancel", "cancel-live"] as const)
+      : (["drain", "cancel"] as const);
+  it.for(modes)(
+    "settles descendant output after leader exit or live cancellation through %s",
     async (mode, context) => {
       const stop = new AbortController();
       const signal = context.signal;
@@ -37,7 +41,7 @@ describe.skipIf(process.platform === "win32")("POSIX command fixture output drai
       // Registered first so this observes the fixture's existing teardown hook, not only run().
       context.onTestFinished(() => {
         try {
-          expect(diagnostics).toHaveBeenCalledTimes(mode === "cancel" ? 1 : 0);
+          expect(diagnostics).toHaveBeenCalledTimes(mode === "drain" ? 0 : 1);
         } finally {
           diagnostics.mockRestore();
         }
@@ -74,8 +78,15 @@ describe.skipIf(process.platform === "win32")("POSIX command fixture output drai
               throw new Error("Missing fixture listener address");
             }
             const exited = createDeferred();
-            observer.onChild = (child) => child.once("exit", () => exited.resolve());
+            const ready = createDeferred();
+            let leader: ChildProcess | undefined;
+            observer.onChild = (child) => {
+              leader = child;
+              child.once("exit", () => exited.resolve());
+              child.stdout!.once("data", () => ready.resolve());
+            };
             const descendant = `
+process.title = "private fixture process title";
 const socket = require("node:net").connect(${address.port}, "127.0.0.1", () => process.send("ready"));
 require("node:readline").createInterface({ input: socket }).on("line", (line) => {
   if (line === "ping") socket.write("pong\\n");
@@ -93,15 +104,17 @@ const child = require("node:child_process").spawn(process.execPath, ["--eval", $
 });
 child.once("message", () => {
   console.log(child.pid);
-  child.disconnect();
-  child.unref();
+  ${mode === "cancel-live" ? "" : "child.disconnect(); child.unref();"}
 });
 `,
             ]);
             const connection = await Promise.race([connected.promise, cancelled.promise]);
             const lines = createInterface({ input: connection });
             reader = lines;
-            await Promise.race([exited.promise, cancelled.promise]);
+            await Promise.race([
+              mode === "cancel-live" ? ready.promise : exited.promise,
+              cancelled.promise,
+            ]);
             // The descendant remains usable while it owns the final output pipe.
             const pong = new Promise<string>((resolve, reject) => {
               if (connection.destroyed) {
@@ -130,6 +143,29 @@ child.once("message", () => {
               const descendantPid = Number(result.stdout.trim());
               expect(descendantPid).toBeGreaterThan(0);
               expect(isProcessAlive(descendantPid)).toBe(false);
+              if (mode === "cancel-live") {
+                expect(diagnostics).toHaveBeenCalledTimes(1);
+                const reportText = String(diagnostics.mock.calls[0]?.[0]);
+                const report = JSON.parse(reportText.slice("[fixture-lifecycle] ".length));
+                expect(reportText).not.toContain("private fixture");
+                expect(report.current).toMatchObject({ exitCode: null, signalCode: null });
+                expect(report.current.processTree.processes).toEqual(
+                  expect.arrayContaining([
+                    expect.objectContaining({
+                      pid: leader?.pid,
+                      threads: expect.arrayContaining([
+                        expect.objectContaining({
+                          tid: leader?.pid,
+                          state: expect.stringMatching(/^[A-Z]$/u),
+                          waitChannel: expect.stringMatching(/^[A-Za-z0-9_]{1,96}$/u),
+                        }),
+                      ]),
+                    }),
+                    expect.objectContaining({ pid: descendantPid, parentPid: leader?.pid }),
+                  ]),
+                );
+                expect(isProcessAlive(leader?.pid ?? 0)).toBe(false);
+              }
             }
           } finally {
             observer.onChild = undefined;

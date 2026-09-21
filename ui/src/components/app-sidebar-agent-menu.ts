@@ -148,18 +148,6 @@ function typeaheadSidebarMenuFocus(event: KeyboardEvent): boolean {
   return true;
 }
 
-function focusActiveAgentMenuItem(dropdown: HTMLElement) {
-  const items = sidebarMenuItems(dropdown);
-  const target =
-    items.find((item) => item.classList.contains("sidebar-agent-menu__agent-switch--active")) ??
-    items.find((item) => item.classList.contains("sidebar-agent-menu__agent-switch")) ??
-    items[0];
-  if (!target) {
-    return;
-  }
-  focusSidebarMenuItem(items, target);
-}
-
 type AgentMenuAgent = {
   id: string;
   name?: string;
@@ -209,7 +197,7 @@ function sidebarAgentMenuRows(params: {
   });
 }
 
-function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
+function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams, autofocus: boolean) {
   const agentId = normalizeAgentId(agent.id);
   const identity = params.identities.get(agentId) ?? null;
   const label = normalizeAgentLabel(agent, identity);
@@ -227,6 +215,7 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
       type="checkbox"
       role="menuitemradio"
       aria-checked=${String(active)}
+      ?autofocus=${autofocus}
       ${ref((element) => syncDropdownItemRadio(element, active))}
     >
       <span class="sidebar-agent-menu__agent-tile">
@@ -301,6 +290,11 @@ export function renderSidebarHelpMenu() {
 export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
   const position = params.position;
   const { activeId, activeName, agents } = params;
+  const agentRows = !params.rosterMode && agents.length > 1 ? sidebarAgentMenuRows(params) : [];
+  const autofocusAgent =
+    params.openMode === "click"
+      ? (agentRows.find((agent) => normalizeAgentId(agent.id) === activeId) ?? agentRows[0])
+      : undefined;
   const menuLabel = t(params.rosterMode ? "agentChip.workspaceMenuLabel" : "agentChip.menuLabel");
   return html`
     <wa-dropdown
@@ -353,16 +347,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
             break;
         }
       }}
-      @wa-after-show=${(event: Event) => {
-        if (!(event.currentTarget instanceof HTMLElement)) {
-          return;
-        }
-        params.onAfterShow();
-        if (params.openMode === "hover") {
-          return;
-        }
-        focusActiveAgentMenuItem(event.currentTarget);
-      }}
+      @wa-after-show=${params.onAfterShow}
       @keydown=${(event: KeyboardEvent) => {
         if (moveSidebarMenuFocus(event)) {
           return;
@@ -395,11 +380,11 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         style="position: fixed; left: ${position.x}px; top: ${position.top}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
       ></button>
       ${
-        !params.rosterMode && agents.length > 1
+        agentRows.length > 0
           ? html`
               <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
               <div class="sidebar-agent-menu__agent-grid">
-                ${sidebarAgentMenuRows(params).map((entry) => renderAgentRow(entry, params))}
+                ${agentRows.map((entry) => renderAgentRow(entry, params, entry === autofocusAgent))}
               </div>
               <div class="sidebar-customize-menu__separator" role="separator"></div>
             `

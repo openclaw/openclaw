@@ -1,7 +1,105 @@
 import type { ChildProcess } from "node:child_process";
+import { closeSync, openSync, opendirSync, readSync } from "node:fs";
 
 const MAX_RECORDS = 48;
+const MAX_PROCESSES = 16;
+const MAX_THREADS_PER_PROCESS = 16;
 const label = (value: string) => value.slice(0, 96);
+
+function readProcFile(path: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(4096);
+    return buffer.toString("utf8", 0, readSync(fd, buffer));
+  } catch {
+    // A process may exit during the snapshot; diagnostics must not block cleanup.
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
+  }
+}
+
+function captureLinuxProcessTree(pid: number | undefined) {
+  if (process.platform !== "linux" || pid === undefined || pid <= 0) {
+    return undefined;
+  }
+  const processes = new Map<
+    number,
+    {
+      pid: number;
+      parentPid?: number;
+      category?: "node" | "npm" | "esbuild" | "other";
+      unavailable?: boolean;
+      threads: Array<{ tid: number; state?: string; waitChannel?: string }>;
+    }
+  >([[pid, { pid, threads: [] }]]);
+  let truncated = false;
+  for (const [currentPid, entry] of processes) {
+    const root = `/proc/${currentPid}`;
+    const { threads } = entry;
+    const comm = readProcFile(`${root}/comm`)?.trim();
+    // Only fixed categories escape this helper; process titles can contain arguments.
+    entry.category =
+      comm?.startsWith("npm ") || comm === "npm"
+        ? "npm"
+        : comm === "node" || comm === "MainThread"
+          ? "node"
+          : comm === "esbuild"
+            ? "esbuild"
+            : "other";
+    let directory: ReturnType<typeof opendirSync> | undefined;
+    try {
+      directory = opendirSync(`${root}/task`);
+      for (let item = directory.readSync(); item; item = directory.readSync()) {
+        if (!/^\d+$/u.test(item.name)) {
+          continue;
+        }
+        if (threads.length === MAX_THREADS_PER_PROCESS) {
+          truncated = true;
+          break;
+        }
+        const tid = Number(item.name);
+        const taskRoot = `${root}/task/${tid}`;
+        const stat = readProcFile(`${taskRoot}/stat`);
+        const fields = stat?.slice(stat.lastIndexOf(")") + 2).split(" ");
+        const state = fields?.[0];
+        const waitChannel = readProcFile(`${taskRoot}/wchan`)?.trim();
+        threads.push({
+          tid,
+          state: state && /^[A-Z]$/u.test(state) ? state : undefined,
+          waitChannel:
+            waitChannel && /^[A-Za-z0-9_]{1,96}$/u.test(waitChannel) ? waitChannel : undefined,
+        });
+        if (tid === currentPid && fields?.[1] && /^\d+$/u.test(fields[1])) {
+          entry.parentPid = Number(fields[1]);
+        }
+        const children = readProcFile(`${taskRoot}/children`);
+        for (const child of children?.trim().split(/\s+/u) ?? []) {
+          if (!/^\d+$/u.test(child)) {
+            continue;
+          }
+          const childPid = Number(child);
+          if (processes.has(childPid)) {
+            continue;
+          }
+          if (processes.size === MAX_PROCESSES) {
+            truncated = true;
+            break;
+          }
+          processes.set(childPid, { pid: childPid, threads: [] });
+        }
+      }
+    } catch {
+      entry.unavailable = true;
+    } finally {
+      directory?.closeSync();
+    }
+  }
+  return { processes: [...processes.values()], truncated };
+}
 
 type ChildObservation = Pick<ChildProcess, "pid" | "exitCode" | "signalCode"> & {
   stdout: { closed: boolean } | null;
@@ -60,7 +158,13 @@ export function createFixtureDiagnostics(name: string) {
         errorCode,
       });
       const event = (value: string) => record(snapshot(value));
-      current = () => snapshot("current");
+      current = () => ({
+        ...snapshot("current"),
+        processTree:
+          child?.exitCode === null && child.signalCode === null
+            ? captureLinuxProcessTree(child.pid)
+            : undefined,
+      });
       event("command-start");
       return {
         ready(value: ChildObservation) {

@@ -231,6 +231,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       return;
     }
     const watched = new Set(watchedKeys());
+    let updated = false;
     for (const [sessionKey, snapshot] of Object.entries(changed)) {
       if (!watched.has(sessionKey)) {
         continue;
@@ -259,9 +260,12 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         };
       }
       snapshots.set(sessionKey, next);
+      updated = true;
       settle(sessionKey, next);
     }
-    notify();
+    if (updated) {
+      notify();
+    }
   };
 
   const lifecycle = createGatewaySetSyncLifecycle(gateway, {

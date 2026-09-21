@@ -9,6 +9,12 @@ import { ensureRepoNodeModulesLink } from "./local-check-runtime.mts";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const DEFAULT_FORCE_KILL_DELAY_MS = 5_000;
+const FORWARDED_COMPILER_FLAGS = new Set([
+  "--maglev",
+  "--no-maglev",
+  "--concurrent-sparkplug",
+  "--no-concurrent-sparkplug",
+]);
 const SHIM_CHECKOUT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 function resolveConfiguredModulesDir(checkoutRoot) {
@@ -126,9 +132,17 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
     const implementationUrl = new URL(options.implementation, moduleUrl);
     const implementationPath = fileURLToPath(implementationUrl);
     const nodeExecutable = options.executable ?? (process.versions.bun ? "node" : process.execPath);
+    // Preserve explicit compiler policy without copying parent loaders, evals, or debuggers.
+    const compilerArgs = process.execArgv.filter((arg) => FORWARDED_COMPILER_FLAGS.has(arg));
     child = spawn(
       nodeExecutable,
-      [...nodeArgs, ...(options.execArgv ?? []), implementationPath, ...process.argv.slice(2)],
+      [
+        ...nodeArgs,
+        ...compilerArgs,
+        ...(options.execArgv ?? []),
+        implementationPath,
+        ...process.argv.slice(2),
+      ],
       {
         cwd: process.cwd(),
         detached,

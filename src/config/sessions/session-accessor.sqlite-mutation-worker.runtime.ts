@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync-cache-state.js";
+import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
 import { recordOpenClawAgentCanonicalValidation } from "../../state/openclaw-agent-canonical-validation-receipt.js";
 import {
   createOpenClawAgentDatabaseClaim,
@@ -273,6 +274,7 @@ export async function runReclamationWorkerPort(
       if (request.type === "admission") {
         continue;
       }
+      cancelWorkerIdleGc();
       const requestDatabaseOptions =
         request.type === "close"
           ? databaseOptions
@@ -488,6 +490,7 @@ export async function runReclamationWorkerPort(
       }
       port.postMessage(response);
       commitGate = undefined;
+      scheduleWorkerIdleGc();
     }
     throw new Error("SQLite session reclamation parent closed without retiring its worker");
   } catch (error) {

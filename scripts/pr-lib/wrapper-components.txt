@@ -468,6 +468,7 @@ src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.agents.ts
 src/config/zod-schema.allowdeny.ts
 src/config/zod-schema.approvals.ts
+src/config/zod-schema.channel-bot-loop.ts
 src/config/zod-schema.channels-config.ts
 src/config/zod-schema.channels.ts
 src/config/zod-schema.cloud-workers.ts
@@ -774,6 +775,7 @@ src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-start.ts
 src/infra/worker-cpu.ts
+src/infra/worker-idle-gc.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-native-sections.ts
 src/infra/worker-task-pool-completion.ts
@@ -1192,6 +1194,7 @@ src/state/openclaw-state-schema.sql
 src/state/openclaw-state-schema.ts
 src/state/openclaw-state-worker-context.ts
 src/state/openclaw-state-worker-error.ts
+src/state/openclaw-state-worker-operation.ts
 src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts

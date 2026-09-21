@@ -70,6 +70,7 @@ export async function withSqliteCanonicalValidationWorkerPool<T>(
     >({
       workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive),
       workerOptions: {
+        resourceLimits: { maxOldGenerationSizeMb: 512 },
         workerData: {
           type: "sqlite-transcript-archive-v2",
           operation: "canonical-validation-pool",

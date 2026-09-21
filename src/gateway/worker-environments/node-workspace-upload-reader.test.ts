@@ -4,6 +4,7 @@ import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFixtureDiagnostics } from "../../../test/helpers/fixture-diagnostics.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
@@ -106,10 +107,16 @@ function observeUploadFile(onOpen: (handle: FileHandle) => void) {
 }
 
 describe("workspace upload byte stream", () => {
-  it("uploads and applies a result larger than the former total byte limit", async () => {
+  it("uploads and applies a result larger than the former total byte limit", async ({
+    onTestFailed,
+  }) => {
+    const diagnostics = createFixtureDiagnostics("workspace-large-upload");
+    onTestFailed(() => diagnostics.report("failure"));
     const temporaryRoot = temporary.make("workspace-large-upload-");
     const local = temporary.make("workspace-large-upload-local-");
     const chunk = Buffer.alloc(1024 * 1024, 0x61);
+    // Exercise the upload size limit without generating a 540 MiB Git text patch.
+    chunk[0] = 0;
     const fileBytes = 60 * chunk.length;
     const hash = createHash("sha256");
     for (let index = 0; index < 60; index += 1) {
@@ -151,6 +158,7 @@ describe("workspace upload byte stream", () => {
           entries.length * (8 + fileBytes),
       ),
     };
+    diagnostics.stage("upload");
     const upload = await readNodeWorkspaceUpload({
       request,
       temporaryRoot,
@@ -160,6 +168,7 @@ describe("workspace upload byte stream", () => {
       isAuthorized: () => true,
     });
     const stagedResultRef = workerWorkspaceResultRef("large-upload");
+    diagnostics.stage("stage-result");
     await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
       root: local,
       stagingRoot: upload.stagingRoot,
@@ -170,12 +179,14 @@ describe("workspace upload byte stream", () => {
       currentManifestRaw: upload.currentRaw,
     });
     const commit = vi.fn();
+    diagnostics.stage("apply-result");
     const result = await applyStagedWorkerWorkspaceResult({
       root: local,
       stagedResultRef,
       expectedBaseManifestRef: upload.baseManifestRef,
       journal: { load: () => undefined, begin: () => {}, commit, abort: () => {} },
     });
+    diagnostics.stage("assertions");
     expect(result.manifestRef).toBe(upload.currentManifestRef);
     expect(commit).toHaveBeenCalledWith(upload.currentManifestRef);
     for (const entry of entries) {

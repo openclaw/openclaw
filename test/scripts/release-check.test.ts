@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -11,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { create } from "tar";
 import { describe, expect, vi } from "vitest";
 import { parse } from "yaml";
@@ -157,6 +158,8 @@ describe("release-check", () => {
           ? ["scripts/lib/plugin-sdk-private-local-only-subpaths.json"]
           : []),
       ]);
+      expect(requiredPaths.has("scripts/package-openclaw-for-docker.mts")).toBe(false);
+      expect(requiredPaths.has("scripts/openclaw-prepack.ts")).toBe(false);
       const sparsePaths = new Set(trackedPaths);
       expect(
         [...requiredPaths].filter((file) => !sparsePaths.has(file)),
@@ -204,7 +207,8 @@ describe("release-check", () => {
             `console.log(JSON.stringify({\n` +
             `  execArgv: process.execArgv,\n` +
             `  fixture: readFileSync("consumer/src/index.ts", "utf8"),\n` +
-            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8")\n` +
+            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8"),\n` +
+            `  concurrentSparkplugDisabled: process.execArgv.includes("--no-concurrent-sparkplug")\n` +
             `}));`,
         ],
         {
@@ -230,6 +234,7 @@ describe("release-check", () => {
           join(toolingRoot, "scripts/fixtures/packed-plugin-sdk-setup-consumer.ts"),
           "utf8",
         ),
+        concurrentSparkplugDisabled: !process.versions.bun,
       });
 
       diagnostics.stage("packed-fixture-setup");
@@ -249,7 +254,100 @@ describe("release-check", () => {
       expect(result.stderr).toContain(
         "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing.",
       );
+      expect(result.stderr).not.toContain("Packing OpenClaw package");
       diagnostics.stage("assertions-complete");
+    });
+  });
+
+  it("packs an isolated bundled source through the canonical owner before inspecting it", async ({
+    command,
+  }) => {
+    await command.lifetime.run(async () => {
+      const { root, packedFiles } = createPackedTargetFixture(command);
+      const packageJson = JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        packageManager: JSON.parse(readFileSync("package.json", "utf8")).packageManager,
+        files: ["dist"],
+        dependencies: { "fixture-runtime": "1.0.0" },
+        bundleDependencies: ["fixture-runtime"],
+        scripts: {
+          "update:compat:check":
+            "node -e \"require('node:fs').writeFileSync('compat-checked', 'yes')\"",
+        },
+      });
+      for (const [relativePath, contents] of Object.entries({
+        ...packedFiles,
+        "dist/index.js": "export {};",
+        "dist/control-ui/index.html": "<html></html>",
+        "dist/control-ui/assets/app.js.br": "prepared Brotli fixture",
+      })) {
+        if (relativePath === "package.json") {
+          continue;
+        }
+        const destination = join(root, relativePath);
+        mkdirSync(dirname(destination), { recursive: true });
+        writeFileSync(destination, contents);
+      }
+      writeFileSync(join(root, "package.json"), packageJson);
+      // Match the prepared source: scripts must not reconcile its existing install.
+      expect(parse(readFileSync("pnpm-workspace.yaml", "utf8"))).toMatchObject({
+        nodeLinker: "isolated",
+        verifyDepsBeforeRun: false,
+      });
+      writeFileSync(
+        join(root, "pnpm-workspace.yaml"),
+        "nodeLinker: isolated\nverifyDepsBeforeRun: false\n",
+      );
+      const changelog =
+        "# Changelog\n\n## 2026.9.1\n\n- Preserve the prepared bundled runtime package and source files.\n";
+      writeFileSync(join(root, "CHANGELOG.md"), changelog);
+      copyFileSync("appcast.xml", join(root, "appcast.xml"));
+      mkdirSync(join(root, "extensions"));
+      mkdirSync(join(root, "node_modules/fixture-runtime"), { recursive: true });
+      writeFileSync(
+        join(root, "node_modules/fixture-runtime/package.json"),
+        JSON.stringify({ name: "fixture-runtime", version: "1.0.0" }),
+      );
+      symlinkSync(
+        dirname(fileURLToPath(import.meta.resolve("tsx/package.json"))),
+        join(root, "node_modules/tsx"),
+        "junction",
+      );
+      const inventoryUrl = pathToFileURL(resolve("scripts/lib/package-dist-inventory.ts")).href;
+      writeFileSync(
+        join(root, "scripts/write-package-dist-inventory.ts"),
+        `import(${JSON.stringify(inventoryUrl)}).then(({ writePackageDistInventoryForPublish }) => writePackageDistInventoryForPublish(process.cwd()));\n`,
+      );
+      writeFileSync(join(root, "src/shared/worker-bundle-hash.ts"), launcherWorkerContract);
+      writeWorkerArtifacts(root, legacyArtifacts);
+      const runtimeArgs = process.versions.bun
+        ? []
+        : [...resolveVitestNodeArgs(), "--import", resolve("scripts/tsx.mjs")];
+      const runReleaseCheck = () =>
+        command.run(process.execPath, [...runtimeArgs, resolve("scripts/release-check.ts")], {
+          cwd: root,
+          env: { ...process.env, TSX_TSCONFIG_PATH: resolve("tsconfig.json") },
+        });
+      const unprepared = await runReleaseCheck();
+      expect(unprepared.error).toBeUndefined();
+      expect(unprepared.status).toBe(1);
+      expect(unprepared.stderr).toContain("missing prepared Control UI .gz asset");
+      expect(unprepared.stderr).not.toContain("Packing OpenClaw package");
+
+      writeFileSync(join(root, "dist/control-ui/assets/app.js.gz"), "prepared gzip fixture");
+      const result = await runReleaseCheck();
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Packing OpenClaw package");
+      expect(result.stderr).toContain(
+        "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing.",
+      );
+      expect(result.stderr).not.toContain("ERR_PNPM_BUNDLED_DEPENDENCIES_WITHOUT_HOISTED");
+      expect(readFileSync(join(root, "compat-checked"), "utf8")).toBe("yes");
+      expect(readFileSync(join(root, "package.json"), "utf8")).toBe(packageJson);
+      expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(changelog);
+      expect(existsSync(join(root, "dist/postinstall-inventory.json"))).toBe(true);
     });
   });
 

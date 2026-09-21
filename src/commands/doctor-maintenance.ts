@@ -14,10 +14,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-legacy.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
-import {
-  acquireGatewayMaintenanceCoordinator,
-  acquireStateDatabaseCoordinator,
-} from "../infra/state-database-coordinator.js";
+import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { UpdateDoctorError } from "../infra/update-doctor-result.js";
@@ -31,7 +28,12 @@ import {
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  assertDoctorAgentLeaseAdmission,
+  preflightExternalDoctorAgentLease,
+} from "./doctor-agent-lease-refusal.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
+import { acquireDoctorGatewayMaintenanceCoordinator } from "./doctor-maintenance-foreground.js";
 import { assertDoctorMaintenanceInspection } from "./doctor-maintenance-inspection.js";
 import {
   assertStaleDoctorGatewayStopped,
@@ -114,13 +116,14 @@ export async function beginDoctorMaintenance(params: {
     }
   };
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
-  const acquireMaintenanceResources = () => {
+  const acquireMaintenanceResources = async () => {
     if (resources) {
       return;
     }
     params.assertCurrent?.();
-    const owner = acquireGatewayMaintenanceCoordinator({ databasePath, busyTimeoutMs: 0 });
+    const owner = await acquireDoctorGatewayMaintenanceCoordinator(databasePath, env, params);
     coordinators.push(owner);
+    params.assertCurrent?.();
     resources = createOpenClawDatabaseMaintenanceScope(
       owner.createSchemaFenceDelegate,
       params.assertCurrent,
@@ -463,10 +466,14 @@ export async function beginDoctorMaintenance(params: {
   };
   try {
     await settle(async () => {
+      const externallyManaged = isServiceRepairExternallyManaged();
+      if (externallyManaged) {
+        await preflightExternalDoctorAgentLease(env);
+      }
       if (
         params.root &&
         isDefaultInstallIdentity(env) &&
-        !isServiceRepairExternallyManaged() &&
+        !externallyManaged &&
         (await shouldManageGatewayService(env))
       ) {
         serviceMaintenance =
@@ -503,7 +510,7 @@ export async function beginDoctorMaintenance(params: {
           throw new Error(await formatUpdateDoctorServiceStopRefusal(inspection.serviceEnv ?? env));
         }
         try {
-          acquireMaintenanceResources();
+          await acquireMaintenanceResources();
         } catch (error) {
           // A running managed Gateway legitimately owns this coordinator until its
           // service is stopped. Any other holder is knowable before that mutation.
@@ -597,29 +604,8 @@ export async function beginDoctorMaintenance(params: {
       // Hold the reentrant lifecycle coordinators, not an in-tree Gateway lock:
       // individual migrations acquire their own in-tree locks under this scope.
       // Gateway ownership lasts until that process stops, not for a short transaction.
-      acquireMaintenanceResources();
-      const { assertNoOpenClawAgentDatabaseLeasesReadOnly, OpenClawAgentDatabaseLeaseActiveError } =
-        await import("../state/openclaw-agent-db-lease.js");
-      try {
-        assertNoOpenClawAgentDatabaseLeasesReadOnly({ env }, openDoctorStateSchemaReadAdmission);
-      } catch (error) {
-        if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
-          throw error;
-        }
-        // Classify unreadable state under the held owners without opening a writer.
-        const { preflightOpenClawDatabaseSchemas } =
-          await import("../state/openclaw-database-preflight.js");
-        const schemas = await preflightOpenClawDatabaseSchemas({
-          env,
-          scope: "state",
-          openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-        });
-        const unreadable = schemas.indeterminate.find((database) => database.kind === "state");
-        if (unreadable) {
-          throw new DoctorUnreadableStateDatabaseError(unreadable.path, unreadable.reason);
-        }
-        throw error;
-      }
+      await acquireMaintenanceResources();
+      await assertDoctorAgentLeaseAdmission(env);
       stopped?.windowsTaskAutoStartRecovery?.beginMutation();
       retainStoppedInstallation =
         stopped?.serviceUpdateVerdict?.kind === "owned" &&

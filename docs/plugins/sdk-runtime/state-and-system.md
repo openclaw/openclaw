@@ -314,9 +314,34 @@ Asynchronous AgentSession message, model, compaction, and tree operations use
 this admission for their transcript writes. Embedded prompt preparation, replay
 repair, and tool-result cleanup await their writes before publishing dependent
 results or disposing their resources. Model-selection hooks run after write
-admission releases. Synchronous SessionManager and extension APIs, including
-`setThinkingLevel`, retain their existing synchronous contracts and still need
-an appropriate caller-owned write boundary.
+admission releases. SessionManager `appendModelChange` and
+`appendThinkingLevelChange` return promises for their committed entry IDs;
+AgentSession and extension `setThinkingLevel` return `Promise<void>`. Await these
+operations before using the resulting model or thinking state. Other synchronous
+SessionManager operations still need an appropriate caller-owned write boundary.
+
+`SessionManager.open`, `openBounded`, and `setSessionTarget` capture `storePath`
+as an absolute lexical locator before reading the transcript or invoking
+`onTruncated`. Relative locators resolve against the process working directory
+at entry; `getSessionTarget()` returns that captured locator. Later working
+directory changes leave the manager bound to its original store. Existing
+`sessions.json` and custom-store routing and symlink spelling are preserved.
+
+File-backed model and thinking transcript writes execute through the canonical
+agent database worker. Queued extension actions retain their original runtime
+and session authority through transaction and commit admission. Session opening,
+final model-context validation, and incognito transcript persistence still use
+their native owners; an asynchronous method does not imply that every storage
+operation in the enclosing session flow runs off-thread.
+
+Committed metadata updates the bound session's model or thinking state alongside
+transcript-view adoption, before asynchronous cleanup. Settings setters retain
+their existing persistence queue. If view reconstruction, local publication, or
+a dependent thinking change fails after the append commits, the error preserves
+the committed entry and prevents model fallback from replaying it. A failed view
+reconstruction makes the existing manager refuse further transcript access;
+discard it and reopen through the session owner after resolving the read failure.
+Retrying the append would duplicate a write that already committed.
 
 The signature is `withOpenClawAgentDatabaseWrite(options, operation, expectedDatabase?)`.
 `options` uses the existing agent database options, including the required

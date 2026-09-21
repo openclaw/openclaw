@@ -113,8 +113,14 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
     return result;
   };
   const ensureIndex = steps.findIndex((step) => step.name === "Ensure PR base commit");
-  expect(ensureIndex).toBeGreaterThan(0);
-  for (const step of steps.slice(1, ensureIndex + 1)) {
+  expect(steps[1]).toEqual({
+    name: "Setup supported Node runtime",
+    uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+    with: { "node-version": "24.19.0", "package-manager-cache": false },
+  });
+  expect(ensureIndex).toBeGreaterThan(1);
+  // The fixture already has a supported Node; exercise the repository-owned preparation below.
+  for (const step of steps.slice(2, ensureIndex + 1)) {
     const result = run(step);
     if (result.status !== 0) {
       return result;

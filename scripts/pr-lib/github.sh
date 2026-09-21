@@ -66,14 +66,5 @@ pr_gh_quota_exhausted() {
 }
 
 pr_gh_writer_login() {
-  local response exit_code=0
-  local args=(api)
-  [ -z "${1:-}" ] || args+=(--hostname "$1")
-  # Included headers keep this identity probe on the protected native CLI route.
-  response=$(pr_gh_plain "${args[@]}" user --include 2>&1) || exit_code=$?
-  if [ "$exit_code" -eq 75 ] || [ "$exit_code" -eq 77 ]; then
-    printf '%s\n' "$response" >&2
-    return "$exit_code"
-  fi
-  printf '%s' "$response" | node "${BASH_SOURCE[0]%/*}/gh-api-preflight.mjs" "$exit_code"
+  pr_gh_plain writer-login "$@"
 }

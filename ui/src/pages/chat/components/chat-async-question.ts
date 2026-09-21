@@ -20,6 +20,7 @@ import type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-c
 
 export type AsyncQuestions = {
   itemId: string;
+  sourceMessageId?: string;
   questions: { title: string; options?: string[] }[];
 };
 
@@ -36,6 +37,7 @@ export type AsyncQuestionPresentation = {
   archived: ReadonlyMap<string, string>;
   historyKey: string;
   drafts: Map<string, AsyncQuestionDraft>;
+  resolved: ReadonlyMap<string, AsyncQuestionDraft>;
   onChange: () => void;
   reopen: (itemId: string) => void;
   submit?: (message: string) => Promise<boolean>;
@@ -81,6 +83,7 @@ function questionHistory(messages: readonly unknown[]) {
     string,
     { question: AsyncQuestions; index: number; runId?: string; originRunId?: string }
   >();
+  const resolved = new Map<string, AsyncQuestionDraft>();
   const terminals: Array<{ index: number; turnStart: number; runId?: string; key: string }> = [];
   let turnStart = -1;
   let userRunId: string | undefined;
@@ -120,6 +123,35 @@ function questionHistory(messages: readonly unknown[]) {
     const question = readAsyncQuestions(message);
     if (question) {
       questions.set(question.itemId, { question, index, runId, originRunId: runId ?? userRunId });
+    }
+    if (
+      identity?.role === "user" &&
+      identity.id &&
+      identity.sequence !== null &&
+      !identity.isImported &&
+      (!provenance?.kind || provenance.kind === "external_user")
+    ) {
+      const text = extractTextCached(message);
+      if (text) {
+        // Only canonical saved answers resolve a question; duplicate titles stay ambiguous.
+        const rawReplyToId = asNullableRecord(record?.["__openclaw"])?.replyToId;
+        const replyToId = typeof rawReplyToId === "string" ? rawReplyToId.trim() : "";
+        const matches = [...questions.values()]
+          .filter(
+            ({ question: candidate }) =>
+              !resolved.has(candidate.itemId) &&
+              (!replyToId || candidate.sourceMessageId === replyToId),
+          )
+          .map(({ question: candidate }) => ({
+            question: candidate,
+            answers: parseGeneratedAsyncAnswer(candidate, text),
+          }))
+          .filter((match) => match.answers !== null);
+        const match = matches.length === 1 ? matches[0] : undefined;
+        if (match?.answers) {
+          resolved.set(match.question.itemId, { status: "submitted", answers: match.answers });
+        }
+      }
     }
     if (outcome === "successful") {
       terminals.push({
@@ -162,7 +194,7 @@ function questionHistory(messages: readonly unknown[]) {
       }
     }
   }
-  return [...questions.values()].map(({ question, index, runId, originRunId }) => {
+  const history = [...questions.values()].map(({ question, index, runId, originRunId }) => {
     const origin = originRunId ? runs.get(originRunId) : undefined;
     const lookup = runId ? laterRun : laterTurn;
     let boundary = origin
@@ -185,6 +217,7 @@ function questionHistory(messages: readonly unknown[]) {
     }
     return { question, boundary: boundary?.key };
   });
+  return { history, resolved };
 }
 
 export function createAsyncQuestionPresentation(
@@ -212,10 +245,10 @@ export function createAsyncQuestionPresentation(
   const drafts = state.asyncQuestionDrafts;
   const isCurrent = () =>
     state.asyncQuestionScope === scope && state.asyncQuestionDrafts === drafts;
-  const questions = questionHistory(props.messages ?? []);
+  const { history: questions, resolved } = questionHistory(props.messages ?? []);
   const archived = new Map<string, string>();
   const pending = questions.flatMap(({ question, boundary }) => {
-    const draft = drafts.get(question.itemId);
+    const draft = resolved.get(question.itemId) ?? drafts.get(question.itemId);
     if (draft?.status === "submitted" || draft?.status === "skipped") {
       return [];
     }
@@ -235,8 +268,15 @@ export function createAsyncQuestionPresentation(
     scope,
     pending,
     archived,
-    historyKey: JSON.stringify([...archived]),
+    historyKey: JSON.stringify([
+      [...archived],
+      [...resolved].map(([itemId, draft]) => [
+        itemId,
+        [...draft.answers].map(([questionId, answer]) => [questionId, questionDraftValues(answer)]),
+      ]),
+    ]),
     drafts,
+    resolved,
     onChange,
     reopen: (itemId) => {
       const boundary = archived.get(itemId);
@@ -292,7 +332,73 @@ export function readAsyncQuestions(message: unknown): AsyncQuestions | null {
     }
     questions.push({ title: question.title, options: question.options });
   }
-  return { itemId: metadata.itemId, questions };
+  const identity = readSessionMessageIdentity(message);
+  const sourceMessageId =
+    identity?.id && identity.sequence !== null && !identity.isImported ? identity.id : undefined;
+  return { itemId: metadata.itemId, ...(sourceMessageId ? { sourceMessageId } : {}), questions };
+}
+
+function draftForAnswer(
+  question: AsyncQuestions["questions"][number],
+  answer: string,
+): QuestionDraft {
+  const values = answer ? answer.split(", ") : [];
+  const selected =
+    values.length > 0 &&
+    values.every((value) => question.options?.includes(value)) &&
+    values.join(", ") === answer
+      ? new Set(values)
+      : new Set<string>();
+  return { selected, freeText: selected.size > 0 ? "" : answer };
+}
+
+function parseGeneratedAsyncAnswer(
+  question: AsyncQuestions,
+  message: string,
+): Map<string, QuestionDraft> | null {
+  let offset = 0;
+  const answers: string[] = [];
+  for (let index = 0; index < question.questions.length; index += 1) {
+    const current = question.questions[index];
+    if (!current) {
+      return null;
+    }
+    const prefix = `${quoteQuestion(current.title)}\n\n`;
+    if (!message.startsWith(prefix, offset)) {
+      return null;
+    }
+    offset += prefix.length;
+    if (index === question.questions.length - 1) {
+      answers.push(message.slice(offset));
+      offset = message.length;
+      break;
+    }
+    const next = question.questions[index + 1];
+    if (!next) {
+      return null;
+    }
+    const separator = `\n\n${quoteQuestion(next.title)}\n\n`;
+    const answerEnd = message.indexOf(separator, offset);
+    // Free text can contain quoted headings. Do not guess a section boundary.
+    if (answerEnd < offset || message.includes(separator, answerEnd + separator.length)) {
+      return null;
+    }
+    answers.push(message.slice(offset, answerEnd));
+    offset = answerEnd + 2;
+  }
+  if (
+    offset !== message.length ||
+    answers.length !== question.questions.length ||
+    answers.some((answer) => !answer.trim())
+  ) {
+    return null;
+  }
+  return new Map(
+    question.questions.map((entry, index) => [
+      String(index),
+      draftForAnswer(entry, answers[index] ?? ""),
+    ]),
+  );
 }
 
 function quoteQuestion(title: string): string {
@@ -400,7 +506,8 @@ export function renderAsyncQuestionSummary(
   questions: AsyncQuestions,
   presentation: AsyncQuestionPresentation,
 ) {
-  const draft = presentation.drafts.get(questions.itemId);
+  const draft =
+    presentation.resolved.get(questions.itemId) ?? presentation.drafts.get(questions.itemId);
   const archived = presentation.archived.has(questions.itemId);
   return html`<div class="chat-question-summary" role="status">
     ${questions.questions.map(

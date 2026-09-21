@@ -134,44 +134,58 @@ describe("plugins marketplace entries", () => {
     );
   });
 
-  it("redacts query-bearing feed URLs from entries output", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "bundled-fallback",
-      entries: [],
-      error:
-        "hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
-      metadata: {
-        url: "https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
-        status: 503,
-      },
-    });
+  it.each(["both", "metadata", "override"])(
+    "redacts query-bearing feed URLs from entries output using %s",
+    async (urlSource) => {
+      mocks.getRuntimeConfig.mockReturnValue({});
+      const result = Object.freeze({
+        source: "bundled-fallback",
+        entries: [],
+        error:
+          "hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
+        ...(urlSource !== "override"
+          ? {
+              metadata: Object.freeze({
+                url: "https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
+                status: 503,
+              }),
+            }
+          : {}),
+      });
+      mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(result);
+      const feedUrl =
+        urlSource !== "metadata"
+          ? "https://clawhub.ai/v1/feeds/plugins?token=secret#frag"
+          : undefined;
 
-    const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
-    await runPluginMarketplaceEntriesCommand({
-      feedUrl: "https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
-      json: true,
-    });
+      const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
+      await runPluginMarketplaceEntriesCommand({
+        feedUrl,
+        json: true,
+      });
 
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({ url: "https://clawhub.ai/v1/feeds/plugins" }),
-        error: "hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins",
-      }),
-    );
+      expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...(urlSource !== "override"
+            ? { metadata: expect.objectContaining({ url: "https://clawhub.ai/v1/feeds/plugins" }) }
+            : {}),
+          error: "hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins",
+        }),
+      );
 
-    mocks.defaultRuntime.writeJson.mockClear();
-    mocks.defaultRuntime.log.mockClear();
+      mocks.defaultRuntime.writeJson.mockClear();
+      mocks.defaultRuntime.log.mockClear();
 
-    await runPluginMarketplaceEntriesCommand({
-      feedUrl: "https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
-    });
+      await runPluginMarketplaceEntriesCommand({
+        feedUrl,
+      });
 
-    const output = mocks.defaultRuntime.log.mock.calls.map(([value]) => String(value)).join("\n");
-    expect(output).toContain("https://clawhub.ai/v1/feeds/plugins");
-    expect(output).not.toContain("token=secret");
-    expect(output).not.toContain("#frag");
-  });
+      const output = mocks.defaultRuntime.log.mock.calls.map(([value]) => String(value)).join("\n");
+      expect(output).toContain("https://clawhub.ai/v1/feeds/plugins");
+      expect(output).not.toContain("token=secret");
+      expect(output).not.toContain("#frag");
+    },
+  );
 
   it("keeps replacement metacharacters literal while redacting feed URLs", async () => {
     const publicUrl = ["https://", "feed.example.invalid", "/$&"].join("");

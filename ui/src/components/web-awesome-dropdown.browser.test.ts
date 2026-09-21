@@ -458,6 +458,89 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     expect(document.activeElement).toBe(f.outside);
   });
 
+  it("preserves keyboard selection made during the dropdown opening animation", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const f = await fixture();
+    const photo = document.createElement("wa-dropdown-item");
+    photo.value = "photo";
+    photo.textContent = "Photo";
+    f.item.after(photo);
+    await photo.updateComplete;
+    const selected: Element[] = [];
+    f.dropdown.addEventListener("wa-select", (event: WaSelectEvent) =>
+      selected.push(event.detail.item),
+    );
+    const afterShow = new Promise<void>((resolve) => {
+      f.dropdown.addEventListener("wa-after-show", () => resolve(), { once: true });
+    });
+    f.trigger.focus();
+    await duringElementAnimation(
+      f.menu,
+      "show",
+      () => userEvent.keyboard("{Enter}"),
+      async () => {
+        await userEvent.keyboard("{ArrowDown}");
+        expect(document.activeElement).toBe(photo);
+      },
+    );
+    await afterShow;
+    expect.soft(document.activeElement).toBe(photo);
+    await userEvent.keyboard("{Enter}");
+    expect(selected).toEqual([photo]);
+  });
+
+  it("preserves item focus while a rapid reopen joins pending hide cleanup", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const f = await fixture();
+    const photo = document.createElement("wa-dropdown-item");
+    photo.value = "photo";
+    photo.textContent = "Photo";
+    f.item.after(photo);
+    await photo.updateComplete;
+    await open(f);
+    const selected: Element[] = [];
+    f.dropdown.addEventListener("wa-select", (event: WaSelectEvent) =>
+      selected.push(event.detail.item),
+    );
+    let focusDuringReopen: Element | null = null;
+    const afterShow = new Promise<void>((resolve) => {
+      f.dropdown.addEventListener("wa-after-show", () => resolve(), { once: true });
+    });
+    await duringAnimation(f, "hide", () => {
+      f.dropdown.addEventListener(
+        "wa-show",
+        () => {
+          // The accepted reopen restores menu interaction before old animation cleanup settles.
+          queueMicrotask(() => {
+            photo.focus();
+            focusDuringReopen = document.activeElement;
+          });
+        },
+        { once: true },
+      );
+      f.dropdown.open = true;
+    });
+    await afterShow;
+    expect(focusDuringReopen).toBe(photo);
+    expect.soft(document.activeElement).toBe(photo);
+    await userEvent.keyboard("{Enter}");
+    expect(selected).toEqual([photo]);
+  });
+
+  it.each(["item", "input"] as const)(
+    "keeps autofocus on an owned %s inside grouped menu content",
+    async (kind) => {
+      const f = await fixture();
+      const group = document.createElement("div");
+      const target = document.createElement(kind === "item" ? "wa-dropdown-item" : "input");
+      target.autofocus = true;
+      group.append(target);
+      f.dropdown.append(group);
+      await open(f);
+      expect(document.activeElement).toBe(target);
+    },
+  );
+
   it("settles a never-connected submenu close as a public no-op", async () => {
     const item = document.createElement("wa-dropdown-item");
     let completed = false;
@@ -630,10 +713,11 @@ describe.runIf(browserMode)("Web Awesome dropdown lifecycle", () => {
     },
   );
 
-  it("registers an initially open dropdown after client upgrade", async () => {
+  it("focuses and registers an initially open dropdown after client upgrade", async () => {
     const { userEvent } = await import("vitest/browser");
     const f = await fixture(true);
     await expect.poll(() => count(f, "wa-after-show")).toBe(1);
+    expect(document.activeElement).toBe(f.item);
     await userEvent.keyboard("{Escape}");
     await closed(f);
     expect(document.activeElement).toBe(f.trigger);

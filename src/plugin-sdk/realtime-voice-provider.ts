@@ -55,3 +55,5 @@ export {
   type RealtimeVoiceAudioOutputPort,
   type RealtimeVoiceAudioOutputMessage,
 } from "../talk/audio-output-port.js";
+export { isRealtimeVoiceAudioAudible } from "../talk/audio-energy.js";
+export { createRealtimeVoiceOutputActivityTracker } from "../talk/output-activity-tracker.js";
