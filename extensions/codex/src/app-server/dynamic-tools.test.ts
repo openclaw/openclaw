@@ -854,14 +854,14 @@ describe("createCodexDynamicToolBridge", () => {
   });
 
   it("can register a durable tool schema while denying execution for the current turn", async () => {
-    const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
+    const unavailableExecute = vi.fn(async () => textToolResult("tool executed"));
     const onAgentToolResult = vi.fn();
     const onToolOutcome = vi.fn();
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "message" })],
       registeredTools: [
         createTool({ name: "message" }),
-        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME, execute: heartbeatExecute }),
+        createTool({ name: "registered_tool", execute: unavailableExecute }),
       ],
       signal: new AbortController().signal,
       hookContext: { runId: "run-unavailable", onToolOutcome },
@@ -869,7 +869,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
     expect(bridge.availableTools.map((tool) => tool.name)).toEqual(["message"]);
-    expect(specNames(bridge.specs)).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
+    expect(specNames(bridge.specs)).toEqual(["message", "registered_tool"]);
 
     const result = await bridge.handleToolCall(
       {
@@ -877,7 +877,7 @@ describe("createCodexDynamicToolBridge", () => {
         turnId: "turn-1",
         callId: "call-1",
         namespace: null,
-        tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+        tool: "registered_tool",
         arguments: {},
       },
       { onAgentToolResult },
@@ -888,31 +888,31 @@ describe("createCodexDynamicToolBridge", () => {
       contentItems: [
         {
           type: "inputText",
-          text: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+          text: "OpenClaw tool is not available for this turn: registered_tool",
         },
       ],
     });
     expect(result.executionStarted).toBe(false);
     expect(result.executedArguments).toEqual({});
-    expect(heartbeatExecute).not.toHaveBeenCalled();
+    expect(unavailableExecute).not.toHaveBeenCalled();
     expect(onAgentToolResult).toHaveBeenCalledWith({
-      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      toolName: "registered_tool",
       result: {
         content: [
           {
             type: "text",
-            text: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+            text: "OpenClaw tool is not available for this turn: registered_tool",
           },
         ],
         details: {
           status: "failed",
-          error: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+          error: "OpenClaw tool is not available for this turn: registered_tool",
         },
       },
       isError: true,
     });
     expect(onToolOutcome).toHaveBeenLastCalledWith({
-      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      toolName: "registered_tool",
       argsHash: "",
       resultHash: "",
       terminalPresentation: undefined,
