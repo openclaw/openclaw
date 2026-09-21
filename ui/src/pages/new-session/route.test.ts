@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { newSessionSearch, type NewSessionRouteData } from "./location.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import { newSessionModelSearch } from "./model-location.ts";
 import { page } from "./route.ts";
 
 // The loader is exercised through the page contract so route.ts keeps its
@@ -60,7 +61,7 @@ describe("new-session route catalog target", () => {
     const { context, request } = createContext({ assistantAgentId: "main", agentsList: null });
     const data = await loadNewSessionData(
       context,
-      newSessionSearch("main", { model: "example/model-one" }),
+      newSessionModelSearch("main", "example/model-one"),
     );
     expect(data).toMatchObject({
       agentId: "main",

@@ -1,8 +1,3 @@
-import {
-  buildModelCatalogRef,
-  parseModelCatalogRef,
-} from "@openclaw/model-catalog-core/model-catalog-refs";
-
 export type NewSessionRouteData = {
   /** The agent the loader resolved; empty until the Gateway can name one. */
   agentId: string;
@@ -24,24 +19,8 @@ export type NewSessionRouteData = {
 };
 
 export type NewSessionTarget =
-  | { catalogId: string; group?: never; model?: never }
-  | { group: string; catalogId?: never; model?: never }
-  | { model: string; catalogId?: never; group?: never };
-
-function requestedModel(value: string | null): string | undefined {
-  if (
-    !value ||
-    value.length > 2048 ||
-    Array.from(value).some((character) => {
-      const code = character.charCodeAt(0);
-      return code < 32 || code === 127;
-    })
-  ) {
-    return undefined;
-  }
-  const parsed = parseModelCatalogRef(value);
-  return parsed ? buildModelCatalogRef(parsed.provider, parsed.modelId) : undefined;
-}
+  | { catalogId: string; group?: never }
+  | { group: string; catalogId?: never };
 
 export function newSessionSearch(agentId: string, target?: NewSessionTarget): string {
   const params = new URLSearchParams();
@@ -54,23 +33,16 @@ export function newSessionSearch(agentId: string, target?: NewSessionTarget): st
   if (target?.group) {
     params.set("group", target.group);
   }
-  const model = requestedModel(target?.model ?? null);
-  if (model) {
-    params.set("model", model);
-  }
   return params.size > 0 ? `?${params.toString()}` : "";
 }
 
 export function newSessionLocationFromSearch(
   search: string,
-): Pick<NewSessionRouteData, "agentId" | "catalogId" | "group" | "requestedModel"> {
+): Pick<NewSessionRouteData, "agentId" | "catalogId" | "group"> {
   const params = new URLSearchParams(search);
-  const catalogId = params.get("catalog")?.trim() ?? "";
-  const model = catalogId ? undefined : requestedModel(params.get("model"));
   return {
-    ...(model ? { requestedModel: model } : {}),
     agentId: params.get("agent")?.trim() ?? "",
-    catalogId,
+    catalogId: params.get("catalog")?.trim() ?? "",
     group: params.get("group")?.trim() ?? "",
   };
 }

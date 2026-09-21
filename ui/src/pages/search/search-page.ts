@@ -41,7 +41,7 @@ import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderSettingsSelectRow } from "../config/settings-select-row.ts";
-import { newSessionSearch } from "../new-session/location.ts";
+import { newSessionModelSearch } from "../new-session/model-location.ts";
 import { renderPluginCredential } from "../plugins/credential-editor.ts";
 import { pluginConfigSchema } from "../plugins/settings-model.ts";
 import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
@@ -639,9 +639,10 @@ class SearchPage extends OpenClawLightDomElement {
                                 !this.loading
                               ) {
                                 this.context.navigate("new-session", {
-                                  search: newSessionSearch(result.agentId, {
-                                    model: `${result.model.provider}/${result.model.id}`,
-                                  }),
+                                  search: newSessionModelSearch(
+                                    result.agentId,
+                                    `${result.model.provider}/${result.model.id}`,
+                                  ),
                                 });
                               }
                             },

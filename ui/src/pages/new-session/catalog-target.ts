@@ -12,7 +12,8 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
-import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import { newSessionModelLocationFromSearch } from "./model-location.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -41,7 +42,7 @@ export function routeKey(data?: NewSessionRouteData): string {
 }
 
 export function routeKeyFromSearch(search: string): string {
-  const location = newSessionLocationFromSearch(search);
+  const location = newSessionModelLocationFromSearch(search);
   return draftRouteKey(
     location.agentId,
     location.catalogId,
