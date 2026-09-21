@@ -3,7 +3,7 @@ import { claimPendingAgentQuestionAnswer } from "openclaw/plugin-sdk/agent-harne
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFailed, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -120,6 +120,40 @@ describe("runCodexAppServerAttempt question refresh", () => {
     );
 
     const params = createSteeringParams();
+    let deadlineAtMs: number | undefined;
+    let timedOut = false;
+    let aborted = false;
+    let requestStarted = false;
+    let promptWasDelivered = false;
+    const snapshotLifetime = (responseShape: string) => ({
+      responseShape,
+      timedOut,
+      aborted,
+      requestStarted,
+      promptWasDelivered,
+    });
+    const diagnostics: {
+      request?: { elapsedMs: number; remainingMs: number | undefined };
+      requestSettlement?: ReturnType<typeof snapshotLifetime>;
+      attemptSettlement?: ReturnType<typeof snapshotLifetime>;
+    } = {};
+    params.onAttemptTimeout = () => {
+      timedOut = true;
+    };
+    params.onAttemptAbort = () => {
+      aborted = true;
+    };
+    params.onAttemptDeadlineChanged = (event) => {
+      deadlineAtMs = event.kind === "bounded" ? event.deadlineAtMs : undefined;
+    };
+    onTestFailed(() => {
+      // Never log question text, answer keys/values, or raw response payloads.
+      console.error("[question-prompt-lifetime]", {
+        scenario: scenario.name,
+        timeoutMs: params.timeoutMs,
+        ...diagnostics,
+      });
+    });
     let pendingRefresh = false;
     let sourceRecorder: typeof params.userTurnTranscriptRecorder;
     if (refresh) {
@@ -155,8 +189,14 @@ describe("runCodexAppServerAttempt question refresh", () => {
       }
     }
     const promptDelivered = createDeferred<void>();
-    params.onBlockReply = vi.fn(() => promptDelivered.resolve());
+    params.onBlockReply = vi.fn(() => {
+      promptWasDelivered = true;
+      promptDelivered.resolve();
+    });
     const onRunProgress = vi.fn<NonNullable<typeof params.onRunProgress>>((event) => {
+      if (event.reason === "request:item/tool/requestUserInput:start") {
+        requestStarted = true;
+      }
       // Host progress fires after the active turn's input bridge is installed.
       if (event.reason === "turn:start") {
         turnStarted.resolve();
@@ -166,10 +206,15 @@ describe("runCodexAppServerAttempt question refresh", () => {
     const closeHost = refresh
       ? await bindProductionHarnessHostCapabilitiesForTest(params)
       : undefined;
+    const attemptStartedAt = performance.now();
     const run = runCodexAppServerAttempt(params);
     await turnStarted.promise;
     expect(handleRequest).toBeTypeOf("function");
 
+    diagnostics.request = {
+      elapsedMs: Math.round(performance.now() - attemptStartedAt),
+      remainingMs: deadlineAtMs === undefined ? undefined : deadlineAtMs - Date.now(),
+    };
     const response = handleRequest?.({
       id: "request-input-1",
       method: "item/tool/requestUserInput",
@@ -198,10 +243,27 @@ describe("runCodexAppServerAttempt question refresh", () => {
     // that handoff, not a short polling budget; surface an early terminal result.
     await Promise.race([
       promptDelivered.promise,
-      Promise.resolve(response).then(() => {
+      Promise.resolve(response).then((value) => {
+        let responseShape = "other";
+        if (value === undefined) {
+          responseShape = "undefined";
+        } else if (
+          value !== null &&
+          typeof value === "object" &&
+          "answers" in value &&
+          value.answers !== null &&
+          typeof value.answers === "object" &&
+          Object.keys(value.answers).length === 0
+        ) {
+          responseShape = "empty-answers";
+        }
+        // Teardown can abort a surviving attempt after this failure. Snapshot
+        // here so the failure hook cannot mistake cleanup for the cause.
+        diagnostics.requestSettlement = snapshotLifetime(responseShape);
         throw new Error("User-input request settled before its prompt was delivered");
       }),
       run.then(() => {
+        diagnostics.attemptSettlement = snapshotLifetime("attempt-ended");
         throw new Error("Codex attempt ended before its prompt was delivered");
       }),
     ]);

@@ -262,15 +262,23 @@ export async function createMarginImage(
   return Buffer.from(encoded, "base64");
 }
 
-export async function measureMargin(page: Page, testCase: MarginCase) {
+export async function measureMargin(
+  page: Page,
+  testCase: MarginCase,
+  markPhase: (phase: string) => void = () => {},
+) {
   const target = page.locator(`.chat-thread ${testCase.selector}`).first();
+  markPhase("measure-target");
   await target.waitFor();
+  markPhase("measure-image-decode");
   await page
     .locator(".chat-thread img.chat-message-image")
     .evaluateAll((images: HTMLImageElement[]) =>
       Promise.all(images.map((element) => element.decode())),
     );
+  markPhase("measure-fonts");
   await page.evaluate(() => document.fonts.ready);
+  markPhase("measure-geometry");
   return target.evaluate((element, side) => {
     const group = element.closest(".chat-group") ?? element.closest(".chat-thread-inner")!;
     const column = group.getBoundingClientRect();

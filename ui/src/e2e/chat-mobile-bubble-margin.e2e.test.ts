@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect as expectBrowser } from "playwright/test";
-import { expect, it } from "vitest";
+import { expect, it, onTestFailed } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -20,12 +20,31 @@ suite.define(() => {
   it.each(marginCases)(
     "preserves $id gutters at 390 and 430 px in both themes and restores desktop geometry",
     async (testCase) => {
+      let phase = "acquire-page";
+      let currentTheme = "light";
+      let currentWidth = 1440;
+      // A renderer read may be unavailable after a timeout closes the page.
+      // Keep the last awaited owner in the test process; do not add another wait.
+      onTestFailed(() => {
+        console.error("[mobile-gutter-phase]", {
+          caseId: testCase.id,
+          phase,
+          theme: currentTheme,
+          requestedWidth: currentWidth,
+        });
+      });
+      const markPhase = (value: string) => {
+        phase = value;
+      };
       await suite.withPage(
         { viewport: { width: 1440, height: 1200 }, colorScheme: "light", reducedMotion: "reduce" },
         async ({ page }) => {
           const imageSize = "imageSize" in testCase ? testCase.imageSize : undefined;
+          markPhase("create-image");
           const image = await createMarginImage(page, imageSize);
+          markPhase("read-video-fixture");
           const video = await readFile(new URL("./fixtures/video-poster.mp4", import.meta.url));
+          markPhase("install-media-route");
           await page.route("https://media.example/**", (route) => {
             if (route.request().url().endsWith("png")) {
               return route.fulfill({ contentType: "image/png", body: image });
@@ -52,15 +71,23 @@ suite.define(() => {
               body: isVideo ? video.subarray(start) : createPlaybackMediaFixture("mp3"),
             });
           });
+          markPhase("install-gateway");
           await installMockGateway(page, marginScenario(testCase));
+          markPhase("bring-to-front");
           await page.bringToFront();
+          markPhase("navigate");
           await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "domcontentloaded" });
           // Reuse the rendered transcript; each theme starts with its own desktop baseline.
           for (const theme of ["light", "dark"] as const) {
+            currentTheme = theme;
+            markPhase("emulate-theme");
             await page.emulateMedia({ colorScheme: theme });
+            markPhase("theme-attribute");
             await expectBrowser(page.locator("html")).toHaveAttribute("data-theme-mode", theme);
             if (testCase.id === "user-video" || testCase.id === "user-mixed") {
+              markPhase("video-preview-visible");
               await expectBrowser(page.locator(".chat-video-preview img")).toBeVisible();
+              markPhase("video-preview-decoded");
               await expect
                 .poll(() =>
                   page
@@ -74,27 +101,29 @@ suite.define(() => {
                 )
                 .toBe(true);
             }
-            const desktop = await measureMargin(page, testCase);
+            const desktop = await measureMargin(page, testCase, markPhase);
             // Each width starts from the verified desktop geometry in the same fixture.
             for (const width of [390, 430]) {
               const label = `${testCase.id} at ${width} px in ${theme}`;
+              currentWidth = width;
+              markPhase("mobile-viewport");
               await page.setViewportSize({ width, height: 1200 });
               if (!("excluded" in testCase)) {
                 await expect
                   .poll(
                     async () => {
-                      const box = await measureMargin(page, testCase);
+                      const box = await measureMargin(page, testCase, markPhase);
                       return box.open - box.columnWidth * 0.1;
                     },
                     { message: label },
                   )
                   .toBeGreaterThanOrEqual(-1);
                 await expect
-                  .poll(async () => (await measureMargin(page, testCase)).closed, {
+                  .poll(async () => (await measureMargin(page, testCase, markPhase)).closed, {
                     message: `${label} closed edge`,
                   })
                   .toBeCloseTo(testCase.id === "user-audio" ? 17 : 0, 0);
-                const mobile = await measureMargin(page, testCase);
+                const mobile = await measureMargin(page, testCase, markPhase);
                 if (imageSize) {
                   const expectedWidth = Math.min(imageSize.width, mobile.columnWidth * 0.9);
                   expect(mobile.width, `${label} fits the column once`).toBeCloseTo(
@@ -116,19 +145,23 @@ suite.define(() => {
                 if (testCase.id === "forwarded-short") {
                   await expectBrowser(toggle, label).toBeHidden();
                 } else if (await toggle.count()) {
+                  markPhase("expand-disclosure");
                   await toggle.first().click();
-                  const expanded = await measureMargin(page, testCase);
+                  const expanded = await measureMargin(page, testCase, markPhase);
                   expect(expanded.open, `${label} expanded`).toBeGreaterThanOrEqual(
                     expanded.columnWidth * 0.1 - 1,
                   );
+                  markPhase("collapse-disclosure");
                   await toggle.first().click();
                 }
               }
+              currentWidth = 1440;
+              markPhase("restore-desktop-viewport");
               await page.setViewportSize({ width: 1440, height: 1200 });
               await expect
                 .poll(
                   async () => {
-                    const restored = await measureMargin(page, testCase);
+                    const restored = await measureMargin(page, testCase, markPhase);
                     return Math.max(
                       ...(["x", "y", "width", "height"] as const).map((key) =>
                         Math.abs(restored[key] - desktop[key]),
@@ -140,8 +173,10 @@ suite.define(() => {
                 .toBeLessThanOrEqual(0.5);
             }
           }
+          markPhase("close-page");
         },
       );
+      markPhase("complete");
     },
   );
 });
