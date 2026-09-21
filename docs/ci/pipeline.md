@@ -146,6 +146,15 @@ baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilat
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
 
+App tests run in three sequential launcher invocations: the default-profile suite,
+rendered Quick Chat in a fresh default-profile process, then named-profile fixtures.
+The rendered suite keeps its catalog, disclosure, and shortcut flows together and
+separate from tests that change the process-wide executor. Each partition retains
+coverage instrumentation and completion checks; a failure stops later partitions.
+Rendered Quick Chat uses an AppKit-owned run loop for native menu tracking.
+Historical targets with a launcher retain their original default- and named-profile
+partitions, including XCTest's rendered-flow ordering.
+
 Both phases use Xcode 27 on GitHub-hosted `xcode-27`, the preview macOS 27
 image, with at most two concurrent jobs. Full manual
 validation adds the existing `release` phase under the same cap. The package split adds one

@@ -10,6 +10,7 @@ import Testing
 struct QuickChatCatalogPresentationTests {
     @Test func `rendered Quick Chat preserves catalog disclosure and shortcut behavior in order`() async throws {
         try await TestIsolation.withIsolatedState {
+            try await AppKitTestSupport.startApplication()
             let application = AppKitTestSupport.application
             let previousAppearance = application.appearance
             defer { application.appearance = previousAppearance }

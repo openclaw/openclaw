@@ -7,7 +7,6 @@ import Testing
 enum AppKitTestSupport {
     /// Rendered suites share one process and must initialize AppKit only once.
     private static let initializedApplication: (application: NSApplication, didSetActivationPolicy: Bool) = {
-        atexit { AppKitTestSupport.recordProcessExit() }
         let application = NSApplication.shared
         let didSetActivationPolicy = application.setActivationPolicy(.accessory)
         #expect(didSetActivationPolicy)
@@ -15,18 +14,28 @@ enum AppKitTestSupport {
         return (application, didSetActivationPolicy)
     }()
 
-    private nonisolated static func recordProcessExit() {
-        let diagnostic = "[macos-native] AppKit test process exit\n" + Thread.callStackSymbols
-            .joined(separator: "\n") + "\n"
-        FileHandle.standardError.write(Data(diagnostic.utf8))
-    }
-
     static var application: NSApplication {
         self.initializedApplication.application
     }
 
     static var didSetActivationPolicy: Bool {
         self.initializedApplication.didSetActivationPolicy
+    }
+
+    static func startApplication() async throws {
+        let application = self.application
+        guard !application.isRunning else { return }
+        await withCheckedContinuation { continuation in
+            // Start outside a Swift task so AppKit owns nested menu run loops.
+            // Otherwise macOS 27 can stop Swift's outer loop and exit before test completion.
+            RunLoop.main.perform(inModes: [.common]) {
+                MainActor.assumeIsolated {
+                    continuation.resume()
+                    application.run()
+                }
+            }
+        }
+        try #require(application.isRunning)
     }
 
     static func accessibilityElements(in root: AnyObject) async throws -> [AnyObject] {
