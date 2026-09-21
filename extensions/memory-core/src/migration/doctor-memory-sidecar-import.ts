@@ -8,6 +8,7 @@ import {
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   CREATE_LEGACY_MEMORY_FTS_MATCH_TABLE_SQL,
   LEGACY_MEMORY_FTS_MATCH_TABLE,
@@ -187,8 +188,11 @@ function readMemoryIndexMetaVectorDimensions(
   }
   try {
     const parsed = JSON.parse(meta.value) as { vectorDims?: unknown };
-    const dimensions = Number(parsed.vectorDims);
-    return Number.isSafeInteger(dimensions) && dimensions > 0 ? dimensions : undefined;
+    // A legacy sidecar is operator-visible state. Reject non-decimal spellings
+    // (hex, exponent, binary) that Number() would coerce into a dimension of its
+    // own, so a malformed declaration can never be mistaken for a real dimension
+    // that happens to match the canonical table.
+    return parseStrictPositiveInteger(parsed.vectorDims);
   } catch {}
   return undefined;
 }
