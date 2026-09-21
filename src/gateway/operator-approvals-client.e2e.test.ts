@@ -321,4 +321,93 @@ describe("operator approval gateway client e2e", () => {
     expect(validateApprovalHistoryResult(history)).toBe(true);
     expect(history.items).toContainEqual(allowResult.approval);
   }, 120_000);
+
+  it("looks up and denies a live approval when approval.get/resolve receive a padded id", async () => {
+    const envSnapshot = captureEnv(TEST_ENV_KEYS);
+    cleanup.push(() => envSnapshot.restore());
+    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
+
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-approval-id-trim-e2e-"));
+    cleanup.push(() => fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5 }));
+
+    const stateDir = path.join(tempHome, ".openclaw");
+    await fs.mkdir(stateDir, { recursive: true });
+    setTestEnvValue("HOME", tempHome);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    configureManualGatewayBackgroundEnv(tempHome);
+
+    const requesterIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(stateDir, "test-device-identities", "approval-trim-requester.sqlite"),
+    });
+    const reviewerIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(stateDir, "test-device-identities", "approval-trim-reviewer.sqlite"),
+    });
+    expect(requesterIdentity.deviceId).not.toBe(reviewerIdentity.deviceId);
+
+    const port = await getGatewayE2ePortBlock();
+    const token = "approval-id-trim-e2e-token";
+    const url = `ws://127.0.0.1:${port}`;
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+
+    const server = await startGatewayServer(port, {
+      bind: "loopback",
+      auth: { mode: "token", token },
+      controlUiEnabled: false,
+      sidecarStartup: "defer",
+    });
+    cleanup.push(() => server.close());
+
+    const requester = await connectGatewayClient({
+      url,
+      token,
+      clientDisplayName: "approval trim requester",
+      scopes: [APPROVALS_SCOPE],
+      deviceIdentity: requesterIdentity,
+      timeoutMs: 60_000,
+    });
+    cleanup.push(() => disconnectGatewayClient(requester));
+
+    const reviewer = await connectGatewayClient({
+      url,
+      token,
+      clientDisplayName: "approval trim reviewer",
+      scopes: [APPROVALS_SCOPE],
+      deviceIdentity: reviewerIdentity,
+      timeoutMs: 60_000,
+    });
+    cleanup.push(() => disconnectGatewayClient(reviewer));
+
+    const approvalId = "padded-approval-gateway-lookup";
+    await requestExecApproval({ requester, id: approvalId });
+
+    const paddedId = ` ${approvalId} `;
+    const pending = await reviewer.request<ApprovalGetResult>("approval.get", { id: paddedId });
+    expect(validateApprovalGetResult(pending)).toBe(true);
+    expect(pending.approval).toMatchObject({
+      id: approvalId,
+      status: "pending",
+      presentation: { kind: "exec" },
+    });
+
+    const denied = await reviewer.request<ApprovalResolveResult>("approval.resolve", {
+      id: paddedId,
+      kind: "exec",
+      decision: "deny",
+    });
+    expect(validateApprovalResolveResult(denied)).toBe(true);
+    expect(denied).toMatchObject({
+      applied: true,
+      approval: { id: approvalId, status: "denied", decision: "deny" },
+    });
+
+    const terminal = await requester.request<ApprovalGetResult>("approval.get", { id: paddedId });
+    expect(validateApprovalGetResult(terminal)).toBe(true);
+    expect(terminal.approval).toEqual(denied.approval);
+    console.log(
+      `[approval id trim Gateway client E2E] get_ok=true resolve_denied=true padded=${JSON.stringify(paddedId)} exact=${approvalId}`,
+    );
+  }, 120_000);
 });
