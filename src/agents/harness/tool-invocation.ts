@@ -19,7 +19,7 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
   boundaries: ReturnType<typeof createAgentHarnessToolExecutionBoundaryRegistry>;
   retainExecutionSnapshot?: boolean;
   initialArguments?: Record<string, unknown>;
-  prepareArguments?: (args: unknown, nativeArgumentsPrepared: boolean) => unknown | Promise<unknown>;
+  prepareArguments?: (args: unknown, nativeArgumentsPrepared: boolean) => unknown;
   assertCurrent?: () => void;
   beforeExecute?: () => void | Promise<void>;
   validateArguments?: (args: unknown) => void | Promise<void>;
