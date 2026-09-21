@@ -154,7 +154,8 @@ describe("runCodexAppServerAttempt question refresh", () => {
         });
       }
     }
-    params.onBlockReply = vi.fn();
+    const promptDelivered = createDeferred<void>();
+    params.onBlockReply = vi.fn(() => promptDelivered.resolve());
     const onRunProgress = vi.fn<NonNullable<typeof params.onRunProgress>>((event) => {
       // Host progress fires after the active turn's input bridge is installed.
       if (event.reason === "turn:start") {
@@ -193,7 +194,18 @@ describe("runCodexAppServerAttempt question refresh", () => {
       },
     });
 
-    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), fastWait);
+    // Native turn acceptance precedes the asynchronous prompt handoff. Wait for
+    // that handoff, not a short polling budget; surface an early terminal result.
+    await Promise.race([
+      promptDelivered.promise,
+      Promise.resolve(response).then(() => {
+        throw new Error("User-input request settled before its prompt was delivered");
+      }),
+      run.then(() => {
+        throw new Error("Codex attempt ended before its prompt was delivered");
+      }),
+    ]);
+    expect(params.onBlockReply).toHaveBeenCalledTimes(1);
     await waitAndQueueActiveRunMessage(params.sessionId, "tool progress", { debounceMs: 0 });
     await vi.waitFor(
       () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/steer"),
