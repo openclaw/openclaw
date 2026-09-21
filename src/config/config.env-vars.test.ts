@@ -168,6 +168,29 @@ describe("config env vars", () => {
     });
   });
 
+  it("skips env.vars values holding an unresolved reference, bare or with a default", async () => {
+    await withEnvAsync(
+      { BARE_REF: undefined, DEFAULT_REF: undefined, PLAIN_VALUE: undefined },
+      async () => {
+        applyConfigEnvVars({
+          env: {
+            vars: {
+              BARE_REF: "${SOME_VAR}",
+              DEFAULT_REF: "${SOME_VAR:-fallback}",
+              PLAIN_VALUE: "literal",
+            },
+          },
+        } as OpenClawConfig);
+
+        // applyConfigEnvVars runs before env substitution, so a reference that is still
+        // a template would otherwise be exported into process.env as literal "${...}" text.
+        expect(process.env.BARE_REF).toBeUndefined();
+        expect(process.env.DEFAULT_REF).toBeUndefined();
+        expect(process.env.PLAIN_VALUE).toBe("literal");
+      },
+    );
+  });
+
   it("can build a merged runtime env without mutating process.env", async () => {
     await withEnvAsync({ OPENROUTER_API_KEY: undefined }, async () => {
       const merged = createConfigRuntimeEnv({
