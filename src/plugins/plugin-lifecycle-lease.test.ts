@@ -423,9 +423,6 @@ describe("plugin lifecycle lease", () => {
         const recordsModuleUrl = pathToFileURL(
           path.resolve("src/plugins/installed-plugin-index-records.ts"),
         ).href;
-        const seedModuleUrl = pathToFileURL(
-          path.resolve("src/plugins/test-helpers/installed-plugin-index.ts"),
-        ).href;
         const alphaGoMarker = state.path("alpha-go");
         const betaGoMarker = state.path("beta-go");
         const releaseAlphaMarker = state.path("release-alpha");
@@ -441,8 +438,8 @@ describe("plugin lifecycle lease", () => {
           import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
           import {
             loadInstalledPluginIndexInstallRecords,
+            writePersistedInstalledPluginIndexInstallRecordsWithLease,
           } from ${JSON.stringify(recordsModuleUrl)};
-          import { seedInstalledPluginIndex } from ${JSON.stringify(seedModuleUrl)};
           const [pluginId, stateDir, goMarker, releaseAlphaMarker, bundledDir] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
@@ -460,14 +457,14 @@ describe("plugin lifecycle lease", () => {
           await loadInstalledPluginIndexInstallRecords();
           process.stdout.write("ready\\n");
           await waitForMarker(goMarker);
-          const operation = withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
+          const operation = withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async (lease) => {
             process.stdout.write("acquired\\n");
             if (pluginId === "alpha") {
               await waitForMarker(releaseAlphaMarker);
             }
             const records = await loadInstalledPluginIndexInstallRecords();
             process.stdout.write("records:" + Object.keys(records).sort().join(",") + "\\n");
-            await seedInstalledPluginIndex({
+            await writePersistedInstalledPluginIndexInstallRecordsWithLease({
               ...records,
               [pluginId]: {
                 source: "path",
@@ -475,7 +472,7 @@ describe("plugin lifecycle lease", () => {
                 sourcePath: "/tmp/" + pluginId,
                 installPath: "/tmp/" + pluginId,
               },
-            });
+            }, { env, candidates: [], lease });
             process.stdout.write("written\\n");
           });
           process.stdout.write("attempted\\n");
