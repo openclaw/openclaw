@@ -32,6 +32,20 @@ export const cliRecoveryEntrypoints = {
   },
 } as const;
 
+// Report producers remain hookable inside the prepared CLI graph.
+export const doctorOutputEntrypoints = {
+  maintenance: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "program/register.maintenance",
+    distWorkerPath: "legacy-finalizer/src/cli/program/register.maintenance.js",
+  },
+  oneShotExit: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "one-shot-exit",
+    distWorkerPath: "legacy-finalizer/src/cli/one-shot-exit.js",
+  },
+} as const;
+
 // Failure reporting and exit finalization must share their compiled error classes.
 export const updateCandidateExitEntrypoints = {
   oneShotExit: {
