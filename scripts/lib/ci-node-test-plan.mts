@@ -4031,7 +4031,7 @@ function createCompactNodeTestShardBundles(
 
   // Larger initial bins change which groups reach serial Gateway/runtime rows.
   // Freeze those settled rows; only already-overlapping jobs can share more work.
-  const parallelJobsByRunner = new Map<string, CompactNodeTestShard[]>();
+  const parallelJobs: CompactNodeTestShard[] = [];
   for (const job of compactJobs) {
     if (
       job.planConcurrency !== 2 ||
@@ -4044,14 +4044,11 @@ function createCompactNodeTestShardBundles(
     ) {
       continue;
     }
-    const runner = job.groups[0]!.runner;
-    const jobs = parallelJobsByRunner.get(runner) ?? [];
-    jobs.push(job);
-    parallelJobsByRunner.set(runner, jobs);
+    parallelJobs.push(job);
   }
   const retiredJobs = new Set<CompactNodeTestShard>();
-  for (const jobs of parallelJobsByRunner.values()) {
-    const groups = jobs
+  if (parallelJobs.length > 1) {
+    const groups = parallelJobs
       .flatMap((job) => job.groups)
       .toSorted(
         (a, b) =>
@@ -4066,26 +4063,25 @@ function createCompactNodeTestShardBundles(
         { parallel: true },
       ),
     );
-    if (bins.length >= jobs.length) {
-      continue;
+    if (bins.length < parallelJobs.length) {
+      parallelJobs.forEach((job, index) => {
+        const bin = bins[index];
+        if (!bin) {
+          retiredJobs.add(job);
+          return;
+        }
+        job.groups = bin;
+        job.predictedSeconds = Math.ceil(estimateBinSeconds(bin));
+        job.planConcurrency = bin.length > 1 ? 2 : 1;
+        job.timeoutMinutes = bin.some((group) => !group.includePatterns)
+          ? COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES
+          : undefined;
+        if (bin.length === 1) {
+          // Losing a sibling must not increase this child's previous worker allowance.
+          job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
+        }
+      });
     }
-    jobs.forEach((job, index) => {
-      const bin = bins[index];
-      if (!bin) {
-        retiredJobs.add(job);
-        return;
-      }
-      job.groups = bin;
-      job.predictedSeconds = Math.ceil(estimateBinSeconds(bin));
-      job.planConcurrency = bin.length > 1 ? 2 : 1;
-      job.timeoutMinutes = bin.some((group) => !group.includePatterns)
-        ? COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES
-        : undefined;
-      if (bin.length === 1) {
-        // Losing a sibling must not increase this child's previous worker allowance.
-        job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
-      }
-    });
   }
   const finalJobs = compactJobs.filter((job) => !retiredJobs.has(job));
   if (finalJobs.length > compactJobCap) {

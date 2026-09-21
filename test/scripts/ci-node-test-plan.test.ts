@@ -24,6 +24,7 @@ import {
 import { isCiProofTestFile } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { isRuntimePlacementIncludePatterns } from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import { isExclusiveCiTestConfig } from "../../scripts/lib/local-check-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { listVitestRuntimeConsumerFiles } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import * as shardMetadata from "../../scripts/lib/vitest-shard-metadata.mts";
@@ -276,8 +277,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "ordinary-b": 150,
       "ordinary-c": 150,
       "ordinary-d": 150,
-      "ordinary-e": 150,
-      "ordinary-f": 150,
+      "agentic-agents-core-auth": 150,
+      "agentic-agents-core-tools": 150,
     });
     vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
     vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
@@ -294,8 +295,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           ["ordinary-b", "secrets"],
           ["ordinary-c", "logging"],
           ["ordinary-d", "unit-support"],
-          ["ordinary-e", "hooks"],
-          ["ordinary-f", "secrets"],
+          ["agentic-agents-core-auth", "hooks"],
+          ["agentic-agents-core-tools", "secrets"],
         ].map(([name, config]) => ({
           name: name!,
           config: `fixture-${name}.config.ts`,
@@ -328,11 +329,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       );
       expect(ordinary.planConcurrency).toBe(2);
       expect(ordinary.groups.map((group) => group.shard_name).toSorted()).toEqual([
+        "agentic-agents-core-auth",
+        "agentic-agents-core-runtime",
         "ordinary-a",
-        "ordinary-b",
-        "ordinary-c",
       ]);
-      expect(ordinary.predictedSeconds).toBe(450);
+      expect(new Set(ordinary.groups.map((group) => group.runner))).toEqual(
+        new Set([BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER]),
+      );
+      expect(ordinary.predictedSeconds).toBe(460);
       expect(
         jobs.find((job) => job.groups.some((group) => group.shard_name === "ordinary-d")),
       ).toMatchObject({
@@ -2033,6 +2037,22 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/cli/gateway-backed-exit.process.test.ts",
       "src/cli/gateway-backed-exit-health.process.test.ts",
     ];
+    const sharesNativeCapacity = (shard: CompactNodeTestShard) =>
+      shard.runner === EXTRA_LARGE_NODE_TEST_RUNNER &&
+      !shard.requiresDist &&
+      !shard.pretestBuildMode &&
+      (shard.planConcurrency === 2 ||
+        (shard.planConcurrency === 1 &&
+          shard.groups.length === 1 &&
+          shard.env?.OPENCLAW_VITEST_MAX_WORKERS === "2")) &&
+      shard.groups.every(
+        (group) =>
+          [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER].includes(group.runner) &&
+          !group.requiresDist &&
+          !group.pretestBuildMode &&
+          !isExclusiveCompactShardName(group.shard_name) &&
+          !group.configs.some(isExclusiveCiTestConfig),
+      );
 
     for (const profile of [
       {
@@ -2263,7 +2283,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       compact.every((shard) =>
         shard.groups.every(
           (group) =>
-            group.requiresDist === shard.requiresDist && group.runner === shard.groups[0]?.runner,
+            group.requiresDist === shard.requiresDist &&
+            (group.runner === shard.groups[0]?.runner || sharesNativeCapacity(shard)),
         ),
       ),
     ).toBe(true);
@@ -2650,13 +2671,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       compact.length,
     );
     expect(
-      largeJobs.every((shard) =>
-        shard.groups.every((group) => group.runner === DEFAULT_NODE_TEST_RUNNER),
+      largeJobs.every(
+        (shard) =>
+          shard.groups.every((group) => group.runner === DEFAULT_NODE_TEST_RUNNER) ||
+          sharesNativeCapacity(shard),
       ),
     ).toBe(true);
     expect(
-      smallJobs.every((shard) =>
-        shard.groups.every((group) => group.runner === BUNDLED_NODE_TEST_RUNNER),
+      smallJobs.every(
+        (shard) =>
+          shard.groups.every((group) => group.runner === BUNDLED_NODE_TEST_RUNNER) ||
+          sharesNativeCapacity(shard),
       ),
     ).toBe(true);
     expect(extraLargeJobs[0]?.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
