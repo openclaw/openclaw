@@ -32,16 +32,17 @@ import { persistSystemAgentEngineHistory } from "./system-agent-chat-turn.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import type { GatewayRequestContext } from "./types.js";
 
-function sameApprovalAuthority(
+function sameApprovalSourceOwner(
   left: AgentRuntimeDelegatedAuthority,
   right: AgentRuntimeDelegatedAuthority,
 ): boolean {
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  const leftOwner = getActiveAgentRunDelegatedAuthority(left.operationalRunInstance);
   if (
-    left.kind !== right.kind ||
-    left.claimId !== right.claimId ||
-    left.lifecycleGeneration !== right.lifecycleGeneration ||
-    left.operationalRunInstance.instanceId !== right.operationalRunInstance.instanceId ||
-    left.operationalRunInstance.runId !== right.operationalRunInstance.runId
+    !leftOwner ||
+    leftOwner !== getActiveAgentRunDelegatedAuthority(right.operationalRunInstance)
   ) {
     return false;
   }
@@ -83,7 +84,7 @@ async function reconcileSystemAgentApproval(
     snapshot &&
     (snapshot.resolvedAtMs === undefined || snapshot.decision === "allow-once") &&
     snapshot.agentRuntimeDelegatedAuthority &&
-    sameApprovalAuthority(snapshot.agentRuntimeDelegatedAuthority, authority) &&
+    sameApprovalSourceOwner(snapshot.agentRuntimeDelegatedAuthority, authority) &&
     session.engine.getPendingOperatorProposal()?.hash === pending.proposalHash
   ) {
     return pending;

@@ -737,7 +737,9 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       expect.objectContaining({ id: ownerResolution.id }),
     ]);
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
-    expect(manager.resolve(ownerResolution.id, "allow-once", "operator-ui")).toBe(true);
+    await expect(manager.resolve(ownerResolution.id, "allow-once", "operator-ui")).resolves.toBe(
+      true,
+    );
     await expect(ownerResolution.completion).resolves.toMatchObject({ applied: true });
     expect(resolveOperatorApproval).toHaveBeenCalledWith(
       "allow-once",
