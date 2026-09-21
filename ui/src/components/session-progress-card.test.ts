@@ -450,6 +450,37 @@ describe("renderSessionProgressCard", () => {
     expect(card?.open).toBe(true);
   });
 
+  it("keeps mobile progress collapsed across runs without overriding manual choices", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    const container = createContainer();
+    const gatewayScope = {};
+    const renderRun = (activeRunId: string | null, completedRunId: string | null) =>
+      renderTranscriptCard(container, { gatewayScope, activeRunId, completedRunId });
+    renderRun(null, null);
+    let card = container.querySelector("details")!;
+    expect(card.open).toBe(false);
+    renderRun("run-1", null);
+    expect(card.open).toBe(false);
+    renderRun(null, "run-1");
+    expect(card.open).toBe(false);
+    card.querySelector("summary")!.click();
+    renderRun("run-2", null);
+    expect(card.open).toBe(true);
+    renderRun(null, "run-2");
+    expect(card.open).toBe(true);
+    render(nothing, container);
+    renderRun(null, "run-2");
+    card = container.querySelector("details")!;
+    expect(card.open).toBe(true);
+    card.querySelector("summary")!.click();
+    renderRun("run-3", null);
+    renderRun(null, "run-3");
+    expect(card.open).toBe(false);
+  });
+
   it("expands the collapsed default at final unless manually overridden", () => {
     const container = createContainer();
     const renderRun = (activeRunId: string | null, completedRunId: string | null) =>

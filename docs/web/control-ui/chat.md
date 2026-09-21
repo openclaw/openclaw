@@ -532,8 +532,10 @@ Task progress cards are enabled by default. Toggle **Show task progress cards** 
 **Settings → Appearance → Chat** to hide or show the composer card in this browser.
 Hiding it does not stop agent work or clear saved progress.
 
-The task progress card above the composer collapses after deliberate upward
-scrolling settles. Returning to the end and progress updates leave it collapsed;
+On mobile, the task progress card above the composer starts collapsed and stays
+collapsed when you send a new message or the run completes. You can still open it
+manually. The card also collapses after deliberate upward scrolling settles.
+Returning to the end and progress updates leave it collapsed; on desktop,
 completion can reopen it only while you are already at the end. Manual choices
 are remembered per session. Continued scrolling after a manual reopen uses a
 higher threshold, and a second reopen keeps it open for that visit and task.
