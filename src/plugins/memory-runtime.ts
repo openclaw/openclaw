@@ -82,7 +82,7 @@ function normalizeRegisteredMemoryManager(
 }
 
 /** Resolves the configured memory slot to the single runtime plugin that may load memory. */
-function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
+export function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   const plugins = normalizePluginsConfig(config.plugins);
   const memorySlot = plugins.slots.memory;
   if (!plugins.enabled || typeof memorySlot !== "string" || memorySlot.trim().length === 0) {
@@ -168,7 +168,15 @@ function ensureMemoryRuntime(params?: {
   return runtime ? { runtime, standalone: true } : undefined;
 }
 
-/** Returns the active plugin-backed memory search manager for an agent. */
+/**
+ * Returns the active plugin-backed memory search manager for an agent.
+ *
+ * `capabilityRegistered` reflects whether a memory runtime owner was resolved at
+ * all, independent of whether that owner's `getMemorySearchManager` call then
+ * failed. Callers must use it (not `!!manager`) to distinguish "no memory
+ * capability is registered" from "the registered capability's manager failed to
+ * construct" - see src/plugins/AGENTS.md "Availability And Selection".
+ */
 export async function getActiveMemorySearchManagerCore(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -177,7 +185,7 @@ export async function getActiveMemorySearchManagerCore(params: {
 }) {
   const owner = ensureMemoryRuntime(params);
   if (!owner) {
-    return { manager: null, error: "memory plugin unavailable" };
+    return { manager: null, error: "memory plugin unavailable", capabilityRegistered: false };
   }
   if (owner.standalone) {
     setStandaloneMemoryManagerActive(true);
@@ -186,6 +194,7 @@ export async function getActiveMemorySearchManagerCore(params: {
   return {
     ...result,
     manager: result.manager ? normalizeRegisteredMemoryManager(result.manager) : null,
+    capabilityRegistered: true,
   };
 }
 

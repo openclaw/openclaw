@@ -33,6 +33,16 @@ engine unchanged, and tries that engine again on the next logical turn.
 ## Memory embedding adapters
 
 - `registerMemoryCapability` is the exclusive memory-plugin API.
+- Owning `plugins.slots.memory` does not by itself register a host memory
+  capability. A plugin can fill the slot and handle recall and retain through
+  its own agent hooks, but the host integrations that need a registered
+  capability (search, prompt section, dream planning, wiki artifact listing,
+  deterministic recall, private-transcript recall) stay inactive, and
+  `doctor.memory.status` reports `eligible: true` with
+  `capabilityRegistered: false`. The Control UI Memory page shows that as the
+  slot owner holding the slot with host integrations inactive, not as a health
+  failure and not as an unconfigured slot. Register the capability to
+  participate in host-side memory.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
   for host-managed exports. Companion plugins that enumerate those declared
   artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained

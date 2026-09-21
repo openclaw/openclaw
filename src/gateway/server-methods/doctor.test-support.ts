@@ -18,6 +18,7 @@ const resolveMemorySearchConfig = vi.hoisted(() =>
   })),
 );
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistryCore = vi.hoisted(() => vi.fn());
 const getAgentWorkspaceAccess = vi.hoisted(() =>
   vi.fn<
     (workspaceDir: string) =>
@@ -71,8 +72,13 @@ vi.mock("../../agents/memory-search.js", () => ({
   resolveMemorySearchConfig,
 }));
 
-vi.mock("../../plugins/memory-runtime.js", () => ({
+vi.mock("../../plugins/memory-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/memory-runtime.js")>()),
   getActiveMemorySearchManagerCore: getMemorySearchManager,
+}));
+
+vi.mock("../../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistryCore,
 }));
 
 import { createDoctorHandlers } from "./doctor.js";
@@ -262,6 +268,7 @@ export {
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
   getMemorySearchManager,
+  loadPluginManifestRegistryCore,
   getAgentWorkspaceAccess,
   previewGroundedRemMarkdown,
   dedupeDreamDiaryEntries,

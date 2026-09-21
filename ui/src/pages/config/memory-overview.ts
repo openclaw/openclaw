@@ -51,6 +51,28 @@ function hasEmbeddingError(payload: DoctorMemoryStatusPayload): boolean {
   return !payload.embedding.ok && payload.embedding.checked !== false;
 }
 
+// Nothing owns the memory slot: it is switched off, plugins are disabled, or the configured
+// owner is denied, disabled, or does not declare kind:"memory". Memory really is not running.
+function isUnconfigured(payload: DoctorMemoryStatusPayload): boolean {
+  return !payload.eligible;
+}
+
+// A plugin DOES own the slot and is enabled, it just never registered a host memory capability.
+// `plugins.slots.memory` names an owner; it does not promise a host capability. Plugins that
+// implement recall and retain through registerAgentHooks() land here, and their memory is
+// running - only the host-side integrations are absent. Reporting this as "not configured" or
+// as a health failure are both false statements about a working system.
+function isSelfManaged(payload: DoctorMemoryStatusPayload): boolean {
+  return payload.eligible && !payload.capabilityRegistered;
+}
+
+// Neither state has a manager to probe, so both always carry embedding.ok: false. Both must win
+// over the embedding-error branch, and both must suppress the engine-health card, or the page
+// renders a health failure underneath a non-failure verdict for the same payload.
+function hasNoHostCapability(payload: DoctorMemoryStatusPayload): boolean {
+  return isUnconfigured(payload) || isSelfManaged(payload);
+}
+
 function searchMode(payload: DoctorMemoryStatusPayload): string {
   return payload.provider === "none"
     ? t("memoryPage.overview.hero.keywordSearch")
@@ -61,16 +83,27 @@ function renderHero(props: MemoryOverviewProps) {
   const engineId = selectedEngineId(props.engineSelection);
   const off = props.engineSelection.kind === "off" || props.engineDisabled;
   const readyPayload = props.status.kind === "ready" ? props.status.payload : null;
+  // Both no-capability states must win over hasEmbeddingError below (neither has a manager to
+  // probe, so both always present with embedding.ok: false).
+  const unconfigured = readyPayload !== null && isUnconfigured(readyPayload);
+  const selfManaged = readyPayload !== null && isSelfManaged(readyPayload);
   const error =
-    props.status.kind === "error" || (readyPayload !== null && hasEmbeddingError(readyPayload));
+    !unconfigured &&
+    !selfManaged &&
+    (props.status.kind === "error" || (readyPayload !== null && hasEmbeddingError(readyPayload)));
   const look = createLobsterPetLook(lobsterPetSeed(props.agentId ?? "memory"));
+  const engineName = engineId ?? t("common.unknown");
   const headline = off
     ? t("memoryPage.overview.hero.hibernating")
     : props.status.kind === "loading" || props.status.kind === "idle"
       ? t("memoryPage.overview.hero.waking")
-      : error
-        ? t("memoryPage.overview.hero.needsAttention")
-        : t("memoryPage.overview.hero.awake");
+      : unconfigured
+        ? t("memoryPage.overview.hero.unconfigured")
+        : selfManaged
+          ? t("memoryPage.overview.hero.selfManaged", { engine: engineName })
+          : error
+            ? t("memoryPage.overview.hero.needsAttention")
+            : t("memoryPage.overview.hero.awake");
   const description = off
     ? t(
         props.engineDisabled
@@ -80,20 +113,29 @@ function renderHero(props: MemoryOverviewProps) {
     : props.status.kind === "error"
       ? props.status.message
       : readyPayload
-        ? hasEmbeddingError(readyPayload)
-          ? (readyPayload.embedding.error ?? t("memoryPage.overview.health.unavailable"))
-          : t("memoryPage.overview.hero.activeDescription", {
-              engine: engineId ?? t("common.unknown"),
-              mode: searchMode(readyPayload),
-            })
+        ? unconfigured
+          ? t("memoryPage.overview.hero.unconfiguredDescription")
+          : selfManaged
+            ? t("memoryPage.overview.hero.selfManagedDescription", { engine: engineName })
+            : hasEmbeddingError(readyPayload)
+              ? (readyPayload.embedding.error ?? t("memoryPage.overview.health.unavailable"))
+              : t("memoryPage.overview.hero.activeDescription", {
+                  engine: engineName,
+                  mode: searchMode(readyPayload),
+                })
         : t("memoryPage.overview.hero.loadingDescription");
+  // Self-managed memory is running, so it is neither grumpy (a failure) nor sleeping (inert).
   const pose = off
     ? { sleeping: true }
     : error
       ? { grumpy: true, standalone: true }
-      : readyPayload
-        ? { reading: true, standalone: true }
-        : { standalone: true };
+      : selfManaged
+        ? { standalone: true }
+        : readyPayload && !unconfigured
+          ? { reading: true, standalone: true }
+          : readyPayload
+            ? { sleeping: true, standalone: true }
+            : { standalone: true };
 
   return html`
     <section class="memory-overview__hero ${off ? "memory-overview__hero--sleeping" : ""}">
@@ -285,10 +327,11 @@ function renderStatusCards(props: MemoryOverviewProps) {
   if (props.status.kind !== "ready") {
     return nothing;
   }
+  const payload = props.status.payload;
   return html`
-    ${props.status.payload.dreaming ? renderSchedule(props.status.payload.dreaming) : nothing}
-    ${props.status.payload.dreaming ? renderActivity(props.status.payload.dreaming) : nothing}
-    ${renderEngineHealth(props.status.payload, props)}
+    ${payload.dreaming ? renderSchedule(payload.dreaming) : nothing}
+    ${payload.dreaming ? renderActivity(payload.dreaming) : nothing}
+    ${hasNoHostCapability(payload) ? nothing : renderEngineHealth(payload, props)}
   `;
 }
 

@@ -217,7 +217,7 @@ describe("memory runtime handles", () => {
 
     await expect(
       getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
-    ).resolves.toEqual({ manager: null, error: "no index" });
+    ).resolves.toEqual({ manager: null, error: "no index", capabilityRegistered: true });
 
     expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledWith({
       activate: false,
@@ -278,6 +278,7 @@ describe("memory runtime handles", () => {
       ).resolves.toEqual({
         manager: null,
         error: capability === "missing" ? "memory plugin unavailable" : "no index",
+        capabilityRegistered: capability !== "missing",
       });
       await retirePluginCache(cache);
       expect(first.instance.lifecycle.signal.aborted).toBe(true);
@@ -285,7 +286,7 @@ describe("memory runtime handles", () => {
       for (let query = 0; query < 2; query += 1) {
         await expect(
           getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
-        ).resolves.toEqual({ manager: null, error: "no index" });
+        ).resolves.toEqual({ manager: null, error: "no index", capabilityRegistered: true });
       }
       expect(replacement.runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
       expect(replacement.instance.lifecycle.signal.aborted).toBe(false);
@@ -436,7 +437,11 @@ describe("memory runtime handles", () => {
   ])("does not load a disabled memory selection", async (cfg) => {
     await expect(
       getActiveMemorySearchManagerCore({ cfg: cfg as never, agentId: "main" }),
-    ).resolves.toEqual({ manager: null, error: "memory plugin unavailable" });
+    ).resolves.toEqual({
+      manager: null,
+      error: "memory plugin unavailable",
+      capabilityRegistered: false,
+    });
     expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
 

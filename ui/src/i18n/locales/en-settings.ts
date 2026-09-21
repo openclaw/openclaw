@@ -1256,6 +1256,12 @@ const enSettings = {
         waking: "Waking memory…",
         hibernating: "Memory is hibernating",
         needsAttention: "Memory needs attention",
+        unconfigured: "Memory is not configured",
+        unconfiguredDescription:
+          "Memory is not running. Host integrations that depend on memory (search, prompt section, dream planning, wiki artifact listing, deterministic recall, private-transcript recall) are inactive.",
+        selfManaged: "{engine} owns the memory slot",
+        selfManagedDescription:
+          "{engine} has not registered a host memory capability, so host integrations that require one (search, prompt section, dream planning, wiki artifact listing, deterministic recall, private-transcript recall) are inactive. A plugin that handles memory through its own agent hooks still works; this page reports only host-side memory.",
         activeDescription: "{engine} · {mode}",
         loadingDescription: "Checking this agent's memory engine and dream cycle.",
         offDescription: "Choose a memory engine in Settings to wake it up.",

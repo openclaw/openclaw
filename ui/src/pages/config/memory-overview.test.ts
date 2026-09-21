@@ -34,6 +34,8 @@ function fixturePayload(): DoctorMemoryStatusPayload {
   };
   return {
     agentId: "main",
+    eligible: true,
+    capabilityRegistered: true,
     provider: "local",
     embedding: { ok: true, checked: true },
     embeddingRuntime: {
@@ -281,6 +283,89 @@ describe("renderMemoryOverview", () => {
         (button) => button.textContent?.trim() === "Test",
       ),
     ).toBe(false);
+  });
+
+  it("renders unconfigured hero when eligible is false", () => {
+    const container = renderOverview({
+      kind: "ready",
+      payload: { ...fixturePayload(), eligible: false },
+    });
+
+    expect(container.textContent).toContain("Memory is not configured");
+    expect(container.textContent).toContain("Host integrations that depend on memory");
+    expect(container.querySelector(".lob-reading-book")).toBeNull();
+    // The unconfigured state must NOT show the error/grumpy pose
+    expect(container.textContent).not.toContain("Memory needs attention");
+    expect(container.textContent).not.toContain("Retry");
+  });
+
+  it("renders the self-managed hero, not 'not configured', when the slot owner registers no capability", () => {
+    const container = renderOverview({
+      kind: "ready",
+      payload: { ...fixturePayload(), eligible: true, capabilityRegistered: false },
+    });
+
+    // This is the filed #153016 case: the plugin owns the slot and is enabled, it just never
+    // registered a host memory capability. Claiming it is not configured, or that memory is not
+    // running, are both false statements about a system whose memory may be working fine.
+    expect(container.textContent).toContain("owns the memory slot");
+    expect(container.textContent).toContain("has not registered a host memory capability");
+    expect(container.textContent).not.toContain("Memory is not configured");
+    expect(container.textContent).not.toContain("Memory is not running");
+    // Not a failure either.
+    expect(container.textContent).not.toContain("Memory needs attention");
+    expect(container.textContent).not.toContain("Retry");
+    expect(container.querySelector(".lob-reading-book")).toBeNull();
+  });
+
+  it("names the third-party slot owner in the self-managed hero", () => {
+    const container = renderOverview(
+      {
+        kind: "ready",
+        payload: { ...fixturePayload(), eligible: true, capabilityRegistered: false },
+      },
+      { kind: "auto", engineId: "hindsight-openclaw" },
+    );
+
+    // The reported configuration verbatim. The owner name comes from the engine selection, so an
+    // operator can tell which plugin is responsible instead of reading an anonymous verdict.
+    expect(container.textContent).toContain("hindsight-openclaw owns the memory slot");
+    expect(container.textContent).not.toContain("memory plugin unavailable");
+  });
+
+  it("does not render a contradictory engine-health danger badge for the slot-owner hero", () => {
+    const container = renderOverview({
+      kind: "ready",
+      payload: {
+        ...fixturePayload(),
+        eligible: true,
+        capabilityRegistered: false,
+        dreaming: undefined,
+        embedding: { ok: false, error: "memory plugin unavailable" },
+      },
+    });
+
+    expect(container.textContent).toContain("owns the memory slot");
+    expect(container.textContent).not.toContain("memory plugin unavailable");
+    expect(container.textContent).not.toContain("Engine health");
+    expect(container.querySelector(".oc-status-error")).toBeNull();
+  });
+
+  it("does not render a contradictory engine-health danger badge for the unconfigured hero", () => {
+    const container = renderOverview({
+      kind: "ready",
+      payload: {
+        ...fixturePayload(),
+        eligible: false,
+        dreaming: undefined,
+        embedding: { ok: false, error: "memory plugin unavailable" },
+      },
+    });
+
+    expect(container.textContent).toContain("Memory is not configured");
+    expect(container.textContent).not.toContain("memory plugin unavailable");
+    expect(container.textContent).not.toContain("Engine health");
+    expect(container.querySelector(".oc-status-error")).toBeNull();
   });
 
   it("opens the Memories tab from the overview shortcut", () => {

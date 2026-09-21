@@ -552,6 +552,8 @@ describe("MemorySettingsPage tab routing", () => {
     const probe = deferred<DoctorMemoryStatusPayload>();
     const initial: DoctorMemoryStatusPayload = {
       agentId: "main",
+      eligible: true,
+      capabilityRegistered: true,
       provider: "local",
       embedding: { ok: false, checked: false },
     };
@@ -591,6 +593,8 @@ describe("MemorySettingsPage tab routing", () => {
 
       probe.resolve({
         agentId: "main",
+        eligible: true,
+        capabilityRegistered: true,
         provider: "local",
         embedding: { ok: false, checked: true, error: "embedding probe failed" },
       });
@@ -752,7 +756,13 @@ describe("MemorySettingsPage tab routing", () => {
 
   it("loads Overview status once per activation, Settings agent change, and reconnect", async () => {
     const memoryStatus = vi.fn((agentId: string) =>
-      Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
+      Promise.resolve({
+        agentId,
+        eligible: true,
+        capabilityRegistered: true,
+        provider: "none",
+        embedding: { ok: false, checked: false },
+      }),
     );
     const { element, request, setPhase, settingsAgentSelection } = createPage({
       configObject: {},
@@ -790,7 +800,13 @@ describe("MemorySettingsPage tab routing", () => {
 
   it("reloads status when one pinned engine replaces another", async () => {
     const memoryStatus = vi.fn((agentId: string) =>
-      Promise.resolve({ agentId, provider: "none", embedding: { ok: false, checked: false } }),
+      Promise.resolve({
+        agentId,
+        eligible: true,
+        capabilityRegistered: true,
+        provider: "none",
+        embedding: { ok: false, checked: false },
+      }),
     );
     const { element } = createPage({
       configObject: { plugins: { slots: { memory: "engine-a" } } },
@@ -903,12 +919,16 @@ describe("MemorySettingsPage tab routing", () => {
       await waitForFast(() => expect(memoryStatus).toHaveBeenCalledTimes(2));
       second.resolve({
         agentId: "main",
+        eligible: true,
+        capabilityRegistered: true,
         provider: "local",
         embedding: { ok: false, checked: true, error: "current embedding status" },
       });
       await waitForFast(() => expect(element.textContent).toContain("current embedding status"));
       first.resolve({
         agentId: "main",
+        eligible: true,
+        capabilityRegistered: true,
         provider: "local",
         embedding: { ok: false, checked: true, error: "obsolete embedding status" },
       });
@@ -922,11 +942,15 @@ describe("MemorySettingsPage tab routing", () => {
       first.resolve({
         agentId: "main",
         provider: "none",
+        eligible: true,
+        capabilityRegistered: true,
         embedding: { ok: false, checked: false },
       });
       second.resolve({
         agentId: "main",
         provider: "none",
+        eligible: true,
+        capabilityRegistered: true,
         embedding: { ok: false, checked: false },
       });
       element.remove();
