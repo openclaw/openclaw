@@ -48,7 +48,9 @@ function maximumKnown(values: readonly DynamicsMetric[]): number | null {
   return known.length === 0 ? null : Math.max(...known);
 }
 
-export function assessLocalPhase(observation: LocalDynamicsObservation): LocalPhaseAssessment {
+export function assessLocalPhase(
+  observation: LocalDynamicsObservation,
+): LocalPhaseAssessment {
   validateDynamicsObservation(observation);
   const {
     candidateEntropy,
@@ -85,7 +87,11 @@ export function assessLocalPhase(observation: LocalDynamicsObservation): LocalPh
     phase = "glass";
     confidence = (1 - mobility + (1 - progressRate)) / 2;
     reason = "low mobility and low progress without sufficient evidence";
-  } else if (candidateEntropy !== null && candidateEntropy >= 0.45 && candidateEntropy <= 0.65) {
+  } else if (
+    candidateEntropy !== null &&
+    candidateEntropy >= 0.45 &&
+    candidateEntropy <= 0.65
+  ) {
     phase = "critical";
     confidence = 1 - Math.abs(candidateEntropy - 0.55);
     reason = "candidate entropy is in the experimental transition band";
@@ -111,7 +117,12 @@ export function assessLocalPhase(observation: LocalDynamicsObservation): LocalPh
     phase = "gas";
     confidence = (candidateEntropy + (1 - coherence)) / 2;
     reason = "high candidate entropy with low coherence";
-  } else if (mobility !== null && coherence !== null && mobility >= 0.35 && coherence >= 0.45) {
+  } else if (
+    mobility !== null &&
+    coherence !== null &&
+    mobility >= 0.35 &&
+    coherence >= 0.45
+  ) {
     phase = "liquid";
     confidence = (mobility + coherence) / 2;
     reason = "productive mobility with moderate coherence";
@@ -121,9 +132,13 @@ export function assessLocalPhase(observation: LocalDynamicsObservation): LocalPh
   return { replicaId: observation.replicaId, phase, confidence, reason };
 }
 
-export function phaseMixture(assessments: readonly LocalPhaseAssessment[]): PhaseMixture {
+export function phaseMixture(
+  assessments: readonly LocalPhaseAssessment[],
+): PhaseMixture {
   // SAFETY: every COGNITIVE_PHASES key is initialized to a numeric count.
-  const counts = Object.fromEntries(COGNITIVE_PHASES.map((phase) => [phase, 0])) as PhaseMixture;
+  const counts = Object.fromEntries(
+    COGNITIVE_PHASES.map((phase) => [phase, 0]),
+  ) as PhaseMixture;
   if (assessments.length === 0) {
     counts.unknown = 1;
     return counts;
