@@ -2134,10 +2134,6 @@ openclaw-settings-save-indicator:empty {
   color: var(--text);
 }
 
-.sidebar-session-pagination__button:disabled {
-  opacity: 0.55;
-}
-
 .sidebar-session-empty-hint {
   display: block;
   padding: 4px 10px 10px var(--sidebar-text-offset);
