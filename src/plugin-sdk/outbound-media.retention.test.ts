@@ -11,6 +11,10 @@ import {
 import * as webMedia from "./web-media.js";
 
 const MEDIA_ID = "abc123abc123abc123abc123";
+// Fake Date does not reach SQLite workers. Keep backing expiry independent of
+// the short logical URL/grace window so cleanup, not wall time, removes rows.
+const PHYSICAL_TTL_MS = 120_000;
+const LOGICAL_TTL_MS = 100;
 
 function prepare(store: ReturnType<typeof createHostedOutboundMediaStore>) {
   return store.prepareUrl({
@@ -50,9 +54,9 @@ describe("hosted outbound media post-expiry retention", () => {
     const store = createHostedOutboundMediaStore({
       metadataStore,
       chunkStore,
-      ttlMs: 100,
+      ttlMs: PHYSICAL_TTL_MS,
       postExpiryRetentionMs: 100,
-      resolveExpiresAtMs: (ttlMs) => Date.now() + ttlMs,
+      resolveExpiresAtMs: () => Date.now() + LOGICAL_TTL_MS,
       createId: () => MEDIA_ID,
       createToken: () => "token123",
       rawChunkBytes: 4,
@@ -91,9 +95,9 @@ describe("hosted outbound media post-expiry retention", () => {
         maxEntries: 10,
         overflowPolicy: "reject-new",
       }),
-      ttlMs: 100,
+      ttlMs: PHYSICAL_TTL_MS,
       postExpiryRetentionMs: 100,
-      resolveExpiresAtMs: (ttlMs) => Date.now() + ttlMs,
+      resolveExpiresAtMs: () => Date.now() + LOGICAL_TTL_MS,
       createId: () => ids[idIndex++] ?? "444444444444444444444444",
       createToken: () => "token123",
       rawChunkBytes: 4,
