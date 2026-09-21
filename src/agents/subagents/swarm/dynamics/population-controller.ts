@@ -68,7 +68,7 @@ export function buildPopulationSnapshot(params: {
   return {
     campaignId: params.campaignId,
     groupId: params.groupId,
-    replicas: params.replicas.map((replica) => ({ ...replica, profile: { ...replica.profile } })),
+    replicas: params.replicas.map((replica) => ({ ...replica })),
     observations,
     phaseMixture: phaseMixture(assessments),
     meanCorrelation: correlation,
@@ -114,7 +114,7 @@ export function assessPopulation(input: PopulationSnapshot): PopulationDecision 
   if (mix.glass >= 0.15) {
     actions.push({
       kind: "perturb",
-      profile: "glass-breaker",
+      purpose: "decorrelate",
       count: 1,
       reason: "bounded fresh-context perturbation for stalled low-mobility search",
     });
@@ -135,7 +135,7 @@ export function assessPopulation(input: PopulationSnapshot): PopulationDecision 
   if (mix.gas >= 0.4 && mix.critical === 0 && systemPressure < 0.6) {
     actions.push({
       kind: "spawn",
-      profile: "builder",
+      purpose: "coordinate",
       count: 1,
       reason: "broad exploration has enough diversity to justify one coordinating builder",
     });
