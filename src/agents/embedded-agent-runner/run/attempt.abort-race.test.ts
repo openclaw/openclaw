@@ -43,10 +43,12 @@ describe("runEmbeddedAttempt abort races", () => {
     Date.now = () => originalDateNow() + wallClockOffsetMs;
     const publishedDeadlines: Array<{ kind: string; deadlineAtMs?: number }> = [];
     const broker = new EmbeddedPluginApprovalBroker();
+    const approvalRequested = createDeferred<void>();
     const approvalEvents: string[] = [];
     const unsubscribe = broker.subscribe((event) => {
       approvalEvents.push(event.event);
       if (event.event === "plugin.approval.requested") {
+        approvalRequested.resolve();
         wallClockOffsetMs = 60_000;
         emitAgentEvent({
           runId: "run-context-engine-forwarding",
@@ -85,14 +87,10 @@ describe("runEmbeddedAttempt abort races", () => {
               config: { skills: { workshop: { approvalPolicy: "pending" } } },
             },
           });
-          while (broker.listPending().length === 0) {
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, 1);
-            });
-          }
+          await Promise.race([approvalRequested.promise, approvalPromise.then(() => undefined)]);
           const approval = broker.listPending()[0];
           if (!approval) {
-            throw new Error("approval broker did not publish a pending request");
+            throw new Error("approval broker did not publish a pending request before hook settled");
           }
           if (!broker.resolve(approval.id, "allow-once")) {
             throw new Error("approval broker did not resolve the pending request");
