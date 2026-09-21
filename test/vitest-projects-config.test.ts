@@ -447,9 +447,9 @@ describe("projects vitest config", () => {
     const configFiles = new Map<string, string[]>();
     const matches: string[] = [];
     const processLimits = [
-      ["test/vitest/vitest.extension-codex.config.ts", "extensions/codex/", 24],
-      ["test/vitest/vitest.extension-matrix.config.ts", "extensions/matrix/", 40],
-      ["test/vitest/vitest.extension-telegram.config.ts", "extensions/telegram/", 1],
+      ["test/vitest/vitest.extension-codex.config.ts", "extensions/codex/", 24, 12],
+      ["test/vitest/vitest.extension-matrix.config.ts", "extensions/matrix/", 40, 40],
+      ["test/vitest/vitest.extension-telegram.config.ts", "extensions/telegram/", 10, 1],
     ] as const;
     for (const plan of buildVitestRunPlans(["extensions"])) {
       let files = configFiles.get(plan.config);
@@ -462,7 +462,7 @@ describe("projects vitest config", () => {
           !plan.includePatterns ||
           plan.includePatterns.some((pattern) => path.matchesGlob(file, pattern)),
       );
-      for (const [boundedConfig, root, limit] of processLimits) {
+      for (const [boundedConfig, root, limit, workerLimit] of processLimits) {
         const inheritedWorkerLimit =
           plan.config === "test/vitest/vitest.extension-database-workers.config.ts" &&
           selected.some((file) => file.startsWith(root));
@@ -471,7 +471,9 @@ describe("projects vitest config", () => {
             selected.every((file) => file.startsWith(root)),
             plan.config,
           ).toBe(true);
-          expect(selected.length, plan.config).toBeLessThanOrEqual(limit);
+          expect(selected.length, plan.config).toBeLessThanOrEqual(
+            inheritedWorkerLimit ? workerLimit : limit,
+          );
         }
       }
       matches.push(...selected);

@@ -16,6 +16,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   adoptPluginRegistryRecords,
@@ -59,8 +60,15 @@ async function startFixture(options: { stop?: () => Promise<void>; bound?: boole
   const subagent = {} as PluginRuntime["subagent"];
   if (options.bound !== false) {
     bindGatewayContextResolver(subagent, resolveContext);
-    bindPluginRegistryRuntime(registry, { subagent } as PluginRuntime);
   }
+  const loadPluginModule = vi.fn(() => {
+    throw new Error("Service metadata must not load the broad runtime");
+  });
+  const runtime = createLazyPluginRuntime({
+    loadPluginModule,
+    ...(options.bound !== false ? { runtimeOptions: { subagent } } : {}),
+  });
+  bindPluginRegistryRuntime(registry, runtime);
   markPluginRegistryActive(registry);
   let serviceContext: OpenClawPluginServiceContext | undefined;
   registry.services.push({
@@ -99,7 +107,16 @@ async function startFixture(options: { stop?: () => Promise<void>; bound?: boole
         },
       },
     ]);
-  return { registry, record, context, resolveContext, serviceContext, handle, nodeHandler };
+  return {
+    registry,
+    record,
+    context,
+    resolveContext,
+    serviceContext,
+    handle,
+    nodeHandler,
+    loadPluginModule,
+  };
 }
 
 const request = {
@@ -174,7 +191,10 @@ describe("service-owned node invocation", () => {
   );
 
   it("omits node access outside a Gateway host", async () => {
-    expect((await startFixture({ bound: false })).serviceContext.invokeNode).toBeUndefined();
+    const fixture = await startFixture({ bound: false });
+    expect(fixture.serviceContext.invokeNode).toBeUndefined();
+    expect(fixture.serviceContext.openNodeDuplex).toBeUndefined();
+    expect(fixture.loadPluginModule).not.toHaveBeenCalled();
   });
 
   it("rejects core and other-plugin commands", async () => {

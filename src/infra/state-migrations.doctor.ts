@@ -124,6 +124,7 @@ import {
 import {
   captureLegacyStateSnapshotIdentity,
   closeMigrationPlanTail,
+  createBlockedLegacyStateMigrationStepReceipts,
   migrationStepPlan,
   createLegacyStateMigrationCallerEnv,
   createLegacyStateMigrationPlanEnv,
@@ -200,6 +201,7 @@ import {
 } from "./state-migrations.subagent-registry.js";
 import {
   detectLegacyTuiLastSessions,
+  inspectLegacyTuiLastSessionRefusal,
   migrateLegacyTuiLastSessions,
 } from "./state-migrations.tui-last-session.js";
 import type {
@@ -1069,6 +1071,7 @@ function buildPlannedPluginStateMigrationDescriptor(params: {
 
 function buildUnresolvedBlockedMigrationSteps(params: {
   mode: LegacyStateMigrationMode;
+  stateDir: string;
   env: NodeJS.ProcessEnv;
   skipAgentScopedMigrations: boolean;
   pluginStateMigrationInventory?: PluginDoctorStateMigrationInventory;
@@ -1105,6 +1108,17 @@ function buildUnresolvedBlockedMigrationSteps(params: {
         target: pluginDescriptor?.target ?? [],
         requiredness: pluginDescriptor?.requiredness ?? "conditional",
         reversibility: "checkpoint-required",
+        ...(id === "tui-last-session"
+          ? {
+              inspectRefusal: () =>
+                inspectLegacyTuiLastSessionRefusal(
+                  detectLegacyTuiLastSessions({
+                    stateDir: params.stateDir,
+                    doctorOnlyStateMigrations: true,
+                  }),
+                ),
+            }
+          : {}),
         run: () => ({ changes: [], warnings: [] }),
       },
     ];
@@ -1763,7 +1777,10 @@ function buildLegacyStateMigrationSteps(
           const { migrateDoctorPairingStores } = await import("./state-migrations.pairing.js");
           return migrateDoctorPairingStores({ stateDir, env, cfg: params.config });
         }),
-        ownerStep("tui-last-session", detected.tuiLastSessions, migrateLegacyTuiLastSessions),
+        {
+          ...ownerStep("tui-last-session", detected.tuiLastSessions, migrateLegacyTuiLastSessions),
+          inspectRefusal: () => inspectLegacyTuiLastSessionRefusal(detected.tuiLastSessions),
+        },
         ...(detected.commitments
           ? [ownerStep("commitments", detected.commitments, migrateLegacyCommitments)]
           : []),
@@ -2163,6 +2180,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       detectionStep,
       ...buildUnresolvedBlockedMigrationSteps({
         mode: params.mode,
+        stateDir: snapshot.stateDir,
         env,
         skipAgentScopedMigrations: hasCustomAgentDirOverride(env),
         pluginStateMigrationInventory,
@@ -2224,6 +2242,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       }),
       ...buildUnresolvedBlockedMigrationSteps({
         mode: params.mode,
+        stateDir: snapshot.stateDir,
         env,
         skipAgentScopedMigrations: hasCustomAgentDirOverride(env),
         pluginStateMigrationInventory,
@@ -2553,29 +2572,6 @@ function refusedStepReceipt(
   };
 }
 
-function blockedStepReceipts(params: {
-  steps: readonly LegacyStateMigrationStep[];
-  blocker: LegacyStateMigrationStepReceipt;
-  onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
-}): LegacyStateMigrationStepReceipt[] {
-  const originatingRefusal =
-    params.blocker.originatingRefusal ??
-    (params.blocker.refusal && { stepId: params.blocker.id, ...params.blocker.refusal });
-  return params.steps.map((step) => {
-    const message = `Migration step "${step.id}" was not run because prior step "${params.blocker.id}" refused execution.`;
-    const receipt: LegacyStateMigrationStepReceipt = {
-      ...migrationStepPlan(step),
-      outcome: "refused",
-      changes: [],
-      warnings: [message],
-      refusal: { code: "blocked-by-prior-refusal", message },
-      ...(originatingRefusal ? { originatingRefusal: { ...originatingRefusal } } : {}),
-    };
-    params.onStepReceipt?.(receipt);
-    return receipt;
-  });
-}
-
 async function runLegacyStateMigrationSteps(
   steps: readonly LegacyStateMigrationStep[],
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void,
@@ -2671,7 +2667,7 @@ async function runLegacyStateMigrationSteps(
       (step.phase === "shared" ? sharedSources : finalSources).push(result);
       haltedBy = receipt;
       receipts.push(
-        ...blockedStepReceipts({
+        ...createBlockedLegacyStateMigrationStepReceipts({
           steps: steps.slice(index + 1),
           blocker: receipt,
           onStepReceipt,
@@ -2701,7 +2697,7 @@ async function runLegacyStateMigrationSteps(
       }
       haltedBy = receipt;
       receipts.push(
-        ...blockedStepReceipts({
+        ...createBlockedLegacyStateMigrationStepReceipts({
           steps: steps.slice(index + 1),
           blocker: receipt,
           onStepReceipt,
@@ -2809,7 +2805,7 @@ export async function runLegacyStateMigrations(params: {
       mode: "doctor",
       stepReceipts: [
         ...preparation.receipts,
-        ...blockedStepReceipts({
+        ...createBlockedLegacyStateMigrationStepReceipts({
           steps: remainingSteps,
           blocker: preparation.haltedBy,
           onStepReceipt: params.onStepReceipt,
@@ -3132,7 +3128,7 @@ async function executeLegacyStateMigrations(
   }): Promise<LegacyStateMigrationStepReceipt[]> => {
     const receipts = [
       ...paramsForBlockedPlan.receipts,
-      ...blockedStepReceipts({
+      ...createBlockedLegacyStateMigrationStepReceipts({
         steps: paramsForBlockedPlan.pendingPreludeSteps,
         blocker: paramsForBlockedPlan.blocker,
         onStepReceipt: params.onStepReceipt,
@@ -3147,13 +3143,14 @@ async function executeLegacyStateMigrations(
       }),
       ...buildUnresolvedBlockedMigrationSteps({
         mode,
+        stateDir,
         env,
         skipAgentScopedMigrations: hasCustomAgentDirOverride(env),
         pluginStateMigrationInventory,
       }),
     ];
     receipts.push(
-      ...blockedStepReceipts({
+      ...createBlockedLegacyStateMigrationStepReceipts({
         steps: blockedSteps,
         blocker: paramsForBlockedPlan.blocker,
         onStepReceipt: params.onStepReceipt,
@@ -3534,9 +3531,10 @@ async function executeLegacyStateMigrations(
   preludeReceipts.push(...detectionExecution.receipts);
   if (detectionExecution.haltedBy || !detected) {
     preludeReceipts.push(
-      ...blockedStepReceipts({
+      ...createBlockedLegacyStateMigrationStepReceipts({
         steps: buildUnresolvedBlockedMigrationSteps({
           mode,
+          stateDir,
           env,
           skipAgentScopedMigrations: hasCustomAgentDirOverride(env),
           pluginStateMigrationInventory,
@@ -3607,7 +3605,7 @@ async function executeLegacyStateMigrations(
         ...stateSchemaMigration.receipts,
         ...preludeReceipts,
         ...eagerMigrations.receipts,
-        ...blockedStepReceipts({
+        ...createBlockedLegacyStateMigrationStepReceipts({
           steps: remainingMigrationSteps,
           blocker: eagerMigrations.haltedBy,
           onStepReceipt: params.onStepReceipt,

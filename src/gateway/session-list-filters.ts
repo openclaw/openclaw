@@ -344,10 +344,15 @@ export function* filterSessionEntries(
         entry.participants?.some((participant) => participant.identity.type === "legacy") === true;
       for (const person of associated) {
         const existing = people.get(person.identity.id);
-        people.set(person.identity.id, {
-          ...person,
-          sessionCount: (existing?.sessionCount ?? 0) + 1,
-        });
+        if (existing) {
+          existing.identity = person.identity;
+          existing.label = person.label;
+          existing.avatarUrl = person.avatarUrl;
+          existing.sessionCount += 1;
+        } else {
+          // Counts belong to this request, never the cached association.
+          people.set(person.identity.id, { ...person, sessionCount: 1 });
+        }
       }
       if (opts.involvingProfileId) {
         if (!associated.some((person) => person.identity.id === selectedProfileId)) {

@@ -48,6 +48,8 @@ A theme without a mascot hides the resident lobster and visiting lobster strange
 
 Themes can add occasional penguin or fedora visitors to that ledge traffic. These visitors follow the same visits toggle. A theme can also add occasional decorative hats to agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog; those hats are separate from composer visits.
 
+Plugin themes can bring their own [SVG hats and visitors](/plugins/manifest/surfaces#themes), with visitors following the same visits toggle.
+
 Reduced-motion users get calm, stationary lobsters automatically.
 
 Next to it sits **Lobster sounds**, which is off by default and stays off until you decide otherwise. Turn it on and the lobster becomes very quietly audible when touched. It is a small sound. It is a good sound.

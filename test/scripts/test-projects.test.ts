@@ -49,7 +49,7 @@ import {
 const normalizeRepoPath = toRepoPath;
 const CODEX_TEST_PROCESS_FILE_LIMIT = 24;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
-const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 1;
+const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 10;
 
 describe("Windows CI partitions", () => {
   it("keeps explicit coverage disjoint without repeating small project setup", () => {
@@ -3738,6 +3738,12 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(selected.toSorted()).toEqual(listExtensionTestFilesForRoots([root]).toSorted());
     expect(new Set(selected).size).toBe(selected.length);
     for (const plan of plans) {
+      if (
+        name === "telegram" &&
+        plan.config === "test/vitest/vitest.extension-database-workers.config.ts"
+      ) {
+        expect(plan.includePatterns).toHaveLength(1);
+      }
       for (const file of plan.includePatterns ?? []) {
         expect(plan.config).toBe(
           databaseWorkerExtensionTestFiles.includes(file)

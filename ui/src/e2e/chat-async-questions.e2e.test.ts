@@ -203,7 +203,9 @@ suite.define(() => {
           message,
         });
       }
-      await expectBrowser(page.getByText("Other work finished.", { exact: true })).toBeVisible();
+      await expectBrowser(
+        page.locator(".chat-thread-inner").getByText("Other work finished.", { exact: true }),
+      ).toBeVisible();
       await expectBrowser(draft).toHaveValue("New contributors and maintainers");
       // Observe the owning IndexedDB transaction, not a timeout, before simulating a reload.
       await expect

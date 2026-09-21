@@ -52,9 +52,18 @@ type PluginManifestRecordStatic = Omit<
   | "uiHints"
 >;
 
+export type PluginThemeArtwork = {
+  hats?: Record<string, { svg: string }>;
+  critters?: Record<string, { svg: string; title?: string; crossMs?: number }>;
+};
+
 export type PluginManifestRecord = PluginManifestRecordStatic & {
-  /** Validated palette bytes captured by the immutable metadata generation. */
-  themeDefinitions?: Array<{ id: string; definition: ThemeDefinition }>;
+  /** Validated palettes and artwork captured by the immutable metadata generation. */
+  themeDefinitions?: Array<{
+    id: string;
+    definition: ThemeDefinition;
+    artwork?: PluginThemeArtwork;
+  }>;
   /** Process-local source selection, never persisted in the installed index. */
   sourcePreferred?: true;
   iconPath?: string;

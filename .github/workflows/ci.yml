@@ -1745,12 +1745,12 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
-          // Grouped rows list every striped test file. Current targets pack the
-          // projected runner contract; older targets retain the same projection
-          // as legacy JSON because their shard runner predates the codec.
+          // Node rows list every striped test file. Current targets pack the
+          // projected runner contract; older targets keep their flat fields or
+          // projected legacy groups because their shard runner predates the codec.
           const nodeTestGroupsCodecPath = "./scripts/lib/ci-node-test-groups-codec.mts";
           const nodeTestGroupsCodec =
-            rawNodeTestShards.some((shard) => shard.groups) &&
+            rawNodeTestShards.length > 0 &&
             existsSync(nodeTestGroupsCodecPath)
               ? await importTargetPlan(nodeTestGroupsCodecPath)
               : null;
@@ -1789,18 +1789,29 @@ jobs:
           const nodeTestShards = rawNodeTestShards
             .toSorted((a, b) => (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
             .map((shard) => {
-              const groups = shard.groups?.map(projectNodeTestGroup);
+              const groups = shard.groups?.map(projectNodeTestGroup) ?? (
+                nodeTestGroupsCodec && shard.configs?.length && !shard.targets?.length
+                  ? [{
+                      configs: shard.configs,
+                      env: shard.env,
+                      includePatterns: shard.includePatterns,
+                      shard_name: shard.shardName,
+                    }]
+                  : undefined
+              );
+              const packedGroups = groups?.length && nodeTestGroupsCodec
+                ? encodeNodeTestGroups(groups)
+                : undefined;
               return {
                 check_name: shard.checkName,
                 test_runtime_policy: testRuntimeMode,
                 requires_bun: !shard.requiresDist && Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
                 shard_name: shard.shardName,
-                groups_gzip_base64:
-                  groups && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined,
+                groups_gzip_base64: packedGroups,
                 groups: groups && !nodeTestGroupsCodec ? groups : undefined,
-                configs: shard.configs,
+                configs: packedGroups ? undefined : shard.configs,
                 env: shard.env,
-                includePatterns: shard.includePatterns,
+                includePatterns: packedGroups ? undefined : shard.includePatterns,
                 pretest_build_mode: shard.pretestBuildMode,
                 git_commits: resolveTestGitCommits(shard),
                 requires_dist: shard.requiresDist,
@@ -3939,6 +3950,16 @@ jobs:
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
 
+      - name: Restore test-type incremental state
+        id: test-type-cache
+        if: matrix.task == 'test-types' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
+
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
         if: matrix.task == 'lint'
@@ -4279,6 +4300,14 @@ jobs:
               ;;
           esac
 
+      - name: Save test-type incremental state
+        if: success() && matrix.task == 'test-types' && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && steps.test-type-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ steps.test-type-cache.outputs.cache-primary-key }}
+
   # Keep five core stripes; the runner isolates large targets into serial child processes.
   # Ordinary hybrid runs serialize the stripes across two hosted jobs.
   # GitHub, frozen and manual runs retain five jobs. All-Blacksmith keeps one lint job.
@@ -4371,7 +4400,7 @@ jobs:
           done
 
   # Pair four original core stripes; check-test-types owns the fifth and its tail.
-  # Each stripe retains fresh compiler processes and its two-child limit;
+  # Each row retains fresh compiler processes and its two-child limit;
   # all-Blacksmith mode uses one 16-vCPU test-types job for the full workload.
   check-test-types-hosted-core-shard:
     permissions:
@@ -4396,7 +4425,19 @@ jobs:
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
 
+      - name: Restore core test-type incremental state
+        id: test-type-cache
+        if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
+
       - name: Run hosted core test-types stripe
+        env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         shell: bash
         run: |
           set -euo pipefail
@@ -4406,9 +4447,24 @@ jobs:
             echo "[skip] target does not support core test-type stripes"
             exit 0
           fi
-          for stripe in "$((2 * ${{ matrix.stripe }} - 1))" "$((2 * ${{ matrix.stripe }}))"; do
-            node scripts/run-tsgo-core-test-shards.mjs --stripe "$stripe/5" --concurrency 2
-          done
+          first="$((2 * ${{ matrix.stripe }} - 1))"
+          last="$((2 * ${{ matrix.stripe }}))"
+          if [ "$FROZEN_TARGET" = "true" ]; then
+            for stripe in "$first" "$last"; do
+              node scripts/run-tsgo-core-test-shards.mjs --stripe "$stripe/5" --concurrency 2
+            done
+          else
+            # One queue fills an idle slot across the former stripe barrier.
+            node scripts/run-tsgo-core-test-shards.mjs --stripe "$first-$last/5" --concurrency 2
+          fi
+
+      - name: Save core test-type incremental state
+        if: success() && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && steps.test-type-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ steps.test-type-cache.outputs.cache-primary-key }}
 
   check-additional-shard:
     permissions:

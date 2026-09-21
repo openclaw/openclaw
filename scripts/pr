@@ -372,15 +372,24 @@ elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=abs
         # already exited for any staged or unstaged edit to these paths, so
         # the working tree matches HEAD and this list matches what was rejected.
         differing_wrapper_components=()
-        for wrapper_component in "${pr_wrapper_components[@]}"; do
-          linked_component_revision=$(pr_git -C "$script_parent_dir" rev-parse "HEAD:$wrapper_component" 2>/dev/null || true)
-          anchor_component_revision=$(pr_git -C "$script_parent_dir" rev-parse "refs/remotes/origin/main:$wrapper_component" 2>/dev/null || true)
-          if [ -z "$linked_component_revision" ] ||
-            [ -z "$anchor_component_revision" ] ||
-            [ "$linked_component_revision" != "$anchor_component_revision" ]; then
-            differing_wrapper_components+=("$wrapper_component")
-          fi
-        done
+        anchor_ref_status=0
+        if [ -z "$anchor_commit" ]; then
+          pr_git -C "$script_parent_dir" show-ref --verify --quiet refs/remotes/origin/main 2>/dev/null || anchor_ref_status=$?
+        fi
+        if [ "$anchor_ref_status" -eq 1 ]; then
+          # An absent anchor differs at every path; avoid two Git processes per component.
+          differing_wrapper_components=("${pr_wrapper_components[@]}")
+        else
+          for wrapper_component in "${pr_wrapper_components[@]}"; do
+            linked_component_revision=$(pr_git -C "$script_parent_dir" rev-parse "HEAD:$wrapper_component" 2>/dev/null || true)
+            anchor_component_revision=$(pr_git -C "$script_parent_dir" rev-parse "refs/remotes/origin/main:$wrapper_component" 2>/dev/null || true)
+            if [ -z "$linked_component_revision" ] ||
+              [ -z "$anchor_component_revision" ] ||
+              [ "$linked_component_revision" != "$anchor_component_revision" ]; then
+              differing_wrapper_components+=("$wrapper_component")
+            fi
+          done
+        fi
         if [ "$linked_matches_anchor" = "1" ]; then
           echo "scripts/pr wrapper matches origin/main, but its linked checkout has no node_modules directory." >&2
         else
@@ -518,7 +527,8 @@ require_cmds() {
 require_main_target_pr() {
   local pr="$1"
   local base base_json
-  base_json=$(read_pr_view_json "$pr" "baseRefName") || exit 1
+  pr_observe "$pr" || exit 1
+  base_json="$PR_OBSERVATION"
   base=$(pr_view_string_field "$base_json" "baseRefName" "$pr" "Retry the scripts/pr command.") || exit 1
   if [ "$base" != "main" ]; then
     echo "scripts/pr prepare and merge commands only support PRs targeting main; PR #$pr targets $base." >&2
@@ -715,7 +725,7 @@ main() {
     prepare-init)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      prepare_init "$pr"
+      prepare_init "$pr" "${PR_OBSERVATION:-}"
       ;;
     prepare-validate-commit)
       local pr="${1-}"
@@ -740,7 +750,7 @@ main() {
     prepare-run)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      prepare_run "$pr"
+      prepare_run "$pr" "${PR_OBSERVATION:-}"
       ;;
     ci-dispatch)
       local pr="${1-}"
@@ -751,7 +761,7 @@ main() {
     merge-verify)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      merge_verify "$pr"
+      merge_verify "$pr" '{"replacementHead":"","autoMergeRequested":false,"observation":null}'
       ;;
     merge-run | merge-recover)
       merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto"

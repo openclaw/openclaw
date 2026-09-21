@@ -90,7 +90,19 @@ describe("copyBundledPluginMetadata", () => {
     const pluginDir = createPlugin(repoRoot, {
       id: "acpx",
       packageName: "@openclaw/acpx",
-      manifest: { skills: ["./skills"] },
+      manifest: {
+        skills: ["./skills"],
+        themes: [
+          {
+            id: "workshop",
+            name: "Workshop",
+            description: "Workshop colors",
+            source: "themes/workshop.json",
+            hats: { beret: "assets/theme-art/beret.svg" },
+            critters: { ferris: { source: "assets/theme-art/ferris.svg" } },
+          },
+        ],
+      },
       packageOpenClaw: { extensions: ["./index.ts"] },
     });
     fs.mkdirSync(path.join(pluginDir, "skills", "acp-router"), { recursive: true });
@@ -103,6 +115,11 @@ describe("copyBundledPluginMetadata", () => {
     fs.writeFileSync(path.join(pluginDir, "assets", "icon.png"), Buffer.from("package icon"));
     const activityIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>';
     fs.writeFileSync(path.join(pluginDir, "assets", "activity.svg"), activityIcon);
+    fs.mkdirSync(path.join(pluginDir, "themes"));
+    fs.writeFileSync(path.join(pluginDir, "themes/workshop.json"), '{"name":"Workshop"}');
+    fs.mkdirSync(path.join(pluginDir, "assets/theme-art"));
+    fs.writeFileSync(path.join(pluginDir, "assets/theme-art/beret.svg"), activityIcon);
+    fs.writeFileSync(path.join(pluginDir, "assets/theme-art/ferris.svg"), activityIcon);
     fs.mkdirSync(path.join(pluginDir, "assets", "activity"));
     fs.writeFileSync(path.join(pluginDir, "assets", "activity", "acp_status.svg"), activityIcon);
     fs.writeFileSync(path.join(pluginDir, "assets", "activity", "notes.txt"), "not artwork");
@@ -128,6 +145,18 @@ describe("copyBundledPluginMetadata", () => {
       fs.readFileSync(path.join(repoRoot, "dist", "extensions", "acpx", "assets", "icon.png")),
     ).toEqual(Buffer.from("package icon"));
     expect(fs.readFileSync(path.join(distAssetsDir, "activity.svg"), "utf8")).toBe(activityIcon);
+    expect(fs.readFileSync(path.join(distAssetsDir, "theme-art/beret.svg"), "utf8")).toBe(
+      activityIcon,
+    );
+    expect(fs.readFileSync(path.join(distAssetsDir, "theme-art/ferris.svg"), "utf8")).toBe(
+      activityIcon,
+    );
+    expect(
+      fs.readFileSync(
+        path.join(bundledPluginDir(repoRoot, "acpx"), "themes/workshop.json"),
+        "utf8",
+      ),
+    ).toBe('{"name":"Workshop"}');
     expect(fs.readdirSync(path.join(distAssetsDir, "activity"))).toEqual(["acp_status.svg"]);
     expect(fs.readFileSync(path.join(distAssetsDir, "activity", "acp_status.svg"), "utf8")).toBe(
       activityIcon,
@@ -162,6 +191,38 @@ describe("copyBundledPluginMetadata", () => {
     for (const staleIconPath of staleIconPaths) {
       expect(fs.existsSync(staleIconPath)).toBe(false);
     }
+  });
+
+  it.skipIf(process.platform === "win32")("does not copy escaped theme artwork", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-theme-boundary-");
+    const pluginDir = createPlugin(repoRoot, {
+      id: "acpx",
+      packageName: "@openclaw/acpx",
+      packageOpenClaw: { extensions: ["./index.ts"] },
+      manifest: {
+        themes: [
+          {
+            id: "workshop",
+            name: "Workshop",
+            description: "Workshop colors",
+            source: "theme.json",
+            hats: { beret: "art/beret.svg" },
+          },
+        ],
+      },
+    });
+    const outside = path.join(repoRoot, "outside.svg");
+    fs.writeFileSync(outside, "outside bytes");
+    fs.mkdirSync(path.join(pluginDir, "art"));
+    fs.symlinkSync(outside, path.join(pluginDir, "art/beret.svg"));
+    const target = path.join(bundledPluginDir(repoRoot, "acpx"), "art/beret.svg");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "stale bytes");
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.readFileSync(outside, "utf8")).toBe("outside bytes");
   });
 
   it("omits oversized tool artwork directories while retaining the default activity icon", () => {

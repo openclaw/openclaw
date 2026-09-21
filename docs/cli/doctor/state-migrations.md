@@ -25,15 +25,24 @@ and deferred. Startup records an advisory and continues independent migrations;
 Doctor reports the retained source for follow-up. An advisory never hides a separate
 required-store refusal.
 
-When a refused step blocks later work, each blocked execution receipt keeps
+A step blocked solely by an earlier refusal keeps
 `refusal.code: "blocked-by-prior-refusal"` and includes `originatingRefusal` with
 the first refusal's `stepId`, reason `code`, and human-readable `message`.
 Resolve that originating failure before retrying the blocked steps. These fields
 travel with `stepReceipts`, including Doctor refusal errors; they are separate
 from the persisted import receipts in `migration_runs` and `migration_sources`.
 Older execution receipts may omit `originatingRefusal`.
+If a blocked owner can independently validate its input without writing, a
+verified input error keeps its own `step-refused` receipt and warnings. The
+earlier failure remains attached as `originatingRefusal`. Doctor applies this to
+legacy TUI last-session JSON: malformed input stays explicit even when an earlier
+maintenance heartbeat exits. Valid or absent input remains blocked by the prior
+failure. This diagnostic inspection does not authorize later migrations or writes.
+
 `doctor --fix` includes the failing check, refusal code, and reason in its halt
 message and health warnings, using the same failure facts as `openclaw update repair`.
+Its bounded summary lists observed refusals before derivative blocked steps;
+the full receipt list retains the complete chain.
 
 Doctor imports recognized legacy workspace setup files during preflight, before
 Workshop migration accesses workspace state. An existing canonical SQLite setup record wins,

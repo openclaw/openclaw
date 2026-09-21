@@ -212,6 +212,30 @@ function createWrapperGit(fixtureEnv: ReturnType<typeof isolatedWrapperEnv>) {
   };
 }
 
+function baseBranchGhStub(baseRef: string) {
+  const pull = {
+    number: 123,
+    html_url: "https://github.com/fixture/repo/pull/123",
+    base: {
+      ref: baseRef,
+      repo: {
+        id: 123,
+        node_id: "fixture-repo",
+        full_name: "fixture/repo",
+        html_url: "https://github.com/fixture/repo",
+      },
+    },
+  };
+  return `#!/bin/sh
+case "$*" in
+  "browse") printf 'https://github.com/fixture/repo\\n' ;;
+  "api --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0")
+    printf '%s\\n' '${JSON.stringify(pull)}' ;;
+  *) echo "Unexpected gh call: $*" >&2; exit 99 ;;
+esac
+`;
+}
+
 function createMismatchedWrapperTemplate({
   realModules,
   dispatchBody,
@@ -235,10 +259,7 @@ function createMismatchedWrapperTemplate({
   // Deterministic gh stub: main-only subcommands fail fast on the base-branch
   // gate instead of reaching the network, proving which wrapper actually ran.
   const ghStub = join(bin, "gh");
-  writeFileSync(
-    ghStub,
-    '#!/bin/sh\nif [ "$1" = "browse" ]; then\n  printf \'https://github.com/fixture/repo\\n\'\n  exit 0\nfi\nif [ "$1" = "api" ]; then\n  printf \'{"base":{"ref":"not-main"}}\\n\'\n  exit 0\nfi\necho "Unexpected gh call: $*" >&2\nexit 99\n',
-  );
+  writeFileSync(ghStub, baseBranchGhStub("not-main"));
   chmodSync(ghStub, 0o755);
 
   const fixtureEnv = isolatedWrapperEnv(root);
@@ -519,9 +540,12 @@ describe("scripts/pr wrappers", () => {
     const merge = readScript("scripts/pr-lib/merge.sh");
     const mergeOutcome = readScript("scripts/pr-lib/merge-outcome.sh");
 
-    expect(script).toContain('base_json=$(read_pr_view_json "$pr" "baseRefName")');
+    expect(script).toContain('pr_observe "$pr" || exit 1');
+    expect(script).toContain('base_json="$PR_OBSERVATION"');
     expect(common).toContain('pr_gh pr view "$pr" --json "$fields"');
-    expect(worktree).toContain('metadata=$(GH_REPO="$repo_url" read_pr_view_json "$pr"');
+    expect(worktree).toContain(
+      'metadata=$(read_pr_view_json "$pr" "number,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,',
+    );
     expect(review).toContain('pr_gh_plain assign-reviewer "$pr" "$reviewer"');
     expect(push).toContain('pr_gh_plain api graphql --input "$payload_file"');
     expect(push).not.toContain("pr_gh_plain api graphql --input -");
@@ -714,10 +738,7 @@ describe("scripts/pr wrappers", () => {
 
   itPosix("dispatches explicit replacement arguments through the same merge owner", () => {
     const fixture = makeMismatchedWrapperRepo();
-    writeFileSync(
-      join(fixture.bin, "gh"),
-      `#!/bin/sh\nif [ "$1" = "browse" ]; then printf 'https://github.com/fixture/repo\\n'; else printf '{"base":{"ref":"main"}}\\n'; fi\n`,
-    );
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
     writeFileSync(
       join(fixture.canonical, "scripts/pr-lib/merge.sh"),
       `merge_run() { printf '<%s>\\n' "$@"; }\n`,
@@ -752,10 +773,7 @@ describe("scripts/pr wrappers", () => {
     const fixture = makeMismatchedWrapperRepo();
     const caller = join(fixture.canonical, "nested");
     mkdirSync(caller);
-    writeFileSync(
-      join(fixture.bin, "gh"),
-      `#!/bin/sh\nif [ "$1" = "browse" ]; then printf 'https://github.com/fixture/repo\\n'; else printf '{"base":{"ref":"main"}}\\n'; fi\n`,
-    );
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
     writeFileSync(
       join(fixture.canonical, "scripts/pr-lib/merge.sh"),
       `merge_run() { printf '<%s>\\n' "$@"; }\n`,

@@ -210,8 +210,8 @@ function createOwnedDatabase() {
 }
 
 it("keeps caller cancellation independent of idle reclamation", async () => {
-  for (const mode of ["snapshot", "update", "owned"] as const) {
-    const owned = mode === "owned" ? createOwnedDatabase() : undefined;
+  for (const mode of ["snapshot", "update", "excluded"] as const) {
+    const owned = mode === "excluded" ? createOwnedDatabase() : undefined;
     const f = mode === "snapshot" ? fixture(64, 4 * 1024 * 1024) : fixture();
     const controller = new AbortController();
     const reason = new DOMException(`${mode} caller stopped`, "AbortError");
@@ -237,11 +237,8 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
         if (!owned || !owner) {
           throw new Error("Owned database fixture is unavailable");
         }
-        // Cold-open repair must not consume the backlog reserved for the owned snapshot.
-        vi.stubEnv("XDG_CACHE_HOME", owned.bootstrapCache);
         try {
-          await owner.mutate(owner.assertCurrent, async () => {
-            openOpenClawStateDatabase(owned.options);
+          await owner.runWithSourceReads(async () => {
             vi.stubEnv("XDG_CACHE_HOME", path.dirname(f.cache));
             await readSnapshot(owned.options.path, controller.signal);
           });

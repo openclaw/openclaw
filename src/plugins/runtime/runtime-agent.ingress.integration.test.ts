@@ -144,7 +144,12 @@ async function withIngressFixture(
               heartbeat: { every: "0m" },
             },
           },
-          tools: { allow: ["sessions", "write", "read"], codeMode: { enabled: false } },
+          tools: {
+            allow: ["sessions", "write", "read"],
+            codeMode: { enabled: false },
+            // The synthetic provider emits direct tool calls instead of catalog lookups.
+            toolSearch: false,
+          },
           models: {
             mode: "replace",
             providers: {

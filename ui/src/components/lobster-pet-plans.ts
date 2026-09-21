@@ -1,4 +1,4 @@
-import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
+import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import type {
@@ -158,7 +158,7 @@ export const LOBSTER_PET_ENTRANCE_MS: Record<LobsterPetEntrance, number> = {
 
 // One full ledge crossing per passer kind. The snail is the point of the
 // snail: glance away, glance back, still crossing.
-export const LOBSTER_PASSER_CROSS_MS: Record<LobsterPasserKind, number> = {
+const LOBSTER_PASSER_CROSS_MS: Partial<Record<LobsterPasserKind, number>> = {
   stranger: 11_000,
   crab: 11_000,
   snail: 90_000,
@@ -202,7 +202,22 @@ export type LobsterPasserPlan = {
 // lobster, refuses to discuss it), a snail, a rubber duck, or a jellyfish.
 // Theme visitors add their own rarity bands after the regulars. None count
 // for the Lobsterdex; one roll still admits at most one crossing per load.
-export type LobsterPasserOptions = { critters?: readonly ThemeCritterId[]; strangers?: boolean };
+export type LobsterPasserOptions = {
+  critters?: readonly string[];
+  strangers?: boolean;
+  critterArtwork?: ThemeArtwork["critters"];
+};
+
+export function resolveLobsterPasserCrossMs(
+  kind: LobsterPasserKind,
+  artwork?: ThemeArtwork["critters"],
+): number {
+  return (
+    (Object.hasOwn(LOBSTER_PASSER_CROSS_MS, kind) ? LOBSTER_PASSER_CROSS_MS[kind] : undefined) ??
+    artwork?.[kind]?.crossMs ??
+    12_000
+  );
+}
 
 export function planLobsterPasser(
   seed: number,

@@ -57,8 +57,7 @@ import {
   readOpenClawAgentDatabaseIdentity,
 } from "./openclaw-agent-db-identity.js";
 import {
-  assertAgentDatabaseMaintenanceAccess,
-  registerAgentDatabaseMaintenanceAccess,
+  hasAgentDatabaseMaintenanceAuthority,
   assertOpenClawAgentDatabaseLease,
   claimOpenClawAgentDatabaseLease,
   recordOpenClawAgentDatabaseIntegrityVerified,
@@ -428,7 +427,11 @@ function* openOpenClawAgentDatabaseSteps(
     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
     const database = { agentId, db, path: pathname, walMaintenance };
     openedDatabase = database;
-    registerAgentDatabaseMaintenanceAccess(db);
+    if (hasAgentDatabaseMaintenanceAuthority()) {
+      throw new Error(
+        "Agent database maintenance is in progress; retry after openclaw doctor --fix completes.",
+      );
+    }
     const cleanup = registerAgentDeletionDatabaseCleanup(database, databaseOptions);
     if (cleanup) {
       const release = retainAgentDatabase(db);
@@ -648,7 +651,6 @@ function findOpenClawAgentDatabaseIfOpen(
     );
   }
   assertAgentDeletionDatabaseCleanupAccess(database, options);
-  assertAgentDatabaseMaintenanceAccess(database.db);
   observeOpenClawDatabaseMaintenanceResource(database.db);
   return database;
 }

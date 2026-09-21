@@ -244,7 +244,7 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
   recoveredAgentDatabasePaths?: readonly string[];
   rehearsal?: MigrationMessages["rehearsal"];
   refusal?: { code: string; message: string };
-  /** The first refused step that prevented this step from running. */
+  /** The first refused step that prevented this step's mutation. */
   originatingRefusal?: { stepId: string; code: string; message: string };
 };
 
@@ -288,6 +288,8 @@ export type LegacyStateMigrationPlan = {
 };
 
 export type LegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outcome"> & {
+  /** Read-only input validation may explain an independently refused, blocked writer. */
+  inspectRefusal?: () => LegacyStateMigrationStepPlan["refusal"];
   runWithoutFileDetection?: boolean;
   collectNotices?: boolean;
   deferredExecution?: {

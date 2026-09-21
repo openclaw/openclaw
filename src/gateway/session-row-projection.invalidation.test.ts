@@ -229,6 +229,25 @@ it("refreshes profile display fields on selected live and archived rows without 
         }),
       ]);
       expect(result.sessions).toHaveLength(2);
+      const originalPeople = structuredClone(result.people);
+      const live = await listProjectedSessions({
+        projection,
+        opts: { includePeople: true },
+      });
+      expect(live.people).toEqual(
+        originalPeople?.map((person) => ({ ...person, sessionCount: 1 })),
+      );
+      expect(result.people).toEqual(originalPeople);
+      for (const person of live.people ?? []) {
+        person.sessionCount = 99;
+        person.label = "Changed response";
+      }
+      const repeated = await listProjectedSessions({
+        projection,
+        opts: { archived: "all", includePeople: true },
+      });
+      expect(repeated.people).toEqual(originalPeople);
+      expect(result.people).toEqual(originalPeople);
       for (const row of result.sessions) {
         expect(row.createdActor?.label).toBe("Current owner");
         expect(row.owner?.actor.label).toBe("Current owner");

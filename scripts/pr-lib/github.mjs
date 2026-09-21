@@ -331,6 +331,22 @@ function connectionNodes(readPage) {
   return nodes;
 }
 
+function validateRepoAuthority(repo, record) {
+  if (
+    !record ||
+    !Number.isSafeInteger(record.databaseId) ||
+    record.databaseId <= 0 ||
+    typeof record.id !== "string" ||
+    !record.id ||
+    typeof record.nameWithOwner !== "string" ||
+    record.nameWithOwner.toLowerCase() !== repo.name.toLowerCase() ||
+    typeof record.url !== "string" ||
+    record.url.toLowerCase() !== `https://${repo.host}/${repo.name}`.toLowerCase()
+  ) {
+    throw invalidMetadata("GitHub returned invalid repository authority.");
+  }
+}
+
 function readRepoAuthority(repo, route) {
   return restPreferred(
     () => api(repo, `repos/${repo.name}`, route, false, { revalidate: true }),
@@ -341,19 +357,7 @@ function readRepoAuthority(repo, route) {
         repositoryVariables(repo),
         route,
       ).repository;
-      if (
-        !record ||
-        !Number.isSafeInteger(record.databaseId) ||
-        record.databaseId <= 0 ||
-        typeof record.id !== "string" ||
-        !record.id ||
-        typeof record.nameWithOwner !== "string" ||
-        record.nameWithOwner.toLowerCase() !== repo.name.toLowerCase() ||
-        typeof record.url !== "string" ||
-        record.url.toLowerCase() !== `https://${repo.host}/${repo.name}`.toLowerCase()
-      ) {
-        throw invalidMetadata("GitHub returned invalid repository authority.");
-      }
+      validateRepoAuthority(repo, record);
       return {
         id: record.databaseId,
         node_id: record.id,
@@ -562,6 +566,15 @@ function readPrRest(repo, pr, fields, route, options = {}) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("GitHub did not return one PR JSON object.");
   }
+  if (
+    fields.includes("baseRepository") &&
+    (typeof record.base?.repo?.full_name !== "string" ||
+      typeof record.base.repo.html_url !== "string" ||
+      record.base.repo.full_name.toLowerCase() !== repo.name.toLowerCase() ||
+      record.base.repo.html_url.toLowerCase() !== `https://${repo.host}/${repo.name}`.toLowerCase())
+  ) {
+    throw invalidMetadata("GitHub PR base repository does not match the requested repository.");
+  }
   const result = {
     number: record.number,
     title: record.title,
@@ -570,6 +583,15 @@ function readPrRest(repo, pr, fields, route, options = {}) {
     author: user(record.user),
     baseRefName: record.base?.ref,
     baseRefOid: record.base?.sha,
+    baseRepository:
+      record.base?.repo == null
+        ? record.base?.repo
+        : {
+            id: record.base.repo.node_id,
+            databaseId: record.base.repo.id,
+            nameWithOwner: record.base.repo.full_name,
+            url: record.base.repo.html_url,
+          },
     headRefName: record.head?.ref,
     headRefOid: record.head?.sha,
     headRepository:
@@ -650,23 +672,33 @@ function readPr(repo, pr, fields, route, options = {}) {
         mergeable: "mergeable",
         mergeStateStatus: "mergeStateStatus",
       };
-      const scalarFields = fields.filter((field) => !Object.hasOwn(connections, field));
+      const needsBaseRepository = fields.includes("baseRepository");
+      const scalarFields = fields.filter(
+        (field) => field !== "baseRepository" && !Object.hasOwn(connections, field),
+      );
       const selection = Object.values(selectFields(selections, scalarFields, "PR")).join(" ");
       const freshOptions = { ...options, revalidate: true };
       const variables = { ...repositoryVariables(repo), number: Number(pr) };
       // A top-level pr view can be projected back to REST by a relay. An explicit
       // GraphQL request both selects the independent quota and carries freshness.
-      const result = scalarFields.length
-        ? graphql(
-            repo,
-            `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){${selection}}}}`,
-            variables,
-            route,
-            freshOptions,
-          ).repository?.pullRequest
-        : {};
+      const repository =
+        scalarFields.length || needsBaseRepository
+          ? graphql(
+              repo,
+              `query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){${needsBaseRepository ? "id databaseId nameWithOwner url " : ""}pullRequest(number:$number){${selection || "id"}}}}`,
+              variables,
+              route,
+              freshOptions,
+            ).repository
+          : null;
+      const result = scalarFields.length || needsBaseRepository ? repository?.pullRequest : {};
       if (!result || typeof result !== "object" || Array.isArray(result)) {
         throw invalidMetadata("GitHub did not return one PR JSON object.");
+      }
+      if (needsBaseRepository) {
+        validateRepoAuthority(repo, repository);
+        const { id, databaseId, nameWithOwner, url } = repository;
+        result.baseRepository = { id, databaseId, nameWithOwner, url };
       }
       const actor = (record) =>
         record == null ? record : user({ ...record, node_id: record.id, type: record.__typename });

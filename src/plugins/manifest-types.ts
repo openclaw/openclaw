@@ -26,6 +26,8 @@ export type PluginManifestTheme = {
   name: string;
   description: string;
   source: string;
+  hats?: Record<string, string>;
+  critters?: Record<string, { source: string; title?: string; crossMs?: number }>;
 };
 
 /** Top-level plugin manifest format. */

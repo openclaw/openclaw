@@ -418,22 +418,7 @@ function ensureAgentRunListener() {
 }
 
 function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
-  const payload = entry.payload as
-    | {
-        status?: unknown;
-        startedAt?: unknown;
-        endedAt?: unknown;
-        error?: unknown;
-        summary?: unknown;
-        stopReason?: unknown;
-        livenessState?: unknown;
-        yielded?: unknown;
-        timeoutPhase?: unknown;
-        providerStarted?: unknown;
-        result?: unknown;
-        terminalReply?: unknown;
-      }
-    | undefined;
+  const payload = asOptionalRecord(entry.payload);
   const status = typeof payload?.status === "string" ? payload.status : undefined;
   if (isNonTerminalAgentRunStatus(status)) {
     return { state: "active" };

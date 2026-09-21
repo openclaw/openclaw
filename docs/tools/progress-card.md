@@ -145,6 +145,8 @@ Keep the original session and agent together for subsequent reads and clears. Th
 
 `progressCard.refresh` also requires an `idempotencyKey` and an existing card. It accepts no prompt text. Its `{ runId, status: "accepted", revision }` response acknowledges the request and identifies the baseline revision; it does not mean the card was updated. Clients confirm a newer card through the existing change event and read path.
 
+Retries with the same idempotency key preserve the original revision baseline and compare completed work with the latest saved card.
+
 The Control UI ships with its Gateway and follows the captured session owner without version negotiation: ordinary agent-qualified keys omit redundant `agentId`, while raw targets retain their explicit owner. Gateways also advertise `progress-card-agent-scope-v1` in `hello.features.capabilities` for independently upgraded clients, such as native apps. Those clients check the capability before sending `agentId`: ordinary agent-qualified keys can omit the field, while a canonical `global` target with an explicit owner requires it. If that capability is missing, the independently upgraded client reports that a Gateway update is needed.
 
 ## Pin the card to the dashboard

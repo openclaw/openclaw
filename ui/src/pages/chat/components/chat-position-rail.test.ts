@@ -331,6 +331,9 @@ describe("conversation position rail", () => {
           marker(60).blur();
           activeMessage.mockReturnValue("message-79");
           publishVisibility(root.querySelector(".chat-bubble")!);
+          // Native Tab may arrive before the scheduled reader update commits.
+          const publishedMarker = marks.querySelector('[aria-current="true"]');
+          expect([...marks.querySelectorAll('[tabindex="0"]')]).toEqual([publishedMarker]);
           // Observer updates publish reader position and Tab entry in the same layout frame.
           await flush();
           expect(marker(79).getAttribute("aria-current")).toBe("true");

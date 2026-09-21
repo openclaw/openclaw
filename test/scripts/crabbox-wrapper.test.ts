@@ -6075,6 +6075,7 @@ cp.spawnSync = (command, args, options) => {
         expect(failure.message).toContain(
           "wrapper readiness not observed within 8 s; last observed phase loading wrapper",
         );
+        expect(failure.message).not.toContain("fixture teardown could not be verified");
         expect(failure.message).not.toContain("fixture writers did not settle");
         expect(failure.message).not.toContain("fixture ownership receipts are incomplete");
         expect(existsSync(path.join(retained, "run.spawned"))).toBe(false);

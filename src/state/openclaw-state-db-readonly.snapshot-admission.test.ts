@@ -60,7 +60,6 @@ vi.mock("./openclaw-state-db-read-connection.js", () => ({
 }));
 vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/state-database-coordinator.js")>()),
-  prepareStateDatabaseCanonicalMutation: () => undefined,
   hasStateDatabaseSourceExclusion: () => false,
 }));
 vi.mock("./openclaw-state-read-worker.js", () => ({

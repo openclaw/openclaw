@@ -170,6 +170,7 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
         for (const client of clients) {
           await rpc(client);
         }
+        const rpcCpuStarted = process.threadCpuUsage();
         for (let round = 0; round < 5; round++) {
           for (const client of clients) {
             const start = performance.now();
@@ -177,6 +178,7 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
             rpcSamples.push(performance.now() - start);
           }
         }
+        const rpcCpu = process.threadCpuUsage(rpcCpuStarted);
         const samples: number[] = [];
         const phases = new Map<SessionListPhase | "serialize" | "total", number>();
         for (let round = 0; round < 5; round++) {
@@ -250,6 +252,7 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
               medianMs: samples.toSorted((a, b) => a - b)[Math.floor(samples.length / 2)],
               rpcMeanMs: rpcSamples.reduce((sum, value) => sum + value, 0) / rpcSamples.length,
               rpcMedianMs: rpcSamples.toSorted((a, b) => a - b)[Math.floor(rpcSamples.length / 2)],
+              rpcThreadCpuMsPerCall: (rpcCpu.user + rpcCpu.system) / 1_000 / rpcSamples.length,
               phaseMs: Object.fromEntries(
                 [...phases].map(([key, ms]) => [key, ms / samples.length]),
               ),

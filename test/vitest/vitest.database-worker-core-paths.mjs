@@ -219,7 +219,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-db-retired-lease-repair.test.ts",
   "src/state/openclaw-agent-db.test.ts",
   "src/state/openclaw-agent-participants-migration.test.ts",
-  "src/state/openclaw-state-mutation-snapshot.test.ts",
   "src/system-agent/hosted-setup.runtime.test.ts",
   "src/system-agent/system-agent.lifecycle.test.ts",
   "src/agents/worktrees/run-lease.test.ts",

@@ -246,6 +246,22 @@ Focused tooling plans defer unrelated full-suite inventory discovery and retain
 both the boundary and built TUI checks. Other precise selections and broad plans
 keep their complete canonical owners.
 
+The specialized Codex, Slack, Telegram, package-contract, and release-only plugin
+configs also inherit file scheduling from the worker ceiling. Codex, Telegram,
+package contracts, and plugins keep isolated module graphs. Slack uses file-local
+transport fixtures and the existing runner's module cleanup between files, so
+forks can reuse their prepared dependencies. Slack and the plugin runtime use
+forks for the application main-thread SQLite worker broker. Ordinary
+Telegram files share a process within each existing ten-file job envelope, while
+native Telegram database-worker files retain their one-file process lifetime.
+The plugin shard stays release-only. These changes reduce process overhead and
+allow file concurrency without expanding the job inventory or worker budgets.
+Slack and Telegram multi-file estimates conservatively discount their historical
+serial rates by 1.2 after two-worker qualification. Singleton and native-worker
+costs stay unchanged; new parallel measurements replace those serial references
+without another discount. Packing saves one Node PR row on each runner profile,
+with unchanged compact and push budgets.
+
 The [September 19 probe](https://github.com/openclaw/openclaw/actions/runs/35441442486)
 ran two predefined samples per cell on eight CPUs, 30.95 GiB, and Node 24.19.0.
 All twelve samples passed. Single-plan cells ran all 293 core-2 files; two-plan

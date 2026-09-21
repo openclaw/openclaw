@@ -61,8 +61,9 @@ function mockHostedOfficialCatalog(entries: unknown[]) {
   });
 }
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("managed plugin catalog", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
@@ -478,9 +479,9 @@ describe("managed plugin catalog", () => {
   });
 
   it("keeps installed plugins uncategorized when ClawHub enrichment is unavailable", async () => {
-    const rootDir = tempDirs.make("managed-catalog-enrichment-");
+    const packageRoot = tempDirs.make("managed-plugin-installed-");
     fs.writeFileSync(
-      path.join(rootDir, "package.json"),
+      path.join(packageRoot, "package.json"),
       JSON.stringify({ name: "@openclaw/community-tool", version: "1.0.0" }),
     );
     const metadata = metadataSnapshot({
@@ -491,17 +492,18 @@ describe("managed plugin catalog", () => {
       packageVersion: "1.0.0",
       installRecord: {
         source: "clawhub",
-        installPath: rootDir,
         clawhubPackage: "community/tool",
         version: "1.0.0",
+        installPath: packageRoot,
       },
     });
-    expectDefined(metadata.index.plugins[0], "installed plugin").rootDir = rootDir;
-    Object.assign(expectDefined(metadata.plugins[0], "installed manifest"), {
-      rootDir,
-      source: path.join(rootDir, "index.ts"),
-      manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-    });
+    expectDefined(metadata.index.plugins[0], "installed plugin").rootDir = packageRoot;
+    const manifest = expectDefined(metadata.byPluginId.get("community-tool"), "plugin manifest");
+    manifest.rootDir = packageRoot;
+    manifest.source = path.join(packageRoot, "index.ts");
+    manifest.manifestPath = path.join(packageRoot, "openclaw.plugin.json");
+    fs.writeFileSync(manifest.source, "export {};\n");
+    fs.writeFileSync(manifest.manifestPath, JSON.stringify({ id: manifest.id }));
     mocks.metadata.mockReturnValue(metadata);
     mocks.pluginVersionCategories.mockRejectedValue(new Error("ClawHub offline"));
 

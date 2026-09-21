@@ -20,6 +20,7 @@ packages/gateway-protocol/src/schema/since.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts
 packages/gateway-protocol/src/schema/worker-protocol-primitives.ts
+packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
 packages/gateway-protocol/src/update-run-vocabulary.ts
@@ -881,6 +882,7 @@ src/plugins/doctor-contract-relevance.ts
 src/plugins/doctor-session-route-state-owner-types.ts
 src/plugins/enable.ts
 src/plugins/hardlink-policy.ts
+src/plugins/host-hook-cleanup-result.ts
 src/plugins/host-hook-json.ts
 src/plugins/install-channel-specs.ts
 src/plugins/install-paths.ts
@@ -927,6 +929,7 @@ src/plugins/manifest-registry-build.ts
 src/plugins/manifest-registry-installed.ts
 src/plugins/manifest-registry.ts
 src/plugins/manifest-setup-normalizers.ts
+src/plugins/manifest-theme-definitions.ts
 src/plugins/manifest-themes.ts
 src/plugins/manifest.ts
 src/plugins/min-host-version.ts

@@ -63,9 +63,7 @@ export async function runWriteConfigHealth(
   const { shortenHomePath } = await import("../utils.js");
   const configResultWritePending =
     ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true;
-  const confirmedConfigSource = configResultWritePending
-    ? ctx.configResult.confirmedConfigSource
-    : undefined;
+  const confirmedConfigSource = ctx.configResult.confirmedConfigSource;
   const shouldWriteConfig =
     configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
@@ -88,6 +86,12 @@ export async function runWriteConfigHealth(
       await import("../commands/doctor/shared/plugin-registry-migration.js");
     let committed: Awaited<ReturnType<typeof transformConfigFile>>;
     try {
+      if (!confirmedConfigSource?.hash) {
+        throw new ConfigMutationConflictError("Doctor config write has no source revision", {
+          retryable: false,
+        });
+      }
+      const { path, hash } = confirmedConfigSource;
       const authority = getUpdateDoctorConfigWriteAuthority(ctx.configPath);
       const includeSnapshot = authority
         ? await readConfigFileSnapshot({ skipPluginValidation: updateDoctorRun, observe: false })
@@ -103,12 +107,9 @@ export async function runWriteConfigHealth(
           explicitSetPaths: ctx.configResult.explicitSetPaths,
         });
       const includeWrite = includeBoundary ? includeSnapshot : undefined;
-      const writeSource =
-        confirmedConfigSource ??
-        (includeWrite ? { path: includeWrite.path, hash: includeWrite.hash } : undefined);
       const writeConfig = () =>
         transformConfigFile({
-          ...(writeSource ? { baseHash: writeSource.hash } : {}),
+          baseHash: hash,
           transform: (_current, { snapshot }, { envSnapshotForRestore }) => {
             authority?.assertCurrent();
             // Revalidate the copied source under the config lock; never import after plugin repair.
@@ -144,7 +145,7 @@ export async function runWriteConfigHealth(
           },
           afterWrite: { mode: "auto" },
           writeOptions: {
-            ...(writeSource ? { expectedConfigPath: writeSource.path } : {}),
+            expectedConfigPath: path,
             auditOrigin: "doctor",
             allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
             skipPluginValidation:
@@ -187,6 +188,10 @@ export async function runWriteConfigHealth(
       if (error instanceof ConfigWritePostCommitError) {
         // Preserve terminal publication failure before a diagnostic can replace it. No later contribution may replay this committed candidate.
         ctx.configWriteError = error;
+        if (error.publication === "partial") {
+          // The saved baseline is historical; a partial write invalidates its active revision.
+          delete ctx.configResult.confirmedConfigSource;
+        }
         throw error;
       }
       recordUpdateDoctorConfigWriteRefusal({
@@ -194,7 +199,7 @@ export async function runWriteConfigHealth(
         message: formatErrorMessage(error),
         keys: [],
       });
-      if (confirmedConfigSource && error instanceof ConfigMutationConflictError) {
+      if (error instanceof ConfigMutationConflictError) {
         const { note } = await import("../../packages/terminal-core/src/note.js");
         note(
           [
@@ -269,6 +274,10 @@ export async function runWriteConfigHealth(
       ctx.configWriteRefusal = "cron-owner-safety";
       return false;
     }
+    ctx.configResult.confirmedConfigSource = {
+      path: committed.path,
+      hash: committed.persistedHash,
+    };
     // The atomic write committed: repair panels queued by the config flow are now
     // true statements about disk state, so print them exactly once.
     const pendingChangePanels = ctx.configResult.pendingChangePanels;
@@ -294,7 +303,6 @@ export async function runWriteConfigHealth(
     delete ctx.configResult.sourceConfigForWrite;
     if (ctx.configResult.shouldWriteConfig === true) {
       ctx.configResultWriteCommitted = true;
-      delete ctx.configResult.confirmedConfigSource;
     }
     // logConfigUpdated already prints the `.bak` backup line when it exists.
     logConfigUpdated(ctx.runtime);

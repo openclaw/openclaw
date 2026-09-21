@@ -20,6 +20,7 @@ import {
   drainSessionDiskBudgetWorkers,
   measureSessionPhysicalDiskUsage,
 } from "./disk-budget-runtime.js";
+import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
 import {
   enforceSqliteSessionHistoryDiskBudget,
   inspectSqliteSessionHistoryDiskBudget,
@@ -226,7 +227,31 @@ it.each(["transaction", "iterator"] as const)(
       expect(database.walMaintenance.checkpoint()).toBe(true);
       expect(fs.statSync(`${database.path}-wal`).size).toBe(0);
       const recovered = await enforce();
-      expect(recovered?.deferredReason).toBeUndefined();
+      const lastPruning = (
+        diagnostics.at(-1) as
+          | { archivePruning?: SqliteSessionArchivePruningDiagnostics }
+          | undefined
+      )?.archivePruning;
+      expect(
+        recovered?.deferredReason,
+        JSON.stringify(
+          {
+            blockedCheckpoint: blocked.checkpoint,
+            recovered,
+            diagnosticsCount: diagnostics.length,
+            lastArchivePruning: {
+              completed: lastPruning?.completed,
+              checkpointCalls: lastPruning?.checkpointCalls,
+              checkpointIncomplete: lastPruning?.checkpointIncomplete,
+              checkpoint: lastPruning?.checkpoint,
+              walBytesBefore: lastPruning?.walBytesBefore,
+              walBytesAfter: lastPruning?.walBytesAfter,
+            },
+          },
+          // Checkpoint errors can contain paths; retain only the recorded health facts.
+          (key, value) => (key === "error" ? undefined : value),
+        ),
+      ).toBeUndefined();
       expect(recovered?.totalBytesAfter).toBeLessThanOrEqual(maintenance.highWaterBytes!);
       expect(diagnostics.at(-1)).toMatchObject({
         archivePruning: { completed: true, checkpointIncomplete: 0 },

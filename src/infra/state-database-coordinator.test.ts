@@ -5,11 +5,9 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
-import { readLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
 import { captureCoordinatorDatabase } from "./sqlite-coordinator.test-support.js";
 import {
@@ -27,41 +25,6 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("state database coordinator", () => {
-  it("observes writer settlement without treating idle Gateway ownership as custody", async () => {
-    const root = tempDirs.make("openclaw-coordinator-write-observation-");
-    const params = { databasePath: path.join(root, "state.sqlite"), runtimeDirectory: root };
-    const gateway = acquireGatewayLifecycleCoordinator(params);
-    const exclusion = acquireStateDatabaseHandleExclusion(params);
-    const entered = createDeferred();
-    const settled = createDeferred();
-    let writing: Promise<unknown> | undefined;
-    try {
-      expect(readLifecycleWriteCustody()).toEqual([]);
-      writing = exclusion.runWithCanonicalMutation(
-        () => {},
-        async () => {
-          entered.resolve();
-          await settled.promise;
-          throw new Error("write failed after settlement");
-        },
-        async () => {
-          throw new Error("unexpected snapshot");
-        },
-      );
-      const rejected = expect(writing).rejects.toThrow("write failed after settlement");
-      await entered.promise;
-      expect(readLifecycleWriteCustody()).toEqual([{ phase: "coordinator-write", count: 1 }]);
-      settled.resolve();
-      await rejected;
-      expect(readLifecycleWriteCustody()).toEqual([]);
-    } finally {
-      settled.resolve();
-      await writing?.catch(() => undefined);
-      exclusion.release();
-      gateway.release();
-    }
-  });
-
   it("retains final-reference cleanup without treating its rolled-back handle as ownership", () => {
     const root = tempDirs.make("openclaw-coordinator-reference-retry-");
     const params = { databasePath: path.join(root, "state.sqlite"), runtimeDirectory: root };

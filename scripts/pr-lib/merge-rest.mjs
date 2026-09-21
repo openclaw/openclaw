@@ -163,6 +163,7 @@ function readPullRequest(repo, authority, pr) {
       record.base.ref === "main" &&
       OID.test(record.base.sha ?? "") &&
       OID.test(record.head?.sha ?? "") &&
+      nonemptyString(record.head?.ref) &&
       ["open", "closed"].includes(record.state) &&
       typeof record.merged === "boolean" &&
       typeof record.draft === "boolean" &&
