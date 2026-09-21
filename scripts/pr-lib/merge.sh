@@ -271,25 +271,9 @@ merge_verify() {
       fi
     fi
   fi
-  local checks_json
-  local checks_response
-  local checks_err_file
-  local checks_exit_status
+  local checks_json checks_response checks_err_file checks_exit_status=0
   checks_err_file=$(mktemp)
-  if checks_response=$(merge_read checks "$pr" 2>"$checks_err_file"); then
-    checks_exit_status=0
-  else
-    checks_exit_status=$?
-  fi
-  if [ "$checks_exit_status" -eq 0 ] || [ "$checks_exit_status" -eq 8 ]; then
-    MERGE_TRANSPORT=$(printf '%s\n' "$checks_response" | jq -er '.transport') || { rm -f "$checks_err_file"; return 1; }
-    checks_json=$(printf '%s\n' "$checks_response" | jq -c '.payload') || { rm -f "$checks_err_file"; return 1; }
-    if [ "$github_pending" = true ] && [ "$MERGE_TRANSPORT" != graphql ]; then
-      echo "GitHub auto-merge requires GraphQL quota; no merge was requested." >&2
-      rm -f "$checks_err_file"
-      return 1
-    fi
-  fi
+  checks_response=$(merge_read checks "$pr" 2>"$checks_err_file") || checks_exit_status=$?
   # gh documents exit 8 for pending checks even when it emits valid JSON. Let
   # the checked evidence below reject pending checks without hiding API errors.
   if [ "$checks_exit_status" -ne 0 ] && [ "$checks_exit_status" -ne 8 ]; then
@@ -299,6 +283,12 @@ merge_verify() {
     return 1
   fi
   rm -f "$checks_err_file"
+  MERGE_TRANSPORT=$(printf '%s\n' "$checks_response" | jq -er '.transport') || return 1
+  checks_json=$(printf '%s\n' "$checks_response" | jq -c '.payload') || return 1
+  if [ "$github_pending" = true ] && [ "$MERGE_TRANSPORT" != graphql ]; then
+    echo "GitHub auto-merge requires GraphQL quota; no merge was requested." >&2
+    return 1
+  fi
   # merge_run calls this function in an OR-list, disabling Bash errexit.
   # Validate every row so malformed evidence cannot fall through as green.
   if ! printf '%s\n' "$checks_json" | jq -e '
@@ -366,11 +356,8 @@ merge_verify() {
       "${PREP_MAINLINE_BASE_SHA:-${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}}" \
       "$PREP_HEAD_SHA"
     then
-      # Relevant drift is advisory by default: GitHub enforces required checks
-      # at the prepared head and its mergeable state still blocks
-      # true conflicts. The hard fail serialized every landing behind a full
-      # CI cycle per merged sibling, which collapses under multi-session
-      # traffic. Set OPENCLAW_PR_STRICT_DRIFT=1 to restore the hard gate.
+      # GitHub enforces required checks and conflicts. Relevant drift stays
+      # advisory unless OPENCLAW_PR_STRICT_DRIFT=1.
       if [ "${OPENCLAW_PR_STRICT_DRIFT:-}" = "1" ]; then
         echo "Merge verify failed: mainline drift is relevant to this PR; run scripts/pr prepare-sync-head $pr before merge."
         exit 1
@@ -449,7 +436,7 @@ prepare_squash_merge_body() {
   body_file=$(mktemp .local/merge-body.XXXXXX) || return 1
   printf '%s\n' "$preview" | jq -c \
     --arg source "$source_trailers" --argjson authors "$authors" --arg captured "$captured" \
-    --argjson queue "$queue_enabled" --arg transport "${MERGE_TRANSPORT:-graphql}" --argjson messages "$messages" '
+    --argjson queue "$queue_enabled" --arg transport "$MERGE_TRANSPORT" --argjson messages "$messages" '
     {preview:.data.repository.pullRequest.viewerMergeBodyText,prAuthor:.data.repository.pullRequest.author,source:$source,authors:$authors,captured:$captured,queue:$queue,sourceCredit:($transport == "rest"),
      squashDefault:(if $transport == "rest" then {title:.data.repository.squashMergeCommitTitle,message:.data.repository.squashMergeCommitMessage,commits:$messages} else null end)}
   ' | node "${BASH_SOURCE[0]%/*}/merge-body.mjs" compose > "$body_file" || return 1
@@ -460,7 +447,7 @@ prepare_squash_merge_body() {
     return 0
   fi
   MERGE_BODY_FILE="$body_file"
-  MERGE_BODY_TRANSPORT="${MERGE_TRANSPORT:-graphql}"
+  MERGE_BODY_TRANSPORT="$MERGE_TRANSPORT"
   printf '%s\n' "$body_file"
 }
 
@@ -681,7 +668,7 @@ merge_run() {
     if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" --argjson admin "$MERGE_USE_CRABBOX_ADMIN_BYPASS" '
       def facts: del(.pr.mergeable,.pr.mergeStateStatus) |
         if $admin then . else del(.main) end;
-      (if (.transport // "graphql") != ($previous.transport // "graphql") then
+      (if .transport != $previous.transport then
          (facts | del(.transport,.restPolicy)) == ($previous | facts | del(.transport,.restPolicy))
        else facts == ($previous | facts) end) and
       ($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and

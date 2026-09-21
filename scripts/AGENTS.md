@@ -51,32 +51,29 @@ calls use the same deadline. PR metadata, repository authority, writer identity,
 comments, contributor authors, and author permissions prefer REST, with GraphQL
 fallback on confirmed primary core quota exhaustion. Review snapshots omit unused
 check rollups, and preparation reads only the live head fields it consumes.
-Host-qualified repository locators go directly to the API; review metadata carries
-the resolved URL through its reads instead of repeating repository discovery.
+Repository discovery uses the CLI's local default and host resolution, without a
+quota-dependent HEAD request. Host-qualified locators go directly to the API;
+review metadata reuses the resolved URL.
 Each PR-head observation and merge snapshot explicitly requests
 `Cache-Control: max-age=0`: the relay revalidates that read and may publish its
 result, while separate before/after observations must never reuse one cached fact.
-Writer identity uses the protected selected CLI with included headers on both
-transports, keeping relay callers on the native writer route. Repository selection
-uses the CLI's local default and host resolution without a quota-dependent HEAD.
-Reviewer assignment uses REST and verifies that GitHub retained the requested
-assignee. The CI watcher polls GraphQL summaries, expanding check details only for
-failure analysis or pending checks after CI succeeds. Primary GraphQL exhaustion selects a bounded
-REST fallback; secondary throttles and access failures never authorize a transport
-switch. The watcher retains complete check/status and workflow evidence. Ordinary
-immediate squash prefers REST; admission reads can switch in either direction on
-confirmed primary quota exhaustion. Unsupported REST policy contracts select
-GraphQL before dispatch. REST landing requires authoritative absence
-of classic protection, supported effective rules without a merge queue, exact-head
-publisher-bound checks, and the existing retained-outcome lifecycle. Choose the
-transport before dispatch; never retry an uncertain mutation through another API.
-REST squash preserves configured message content from the pinned published commits
-or PR body and leaves the configured title to GitHub.
-Completion comments use the successful receipt observation's transport and retain
-their one-attempt marker. Native auto-merge, queues, admin admission, and non-squash
-merges retain their GraphQL contracts; GitHub has no REST auto-merge endpoint.
-Legacy hosted workflow proof and reviewer assignment still require REST. Neither
-quota fallback nor unavailable evidence waives a required gate.
+Writer identity uses the protected CLI with included headers on both transports
+to retain the native writer route. Reviewer assignment requires REST and verifies
+the retained assignee. The CI watcher polls GraphQL summaries, expanding details
+for failures or pending checks after CI succeeds; primary quota exhaustion selects
+REST with complete check/status and workflow evidence.
+
+Ordinary immediate squash prefers REST. Admission reads switch transports only
+for confirmed primary quota exhaustion or unsupported REST policy; secondary
+throttles and access failures never authorize a switch. REST requires proven absence
+of classic protection and merge queues, supported effective rules, exact-head publisher-bound
+checks, and the retained-outcome lifecycle. It preserves configured message content
+from pinned published commits or the PR body and leaves the title to GitHub.
+Choose the transport before dispatch; never replay an uncertain mutation through
+another API. Completion comments use the receipt observation's transport and keep
+their one-attempt marker. Auto-merge, queues, admin admission, and non-squash merges
+require GraphQL; GitHub has no REST auto-merge endpoint. Legacy hosted workflow
+proof requires REST. Fallback never waives a required gate.
 API failures preserve safe quota and retry metadata from the original response.
 When that response has no usable HTTP framing, a separate GraphQL/core quota
 probe is labeled supplemental and does not establish the failed request's reset.

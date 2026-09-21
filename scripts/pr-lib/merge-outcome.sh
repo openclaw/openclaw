@@ -373,7 +373,7 @@ merge_outcome_observe() {
   MERGE_OBSERVATION=$(merge_outcome_read_remote "$1") || {
     merge_outcome_stop "PR/main metadata: observed=unavailable or invalid; expected=authoritative valid snapshot"; return 1;
   }
-  MERGE_TRANSPORT=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r '.transport // "graphql"') || return 1
+  MERGE_TRANSPORT=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r '.transport') || return 1
   merge_outcome_require_main "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)"
 }
 
@@ -391,11 +391,11 @@ merge_outcome_stable() {
   # Both APIs bind the same PR/main facts. Compare REST policy evidence whenever
   # both reads support it; GraphQL admission relies on GitHub's policy enforcement.
   if printf '%s\n' "$reread" | jq -e --argjson observed "$MERGE_OBSERVATION" '
-    (.transport // "graphql") != ($observed.transport // "graphql") and
+    .transport != $observed.transport and
     del(.transport,.restPolicy) == ($observed | del(.transport,.restPolicy))
   ' >/dev/null; then
     MERGE_OBSERVATION="$reread"
-    MERGE_TRANSPORT=$(printf '%s\n' "$reread" | jq -r '.transport // "graphql"') || return 1
+    MERGE_TRANSPORT=$(printf '%s\n' "$reread" | jq -r '.transport') || return 1
     return 0
   fi
   # Only finish an already-proven MERGED receipt; this never admits a future merge.
