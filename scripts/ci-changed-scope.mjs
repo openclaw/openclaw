@@ -167,15 +167,21 @@ function isAppleSharedBuildInput(path) {
   );
 }
 
-/** @param {Record<string, string | undefined>} scripts */
+/** @param {Readonly<Record<string, string | undefined>>} scripts */
 export function listWindowsCiTestFiles(scripts) {
-  return [1, 2].flatMap((part) => {
-    const targets = scripts[`test:windows:ci:${part}`]?.match(/[^\s"']+\.test\.ts/g);
-    if (!targets) {
-      throw new Error(`Windows CI part ${part} must declare explicit test paths`);
+  const targets = [1, 2].flatMap((part) => {
+    const script = scripts[`test:windows:ci:${part}`];
+    const match = script?.match(/^node --import \S+ scripts\/test-projects\.mts (.+)$/u);
+    const files = match?.[1]?.trim().split(/\s+/u);
+    if (!files?.length || files.some((file) => !/^[\w./-]+\.test\.tsx?$/u.test(file))) {
+      throw new Error(`Windows CI part ${part} must declare explicit test-projects file targets`);
     }
-    return targets;
+    return files;
   });
+  if (new Set(targets).size !== targets.length) {
+    throw new Error("Windows CI package scripts must not repeat a test file");
+  }
+  return targets;
 }
 
 /**

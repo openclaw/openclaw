@@ -5501,7 +5501,6 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
     }
   });
 
-
   it.each(["pull_request", "push", "workflow_dispatch"] as const)(
     "uses independent Windows test selection only for ordinary PRs (%s)",
     (eventName) => {
@@ -5523,14 +5522,17 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
               {
                 check_name: "checks-windows-node-test-selected",
                 runtime: "node",
-                task: "test-selected",
+                task: "test",
                 targets,
               },
             ]
-          : [
-              { check_name: "checks-windows-node-test-1", runtime: "node", task: "test-1" },
-              { check_name: "checks-windows-node-test-2", runtime: "node", task: "test-2" },
-            ],
+          : Array.from({ length: 5 }, (_, index) => ({
+              check_name: "checks-windows-node-test-" + (index + 1),
+              runtime: "node",
+              task: "test",
+              targets: ["test/windows-part-" + (index + 1) + ".test.ts"],
+              predicted_seconds: 400,
+            })),
       );
     },
   );
@@ -5544,13 +5546,15 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       (step: WorkflowStep) => step.name === "Verify native selected-test execution",
     );
     expect(proofStep.if).toBe(
-      "${{ github.event_name == 'pull_request' && needs.preflight.outputs.frozen_target != 'true' && matrix.task == 'test-1' }}",
+      "${{ github.event_name == 'pull_request' && needs.preflight.outputs.frozen_target != 'true' && matrix.task == 'test' && matrix.check_name == 'checks-windows-node-test-1' }}",
     );
     expect(proofStep.env).toEqual({
-      TASK: "test-selected",
-      SELECTED_TESTS_JSON: JSON.stringify(["extensions/canvas/scripts/pnpm-runner.test.ts"]),
+      TASK: "test",
+      OPENCLAW_VITEST_MAX_WORKERS: runStep.env.OPENCLAW_VITEST_MAX_WORKERS,
+      WINDOWS_TARGETS_JSON: JSON.stringify(["extensions/canvas/scripts/pnpm-runner.test.ts"]),
     });
     expect(proofStep.run).toBe(runStep.run);
+    expect(proofStep.shell).toBe(runStep.shell);
   });
 
   it("runs selected Windows test arguments unchanged and propagates failures", () => {
@@ -5566,31 +5570,36 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       `console.log(JSON.stringify({ targets: process.argv.slice(2), parallelism: process.env.OPENCLAW_TEST_PROJECTS_PARALLEL }));
 process.exitCode = Number(process.env.FIXTURE_EXIT);`,
     );
-    const targets = ["test/path with spaces.test.ts", 'test/quote";echo.test.ts'];
+    const targets = ["test/windows-first.test.ts", "test/windows-second.test.tsx"];
     for (const exitCode of [0, 7]) {
       const result = runWorkflowShellScript(step.run, {
         cwd,
         env: {
           ...process.env,
-          TASK: "test-selected",
-          SELECTED_TESTS_JSON: JSON.stringify(targets),
+          TASK: "test",
+          WINDOWS_TARGETS_JSON: JSON.stringify(targets),
           FIXTURE_EXIT: String(exitCode),
         },
       });
       expect(result.status, result.stderr).toBe(exitCode);
-      expect(JSON.parse(result.stdout)).toEqual({ targets, parallelism: "1" });
+      expect(JSON.parse(result.stdout)).toEqual({
+        targets: [...targets, "--fileParallelism"],
+        parallelism: "1",
+      });
     }
-    const empty = runWorkflowShellScript(step.run, {
-      cwd,
-      env: {
-        ...process.env,
-        TASK: "test-selected",
-        SELECTED_TESTS_JSON: "[]",
-        FIXTURE_EXIT: "0",
-      },
-    });
-    expect(empty.status).not.toBe(0);
-    expect(empty.stderr).toContain("nonempty test-file list");
+    for (const invalid of [[], ["test/path with spaces.test.ts"], ['test/quote";echo.test.ts']]) {
+      const empty = runWorkflowShellScript(step.run, {
+        cwd,
+        env: {
+          ...process.env,
+          TASK: "test",
+          WINDOWS_TARGETS_JSON: JSON.stringify(invalid),
+          FIXTURE_EXIT: "0",
+        },
+      });
+      expect(empty.status).not.toBe(0);
+      expect(empty.stderr).toContain("Windows test row requires explicit test files");
+    }
   });
 
   it("uses target-owned Windows shards on every runner backend and preserves frozen plans", () => {

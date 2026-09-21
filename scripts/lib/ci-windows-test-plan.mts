@@ -1,3 +1,4 @@
+import { listWindowsCiTestFiles } from "../ci-changed-scope.mjs";
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
 import { resolveVitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
 
@@ -154,29 +155,13 @@ const runtimeBuildSeconds = 68;
 const fallbackFileSeconds = 3;
 const targetSeconds = 420;
 
-function readWindowsTargets(scripts: Readonly<Record<string, string | undefined>>): string[] {
-  const targets = [1, 2].flatMap((part) => {
-    const script = scripts[`test:windows:ci:${part}`];
-    const match = script?.match(/^node --import \S+ scripts\/test-projects\.mts (.+)$/u);
-    const files = match?.[1]?.trim().split(/\s+/u);
-    if (!files?.length || files.some((file) => !/^[\w./-]+\.test\.tsx?$/u.test(file))) {
-      throw new Error(`Windows CI part ${part} must declare explicit test-projects file targets`);
-    }
-    return files;
-  });
-  if (new Set(targets).size !== targets.length) {
-    throw new Error("Windows CI package scripts must not repeat a test file");
-  }
-  return targets;
-}
-
 export function createWindowsTestShards(
   scripts: Readonly<Record<string, string | undefined>>,
 ): WindowsTestShard[] {
   const envelopes: { targets: string[]; seconds: number }[] = [];
   const projects = new Map<string, { targets: string[]; seconds: number }>();
   const runtime = { targets: [] as string[], seconds: runtimeBuildSeconds };
-  for (const file of readWindowsTargets(scripts).toSorted()) {
+  for (const file of listWindowsCiTestFiles(scripts).toSorted()) {
     const seconds = fileSeconds[file] ?? fallbackFileSeconds;
     if (resolveVitestPretestBuildMode([{ includePatterns: [file] }]) !== undefined) {
       // test-projects prepares one runtime before all serial project borrowers.

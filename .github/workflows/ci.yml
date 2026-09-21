@@ -1417,10 +1417,10 @@ jobs:
               return null;
             }
           })();
-          // A leaf-test-only PR needs its native tests, not two unrelated full
-          // suites. Source/support changes and uncertain consumers stay full.
+          // A leaf-test-only PR needs its native tests, not the unrelated full
+          // inventory. Source/support changes and uncertain consumers stay full.
           const changedWindowsTests =
-            eventName === "pull_request" && !frozenTarget && changedPaths &&
+            eventName === "pull_request" && !frozenTarget && windowsTestPlan && changedPaths &&
             typeof changedNodeTestPlan.resolveChangedWindowsTestTargets === "function"
               ? changedNodeTestPlan.resolveChangedWindowsTestTargets(changedPaths)
               : undefined;
@@ -4865,7 +4865,7 @@ jobs:
         env:
           TASK: ${{ matrix.task }}
           # The 16-class delivers four native CPUs; hosted fallback keeps its serial budget.
-          OPENCLAW_VITEST_MAX_WORKERS: ${{ runner.environment == 'self-hosted' && 4 || 1 }}
+          OPENCLAW_VITEST_MAX_WORKERS: &windows_test_workers ${{ runner.environment == 'self-hosted' && 4 || 1 }}
           WINDOWS_TARGETS_JSON: ${{ toJSON(matrix.targets || null) }}
         shell: bash
         run: &windows_test_command |
@@ -4914,10 +4914,12 @@ jobs:
       # Mixed source/workflow PRs retain full suites, but must also exercise the
       # selected command on Windows. Reuse the exact executor, not a substitute.
       - name: Verify native selected-test execution
-        if: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.frozen_target != 'true' && matrix.task == 'test-1' }}
+        shell: bash
+        if: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.frozen_target != 'true' && matrix.task == 'test' && matrix.check_name == 'checks-windows-node-test-1' }}
         env:
-          TASK: test-selected
-          SELECTED_TESTS_JSON: '["extensions/canvas/scripts/pnpm-runner.test.ts"]'
+          TASK: test
+          OPENCLAW_VITEST_MAX_WORKERS: *windows_test_workers
+          WINDOWS_TARGETS_JSON: '["extensions/canvas/scripts/pnpm-runner.test.ts"]'
         run: *windows_test_command
 
   macos-node:

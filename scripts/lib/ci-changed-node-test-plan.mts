@@ -81,7 +81,7 @@ export function resolveChangedWindowsTestTargets(
     changedPaths.length === 0 ||
     changedPaths.some(
       (file) =>
-        !file.endsWith(".test.ts") ||
+        !/\.test\.tsx?$/u.test(file) ||
         path.posix.normalize(file) !== file ||
         path.isAbsolute(file) ||
         file.startsWith("../") ||

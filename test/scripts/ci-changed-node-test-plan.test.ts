@@ -129,43 +129,49 @@ it.each(
   expect(resolveChangedWindowsTestTargets(paths)).toBeUndefined();
 });
 
-it.each(["leaf", "source-consumer", "tooling-consumer", "archive", "untracked", "symlink"])(
-  "preserves Windows coverage for %s test entries",
-  (mode) => {
-    const cwd = argvTempDirs.make("openclaw-windows-test-selection-");
-    const target = "test/native.test.ts";
-    mkdirSync(path.join(cwd, "test"));
-    writeFileSync(path.join(cwd, "test/source.ts"), "export const fixture = 1;\n");
-    if (mode === "symlink") {
-      symlinkSync("source.ts", path.join(cwd, target));
-    } else {
-      writeFileSync(path.join(cwd, target), "export const fixture = 1;\n");
+it.each([
+  "leaf",
+  "tsx-leaf",
+  "source-consumer",
+  "tooling-consumer",
+  "archive",
+  "untracked",
+  "symlink",
+])("preserves Windows coverage for %s test entries", (mode) => {
+  const cwd = argvTempDirs.make("openclaw-windows-test-selection-");
+  const target = mode === "tsx-leaf" ? "test/native.test.tsx" : "test/native.test.ts";
+  mkdirSync(path.join(cwd, "test"));
+  writeFileSync(path.join(cwd, "test/source.ts"), "export const fixture = 1;\n");
+  if (mode === "symlink") {
+    symlinkSync("source.ts", path.join(cwd, target));
+  } else {
+    writeFileSync(path.join(cwd, target), "export const fixture = 1;\n");
+  }
+  writeFileSync(
+    path.join(cwd, "package.json"),
+    JSON.stringify({
+      scripts: {
+        "test:windows:ci:1": `node --import ./scripts/tsx.mjs scripts/test-projects.mts ${target}`,
+        "test:windows:ci:2":
+          "node --import ./scripts/tsx.mjs scripts/test-projects.mts test/other.test.ts",
+      },
+    }),
+  );
+  if (mode.endsWith("consumer")) {
+    const directory = mode === "tooling-consumer" ? "scripts" : "src";
+    mkdirSync(path.join(cwd, directory));
+    writeFileSync(path.join(cwd, directory, "consumer.ts"), `import "../${target}";\n`);
+  }
+  if (mode !== "archive") {
+    execFileSync("git", ["init", "-q"], { cwd });
+    if (mode !== "untracked") {
+      execFileSync("git", ["add", "."], { cwd });
     }
-    writeFileSync(
-      path.join(cwd, "package.json"),
-      JSON.stringify({
-        scripts: {
-          "test:windows:ci:1": `node scripts/test-projects.mts ${target}`,
-          "test:windows:ci:2": "node scripts/test-projects.mts test/other.test.ts",
-        },
-      }),
-    );
-    if (mode.endsWith("consumer")) {
-      const directory = mode === "tooling-consumer" ? "scripts" : "src";
-      mkdirSync(path.join(cwd, directory));
-      writeFileSync(path.join(cwd, directory, "consumer.ts"), `import "../${target}";\n`);
-    }
-    if (mode !== "archive") {
-      execFileSync("git", ["init", "-q"], { cwd });
-      if (mode !== "untracked") {
-        execFileSync("git", ["add", "."], { cwd });
-      }
-    }
-    expect(resolveChangedWindowsTestTargets([target], { cwd })).toEqual(
-      mode === "leaf" ? [target] : undefined,
-    );
-  },
-);
+  }
+  expect(resolveChangedWindowsTestTargets([target], { cwd })).toEqual(
+    mode === "leaf" || mode === "tsx-leaf" ? [target] : undefined,
+  );
+});
 
 it("keeps ordinary activity unit changes with their UI unit owner", () => {
   expect(hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts"])).toBe(false);
