@@ -911,4 +911,52 @@ suite.define(() => {
       await suite.closeBrowserContext(context);
     }
   });
+
+  it("sanitizes split tool-call syntax from cumulative snapshots and reconciles once", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(".agent-chat__composer-combobox textarea").fill("split syntax proof");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: "tool_",
+        message: {
+          content: [{ text: "tool_", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: "call: hidden\nVisible",
+        message: {
+          content: [{ text: "tool_call: hidden\nVisible", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      const transcript = page.locator(".chat-thread-inner");
+      await transcript.getByText("Visible", { exact: true }).waitFor();
+      expect(await transcript.textContent()).not.toContain("tool_call");
+
+      await gateway.emitChatFinal({ runId, text: "Visible" });
+      await expect.poll(() => transcript.getByText("Visible", { exact: true }).count()).toBe(1);
+      expect(await page.locator(".chat-bubble.streaming").count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
 });

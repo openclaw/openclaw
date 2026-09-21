@@ -8,6 +8,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
+import { createState, createTextChatMessage } from "./chat-gateway.test-support.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -38,31 +39,6 @@ import {
 } from "./terminal-message-identity.ts";
 import { createHost } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
-
-function createState(overrides: Partial<ChatState> = {}): ChatState {
-  return {
-    chatAttachments: [],
-    chatHistoryPagination: { hasMore: false },
-    chatLoading: false,
-    chatMessage: "",
-    chatMessages: [],
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
-    chatStream: null,
-    chatStreamStartedAt: null,
-    chatRunStartup: null,
-    chatThinkingLevel: null,
-    chatVerboseLevel: null,
-    client: null,
-    connected: true,
-    connectionEpoch: 0,
-    hello: null,
-    lastError: null,
-    sessionKey: "main",
-    ...overrides,
-  };
-}
 
 it.each(
   [false, true].flatMap((persistedFirst) =>
@@ -391,20 +367,6 @@ function expectTextChatMessage(message: unknown, role: string, text: string): vo
   const record = requireRecord(message);
   expect(record.role).toBe(role);
   expect(record.content).toEqual([{ type: "text", text }]);
-}
-
-function createTextChatMessage(
-  role: "assistant" | "user",
-  text: string,
-  metadata?: Record<string, unknown>,
-  timestamp?: number,
-) {
-  return {
-    role,
-    content: [{ type: "text" as const, text }],
-    ...(metadata ? { __openclaw: metadata } : {}),
-    ...(timestamp === undefined ? {} : { timestamp }),
-  };
 }
 
 function projectChatMessageEvent(
