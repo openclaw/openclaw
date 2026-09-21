@@ -423,7 +423,7 @@ describe("Code Mode swarm guest", () => {
     expect(files[0]?.content).toContain("Promise.allSettled");
     expect(files[0]?.content).toContain("schema: AgentJsonSchema");
     expect(files[0]?.content).toContain("dynamics?: DynamicsOptions");
-    expect(files[0]?.content).toContain('"independent-verifier"');
+    expect(files[0]?.content).toContain('"artifact-only"');
   });
 });
 
