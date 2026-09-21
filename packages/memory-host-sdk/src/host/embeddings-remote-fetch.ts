@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { EmbeddingUsage } from "../../../../src/plugins/embedding-provider-types.js";
 import { readEmbeddingVectors } from "./embedding-vectors.js";
+import type { EmbeddingUsage } from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import { postJson } from "./post-json.js";
 
