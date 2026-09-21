@@ -235,12 +235,13 @@ file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 [Gateway logging](/gateway/logging).
 
 Interactive updates show phase transitions, the current step, and elapsed time.
-The phases match the Control UI: requested, staging, validating, optional
-repairing, activating, restarting, verifying, and finished. When output is
-piped or captured in a log, progress prints without animation. `repairing` can
-follow failed candidate validation or failed post-activation verification when
-rollback is unsafe or has failed; successful repair returns to validation or
-verification. The Control UI shows this optional phase only after it starts.
+The phases match the Control UI: requested, staging, validating, activating,
+restarting, verifying, and finished. When output is piped or captured in a log,
+progress prints without animation. Updates, verification, and rollback do not
+require inference or model authentication. Model-auth findings remain warnings.
+Automatic inference repair belongs to triage after an update has finished with
+a failed outcome and released its update ownership; it does not change that
+recorded outcome. Reports from older updaters can still contain a `repairing` phase.
 Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not

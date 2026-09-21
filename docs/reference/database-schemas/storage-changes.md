@@ -190,6 +190,17 @@ fresh canonical-profile and alias query for their disclosure scope. Profile crea
 display-name and role changes, explicit avatar uploads, identity merges, and final
 identity/permission lookups keep their existing native owners.
 
+Chat startup prepares its requester from the profile catalog retained by the
+session projection. Metadata reads the current merge head after preparation
+waits and rejects a changed client identity or retired physical database. A
+missing catalog leaves optional metadata unavailable without opening SQLite.
+Legacy email clients resolve their alias through the read-only worker; only
+a missing alias enters the shared-state writer and existing profile transaction.
+Committed creation updates the same resident catalog before profile observers,
+including retained reconciliation when result delivery fails. Other profile
+mutation and authorization paths retain their existing owners. Schema, migration,
+update, and retention behavior are unchanged.
+
 Post-login Tailscale avatar adoption reads and conditionally writes through the
 shared-state worker. Its transaction follows the current merge target and preserves
 every non-null avatar, including an explicit empty upload. Committed descriptors
@@ -984,14 +995,17 @@ their existing execution path unless their host explicitly supplies this operati
 Missing-file defaults still load plugin metadata only when those defaults need it.
 The operation changes no schema, persisted representation, or publication authority.
 
-Meeting transcript identity, descriptor, notes, summary, and utterance reads use
+Meeting transcript identity, descriptor, notes, summary, utterance, and export-ownership reads use
 the shared-state worker. Typed commands call the existing synchronous query
 kernels, preserve complete stored results and library error fields, and retain
 first-use schema creation. Compound enumeration, matching, and library reads
 use one deferred read snapshot, keeping their queries coherent with concurrent
 capture writes. Schema creation finishes before the
 read transaction, and domain errors are translated after it settles. Canonical
-close drains these reads before closing their worker connection. Capture utterance
+close drains these reads before closing their worker connection. Export-ownership
+queries return the existing ordered row facts; filesystem case, artifact identity,
+and hash checks stay with the export owner. Pending and manifest writes retain
+their existing transactions. Capture utterance
 appends also run their existing deduplication, sequence allocation, and insertion
 transaction on that worker. The capture records accepted speech before preparing
 its immutable input, preserves its order, and retains authority through native
@@ -1436,6 +1450,13 @@ shutdown joins accepted board-event discovery and reconciliation; replaced
 runtimes discard late discovery results. Registration's alias bootstrap, tab
 mutations, and the final synchronous ownership check before closing a browser
 target retain their existing owners.
+
+Selected library resources read cold pin descriptions and eligible manifests
+through the shared read-only worker. Resource preparation retains its captured
+state root and admission through both reads and file preparation, preserving
+snapshot scopes, selected revision bytes, hidden-pin omission, and the first
+resource failure. Synchronous discovery and borrowed-database readers keep their
+existing contracts. This changes no schema, migration, or persistent data.
 
 ### Preserve the data and concurrency contracts
 

@@ -25,14 +25,19 @@ describe("Codex native hook relay managed policy", () => {
   it.each([
     { name: "absent requirements", response: { requirements: null } },
     { name: "ordinary hooks", response: { requirements: { allowManagedHooksOnly: false } } },
-  ])("accepts $name and caches the authoritative process policy", async ({ response }) => {
-    const request = vi.fn(async () => response);
+  ])("rechecks managed policy after accepting $name", async ({ response }) => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(response)
+      .mockResolvedValueOnce({ requirements: { allowManagedHooksOnly: true } });
     const client = { request };
 
     await assertCodexNativeHookRelayAllowed(client as never);
-    await assertCodexNativeHookRelayAllowed(client as never);
+    await expect(assertCodexNativeHookRelayAllowed(client as never)).rejects.toThrow(
+      /managed-only hooks.*OpenClaw native hook relay/i,
+    );
 
-    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith("configRequirements/read", undefined, {
       signal: undefined,
     });

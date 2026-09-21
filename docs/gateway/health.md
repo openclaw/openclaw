@@ -115,6 +115,11 @@ core equivalents: `1` means one CPU core fully occupied over the interval, and
 parallel work can produce values above `1`. It is not a percentage of the host's
 total CPU capacity.
 
+The `health` RPC also reads the latest completed sample when returning a cached
+summary or publishing a newly collected one. Slow channel checks do not freeze
+its CPU and delay readings. If the sampler resets, health responses omit
+`eventLoop` until a new window completes instead of reviving a cached sample.
+
 The optional `cpuBreakdown` separates independent native counters:
 
 - `hostUtilization` is the busy fraction of the host CPU time reported by

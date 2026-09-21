@@ -7,7 +7,7 @@ import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
 import { resolveAssistantAttachmentAuthToken } from "../chat-pane-state.ts";
-import { createTestChatPane } from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
   buildCachedChatItems,
@@ -668,7 +668,7 @@ describe("chat transcript invalidation", () => {
     const client = {
       request: vi.fn(async () => null),
     } as unknown as Parameters<typeof createTestChatPane>[0]["client"];
-    const sessions = {} as Parameters<typeof createTestChatPane>[0]["sessions"];
+    const sessions = createSessionCapabilityFixture();
     const { pane, state } = createTestChatPane({ client, sessions });
     state.hello = {
       auth: { deviceToken: "test-auth-token" },

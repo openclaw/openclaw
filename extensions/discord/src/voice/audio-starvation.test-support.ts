@@ -26,6 +26,10 @@ export function startDiscordPacingReceiver(
       // the SDK's own 20 ms resource consumption, not a substitute test timer.
       if (packet && !packet.equals(Buffer.from([0xf8, 0xff, 0xfe]))) {
         times.push(performance.now());
+        // Queuing playback can precede asynchronous encoder construction.
+        if (times.length === 1) {
+          started();
+        }
       }
       return packet;
     };
@@ -39,9 +43,6 @@ export function startDiscordPacingReceiver(
     player: room,
     logContext: "synthetic-starvation-proof",
     post: (event) => {
-      if (event.type === "continuous-start") {
-        started();
-      }
       if (event.type === "continuous-error") {
         throw new Error(event.error.message);
       }

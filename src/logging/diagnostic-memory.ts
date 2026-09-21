@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { totalmem } from "node:os";
 // Diagnostic memory helpers capture process memory facts for support diagnostics.
 import { getHeapStatistics } from "node:v8";
@@ -427,6 +428,9 @@ export function emitDiagnosticMemorySample(options?: {
 
   const growthPressure = pickGrowthPressure({ current, thresholds });
   const pressure = pickThresholdPressure({ memory, thresholds }) ?? growthPressure;
+  if (pressure?.level === "critical") {
+    channel("openclaw.memory.critical").publish(undefined);
+  }
   if (pressure && shouldEmitPressure(pressure, now, thresholds.pressureRepeatMs)) {
     emitDiagnosticEvent({
       type: "diagnostic.memory.pressure",

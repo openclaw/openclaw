@@ -9,6 +9,7 @@ import {
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import {
   isInstallerServiceDescription,
+  serviceDefinitionPreserved,
   serviceDefinitionUnknown,
 } from "./service-audit-preservation.js";
 import type { ServiceConfigIssue, ServiceDefinitionDrift } from "./service-audit-types.js";
@@ -110,6 +111,8 @@ export async function auditLaunchdDefinition(
         sourcePath,
         message: `LaunchAgent ${key} differs from the installer value ${String(value)}.`,
       });
+    } else if (value !== undefined && key !== "Label") {
+      findings.push(serviceDefinitionPreserved(key, sourcePath));
     } else {
       findings.push({
         kind: "unknown-edit",

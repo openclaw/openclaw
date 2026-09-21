@@ -1,5 +1,9 @@
 // Doctor config preflight tests cover state migration preflight behavior before config repair.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createConfigIO } from "../config/io.factory.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
@@ -53,9 +57,54 @@ const {
   recordDeferredPluginMigrations,
 } = preflightStateMigrationMocks;
 const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("runDoctorConfigPreflight state migration", () => {
   beforeEach(resetStateMigrationPreflightMocks);
+
+  it("admits unchanged tilde paths from core-only and prepared plugin snapshot readers", async () => {
+    const root = tempDirs.make("openclaw-startup-config-paths-");
+    const configPath = path.join(root, "openclaw.json");
+    const env = {
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    };
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local" },
+        plugins: {
+          enabled: false,
+          entries: { wiki: { config: { store: { path: "~/.openclaw/wiki" } } } },
+        },
+      }),
+    );
+    const options = { env, configPath, homedir: () => root, observe: false };
+    const core = await createConfigIO({
+      ...options,
+      pluginValidation: "core-only",
+    }).readConfigFileSnapshot();
+    const { snapshot: full } = await createConfigIO(
+      options,
+    ).readConfigFileSnapshotWithPluginMetadata({
+      prepareValidation: "runtime",
+    });
+
+    await withEnvAsync(env, () =>
+      readConfigFileSnapshot.withImplementation(
+        async () => full,
+        async () => {
+          readConfigFileSnapshot.mockResolvedValueOnce(core);
+          await runDoctorConfigPreflight(startupCheckpointOptions);
+        },
+      ),
+    );
+    expect(core.sourceConfig).toEqual(full.sourceConfig);
+    expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalled();
+  });
 
   it("forwards config snapshot phase measurement", async () => {
     const measure: ConfigSnapshotReadMeasure = async (_name, run) => await run();
@@ -517,7 +566,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
 
     await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
-      "migration inputs changed during startup",
+      "migration inputs changed during startup (resolved config values changed)",
     );
 
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();

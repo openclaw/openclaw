@@ -160,10 +160,14 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   // The owning surface declares its cap in CSS. Retain the historical fallback
   // for detached/test controls whose computed max-height is not a pixel value.
-  const computedMaxHeight = getComputedStyle(el).maxHeight.trim();
+  const style = getComputedStyle(el);
+  const computedMaxHeight = style.maxHeight.trim();
   const pixelMaxHeight = /^(\d+(?:\.\d+)?)px$/u.exec(computedMaxHeight);
   const maxHeight = pixelMaxHeight ? Number(pixelMaxHeight[1]) : 150;
-  el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
+  // scrollHeight includes padding but not borders. Bordered answer fields share
+  // this owner with the borderless composer and must not scroll on a single line.
+  const borderHeight = style.boxSizing === "border-box" ? el.offsetHeight - el.clientHeight : 0;
+  el.style.height = `${Math.min(el.scrollHeight + borderHeight, maxHeight)}px`;
   updateTextareaOverflow(el);
   // Once capped, the textarea can perturb the sibling transcript without
   // resizing its viewport, so ResizeObserver has no correction to apply.

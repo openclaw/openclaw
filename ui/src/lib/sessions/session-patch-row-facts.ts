@@ -21,6 +21,31 @@ export function projectSessionPatchRowFields(
         : {}),
     });
   }
+  if (patch.thinkingLevel !== undefined) {
+    fields.push({
+      thinkingLevel:
+        result.resolved && Object.hasOwn(result.resolved, "thinkingLevel")
+          ? result.resolved.thinkingLevel
+          : entry.thinkingLevel,
+      ...(result.resolved?.thinkingLevels !== undefined
+        ? { thinkingLevels: result.resolved.thinkingLevels }
+        : {}),
+    });
+  }
+  if (patch.contextWindow !== undefined) {
+    fields.push({
+      contextWindow:
+        result.resolved && Object.hasOwn(result.resolved, "contextWindow")
+          ? result.resolved.contextWindow
+          : entry.contextWindow,
+      ...(result.resolved?.contextWindows !== undefined
+        ? { contextWindows: result.resolved.contextWindows }
+        : {}),
+    });
+  }
+  if (patch.fastMode !== undefined) {
+    fields.push({ fastMode: entry.fastMode });
+  }
   if (typeof patch.archived === "boolean") {
     fields.push(projectSessionArchiveFields(patch.archived, entry));
   }

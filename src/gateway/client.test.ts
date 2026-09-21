@@ -21,7 +21,7 @@ import {
 } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClientOptions } from "./client.js";
-import { firstMockArg, waitForFast } from "./client.test-support.js";
+import { createAuthFailureMessage, firstMockArg, waitForFast } from "./client.test-support.js";
 
 type MockLoggingConfig = {
   redactPatterns?: string[];
@@ -2497,12 +2497,7 @@ describe("GatewayClient connect auth payload", () => {
     });
 
     const { ws, connect } = await startClientAndConnect({ client });
-    emitConnectFailure(
-      ws,
-      connect.id,
-      { code: "AUTH_UNAUTHORIZED" },
-      "Authorization: Bearer sk-testsecret1234567890abcd wss://user:pass@gateway.example/ws?token=secret-token", // pragma: allowlist secret
-    );
+    emitConnectFailure(ws, connect.id, { code: "AUTH_UNAUTHORIZED" }, createAuthFailureMessage());
 
     await waitForFast(() => {
       expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));

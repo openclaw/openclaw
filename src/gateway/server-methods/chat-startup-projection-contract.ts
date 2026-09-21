@@ -3,7 +3,8 @@ import type { ChatMetadataResult, ChatMetadataSessionEntry } from "./chat-metada
 
 export type ChatStartupProjectionReadParams = {
   agentId: string;
-  requesterProfileId?: string;
+  /** Startup reads this after metadata preparation yields; the profile owner tracks merges. */
+  readRequesterProfileId?: () => string | undefined;
   sessionKey?: string;
   sessionEntry?: ChatMetadataSessionEntry;
   // Ready reads return settled catalogs only; startup also reads current model availability.

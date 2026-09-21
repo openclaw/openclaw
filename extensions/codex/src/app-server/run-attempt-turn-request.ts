@@ -262,6 +262,11 @@ export async function prepareCodexAttemptTurnRequest(
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
+      resources.nativeProcessAuthority?.bindTurn(
+        resourceState.client,
+        resourceState.thread.threadId,
+        acceptedTurnId,
+      );
       connection.assertCurrent();
       // Fitting may drop or truncate references; only acknowledge the complete block.
       if (referencesRetained) {

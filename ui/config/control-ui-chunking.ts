@@ -62,6 +62,14 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   if (
+    normalized.endsWith("/ui/src/styles/chat/grouped.css") ||
+    normalized.endsWith("/ui/src/styles/chat/message-layout.css")
+  ) {
+    // Both routes load transcript styles; keep them outside the larger shared boot stylesheet.
+    return "chat-transcript-styles";
+  }
+
+  if (
     moduleIdIncludesPackage(id, "lit") ||
     moduleIdIncludesPackage(id, "lit-html") ||
     moduleIdIncludesPackage(id, "@lit/reactive-element")

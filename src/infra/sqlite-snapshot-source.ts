@@ -159,21 +159,13 @@ function prepareWorkerSnapshot(
 
 export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
-  options: { fallbackToOnlineBackupUnderLoad?: boolean } = {},
 ): PreparedSqliteReadOnlyLocation {
   if (hasStateDatabaseSourceExclusion(pathname)) {
     return prepareSqliteReadOnlyLocationSyncInProcess(pathname);
   }
   const stagingRoot = createSqliteSnapshotStagingDirectorySync();
   try {
-    return adoptPreparedLocation(
-      runSqliteReadOnlyWorkerSync(
-        pathname,
-        stagingRoot,
-        options.fallbackToOnlineBackupUnderLoad ? "sync-fallback" : "sync",
-      ),
-      stagingRoot,
-    );
+    return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname, stagingRoot), stagingRoot);
   } catch (error) {
     if (!removeTempDirectory(stagingRoot)) {
       throw new SqliteSnapshotCleanupError(

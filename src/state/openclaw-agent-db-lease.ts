@@ -584,17 +584,17 @@ function isAgentDatabaseLeaseStale(row: {
   );
 }
 
-/** Doctor holds both lifecycle coordinators before checking writers, without schema repair. */
-export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
+/** Read-only diagnostic observation; an empty result never grants maintenance authority. */
+export function readActiveOpenClawAgentDatabaseLeasesReadOnly(
   options: OpenClawStateDatabaseOptions = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
-): void {
+): ReturnType<typeof readAgentDatabaseLeases> {
   const pathname = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env));
   try {
     fs.statSync(pathname);
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
-      return;
+      return [];
     }
     throw error;
   }
@@ -607,16 +607,11 @@ export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
   let closeSchemaReadAdmission: (() => void) | undefined;
   try {
     closeSchemaReadAdmission = openStateSchemaReadAdmission?.(db);
-    runWithSqliteBusyTimeout(db, 250, () => {
+    return runWithSqliteBusyTimeout(db, 250, () => {
       if (!tableExists(db, "agent_database_leases")) {
-        return;
+        return [];
       }
-      const owner = readAgentDatabaseLeases(db).find((row) => !isAgentDatabaseLeaseStale(row));
-      if (owner) {
-        throw new OpenClawAgentDatabaseLeaseActiveError(
-          `Agent ${owner.agent_id} database is still open in process ${owner.owner_pid}; stop that process before Doctor repair.`,
-        );
-      }
+      return readAgentDatabaseLeases(db).filter((row) => !isAgentDatabaseLeaseStale(row));
     });
   } finally {
     try {
@@ -627,6 +622,22 @@ export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
         db.close();
       }
     }
+  }
+}
+
+/** Doctor holds both lifecycle coordinators before checking writers, without schema repair. */
+export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
+  options: OpenClawStateDatabaseOptions = {},
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
+): void {
+  const [owner] = readActiveOpenClawAgentDatabaseLeasesReadOnly(
+    options,
+    openStateSchemaReadAdmission,
+  );
+  if (owner) {
+    throw new OpenClawAgentDatabaseLeaseActiveError(
+      `Agent ${owner.agent_id} database is still open in process ${owner.owner_pid}; stop that process before Doctor repair.`,
+    );
   }
 }
 

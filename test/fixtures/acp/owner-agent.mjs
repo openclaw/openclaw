@@ -12,6 +12,7 @@ const modelControls = process.argv.slice(3).includes("--model-controls");
 const holdModeControl = process.argv.slice(3).includes("--hold-mode-control");
 const holdNewSession = process.argv.slice(3).includes("--hold-new-session");
 const holdPromptReply = process.argv.slice(3).includes("--hold-prompt-reply");
+const captureWorkerEnv = process.argv.slice(3).includes("--capture-worker-env");
 const sessions = new Map();
 const configOptions = (state) => [
   {
@@ -84,6 +85,7 @@ const connection = new AgentSideConnection(
         mode: "normal",
         mcpServers,
         argv: process.argv.slice(3),
+        ...(captureWorkerEnv ? { workerThreads: process.env.TOKIO_WORKER_THREADS ?? null } : {}),
         ...(modelControls ? { currentModelId: "initial", modelChanges: [] } : {}),
       };
       sessions.set(sessionId, state);

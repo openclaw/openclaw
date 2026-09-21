@@ -30,10 +30,6 @@ const overrides = new Map<string, string>([
     }`,
   ],
   [
-    source("./update-command-repair-service.ts"),
-    `export async function repairUpdateService(p) { return p.result; }`,
-  ],
-  [
     source("../../infra/tmp-openclaw-dir.ts"),
     process.env.OPENCLAW_TEST_LEGACY_TEMP_FALLBACK === "1"
       ? `import {resolvePreferredOpenClawTmpDir as actual} from ${JSON.stringify(source("../../infra/tmp-openclaw-dir.ts") + "?fixture-original")};

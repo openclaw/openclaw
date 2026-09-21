@@ -369,7 +369,7 @@ export async function finishGatewayStartup(params: {
     ),
   );
   kernel.setPostAttachHandles(postAttachHandles);
-  if (databaseStartupAdmission) {
+  if (databaseStartupAdmission && !opts.updateCanary) {
     void postAttachHandles.startupSettled
       .then(() => {
         if (!lifecycle.closePreludeStarted) {

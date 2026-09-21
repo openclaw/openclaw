@@ -19,7 +19,7 @@ import { execSystemctlUser, reloadSystemdUserManager } from "./systemd-exec.js";
 import { assertNoSystemGatewayOwnership } from "./systemd-scope.js";
 import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { parseSystemdTimeSpanMs } from "./systemd-time-span.js";
-import { refreshSystemdUnitPolicy } from "./systemd-unit.js";
+import { preserveSystemdUnitPolicy, refreshSystemdUnitPolicy } from "./systemd-unit.js";
 
 /** Read the effective native policy; absence is a diagnostic, not a stop refusal. */
 export async function readSystemdGatewayStopTimeout(state: GatewayServiceState) {
@@ -89,7 +89,11 @@ export async function prepareSystemdGatewayMaintenance(params: {
                   await assertNoSystemGatewayOwnership(state.env);
                   await mutation.publish(
                     unitPath,
-                    refreshSystemdUnitPolicy(previous.contents.toString("utf8")),
+                    preserveSystemdUnitPolicy(
+                      refreshSystemdUnitPolicy(previous.contents.toString("utf8")),
+                      previous.contents.toString("utf8"),
+                      definitionTransaction.preservePolicy,
+                    ),
                     previous.mode,
                   );
                   await definitionTransaction.beforeWrite();

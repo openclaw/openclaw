@@ -20,6 +20,7 @@ const modelContextReads = new WorkerTaskPool<
   SessionTranscriptWorkerReply<"model-context">
 >({
   workerUrl,
+  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
   // Preserve context-read admission order and avoid multiplying large SQLite scans.
   maxWorkers: 1,
 });
@@ -28,13 +29,23 @@ const modelContextReads = new WorkerTaskPool<
 const sessionEntries = new WorkerTaskPool<
   SessionEntryWorkerInput,
   SessionTranscriptWorkerReply<"session-entry">
->({ workerUrl, maxWorkers: 1, sharedCompute: true });
+>({
+  workerUrl,
+  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+  maxWorkers: 1,
+  sharedCompute: true,
+});
 
 // Branch scans share background compute admission without delaying foreground history or context.
 const branchSummaries = new WorkerTaskPool<
   SessionBranchSummaryWorkerInput,
   SessionTranscriptWorkerReply<"branch-summaries">
->({ workerUrl, maxWorkers: 1, sharedCompute: true });
+>({
+  workerUrl,
+  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+  maxWorkers: 1,
+  sharedCompute: true,
+});
 
 export async function readSessionTranscriptModelContextAsync(
   target: SessionTranscriptRuntimeTarget,

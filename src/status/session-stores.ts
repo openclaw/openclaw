@@ -24,24 +24,14 @@ function summarizeProjectionRows(
   recentLimit: number,
 ): SessionStoreSummary {
   const rows = projection.selectEntries({ storePath, sortBy: null });
-  if (recentLimit === 0) {
-    const byAgent: SessionStoreSummary["byAgent"] = new Map(
-      agentIds.map((agentId) => [agentId, { count: 0, recent: [] }]),
+  if (recentLimit !== 0) {
+    // The projection returns a fresh selection, independent of its resident indexes.
+    rows.sort(
+      (left, right) =>
+        (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0) ||
+        (left.key < right.key ? -1 : left.key > right.key ? 1 : 0),
     );
-    rows.forEach((row) => {
-      const agent = byAgent.get(row.agentId);
-      if (agent) {
-        agent.count += 1;
-      }
-    });
-    return { count: rows.length, recent: [], byAgent };
   }
-  // The projection returns a fresh selection, independent of its resident indexes.
-  rows.sort(
-    (left, right) =>
-      (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0) ||
-      (left.key < right.key ? -1 : left.key > right.key ? 1 : 0),
-  );
   const summarize = (selected: typeof rows) => ({
     count: selected.length,
     recent: selected.slice(0, recentLimit).map(({ key: sessionKey, entry }) => ({
@@ -49,6 +39,21 @@ function summarizeProjectionRows(
       entry,
     })),
   });
+  if (recentLimit >= 0) {
+    const byAgent: SessionStoreSummary["byAgent"] = new Map(
+      agentIds.map((agentId) => [agentId, { count: 0, recent: [] }]),
+    );
+    rows.forEach((row) => {
+      const agent = byAgent.get(row.agentId);
+      if (agent) {
+        agent.count += 1;
+        if (agent.count <= recentLimit) {
+          agent.recent.push({ sessionKey: row.key, entry: row.entry });
+        }
+      }
+    });
+    return { count: rows.length, recent: recentLimit === 0 ? [] : summarize(rows).recent, byAgent };
+  }
   return {
     ...summarize(rows),
     byAgent: new Map(

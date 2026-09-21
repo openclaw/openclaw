@@ -7,11 +7,6 @@ export const updateExecutorNativeEntrypoints = {
     sourceWorkerName: "../signal-exit-barrier",
     distWorkerPath: "cli/signal-exit-barrier.js",
   },
-  commandRepair: {
-    currentModuleUrl,
-    sourceWorkerName: "update-command-repair",
-    distWorkerPath: "cli/update-cli/update-command-repair.js",
-  },
   retainedService: {
     currentModuleUrl,
     sourceWorkerName: "update-command-retained-service",

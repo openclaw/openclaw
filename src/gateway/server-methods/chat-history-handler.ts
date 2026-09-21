@@ -70,11 +70,11 @@ import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { handleChatStartupRequest } from "./chat-startup-handler.js";
+import { prepareChatStartupRequester } from "./chat-startup-requester.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
-import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
@@ -285,7 +285,9 @@ export async function handleChatHistoryRequest({
             agentId: sessionAgentId,
             sessionKey: canonicalKey,
             sessionEntry: entry,
-            requesterProfileId: resolveAuthenticatedProfileId(client),
+            ...(method === "chat.startup"
+              ? { readRequesterProfileId: await prepareChatStartupRequester(client) }
+              : {}),
             readPolicy: method === "chat.history" ? "ready" : "current",
           });
         } catch (error) {

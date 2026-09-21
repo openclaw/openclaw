@@ -34,6 +34,9 @@ async function openMockAbortableRun(currentPage: Page, runId: string) {
   const sessionKey = "agent:main:main";
   const sessionInfo = {
     key: sessionKey,
+    sessionId: `session:${sessionKey}`,
+    kind: "direct",
+    updatedAt: 1,
     hasActiveRun: true,
     activeRunIds: [runId],
     status: "running",
@@ -367,6 +370,9 @@ suite.define(() => {
       sessionId: `session:${sessionKey}`,
       sessionInfo: {
         key: sessionKey,
+        sessionId: `session:${sessionKey}`,
+        kind: "direct",
+        updatedAt: 2,
         hasActiveRun: false,
         activeRunIds: [],
         lastRunId: runId,
@@ -438,6 +444,9 @@ suite.define(() => {
       sessionId: `session:${sessionKey}`,
       sessionInfo: {
         key: sessionKey,
+        sessionId: `session:${sessionKey}`,
+        kind: "direct",
+        updatedAt: 2,
         hasActiveRun: true,
         activeRunIds: [runId],
         status: "running",
@@ -542,6 +551,9 @@ suite.define(() => {
       sessionId: `session:${sessionKey}`,
       sessionInfo: {
         key: sessionKey,
+        sessionId: `session:${sessionKey}`,
+        kind: "direct",
+        updatedAt: 2,
         hasActiveRun: false,
         activeRunIds: [],
         lastRunId: runId,
@@ -581,6 +593,7 @@ suite.define(() => {
       const activeUpdatedAt = Date.now();
       const sessionInfo = {
         key: sessionKey,
+        kind: "direct",
         updatedAt: activeUpdatedAt,
         hasActiveRun: activity === "direct",
         hasActiveSubagentRun: activity === "descendant",
@@ -603,6 +616,8 @@ suite.define(() => {
         sessionId: `session:${sessionKey}`,
         sessionInfo: {
           key: sessionKey,
+          sessionId: `session:${sessionKey}`,
+          kind: "direct",
           updatedAt: activeUpdatedAt + 1,
           hasActiveRun: false,
           hasActiveSubagentRun: false,

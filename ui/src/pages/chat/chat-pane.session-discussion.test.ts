@@ -4,8 +4,11 @@ import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import {
+  createSessionCapabilityFixture,
+  createTestChatPane,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import "./components/session-discussion-panel.ts";
 import { openSlot } from "./sidebar-layout.ts";
@@ -33,7 +36,7 @@ function createDiscussionPane(params: {
     throw new Error(`unexpected method ${method}`);
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  const created = createTestChatPane({ client, sessions: {} as SessionCapability });
+  const created = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
   const pane = created.pane as DiscussionTestPane;
   const state = created.state;
   (pane.context.gateway.snapshot as { hello: unknown }).hello = {

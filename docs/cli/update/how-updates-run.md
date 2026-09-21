@@ -40,6 +40,10 @@ Changed plugins restart a running managed Gateway unless `--no-restart` is set; 
 Linux updates also refresh outdated OpenClaw-managed systemd policy when the core
 is already current or `--no-restart` is set. This policy-only refresh confirms
 `daemon-reload` without stopping the Gateway and preserves operator drop-ins.
+Native-definition reconciliation on launchd, Scheduled Tasks, and systemd keeps
+custom policy values with an advisory while refreshing recognized old defaults.
+For example, `TimeoutStartSec=45` stays unchanged while the old installer value
+`TimeoutStopSec=30` becomes `330`. Existing identity and command checks still apply.
 Maintenance stops also read the resident Gateway's recorded shutdown budget.
 Published 2026.9.5 residents keep their startup budget even after `daemon-reload`;
 their first stop therefore uses the short/unknown-budget path. The Gateway's
@@ -127,6 +131,11 @@ classification. The live plugin files and host links stay unchanged. Channels,
 cron, automatic updates, background task maintenance, and other side services are
 suppressed in this canary. Copied task records remain available for startup
 validation without recovery or pruning.
+The canary also defers session catalog hydration, worker recovery, and startup
+maintenance until activation, recording a warning. Required configuration,
+database ownership, schema, and migration checks still run before readiness;
+plugin runtime loading remains part of validation. The serving Gateway prepares
+its session catalogs and maintenance normally after activation.
 
 Update build and validation processes resolve source-linked plugin SDKs from
 the staged installation root, even when the serving source launcher passed its own checkout
@@ -136,6 +145,12 @@ Doctor warnings do not block update checks or readiness after plugin updates.
 The updater retains them in the run report shown by `openclaw update status`,
 including when an intentional open channel policy requires no configuration change.
 Error findings and failed check execution still refuse the update.
+
+These checks do not run an agent turn or require a usable model-auth route.
+OAuth-only installations and installations without provider credentials can update.
+Auth diagnostics are advisory; optional inference repair runs through triage only
+after a failed update has settled. It uses the normal runtime credential resolver,
+including shared profiles and OAuth refresh.
 
 The new version answers the updater's native service capability probe before
 loading configuration or initializing debug capture. Probing capability does not
@@ -223,8 +238,12 @@ TMPDIR=/var/tmp openclaw update --yes
 
 Subsequent updates use the new updater's measured destination selection.
 
-Schema checks also use private SQLite copies so inspection does not create or
-modify WAL sidecars beside live databases. Inspection budgets include database
+Live snapshots use SQLite read transactions and private backups while writers
+continue. Artifact-preserving planning and Doctor checks retain byte-neutral
+copies that leave source SHM unchanged. WAL copies capture a bounded prefix
+within one verified WAL generation, so appended commits do not require a quiet database.
+Incomplete WAL families and crash journals are recovered privately without
+creating missing source sidecars. Inspection budgets include database
 and journal sizes, cold startup, and repeated IO passes for every discovered
 store. Metadata checks remain cancellable. Copy progress renews the watchdog,
 and larger caller allowances are preserved. Workers stop before their private
@@ -234,6 +253,18 @@ Inspection failures report the database or known scope, inspection phase, elapse
 time, and the next action. Check access to the named path, concurrent writers,
 and storage performance before retrying. Older candidate workers that cannot
 report their current database identify the known scope instead.
+
+If the initial config inspection encounters SQLite lock contention or a changing
+snapshot source, the updater repeats that read once. A successful read records a
+warning and lets target selection continue. Corruption and other inspection errors
+remain failures. A pre-staging failure retains its original diagnostic and next
+action in update history once fresh database admission succeeds; unresolved
+recovery ownership still prevents terminal publication.
+
+This inspection behavior belongs to the invoking updater. A published 2026.9.4
+updater can still fail before staging the candidate. In that case, use the
+installation's [manual update method](/install/updating/update-methods), then run
+`openclaw update repair` from the updated installation.
 
 Before stopping the previous Gateway, the updater waits for affirmative readiness.
 Its observation window uses the canary's measured startup time with headroom for
@@ -350,6 +381,23 @@ plugin convergence, and any required full Doctor migrations. Downloads therefore
 count toward downtime. Unchanged plugins use read-only validation and readiness
 checks without another full Doctor pass. Service ownership is revalidated after
 convergence, and final runtime verification checks the resulting snapshot.
+
+If `update finalize` finds a live Gateway holding maintenance ownership, it uses
+the existing restart readiness wait within the remaining finalization allowance.
+When that exact process is verified serving the installed version and build,
+finalization leaves it running and exits successfully with a warning. The history
+records `finalize:doctor` as skipped and identifies the holder. Doctor, config
+changes, and plugin convergence remain pending until the next maintenance window:
+stop the Gateway through its owner, run `openclaw update repair`, then start it
+through the same owner. Deferred finalization does not resolve earlier interrupted
+updates. A dead process releases its physical maintenance lock; its stale lease
+does not qualify for this warning path. Ordinary maintenance admission and lease
+reclamation still apply, including refusals for unsafe or unreadable state.
+
+This behavior lives in the installed finalizer, so published updaters can use it
+when they invoke the new version's `update finalize`. Older parents may omit the
+warning from their own summary; the finalizer prints it and records it in update
+history.
 
 <a id="durable-serving-recovery" />
 

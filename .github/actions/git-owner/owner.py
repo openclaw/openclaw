@@ -460,6 +460,7 @@ def checkout_selected_ref():
 
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
+    node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
     evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
     upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
@@ -477,7 +478,7 @@ def checkout_harness(sha):
     if sha == os.environ["WORKFLOW_SHA"]:
         # Export the workflow revision from the freshly populated index, replacing
         # retained harness files without updating the index or trusting later edits.
-        pathspecs = [".github/actions"]
+        pathspecs = [".github/actions", *node_setup_scripts]
         if kind in ("platform", "linux-node"):
             pathspecs += evidence_scripts
         elif kind == "preflight":
@@ -489,7 +490,7 @@ def checkout_harness(sha):
     else:
         run_git(harness, "init", harness)
         run_git(harness, "remote", "add", "origin", remote)
-        sparse_paths = ["/.github/actions/"]
+        sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
         if kind in ("platform", "linux-node"):
             sparse_paths += [f"/{path}" for path in evidence_scripts]
         if kind == "linux-node":

@@ -1,5 +1,6 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { SKILL_LIBRARY_MAX_SELECTIONS } from "../../packages/gateway-protocol/src/schema/skill-library.js";
 import {
   readSandboxBrowserRegistryInDatabase,
   readSandboxRegistryEntryInDatabase,
@@ -21,6 +22,10 @@ import {
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
 import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
+import {
+  selectSkillLibraryRevisionMetadataBatch,
+  selectSkillLibraryRevisionManifestsBatch,
+} from "../skills/library/selection-read.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
@@ -36,6 +41,7 @@ import type {
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+import { readUserProfileIdForEmail } from "./user-profile-identity.read.js";
 import { selectProfileDisplayEntries } from "./user-profiles-internal.js";
 
 function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
@@ -61,9 +67,19 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     (isPluginBlobReadCommand(input.command) ||
       input.command.type === "admit" ||
       input.command.type === "exec-approvals.read" ||
+      ((input.command.type === "skills.library.descriptions" ||
+        input.command.type === "skills.library.manifests") &&
+        Array.isArray(input.command.input) &&
+        input.command.input.length <= SKILL_LIBRARY_MAX_SELECTIONS &&
+        input.command.input.every(
+          (pin) =>
+            isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
+        )) ||
       input.command.type === "agentDatabaseRegistry.read" ||
-      (input.command.type === "userProfiles.avatar.reconcile" &&
+      (input.command.type === "userProfiles.reconcile" &&
         typeof input.command.profileId === "string") ||
+      (input.command.type === "userProfiles.email.resolve" &&
+        typeof input.command.email === "string") ||
       (input.command.type === "audit.run.inspect" &&
         isRecord(input.command.input) &&
         typeof input.command.input.now === "number" &&
@@ -200,6 +216,26 @@ serveOwnedWorkerTasks(
                     row: readExecApprovalsConfigRow(db),
                   };
                 }
+                if (command.type === "skills.library.descriptions") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: tableExists(db, "skill_library_entries")
+                      ? selectSkillLibraryRevisionMetadataBatch(db, command.input)
+                      : undefined,
+                  };
+                }
+                if (command.type === "skills.library.manifests") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: tableExists(db, "skill_library_entries")
+                      ? selectSkillLibraryRevisionManifestsBatch(db, command.input)
+                      : undefined,
+                  };
+                }
                 if (command.type === "onboardingRecommendations.read") {
                   return {
                     ok: true,
@@ -250,7 +286,7 @@ serveOwnedWorkerTasks(
                     }),
                   };
                 }
-                if (command.type === "userProfiles.avatar.reconcile") {
+                if (command.type === "userProfiles.reconcile") {
                   return {
                     ok: true,
                     type: command.type,
@@ -258,6 +294,16 @@ serveOwnedWorkerTasks(
                     profile: runSqliteDeferredTransactionSync(
                       db,
                       () => selectProfileDisplayEntries(db, [command.profileId])[0]?.[1],
+                    ),
+                  };
+                }
+                if (command.type === "userProfiles.email.resolve") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    profileId: runSqliteDeferredTransactionSync(db, () =>
+                      readUserProfileIdForEmail(db, command.email),
                     ),
                   };
                 }

@@ -42,6 +42,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_private_node_provisioning:
+        description: "Prove private Node installation and portable updater authorization on native Windows"
+        required: false
+        default: false
+        type: boolean
       installed_startup_package:
         description: "Optional Package Acceptance binding, or {baseline, candidate} bindings for a matched comparison"
         required: false
@@ -83,6 +88,25 @@ jobs:
           ref: ${{ inputs.target_ref || github.ref }}
           persist-credentials: false
           submodules: false
+
+      - name: Validate private Node proof inputs
+        if: ${{ inputs.run_private_node_provisioning }}
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUNNER_LABEL: ${{ inputs.runner_label }}
+          KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
+          MIXED_PROOF: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic || inputs.require_wsl2 || inputs.import_ubuntu_wsl2 || inputs.enable_wsl2_features }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:RUNNER_LABEL -ne "windows-2025" -or $env:KEEPALIVE_MINUTES -ne "0" -or $env:MIXED_PROOF -eq "true") {
+            throw "Private Node proof requires windows-2025, keepalive 0, and no startup, broad CI, or WSL proof."
+          }
+          if ($env:TARGET_REF -cnotmatch '^[0-9a-f]{40}$' -or $env:WORKFLOW_SHA -cne $env:TARGET_REF) {
+            throw "Private Node proof requires the same immutable workflow and target SHA."
+          }
+          $checkoutSha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $checkoutSha -cne $env:TARGET_REF) { throw "Private Node proof checkout differs from target_ref." }
 
       - name: Validate installed startup inputs
         id: startup_input
@@ -175,6 +199,7 @@ jobs:
 
       - name: Probe WSL2
         id: wsl2
+        if: ${{ !inputs.run_private_node_provisioning }}
         env:
           ENABLE_WSL2_FEATURES: ${{ inputs.enable_wsl2_features }}
           IMPORT_UBUNTU_WSL2: ${{ inputs.import_ubuntu_wsl2 }}
@@ -318,7 +343,7 @@ jobs:
 
       - &windows_node
         name: Setup Node.js
-        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning }}
         shell: bash
         env:
           REQUESTED_NODE_VERSION: ${{ inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
@@ -329,7 +354,7 @@ jobs:
 
       - &windows_pnpm
         name: Setup pnpm
-        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning }}
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
@@ -337,7 +362,7 @@ jobs:
 
       - &windows_versions
         name: Runtime versions
-        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning }}
         shell: bash
         run: |
           node -v
@@ -346,7 +371,7 @@ jobs:
 
       - &windows_node_path
         name: Capture node path
-        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning }}
         shell: bash
         run: |
           node_bin="$(dirname "$(node -p 'process.execPath')")"
@@ -357,7 +382,7 @@ jobs:
 
       - &windows_install
         name: Install dependencies
-        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning }}
         shell: bash
         env:
           CI: true
@@ -367,6 +392,19 @@ jobs:
           node -v
           pnpm -v
           pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+
+      - name: Prove private Node provisioning and portable authorization
+        if: ${{ inputs.run_private_node_provisioning }}
+        shell: bash
+        timeout-minutes: 40
+        env:
+          CI: true
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          # Match the real installer deadline plus owner cleanup, only for this live proof.
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=1920000 pnpm test:live src/cli/update-cli/update-command-node-runtime.live.test.ts
+          node scripts/run-vitest.mjs src/cli/update-cli/update-command-executor-auxiliary.test.ts -t 'preserves direct preflight release through a healthy installer child and active drain|never starts Node provisioning without released authorization input|refuses Node provisioning after|preserves native-gate environment precedence|preserves absent or empty native payload options'
 
       - name: Prove installed benchmark lifecycle
         if: ${{ inputs.installed_startup_package != '' }}
@@ -466,7 +504,7 @@ jobs:
           pnpm test:windows:ci
 
       - name: Keep runner alive for SSH inspection
-        if: ${{ always() && !cancelled() }}
+        if: ${{ always() && !cancelled() && !inputs.run_private_node_provisioning }}
         env:
           KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
         run: |
@@ -497,7 +535,7 @@ jobs:
   # Native session qualification must not depend on headless CI or WSL results.
   native-schtasks:
     name: Native Scheduled Task proof
-    if: ${{ inputs.run_windows_ci }}
+    if: ${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning }}
     runs-on: windows-2025
     timeout-minutes: 75
     steps:

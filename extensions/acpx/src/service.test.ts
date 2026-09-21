@@ -20,6 +20,9 @@ import { AcpxRuntime } from "./runtime.js";
 const { runtimeRegistry } = vi.hoisted(() => ({
   runtimeRegistry: new Map<string, { runtime: unknown; healthy?: () => boolean }>(),
 }));
+const { availableParallelismMock } = vi.hoisted(() => ({
+  availableParallelismMock: vi.fn(() => 4),
+}));
 const { prepareAcpxCodexAuthConfigMock } = vi.hoisted(() => ({
   prepareAcpxCodexAuthConfigMock: vi.fn(
     async ({ pluginConfig }: { pluginConfig: unknown }) => pluginConfig,
@@ -83,6 +86,11 @@ vi.mock("../runtime-api.js", () => ({
   getAcpRuntimeBackend: (id: string) => runtimeRegistry.get(id),
 }));
 
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: availableParallelismMock,
+}));
+
 vi.mock("./runtime.js", () => ({
   ACPX_BACKEND_ID: "acpx",
   AcpxRuntime: acpxRuntimeConstructorMock,
@@ -120,6 +128,7 @@ const previousEnv = {
   OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE: process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE,
   OPENCLAW_SKIP_ACPX_RUNTIME: process.env.OPENCLAW_SKIP_ACPX_RUNTIME,
   OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE,
+  TOKIO_WORKER_THREADS: process.env.TOKIO_WORKER_THREADS,
 };
 
 function restoreEnv(name: keyof typeof previousEnv): void {
@@ -149,9 +158,12 @@ afterEach(async () => {
   acpxRuntimeConstructorMock.mockClear();
   createAgentRegistryMock.mockClear();
   createFileSessionStoreMock.mockClear();
+  availableParallelismMock.mockReturnValue(4);
   restoreEnv("OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE");
   restoreEnv("OPENCLAW_SKIP_ACPX_RUNTIME");
   restoreEnv("OPENCLAW_SKIP_ACPX_RUNTIME_PROBE");
+  restoreEnv("TOKIO_WORKER_THREADS");
+  vi.restoreAllMocks();
   await testWorkspace.cleanup();
 });
 
@@ -547,6 +559,41 @@ describe("createAcpxRuntimeService", () => {
       }),
     );
 
+    await service.stop?.(ctx);
+  });
+
+  it.each([
+    { parallelism: 4, expected: "4" },
+    { parallelism: 64, expected: "8" },
+  ])(
+    "bounds default ACPX Tokio workers at host parallelism $parallelism",
+    async ({ parallelism, expected }) => {
+      process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
+      delete process.env.TOKIO_WORKER_THREADS;
+      availableParallelismMock.mockReturnValue(parallelism);
+      const ctx = createServiceContext(testWorkspace.dir);
+      const service = createAcpxRuntimeService(ctx);
+
+      await service.start(ctx);
+
+      expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agentProcessEnv: { TOKIO_WORKER_THREADS: expected } }),
+      );
+      await service.stop?.(ctx);
+    },
+  );
+
+  it("preserves an explicit ACPX Tokio worker override", async () => {
+    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
+    process.env.TOKIO_WORKER_THREADS = "12";
+    const ctx = createServiceContext(testWorkspace.dir);
+    const service = createAcpxRuntimeService(ctx);
+
+    await service.start(ctx);
+
+    expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentProcessEnv: undefined }),
+    );
     await service.stop?.(ctx);
   });
 

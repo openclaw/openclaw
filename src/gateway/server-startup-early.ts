@@ -60,7 +60,8 @@ export async function startGatewayEarlyRuntime(params: {
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
 }) {
-  if (!params.minimalTestGateway) {
+  const startSideRuntimes = !params.minimalTestGateway && !params.updateCanary;
+  if (startSideRuntimes) {
     await measureStartup(params.startupTrace, "runtime.early.task-state", async () => {
       const { ensureTaskRuntimeStateReady } = await import("../tasks/runtime-internal.js");
       await ensureTaskRuntimeStateReady();
@@ -72,7 +73,7 @@ export async function startGatewayEarlyRuntime(params: {
   // Startup failure can occur immediately after discovery; publish its owner first.
   params.swapDiscovery(
     await measureStartup(params.startupTrace, "runtime.early.discovery", async () => {
-      if (params.minimalTestGateway) {
+      if (!startSideRuntimes) {
         return null;
       }
       const machineDisplayName = await measureStartup(
@@ -102,7 +103,7 @@ export async function startGatewayEarlyRuntime(params: {
   );
   let getActiveTaskCount = () => 0;
 
-  if (!params.minimalTestGateway) {
+  if (startSideRuntimes) {
     const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, taskRegistryMaintenance] =
       await measureStartup(params.startupTrace, "runtime.early.lazy-runtime-imports", () =>
         Promise.all([
@@ -112,19 +113,16 @@ export async function startGatewayEarlyRuntime(params: {
       );
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
-    // Canary task rows belong to the source Gateway; never reconcile or resume them.
-    if (!params.updateCanary) {
-      // Restart-blocker counts must reflect the same live cron runtime.
-      taskRegistryMaintenance.configureTaskRegistryMaintenance({
-        runtimeAuthoritative: true,
-      });
-      taskRegistryMaintenance.startTaskRegistryMaintenance();
-      getActiveTaskCount = () =>
-        taskRegistryMaintenance.getInspectableActiveTaskRestartBlockers().length;
-    }
+    // Restart-blocker counts must reflect the same live cron runtime.
+    taskRegistryMaintenance.configureTaskRegistryMaintenance({
+      runtimeAuthoritative: true,
+    });
+    taskRegistryMaintenance.startTaskRegistryMaintenance();
+    getActiveTaskCount = () =>
+      taskRegistryMaintenance.getInspectableActiveTaskRestartBlockers().length;
   }
 
-  const skillsChangeUnsub = params.minimalTestGateway
+  const skillsChangeUnsub = !startSideRuntimes
     ? async () => {}
     : await measureStartup(params.startupTrace, "runtime.early.skills-listener", async () => {
         const skillsRuntimePromise = import("../skills/runtime/refresh.js");
@@ -169,7 +167,7 @@ export async function startGatewayEarlyRuntime(params: {
   const startMaintenance = async (activeWorkInspectors: Partial<GatewayActiveWorkInspectors>) => {
     // Defer periodic maintenance until the caller has finished ready-state
     // wiring, but keep the lazy import owned by this early-runtime bundle.
-    if (params.minimalTestGateway || params.isClosing()) {
+    if (!startSideRuntimes || params.isClosing()) {
       return null;
     }
     return await measureStartup(params.startupTrace, "post-ready.maintenance", async () => {

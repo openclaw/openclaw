@@ -13,6 +13,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -448,6 +449,7 @@ async function runArchiveSession(
 ): Promise<void> {
   let operationId = 0;
   for await (const [message] of on(port, "message")) {
+    cancelWorkerIdleGc();
     // SAFETY: only the paired scoped archive owner sends this private port's requests.
     const request = message as SqliteArchiveSessionRequest | { type: "close" };
     if (request.type === "close") {
@@ -505,6 +507,7 @@ async function runArchiveSession(
       response.results.some((result) => result.error !== undefined);
     response.results.length = 0;
     request.plans = [];
+    scheduleWorkerIdleGc();
     if (failed) {
       break;
     }

@@ -138,7 +138,7 @@ export function installEmbeddedAttemptStreamGuards(
         sessionKey: attempt.sessionKey,
         agentId: sessionAgentId,
       };
-      await withSessionManagerWrite(sessionManager, () => {
+      await withSessionManagerWrite(sessionManager, async () => {
         abortSignal.throwIfAborted();
         let repair;
         if (kind === "compaction") {
@@ -149,9 +149,12 @@ export function installEmbeddedAttemptStreamGuards(
             );
             return;
           }
-          repair = repairRejectedCompactionReplayInSessionManager({ ...repairParams, checkpoint });
+          repair = await repairRejectedCompactionReplayInSessionManager({
+            ...repairParams,
+            checkpoint,
+          });
         } else {
-          repair = repairRejectedThinkingReplayInSessionManager(repairParams);
+          repair = await repairRejectedThinkingReplayInSessionManager(repairParams);
         }
         if (repair.repaired) {
           callbacks.onRejectedProviderReplayRepaired();

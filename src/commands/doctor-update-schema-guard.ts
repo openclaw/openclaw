@@ -372,7 +372,6 @@ export async function rehearseDeferredUpdateDoctorSchema(
     candidateRoot: root,
     config: snapshot.sourceConfig ?? snapshot.config,
     stateDir: resolveStateDir(),
-    sourceConfigHash: snapshot.hash,
   });
   let settled = false;
   try {

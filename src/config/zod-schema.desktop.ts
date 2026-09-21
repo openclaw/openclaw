@@ -1,11 +1,8 @@
 // Defines local desktop config parsing and generated field metadata.
 import path from "node:path";
 import { z } from "zod";
-import { type ConfigSchemaShape, projectConfigFieldMetadata } from "./schema.field-metadata.js";
-import type { DesktopConfig } from "./types.desktop.js";
+import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import { configUiMetadata } from "./zod-schema.sensitive.js";
-
-type DesktopHostConfig = NonNullable<DesktopConfig["host"]>;
 
 const DesktopHostConfigShape = {
   enabled: z.boolean().register(configUiMetadata, {
@@ -30,7 +27,7 @@ const DesktopHostConfigShape = {
       label: "Local VNC Password File",
       help: "Absolute path to the VNC password file. Omit on macOS to enter account credentials when opening the desktop viewer.",
     }),
-} satisfies ConfigSchemaShape<DesktopHostConfig>;
+};
 
 const DesktopHostConfigSchema = z
   .object(DesktopHostConfigShape)
@@ -45,7 +42,7 @@ const DesktopConfigShape = {
     label: "Local Desktop",
     help: "Desktop observation for paired nodes, or the experimental Gateway host source, backed by a local VNC server.",
   }),
-} satisfies ConfigSchemaShape<DesktopConfig>;
+};
 
 export const DesktopConfigSchema = z.object(DesktopConfigShape).strict().optional();
 

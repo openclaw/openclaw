@@ -393,7 +393,7 @@ describe("CI changed Node test plan", () => {
   it.each(["blacksmith", "github", "hybrid"])(
     "retains precise embedded files with their canonical owners (%s)",
     (runnerBackend) => {
-      const yieldTest = "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts";
+      const embeddedTest = "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts";
       const siblings = [
         "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts",
         "src/agents/embedded-agent-runner/run.incomplete-turn.classification.test.ts",
@@ -411,7 +411,7 @@ describe("CI changed Node test plan", () => {
       } finally {
         placement.mockRestore();
       }
-      for (const targets of [[yieldTest], [...siblings, yieldTest]]) {
+      for (const targets of [[embeddedTest], [...siblings, embeddedTest]]) {
         const shards = createChangedNodeTestShards(targets, { runnerBackend });
         expect(shards).not.toBeNull();
         const groups = shards?.flatMap((shard) => shard.groups ?? []) ?? [];
@@ -551,7 +551,7 @@ describe("CI changed Node test plan", () => {
 
   it("retains ordinary and embedded targets beside a shared Git fixture's canonical family", () => {
     const ordinary = "src/plugin-sdk/config-runtime.test.ts";
-    const embedded = "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts";
+    const embedded = "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts";
     const shards = createChangedNodeTestShards([
       "test/scripts/ci-git-owner.test-support.ts",
       ordinary,
@@ -591,7 +591,7 @@ describe("CI changed Node test plan", () => {
 
   it("does not borrow canonical embedded ownership for another checkout", () => {
     const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-embedded-owner-"));
-    const target = "src/agents/embedded-agent-runner/run/attempt-yield-handoff.test.ts";
+    const target = "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts";
     try {
       mkdirSync(path.dirname(path.join(cwd, target)), { recursive: true });
       writeFileSync(path.join(cwd, target), "export {};\n");

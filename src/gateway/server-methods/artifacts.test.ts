@@ -955,17 +955,19 @@ describe("artifacts RPC handlers", () => {
     expect(artifacts?.[0]).not.toHaveProperty("data");
   });
 
-  it("treats malformed direct artifact data as unsupported downloads", async () => {
+  it.each([
+    { type: "file", data: "not-base64!", title: "bad.txt" },
+    { type: "file", data: "AA=A", title: "bad.txt" },
+    { type: "file", data: "A===", title: "bad.txt" },
+    { type: "file", data: "A", title: "bad.txt" },
+    { type: "file", data: "AA\vAA", title: "bad.txt" },
+    { type: "file", data: "AA\u2028AA", title: "bad.txt" },
+    { type: "image", image_url: "data:image/png;base64,not-base64!", alt: "bad.txt" },
+  ])("treats malformed artifact data as unsupported downloads: %j", async (block) => {
     mockedMessages([
       {
         role: "assistant",
-        content: [
-          {
-            type: "file",
-            data: "not-base64!",
-            title: "bad.txt",
-          },
-        ],
+        content: [block],
         __openclaw: { seq: 6 },
       },
     ]);
@@ -980,14 +982,19 @@ describe("artifacts RPC handlers", () => {
     expect(artifacts?.[0]).not.toHaveProperty("data");
   });
 
-  it("keeps unpadded direct artifact base64 downloadable", async () => {
+  it.each([
+    { data: "JVBERi0", expected: "JVBERi0=", sizeBytes: 5 },
+    { data: "-_8", expected: "+/8=", sizeBytes: 2 },
+    { data: " \t-_\r\n8=\n", expected: "+/8=", sizeBytes: 2 },
+    { data: "Zh", expected: "Zh==", sizeBytes: 1 },
+  ])("normalizes downloadable artifact base64: %j", async ({ data, expected, sizeBytes }) => {
     mockedMessages([
       {
         role: "assistant",
         content: [
           {
             type: "file",
-            data: "JVBERi0",
+            data,
             title: "report.pdf",
           },
         ],
@@ -1000,7 +1007,7 @@ describe("artifacts RPC handlers", () => {
     const artifactId = requireNonEmptyString(artifact?.id, "expected listed artifact id");
     expectFields(artifact, {
       title: "report.pdf",
-      sizeBytes: 5,
+      sizeBytes,
     });
     expectFields(artifact?.download, { mode: "bytes" });
 
@@ -1011,33 +1018,8 @@ describe("artifacts RPC handlers", () => {
     const downloadPayload = expectOkPayload(download.calls) as Record<string, unknown>;
     expectFields(downloadPayload, {
       encoding: "base64",
-      data: "JVBERi0=",
+      data: expected,
     });
-  });
-
-  it("treats malformed base64 data URLs as unsupported downloads", async () => {
-    mockedMessages([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "image",
-            image_url: "data:image/png;base64,not-base64!",
-            alt: "bad.png",
-          },
-        ],
-        __openclaw: { seq: 7 },
-      },
-    ]);
-
-    const { calls } = await listArtifacts({ sessionKey: "agent:main:main" });
-    const artifacts = expectArtifactList(calls).artifacts;
-    expect(artifacts).toHaveLength(1);
-    expectFields(artifacts?.[0], {
-      title: "bad.png",
-    });
-    expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
-    expect(artifacts?.[0]).not.toHaveProperty("data");
   });
 
   it("keeps unpadded base64 data URLs downloadable", async () => {

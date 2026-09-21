@@ -313,20 +313,26 @@ it.each(["success", "failure"])(
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const { gateway, emitEvent } = createGatewayHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
     const sessions = createTestSessionCapability(gateway);
     await sessions.refresh({ force: true });
 
     const older = sessions.patch(key, { permissionMode: "workspace" });
     await vi.waitFor(() => expect(listCalls).toBe(2));
-    sessions.reconcileChanged({
-      sessionKey: key,
-      key,
-      kind: "direct",
-      reason: "patch",
-      permissionMode: "full",
-      sessionId,
-      updatedAt: 3,
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: key,
+        key,
+        kind: "direct",
+        reason: "patch",
+        permissionMode: "full",
+        sessionId,
+        updatedAt: 3,
+      },
     });
     if (outcome === "failure") {
       refreshA.reject(new Error("obsolete refresh failed"));

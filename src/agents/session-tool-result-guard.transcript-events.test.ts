@@ -35,7 +35,10 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { createAssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { normalizeAssistantReplayContent } from "./embedded-agent-runner/replay-history.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
@@ -70,11 +73,12 @@ async function openPersistedSessionManager(lifecycleRevision?: string) {
   return { root, sessionManager: SessionManager.open(target, root), target, sessionEntry };
 }
 
-afterEach(() => {
+afterEach(async () => {
   // Remove all transcript listeners between tests to avoid duplicate broadcasts.
   while (listeners.length > 0) {
     listeners.pop()?.();
   }
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -348,6 +352,7 @@ describe("guardSessionManager transcript updates", () => {
     expect(admitted).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ entryId, idempotencyKey: message.idempotencyKey }),
     );
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const persisted = SessionManager.open(target, root)
       .getBranch()
@@ -370,8 +375,8 @@ describe("guardSessionManager transcript updates", () => {
       if (staleManager) {
         // The SDK persists model/thinking setup before prompt submission. Keep the user
         // projection stale without creating a competing lazy header initializer.
-        sessionManager.appendModelChange("openai", "gpt-5.6-sol");
-        sessionManager.appendThinkingLevelChange("off");
+        await sessionManager.appendModelChange("openai", "gpt-5.6-sol");
+        await sessionManager.appendThinkingLevelChange("off");
       }
       const openedBeforeIngress = staleManager
         ? SessionManager.openBounded(target, { cwd: root, maxBytes: 100_000, maxEvents: 100 })
@@ -434,7 +439,7 @@ describe("guardSessionManager transcript updates", () => {
 
   it.each(["active", "side", "setup-metadata"] as const)(
     "adopts an ingress-persisted %s-branch user without broadcasting a duplicate",
-    (branch) => {
+    async (branch) => {
       const updates: InternalSessionTranscriptUpdate[] = [];
       listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
 
@@ -458,8 +463,8 @@ describe("guardSessionManager transcript updates", () => {
           appendMode: "side",
         });
       } else if (branch === "setup-metadata") {
-        sm.appendModelChange("openai", "gpt-5.5");
-        sm.appendThinkingLevelChange("off");
+        await sm.appendModelChange("openai", "gpt-5.5");
+        await sm.appendThinkingLevelChange("off");
         sm.appendCustomEntry("model-snapshot", {
           modelApi: "openai-responses",
           modelId: "gpt-5.5",
@@ -855,6 +860,7 @@ describe("deferred assistant error transcript", () => {
       }),
     );
     await owner.settle(false);
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const messages = SessionManager.open(target).buildSessionContext().messages;
     expect(messages).toMatchObject([

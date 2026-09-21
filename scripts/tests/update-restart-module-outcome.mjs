@@ -217,10 +217,6 @@ async function fixture({
       events.push("rollback-unverified");
       return { result: params.result, rolledBack: false };
     },
-    repairUpdateService: async (params) => {
-      events.push("repair-unverified");
-      return params.result;
-    },
     resolveUpdateResultNextAction: () => "Retain recovery material until health is verified.",
     completeUpdateCommandRun: (value) => value,
     printResult: (value) => printed.push(value),
@@ -464,7 +460,6 @@ for (const [name, makeError] of thrownCases) {
     assert.deepEqual(f.completion, [false]);
     assert.equal(f.printed.at(-1).status, "error");
     assert.ok(f.events.includes("rollback-unverified"));
-    assert.ok(f.events.includes("repair-unverified"));
     if (main) {
       assert.ok(f.events.indexOf("complete:false") < f.events.indexOf("recovery-verification"));
     }

@@ -57,6 +57,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/plugins/runtime-retention-entrypoint.test-support.ts",
   "system-agent/setup-inference-groq-sdk.test-support":
     "src/system-agent/setup-inference-groq-sdk.test-support.ts",
+  "agents/auth-profiles/store-scope-cwd-runtime.test-support":
+    "src/agents/auth-profiles/store-scope-cwd-runtime.test-support.ts",
   "agents/code-mode-retention-entrypoint.test-support":
     "src/agents/code-mode-retention-entrypoint.test-support.ts",
   "agents/command/cli-compaction-runtime.test-support":
@@ -71,6 +73,8 @@ export const vitestWorkerDeclarationEntries = {
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
   "skills/library/persistence-runtime.test-support":
     "src/skills/library/persistence-runtime.test-support.ts",
+  "snapshot/git-backup-command-runtime.test-support":
+    "src/snapshot/git-backup-command-runtime.test-support.ts",
   "state/openclaw-database-verify-runtime.test-support":
     "src/state/openclaw-database-verify-runtime.test-support.ts",
   "state/openclaw-state-lease-runtime.test-support":

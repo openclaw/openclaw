@@ -89,6 +89,8 @@ the updated Gateway; older runs cannot recover a cause that was never recorded.
 
 An admitted `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
+Retained dry-run previews remain available through history queries but do not
+replace `lastRun`, so a preview cannot hide the last real update failure.
 If history cannot be read or classified, status still shows update availability
 and runtime findings. Human output explains that run status is unavailable;
 JSON includes `runStatusError` and omits the run fields. This does not mean

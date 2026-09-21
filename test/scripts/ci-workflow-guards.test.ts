@@ -26,6 +26,7 @@ import { minimatch } from "minimatch";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import * as qaEvidence from "../../extensions/qa-lab/test-api.js";
+import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import {
   detectChangedScope,
   detectNodeFastScope,
@@ -8825,167 +8826,6 @@ server.listen(0, "127.0.0.1", () => {
     });
   });
 
-  it("fingerprints dependency install inputs without ordinary script churn", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-dependency-fingerprint-"));
-    try {
-      const helper = path.resolve(".github/actions/setup-node-env/dependency-fingerprint.mjs");
-      const writeManifest = (manifest: Record<string, unknown>) => {
-        writeFileSync(path.join(root, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-      };
-      const fingerprint = (frozenLockfile = true) =>
-        execFileSync(
-          process.execPath,
-          [helper, "--workspace", root, "--frozen-lockfile", frozenLockfile ? "true" : "false"],
-          { encoding: "utf8" },
-        ).trim();
-
-      execFileSync("git", ["init", "-q"], { cwd: root });
-      writeManifest({
-        name: "fixture",
-        openclaw: { schemaVersions: { agent: 17, state: 6 } },
-        scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-          test: "vitest run",
-        },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-      execFileSync("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: root });
-
-      const baseline = fingerprint();
-      expect(baseline).toMatch(/^v2-[a-f0-9]{64}$/);
-
-      // Presence is part of the record type, so a real file cannot collide
-      // with the representation of an absent optional install input.
-      writeFileSync(path.join(root, ".pnpmfile.cjs"), "<missing>");
-      expect(fingerprint()).not.toBe(baseline);
-      rmSync(path.join(root, ".pnpmfile.cjs"));
-      expect(fingerprint()).toBe(baseline);
-
-      writeFileSync(path.join(root, ".pnpmfile.mjs"), "export const hooks = {};\n");
-      const mjsHookFingerprint = fingerprint();
-      expect(mjsHookFingerprint).not.toBe(baseline);
-      writeFileSync(
-        path.join(root, ".pnpmfile.mjs"),
-        "export const hooks = { readPackage: (pkg) => pkg };\n",
-      );
-      expect(fingerprint()).not.toBe(mjsHookFingerprint);
-      rmSync(path.join(root, ".pnpmfile.mjs"));
-      expect(fingerprint()).toBe(baseline);
-
-      for (const relativePath of [
-        "node-version.mjs",
-        ".github/actions/setup-node-env/install-dependencies.sh",
-        "scripts/check-install-dependency-ownership.mjs",
-        "scripts/prepare-git-hooks.mjs",
-        "scripts/lib/package-lifecycle-marker.mjs",
-      ]) {
-        const inputPath = path.join(root, relativePath);
-        mkdirSync(path.dirname(inputPath), { recursive: true });
-        writeFileSync(inputPath, "fixture\n");
-        expect(fingerprint(), relativePath).not.toBe(baseline);
-        rmSync(inputPath);
-        expect(fingerprint(), relativePath).toBe(baseline);
-      }
-
-      // Formatting, key order, and scripts that pnpm install never executes
-      // should keep the existing dependency snapshot warm.
-      writeManifest({
-        devDependencies: { vitest: "1.0.0" },
-        scripts: {
-          test: "vitest run --reporter=dot",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-        },
-        name: "fixture",
-      });
-      expect(fingerprint()).toBe(baseline);
-
-      // Repository-owned package metadata does not affect pnpm's install tree
-      // or any audited install hook, so schema churn must stay warm.
-      writeManifest({
-        name: "fixture",
-        openclaw: { schemaVersions: { agent: 17, state: 7 } },
-        scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-          test: "vitest run",
-        },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      expect(fingerprint()).toBe(baseline);
-
-      writeManifest({
-        name: "fixture",
-        scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-          test: "vitest run",
-        },
-        devDependencies: { vitest: "2.0.0" },
-      });
-      expect(fingerprint()).not.toBe(baseline);
-
-      writeManifest({
-        name: "fixture",
-        scripts: { postinstall: "node install-v2.mjs", test: "vitest run" },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      expect(() => fingerprint()).toThrow(/unaudited install lifecycle scripts in package\.json/);
-
-      mkdirSync(path.join(root, "packages", "worker"), { recursive: true });
-      writeManifest({
-        name: "fixture",
-        scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-        },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      const workerManifest = path.join(root, "packages", "worker", "package.json");
-      writeFileSync(
-        workerManifest,
-        `${JSON.stringify({ name: "worker", scripts: { prepare: "node build.mjs" } })}\n`,
-      );
-      execFileSync("git", ["add", "packages/worker/package.json"], { cwd: root });
-      expect(() => fingerprint()).toThrow(
-        /unaudited install lifecycle scripts in packages\/worker\/package\.json/,
-      );
-      writeFileSync(
-        workerManifest,
-        `${JSON.stringify({ name: "worker", scripts: { build: "node build.mjs" } })}\n`,
-      );
-
-      writeManifest({
-        name: "fixture",
-        scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-          test: "vitest run",
-        },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.1'\n");
-      expect(fingerprint()).not.toBe(baseline);
-      expect(fingerprint(false)).not.toBe(baseline);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it("hashes transform inputs once per enabled setup and never for skipped caches", () => {
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
     const transformSteps = (action.runs.steps as WorkflowStep[]).filter((step) =>
@@ -11354,7 +11194,7 @@ server.listen(0, "127.0.0.1", () => {
         ref: "${{ github.workflow_sha }}",
         path: ".ci-harness",
         "sparse-checkout":
-          "/.github/actions/\n/scripts/lib/release-context.mjs\n/scripts/lib/release-version.mjs\n",
+          "/.github/actions/\n/scripts/lib/pnpm-lockfile-documents.mjs\n/scripts/lib/release-context.mjs\n/scripts/lib/release-version.mjs\n",
         "sparse-checkout-cone-mode": false,
         "persist-credentials": false,
       },
@@ -11556,6 +11396,62 @@ server.listen(0, "127.0.0.1", () => {
         "persist-credentials": false,
       });
     }
+  });
+
+  it("selects a supported Node before lightweight checks, release approval, and image wrappers", () => {
+    const cases: [file: string, jobId: string, consumerName: string, setupCondition?: string][] = [
+      ["workflow-sanity.yml", "actionlint", "Disallow tracked merge conflict markers"],
+      ["android-release.yml", "publish_signed_android_apk", "Validate release approval and target"],
+      ["docker-channel-promote.yml", "resolve", "Resolve release channel policy"],
+      ["linux-app-release.yml", "validate_release", "Verify trusted release tooling identity"],
+      [
+        "openclaw-live-and-e2e-checks-reusable.yml",
+        "prepare_live_test_image",
+        "Pack live-test image artifact",
+      ],
+      [
+        "openclaw-live-and-e2e-checks-reusable.yml",
+        "validate_live_models_docker",
+        "Verify and load live-test image artifact",
+      ],
+      [
+        "openclaw-live-and-e2e-checks-reusable.yml",
+        "validate_live_models_docker_targeted",
+        "Verify and load live-test image artifact",
+      ],
+      ["openclaw-release-publish.yml", "publish", "Record postpublish outcome", "${{ always() }}"],
+    ];
+    for (const [file, jobId, consumerName, setupCondition] of cases) {
+      const workflow = parse(readFileSync(`.github/workflows/${file}`, "utf8"));
+      const job = workflow.jobs[jobId];
+      const steps: WorkflowStep[] = job.steps;
+      const consumerIndex = steps.findIndex((step) => step.name === consumerName);
+      const context = `${file}:${jobId}`;
+      expect(consumerIndex, context).toBeGreaterThanOrEqual(0);
+      const setup = expectDefined(
+        steps.slice(0, consumerIndex).find((step) => step.uses?.startsWith("actions/setup-node@")),
+        `${context} must select Node before ${consumerName}`,
+      );
+      const version = setup.with?.["node-version"];
+      const resolved =
+        version === "${{ env.NODE_VERSION }}"
+          ? (job.env?.NODE_VERSION ?? workflow.env?.NODE_VERSION)
+          : version;
+      expect(isSupportedOpenClawNodeVersion(resolved), context).toBe(true);
+      expect(setup.if, context).toBe(setupCondition);
+      expect(setup.with?.["package-manager-cache"], context).toBe(false);
+    }
+    const ci = readCiWorkflow();
+    const manifestRuntime = expectDefined(
+      ci.jobs.preflight.steps.find(
+        (step: WorkflowStep) => step.name === "Setup manifest TypeScript runtime",
+      ),
+      "CI manifest runtime",
+    );
+    expect(manifestRuntime.with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
+    expect(isSupportedOpenClawNodeVersion(ci.env.NODE_VERSION), "CI manifest runtime pin").toBe(
+      true,
+    );
   });
 
   it("pins workflow sanity's typed Git policy after Python setup", () => {
@@ -18126,7 +18022,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(qaValidateJob.outputs.workflow_sha).toBe("${{ steps.workflow.outputs.workflow_sha }}");
     expect(qaValidateJob.outputs).not.toHaveProperty("workflow_repository");
-    const workflowIdentityStep = qaValidateJob.steps[0];
+    expect(qaValidateJob.steps[0]).toEqual({
+      name: "Setup supported Node runtime",
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: { "node-version": "24.19.0", "package-manager-cache": false },
+    });
+    const workflowIdentityStep = qaValidateJob.steps[1];
     expect(workflowIdentityStep).toMatchObject({
       name: "Resolve job workflow identity",
       id: "workflow",

@@ -38,9 +38,11 @@ import { renderChatTranscriptLayout, type TranscriptRow } from "./chat-transcrip
 import {
   createTranscriptOffsetState,
   isTranscriptMaintenanceScroll,
+  isTranscriptManualScroll,
   isTranscriptProgrammaticScroll,
   observeTranscriptOffset,
   scrollTranscriptOffset,
+  scrollTranscriptToEnd,
 } from "./chat-transcript-offset-observer.ts";
 import { activeTranscriptMessageId } from "./chat-transcript-position.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
@@ -595,6 +597,10 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     return isTranscriptProgrammaticScroll(this.offsetState, this.scrollElement);
   }
 
+  get isManualScroll(): boolean {
+    return isTranscriptManualScroll(this.offsetState, this.scrollElement);
+  }
+
   private canAutoFollow(): boolean {
     return this.callbacks.canFollowEnd?.() ?? true;
   }
@@ -605,16 +611,12 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     if (source === "auto" && (this.offsetState.pendingScrollOffset || !this.canAutoFollow())) {
       return false;
     }
-    // Automatic follow retargets the same native end command. Cancelling first
-    // inserts an instant scroll and restarts easing on every streamed update.
-    if (source !== "auto" || this.offsetState.scrollCommand?.target !== "end") {
-      this.cancelScroll();
-    }
-    this.offsetState.scrollCommand = {
-      behavior,
-      target: "end",
-    };
-    this.virtualizerController.getVirtualizer().scrollToEnd({ behavior });
+    scrollTranscriptToEnd(
+      this.offsetState,
+      this.virtualizerController.getVirtualizer(),
+      { source, behavior },
+      () => this.cancelScroll(),
+    );
     if (behavior !== "smooth") {
       this.endAnchor.capture(this.scrollElement);
     }

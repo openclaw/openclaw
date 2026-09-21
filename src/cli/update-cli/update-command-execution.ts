@@ -61,10 +61,6 @@ import {
 } from "./update-command-package.js";
 import { assertUpdateCommandRecovery } from "./update-command-recovery.js";
 import {
-  runUpdateCommandRepair,
-  updateRepairValidationFromCanary,
-} from "./update-command-repair.js";
-import {
   collectServiceInspectionFailureFacts,
   resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
@@ -353,16 +349,7 @@ export async function executeMutableUpdate(
     if (opts.run) {
       recordUpdateRunPhase(opts.run.runId, "validating", undefined, { env: opts.run.env });
     }
-    const validate = async ({
-      signal,
-      rehearsal,
-      assertCurrent,
-      retainFailedRehearsal = false,
-    }: Pick<
-      Parameters<typeof validateUpdateCandidateCanary>[0],
-      "signal" | "rehearsal" | "assertCurrent" | "retainFailedRehearsal"
-    > = {}) => {
-      signal?.throwIfAborted();
+    const validate = async () => {
       try {
         if (params.updateInstallKind === "package") {
           // The staged manifest owns schema support, including artifacts without registry metadata.
@@ -371,17 +358,11 @@ export async function executeMutableUpdate(
               await tryReadJson<unknown>(path.join(root, "package.json")),
             ) ?? admittedTargetSchemaVersions,
           );
-          signal?.throwIfAborted();
-          assertCurrent?.();
         }
         if (stagedPluginAdmission) {
           // Explicit artifacts acquire their version before rehearsal or activation.
           await preflightPlugins(await readPackageVersion(root));
-          signal?.throwIfAborted();
-          assertCurrent?.();
           await prepareMutableUpdate(ownedManagedUpdateContext?.env ?? admission?.managedEnv);
-          signal?.throwIfAborted();
-          assertCurrent?.();
         }
       } catch (error) {
         if (error instanceof UpdatePreMutationError) {
@@ -410,7 +391,6 @@ export async function executeMutableUpdate(
           executor,
           timeoutMs: updateStepTimeoutMs,
           nodeRunner: params.packageUpdateNodeRunner,
-          signal,
         });
         assertExecutionCurrent();
         if (!supported) {
@@ -421,71 +401,34 @@ export async function executeMutableUpdate(
           );
         }
       }
-      const snapshot = rehearsal
-        ? { config: rehearsal.sourceConfig, hash: rehearsal.sourceConfigHash }
-        : (validatedConfigSnapshot ??
-          (await readUpdateCandidateSource(env, params.legacyConfigPlan)));
+      const snapshot =
+        validatedConfigSnapshot ?? (await readUpdateCandidateSource(env, params.legacyConfigPlan));
       const validation = await validateUpdateCandidateCanary({
         root,
         config: snapshot.config,
-        sourceConfigHash: snapshot.hash,
         stateDir: resolveStateDir(env),
         env,
-        signal,
-        rehearsal,
-        retainFailedRehearsal,
-        assertCurrent,
+        assertCurrent: assertExecutionCurrent,
         nodeRunner: params.packageUpdateNodeRunner,
         timeoutMs: params.timeoutMs,
         onStep: (step) => params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 }),
       });
-      try {
-        assertExecutionCurrent();
-        doctorConfigChanges.push(...(validation.doctorConfigChanges ?? []));
-        if (validation.status === "ok") {
-          validatedConfigSnapshot = snapshot;
-          candidateSchemaVersions = validation.candidateSchemaVersions;
-          gatewayRestartCompletion = validation.gatewayRestartCompletion === true;
-          doctorConfigWrites = validation.doctorConfigWrites === true;
-          observedGatewayStartupMs = validation.steps.find(
-            (step) => step.name === "candidate-gateway-startup" && step.exitCode === 0,
-          )?.durationMs;
-        }
-        return validation;
-      } catch (error) {
-        await validation.retainedRehearsal?.cleanup();
-        throw error;
+      assertExecutionCurrent();
+      doctorConfigChanges.push(...(validation.doctorConfigChanges ?? []));
+      if (validation.status === "ok") {
+        validatedConfigSnapshot = snapshot;
+        candidateSchemaVersions = validation.candidateSchemaVersions;
+        gatewayRestartCompletion = validation.gatewayRestartCompletion === true;
+        doctorConfigWrites = validation.doctorConfigWrites === true;
+        observedGatewayStartupMs = validation.steps.find(
+          (step) => step.name === "candidate-gateway-startup" && step.exitCode === 0,
+        )?.durationMs;
       }
+      return validation;
     };
-    let validation = await validate({ retainFailedRehearsal: true });
-    if (validation.status === "error") {
-      candidateFailureReason = validation.reason;
-      const repair = await runUpdateCommandRepair({
-        root: params.root,
-        candidateRoot: root,
-        env,
-        run: opts.run,
-        phase: "validating",
-        mode,
-        validation,
-        nodeRunner: params.packageUpdateNodeRunner,
-        validate: async (signal, assertCurrent, rehearsal) => {
-          return updateRepairValidationFromCanary(
-            await validate({ signal, rehearsal, assertCurrent }),
-          );
-        },
-      });
-      if (repair.status !== "repaired") {
-        if (repair.reason === "requester-revoked") {
-          candidateFailureReason = repair.reason;
-        }
-        return validation.steps;
-      }
-      candidateFailureReason = undefined;
-      // Repair's disposable state is gone; only surviving candidate changes may authorize activation.
-      validation = await validate();
-      candidateFailureReason = validation.status === "error" ? validation.reason : undefined;
-    }
+    // Inference repair belongs to triage after the update's terminal failure.
+    const validation = await validate();
+    candidateFailureReason = validation.status === "error" ? validation.reason : undefined;
     if (validation.status === "ok" && !doctorConfigWrites && doctorConfigChanges.length) {
       const warning = createUpdateDoctorConfigWarningStep(root, doctorConfigChanges);
       validation.steps.push(warning);

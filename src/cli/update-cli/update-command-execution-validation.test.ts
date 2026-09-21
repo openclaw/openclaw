@@ -57,8 +57,8 @@ describe("mutable update validation", () => {
           logTail: [message],
         };
       });
-      const repair = await import("./update-command-repair.js");
-      const runRepair = vi.spyOn(repair, "runUpdateCommandRepair");
+      const repair = await import("../../infra/update-repair-agent.js");
+      const runRepair = vi.spyOn(repair, "runUpdateRepairLoop");
       const accepted = vi.fn();
       const runStagedUpdate = async ({
         validateCandidate,
@@ -407,12 +407,6 @@ describe("mutable update validation", () => {
           failureFacts: [fact],
         },
       ],
-    });
-    const repair = await import("./update-command-repair.js");
-    vi.spyOn(repair, "runUpdateCommandRepair").mockResolvedValue({
-      status: "unavailable",
-      attempts: [],
-      finalValidation: { ok: false, score: 0, summary: fact.message },
     });
     mocks.runGitUpdate.mockImplementation(
       async (params: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0]) => {

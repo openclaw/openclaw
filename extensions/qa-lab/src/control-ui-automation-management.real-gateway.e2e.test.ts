@@ -25,7 +25,7 @@ const suite = createControlUiE2eSuite({
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 type AutomationAction = "list" | "get" | "update" | "run" | "remove";
 const actions = ["list", "get", "update", "run", "remove"] as const;
-const automationName = "Telegram-created reminder";
+const automationName = "Telegram-created reminder _literal_";
 const updatedReminderMessage = "Complete the reminder updated from Control UI.";
 const scheduledReply = "Scheduled reminder completed.";
 
@@ -73,7 +73,9 @@ async function startAutomationProvider() {
           ? toolAvailable
             ? buildToolCallEventsWithArgs("automations", args)
             : buildAssistantEvents(`${marker}: Automation tools are unavailable for this caller.`)
-          : buildAssistantEvents(marker && args ? `${marker}: ${output}` : scheduledReply);
+          : buildAssistantEvents(
+              marker && args ? `${marker}:\n\n\`\`\`json\n${output}\n\`\`\`` : scheduledReply,
+            );
       if (body.stream === true) {
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));

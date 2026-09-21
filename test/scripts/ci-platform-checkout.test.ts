@@ -38,6 +38,21 @@ beforeAll(() => {
   return () => vi.resetConfig();
 });
 
+function expectedHarnessSparseCheckoutArgs(linux: boolean) {
+  return [
+    "sparse-checkout",
+    "set",
+    "--no-cone",
+    "/.github/actions/",
+    "/scripts/lib/pnpm-lockfile-documents.mjs",
+    "/scripts/ios-screenshot-evidence.mjs",
+    "/scripts/lib/direct-run.mjs",
+    ...(linux
+      ? ["/scripts/lib/release-upgrade-baseline.mjs", "/scripts/lib/release-version.mjs"]
+      : []),
+  ];
+}
+
 // Execute both workflow policies against the same owned tree fixture. A leader's
 // exit must not authorize workspace deletion, Git reuse, or final success.
 const platformCases = [
@@ -232,18 +247,9 @@ it.concurrent.each([
           expect(fetches.at(-1)?.args).toContain(
             `+${"b".repeat(40)}:refs/remotes/origin/ci-harness`,
           );
-          expect(
-            report.commands.some(
-              ({ args }) =>
-                args.join(" ") ===
-                [
-                  "sparse-checkout set --no-cone /.github/actions/ /scripts/ios-screenshot-evidence.mjs /scripts/lib/direct-run.mjs",
-                  ...(linux
-                    ? ["/scripts/lib/release-upgrade-baseline.mjs /scripts/lib/release-version.mjs"]
-                    : []),
-                ].join(" "),
-            ),
-          ).toBe(true);
+          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
+            expectedHarnessSparseCheckoutArgs(linux),
+          );
           expect(report.commands.at(-1)?.args).toEqual([
             "checkout",
             "--force",
@@ -327,12 +333,22 @@ it.concurrent.each([
     const link = ".github/actions/tool/link";
     const files = {
       [action]: "name: trusted $Format:%H$\n",
+      ".github/actions/setup-node-env/dependency-fingerprint.mjs": readFileSync(
+        ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+        "utf8",
+      ),
       ".github/actions/tool/with space.txt": "literal action bytes\n",
       ...(posix ? { [executable]: "#!/bin/sh\nexit 0\n" } : {}),
     };
     const evidenceScripts = {
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
+    };
+    const nodeSetupScripts = {
+      "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(
+        "scripts/lib/pnpm-lockfile-documents.mjs",
+        "utf8",
+      ),
     };
     const releasePolicy = Object.fromEntries(
       [
@@ -343,6 +359,8 @@ it.concurrent.each([
     );
     const candidateFiles = {
       "candidate-only.txt": "candidate stays intact\n",
+      "package.json": '{"name":"checkout-fixture"}\n',
+      "pnpm-lock.yaml": "---\nlockfileVersion: '9.0'\n---\nimporters:\n  .: {}\n",
       "extensions/browser/icon.png": "complete binary path\0\xff",
       "ui/src/i18n/.i18n/de-DE.tm.jsonl": '{"fixture":"complete inventory"}\n',
       "scripts/lib/candidate-only.mjs": "export const candidate = true;\n",
@@ -400,6 +418,7 @@ it.concurrent.each([
         for (const [name, contents] of Object.entries({
           ...files,
           ...evidenceScripts,
+          ...nodeSetupScripts,
           ...releasePolicy,
           ...candidateFiles,
         })) {
@@ -431,10 +450,16 @@ it.concurrent.each([
           for (const [name, contents] of Object.entries(candidateEvidenceScripts)) {
             writeFileSync(path.join(source, name), contents);
           }
-          for (const name of Object.keys(releasePolicy)) {
+          for (const name of [...Object.keys(releasePolicy), ...Object.keys(nodeSetupScripts)]) {
             writeFileSync(path.join(source, name), "throw new Error('candidate policy');\n");
           }
-          run("add", action, ...Object.keys(evidenceScripts), ...Object.keys(releasePolicy));
+          run(
+            "add",
+            action,
+            ...Object.keys(evidenceScripts),
+            ...Object.keys(nodeSetupScripts),
+            ...Object.keys(releasePolicy),
+          );
           run("commit", "--no-gpg-sign", "-m", "selected candidate");
           revision = run("rev-parse", "HEAD");
         } else if (workflow === "missing") {
@@ -537,6 +562,19 @@ it.concurrent.each([
         for (const [name, contents] of Object.entries(files)) {
           expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
         }
+        const fingerprint = spawnSync(
+          process.execPath,
+          [
+            path.join(harness, ".github/actions/setup-node-env/dependency-fingerprint.mjs"),
+            "--workspace",
+            workspace,
+            "--frozen-lockfile",
+            "true",
+          ],
+          { cwd: workspace, encoding: "utf8" },
+        );
+        expect(fingerprint.status, fingerprint.stderr).toBe(0);
+        expect(fingerprint.stdout.trim()).toMatch(/^v2-[a-f0-9]{64}$/u);
         for (const [name, contents] of Object.entries(evidenceScripts)) {
           expect(existsSync(path.join(harness, name))).toBe(workflowOwnsEvidence);
           if (workflowOwnsEvidence) {
@@ -577,17 +615,9 @@ it.concurrent.each([
           expect(readlinkSync(path.join(harness, link))).toBe("line\nbreak.sh");
         }
         if (workflow !== "same" && workflowOwnsEvidence) {
-          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual([
-            "sparse-checkout",
-            "set",
-            "--no-cone",
-            "/.github/actions/",
-            "/scripts/ios-screenshot-evidence.mjs",
-            "/scripts/lib/direct-run.mjs",
-            ...(kind === "linux-node"
-              ? ["/scripts/lib/release-upgrade-baseline.mjs", "/scripts/lib/release-version.mjs"]
-              : []),
-          ]);
+          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
+            expectedHarnessSparseCheckoutArgs(linux),
+          );
         }
         writeFileSync(path.join(workspace, action), "later candidate edit\n");
         expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);

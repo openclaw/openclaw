@@ -30,7 +30,7 @@ export const ConfigSchema = Type.Object(
         description: "Tool default: jev-latest for hosted Jev, kev-latest for a local endpoint.",
       }),
     ),
-    timeoutMs: Type.Optional(Type.Integer({ minimum: 1000, maximum: 60000, default: 10000 })),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 1000, maximum: 60000, default: 30000 })),
   },
   { additionalProperties: false },
 );
@@ -58,7 +58,7 @@ export function localBaseUrl(value: unknown): string | undefined {
 export function runtimeConfig(config: Record<string, unknown> | undefined): RuntimeConfig {
   const baseUrl = localBaseUrl(config?.baseUrl);
   const model = config?.model ?? (baseUrl ? "kev-latest" : DEFAULT_MODEL);
-  const timeoutMs = config?.timeoutMs ?? 10000;
+  const timeoutMs = config?.timeoutMs ?? 30000;
   if (
     typeof model !== "string" ||
     !/^[a-zA-Z0-9._/-]{1,128}$/.test(model) ||

@@ -22,6 +22,7 @@ import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
   createRenderTestChatPane,
+  createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -210,6 +211,61 @@ function createPublicationPane(scope?: "global" | "per-sender") {
 }
 
 describe("chat pane pushed pull request state", () => {
+  it("keeps the pane quiet for unrelated PR snapshots while publishing its own changes", () => {
+    const { pane, state, emitGatewayEvent } = createPullRequestPane({
+      capturePullRequestEpoch: vi.fn(() => ({})),
+      setPullRequestSummary: vi.fn(),
+    } as unknown as SessionCapability);
+    const store = sessionPullRequestsForGateway(pane.context.gateway);
+    const otherOwner = {};
+    const otherKey = "agent:main:other-pull-request";
+    store.watch(otherOwner, [otherKey]);
+    pane.refreshSessionPullRequests();
+    const notified = vi.fn(() => pane.refreshSessionPullRequests());
+    const stop = store.subscribe(notified);
+    onTestFinished(() => {
+      stop();
+      store.unwatch(otherOwner);
+    });
+    const snapshot = {
+      pullRequests: [pullRequest(1, "open")],
+      rateLimited: false,
+      status: "ready" as const,
+    };
+    emitSnapshot(emitGatewayEvent, state.sessionKey, snapshot);
+    const redraw = vi.spyOn(pane, "requestUpdate");
+    notified.mockClear();
+
+    emitSnapshot(emitGatewayEvent, "agent:main:unwatched", snapshot);
+    expect.soft(notified).not.toHaveBeenCalled();
+    expect.soft(redraw).not.toHaveBeenCalled();
+    notified.mockClear();
+    redraw.mockClear();
+
+    emitSnapshot(emitGatewayEvent, otherKey, {
+      ...snapshot,
+      pullRequests: [pullRequest(2, "merged")],
+    });
+    expect(notified).toHaveBeenCalledOnce();
+    expect.soft(redraw).not.toHaveBeenCalled();
+    expect(pane.sessionPullRequests).toEqual(snapshot.pullRequests);
+    redraw.mockClear();
+
+    emitSnapshot(emitGatewayEvent, state.sessionKey, {
+      pullRequests: [],
+      rateLimited: false,
+      status: "unavailable",
+    });
+    expect(redraw).toHaveBeenCalledOnce();
+    expect(pane.sessionPullRequests).toEqual(snapshot.pullRequests);
+    redraw.mockClear();
+
+    state.sessionKey = otherKey;
+    pane.refreshSessionPullRequests();
+    expect(redraw).toHaveBeenCalledOnce();
+    expect(pane.sessionPullRequests).toEqual([pullRequest(2, "merged")]);
+  });
+
   it.each(["unavailable", "rate-limited"] as const)(
     "applies retained and replaced repository snapshots during %s",
     async (status) => {
@@ -510,7 +566,7 @@ describe("chat pane pushed pull request state", () => {
   });
 
   it("clears the pane snapshot when the Gateway source disconnects", () => {
-    const { pane } = createPullRequestPane({} as SessionCapability);
+    const { pane } = createPullRequestPane(createSessionCapabilityFixture());
     pane.sessionPullRequests = [pullRequest(111532, "open")];
     pane.githubRepo = { owner: "openclaw", repo: "openclaw" };
 

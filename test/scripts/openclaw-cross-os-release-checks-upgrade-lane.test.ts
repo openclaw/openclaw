@@ -186,6 +186,9 @@ describe("cross-OS manual gateway lane evidence", () => {
           if (outcome === "models-set") {
             throw new Error("injected models-set failure");
           }
+          if (_name === "fresh") {
+            writeFileSync(join(lane.stateDir, "openclaw.json"), "{}\n", "utf8");
+          }
         });
         mocks.runInstalledModelsSet.mockImplementation(() =>
           mocks.runModelsSet({ lane: { gatewayPort: port } }),
@@ -225,6 +228,67 @@ describe("cross-OS manual gateway lane evidence", () => {
       },
     );
   });
+
+  it.each(["retained", "missing", "expanded"] as const)(
+    "checks the authored nested path after fresh Gateway readiness: %s",
+    async (outcome) => {
+      arrangeSuccessfulLane();
+      const authored = {
+        plugins: {
+          enabled: true,
+          allow: ["openai"],
+          deny: ["retired"],
+          slots: { memory: "none" },
+          entries: { openai: { enabled: true, config: { apiKey: "fixture-secret" } } },
+        },
+        agents: { defaults: { model: "openai/gpt-5.6-luna" } },
+        gateway: { mode: "local" },
+      };
+      let configPath = "";
+      mocks.runModelsSet.mockImplementation(async ({ lane }) => {
+        configPath = join(lane.stateDir, "openclaw.json");
+        writeFileSync(configPath, JSON.stringify(authored), "utf8");
+      });
+      mocks.waitForGateway.mockImplementation(async () => {
+        const config = JSON.parse(readFileSync(configPath, "utf8"));
+        expect(config).toEqual({
+          ...authored,
+          plugins: {
+            ...authored.plugins,
+            entries: {
+              ...authored.plugins.entries,
+              wiki: { enabled: false, config: { store: { path: "~/.openclaw/wiki" } } },
+            },
+          },
+        });
+        if (outcome === "missing") {
+          delete config.plugins.entries.wiki.config.store.path;
+        } else if (outcome === "expanded") {
+          config.plugins.entries.wiki.config.store.path = "C:\\Users\\fixture\\.openclaw\\wiki";
+        }
+        writeFileSync(configPath, JSON.stringify(config), "utf8");
+      });
+
+      const result = runFreshLane(upgradeParams());
+      if (outcome === "retained") {
+        await expect(result).resolves.toMatchObject({
+          status: "pass",
+          phaseTimings: expect.arrayContaining([
+            expect.objectContaining({ name: "verify-nested-plugin-path", status: "pass" }),
+          ]),
+        });
+      } else {
+        await expect(result).rejects.toThrow(
+          "Fresh Gateway startup changed the authored nested plugin path.",
+        );
+      }
+      expect(mocks.startGateway).toHaveBeenCalledTimes(1);
+      expect(mocks.waitForGateway).toHaveBeenCalledTimes(1);
+      expect(mocks.runDashboardSmoke).toHaveBeenCalledTimes(outcome === "retained" ? 1 : 0);
+      expect(mocks.runAgentTurn).toHaveBeenCalledTimes(outcome === "retained" ? 1 : 0);
+      expect(mocks.stopGateway).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     ["pass", 15],

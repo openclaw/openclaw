@@ -55,6 +55,7 @@ import {
 } from "./systemd-service-files.js";
 import {
   buildSystemdUnit,
+  preserveSystemdUnitPolicy,
   parseSystemdEnvAssignments,
   renderSystemdEnvAssignment,
   splitSystemdLogicalLines,
@@ -384,13 +385,17 @@ async function writeSystemdUnit(
             );
           }),
         );
-        const unit = buildSystemdUnit({
-          description: resolveGatewayServiceDescription({ env, description }),
-          programArguments,
-          workingDirectory,
-          environment: environmentSansDotEnvEntries,
-          environmentFiles: hasGeneratedValues ? [environmentFilePath] : [],
-        });
+        const unit = preserveSystemdUnitPolicy(
+          buildSystemdUnit({
+            description: resolveGatewayServiceDescription({ env, description }),
+            programArguments,
+            workingDirectory,
+            environment: environmentSansDotEnvEntries,
+            environmentFiles: hasGeneratedValues ? [environmentFilePath] : [],
+          }),
+          existingUnit?.contents.toString("utf8") ?? "",
+          definitionTransaction?.preservePolicy,
+        );
         await assertNoSystemGatewayOwnership(env);
         await mutation.publish(unitPath, unit, restrictSystemdArtifactMode(existingUnit?.mode));
         await assertNoSystemGatewayOwnership(env);

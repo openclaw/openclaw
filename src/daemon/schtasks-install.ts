@@ -6,6 +6,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import {
+  readScheduledTaskDefinition,
   restartRegisteredScheduledTask,
   runScheduledTaskOrThrow,
   type ScheduledTaskActivation,
@@ -47,6 +48,7 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceEnv,
@@ -194,6 +196,7 @@ async function updateExistingScheduledTask(
     scriptPath: string;
     taskLaunchPath: string;
     description?: string;
+    expectedXml: string;
     definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
   } & ScheduledTaskInstallRecovery,
 ): Promise<ScheduledTaskActivation | null> {
@@ -220,11 +223,7 @@ async function updateExistingScheduledTask(
   }
   // Re-apply the full XML so older tasks inherit both false battery flags (#59299).
   // Transactional repair must compensate; ordinary installs keep best-effort activation.
-  const expectedXml = buildScheduledTaskXml({
-    taskDescription: params.description ?? "OpenClaw Gateway",
-    taskUser: resolveTaskUser(params.env),
-    launchPath: params.taskLaunchPath,
-  });
+  const { expectedXml } = params;
   const upgradeXmlPath = await writeTaskXmlTempFile(expectedXml);
   try {
     await params.definitionTransaction?.taskPrepared(expectedXml);
@@ -293,23 +292,31 @@ async function activateScheduledTask(
   const taskDescription = params.description ?? "OpenClaw Gateway";
   const taskName = resolveTaskName(params.env);
   const quotedLaunchPath = quoteSchtasksArg(params.taskLaunchPath);
+  let expectedXml = buildScheduledTaskXml({
+    taskDescription,
+    taskUser: resolveTaskUser(params.env),
+    launchPath: params.taskLaunchPath,
+  });
+  if (params.definitionTransaction?.preservePolicy?.length) {
+    expectedXml = preserveServicePolicyXml(
+      expectedXml,
+      await readScheduledTaskDefinition(params.env),
+      params.definitionTransaction.preservePolicy,
+      "Task",
+    );
+  }
   const existingActivation = await updateExistingScheduledTask({
     ...params,
     taskName,
     quotedLaunchPath,
+    expectedXml,
   });
   if (existingActivation) {
     return existingActivation;
   }
 
-  const taskUser = resolveTaskUser(params.env);
   // Use `schtasks /Create /XML` so the task carries explicit battery settings.
   // The CLI flag form cannot set these and kills the Gateway when a laptop unplugs (#59299).
-  const expectedXml = buildScheduledTaskXml({
-    taskDescription,
-    taskUser,
-    launchPath: params.taskLaunchPath,
-  });
   const xmlPath = await writeTaskXmlTempFile(expectedXml);
   let create: Awaited<ReturnType<typeof execSchtasks>>;
   try {

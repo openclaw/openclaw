@@ -21,6 +21,7 @@ suite.define(() => {
         : null;
     const session = {
       key: "agent:main:cloud-recovery",
+      sessionId: "cloud-recovery-session",
       label: "Recover cloud session",
       kind: "direct",
       updatedAt: Date.now(),
@@ -112,6 +113,7 @@ suite.define(() => {
         : null;
     const session = {
       key: "agent:main:repository-recovery",
+      sessionId: "repository-recovery-session",
       label: "Recover repository session",
       kind: "direct",
       updatedAt: Date.now(),

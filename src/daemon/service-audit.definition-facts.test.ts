@@ -142,10 +142,10 @@ it.each([
   expect(result.definitionDrift).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
-        kind: "unknown-edit",
+        kind: "preserved",
         key: "Service.TimeoutStartSec",
       }),
-      expect.objectContaining({ kind: "unknown-edit", key: "Service.TimeoutStopSec" }),
+      expect.objectContaining({ kind: "preserved", key: "Service.TimeoutStopSec" }),
     ]),
   );
   expect(result.definitionDrift).toHaveLength(2);
@@ -300,9 +300,9 @@ it.each(["missing", "custom", "stale", "legacy-1", "legacy-60"])(
       expect.objectContaining(
         kind === "custom" || kind === "stale"
           ? {
-              kind: "unknown-edit",
+              kind: "preserved",
               key: "ExitTimeOut",
-              reason: expect.any(String),
+              message: expect.stringContaining("not changed"),
             }
           : {
               kind: "outdated",
@@ -352,9 +352,9 @@ it.each([
               expected: "3",
             }
           : {
-              kind: "unknown-edit",
+              kind: "preserved",
               key: "Settings.RestartOnFailure.Count",
-              reason: expect.any(String),
+              message: expect.stringContaining("not changed"),
             },
       ),
     ]);

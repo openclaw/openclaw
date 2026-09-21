@@ -351,6 +351,7 @@ export function executeSharedStateCommand(
   if (
     command.type === "userProfiles.list" ||
     command.type === "userProfiles.directory" ||
+    command.type === "userProfiles.email.ensure" ||
     command.type === "userProfiles.avatar.inspect" ||
     command.type === "userProfiles.avatar.adopt"
   ) {
@@ -412,6 +413,9 @@ export function executeSharedStateCommand(
   }
   switch (command.type) {
     case "transcripts.readEntries":
+    case "transcripts.exportOwnership":
+    case "transcripts.exportPathCollisions":
+    case "transcripts.exportPathOwners":
     case "transcripts.sessionEntries":
     case "transcripts.matches":
     case "transcripts.session":

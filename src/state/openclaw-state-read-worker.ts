@@ -75,6 +75,7 @@ function readPool(): ReadPool {
     ensureSqliteLibrarySelected();
     state.pool = createOwnedWorkerTaskPool({
       workerUrl: resolveRuntimeProcessEntrypointUrl("stateRead"),
+      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
       maxWorkers: 2,
       idleTimeoutMs: SQLITE_IDLE_HANDLE_TTL_MS,
       maxPendingTasks: DEFAULT_WORKER_PENDING_TASKS,
@@ -95,6 +96,15 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
   }
   if (command.type === "updateRuns.list") {
     return { ...command, input: { ...command.input } };
+  }
+  if (
+    command.type === "skills.library.descriptions" ||
+    command.type === "skills.library.manifests"
+  ) {
+    return {
+      type: command.type,
+      input: command.input.map(({ skillId, revision }) => ({ skillId, revision })),
+    };
   }
   if (command.type === "audit.run.inspect") {
     const input = command.input;
@@ -151,14 +161,27 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       (command.input.active === undefined ? 0 : 1)
     );
   }
+  if (
+    command.type === "skills.library.descriptions" ||
+    command.type === "skills.library.manifests"
+  ) {
+    return command.input.reduce(
+      (total, pin) =>
+        total + Buffer.byteLength(pin.skillId, "utf8") + Buffer.byteLength(pin.revision, "utf8"),
+      bytes,
+    );
+  }
   if (command.type === "fleet.get") {
     return bytes + Buffer.byteLength(command.tenantId, "utf8");
   }
   if (command.type === "onboardingRecommendations.read") {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
   }
-  if (command.type === "userProfiles.avatar.reconcile") {
+  if (command.type === "userProfiles.reconcile") {
     return bytes + Buffer.byteLength(command.profileId, "utf8");
+  }
+  if (command.type === "userProfiles.email.resolve") {
+    return bytes + Buffer.byteLength(command.email, "utf8");
   }
   if (command.type === "workspace.snapshot") {
     return bytes + Buffer.byteLength(command.workspaceDir, "utf8");

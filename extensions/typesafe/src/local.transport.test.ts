@@ -196,7 +196,7 @@ it.each([
   expect(runtimeConfig({ baseUrl: url, apiKey: "ignored-secret" })).toEqual({
     baseUrl: new URL(url).origin,
     model: "kev-latest",
-    timeoutMs: 10000,
+    timeoutMs: 30000,
   });
 });
 

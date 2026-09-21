@@ -453,25 +453,102 @@ suite.define(() => {
                   outline: getComputedStyle(element).outlineStyle,
                 };
               });
-          for (const index of [120, 121]) {
-            await markerForIndex(index).click();
-            const revealed = transcript.locator(
-              `.chat-bubble[data-entry-id="position-rail-${index}"]`,
+          const clickAndObserveFlash = async (index: number, animated: boolean) => {
+            // Retain the transient paint in the renderer before a delayed host can miss it.
+            const observation = await transcript.evaluateHandle(
+              (element: HTMLElement, position) => {
+                let clicked = false;
+                let animationStarted = false;
+                let paint: { visible: boolean; animated: boolean; outline: string } | null = null;
+                const sample = () => {
+                  if (!clicked) {
+                    return;
+                  }
+                  const bubble = element.querySelector(
+                    `.chat-bubble[data-entry-id="position-rail-${position}"]`,
+                  );
+                  if (!bubble) {
+                    return;
+                  }
+                  const overlay = getComputedStyle(bubble, "::after");
+                  const rect = bubble.getBoundingClientRect();
+                  const viewport = element.getBoundingClientRect();
+                  if (
+                    overlay.content !== "none" &&
+                    Number.parseFloat(overlay.opacity) > 0 &&
+                    (overlay.animationName === "none" || animationStarted) &&
+                    rect.top >= viewport.top &&
+                    rect.bottom <= viewport.bottom
+                  ) {
+                    paint = {
+                      visible: true,
+                      animated: overlay.animationName !== "none",
+                      outline: getComputedStyle(bubble).outlineStyle,
+                    };
+                  }
+                };
+                const onClick = (event: Event) => {
+                  if (
+                    event.target instanceof Element &&
+                    event.target
+                      .closest("[data-position-marker-id]")
+                      ?.getAttribute("data-position-marker-id") === `position-rail-${position}`
+                  ) {
+                    clicked = true;
+                  }
+                };
+                const onAnimationStart = (event: AnimationEvent) => {
+                  if (
+                    clicked &&
+                    event.target instanceof Element &&
+                    event.target.getAttribute("data-entry-id") === `position-rail-${position}` &&
+                    event.pseudoElement === "::after"
+                  ) {
+                    animationStarted = true;
+                    sample();
+                  }
+                };
+                const mutations = new MutationObserver(sample);
+                mutations.observe(element, {
+                  subtree: true,
+                  childList: true,
+                  attributes: true,
+                  attributeFilter: ["class"],
+                });
+                element.addEventListener("click", onClick, true);
+                element.addEventListener("animationstart", onAnimationStart, true);
+                element.addEventListener("scroll", sample, true);
+                return {
+                  read: () => paint,
+                  disconnect: () => {
+                    mutations.disconnect();
+                    element.removeEventListener("click", onClick, true);
+                    element.removeEventListener("animationstart", onAnimationStart, true);
+                    element.removeEventListener("scroll", sample, true);
+                  },
+                };
+              },
+              index,
             );
-            await expect
-              .poll(() =>
-                revealed.evaluate((element) => {
-                  const viewport = element.closest(".chat-thread")!.getBoundingClientRect();
-                  const bubble = element.getBoundingClientRect();
-                  return bubble.top >= viewport.top && bubble.bottom <= viewport.bottom;
-                }),
-              )
-              .toBe(true);
-            await expect
-              .poll(() => flashPaint(index))
-              .toEqual({ visible: true, animated: true, outline: "none" });
-            await captureUiProof(suite, page, "chat-position-rail", `jump-flash-${index}.png`);
-            await expect.poll(async () => (await flashPaint(index)).visible).toBe(false);
+            try {
+              await markerForIndex(index).click();
+              await expect
+                .poll(() => observation.evaluate((entry) => entry.read()))
+                .toEqual({ visible: true, animated, outline: "none" });
+              if (animated) {
+                await captureUiProof(suite, page, "chat-position-rail", `jump-flash-${index}.png`);
+              }
+              await expect.poll(async () => (await flashPaint(index)).visible).toBe(false);
+            } finally {
+              try {
+                await observation.evaluate((entry) => entry.disconnect());
+              } finally {
+                await observation.dispose();
+              }
+            }
+          };
+          for (const index of [120, 121]) {
+            await clickAndObserveFlash(index, true);
           }
           await markerForIndex(120).press("Escape");
           await expect.poll(() => preview.count()).toBe(0);
@@ -514,11 +591,7 @@ suite.define(() => {
           ).toBeLessThanOrEqual(0.00001); // Global reduced-motion policy uses 0.01ms.
 
           await showMarker(239);
-          await markerForIndex(239).click();
-          await expect
-            .poll(() => flashPaint(239))
-            .toEqual({ visible: true, animated: false, outline: "none" });
-          await expect.poll(async () => (await flashPaint(239)).visible).toBe(false);
+          await clickAndObserveFlash(239, false);
 
           // Saved widths can consume the gutter even in a wide desktop pane.
           for (const width of ["100%", "none", "95%", "48rem"]) {

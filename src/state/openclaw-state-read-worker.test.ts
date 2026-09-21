@@ -178,7 +178,7 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
   const release = vi.fn();
   const result = withOpenClawStateSettlementRead(context, async (read) => {
     read.bind(
-      { type: "userProfiles.avatar.reconcile", profileId: profile.id },
+      { type: "userProfiles.reconcile", profileId: profile.id },
       Promise.resolve({ kind: "completed" }),
       publish,
       release,
@@ -189,7 +189,7 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
   const recovery = queueTask();
   recovery.result.resolve({
     ok: true,
-    type: "userProfiles.avatar.reconcile",
+    type: "userProfiles.reconcile",
     sourceAdmitted: true,
     profile: descriptor,
   });
@@ -203,7 +203,7 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
     mutationSettled.resolve();
     expect(await result).toBe(delivery);
     expect((await recovery.captured).command).toEqual({
-      type: "userProfiles.avatar.reconcile",
+      type: "userProfiles.reconcile",
       profileId: profile.id,
     });
     expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor);
@@ -236,7 +236,7 @@ it.each([false, true])(
     ])[0]![1];
     await closeOpenClawStateDatabaseAsync();
     const context = captureOpenClawStateWorkerContext(options);
-    const command = { type: "userProfiles.avatar.reconcile", profileId: profile.id } as const;
+    const command = { type: "userProfiles.reconcile", profileId: profile.id } as const;
     const reply: OpenClawStateReadReply = {
       ok: true,
       type: command.type,
@@ -593,7 +593,7 @@ it("closes only the operation matching a state path while its sibling finishes n
 
 it.each([
   "fleet.get",
-  "userProfiles.avatar.reconcile",
+  "userProfiles.reconcile",
   "onboardingRecommendations.read",
   "workspace.snapshot",
   "pluginBlob.lookup",
@@ -611,7 +611,7 @@ it.each([
         ? { type, runId: selector }
         : type === "fleet.get"
           ? { type, tenantId: selector }
-          : type === "userProfiles.avatar.reconcile"
+          : type === "userProfiles.reconcile"
             ? { type, profileId: selector }
             : type === "onboardingRecommendations.read"
               ? { type, configKey: selector }
@@ -634,7 +634,7 @@ it.each([
       command.runId = "different run after admission";
     } else if (command.type === "fleet.get") {
       command.tenantId = "different tenant after admission";
-    } else if (command.type === "userProfiles.avatar.reconcile") {
+    } else if (command.type === "userProfiles.reconcile") {
       command.profileId = "different profile after admission";
     } else if (command.type === "onboardingRecommendations.read") {
       command.configKey = "different key after admission";
@@ -658,7 +658,7 @@ it.each([
         ? { ok: true, type, sourceAdmitted: true, run: undefined }
         : type === "fleet.get"
           ? { ok: true, type, sourceAdmitted: true, cell: undefined }
-          : type === "userProfiles.avatar.reconcile"
+          : type === "userProfiles.reconcile"
             ? { ok: true, type, sourceAdmitted: true, profile: undefined }
             : type === "onboardingRecommendations.read"
               ? { ok: true, type, sourceAdmitted: true, record: null }
@@ -736,6 +736,36 @@ it("captures update history filters and charges retained selectors before dispat
     await Promise.allSettled([result]);
   }
 });
+
+it.each(["skills.library.descriptions", "skills.library.manifests"] as const)(
+  "retains library pins and their byte charge while dispatch waits (%s)",
+  async (type) => {
+    const { options } = source();
+    const input = [{ skillId: "技能🦞".repeat(512), revision: "版本🦞".repeat(512) }];
+    const expected = structuredClone(input);
+    const dispatch = createDeferredCore();
+    const task = queueTask(dispatch.promise);
+    const result = executeExistingOpenClawStateRead(options, { type, input });
+    const returned: OpenClawStateReadReply = { ok: true, type, sourceAdmitted: true, value: [] };
+    try {
+      const submitted = await task.submitted;
+      input[0]!.skillId = "changed";
+      input[0]!.revision = "changed";
+      input.push({ skillId: "extra", revision: "extra" });
+      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
+        Buffer.byteLength(expected[0]!.skillId) + Buffer.byteLength(expected[0]!.revision),
+      );
+      dispatch.resolve();
+      expect((await task.captured).command).toEqual({ type, input: expected });
+      task.result.resolve(returned);
+      expect(await result).toEqual(returned);
+    } finally {
+      dispatch.resolve();
+      task.result.resolve(returned);
+      await Promise.allSettled([result]);
+    }
+  },
+);
 
 it.each([
   {

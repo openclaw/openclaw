@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 365261,
-  "reason": "Approved #153178 rebase measurement with frozen Pako 3.0.2: 365172 B rounds up to 365261 B (356.7 KiB), above the previous 364954 B baseline. The existing 512 B growth and 64 B build-variance allowances remain unchanged, giving an explicit 365837 B enforcement limit.",
-  "updatedAt": "2026-09-20"
+  "startupJsGzipBytes": 366336,
+  "reason": "Approved #152375 integration measurement: startup JS is 366291 B; 366336 B (357.75 KiB) provides a rounded baseline. The existing 512 B growth and 64 B build-variance allowances remain unchanged, giving an explicit 366912 B enforcement limit.",
+  "updatedAt": "2026-09-21"
 }

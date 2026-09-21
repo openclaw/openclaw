@@ -305,6 +305,9 @@
      inherit the widened surface treatment (excluded selectors, the tokens
      exported to embedded MCP apps in mcp-app-theme.ts). */
   --openclaw-corner-radius-scale: 1;
+  /* Theme-facing composer corner family; themes may pick e.g. `scoop scoop round round`.
+     Engines without corner-shape keep the circular radius. */
+  --chat-composer-corner-shape: superellipse(1.5);
 
   /* Menu items stay optically parallel to their panel edge: radius 6 + padding 4
      = panel radius 10. Shared knobs keep transient menus from drifting again. */

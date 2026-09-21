@@ -42,7 +42,11 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
       import fs from "node:fs";
       import {setTimeout} from "node:timers/promises";
       import {withDelegatedUpdateCommandExecutor} from ${JSON.stringify(ownerUrl)};
-      const {grant,proceed,effect}=JSON.parse(fs.readFileSync(0,"utf8"));
+      const chunks=[];
+      for await (const chunk of process.stdin) {
+        chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
+      }
+      const {grant,proceed,effect}=JSON.parse(Buffer.concat(chunks).toString("utf8"));
       await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
         process.stdout.write(JSON.stringify({ready:true,rootKey:grant.parent.key,spawnerKey:grant.spawner.key})+"\\n");
         while(!fs.existsSync(proceed)) await setTimeout(10);
@@ -51,10 +55,13 @@ it.each(["healthy", "spawner-settled", "root-replaced", "spawner-replaced"] as c
       });
     `;
     const intermediate = `
-      import fs from "node:fs";
       import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild} from ${JSON.stringify(ownerUrl)};
       import {runUtf8CommandWithTimeout} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processExec).href)};
-      const input=JSON.parse(fs.readFileSync(0,"utf8"));
+      const chunks=[];
+      for await (const chunk of process.stdin) {
+        chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
+      }
+      const input=JSON.parse(Buffer.concat(chunks).toString("utf8"));
       await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async fence=>{
         const result=await withUpdateCommandExecutorChild(fence,input.grant.root,(grant,beforeInput)=>runUtf8CommandWithTimeout(
           [process.execPath,...${JSON.stringify(sourceImportArgs)},"--input-type=module","-e",${JSON.stringify(leaf)}],
@@ -222,7 +229,11 @@ it
     import {spawn} from "node:child_process";
     import {withDelegatedUpdateCommandExecutor,withUpdateCommandExecutorChild} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
     import {runUtf8CommandWithTimeout} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processExec).href)};
-    const input=JSON.parse(fs.readFileSync(0,"utf8"));
+    const chunks=[];
+    for await (const chunk of process.stdin) {
+      chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
+    }
+    const input=JSON.parse(Buffer.concat(chunks).toString("utf8"));
     try{await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async fence=>{
       const result=await withUpdateCommandExecutorChild(fence,input.grant.root,async(grant,beforeInput)=>{
         fs.writeFileSync(${JSON.stringify(file("binding"))},JSON.stringify(grant));

@@ -1,4 +1,5 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
+import { createVisitorAccessReader } from "./src/access.js";
 import { VisitorPolicyClient } from "./src/cloudflare.js";
 import { visitorConfigSchema, visitorPluginSchema } from "./src/config.js";
 import { visitorErrorText } from "./src/errors.js";
@@ -11,7 +12,13 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
     return;
   }
   for (const name of ["visitor_invite", "visitor_revoke", "visitor_list"]) {
-    api.registerTool((ctx) => createVisitorTools(ctx).find((tool) => tool.name === name), { name });
+    api.registerTool(
+      {
+        contextVersion: 2,
+        create: (ctx) => createVisitorTools(ctx).find((tool) => tool.name === name),
+      },
+      { name },
+    );
   }
   if (api.registrationMode !== "full") {
     return;
@@ -29,6 +36,7 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
     store,
     new VisitorPolicyClient(config, fetch, lifetime.signal),
     api.logger,
+    createVisitorAccessReader(api.runtime),
     fetch,
     lifetime.signal,
   );

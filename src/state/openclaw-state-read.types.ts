@@ -22,6 +22,7 @@ import type {
   PluginBlobReadReply,
 } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
+import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
 import type { OnboardingRecommendationsRecord } from "./onboarding-recommendations.contract.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
 import type { ConfigMachineState } from "./openclaw-state-db.generated.js";
@@ -45,9 +46,16 @@ export type OpenClawStateReadAuthority = {
 export type OpenClawStateReadCommand =
   | PluginBlobReadCommand
   | { type: "exec-approvals.read" }
+  | {
+      [Kind in keyof SkillLibraryReadOnlyOperations]: {
+        type: Kind;
+        input: SkillLibraryReadOnlyOperations[Kind]["input"];
+      };
+    }[keyof SkillLibraryReadOnlyOperations]
   | { type: "agentDatabaseRegistry.read" }
   | { type: "onboardingRecommendations.read"; configKey: string }
-  | { type: "userProfiles.avatar.reconcile"; profileId: string }
+  | { type: "userProfiles.reconcile"; profileId: string }
+  | { type: "userProfiles.email.resolve"; email: string }
   | { type: "audit.run.inspect"; input: ExecutionIdentityInspectionQuery }
   | { type: "updateRuns.get"; runId: string }
   | { type: "updateRuns.list"; input: UpdateRunListInput }
@@ -71,6 +79,20 @@ export type OpenClawStateReadRequest = {
 export type OpenClawStateReadReply = (
   | PluginBlobReadReply
   | {
+      [Kind in keyof SkillLibraryReadOnlyOperations]: {
+        ok: true;
+        type: Kind;
+        sourceAdmitted: true;
+        value: SkillLibraryReadOnlyOperations[Kind]["output"];
+      };
+    }[keyof SkillLibraryReadOnlyOperations]
+  | {
+      ok: true;
+      type: "userProfiles.email.resolve";
+      sourceAdmitted: true;
+      profileId: string | undefined;
+    }
+  | {
       ok: true;
       type: "agentDatabaseRegistry.read";
       sourceAdmitted?: true;
@@ -84,7 +106,7 @@ export type OpenClawStateReadReply = (
     }
   | {
       ok: true;
-      type: "userProfiles.avatar.reconcile";
+      type: "userProfiles.reconcile";
       sourceAdmitted: true;
       profile: ProfileDisplayRow | undefined;
     }

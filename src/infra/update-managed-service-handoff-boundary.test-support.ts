@@ -30,11 +30,6 @@ import {
   pathExists,
 } from "./update-managed-service-handoff-process.test-support.js";
 import {
-  managedRepairUpdaterScript,
-  readManagedRepairEffects,
-  releaseManagedRepairInference,
-} from "./update-managed-service-handoff-repair.test-support.js";
-import {
   prepareManagedServiceBoundaryFiles,
   prepareManagedServiceRuntimeFixture,
   prepareManagedServiceSpawn,
@@ -214,7 +209,7 @@ export function createManagedServiceManagerBoundary({
       }
       if (options?.replaceLedgerWriter) {
         const installedLedgerModule = `${ledgerRuntimeImport}
-        export const { finishUpdateRun } = ledger;
+        export const { finishUpdateRun, recordUpdateRunDiagnostic } = ledger;
       `;
         updaterScript =
           `require("node:fs").writeFileSync(${JSON.stringify(recoveryModulePath)}, ${JSON.stringify(installedLedgerModule)});` +
@@ -228,22 +223,14 @@ export function createManagedServiceManagerBoundary({
           updaterScript;
       }
       if (options?.controlDisconnect === "transferred") {
-        const continuation =
-          options.repair && run
-            ? await managedRepairUpdaterScript({
-                root,
-                runId: run.runId,
-                sourceRuntimeImport,
-                phase: options.repair.phase,
-              })
-            : options.validationResult
-              ? `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:${JSON.stringify(options.validationResult === "failed" ? "error" : "skipped")},mode:"npm",reason:${JSON.stringify(options.validationResult === "failed" ? "candidate-validation-failed" : "already-current")}}));`
-              : createManagedServiceActivationScript({
-                  ...options,
-                  sourceRuntimeImport,
-                  statePath,
-                  updaterScript,
-                });
+        const continuation = options.validationResult
+          ? `process.stdout.write(JSON.stringify({root:${JSON.stringify(root)},status:${JSON.stringify(options.validationResult === "failed" ? "error" : "skipped")},mode:"npm",reason:${JSON.stringify(options.validationResult === "failed" ? "candidate-validation-failed" : "already-current")}}));`
+          : createManagedServiceActivationScript({
+              ...options,
+              sourceRuntimeImport,
+              statePath,
+              updaterScript,
+            });
         updaterScript = `
         const validationFs = require("node:fs");
         const validationStartedAt = Date.now();
@@ -505,15 +492,6 @@ export function createManagedServiceManagerBoundary({
               expect(parent.signalCode).toBeNull();
               await fs.writeFile(statePath + ".park-tail", "complete request");
             }
-            if (options.repair) {
-              await Promise.race([
-                options.repair.inferencePending,
-                completion.then(() => {
-                  throw new Error(`Repair updater exited before inference: ${stderr}`);
-                }),
-              ]);
-              await releaseManagedRepairInference(options.repair, root, env.OPENCLAW_CONFIG_PATH);
-            }
             if (notice) {
               await notice;
               await expect(pathExists(commandsPath)).resolves.toBe(false);
@@ -573,9 +551,7 @@ export function createManagedServiceManagerBoundary({
         }
         const code = await completion;
         const helperLog = await fs.readFile(String(generated.logPath), "utf8").catch(() => "");
-        if (!options.repair) {
-          expect(code, `${stderr}\n${helperLog}`).toBe(options.helperExitCode ?? 0);
-        }
+        expect(code, `${stderr}\n${helperLog}`).toBe(options.helperExitCode ?? 0);
         await expect(pathExists(updaterPath)).resolves.toBe(
           activated && !options.expireParentWhileStopPending,
         );
@@ -650,12 +626,6 @@ export function createManagedServiceManagerBoundary({
         db.close();
       }
       return {
-        ...(options?.repair
-          ? {
-              repairEffects: readManagedRepairEffects(root),
-              helperExitCode: runningHelper.exitCode,
-            }
-          : {}),
         ...(run ? { run: getUpdateRun(run.runId, { env }) } : {}),
         ...(options?.expireParentWhileStopPending
           ? { stopSettlement: JSON.parse(await fs.readFile(stopSettlementPath, "utf8")) }

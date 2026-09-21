@@ -150,6 +150,7 @@ export function registerWorktreesCli(program: Command): void {
     .description("Run managed worktree cleanup now")
     .option("--json", "Output JSON", false)
     .action(async (opts: JsonOption) => {
+      const { formatWorktreeGcResult } = await import("../agents/worktrees/gc-result.js");
       const { createManagedWorktreeOwnerPolicy } =
         await import("../agents/worktrees/owner-protection.js");
       const { managedWorktrees, resolveWorktreeCleanupLimits } =
@@ -164,9 +165,11 @@ export function registerWorktreesCli(program: Command): void {
       if (opts.json) {
         printJson(result);
       } else {
-        defaultRuntime.log(
-          `Removed ${result.removed.length}; deleted ${result.orphansDeleted} orphans; pruned ${result.snapshotsPruned} snapshots.`,
-        );
+        defaultRuntime.log(formatWorktreeGcResult(result));
+      }
+      if (result.outcome === "partial") {
+        const { exitCliAfterOutput } = await import("./one-shot-exit.js");
+        exitCliAfterOutput(defaultRuntime, 1);
       }
     });
 

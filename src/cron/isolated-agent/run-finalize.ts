@@ -6,8 +6,6 @@ import {
   buildAgentRunTerminalReplySnapshot,
   normalizeAgentRunTerminalReplySnapshot,
 } from "../../agents/agent-run-terminal-reply.js";
-import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { hasIntentionalTerminalCompletion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
@@ -335,42 +333,10 @@ export async function finalizeCronRun(params: {
       sourceDeliveryOutcome,
     });
   }
-  const hasCommittedTerminalProgress =
-    hasCommittedMessagingToolDeliveryEvidence(finalRunResult) ||
-    finalRunResult.didSendDeterministicApprovalPrompt === true ||
-    acceptedSessionSpawn ||
-    (finalRunResult.successfulCronAdds ?? 0) > 0;
   const hasIntentionalSilentReply =
     finalRunResult.meta?.terminalReplyKind === "silent-empty" ||
     isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantRawText) ||
     isSilentReplyPayloadText(finalRunResult.meta?.finalAssistantVisibleText);
-  if (
-    prepared.deliveryRequested &&
-    !hasFatalErrorPayload &&
-    !sourceDeliveryOutcome.satisfiesSourceDelivery &&
-    !hasCommittedTerminalProgress &&
-    !hasIntentionalSilentReply &&
-    !hasIntentionalTerminalCompletion(finalRunResult) &&
-    deliveryPayloads.length === 0 &&
-    normalizeOptionalString(synthesizedText) === undefined
-  ) {
-    await queueSourceSessionMessageToolAwareness?.();
-    const error = "cron isolated run completed without a final assistant payload";
-    return prepared.withRunSession({
-      status: "error",
-      error,
-      summary: error,
-      outputText: error,
-      replyDisposition,
-      delivered: false,
-      deliveryAttempted: false,
-      diagnostics: mergeCronRunDiagnostics(
-        runDiagnostics,
-        createCronRunDiagnosticsFromError("agent-run", error),
-      ),
-      ...telemetry,
-    });
-  }
   if (hasFatalStructuredErrorPayload && prepared.deliveryRequested) {
     // Structured run error payloads belong in cron state and failure alerts,
     // not the normal completion announce path where provider JSON can leak.

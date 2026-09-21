@@ -250,7 +250,8 @@ async function fixture(
   if (edit === "native-policy") {
     original = original
       .replace("TimeoutStartSec=30", "TimeoutStartSec=45")
-      .replace("TimeoutStopSec=330", "TimeoutStopSec=600");
+      .replace("TimeoutStopSec=330", "TimeoutStopSec=600")
+      .replace("StartLimitIntervalSec=300", "StartLimitIntervalSec=60");
   }
   if (edit === "Nice" || edit === "ExecStartPre") {
     original = original.replace(
@@ -515,9 +516,49 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
+it.skipIf(process.platform === "win32")(
+  "preserves custom timeouts while recording a successful native-policy repair",
+  async () => {
+    const f = await fixture("native-policy");
+    expect(f.original).toContain("StartLimitIntervalSec=60");
+    await runDaemonInstall({ force: true, json: true });
+    const result = response();
+    expect(result.ok, result.error).toBe(true);
+    expect(result.error).toBeUndefined();
+    const changed = await fs.readFile(f.source, "utf8");
+    expect(changed).toMatch(/^TimeoutStartSec=45$/mu);
+    expect(changed).toMatch(/^TimeoutStopSec=600$/mu);
+    expect(changed).toMatch(/^StartLimitIntervalSec=300$/mu);
+    expect(changed).toMatch(/^KillMode=mixed$/mu);
+    expect(await expectDefinitionBackups(f)).toEqual(result.definitionBackup);
+    const steps = getUpdateRun(f.runId)?.steps;
+    for (const key of ["Service.TimeoutStartSec", "Service.TimeoutStopSec"]) {
+      const warning = result.warnings?.find(
+        (message) => message.includes(key) && message.includes("not changed"),
+      );
+      expect(warning).toEqual(expect.any(String));
+      expect(steps).toContainEqual(
+        expect.objectContaining({
+          step: expect.stringContaining("warning:managed-service-reconciliation"),
+          detail: warning,
+        }),
+      );
+    }
+    expect(steps).toContainEqual(
+      expect.objectContaining({
+        step: expect.stringContaining("warning:managed-service-reconciliation"),
+        detail: expect.stringMatching(
+          /Reconciled Gateway service definition:.*Unit\.StartLimitIntervalSec/u,
+        ),
+      }),
+    );
+    expect(native.systemctl.mock.calls.filter(([, args]) => args[0] === "restart")).toHaveLength(1);
+  },
+);
+
 it
   .skipIf(process.platform === "win32")
-  .each(["Nice", "ExecStartPre", "foreign-unit", "foreign-root", "native-policy"] as const)(
+  .each(["Nice", "ExecStartPre", "foreign-unit", "foreign-root"] as const)(
   "preserves the entire definition when candidate repair finds %s",
   async (edit) => {
     const f = await fixture(edit);
@@ -527,10 +568,7 @@ it
     expect(result.ok).toBe(false);
     expect(result.error).toContain("SERVICE_DEFINITION_UNKNOWN");
     expect(result.definitionBackup).toBeUndefined();
-    if (edit === "native-policy") {
-      expect(result.warnings).toContainEqual(expect.stringContaining("Service.TimeoutStartSec"));
-      expect(result.warnings).toContainEqual(expect.stringContaining("Service.TimeoutStopSec"));
-    } else if (edit === "Nice" || edit === "ExecStartPre") {
+    if (edit === "Nice" || edit === "ExecStartPre") {
       expect(result.warnings).toContainEqual(expect.stringContaining(`Service.${edit}`));
     } else {
       expect(result.warnings).toContainEqual(

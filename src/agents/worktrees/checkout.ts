@@ -214,6 +214,7 @@ export async function collectWorktreeTemplates(
   env: NodeJS.ProcessEnv,
   before: number,
   options: WorktreeFilesystemOptions,
+  onError?: (error: unknown, id: string) => void,
 ): Promise<void> {
   for (const record of listTemplates(env)) {
     if (record.status === "ready" && record.lastUsedAt >= before) {
@@ -223,6 +224,7 @@ export async function collectWorktreeTemplates(
       await retireTemplate(env, record, options);
     } catch (error) {
       assertOwned(options);
+      onError?.(error, record.id);
       log.warn(`worktree template cleanup failed: ${String(error)}`);
     }
   }

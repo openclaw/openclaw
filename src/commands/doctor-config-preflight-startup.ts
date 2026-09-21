@@ -1,11 +1,11 @@
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { readConfigFileSnapshot, type ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
+import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
@@ -171,11 +171,9 @@ export async function readStartupMigrationSnapshot(params: {
 }
 
 function assertStartupConfigUnchanged(before: ConfigFileSnapshot, after: ConfigFileSnapshot): void {
-  if (
-    before.path !== after.path ||
-    !isDeepStrictEqual(before.sourceConfig ?? before.config, after.sourceConfig ?? after.config)
-  ) {
-    throwStartupMigrationIdentityChanged();
+  const change = describeConfigSnapshotInputChange(before, after);
+  if (change) {
+    throwStartupMigrationIdentityChanged(change);
   }
 }
 

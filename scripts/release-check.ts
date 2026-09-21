@@ -43,6 +43,8 @@ import {
 } from "./openclaw-npm-postpublish-verify.ts";
 import { assertPreparedOpenClawAiDependency } from "./openclaw-npm-prepublish-verify.ts";
 import { parseNpmPackJsonOutput, type NpmPackResult } from "./openclaw-npm-release-check.ts";
+import type * as OpenClawPrepack from "./openclaw-prepack.ts";
+import type * as OpenClawPackage from "./package-openclaw-for-docker.mts";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -346,18 +348,6 @@ function execPnpm(
   return runReleaseCheckCommand(invocation, options);
 }
 
-function inspectPackedTarball(tarballPath: string): NpmPackResult[] {
-  const raw = execNpm(
-    ["pack", tarballPath, "--dry-run", "--json", "--ignore-scripts", "--offline"],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 1024 * 1024 * 100,
-    },
-  );
-  return expectDefined(parseNpmPackJsonOutput(raw), "npm pack tarball contents receipt");
-}
-
 function runPack(packDestination: string, cwd?: string): NpmPackResult[] {
   const raw = execPnpm(["pack", "--json", "--pack-destination", packDestination], {
     cwd,
@@ -367,6 +357,30 @@ function runPack(packDestination: string, cwd?: string): NpmPackResult[] {
     maxBuffer: 1024 * 1024 * 100,
   });
   return expectDefined(parseNpmPackJsonOutput(raw), "pnpm pack package receipt");
+}
+
+async function packRootPackage(packDestination: string): Promise<string> {
+  // Supplied-tarball tooling must not load the source packer's lifecycle or signal handlers.
+  const { collectPreparedPrepackErrorsFromDisk, resolvePrepackAllowUnreleasedChangelog } =
+    (await importToolingTypeScript(
+      new URL("./openclaw-prepack.ts", import.meta.url).href,
+      import.meta.url,
+    )) as typeof OpenClawPrepack;
+  // The canonical packer skips package hooks; retain prepared prepack's compatibility gate.
+  execPnpm(["update:compat:check"], { encoding: "utf8", stdio: "inherit" });
+  const errors = collectPreparedPrepackErrorsFromDisk();
+  if (errors.length > 0) {
+    throw new Error(
+      `release-check: prepared artifact validation failed:\n- ${errors.join("\n- ")}`,
+    );
+  }
+  const { packOpenClawPackageForDocker } = (await importToolingTypeScript(
+    new URL("./package-openclaw-for-docker.mts", import.meta.url).href,
+    import.meta.url,
+  )) as typeof OpenClawPackage;
+  return await packOpenClawPackageForDocker(process.cwd(), packDestination, {
+    allowUnreleasedChangelog: resolvePrepackAllowUnreleasedChangelog(),
+  });
 }
 
 export function resolvePackedTarballPath(
@@ -1335,11 +1349,24 @@ async function main() {
   try {
     const tarballPath = values.tarball
       ? resolve(values.tarball)
-      : resolvePackedTarballPath(temporaryDir, runPack(temporaryDir));
-    const results = inspectPackedTarball(tarballPath);
+      : await packRootPackage(temporaryDir);
     const packedDir = join(temporaryDir, "unpacked");
     mkdirSync(packedDir);
-    await extract({ cwd: packedDir, file: tarballPath, strict: true, preservePaths: false });
+    const files: { path: string }[] = [];
+    let unpackedSize = 0;
+    await extract({
+      cwd: packedDir,
+      file: tarballPath,
+      strict: true,
+      preservePaths: false,
+      // npm derives this receipt from tar entries too. Reuse extraction so
+      // prepared-artifact inspection cannot stall in an extra npm process.
+      onReadEntry(entry) {
+        files.push({ path: entry.path.replace(/^package\//u, "") });
+        unpackedSize += entry.size;
+      },
+    });
+    const results: NpmPackResult[] = [{ filename: basename(tarballPath), files, unpackedSize }];
     const packedRoot = join(packedDir, "package");
     const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
     const packedPackage = JSON.parse(readFileSync(join(packedRoot, "package.json"), "utf8"));

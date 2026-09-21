@@ -25,7 +25,6 @@ import {
   createUpdateCommandFinalizationFence,
   UpdateCommandRecoveryPendingError,
 } from "./update-command-recovery.js";
-import { repairUpdateService } from "./update-command-repair-service.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
@@ -98,7 +97,6 @@ export async function finishUpdate(
         : undefined,
     });
   let rollbackAttempted = false;
-  let postVerificationRepairAttempted = false;
   let rollbackStopState: PreManagedServiceStop | undefined;
   // Rollback can replace the suspension owner.
   const currentServiceStop = () => rollbackStopState ?? params.preManagedServiceStop;
@@ -149,7 +147,6 @@ export async function finishUpdate(
   const recoverFailedResult = async (
     initialResult: UpdateRunResult,
     initialRecoverService: boolean,
-    repair?: (result: UpdateRunResult) => Promise<UpdateRunResult>,
   ) => {
     assertCurrent();
     let result = initialResult;
@@ -201,11 +198,7 @@ export async function finishUpdate(
       }
       recoverService = false;
     }
-    if (
-      result.status === "error" &&
-      params.rollbackBlockedReason &&
-      !postVerificationRepairAttempted
-    ) {
+    if (result.status === "error" && params.rollbackBlockedReason) {
       result = { ...result, reason: params.rollbackBlockedReason };
       recoverService = false;
     } else if (
@@ -229,17 +222,6 @@ export async function finishUpdate(
     if (isUpdateGatewayReadinessPending(result)) {
       triageAllowed = false;
       return { result, recoverService: false };
-    }
-    if (result.status === "error" && !rolledBack && repair && !definitionRecovery.unverified) {
-      postVerificationRepairAttempted = true;
-      const previousRestored = result.recovery?.packageRollbackVerified === true;
-      result = await repair(result);
-      if (previousRestored && result.status === "ok") {
-        // Restored bytes still failed the requested update; pending readiness is not verified rollback.
-        rolledBack = !isUpdateGatewayReadinessPending(result);
-        result = { ...result, status: "error", reason: initialResult.reason };
-      }
-      recoverService = false;
     }
     return { result, recoverService };
   };
@@ -561,41 +543,10 @@ export async function finishUpdate(
         reason: verificationFailure,
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       };
-      const recovered = await recoverFailedResult(
-        failure,
-        false,
-        verificationFailure !== "service-runtime-refresh-failed" &&
-          restartContext.serviceMutationAllowed &&
-          !restartContext.skipLegacyServiceRestart &&
-          !postVerificationRepairAttempted
-          ? (result) =>
-              repairUpdateService({
-                result,
-                root: postUpdateRoot,
-                env:
-                  params.ownedManagedUpdateEnv ??
-                  params.opts.run?.env ??
-                  restartContext.gatewayServiceEnv ??
-                  restartContext.serviceStateReadEnv,
-                opts: params.opts,
-                gatewayPort: restartContext.gatewayPort,
-                nodeRunner: params.packageUpdateNodeRunner,
-                timeoutMs: params.updateStepTimeoutMs,
-                invocationCwd: params.invocationCwd,
-                expectedService: rollbackStopState ?? {
-                  serviceManagerUid: restartContext.serviceManagerUid,
-                  serviceEnv:
-                    restartContext.gatewayServiceEnv ?? restartContext.serviceStateReadEnv,
-                  serviceUpdateVerdict: restartContext.serviceUpdateVerdict,
-                },
-                recoveryStop: currentServiceStop(),
-                onVerified: recordVerifiedDowntime,
-              })
-          : undefined,
-      );
+      const recovered = await recoverFailedResult(failure, false);
       if (recovered.result.status !== "ok") {
         // The Gateway may have consumed its sentinel. Update only the existing
-        // receipt so a failed repair cannot deliver a duplicate notification.
+        // receipt so the terminal failure cannot deliver a duplicate notification.
         await markControlPlaneUpdateRestartSentinelFailureBestEffort({
           ...sentinelOptions,
           reason: recovered.result.reason ?? verificationFailure,

@@ -196,6 +196,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.sessionsResult = stateValue.result;
       state.sessionsResultAgentId = stateValue.agentId;
     }
+    this.projectObservedSessionRow();
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
     this.refreshSwarmRoster();
@@ -451,6 +452,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.selfUser = snapshot.selfUser ?? null;
     state.assistantAgentId = assistantAgentId;
     this.reconcileTaskSuggestionConnection(sourceChanged);
+    this.synchronizeSessionObservation();
     if (wasConnected && !state.connected) {
       // Only the connected->disconnected transition may reshape loading state;
       // repeated disconnected snapshots must stay no-ops for pane ownership.

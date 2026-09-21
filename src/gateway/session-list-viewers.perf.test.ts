@@ -1,5 +1,7 @@
 import { Session } from "node:inspector/promises";
 import { performance } from "node:perf_hooks";
+import { queryObjects } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -18,6 +20,7 @@ import {
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { projectSessionPeople } from "./session-identity-projection.js";
 import type { SessionListDiagnostics, SessionListPhase } from "./session-list-diagnostics.types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -53,6 +56,7 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
       const clients = Array.from({ length: 50 }, (_, index) =>
         viewer(ensureProfileForEmail(`viewer-${index}@example.com`).id),
       );
+      const includePeople = process.env.OPENCLAW_BENCH_SESSION_PEOPLE === "1";
       const store: Record<string, SessionEntry> = Object.fromEntries(
         Array.from({ length: 5_000 }, (_, index) => [
           `agent:main:viewer-row-${index}`,
@@ -66,6 +70,18 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
               source: "profile",
               id: clients[index % clients.length]!.authenticatedUserProfile!.profileId,
             },
+            ...(includePeople
+              ? {
+                  participants: [1, 2, 3].map((offset) => ({
+                    identity: {
+                      type: "profile" as const,
+                      id: clients[(index + offset) % clients.length]!.authenticatedUserProfile!
+                        .profileId,
+                    },
+                    promptedAt: 1,
+                  })),
+                }
+              : {}),
             ...(index >= 2_300 ? { archivedAt: 1 } : {}),
           },
         ]),
@@ -73,7 +89,19 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
       writeResidentEntries(store);
       const release = retainSessionListForegroundWork();
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      const opts = { limit: 60, ownerFirst: true, excludeCron: true, excludeSystem: true };
+      const opts = includePeople
+        ? {
+            archived: "all" as const,
+            includeGlobal: true,
+            includeUnknown: true,
+            includePeople: true,
+            excludeSubagents: true,
+            includeActivitySummary: true,
+            includeDerivedTitles: true,
+            sortBy: "activity" as const,
+            limit: 100,
+          }
+        : { limit: 60, ownerFirst: true, excludeCron: true, excludeSystem: true };
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const rpcSamples: number[] = [];
       const rpc = async (client: GatewayClient) => {
@@ -98,6 +126,45 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
       };
       try {
         await projection.ensureMaterialized();
+        if (includePeople) {
+          const identity = expectDefined(
+            projection.state.rowContext.identityProjection,
+            "resident identity projection",
+          );
+          const cachedPeople = identity.people;
+          const comparison = [];
+          let uncachedHeap = 0;
+          try {
+            for (const cached of [false, true, false, true]) {
+              identity.people = cached ? cachedPeople : projectSessionPeople;
+              for (const client of clients) {
+                await rpc(client);
+              }
+              queryObjects(Session);
+              const retainedHeap = process.memoryUsage().heapUsed;
+              if (comparison.length === 0) {
+                uncachedHeap = retainedHeap;
+              }
+              const times = [];
+              const cpu = process.cpuUsage();
+              for (const client of clients) {
+                const start = performance.now();
+                await rpc(client);
+                times.push(performance.now() - start);
+              }
+              const used = process.cpuUsage(cpu);
+              comparison.push({
+                cached,
+                medianMs: times.toSorted((a, b) => a - b)[Math.floor(times.length / 2)],
+                cpuMsPerCall: (used.user + used.system) / 1000 / times.length,
+                retainedHeapDeltaBytes: retainedHeap - uncachedHeap,
+              });
+            }
+          } finally {
+            identity.people = cachedPeople;
+          }
+          console.log(JSON.stringify({ peopleComparison: comparison }));
+        }
         for (const client of clients) {
           await rpc(client);
         }
@@ -173,6 +240,7 @@ test.skipIf(process.env.OPENCLAW_BENCH_SESSION_VIEWERS !== "1")(
           console.log(
             JSON.stringify({
               rows: 5_000,
+              includePeople,
               liveRows: 2_300,
               viewers: clients.length,
               calls: samples.length,

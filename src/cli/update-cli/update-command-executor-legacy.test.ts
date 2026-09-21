@@ -70,6 +70,9 @@ it.skipIf(process.platform === "win32").each([
       import {registerSealedRuntime} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.sealedRegistry).href)};
       import {runUtf8CommandWithTimeout} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processExec).href)};
       const root=${JSON.stringify(root)},control=${JSON.stringify(control)};
+      // The original parent may be killed; record the continuation's own exit.
+      if(process.env.LEGACY_SECOND_PROBE!=='1')process.once('exit',code=>
+        fs.writeFileSync(root+'/continuation-exit.json',JSON.stringify({code})));
       // Only scratch location is injected; live processes and lease authority remain real.
       registerSealedRuntime({json5:JSON,resolveSecureTempRoot:()=>control});
       const parent=createManagedHandoffLeaseStore().processIdentity(process.ppid);
@@ -158,9 +161,11 @@ it.skipIf(process.platform === "win32").each([
       child.once("close", () => resolve());
     });
     let parentExitCode: number | null | undefined;
+    let parentExitSignal: NodeJS.Signals | null | undefined;
     const exited = new Promise<void>((resolve) => {
-      child.once("exit", (code) => {
+      child.once("exit", (code, signal) => {
         parentExitCode = code;
+        parentExitSignal = signal;
         resolve();
       });
     });
@@ -170,12 +175,14 @@ it.skipIf(process.platform === "win32").each([
         termination = killProcessTree(child.pid, { detached: true });
       }
     };
+    const deadlineFailure = createDeferred<never>();
     const deadline = setTimeout(() => {
-      ready.reject(new Error(`Legacy descendant did not settle: ${output}`));
+      deadlineFailure.reject(new Error(`Legacy descendant did not settle: ${output}`));
       killGroup();
     }, 20_000);
     try {
       await Promise.race([
+        deadlineFailure.promise,
         managed && lifetime === "live"
           ? Promise.all([ready.promise, secondReady.promise])
           : ready.promise,
@@ -197,13 +204,15 @@ it.skipIf(process.platform === "win32").each([
       }
       if (managed && lifetime === "live") {
         child.send("probe");
-        await Promise.race([secondExited.promise, closed]);
+        await Promise.race([deadlineFailure.promise, secondExited.promise, closed]);
         expect(output).toContain("SECOND_EXIT:1");
         expect(output).toContain("Legacy finalizer lifetime could not be acquired.");
       }
       if (lifetime === "exited") {
         child.kill("SIGKILL");
-        await exited;
+        await Promise.race([deadlineFailure.promise, exited]);
+        expect(parentExitCode, output).toBeNull();
+        expect(parentExitSignal, output).toBe("SIGKILL");
         const contender = createManagedHandoffLeaseStore({
           databasePath: path.join(control, "managed-update-handoffs.sqlite"),
           serviceManagerEnv: process.env,
@@ -223,7 +232,15 @@ it.skipIf(process.platform === "win32").each([
         fs.renameSync(`${leasePath}.replacement`, leasePath);
       }
       fs.writeFileSync(path.join(root, "proceed"), "go");
-      await closed;
+      await Promise.race([deadlineFailure.promise, closed]);
+      const continuationExitPath = path.join(root, "continuation-exit.json");
+      expect(
+        fs.existsSync(continuationExitPath),
+        `Legacy continuation did not exit: ${output}`,
+      ).toBe(true);
+      expect(JSON.parse(fs.readFileSync(continuationExitPath, "utf8")), output).toEqual({
+        code: lifetime === "live" ? 0 : 1,
+      });
       if (lifetime === "live") {
         expect(parentExitCode, output).toBe(0);
       }

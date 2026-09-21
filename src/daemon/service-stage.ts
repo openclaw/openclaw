@@ -51,6 +51,7 @@ export type GatewayServiceDefinitionBackupReceipt = z.infer<
   typeof GatewayServiceDefinitionBackupReceiptSchema
 >;
 export type GatewayServiceDefinitionTransactionHooks = {
+  preservePolicy?: readonly string[];
   assertCurrent: () => void;
   beforeWrite: () => Promise<void>;
   filePrepared: (sourcePath: string, temporaryPath: string | null) => Promise<void>;

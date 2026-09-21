@@ -62,7 +62,6 @@ type CanaryResult = {
   gatewayRestartCompletion?: boolean;
   doctorConfigWrites?: boolean;
   doctorConfigChanges?: UpdateDoctorConfigChange[];
-  retainedRehearsal?: { rehearsal: UpdateCandidateRehearsal; cleanup: () => Promise<void> };
   listenerIsolation?: {
     gateway: { host: "127.0.0.1"; port: number };
     mcpAppSandbox: "disabled";
@@ -79,23 +78,17 @@ type CanaryResult = {
 export async function validateUpdateCandidateCanary(params: {
   root: string;
   config: OpenClawConfig;
-  sourceConfigHash?: string | null;
   stateDir: string;
   timeoutMs?: number;
   signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
-  rehearsal?: UpdateCandidateRehearsal;
-  /** Transfer a failed private copy to the caller after every validation child is drained. */
-  retainFailedRehearsal?: boolean;
   assertCurrent?: () => void;
   /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
   onStep?: (step: UpdateStepResult) => void;
 }): Promise<CanaryResult> {
   const started = Date.now();
-  let rehearsal = params.rehearsal;
-  let retainedRehearsal: CanaryResult["retainedRehearsal"];
-  let unsettledCanaries = 0;
+  let rehearsal: UpdateCandidateRehearsal | undefined;
   const sourceEnv = params.env ?? process.env;
   const logTail: string[] = [];
   const stepLogTail: string[] = [];
@@ -160,14 +153,10 @@ export async function validateUpdateCandidateCanary(params: {
       stateDir: params.stateDir,
       assertCurrent: params.assertCurrent,
       capture,
-      onSpawn: () => {
-        unsettledCanaries += 1;
-      },
     });
   const stopCanary = async (running: ReturnType<typeof launch>, name: string, deadline: number) => {
     const cleanupStarted = Date.now();
     if (await terminateCanary(running.child, running.closed, deadline)) {
-      unsettledCanaries -= 1;
       return true;
     }
     const step: UpdateStepResult = {
@@ -227,10 +216,9 @@ export async function validateUpdateCandidateCanary(params: {
     phase = "snapshot";
     activeStep = { name: "candidate-state-snapshot", command: "Preparing update checks" };
     stepStartedAt = Date.now();
-    rehearsal ??= await prepareUpdateCandidateRehearsal({
+    rehearsal = await prepareUpdateCandidateRehearsal({
       candidateRoot: params.root,
       config: params.config,
-      sourceConfigHash: params.sourceConfigHash,
       stateDir: params.stateDir,
       env: sourceEnv,
       nodeRunner: params.nodeRunner,
@@ -656,16 +644,6 @@ export async function validateUpdateCandidateCanary(params: {
       );
     failed.stderrTail = stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
     params.onStep?.(failed);
-    if (
-      params.retainFailedRehearsal &&
-      !params.rehearsal &&
-      rehearsal &&
-      phase !== "snapshot" &&
-      phase !== "doctor" &&
-      unsettledCanaries === 0
-    ) {
-      retainedRehearsal = { rehearsal, cleanup: cleanupRehearsal };
-    }
     return {
       status: "error",
       reason: failed.failureFacts.some((fact) => fact.code === "candidate-checks-timeout")
@@ -679,13 +657,10 @@ export async function validateUpdateCandidateCanary(params: {
       candidateSchemaVersions,
       gatewayRestartCompletion,
       ...(doctorConfigChanges.length ? { doctorConfigChanges } : {}),
-      ...(retainedRehearsal ? { retainedRehearsal } : {}),
       listenerIsolation,
       steps,
     };
   } finally {
-    if (!params.rehearsal && !retainedRehearsal) {
-      await cleanupRehearsal();
-    }
+    await cleanupRehearsal();
   }
 }
