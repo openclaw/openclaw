@@ -110,6 +110,7 @@ describe("native dynamics spawn boundary", () => {
     await writeConfig("all");
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     subagentSpawnTesting.setDepsForTest({
+      hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess: async <T>(
         method: string,
         params: Record<string, unknown>,
@@ -135,7 +136,10 @@ describe("native dynamics spawn boundary", () => {
     const dispatchGatewayMethodInProcess = vi.fn(async () => {
       throw new Error("sandbox-required verifier must not dispatch unsandboxed");
     });
-    subagentSpawnTesting.setDepsForTest({ dispatchGatewayMethodInProcess });
+    subagentSpawnTesting.setDepsForTest({
+      hasInProcessGatewayContext: () => true,
+      dispatchGatewayMethodInProcess,
+    });
 
     const result = await launchPreparedVerifier();
 
