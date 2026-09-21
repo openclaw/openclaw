@@ -57,9 +57,12 @@ export function resolveGatewayMode(value: unknown): string | null {
 
 export function containsConfigIncludeDirective(value: unknown): boolean {
   // Explicit work stack: document nesting costs heap rather than call frames,
-  // so a schema-valid deep config cannot crash the read path with a RangeError
-  // before include resolution even starts. Items are pushed one by one because
-  // spread-pushing a very long array is itself a call-stack overflow.
+  // so a schema-valid deep config cannot crash the include-aware guards that
+  // consult this scan (recovery, backup capture, startup repair, plugin
+  // publication) with a RangeError. Include resolution runs earlier in the
+  // read path; this predicate protects only the decisions made after it.
+  // Items are pushed one by one because spread-pushing a very long array is
+  // itself a call-stack overflow.
   const stack: unknown[] = [value];
   while (stack.length > 0) {
     const current = stack.pop();

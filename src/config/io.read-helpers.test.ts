@@ -1,6 +1,7 @@
 // Verifies the read-path include pre-scan stays stack-safe on deeply nested
-// documents: the scan runs on every config load before include resolution, so
-// document nesting must cost heap rather than call frames.
+// documents: include resolution runs first on every config load, and the
+// include-aware guards that consult this scan run after it, so document
+// nesting must cost heap rather than call frames.
 import { describe, expect, it } from "vitest";
 import { INCLUDE_KEY } from "./includes.js";
 import { containsConfigIncludeDirective } from "./io.read-helpers.js";
