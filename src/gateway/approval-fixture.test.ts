@@ -23,6 +23,7 @@ import {
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -111,7 +112,7 @@ describe("approval fixture request ownership", () => {
       const context = Object.assign(
         createGatewayRequestContext(
           makeContextParams({
-            clients: new Set([
+            clients: new GatewayClientRegistry([
               {
                 ...reviewer,
                 usesSharedGatewayAuth: false,
