@@ -11,11 +11,7 @@ import {
   type GatewayRestartSignalAdmissionLease,
 } from "../process/gateway-work-admission.js";
 import { formatErrorMessage } from "./errors.js";
-import {
-  GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS,
-  GATEWAY_SHUTDOWN_RESERVE_MS,
-  GATEWAY_SUPERVISOR_EXIT_MARGIN_MS,
-} from "./gateway-shutdown-budget.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 import { type GatewayRestartIntent, normalizeRestartIntentReason } from "./restart-intent.js";
 import { restartGatewayViaSupervisor } from "./restart-supervisor.js";
 import type { RestartAttempt } from "./restart.types.js";
@@ -25,7 +21,6 @@ export { normalizeSystemdUnit } from "./restart-supervisor.js";
 const RESTART_AUTH_GRACE_MS = 5000;
 const DEFAULT_DEFERRAL_POLL_MS = 500;
 const DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS = 30_000;
-const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const RESTART_COOLDOWN_MS = 30_000;
 
 const restartLog = createSubsystemLogger("restart");
@@ -388,24 +383,6 @@ type GatewayRestartEmitResult =
   | { status: "emitted" }
   | { status: "coalesced" }
   | { status: "failed" };
-
-export function resolveGatewayRestartDeferralTimeoutMs(): number;
-export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs: unknown): number | undefined;
-export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs?: unknown): number | undefined {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
-    return DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS;
-  }
-  return timeoutMs > 0 ? Math.floor(timeoutMs) : undefined;
-}
-
-export function resolveGatewayRestartDrainTimeoutMs(intent?: GatewayRestartIntent) {
-  const reserveMs = GATEWAY_SHUTDOWN_RESERVE_MS + GATEWAY_SUPERVISOR_EXIT_MARGIN_MS;
-  const waitMs =
-    intent?.waitMs ??
-    (intent?.force ? GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS - reserveMs : undefined);
-  const exhausted = intent?.drainBudgetExhausted || (intent?.force && waitMs === 0);
-  return exhausted ? 0 : resolveGatewayRestartDeferralTimeoutMs(waitMs);
-}
 
 function canReplacePendingRestartEmitHooks(
   hooks: RestartEmitHooks | undefined,

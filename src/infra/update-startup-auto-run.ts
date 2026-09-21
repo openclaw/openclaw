@@ -6,11 +6,11 @@ import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 import {
   readRestartSentinelSnapshot,
   writeRestartSentinelIfUnchanged,
 } from "./restart-sentinel.js";
-import { resolveGatewayRestartDeferralTimeoutMs } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 import type { UpdateCampaignController } from "./update-campaign.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "./update-control-plane-sentinel.js";

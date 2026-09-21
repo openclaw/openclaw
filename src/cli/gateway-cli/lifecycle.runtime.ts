@@ -10,8 +10,8 @@ export {
   respawnGatewayProcessForUpdate,
   restartGatewayProcessWithFreshPid,
 } from "../../infra/process-respawn.js";
+export { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 export {
-  resolveGatewayRestartDrainTimeoutMs,
   consumeGatewayRestartIntent,
   consumeGatewayRestartAuthorization,
   isGatewayRestartExternallyAllowed,

@@ -50,7 +50,7 @@ import {
   resolveGatewayShutdownDrainBudget,
   resolveGatewayShutdownBudget,
 } from "./run-loop-shutdown-budget.js";
-import { formatShutdownReason } from "./run-loop-shutdown-format.js";
+import { formatBootCompletionContext, formatShutdownReason } from "./run-loop-shutdown-format.js";
 import {
   createGatewayStartupOperations,
   prepareGatewayRestartIteration,
@@ -137,19 +137,9 @@ export async function runGatewayLoop(params: {
   let restartDrainWarning: string | undefined;
   const completeBoot = (completion: GatewayBootLifecycleCompletion) => {
     pendingRestartCompletion = undefined;
-    const context = [installationReplacement?.reason, restartDrainWarning]
-      .filter(Boolean)
-      .join("; ");
-    if (context) {
-      completion = {
-        ...completion,
-        reason: truncateUtf16Safe(
-          `${context}; ${completion.reason ?? completion.outcome}`,
-          GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
-        ),
-      };
-    }
-    params.completeBoot?.(completion);
+    params.completeBoot?.(
+      formatBootCompletionContext(completion, installationReplacement?.reason, restartDrainWarning),
+    );
     restartDrainWarning = undefined;
   };
   let restartDrainingMarked = false;
