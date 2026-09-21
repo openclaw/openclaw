@@ -13,8 +13,9 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     return f;
   }
 
-  it("uses one pinned REST PUT for ordinary squash without GraphQL reads", () => {
+  it("uses one pinned REST PUT without GraphQL reads when only the pooled viewer is blocked", () => {
     const f = restFixture();
+    f.save({ ...f.state(), pooledMergeBlocked: true });
 
     const run = f.run();
 

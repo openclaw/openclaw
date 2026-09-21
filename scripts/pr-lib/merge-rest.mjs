@@ -151,9 +151,14 @@ function readPolicy(repo) {
 }
 
 function readPullRequest(repo, authority, pr) {
-  const record = read(repo, `/pulls/${pr}`);
+  // Mergeability depends on the writer; pooled readers can see a different policy projection.
+  const response = parseGithubResponse(
+    execPrGh(apiArgs(repo, `/pulls/${pr}`, ["--include"]), { encoding: "utf8" }, "plain"),
+  );
+  const record = response.body;
   requireEvidence(
-    record?.number === pr &&
+    response.status === "200" &&
+      record?.number === pr &&
       nonemptyString(record.node_id) &&
       nonemptyString(record.title) &&
       record.html_url === `${repo.url}/pull/${pr}` &&
