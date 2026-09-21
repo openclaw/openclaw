@@ -8,6 +8,7 @@ describe("cognitive dynamics profiles", () => {
     const second = resolveDynamicsProfile("independent-verifier");
 
     expect(first).toEqual(second);
+    expect(first.requirements).not.toBe(second.requirements);
     expect(first.contextBoundary).toBe("artifact-only");
     expect(first.mutationBudget).toBe(0);
     expect(first.verificationWeight).toBe(1);
