@@ -1109,7 +1109,7 @@ function expandCompactGroup(group: NodeTestShardGroup): NodeTestShardGroup[] {
       continue;
     }
     const stripes = createStripedBatches(
-      listAgentEmbeddedBaseTestFiles(),
+      listWholeConfigSplitFiles(COMPACT_EMBEDDED_BASE_GROUP_NAME) ?? [],
       EMBEDDED_BASE_NODE_TEST_STRIPES,
       stripeFileWeight,
     );
@@ -2786,10 +2786,6 @@ function listAgentSupportTestFiles(): string[] {
   return listScopedOwnerTestFiles(agentVitestProjectOwners.support);
 }
 
-function listAgentEmbeddedBaseTestFiles(): string[] {
-  return listScopedOwnerTestFiles(agentVitestProjectOwners.embedded);
-}
-
 function readCompleteSplitGenerationSeconds(
   profile: "blacksmith" | "github",
   selectorKey: string,
@@ -2823,6 +2819,10 @@ const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
   ],
   ["agentic-cli-process", () => cliProcessTestFiles],
   ["agentic-agents-support", listAgentSupportTestFiles],
+  [
+    COMPACT_EMBEDDED_BASE_GROUP_NAME,
+    () => listScopedOwnerTestFiles(agentVitestProjectOwners.embedded),
+  ],
   [
     "agentic-plugins",
     () =>
