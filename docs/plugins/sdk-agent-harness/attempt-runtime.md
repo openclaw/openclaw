@@ -144,9 +144,15 @@ remain authoritative; native decoding and result encoding stay with the harness.
 ## Shared host-tool result facts
 
 Official harnesses use the private JavaScript-only
-`openclaw/plugin-sdk/agent-harness-tool-runtime` to record portable tool facts.
-`resolveAgentHarnessToolResultPresentation` preserves execution failures when
-presentation middleware rewrites a result. `recordAgentHarnessMessagingDelivery`
+`openclaw/plugin-sdk/agent-harness-tool-runtime` to execute host tools and record portable tool facts.
+`runAgentHarnessToolInvocation` owns argument preparation, validation at the
+existing execution boundary, monotonic execution snapshots, middleware, and
+cleanup. Its result and failure callbacks carry those facts to native adapters
+without taking over their receipt or timeout owner.
+`recordAgentHarnessToolResultTelemetry` collects host-tool delivery, media, TTS,
+cron, and heartbeat facts using the caller's prepared source-reply projection.
+The invocation preserves execution failures when presentation middleware
+rewrites a result. `recordAgentHarnessMessagingDelivery`
 records an already-confirmed messaging delivery, and
 `recordAgentHarnessToolResultMedia` collects and trust-filters presented media.
 Callers retain their native receipt, routing, cancellation, and result-encoding

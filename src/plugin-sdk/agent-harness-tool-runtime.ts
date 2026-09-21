@@ -10,11 +10,14 @@ export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-p
 export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
 export {
   recordAgentHarnessMessagingDelivery,
+  recordAgentHarnessToolResultTelemetry,
+  collectAgentHarnessMessagingMediaUrls,
+  type AgentHarnessToolResultTelemetry,
   recordAgentHarnessToolResultMedia,
-  resolveAgentHarnessToolResultPresentation,
   type AgentHarnessMessagingDeliveryFacts,
   type AgentHarnessToolMediaFacts,
 } from "../agents/harness/tool-result-facts.js";
+export { runAgentHarnessToolInvocation } from "../agents/harness/tool-invocation.js";
 export { runWithToolExecutionValidation } from "../agents/agent-tools.execution-validation.js";
 export {
   createAgentHarnessToolExecutionRegistry,
