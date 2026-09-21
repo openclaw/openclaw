@@ -11,6 +11,17 @@ import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { createRestartFlowFixture } from "./scenario-restart-flow.test-support.js";
 
 describe("qa scenario catalog causality", () => {
+  it("exposes the message tool directly for delivery decision inspection", () => {
+    const scenario = readQaScenarioById("message-delivery-decision-inspection");
+
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      tools: {
+        toolSearch: false,
+        alsoAllow: ["message"],
+      },
+    });
+  });
+
   it("treats denied Telegram admission as silent transport suppression", () => {
     for (const scenarioId of [
       "telegram-policy-hot-reload",

@@ -19,6 +19,7 @@ scenario:
       qa-channel:
         allowFrom: ["*"]
     tools:
+      toolSearch: false
       alsoAllow: [message]
     plugins:
       allow: [qa-lab, qa-channel]
