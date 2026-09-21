@@ -54,9 +54,7 @@ export function assessHostCollectorPopulation(params: {
     return { runId, terminalStatus: record.terminalStatus };
   });
 
-  const activeCount = records.filter(
-    (record) => record.terminalStatus === null,
-  ).length;
+  const activeCount = records.filter((record) => record.terminalStatus === null).length;
   const resourcePressure = Math.min(1, activeCount / params.maxConcurrent);
   const observations = records.map((record) => ({
     replicaId: record.runId,
