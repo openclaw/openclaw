@@ -175,7 +175,7 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
       const heartbeat = await rpc<{ ok: boolean; enabled: boolean }>("set-heartbeats", {
         enabled: false,
       });
-      need(heartbeat.ok && heartbeat.enabled === false, "Live heartbeat disable failed");
+      need(heartbeat.ok && !heartbeat.enabled, "Live heartbeat disable failed");
     },
     register(runId: string, sessionKey: string, index: number): string {
       const agentId = sessionKey.split(":")[1] ?? "";
@@ -292,7 +292,15 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
         turns.size === expectedTurns && [...turns.values()].every((turn) => turn.turnId),
         "Missing verified live terminal receipts",
       );
-      const groups = Map.groupBy([...turns.values()], (turn) => turn.sessionKey);
+      const groups = new Map<string, LiveTurn[]>();
+      for (const turn of turns.values()) {
+        const group = groups.get(turn.sessionKey);
+        if (group) {
+          group.push(turn);
+        } else {
+          groups.set(turn.sessionKey, [turn]);
+        }
+      }
       need(
         groups.size === agentIds.length &&
           [...groups.values()].every((group) => group.length === turnsPerSession) &&
@@ -355,10 +363,18 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
           const query = database.prepare(
             "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
           );
-          const groups = Map.groupBy(
-            [...turns.entries()].filter(([, turn]) => turn.agentId === agentId),
-            ([, turn]) => turn.sessionId,
-          );
+          const groups = new Map<string | undefined, Array<[string, LiveTurn]>>();
+          for (const [runId, turn] of turns) {
+            if (turn.agentId !== agentId) {
+              continue;
+            }
+            const group = groups.get(turn.sessionId);
+            if (group) {
+              group.push([runId, turn]);
+            } else {
+              groups.set(turn.sessionId, [[runId, turn]]);
+            }
+          }
           for (const [sessionId, group] of groups) {
             need(identity(sessionId), "Live persisted session identity missing");
             if (!sessionId) {
