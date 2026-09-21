@@ -4,6 +4,7 @@ import { consumeGoogleGenerateContentStream } from "../../packages/ai/src/provid
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { createAssistantOutput } from "../../packages/ai/src/transports/assistant-output.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
+import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { isAudioPayload } from "../auto-reply/reply/agent-runner-helpers.js";
@@ -200,8 +201,9 @@ const cases = [
   {
     name: "authored indented code after a drained paragraph",
     chunks: ["Intro.\n\n", "    const value = 1;\n    use(value);\n\n"],
-    marker: "    const value = 1;\n    use(value);",
+    marker: "const value = 1;\nuse(value);",
     literal: true,
+    code: true,
   },
   ...inlineDirectiveCases,
   {
@@ -339,6 +341,18 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
       expect(delivered.every((payload) => !payload.mediaUrl && !payload.mediaUrls?.length)).toBe(
         true,
       );
+    };
+    const expectCodeContent = () => {
+      if (!("code" in scenario)) {
+        return;
+      }
+      const codeBlocks = delivered.flatMap((payload) => {
+        const ir = markdownToIR(payload.text ?? "");
+        return ir.styles
+          .filter((span) => span.style === "code_block")
+          .map((span) => ir.text.slice(span.start, span.end));
+      });
+      expect.soft(codeBlocks).toEqual([`${scenario.marker}\n`]);
     };
     const beforeEnd = createDeferred();
     const releaseTerminal = createDeferred();
@@ -499,6 +513,7 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
         );
       }
       expectOrdinaryContent("streaming");
+      expectCodeContent();
       releaseTerminal.resolve();
       await settled;
       await subscription.waitForPendingEvents();
@@ -523,6 +538,7 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
         );
       }
       expectOrdinaryContent("final");
+      expectCodeContent();
       if (hasAudio) {
         const audio = delivered.filter(isAudioPayload);
         expect(audio).toHaveLength(1);

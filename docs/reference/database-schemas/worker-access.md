@@ -123,6 +123,15 @@ For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
 through their original store/projection owner.
 
+Placement change reporting reads its before/after snapshots in the shared-state
+read worker using the placement store's row codec. It transfers only session
+identity, state, generation, and update time to the Gateway. The reconciliation
+coordinator reserves and admits its sweep before awaiting reporting, preserving
+dispatch ordering and request coalescing. Reporting failures preserve the original
+operation outcomes. Placement
+writes, current-authority checks, and workspace retention retain their existing
+owners; these reporting snapshots grant no execution or deletion authority.
+
 This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the
 [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).

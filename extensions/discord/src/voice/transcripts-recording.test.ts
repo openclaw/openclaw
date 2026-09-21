@@ -208,7 +208,7 @@ defineDiscordVoiceTests((harness) => {
         return { text: texts[wav.readUInt8(44) - 1] };
       });
       await startTranscripts(f.manager, f.sink);
-      const receiving = f.begin("guest");
+      const receiving = f.beginSpeaking("guest");
       const stream = f.streams.get("guest")!;
       try {
         for (let marker = 1; marker <= 3; marker++) {
@@ -222,22 +222,20 @@ defineDiscordVoiceTests((harness) => {
           expect(allowed).toBe(marker !== excluded);
         }
         allowed = true;
-        stream.end();
-        await receiving;
-        await f.entry.processingQueue;
-        expect(f.sink.mock.calls.map(([u]) => u.text)).toEqual(texts);
-        expect(agentCommandMock).not.toHaveBeenCalled();
-        expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
-        transcribeAudioFileMock.mockResolvedValue({ text: "A complete new request" });
-        await f.audio("guest", 4);
-        expect(agentCommandMock).toHaveBeenCalledOnce();
-        expect(f.sink).toHaveBeenCalledTimes(4);
       } finally {
+        getSessionConnection(f.entry).receiver.speaking.emit("end", "guest");
         stream.end();
         await receiving;
         await f.entry.processingQueue;
         wavSpy.mockRestore();
       }
+      expect(f.sink.mock.calls.map(([u]) => u.text)).toEqual(texts);
+      expect(agentCommandMock).not.toHaveBeenCalled();
+      expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
+      transcribeAudioFileMock.mockResolvedValue({ text: "A complete new request" });
+      await f.audio("guest", 4);
+      expect(agentCommandMock).toHaveBeenCalledOnce();
+      expect(f.sink).toHaveBeenCalledTimes(4);
     },
   );
 
@@ -330,14 +328,15 @@ defineDiscordVoiceTests((harness) => {
         });
       }
       await startTranscripts(f.manager, f.sink);
-      const receiving = f.begin("100000000000000001");
+      const receiving = f.beginSpeaking("100000000000000001");
       const stream = f.streams.get("100000000000000001")!;
-      stream.write(Buffer.alloc(192_000, 1));
-      await vi.waitFor(() => expect(f.sink).toHaveBeenCalledOnce());
-      await f.entry.processingQueue;
       try {
+        stream.write(Buffer.alloc(192_000, 1));
+        await vi.waitFor(() => expect(f.sink).toHaveBeenCalledOnce());
+        await f.entry.processingQueue;
         expect(agentCommandMock).not.toHaveBeenCalled();
       } finally {
+        getSessionConnection(f.entry).receiver.speaking.emit("end", "100000000000000001");
         stream.end(Buffer.alloc(192_000, 2));
         await receiving;
         await f.entry.processingQueue;
@@ -533,7 +532,7 @@ defineDiscordVoiceTests((harness) => {
       const releaseOnAbort = () => releaseOpeningTranscription.resolve();
       signal.throwIfAborted();
       signal.addEventListener("abort", releaseOnAbort, { once: true });
-      const receiving = f.begin("100000000000000001");
+      const receiving = f.beginSpeaking("100000000000000001");
       const stream = f.streams.get("100000000000000001")!;
       try {
         // Each decoded packet is 20 ms of 48 kHz stereo PCM. Change capture only
@@ -557,6 +556,7 @@ defineDiscordVoiceTests((harness) => {
         releaseOpeningTranscription.resolve();
         throw error;
       } finally {
+        getSessionConnection(f.entry).receiver.speaking.emit("end", "100000000000000001");
         stream.end();
         try {
           await receiving;
@@ -700,16 +700,21 @@ defineDiscordVoiceTests((harness) => {
       if (phase === "replace") {
         await startTranscripts(f.manager, f.sink);
       }
-      const receiving = f.begin("100000000000000001");
+      const receiving = f.beginSpeaking("100000000000000001");
       await vi.waitFor(() => expect(f.streams.has("100000000000000001")).toBe(true));
       const stream = f.streams.get("100000000000000001")!;
-      stream.write(Buffer.alloc(96_000, 1));
-      await vi.waitFor(() => expect(realtimeSessionMock.sendAudio).toHaveBeenCalled());
       const nextSink = vi.fn();
-      await startTranscripts(f.manager, nextSink, "notes-2");
-      stream.end(Buffer.alloc(96_000, 2));
-      await receiving;
-      await f.entry.processingQueue;
+      try {
+        stream.write(Buffer.alloc(96_000, 1));
+        await vi.waitFor(() => expect(realtimeSessionMock.sendAudio).toHaveBeenCalled());
+        await startTranscripts(f.manager, nextSink, "notes-2");
+        stream.write(Buffer.alloc(96_000, 2));
+      } finally {
+        getSessionConnection(f.entry).receiver.speaking.emit("end", "100000000000000001");
+        stream.end();
+        await receiving;
+        await f.entry.processingQueue;
+      }
       expect(nextSink).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ text: "audio-2-96000" }),
       );
@@ -823,7 +828,7 @@ defineDiscordVoiceTests((harness) => {
     });
     await startTranscripts(f.manager, f.sink);
     const startedBefore = Date.now();
-    const receiving = f.begin("guest");
+    const receiving = f.beginSpeaking("guest");
     await vi.waitFor(() => expect(f.streams.has("guest")).toBe(true));
     const stream = f.streams.get("guest")!;
     const frame = Buffer.alloc(192_000, 7);
@@ -842,6 +847,7 @@ defineDiscordVoiceTests((harness) => {
       await f.entry.processingQueue;
       expect(transcribeAudioFileMock).toHaveBeenCalled();
     } finally {
+      getSessionConnection(f.entry).receiver.speaking.emit("end", "guest");
       stream.end();
       await receiving;
       await f.entry.processingQueue;

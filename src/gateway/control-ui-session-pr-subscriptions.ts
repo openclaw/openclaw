@@ -15,6 +15,7 @@ import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-pr
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 
 const CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS = 60_000;
+const CONTROL_UI_SESSION_PR_REFRESH_INTERVAL_MS = 10_000;
 const CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY = 4;
 
 type LoadSessionPullRequests = (
@@ -28,6 +29,8 @@ type WatchedKeyState = {
   cacheLifetime: AbortController;
   hash?: string;
   snapshot?: ControlUiSessionPullRequestSnapshot;
+  refreshedAt?: number;
+  cancelRefresh?: () => void;
 };
 
 type SubscriptionDeps = {
@@ -159,6 +162,7 @@ export function createControlUiSessionPullRequestSubscriptions(
         const state = keyStates.get(key);
         state?.connIds.delete(connId);
         if (state?.connIds.size === 0) {
+          state.cancelRefresh?.();
           state.cacheLifetime.abort(null);
           keyStates.delete(key);
         }
@@ -186,12 +190,30 @@ export function createControlUiSessionPullRequestSubscriptions(
       return pending.promise.then(() => loadSnapshot(sessionKey, isCurrent, refresh));
     }
     const demands = new Set([isCurrent]);
-    const promise = scope.track(() =>
-      limit(async () => {
+    const promise = scope.track(async () => {
+      const delay = refresh
+        ? (state.refreshedAt ?? -Infinity) + CONTROL_UI_SESSION_PR_REFRESH_INTERVAL_MS - Date.now()
+        : 0;
+      if (delay > 0) {
+        // Share the delayed inflight refresh without occupying a loader slot.
+        await new Promise<void>((resolve) => {
+          const refreshTimer = setTimer(resolve, delay);
+          refreshTimer.unref?.();
+          state.cancelRefresh = () => {
+            clearTimer(refreshTimer);
+            resolve();
+          };
+        });
+        state.cancelRefresh = undefined;
+      }
+      return await limit(async () => {
         // Joiners retain their own watched-key lifetimes. A later force-only
         // watcher must not revive normal work retired while waiting for a slot.
         if (!Array.from(demands).some((current) => current())) {
           return UNAVAILABLE_SNAPSHOT;
+        }
+        if (refresh) {
+          state.refreshedAt = Date.now();
         }
         // Fresh result identity acknowledges forced loads even when the failure is unchanged.
         const snapshot = await load(loaderParams(sessionKey, refresh), state.cacheLifetime.signal)
@@ -212,8 +234,8 @@ export function createControlUiSessionPullRequestSubscriptions(
         if (inflight.get(sessionKey)?.promise === promise) {
           inflight.delete(sessionKey);
         }
-      }),
-    );
+      });
+    });
     inflight.set(sessionKey, { promise, refresh, state, demands });
     return promise;
   };
@@ -349,6 +371,7 @@ export function createControlUiSessionPullRequestSubscriptions(
     }
     subscriptions.clear();
     for (const state of keyStates.values()) {
+      state.cancelRefresh?.();
       state.cacheLifetime.abort(null);
     }
     keyStates.clear();

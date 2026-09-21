@@ -366,7 +366,14 @@ describe("task-flow-registry", () => {
       if (!selectedFlow) {
         throw new Error("Expected the newest owner flow");
       }
-      selectedFlow.stateJson = { count: 2 };
+      if (
+        !selectedFlow.stateJson ||
+        typeof selectedFlow.stateJson !== "object" ||
+        Array.isArray(selectedFlow.stateJson)
+      ) {
+        throw new Error("Expected the copied flow payload");
+      }
+      selectedFlow.stateJson.count = 2;
       selectedFlow.goal = "Changed copy";
       expect(getTaskFlowById(newer.flowId)).toMatchObject({
         goal: "Synthetic listing",

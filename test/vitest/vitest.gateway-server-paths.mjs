@@ -144,6 +144,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/computer-transport.test.ts",
   "src/gateway/worker-environments/local-workspace-projection.test.ts",
   "src/gateway/worker-environments/node-enrollment.test.ts",
+  "src/gateway/worker-environments/placement-change-snapshot.test.ts",
   "src/gateway/worker-environments/prepared-pool-local-project.test.ts",
   "src/gateway/worker-environments/provider-crabbox-runtime-preflight.test.ts",
   "src/gateway/worker-environments/provider-provisioning.cancellation.test.ts",

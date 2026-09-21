@@ -581,7 +581,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       );
   }
 
-  protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): boolean;
+  protected abstract refreshSessionPullRequests(options?: {
+    refresh?: boolean;
+    automatic?: boolean;
+  }): boolean;
   protected abstract commitSidebarLayout(
     layout: SidebarLayout,
     options?: Parameters<ChatPageHost["updateSidebarLayout"]>[1],
