@@ -122,6 +122,9 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
           params.store.fail(params.taskId, error);
         },
       },
+      // Source replies complete the correlated task; the generic message tool
+      // starts a separate outbound message without that task correlation.
+      replyOptions: { sourceReplyDeliveryMode: "automatic" },
       replyPipeline: {},
     });
     if (dispatch.admission.kind !== "dispatch") {
