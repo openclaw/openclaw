@@ -2662,6 +2662,8 @@ describe("exec approval handlers", () => {
     },
   ) {
     const fixture = createExecApprovalFixture(testContext);
+    const firstResponse = createDeferredCore();
+    fixture.respond.mockImplementationOnce(() => firstResponse.resolve());
     const requestPromise = requestExecApproval({
       handlers: fixture.handlers,
       respond: fixture.respond,
@@ -2669,9 +2671,8 @@ describe("exec approval handlers", () => {
       params: params.request,
       client: params.client,
     });
-    await waitForFast(() => {
-      expect(fixture.respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
-    });
+    await Promise.race([firstResponse.promise, requestPromise]);
+    expect(fixture.respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     return {
       ...fixture,
       ...getRequestedExecApprovalPayload(fixture.broadcasts),
@@ -4095,6 +4096,8 @@ describe("exec approval handlers", () => {
   it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async (testContext) => {
     const { handlers, forwarder, respond, context } =
       createForwardingExecApprovalFixture(testContext);
+    const firstResponse = createDeferredCore();
+    respond.mockImplementationOnce(() => firstResponse.resolve());
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
     const requestContext = {
       ...context,
@@ -4122,10 +4125,9 @@ describe("exec approval handlers", () => {
         turnSourceThreadId: "thread-456",
       },
     });
-    await waitForRequestedExecApprovalPayload(broadcasts);
-    await waitForFast(() => {
-      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
-    });
+    await Promise.race([firstResponse.promise, requestPromise]);
+    getRequestedExecApprovalPayload(broadcasts);
+    expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
 
     const resolveRespond = await resolveExecApprovalForTest({
       handlers,
@@ -4188,6 +4190,8 @@ describe("exec approval handlers", () => {
       },
     );
     const expireSpy = vi.spyOn(manager, "expire");
+    const firstResponse = createDeferredCore();
+    respond.mockImplementationOnce(() => firstResponse.resolve());
 
     const requestPromise = requestExecApproval({
       handlers,
@@ -4201,14 +4205,13 @@ describe("exec approval handlers", () => {
       },
     });
 
-    await waitForFast(() => {
-      expect(lastMockCallArg(respond)).toBe(true);
-      expectRecordFields(lastMockCallArg(respond, 1), {
-        status: "accepted",
-        id: "approval-ios-push",
-      });
-      expect(lastMockCallArg(respond, 2)).toBeUndefined();
+    await Promise.race([firstResponse.promise, requestPromise]);
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      status: "accepted",
+      id: "approval-ios-push",
     });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
 
     expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
     expectRecordFields(mockCallArg(iosPushDelivery.handleRequested), { id: "approval-ios-push" });

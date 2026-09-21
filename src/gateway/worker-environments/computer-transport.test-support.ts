@@ -144,7 +144,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     privateCurrent: true,
     config: {},
   };
-  const { context } = createContext({
+  const { context, nextApproval } = createContext({
     nodeSession: node,
     getRuntimeConfig: () => state.config,
     validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator({
@@ -268,6 +268,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     claim,
     options,
     state,
+    nextApproval,
     run,
     authority,
     privateInvoke,

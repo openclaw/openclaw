@@ -21,7 +21,6 @@ import { createTestApprovalManager } from "../exec-approval-manager.test-support
 import {
   createApprovalClientLookup,
   createOperatorClient,
-  expectSinglePendingApproval,
 } from "../node-invoke-plugin-policy.test-helpers.js";
 import { createWorkerComputerService } from "./computer-service.js";
 import {
@@ -441,7 +440,7 @@ describe("session computer transport", () => {
       return await policy.invokeNode();
     });
     const operation = transport.invoke(request("type"));
-    const record = await expectSinglePendingApproval(manager);
+    const record = await h.nextApproval(operation);
     expect(record.request).toMatchObject({
       agentId: "main",
       sessionKey: h.state.placement.sessionKey,

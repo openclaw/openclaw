@@ -17,7 +17,6 @@ import {
   createOperatorClient,
   DEMO_COMMAND,
   DEMO_PARAMS,
-  expectSinglePendingApproval,
   nodeCommandsConfig,
   setDangerousDemoCommandRegistry,
 } from "./node-invoke-plugin-policy.test-helpers.js";
@@ -61,7 +60,7 @@ describe("private node policy transport", () => {
     setDangerousDemoCommandRegistry([registration]);
     const node = createNodeSession();
     node.commands = [];
-    const { context, invoke } = createContext({
+    const { context, invoke, nextApproval } = createContext({
       nodeSession: node,
       pluginApprovalManager: manager,
       getApprovalClientConnIds: createApprovalClientLookup([reviewer]),
@@ -79,7 +78,7 @@ describe("private node policy transport", () => {
       onNodeCommandDispatched,
     });
 
-    const approval = await expectSinglePendingApproval(manager);
+    const approval = await nextApproval(result);
     expect(privateTransport.invoke).not.toHaveBeenCalled();
     expect(await manager.resolve(approval.id, "allow-once")).toBe(true);
     await expect(result).resolves.toMatchObject({ ok: true, payload: { completed: true } });

@@ -1,6 +1,5 @@
 // Process-local placement-grant retention and final-boundary revalidation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -438,35 +437,13 @@ describe("placement standing grants", () => {
     setDangerousDemoCommandRegistry([policy]);
 
     const nodeSession = { ...createNodeSession(), pairingGeneration: PAIRING_GENERATION };
-    const { context } = createContext({
+    const { context, nextApproval } = createContext({
       pluginApprovalManager: manager,
       nodeSession,
       getApprovalClientConnIds: createApprovalClientLookup([createOperatorClient("reviewer")]),
       validateAgentRuntimeApprovalAuthority: () => true,
     });
     context.placementStandingGrants = placementStandingGrants;
-    let requested = createDeferred();
-    context.broadcastToConnIds = vi.fn((event) => {
-      if (event === "plugin.approval.requested") {
-        requested.resolve();
-      }
-    });
-    const nextApproval = async (operation: Promise<unknown>) => {
-      await Promise.race([
-        requested.promise,
-        operation.then(() => {
-          throw new Error("Node policy completed without requesting approval");
-        }),
-      ]);
-      requested = createDeferred();
-      const records = await manager.listPendingRecords();
-      expect(records).toHaveLength(1);
-      const [record] = records;
-      if (!record) {
-        throw new Error("expected pending approval");
-      }
-      return record;
-    };
     const invoke = vi.fn(async (input: Parameters<typeof context.nodeRegistry.invoke>[0]) => {
       if (input.isDispatchAuthorized?.() === false) {
         return {
