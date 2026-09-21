@@ -687,8 +687,9 @@ describe("update orchestration lifecycle ownership", () => {
   );
 
   it.each([false, true])(
-    "legacy resume settles Doctor before its result (changed=%s)",
+    "legacy resume settles Doctor and retains its warnings before its result (changed=%s)",
     async (changed) => {
+      const secondDoctorWarning = "Plugin fixture: second Doctor repair deferred.";
       await writeScenario("resume");
       await fs.rm(state.path("handoff.json"));
       const resultPath = state.path("legacy-result.json");
@@ -696,14 +697,30 @@ describe("update orchestration lifecycle ownership", () => {
       mocks.plugins.mockImplementationOnce(async () => {
         expect(await events()).toEqual(["post-attempt", "post-acquired"]);
         expect(await fs.stat(resultPath).catch(() => null)).toBeNull();
+        if (changed) {
+          await state.writeJson("scenario.json", {
+            lane: "resume",
+            doctorWarnings: [secondDoctorWarning],
+          } satisfies LeaseScenario);
+        }
         return { ...pluginResult, changed };
       });
 
       await invoke("resume");
 
       expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
-        status: "ok",
+        status: changed ? "warning" : "ok",
         changed,
+        ...(changed
+          ? {
+              warnings: [
+                expect.objectContaining({
+                  reason: "doctor-advisory",
+                  message: secondDoctorWarning,
+                }),
+              ],
+            }
+          : {}),
       });
       expect(await events()).toEqual([
         "post-attempt",
