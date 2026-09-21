@@ -214,11 +214,19 @@ local scheduling is unchanged.
 | 16                         | 4 / 15.42 GiB       |                                3 |                         2 |
 | 32                         | 8 / 30.95 GiB       |                                8 |                         2 |
 
-Group pins can lower these ceilings. Only the measured `agentic-gateway-core-2`
-family loses its two-worker compact pin on Blacksmith and hybrid profiles;
-GitHub-hosted planning and other timing-sensitive groups retain it. Gateway
-plans still run exclusively. When core-2 shares a serial bin, its unproven
-siblings retain their two-worker caps at group scope.
+Group pins can lower these ceilings. The `agentic-gateway-core-2` family and
+whole `agentic-cli` group use measured workers on Blacksmith and hybrid profiles,
+with `fallbackMaxWorkers: 2`. Full CLI bins request
+`blacksmith-32vcpu-ubuntu-2404` after packing and retain serial execution. The
+observed eight-CPU/30.95-GiB allocation can admit eight workers; actual CPU,
+memory, and load still determine the ceiling. The shard runner applies the
+two-worker fallback on hosted, frozen, constrained, or overlapping execution,
+intersected with any lower job or group limit. The four-CPU/15.42-GiB 16-class
+allocation receives that fallback even when the workflow ceiling is three.
+GitHub-hosted planning, `agentic-cli-process`, and other timing-sensitive groups
+retain their existing pins. Gateway plans still run exclusively; unproven
+siblings sharing its serial bin retain their two-worker group caps. The CLI
+inventory, split policies, timing weights, and admission budgets are unchanged.
 
 Agents-core files share the configured worker pool, including local scheduling
 and its one-worker throttle. Compact agents-core groups retain a two-worker cap.

@@ -262,7 +262,6 @@ const EXCLUDED_PROJECT_CONFIGS = new Set([
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
-const CAPACITY_NODE_TEST_RUNNER = "blacksmith-16vcpu-ubuntu-2404";
 // Startup-core transforms the broad gateway graph before its assertions run.
 // Keep enough CPU here to avoid spending minutes in Vitest imports on 4 vCPU.
 const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
@@ -828,7 +827,8 @@ function readSerialAgentsCoreSeconds(
 function usesMeasuredCompactWorkers(group: NodeTestShardGroup, runnerBackend: string | undefined) {
   return (
     (runnerBackend === undefined || runnerBackend === "blacksmith" || runnerBackend === "hybrid") &&
-    /^agentic-gateway-core-2(?:-hosted-\d+)?$/u.test(group.shard_name)
+    (group.shard_name === "agentic-cli" ||
+      /^agentic-gateway-core-2(?:-hosted-\d+)?$/u.test(group.shard_name))
   );
 }
 
@@ -3857,11 +3857,10 @@ function createCompactNodeTestShardBundles(
         usesBlacksmithCapacity(runner) &&
         bin.some((group) =>
           group.includePatterns?.some((file) => TOOLING_DECLARATION_COMPILER_TEST_FILES.has(file)),
-        ))
+        )) ||
+      (usesBlacksmithCapacity(runner) && bin.some((group) => group.shard_name === "agentic-cli"))
         ? EXTRA_LARGE_NODE_TEST_RUNNER
-        : usesBlacksmithCapacity(runner) && bin.some((group) => group.shard_name === "agentic-cli")
-          ? CAPACITY_NODE_TEST_RUNNER
-          : runner;
+        : runner;
     compactJobs.push({
       checkName,
       groups: bin,
@@ -4013,7 +4012,7 @@ function createCompactNodeTestShardBundles(
       continue;
     }
     // Finish placement before moving the job cap onto every unproven sibling,
-    // including donated runtime groups. The measured core group keeps autosizing.
+    // including donated runtime groups. Measured groups keep autosizing.
     const { OPENCLAW_VITEST_MAX_WORKERS: _workers, ...env } = job.env;
     job.env = Object.keys(env).length > 0 ? env : undefined;
     job.groups = job.groups.map((group) =>
