@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
+import { resolveWorkspaceBootstrapRouting } from "../../bootstrap-routing.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { limitHistoryTurns } from "../history.js";
 import {
@@ -176,6 +177,38 @@ describe("embedded attempt context injection", () => {
     });
 
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
+  });
+
+  it("carries a completed workspace routing decision into marker eligibility", async () => {
+    // The same inputs attempt preparation supplies once workspace setup is done:
+    // nothing pending, a primary interactive run, canonical workspace.
+    const routing = await resolveWorkspaceBootstrapRouting({
+      isWorkspaceBootstrapPending: async () => false,
+      trigger: "user",
+      isPrimaryRun: true,
+      isCanonicalWorkspace: true,
+      effectiveWorkspace: "/tmp/openclaw-workspace",
+      resolvedWorkspace: "/tmp/openclaw-workspace",
+      hasBootstrapFileAccess: true,
+    });
+
+    const resolver = vi.fn(async () => ({
+      bootstrapFiles: [{ name: "AGENTS.md", content: "workspace instructions" }],
+      contextFiles: [{ path: "AGENTS.md", content: "workspace instructions" }],
+    }));
+
+    const { result } = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      bootstrapMode: routing.bootstrapMode,
+      deliversCompleteWorkspaceContext: routing.deliversCompleteWorkspaceContext,
+      resolver,
+    });
+
+    expect(routing.bootstrapMode).toBe("none");
+    // The turn really did carry the workspace files, and now it earns the marker
+    // that lets the next continuation skip them.
+    expect(result.contextFiles).toEqual([{ path: "AGENTS.md", content: "workspace instructions" }]);
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(true);
   });
 
   it.each(["heartbeat"] as const)(
