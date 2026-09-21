@@ -1,4 +1,15 @@
-import type { CognitiveReplica } from "./dynamics-types.js";
+import type { ResolvedDynamicsProfile } from "./dynamics-types.js";
+
+type CognitiveReplica = {
+  replicaId: string;
+  campaignId: string;
+  groupId: string;
+  runId: string;
+  requesterSessionKey: string;
+  parentReplicaId?: string;
+  profile: ResolvedDynamicsProfile;
+  authority: "search-only";
+};
 
 export const COGNITIVE_PHASES = [
   "gas",
