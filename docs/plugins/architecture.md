@@ -300,7 +300,8 @@ state temporary directory, `~/.openclaw/tmp` even when another state directory i
 selected, the current system temporary directory, `/tmp` on
 POSIX hosts, and recorded managed-service `TMPDIR` locations. It deduplicates
 directory aliases and reports each capture's path and regular-file size without
-following links inside captures.
+following links inside captures. Catalog roots include all nested
+`openclaw-plugin-build-*` trees in their reported size and removal receipt.
 
 `openclaw doctor --fix` reclaims these legacy roots only while Doctor holds Gateway
 maintenance and a complete host process census finds no other OpenClaw producer.
@@ -323,6 +324,9 @@ Configured Gateway agents share one model-catalog worker per plugin-inventory
 lifetime. Agent and authentication facts belong to each task; plugin registrations
 and captured source remain with the shared inventory. Standalone hosts that supply
 their own environment retain an isolated catalog worker for that environment.
+Provider-discovery entries use the exact selected runtime instance's captured
+source when it is already loaded, so discovery does not create a second copy of
+the same plugin package. Standalone discovery keeps its own setup lifetime.
 Each worker retains one prepared catalog generation. Replacement releases the
 previous generation's registrations after its work settles. Successfully disposed
 registrations leave their plugin caches; unchanged registrations remain reusable

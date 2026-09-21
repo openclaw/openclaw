@@ -273,6 +273,21 @@ Older releases can reject enable, uninstall, and reinstall while trying to copy
 that same missing capture. Restart the Gateway through its service owner before
 retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
 
+### Large model-catalog temporary directories
+
+Older releases can retain several complete plugin copies inside
+`openclaw-model-catalog-*` directories. A scan of only top-level
+`openclaw-plugin-build-*` paths misses those nested copies. Current catalog
+workers reuse the selected runtime capture for provider discovery and remove
+their scratch tree when its owner retires.
+
+Upgrade the host, then run `openclaw doctor` to inspect legacy captures.
+`openclaw doctor --fix` removes whole legacy catalog trees only during maintenance
+when no other OpenClaw process is running. Do not delete captures based on their
+age or absence from open-file or memory-map lists: an idle owner can still need
+them. Modern captures use SQLite custody to prove retirement. See
+[plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
 ## Reason codes
 
 - `dirty`, `no-upstream`: repair the source checkout before retrying.
