@@ -38,6 +38,11 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sess
 const dynamicsGroups = new Set<string>();
 const dynamicsAdvisoryByGroup = new Map<string, string>();
 
+function releaseDynamicsGroup(groupId: string): void {
+  dynamicsGroups.delete(groupId);
+  dynamicsAdvisoryByGroup.delete(groupId);
+}
+
 function resolveCodeModeRequesterSessionKey(ctx: ToolSearchToolContext): string {
   const sessionKey = ctx.sessionKey?.trim();
   if (!sessionKey) {
@@ -225,14 +230,22 @@ async function runAgentWaitBridge(params: {
     throw new ToolInputError("agents.run wait requires session identity.");
   }
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  const completion = await waitForCollectorCompletion({
-    runId: runId.trim(),
-    currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
-    currentAgentId: params.ctx.agentId,
-    config: params.ctx.runtimeConfig ?? params.ctx.config,
-    signal: params.signal,
-  });
   const groupId = resolveCodeModeSwarmGroupId(params.ctx);
+  let completion: CollectorCompletionResult;
+  try {
+    completion = await waitForCollectorCompletion({
+      runId: runId.trim(),
+      currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
+      currentAgentId: params.ctx.agentId,
+      config: params.ctx.runtimeConfig ?? params.ctx.config,
+      signal: params.signal,
+    });
+  } catch (error) {
+    // Dynamics state is advisory-only and owned by this parent run. Releasing it
+    // on an aborted/failed wait cannot cancel or mutate still-live collectors.
+    releaseDynamicsGroup(groupId);
+    throw error;
+  }
   if (dynamicsGroups.has(groupId)) {
     const records = listSwarmRunsForGroup(groupId, requesterSessionKey, params.ctx.agentId);
     const decision = assessHostCollectorPopulation({
@@ -261,8 +274,7 @@ async function runAgentWaitBridge(params: {
       }
     }
     if (records.length > 0 && records.every((entry) => entry.collectorCompletion)) {
-      dynamicsGroups.delete(groupId);
-      dynamicsAdvisoryByGroup.delete(groupId);
+      releaseDynamicsGroup(groupId);
     }
   }
   return completion;
