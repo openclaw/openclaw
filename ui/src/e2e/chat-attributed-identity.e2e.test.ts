@@ -51,8 +51,10 @@ async function readFooterGeometry(group: Locator) {
         left: actionsRect.left,
         right: actionsRect.right,
         top: actionsRect.top,
+        bottom: actionsRect.bottom,
       },
       identity: {
+        top: identityRect.top,
         bottom: identityRect.bottom,
         left: identityRect.left,
         right: identityRect.right,
@@ -438,26 +440,49 @@ suite.define(() => {
     await page.evaluate(() => {
       document.documentElement.dir = "ltr";
     });
-    await page.setViewportSize({ height: 760, width: 390 });
-    await page.mouse.move(0, 0);
-    const restingTouchGeometry = await readFooterGeometry(longNamePeerGroup);
-    const restingTouchHeight = (await longNamePeerGroup.boundingBox())?.height;
-    await longNamePeerGroup
-      .locator(".chat-bubble")
-      .dispatchEvent("pointerup", { pointerType: "touch" });
-    await expect(longNamePeerGroup).toHaveClass(/\bchat-group--meta-revealed\b/u);
-    const revealedTouchGeometry = await readFooterGeometry(longNamePeerGroup);
-    const revealedTouchHeight = (await longNamePeerGroup.boundingBox())?.height;
-    expectStableNamePosition(revealedTouchGeometry.name, restingTouchGeometry.name);
-    expect(revealedTouchGeometry.actions.top).toBeGreaterThanOrEqual(
-      revealedTouchGeometry.identity.bottom,
-    );
-    expect(revealedTouchGeometry.actions.right).toBeCloseTo(revealedTouchGeometry.footer.right, 0);
-    await expect(longNamePeerGroup.getByRole("button", { name: "Reply to message" })).toHaveCSS(
-      "opacity",
-      "1",
-    );
-    expect(revealedTouchHeight).toBeGreaterThan(restingTouchHeight ?? 0);
+    for (const width of [320, 390, 430]) {
+      await page.setViewportSize({ height: 760, width });
+      await page.mouse.move(0, 0);
+      const restingTouchGeometry = await readFooterGeometry(longNamePeerGroup);
+      const restingTouchHeight = (await longNamePeerGroup.boundingBox())?.height;
+      await longNamePeerGroup
+        .locator(".chat-bubble")
+        .dispatchEvent("pointerup", { pointerType: "touch" });
+      await expect(longNamePeerGroup).toHaveClass(/\bchat-group--meta-revealed\b/u);
+      const revealedTouchGeometry = await readFooterGeometry(longNamePeerGroup);
+      expectStableNamePosition(revealedTouchGeometry.name, restingTouchGeometry.name);
+      // Metadata and 44px touch controls share one row, including when the
+      // timestamp wraps within its own column. No disconnected action row.
+      expect(revealedTouchGeometry.actions.top).toBeLessThan(revealedTouchGeometry.identity.bottom);
+      expect(revealedTouchGeometry.actions.bottom).toBeGreaterThan(
+        revealedTouchGeometry.identity.top,
+      );
+      expect(revealedTouchGeometry.actions.left - revealedTouchGeometry.identity.right).toBeCloseTo(
+        8,
+        0,
+      );
+      expect(revealedTouchGeometry.actions.right).toBeCloseTo(
+        revealedTouchGeometry.footer.right,
+        0,
+      );
+      expect(revealedTouchGeometry.actions.left).toBeGreaterThanOrEqual(0);
+      expect(revealedTouchGeometry.footer.right).toBeLessThanOrEqual(width);
+      const reply = longNamePeerGroup.getByRole("button", { name: "Reply to message" });
+      await expect(reply).toHaveCSS("opacity", "1");
+      for (const control of [
+        reply,
+        longNamePeerGroup.getByRole("button", { name: "Rewind", exact: true }),
+      ]) {
+        const bounds = await control.boundingBox();
+        expect(bounds?.width).toBeGreaterThanOrEqual(44);
+        expect(bounds?.height).toBeGreaterThanOrEqual(44);
+      }
+      expect((await longNamePeerGroup.boundingBox())?.height).toBe(restingTouchHeight);
+      await longNamePeerGroup
+        .locator(".chat-bubble")
+        .dispatchEvent("pointerup", { pointerType: "touch" });
+      await expect(longNamePeerGroup).not.toHaveClass(/\bchat-group--meta-revealed\b/u);
+    }
 
     await page.setViewportSize({ height: 760, width: 1180 });
     // Own-message footer: the always-visible name must stay put when hover

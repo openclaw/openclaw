@@ -774,24 +774,34 @@ img.chat-avatar {
     --chat-persistent-footer-opacity: 1;
   }
 
-  :where(.chat-thread)
-    .chat-group.user.chat-group--peer:not(.chat-group--meta-revealed, :focus-within) {
-    --chat-footer-detail-position: absolute;
+  /* Reserve the compact row on reveal; turn spacing belongs below the footer,
+     not between the sender and their controls. */
+  .chat-group.user.chat-group--peer {
+    --chat-footer-detail-position: static;
   }
 
-  /* Extra turn space must not center the name before touch actions wrap below it. */
   .chat-group.user.chat-group--peer .chat-group-footer {
-    align-content: flex-start;
-    align-items: flex-start;
+    align-self: start;
+    flex-wrap: nowrap;
+    align-items: center;
+    width: fit-content;
+    max-width: 100%;
+  }
+
+  .chat-group.user.chat-group--peer .chat-group-footer__meta {
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    gap: 0 8px;
   }
 
   .chat-group.user.chat-group--peer .chat-group-footer-actions {
-    flex-basis: 100%;
+    flex: 0 0 auto;
     justify-content: flex-end;
   }
 
   .chat-group-footer-actions .chat-copy-btn,
   .chat-group-footer-actions .chat-reply-btn,
+  .chat-group-footer-actions .chat-group-rewind,
   .chat-message-actions-row .chat-copy-btn,
   .chat-message-actions-row .chat-reply-btn {
     min-width: 44px;
