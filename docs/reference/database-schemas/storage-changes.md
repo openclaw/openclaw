@@ -1392,6 +1392,10 @@ a confirmed mutation stays successful if only subsequent cleanup fails.
 Switching databases, deletion, quarantine, maintenance, root retirement, and shutdown
 revoke reuse and join native worker exit before releasing the database owner. Pending
 commit requests are rejected before synchronous close can wait on their writer lock.
+Requests still waiting in the shared archive queue drop their callback before releasing
+their retained claim, so retirement does not wait for unrelated queued work. Surviving
+requests keep FIFO order. Once admitted, an operation retains custody through physical
+settlement even if its request is revoked. Schemas, retention, and update behavior are unchanged.
 Crash cleanup can release only the exact admitted lease receipt, after native exit;
 uncertain cleanup remains an error and never causes mutation replay. The parent
 adopts newly established integrity verification only after operation cleanup and
