@@ -18,6 +18,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
+import java.net.InetAddress
 import java.net.ProtocolException
 import java.security.cert.CertificateException
 import java.util.Base64
@@ -279,18 +280,26 @@ class CloudflareAccessClientTest {
       }
     }
 
-  @Test fun defaultTransportPreservesNativeTlsHandshakeFailure() =
-    runBlocking {
-      MockWebServer().use { server ->
-        // No server certificate is installed: the real HTTPS handshake must fail before HTTP.
-        val tls = SSLContext.getInstance("TLS").apply { init(emptyArray(), null, null) }
-        server.useHttps(tls.socketFactory, false)
-        server.start()
-        val failure = runCatching { CloudflareAccessClient.send(Request.Builder().url(server.url("/")).build(), 0, 5) }.exceptionOrNull()
-        assertTrue(failure is SSLException)
-        assertEquals(0, server.requestCount)
+  @Test fun defaultTransportPreservesNativeTlsHandshakeFailure() {
+    MockWebServer().use { server ->
+      // No server certificate is installed: the real HTTPS handshake must fail before HTTP.
+      val tls = SSLContext.getInstance("TLS").apply { init(emptyArray(), null, null) }
+      server.useHttps(tls.socketFactory, false)
+      val address = InetAddress.getLoopbackAddress()
+      server.start(address, 0)
+      // Hostname lookup may try an unbound address family before reaching this TLS listener.
+      val url =
+        server
+          .url("/")
+          .newBuilder()
+          .host(address.hostAddress)
+          .build()
+      assertThrows(SSLException::class.java) {
+        runBlocking { CloudflareAccessClient.send(Request.Builder().url(url).build(), 0, 5) }
       }
+      assertEquals(0, server.requestCount)
     }
+  }
 
   @Test fun defaultTransportPreservesInterruptedResponseBodyFailure() =
     runBlocking {
