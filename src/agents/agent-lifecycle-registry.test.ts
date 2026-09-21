@@ -3,11 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  readAgentDeletionRecoveryHolds,
+  reconstructAgentDeletionJournal,
+} from "../state/agent-deletion-journal-recovery.js";
+import {
   beginAgentDeletionJournal,
   claimCompletedAgentDeletionJournal,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -30,7 +38,9 @@ function createOptions() {
     fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-delete-")),
   );
   tempDirs.push(stateDir);
-  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+  const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+  openOpenClawStateDatabase(options);
+  return options;
 }
 
 function createEntry(agentId: string) {
@@ -43,6 +53,7 @@ function createEntry(agentId: string) {
 }
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -81,7 +92,9 @@ describe("agent lifecycle registry", () => {
     expect(readAgentDeletionJournal("main", options)).toBeUndefined();
     const database = openOpenClawStateDatabase(options);
     database.db.exec("DROP TABLE agent_deletion_journal");
-    expect(() => readAgentDeletionJournal("main", options)).toThrow(/agent_deletion_journal/);
+    expect(() => readAgentDeletionJournal("main", options)).toThrow(
+      "Agent deletion journal missing; run openclaw doctor --fix",
+    );
     expect(tableExists(database.db, "agent_deletion_journal")).toBe(false);
   });
 
@@ -102,6 +115,78 @@ describe("agent lifecycle registry", () => {
         options,
       );
     }, options);
+  });
+
+  it("preserves recovery holds through rollback and failed completion, then transfers protection to retained deletion", async () => {
+    const options = createOptions();
+    const held = ["worker", "kept"].map((agentId) => ({
+      agentId,
+      path: openOpenClawAgentDatabase({ ...options, agentId }).path,
+    }));
+    closeOpenClawAgentDatabasesForTest();
+    const originalBytes = held.map((target) => fs.readFileSync(target.path));
+    runOpenClawStateWriteTransaction((database) => {
+      database.db.exec("DROP TABLE agent_deletion_journal");
+      reconstructAgentDeletionJournal(database, held);
+    }, options);
+    const readHolds = () => readAgentDeletionRecoveryHolds(openOpenClawStateDatabase(options));
+    const target = held[0]!;
+    const entry = {
+      agentId: target.agentId,
+      agentDir: path.dirname(target.path),
+      workspaceDir: path.join(options.env.OPENCLAW_STATE_DIR, "workspace-worker"),
+      sessionsDir: path.join(options.env.OPENCLAW_STATE_DIR, "agents", target.agentId, "sessions"),
+      databasePaths: [target.path],
+      deleteFiles: false,
+    };
+    await withAgentDeletion(
+      target.agentId,
+      async (begin) => {
+        begin(entry).rollback();
+      },
+      options,
+    );
+    expect(readAgentDeletionJournal(target.agentId, options)).toBeUndefined();
+    expect(readHolds()).toEqual(held);
+    expect(isAgentDeletionBlocked(target.agentId, options)).toBe(false);
+    expect(() =>
+      openOpenClawAgentDatabase({ ...options, agentId: target.agentId, path: target.path }),
+    ).toThrow("held after deletion journal reconstruction");
+
+    await expect(
+      withAgentDeletion(
+        target.agentId,
+        async (begin) => {
+          const deletion = begin(entry);
+          runOpenClawStateWriteTransaction((database) => {
+            deletion.completeInTransaction(database);
+            throw new Error("completion transaction failed");
+          }, options);
+        },
+        options,
+      ),
+    ).rejects.toThrow("completion transaction failed");
+    expect(readAgentDeletionJournal(target.agentId, options)).toMatchObject({
+      cleanupCompleted: false,
+    });
+    expect(readHolds()).toEqual(held);
+
+    await withAgentDeletion(
+      target.agentId,
+      async (begin) => {
+        begin(entry).finish();
+      },
+      options,
+    );
+    expect(readHolds()).toEqual(held.slice(1));
+    expect(readAgentDeletionJournal(target.agentId, options)).toMatchObject({
+      cleanupCompleted: true,
+      deleteFiles: false,
+    });
+    expect(() =>
+      openOpenClawAgentDatabase({ ...options, agentId: target.agentId, path: target.path }),
+    ).toThrow("deleted");
+    expect(held.map((store) => fs.readFileSync(store.path))).toEqual(originalBytes);
   });
 
   it("binds legacy and recreated agents to distinct durable incarnations", () => {

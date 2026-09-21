@@ -13,6 +13,10 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
+import {
+  prepareStateDatabaseInitialization,
+  type StateDatabaseInitialization,
+} from "./openclaw-state-db-initialization.js";
 import { resolveDatabasePath } from "./openclaw-state-db-maintenance.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
@@ -125,7 +129,12 @@ function ensureStartupMigrationCheckpointSchema(
 export function withOpenClawStateStartupCheckpointConnection<T>(
   callback: (db: DatabaseSync) => T,
   options: OpenClawStateDatabaseOptions & { atomic?: boolean },
-  initializeCanonicalSchema: (db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv) => void,
+  initializeCanonicalSchema: (
+    db: DatabaseSync,
+    pathname: string,
+    env: NodeJS.ProcessEnv,
+    initialization: StateDatabaseInitialization,
+  ) => void,
 ): T {
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
@@ -134,6 +143,7 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
     { databasePath: pathname, env },
     "startup migration checkpoint database operation",
     () => {
+      const initialization = prepareStateDatabaseInitialization(pathname, env);
       ensureOpenClawStatePermissions(pathname, env);
       const db = openNodeSqliteDatabase(pathname);
       try {
@@ -144,7 +154,7 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
           assertSqliteIntegrity(db, pathname);
           const schemaCookie = options.atomic ? readSqliteSchemaCookie(db) : undefined;
           if (isUninitializedNativeStartupDatabase(db)) {
-            initializeCanonicalSchema(db, pathname, env);
+            initializeCanonicalSchema(db, pathname, env, initialization);
           }
           ensureStartupMigrationCheckpointSchema(db, pathname, env);
           // Bootstrap/additive repair is a separate mutation boundary. Only unchanged
@@ -175,7 +185,12 @@ export function withOpenClawStateStartupCheckpointConnection<T>(
 /** Admit only recognized native bootstrap; versioned state stays on the read-only path. */
 export function initializeNativeOpenClawStateConnection(
   options: OpenClawStateDatabaseOptions,
-  initializeCanonicalSchema: (db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv) => void,
+  initializeCanonicalSchema: (
+    db: DatabaseSync,
+    pathname: string,
+    env: NodeJS.ProcessEnv,
+    initialization: StateDatabaseInitialization,
+  ) => void,
 ): void {
   assertOpenClawStateSchemaRepairAllowed(resolveDatabasePath(options));
   if (
@@ -195,7 +210,7 @@ export function initializeNativeOpenClawStateConnection(
         return;
       }
       assertSqliteIntegrity(db, pathname);
-      initializeCanonicalSchema(db, pathname, env);
+      initializeCanonicalSchema(db, pathname, env, { kind: "existing" });
     } finally {
       clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();

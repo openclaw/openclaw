@@ -32,8 +32,6 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
-  createOpenClawAgentDatabasePathMatcher,
-  isSameOpenClawAgentDatabasePath,
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabases,
@@ -58,7 +56,11 @@ import {
   settleOpenClawAgentDatabaseWorkerClose,
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
+  isSameOpenClawAgentDatabasePath,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { materializeV21WorkerAgentDatabase } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -2524,26 +2526,6 @@ describe("openclaw agent database", () => {
       } finally {
         lstatSync.mockRestore();
       }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "retries path resolution failures within one matcher",
-    () => {
-      const stateDir = fs.realpathSync(createTempStateDir());
-      const loopPath = path.join(stateDir, "loop.sqlite");
-      fs.symlinkSync("loop.sqlite", loopPath);
-      expect(() => isSameOpenClawAgentDatabasePath(loopPath, loopPath)).toThrow(
-        expect.objectContaining({ code: "ELOOP" }),
-      );
-      const matchesPath = createOpenClawAgentDatabasePathMatcher();
-      expect(() => matchesPath(loopPath, loopPath)).toThrow(
-        expect.objectContaining({ code: "ELOOP" }),
-      );
-
-      fs.unlinkSync(loopPath);
-      fs.writeFileSync(loopPath, "recovered");
-      expect(matchesPath(loopPath, loopPath)).toBe(true);
     },
   );
 

@@ -5,6 +5,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionDirs from "../../agents/session-dirs.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import { createLegacyDatabaseFixture } from "../../infra/state-migrations.media-persistence.test-support.js";
+import { reconstructAgentDeletionJournal } from "../../state/agent-deletion-journal-recovery.js";
 import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
@@ -175,6 +177,58 @@ it.each([false, true])(
     );
   },
 );
+
+it("skips receipt-held startup maintenance, certification, and handoff while serving an active sibling", async () => {
+  const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-startup-recovery-hold-"));
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const heldPath = createLegacyDatabaseFixture({
+    agentId: "main",
+    env,
+    eventsBySession: {},
+    schemaVersion: 19,
+  });
+  const active = openOpenClawAgentDatabase({ agentId: "active", env });
+  const activeOptions = { agentId: "active", env, path: active.path };
+  setCanonicalSqliteSessionMainKey(active, "previous");
+  closeOpenClawAgentDatabasesForTest();
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      database.db.exec("DROP TABLE agent_deletion_journal");
+      reconstructAgentDeletionJournal(database, [{ agentId: "main", path: heldPath }]);
+    },
+    { env },
+  );
+  const bytes = fs.readFileSync(heldPath);
+  const artifacts = fs.readdirSync(path.dirname(heldPath));
+  const cfg: OpenClawConfig = { agents: { entries: { main: {}, active: {} } } };
+  const log = { info: vi.fn(), warn: vi.fn() };
+  const handoffDatabase = vi.fn(async (_options: OpenClawAgentDatabaseOptions) => {});
+  const maintenance = vi.spyOn(
+    await import("./session-canonical-key.js"),
+    "setCanonicalSqliteSessionMainKey",
+  );
+  const certification = vi.spyOn(
+    await import("./session-canonical-validation-readiness.js"),
+    "certifySessionCanonicalValidationPending",
+  );
+  try {
+    await runSessionStartupMigration({ cfg, env, log, handoffDatabase });
+
+    expect(maintenance).toHaveBeenCalledOnce();
+    expect(certification.mock.calls.map(([options]) => options.agentId)).toEqual(["active"]);
+    expect(handoffDatabase).toHaveBeenCalledExactlyOnceWith(activeOptions);
+    expect(isCanonicalSqliteSessionMainKeyCurrent(activeOptions, undefined)).toBe(true);
+    expect(isOpenClawAgentDatabaseOpen(heldPath)).toBe(false);
+    expect(fs.readFileSync(heldPath)).toEqual(bytes);
+    expect(fs.readdirSync(path.dirname(heldPath))).toEqual(artifacts);
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining(`main at ${heldPath}`));
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+  } finally {
+    maintenance.mockRestore();
+    certification.mockRestore();
+  }
+});
 
 it("re-registers durable lineage children before configured-only runtime reads", async () => {
   const root = fs.realpathSync.native(tempDirs.make("openclaw-startup-registry-recovery-"));

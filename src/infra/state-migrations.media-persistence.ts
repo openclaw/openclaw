@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { resolveStateDir } from "../config/paths.js";
 import {
   decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
@@ -67,6 +68,8 @@ import {
 } from "./state-migrations.media-persistence-database.js";
 import {
   listTranscriptArchives,
+  prepareAgentDatabaseMigrationDiscovery,
+  agentDatabaseMigrationAdvisory,
   resolveAgentDatabaseMigrationTargets,
   type AgentDatabaseMigrationTarget,
   type PreparedAgentDatabaseMigrationDiscovery,
@@ -356,11 +359,10 @@ function migrateTranscriptArchive(
   if (!transformed.changed) {
     return false;
   }
-  const rewritten = transformed.content;
   const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
   const encoded = compressed
-    ? encodeSessionArchiveContent(rewritten)
-    : { bytes: Buffer.from(rewritten, "utf8"), suffix: "" as const };
+    ? encodeSessionArchiveContent(transformed.content)
+    : { bytes: Buffer.from(transformed.content, "utf8"), suffix: "" as const };
   if (compressed && encoded.suffix !== SESSION_ARCHIVE_ZSTD_SUFFIX) {
     throw new Error(`${filePath} could not be re-encoded with its zstd codec`);
   }
@@ -377,17 +379,17 @@ function migrateTranscriptArchive(
         throw new Error(`${filePath} changed before atomic media migration replacement`);
       }
       const staged = decodeSessionArchiveBytes(fs.readFileSync(tempPath), compressed);
-      if (staged !== rewritten) {
+      if (staged !== transformed.content) {
         throw new Error(`${filePath} failed codec readback before replacement`);
       }
       assertEventIdentitiesUnchanged(
-        parseArchiveContent(rewritten, filePath),
+        parseArchiveContent(transformed.content, filePath),
         parseArchiveContent(staged, tempPath),
         filePath,
       );
     },
   });
-  if (readSessionArchiveContentSync(filePath) !== rewritten) {
+  if (readSessionArchiveContentSync(filePath) !== transformed.content) {
     throw new Error(`${filePath} failed codec readback after replacement`);
   }
   return true;
@@ -413,13 +415,27 @@ export async function migrateLegacyMediaPersistence(
   const refusedAgentDatabasePaths: string[] = [];
   const recoveredAgentDatabasePaths = new Set<string>();
   try {
+    const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({
+      env,
+      configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
+      deletionJournal:
+        params.preparedDiscovery?.stateDir === resolveStateDir(env) &&
+        params.preparedDiscovery.discovery.deletionJournal.status === "unavailable"
+          ? params.preparedDiscovery.discovery.deletionJournal
+          : undefined,
+    });
+    const advisory = agentDatabaseMigrationAdvisory(preparedDiscovery.discovery);
+    if (advisory) {
+      params.onPreparedTargets?.([]);
+      return advisory;
+    }
     await withAgentDatabaseMaintenanceLease({ env }, async (maintenance) => {
       const discovery = resolveAgentDatabaseMigrationTargets({
         changes,
         configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
         env,
         warnings,
-        preparedDiscovery: params.preparedDiscovery,
+        preparedDiscovery,
       });
       recoverableWarningCount = discovery.recoverableWarningCount;
       const recoveries = recoverMisplacedAgentDatabaseCopies({

@@ -85,7 +85,6 @@ import {
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { closeIdleOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-scope.js";
 import {
-  isSameOpenClawAgentDatabasePath,
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
@@ -113,6 +112,7 @@ import {
 import {
   assertIncognitoAgentDatabasePathAvailable,
   isIncognitoOpenClawAgentSqlitePath,
+  isSameOpenClawAgentDatabasePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "./openclaw-agent-write-admission.js";

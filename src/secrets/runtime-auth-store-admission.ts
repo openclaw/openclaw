@@ -8,7 +8,7 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db-registry.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { shortenHomePath } from "../utils.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 

@@ -143,12 +143,15 @@ export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
   ); // sqlite-allow-raw -- Canonical additive DDL only; key rows use Kysely.
 }
 
-export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
-  database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_deletion_journal"));
+export function assertAgentDeletionJournalAvailable(database: DatabaseSync): void {
+  if (!tableHasColumn(database, "agent_deletion_journal", "agent_id")) {
+    throw new Error(
+      "Agent deletion journal missing; run openclaw doctor --fix to reconstruct it before restoring or deleting agents.",
+    );
+  }
 }
 
 export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
-  ensureAgentDeletionJournalSchema(database);
   database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_database_leases"));
 }
 

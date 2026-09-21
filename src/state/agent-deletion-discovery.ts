@@ -1,6 +1,9 @@
 import fs from "node:fs";
+import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -11,7 +14,8 @@ import {
 import {
   createOpenClawAgentDatabasePathMatcher,
   isPersistentOpenClawAgentDatabasePath,
-} from "./openclaw-agent-db-registry.js";
+  resolveOpenClawAgentSqlitePath,
+} from "./openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 type Target = { agentId: string; path: string };
@@ -44,20 +48,90 @@ export function createAgentDatabaseDeletionClassifier(params: {
   registeredAgentDatabases: readonly Target[];
   artifactDirectories?: readonly Target[];
 }) {
-  const entries = params.retainedDeletions;
+  const artifactDirectories = params.artifactDirectories;
+  const journal = params.retainedDeletions;
+  const entries = journal.status === "present" ? journal.entries : [];
   const samePath = createOpenClawAgentDatabasePathMatcher();
-  const recorded = params.artifactDirectories ?? [
+  const recorded = artifactDirectories ?? [
     ...params.configuredAgentDatabaseTargets,
     ...params.registeredAgentDatabases,
   ];
+  const heldPaths =
+    journal.status !== "present"
+      ? []
+      : artifactDirectories
+        ? journal.held.flatMap((entry) => {
+            const defaultDirectory = path.dirname(
+              resolveOpenClawAgentSqlitePath({ agentId: entry.agentId, env: params.env }),
+            );
+            const recordedDirectory = path.dirname(entry.path);
+            const canonicalAgentFile = path.basename(entry.path) === "openclaw-agent.sqlite";
+            const directories = [
+              { agentId: entry.agentId, path: defaultDirectory },
+              ...artifactDirectories.filter(
+                (directory) =>
+                  normalizeAgentId(directory.agentId) === entry.agentId ||
+                  (canonicalAgentFile && samePath(directory.path, recordedDirectory)),
+              ),
+            ];
+            // Only directory bindings or the canonical agents tree identify adjacent artifacts.
+            const selectedByEnvironment =
+              canonicalAgentFile &&
+              [params.env.OPENCLAW_AGENT_DIR, params.env.PI_CODING_AGENT_DIR].some(
+                (directory) =>
+                  directory?.trim() &&
+                  samePath(resolveUserPath(directory, params.env), recordedDirectory),
+              );
+            if (
+              selectedByEnvironment ||
+              (canonicalAgentFile &&
+                path.basename(recordedDirectory) === "agent" &&
+                samePath(
+                  path.dirname(path.dirname(recordedDirectory)),
+                  path.dirname(path.dirname(defaultDirectory)),
+                ))
+            ) {
+              directories.push({ agentId: entry.agentId, path: recordedDirectory });
+            }
+            return directories;
+          })
+        : journal.held;
   return (pathname: string, agentId?: string) => {
-    if (entries === "unavailable") {
-      return entries;
+    if (journal.status === "unavailable") {
+      return "unavailable";
+    }
+    let logicalTargets: readonly Target[] = [];
+    if (!artifactDirectories && agentId !== undefined) {
+      const ownerId = normalizeAgentId(agentId);
+      logicalTargets = params.configuredAgentDatabaseTargets.filter(
+        (target) => normalizeAgentId(target.agentId) === ownerId,
+      );
+      if (logicalTargets.length === 0) {
+        logicalTargets = [
+          ...params.registeredAgentDatabases.filter(
+            (target) => normalizeAgentId(target.agentId) === ownerId,
+          ),
+          {
+            agentId: ownerId,
+            path: resolveUnsuffixedSqliteTargetFromSessionStorePath(pathname).path,
+          },
+        ];
+      }
+    }
+    if (
+      heldPaths.some(
+        (entry) =>
+          (artifactDirectories && entry.agentId === agentId) ||
+          samePath(entry.path, pathname) ||
+          logicalTargets.some((target) => samePath(target.path, entry.path)),
+      )
+    ) {
+      return "held";
     }
     const deletion = entries.find(
       (entry) =>
         entry.agentId === agentId ||
-        (params.artifactDirectories ? [entry.agentDir] : entry.databasePaths).some((file) =>
+        (artifactDirectories ? [entry.agentDir] : entry.databasePaths).some((file) =>
           samePath(file, pathname),
         ),
     );
@@ -68,7 +142,7 @@ export function createAgentDatabaseDeletionClassifier(params: {
       (target) =>
         !entries.some((entry) => entry.agentId === normalizeAgentId(target.agentId)) &&
         samePath(target.path, pathname) &&
-        (params.artifactDirectories !== undefined ||
+        (artifactDirectories !== undefined ||
           (isPersistentOpenClawAgentDatabasePath(target.path, params.env) &&
             (params.configuredAgentDatabaseTargets.includes(target) ||
               isPathInside(
@@ -102,9 +176,10 @@ export function createRetainedAgentDatabaseMatcher(
     return (pathname: string, _agentId?: string) =>
       unavailable || (agentDirectories && hasSqliteArtifacts(pathname));
   }
-  const retainedDeletions = snapshot?.retainedDeletions ?? "unavailable";
-  if (retainedDeletions === "unavailable" || retainedDeletions.length === 0) {
-    return (_pathname: string, _agentId?: string) => retainedDeletions === "unavailable";
+  const retainedDeletions = snapshot?.retainedDeletions;
+  if (!retainedDeletions || retainedDeletions.status !== "present") {
+    return (_pathname: string, _agentId?: string) =>
+      !retainedDeletions || retainedDeletions.status === "unavailable";
   }
   const configured = readConfiguredTargets();
   return createAgentDatabaseDeletionClassifier({

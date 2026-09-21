@@ -20,6 +20,8 @@ export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() =
 // v5 records durable cloud-worker result refs on pending workspace fences.
 export const OPENCLAW_STATE_SCHEMA_VERSION = 18;
 export const OPENCLAW_STATE_STRICT_SCHEMA_VERSION = 3;
+// Absence records lost history; only Doctor may reconstruct these on existing state.
+export const DOCTOR_OWNED_STATE_TABLES = ["agent_deletion_journal"] as const;
 // Privacy-sensitive feature tables remain absent even in fresh databases until
 // their feature-local first write. The canonical SQL still owns their shape.
 export const FIRST_USE_STATE_TABLES = [

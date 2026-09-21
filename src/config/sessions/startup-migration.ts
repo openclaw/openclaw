@@ -4,7 +4,10 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { readDeferredPluginSessionImport } from "../../infra/deferred-plugin-session-sources.js";
 import { formatDoctorStateRepairFailure } from "../../infra/state-repair-message.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
-import { createAgentDatabaseDeletionClassifier } from "../../state/agent-deletion-discovery.js";
+import {
+  createAgentDatabaseDeletionClassifier,
+  createRetainedAgentDatabaseMatcher,
+} from "../../state/agent-deletion-discovery.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import { readAgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.read.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
@@ -249,6 +252,22 @@ export async function runSessionStartupMigration(params: {
     databases.add(databasePath);
     // Retained stores remain discoverable, but only deletion cleanup may write them.
     // Check the physical owner so surviving shared stores still reach their runtime.
+    const skipHeldDatabase = () => {
+      // Each admission follows awaited work; never reuse an earlier journal snapshot.
+      const retained = createRetainedAgentDatabaseMatcher(env, () =>
+        resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
+      )(databasePath, options.agentId);
+      if (!retained) {
+        return false;
+      }
+      params.log.info(
+        `session: skipping held agent database for ${options.agentId} at ${databasePath}${typeof retained === "object" ? " (cleanup complete)" : ""}; run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
+      );
+      return true;
+    };
+    if (skipHeldDatabase()) {
+      return;
+    }
     const deletion = readAgentDeletionJournal(options.agentId, { env });
     if (deletion) {
       params.log.info(
@@ -284,6 +303,9 @@ export async function runSessionStartupMigration(params: {
       const { withSqliteCanonicalValidationWorker } =
         await import("./session-accessor.sqlite-reclamation-worker.js");
       params.assertCurrent?.();
+      if (skipHeldDatabase()) {
+        return;
+      }
       await withSqliteCanonicalValidationWorker((withWorker) =>
         certifySessionCanonicalValidationPending(options, withWorker, params.assertCurrent),
       );
@@ -292,6 +314,9 @@ export async function runSessionStartupMigration(params: {
         // Runtime readiness failures must propagate; only successful handoff
         // transfers the cold connection beyond this maintenance operation.
         params.assertCurrent?.();
+        if (skipHeldDatabase()) {
+          return;
+        }
         await params.handoffDatabase(options);
         params.assertCurrent?.();
         handedOff = true;
