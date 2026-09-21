@@ -1910,6 +1910,7 @@ describe("runGatewayLoop", () => {
 
   it("hands timed-out active work to server close", async () => {
     vi.clearAllMocks();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({});
     const timedOutSnapshot = createActiveWorkSnapshot({ activeTasks: 1, embeddedRuns: 1 }, [
       { kind: "task", count: 1, message: "1 active background task run(s)" },
@@ -1944,7 +1945,7 @@ describe("runGatewayLoop", () => {
       expect(start).toHaveBeenCalledOnce();
 
       await expect(exited).resolves.toBe(0);
-    });
+    }).finally(() => clock.mockRestore());
   });
 
   it("skips a second active-work drain after a SIGUSR2 deferral timeout intent", async () => {
@@ -2004,6 +2005,7 @@ describe("runGatewayLoop", () => {
 
   it("restarts after SIGUSR2 even when drain times out, and resets runtime state for the new iteration", async () => {
     vi.clearAllMocks();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
     peekGatewayRestartReason.mockReturnValue(undefined);
     respawnGatewayProcessForUpdate.mockReturnValue({
       mode: "disabled",
@@ -2160,7 +2162,7 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
-    });
+    }).finally(() => clock.mockRestore());
   });
 
   it("advances stale cron active markers after bounded restart cron-run drain", async () => {
