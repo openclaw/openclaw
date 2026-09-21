@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codeModeSwarmHandlers } from "./code-mode-swarm.runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { waitForCollectorCompletion } from "./tools/agents-wait-tool.js";
@@ -48,7 +48,7 @@ vi.mock("./subagents/swarm/swarm-collector-capability.js", () => ({
   },
 }));
 vi.mock("./subagents/swarm/swarm-config.js", () => ({
-  resolveSwarmConfig: () => ({ enabled: state.enabled }),
+  resolveSwarmConfig: () => ({ enabled: state.enabled, maxConcurrent: 4 }),
 }));
 vi.mock("./tool-policy-shared.js", () => ({
   isToolExecutionAllowed: (allow: readonly string[], name: string) => allow.includes(name),
@@ -63,6 +63,8 @@ vi.mock("./tools/sessions-resolution.js", () => ({
   resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
   resolveInternalSessionKey: ({ key }: { key: string }) => key,
 }));
+
+const fixtureCatalogRefs = new Set<NonNullable<ToolSearchToolContext["catalogRef"]>>();
 
 function setup(dynamics?: unknown) {
   const tool = {
@@ -94,6 +96,7 @@ function setup(dynamics?: unknown) {
       },
     },
   };
+  fixtureCatalogRefs.add(ctx.catalogRef!);
   const callExactId = vi
     .fn()
     .mockResolvedValue({ result: { details: { status: "accepted", runId: "child-run" } } });
@@ -113,6 +116,13 @@ function setup(dynamics?: unknown) {
     },
   };
 }
+
+afterEach(() => {
+  for (const catalogRef of fixtureCatalogRefs) {
+    catalogRef.onDispose?.forEach((dispose) => dispose());
+  }
+  fixtureCatalogRefs.clear();
+});
 
 beforeEach(() => {
   state.enabled = true;
