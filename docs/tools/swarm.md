@@ -125,12 +125,8 @@ When the [requirements](/tools/swarm#requirements) are met, Code Mode exposes
 this guest API:
 
 ```typescript
-type DynamicsProfileId =
-  | "explorer"
-  | "builder"
-  | "critic"
-  | "independent-verifier"
-  | "glass-breaker";
+type DynamicsBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
+type DynamicsRequirement = "optional" | "required";
 
 type AgentRunOptions = {
   label?: string;
@@ -141,7 +137,12 @@ type AgentRunOptions = {
   schema?: Record<string, unknown>;
   phase?: string;
   dynamics?: {
-    profile: DynamicsProfileId;
+    boundary: DynamicsBoundary;
+    requirements?: {
+      sandbox?: "inherit" | "require";
+      candidateDigest?: DynamicsRequirement;
+      artifactRefs?: DynamicsRequirement;
+    };
     handoff?: {
       candidateDigest?: string;
       artifactRefs?: string[];
@@ -173,15 +174,20 @@ starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
 They do not delay the script if the UI is unavailable.
 
-The optional `dynamics` field selects an experimental, host-owned cognitive
-profile for the collector launch. It changes search guidance and the explicit
-handoff bytes prepared for that child; it does not grant tools, change approvals,
-or set the model sampling temperature. `independent-verifier` requires a
-candidate digest plus artifact references and asks the existing spawn owner for a
-required sandbox. If that sandbox cannot be provided, the launch fails rather
-than retrying unsandboxed. Handoff filtering only controls the explicit
-`dynamics.handoff` payload; it is not a security boundary for the original task,
-workspace, memory, or tool visibility.
+The optional `dynamics` field is an experimental generic launch contract. Core
+owns information-boundary filtering plus monotone requests for stricter existing
+admission. It does not ship role/personality names, grant tools, change approvals,
+or set model sampling parameters.
+
+For example, an independent-verification recipe can choose
+`boundary: "artifact-only"` and require `sandbox: "require"`, a candidate
+digest, and artifact references. If that sandbox cannot be provided, the launch
+fails rather than retrying unsandboxed. Handoff filtering only controls the
+explicit `dynamics.handoff` payload; it is not a security boundary for the
+original task, workspace, memory, or tool visibility.
+
+Caller-side names such as explorer, builder, critic, independent verifier, and
+glass breaker are orchestration recipes, not core API values.
 
 ## Liquid Swarm: mixed-phase cognition
 
@@ -209,10 +215,9 @@ These regimes may coexist. A group can keep hot explorers running while a
 different candidate is frozen and cold verifiers measure it. The controller is
 therefore local and mixed-phase rather than one global temperature schedule.
 
-`effectiveTemperature` is policy-level exploration freedom: it can describe
-mutation allowance, context inheritance, role diversity, and fan-out posture.
-It is not an LLM sampling-temperature knob unless a future runtime explicitly
-binds it to one.
+Any temperature, role, or mutation-budget language belongs to caller-side search
+policy. The native dynamics contract does not reinterpret model sampling
+temperature and does not grant execution authority.
 
 Sandbox and session boundaries are the execution medium around each replica.
 Explicit handoffs describe what crosses between trajectories; required sandbox
