@@ -16,6 +16,14 @@ export type InformationBoundary =
   | "summary-only"
   | "fork";
 
+export type DynamicsRequirement = "optional" | "required";
+
+export type DynamicsSpawnRequirements = {
+  sandbox: "inherit" | "require";
+  candidateDigest: DynamicsRequirement;
+  artifactRefs: DynamicsRequirement;
+};
+
 export type DynamicsProfile = {
   version: 1;
   id: string;
@@ -24,6 +32,7 @@ export type DynamicsProfile = {
   mutationBudget: number;
   verificationWeight: number;
   contextBoundary: InformationBoundary;
+  requirements: DynamicsSpawnRequirements;
 };
 
 export type ResolvedDynamicsProfile = DynamicsProfile & {
