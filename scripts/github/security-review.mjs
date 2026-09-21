@@ -10,8 +10,9 @@ import {
 } from "./guard-review.mjs";
 import {
   GitHubRateLimitError,
+  GitHubStatusPublicationError,
   publishGuardStatus,
-  withGitHubRateLimitRecovery,
+  withSecurityReviewRecovery,
 } from "./guard-shared.mjs";
 import { securityReviewRollout } from "./security-review-rollout.mjs";
 import { reviewSecuritySensitiveChanges } from "./security-sensitive-guard.mjs";
@@ -152,7 +153,9 @@ async function main() {
         } catch (error) {
           if (
             error instanceof GitHubRateLimitError ||
-            (error instanceof SupersededReviewError && errors.length === 0)
+            ((error instanceof GitHubStatusPublicationError ||
+              error instanceof SupersededReviewError) &&
+              errors.length === 0)
           ) {
             throw error;
           }
@@ -223,20 +226,30 @@ async function main() {
       "CI and applicable security review requirements passed",
     );
   } catch (error) {
-    if (error instanceof GitHubRateLimitError || error instanceof SupersededReviewError) {
+    if (
+      error instanceof GitHubRateLimitError ||
+      error instanceof GitHubStatusPublicationError ||
+      error instanceof SupersededReviewError
+    ) {
       throw error;
     }
     await publishGuardStatus(
       review,
       "failure",
       "CI or security review failed; see workflow details",
+    ).catch(
+      /** @param {unknown} publicationError */ (publicationError) => {
+        console.error(
+          publicationError instanceof Error ? publicationError.message : String(publicationError),
+        );
+      },
     );
     throw error;
   }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  withGitHubRateLimitRecovery(main).catch(
+  withSecurityReviewRecovery(main).catch(
     /** @param {unknown} error */ (error) => {
       if (error instanceof SupersededReviewError) {
         console.log(error.message);

@@ -21,8 +21,8 @@ const githubApiRetryCodes = new Set([
 const githubApiRetryDelaysMs = [1_000, 2_000, 4_000];
 // One primary quota window plus room for a fresh evaluation. Persist the deadline
 // across detect/autoscrub/enforce so each step cannot start another hour of waits.
-const githubRateLimitBudgetMs = 65 * 60_000;
-const rateLimitDeadlineEnv = "OPENCLAW_SECURITY_REVIEW_DEADLINE_MS";
+const securityReviewBudgetMs = 65 * 60_000;
+const recoveryDeadlineEnv = "OPENCLAW_SECURITY_REVIEW_DEADLINE_MS";
 
 export class GitHubRateLimitError extends Error {
   constructor(message, response) {
@@ -42,36 +42,44 @@ export class GitHubRateLimitError extends Error {
   }
 }
 
-export async function withGitHubRateLimitRecovery(evaluate) {
-  const recorded = process.env[rateLimitDeadlineEnv];
-  const deadline = recorded === undefined ? Date.now() + githubRateLimitBudgetMs : Number(recorded);
+export class GitHubStatusPublicationError extends Error {
+  constructor(cause) {
+    super(cause.message, { cause });
+  }
+}
+
+export async function withSecurityReviewRecovery(evaluate) {
+  const recorded = process.env[recoveryDeadlineEnv];
+  const deadline = recorded === undefined ? Date.now() + securityReviewBudgetMs : Number(recorded);
   if (!Number.isSafeInteger(deadline) || deadline <= 0) {
     throw new Error("Invalid Security Review recovery deadline.");
   }
   if (recorded === undefined && process.env.GITHUB_ENV) {
-    await appendFile(process.env.GITHUB_ENV, `${rateLimitDeadlineEnv}=${deadline}\n`);
+    await appendFile(process.env.GITHUB_ENV, `${recoveryDeadlineEnv}=${deadline}\n`);
   }
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await evaluate();
     } catch (error) {
-      if (!(error instanceof GitHubRateLimitError)) {
+      const rateLimited = error instanceof GitHubRateLimitError;
+      if (!rateLimited && !(error instanceof GitHubStatusPublicationError)) {
         throw error;
       }
       // Do not resume a status write with stale authority after waiting. The
       // caller restarts from live PR, file, comment, role, and CI observations.
-      const delay =
-        Math.max(error.retryAt - Date.now(), 60_000 * 2 ** attempt) +
-        1_000 +
-        Math.floor(Math.random() * 15_000);
+      const delay = rateLimited
+        ? Math.max(error.retryAt - Date.now(), 60_000 * 2 ** attempt) +
+          1_000 +
+          Math.floor(Math.random() * 15_000)
+        : githubApiRetryDelaysMs[attempt];
       if (attempt >= 3 || Date.now() + delay + GITHUB_API_REQUEST_TIMEOUT_MS > deadline) {
         throw new Error(
-          "GitHub API rate-limit recovery budget exhausted; security review remains incomplete.",
+          "GitHub API recovery budget exhausted; security review remains incomplete.",
           { cause: error },
         );
       }
       console.warn(
-        `GitHub API rate limited (${error.status}); retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
+        `${rateLimited ? `GitHub API rate limited (${error.status})` : `GitHub status publication failed (${error.message})`}; retrying the complete evaluation in ${Math.ceil(delay / 1_000)}s (attempt ${attempt + 1}/3).`,
       );
       await wait(delay);
     }
@@ -163,18 +171,25 @@ export async function publishGuardStatus(guard, state, description) {
       }
     }
   }
-  await guard.api.request(
-    `/repos/${guard.owner}/${guard.repo}/statuses/${guard.pullRequest.head.sha}`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        context: guard.context,
-        state,
-        description: `PR #${guard.pullRequest.number}: ${description}`,
-        target_url: guard.runUrl,
-      }),
-    },
-  );
+  try {
+    await guard.api.request(
+      `/repos/${guard.owner}/${guard.repo}/statuses/${guard.pullRequest.head.sha}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          context: guard.context,
+          state,
+          description: `PR #${guard.pullRequest.number}: ${description}`,
+          target_url: guard.runUrl,
+        }),
+      },
+    );
+  } catch (error) {
+    if (githubApiRetryStatuses.has(error?.status) || githubApiRetryCodes.has(error?.code)) {
+      throw new GitHubStatusPublicationError(error);
+    }
+    throw error;
+  }
 }
 
 export function sanitizeGuardDisplayValue(value) {
@@ -364,10 +379,14 @@ export function createGitHubApi(token, options = {}) {
             continue;
           }
           const detail = error instanceof Error ? error.message : String(error);
-          throw new Error(
+          const requestError = new Error(
             `GitHub API ${method} ${path} failed: ${code ? `${code}: ` : ""}${detail}`,
             { cause: error },
           );
+          if (!requestSignal.aborted) {
+            requestError.code = code;
+          }
+          throw requestError;
         }
         if (response.status === 204) {
           return null;

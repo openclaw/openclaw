@@ -312,11 +312,19 @@ have a 30-second timeout. Secondary limits without timing guidance use at least
 one minute of exponential backoff. Small randomized delays spread retries after
 quota resets. Jobs have a 75-minute ceiling, and waiting occupies their runner.
 Recovery is automatic in the same run and does not require another PR event or
-manual dispatch. Exhausted recovery fails the job without publishing success;
-quota exhaustion can also prevent a new status from being published. Ordinary
-permission errors, uncertain writes, and other evaluation errors are not retried.
+manual dispatch. Exhausted recovery fails the job; GitHub errors can also prevent
+a new status from being published. Ordinary permission errors and other
+evaluation errors are not retried.
 Checkout, runtime setup, and separately minted autoscrub token expiry are outside
 this recovery mechanism.
+
+Transient commit-status publication failures also restart the complete evaluation.
+HTTP `500`, `502`, `503`, and `504` responses and recognized connection failures
+use one-, two-, and four-second delays, sharing the three-restart limit and job
+deadline with rate-limit recovery. GitHub may have accepted the failed write, so
+the review rereads current PR, approval, role, and CI data instead of replaying an
+old decision. This recovery applies only to commit-status publication; other
+uncertain writes, cancellation, and request timeouts remain errors.
 
 Separately, read-only `GET` and `HEAD` requests retry HTTP `500`, `502`, `503`,
 and `504` responses and recognized transient connection failures before a

@@ -35,6 +35,12 @@ globalThis.fetch = async (url, options = {}) => {
       ? route.responses.shift()
       : route.responses[0]
     : route;
+  if (value?.recordStatusBeforeError) recordStatus();
+  if (value?.transportError) {
+    throw new TypeError("fetch failed", {
+      cause: Object.assign(new Error("Fixture connection failure"), { code: value.transportError }),
+    });
+  }
   if (value?.httpError) {
     return new Response(JSON.stringify({ message: value.message ?? "Fixture API failure" }), {
       status: value.httpError,

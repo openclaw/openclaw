@@ -157,7 +157,17 @@ export async function openGuard({ context, commentMarker, approvalCommand }, pre
     if (error instanceof GitHubRateLimitError) {
       throw error;
     }
-    await publishGuardStatus(guard, "failure", "Security review policy could not be evaluated");
+    await publishGuardStatus(
+      guard,
+      "failure",
+      "Security review policy could not be evaluated",
+    ).catch(
+      /** @param {unknown} publicationError */ (publicationError) => {
+        console.error(
+          publicationError instanceof Error ? publicationError.message : String(publicationError),
+        );
+      },
+    );
     throw error;
   }
   if (rollout.mode !== "enforced") {
