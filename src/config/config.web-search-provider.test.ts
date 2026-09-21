@@ -164,42 +164,23 @@ vi.mock("../plugins/manifest-registry.js", () => {
   return {
     loadPluginManifestRegistryCore: () => ({
       plugins: [
-        {
-          id: "brave",
+        ...mockWebSearchProviders.map((provider) => ({
+          id: provider.pluginId,
           origin: "bundled",
           channels: [],
           providers: [],
           contracts: {
-            webSearchProviders: ["brave"],
+            webSearchProviders: [provider.id],
           },
           cliBackends: [],
           skills: [],
           hooks: [],
-          rootDir: "/tmp/plugins/brave",
+          rootDir: `/tmp/plugins/${provider.pluginId}`,
           source: "test",
-          manifestPath: "/tmp/plugins/brave/openclaw.plugin.json",
-          schemaCacheKey: "test:brave",
+          manifestPath: `/tmp/plugins/${provider.pluginId}/openclaw.plugin.json`,
+          schemaCacheKey: `test:${provider.pluginId}`,
           configSchema: buildSchema(),
-        },
-        ...mockWebSearchProviders
-          .filter((provider) => provider.pluginId !== "brave")
-          .map((provider) => ({
-            id: provider.pluginId,
-            origin: "bundled",
-            channels: [],
-            providers: [],
-            contracts: {
-              webSearchProviders: [provider.id],
-            },
-            cliBackends: [],
-            skills: [],
-            hooks: [],
-            rootDir: `/tmp/plugins/${provider.pluginId}`,
-            source: "test",
-            manifestPath: `/tmp/plugins/${provider.pluginId}/openclaw.plugin.json`,
-            schemaCacheKey: `test:${provider.pluginId}`,
-            configSchema: buildSchema(),
-          })),
+        })),
         {
           id: "acme-search",
           origin: "installed",
