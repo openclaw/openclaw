@@ -21,6 +21,7 @@ import {
   clearBlockedPageRef,
   clearBlockedPageRefsForCdpUrl,
   clearBlockedTarget,
+  closeConnectionScopedPageBrowser,
   clearBlockedTargetsForCdpUrl,
   connectBrowser,
   evictStalePlaywrightBrowserConnection,
@@ -45,6 +46,7 @@ import {
   gotoPageWithNavigationGuard,
   isPolicyDenyNavigationError,
 } from "./pw-session-navigation.js";
+import { isConnectionScopedPage } from "./pw-session-page-target.js";
 import {
   ensurePageState,
   getObservedBrowserStateForPage,
@@ -253,16 +255,21 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
 async function withPlaywrightSafeReadReconnect<T>(
   opts: {
     cdpUrl: string;
+    engine?: "chromium" | "lightpanda";
     ssrfPolicy?: SsrFPolicy;
     signal: AbortSignal;
   },
   run: (browser: Browser) => Promise<T>,
 ): Promise<T> {
-  const connected = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+  const connected = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, undefined, opts.engine);
   try {
     return await run(connected.browser);
   } catch (err) {
-    if (!isRecoverablePlaywrightDisconnectError(err) || opts.signal.aborted) {
+    if (
+      connected.engine === "lightpanda" ||
+      !isRecoverablePlaywrightDisconnectError(err) ||
+      opts.signal.aborted
+    ) {
       throw err;
     }
     evictStalePlaywrightBrowserConnection(opts.cdpUrl, connected.browser);
@@ -277,13 +284,14 @@ async function withPlaywrightSafeReadReconnect<T>(
 async function readPagesViaPlaywright(
   opts: {
     cdpUrl: string;
+    engine?: "chromium" | "lightpanda";
     ssrfPolicy?: SsrFPolicy;
     requireCompleteTargetList?: boolean;
   },
   signal: AbortSignal,
 ): Promise<PlaywrightPageEnumeration> {
   return await withPlaywrightSafeReadReconnect(
-    { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, signal },
+    { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, signal, engine: opts.engine },
     async (browser) => {
       signal.throwIfAborted();
       const contexts = opts.requireCompleteTargetList ? browser.contexts() : [];
@@ -463,6 +471,7 @@ type PlaywrightPageEnumeration =
 /** List pages through the persistent Playwright connection. */
 export async function listPagesViaPlaywright(opts: {
   cdpUrl: string;
+  engine?: "chromium" | "lightpanda";
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
   requireCompleteTargetList?: boolean;
@@ -517,6 +526,7 @@ export async function listPagesViaPlaywright(opts: {
 export async function createPageViaPlaywright(
   opts: {
     cdpUrl: string;
+    engine?: "chromium" | "lightpanda";
     url: string;
     cdpPolicy?: SsrFPolicy;
     signal?: AbortSignal;
@@ -539,15 +549,30 @@ export async function createPageViaPlaywright(
     signal: opts.signal,
   });
   opts.signal?.throwIfAborted();
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.cdpPolicy ?? opts.ssrfPolicy);
+  const { browser, engine } = await connectBrowser(
+    opts.cdpUrl,
+    opts.cdpPolicy ?? opts.ssrfPolicy,
+    undefined,
+    opts.engine,
+  );
   opts.signal?.throwIfAborted();
   const context = browser.contexts()[0] ?? (await browser.newContext());
   opts.signal?.throwIfAborted();
   ensureContextState(context);
 
+  if (engine === "lightpanda" && (await getAllPages(browser)).length > 0) {
+    throw new Error(
+      "Lightpanda supports one page per connection. Navigate the existing tab, or close it before opening another.",
+    );
+  }
+
   const page = await context.newPage();
   const close = async () => {
-    await page.close();
+    if (engine === "lightpanda") {
+      await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
+    } else {
+      await page.close();
+    }
   };
   let navigationClosedBlockedTarget = false;
   try {
@@ -621,7 +646,14 @@ export async function closePageByTargetIdViaPlaywright(opts: {
     }
     assertBrowserDashboardTabCanClose(targetId);
   }
-  await page.close();
+  if (isConnectionScopedPage(page)) {
+    const browser = page.context().browser();
+    if (browser) {
+      await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
+    }
+  } else {
+    await page.close();
+  }
 }
 
 /**
