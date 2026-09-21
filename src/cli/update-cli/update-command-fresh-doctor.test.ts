@@ -30,6 +30,7 @@ import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state
 import type { UpdateCommandOptions } from "./shared.js";
 import { createConfigValidationFailure } from "./update-cli-config.test-support.js";
 import { registerFreshDoctorDiagnosticTests } from "./update-command-fresh-doctor-diagnostics.test-support.js";
+import { registerFreshDoctorOutcomeTests } from "./update-command-fresh-doctor-outcomes.test-support.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 const mocks = vi.hoisted(() => ({
@@ -543,36 +544,7 @@ describe("post-plugin update readiness", () => {
     expect(mocks.runUtf8).not.toHaveBeenCalled();
   });
 
-  it("retains Doctor failure precedence and bounds combined validation facts", async () => {
-    const doctorFacts = Array.from({ length: 4 }, (_, index) => ({
-      check: "doctor",
-      code: "doctor-failed",
-      message: `Earlier failure ${index}`,
-    }));
-    mocks.runExec.mockImplementation(async (_command, args: string[], options) => {
-      if (args.includes("--repair")) {
-        await writeUpdatePostInstallDoctorResult({
-          resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
-          result: { status: "error", failureFacts: doctorFacts },
-        });
-        throw Object.assign(new Error("Doctor failed"), { exitCode: 1 });
-      }
-      throw Object.assign(new Error("private argv"), {
-        failed: true,
-        timedOut: true,
-        cleanup: "uncertain",
-        stderr: "Validation process could not settle",
-      });
-    });
-    const { pluginUpdate: result } = await completePostCorePluginUpdate(updateOptions);
-    expect(result.reason).toBe("post-plugin-doctor-execution-failed");
-    expect(result.failureFacts).toHaveLength(5);
-    expect(result.failureFacts?.slice(0, 4)).toEqual(doctorFacts);
-    expect(result.failureFacts?.[4]?.message).toContain("cleanup=uncertain");
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings?.[0]?.message).toContain("migrations could not be run");
-    expect(mocks.runUtf8).not.toHaveBeenCalled();
-  });
+  registerFreshDoctorOutcomeTests(mocks, updateOptions);
 
   registerFreshDoctorDiagnosticTests({ mocks, tempDirs, updateOptions });
 
@@ -661,50 +633,6 @@ describe("post-plugin update readiness", () => {
     const result = await completePostCorePluginUpdate(updateOptions);
     expect(result.pluginUpdate).toMatchObject({ status: "error", failureFacts });
   });
-
-  it("records a failed plugin Doctor process as a warning after config and readiness pass", async () => {
-    mocks.runExec.mockRejectedValueOnce(
-      Object.assign(new Error("Doctor exited"), {
-        exitCode: 1,
-        stderr: "Plugin example: optional repair needs a running Gateway.",
-      }),
-    );
-
-    const result = await completePostCorePluginUpdate(updateOptions);
-
-    expect(result.pluginUpdate).toMatchObject({
-      status: "warning",
-      warnings: [
-        expect.objectContaining({
-          reason: "doctor-advisory",
-          message: expect.stringContaining(
-            "Plugin example: optional repair needs a running Gateway.",
-          ),
-        }),
-      ],
-    });
-    expect(result.pluginUpdate.failureFacts).toBeUndefined();
-    expect(result.configSnapshot.valid).toBe(true);
-    expect(mocks.runUtf8).toHaveBeenCalledOnce();
-  });
-
-  it.each(["settlement", "startup"])(
-    "blocks further work when Doctor %s leaves write custody unsettled",
-    async (phase) => {
-      mocks.runExec.mockRejectedValueOnce(
-        phase === "settlement"
-          ? new CommandProcessCleanupError()
-          : Object.assign(new Error("Command timed out during startup"), { cleanup: "uncertain" }),
-      );
-
-      await expect(completePostCorePluginUpdate(updateOptions)).rejects.toThrow(
-        "Command cleanup could not confirm that owned work stopped",
-      );
-      expect(mocks.runExec).toHaveBeenCalledOnce();
-      expect(mocks.readConfig).not.toHaveBeenCalled();
-      expect(mocks.runUtf8).not.toHaveBeenCalled();
-    },
-  );
 
   it("requires the lifecycle owner before starting fresh Doctor maintenance", async () => {
     const beforeDoctor = vi.fn(async () => undefined);
