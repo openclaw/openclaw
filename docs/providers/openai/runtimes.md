@@ -177,11 +177,17 @@ existing plugin and configuration enable them.
 OpenClaw records host function calls, arguments, results, and error status in
 its normal transcript before acknowledging the result to the native session.
 
-Apps, connectors, file transfer, image generation, custom context engines, and
-self-hosted executors are outside this prototype's scope. Admitted turns are
-marked unsafe for replay because hosted commands or Gateway functions may already
-have run. OpenClaw can continue the existing session after a transient provider
-failure.
+Admitted file attachments are copied into `/workspace/inputs` in the hosted VM.
+Follow-up attachments upload into the same connected environment. Completed
+native artifacts under `/workspace/outputs` are copied into OpenClaw's managed
+outbound media and attached to the final reply. Limits are 5 MiB per file,
+10 MiB total, and 50 files per turn in each direction. Model text cannot select a
+Gateway file path for transfer.
+
+Apps, connectors, image generation, custom context engines, and self-hosted
+executors are outside this prototype's scope. Admitted turns are marked unsafe
+for replay because hosted commands or Gateway functions may already have run.
+OpenClaw can continue the existing session after a transient provider failure.
 
 ## Native Codex app-server auth
 
