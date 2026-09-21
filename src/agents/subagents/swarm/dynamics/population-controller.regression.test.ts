@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { resolveDynamicsProfile } from "./dynamics-profiles.js";
 import { assessPopulation, buildPopulationSnapshot } from "./population-controller.js";
 import type { LocalDynamicsObservation, PopulationSnapshot } from "./population-types.js";
 
@@ -29,7 +28,7 @@ function replica(replicaId: string): PopulationSnapshot["replicas"][number] {
     groupId: "g",
     runId: replicaId,
     requesterSessionKey: "parent",
-    profile: resolveDynamicsProfile("explorer"),
+    trajectoryLabel: "explorer-recipe",
     authority: "search-only",
   };
 }
