@@ -39,6 +39,7 @@ vi.mock("../acp/runtime/session-meta-readonly.js", async () => {
   };
 });
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
+vi.mock("../commands/agent.js", () => ({ agentCommandFromIngress: vi.fn() }));
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => config,
   resolveGatewayPort: () => 18789,
@@ -108,7 +109,7 @@ describe("sessions_send child coordination", () => {
       .mockReset()
       .mockImplementation((params: unknown) => readAcpSessionMetaMock(params));
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    agentStepTesting.setDepsForTest({
+    await agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
         payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
         meta: { durationMs: 1 },
@@ -118,7 +119,7 @@ describe("sessions_send child coordination", () => {
   afterEach(async () => {
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     resetGatewayWorkAdmission();
-    agentStepTesting.setDepsForTest();
+    await agentStepTesting.setDepsForTest();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   });
@@ -410,7 +411,7 @@ describe("sessions_send child coordination", () => {
         payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
         meta: { durationMs: 1 },
       }));
-      agentStepTesting.setDepsForTest({ agentCommandFromIngress: finalAnnounce });
+      await agentStepTesting.setDepsForTest({ agentCommandFromIngress: finalAnnounce });
       const tool = createSendTool(requesterKey);
       const result = await tool.execute("child-coordination", {
         sessionKey: targetKey,
