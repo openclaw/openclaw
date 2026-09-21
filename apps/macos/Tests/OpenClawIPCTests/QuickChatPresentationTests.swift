@@ -2,21 +2,15 @@ import AppKit
 import OpenClawChatUI
 import OpenClawProtocol
 import SwiftUI
-import XCTest
+import Testing
 @testable import OpenClaw
 
 @MainActor
-final class QuickChatPresentationTests: XCTestCase {
-    func testConversationDisclosurePreservesOneComposerAndItsDraft() throws {
-        try AppKitTestSupport.runAsyncXCTest {
-            try await self.checkConversationDisclosurePreservesOneComposerAndItsDraft()
-        }
-    }
-
-    private func checkConversationDisclosurePreservesOneComposerAndItsDraft() async throws {
+struct QuickChatPresentationTests {
+    func checkConversationDisclosurePreservesOneComposerAndItsDraft() async throws {
         let application = AppKitTestSupport.application
         let suiteName = "ai.openclaw.quickchat-proof.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let transport = QuickChatPresentationTransport()
         let options = ["off", "low", "medium", "high"].map {
@@ -71,42 +65,42 @@ final class QuickChatPresentationTests: XCTestCase {
         defer { controller.stop() }
         controller.present()
         try await self.waitUntil { model.canUseModelControls && !model.isLoadingModelControls }
-        let panel = try XCTUnwrap(application.windows.first {
+        let panel = try #require(application.windows.first {
             ($0.contentView as? NSHostingView<QuickChatView>)?.rootView.model === model
         })
         panel.appearance = NSAppearance(named:
             ProcessInfo.processInfo.environment["OPENCLAW_TEST_QUICKCHAT_APPEARANCE"] == "dark" ? .darkAqua : .aqua)
-        let content = try XCTUnwrap(panel.contentView)
+        let content = try #require(panel.contentView)
         try await self.captureQuickChat(content, name: "collapsed")
-        XCTAssertEqual(self.composerCount(in: content), 1)
+        #expect(self.composerCount(in: content) == 1)
 
         model.text = "Clean up the confirmed test sessions."
         let accepted = await model.send()
-        XCTAssertTrue(accepted)
+        #expect(accepted)
         controller.handleSendAcceptedForTesting(openChat: false)
-        let reply = try XCTUnwrap(controller.replyBinding.viewModel)
+        let reply = try #require(controller.replyBinding.viewModel)
         try await self.waitUntil {
             reply.messages.count == 2 && !reply.isLoading &&
                 reply.contextUsage != nil && reply.progressCard?.steps?.count == 2
         }
-        XCTAssertEqual(reply.contextUsage?.percentUsed, 46)
-        XCTAssertEqual(reply.progressCard?.steps?.count, 2)
-        XCTAssertNil(reply.modelCatalogMessage)
+        #expect(reply.contextUsage?.percentUsed == 46)
+        #expect(reply.progressCard?.steps?.count == 2)
+        #expect(reply.modelCatalogMessage == nil)
         let contextControl = try await AppKitTestSupport.waitForAccessibilityElement(
             in: panel, description: "the context usage control")
         { elements in
             elements.first { $0.accessibilityLabel?() == "Context usage" }
         }
         let contextValue: Any? = contextControl.accessibilityValue?()
-        XCTAssertEqual(contextValue as? String, "46 percent of the context window used")
+        #expect(contextValue as? String == "46 percent of the context window used")
         model.text = "Can you show me what changed?"
         try await self.captureQuickChat(content, name: "expanded")
-        XCTAssertEqual(self.composerCount(in: content), 1, "Expanded Quick Chat must keep a single composer")
-        XCTAssertEqual(reply.sessionKey, "agent:main:main")
+        #expect(self.composerCount(in: content) == 1, "Expanded Quick Chat must keep a single composer")
+        #expect(reply.sessionKey == "agent:main:main")
 
         await transport.beginThinking()
         try await self.waitUntil { reply.streamingAssistantText != nil }
-        let streamingText = try XCTUnwrap(reply.streamingAssistantText)
+        let streamingText = try #require(reply.streamingAssistantText)
         _ = try await AppKitTestSupport.waitForAccessibilityElement(
             in: panel, description: "the live reply before collapsing")
         { elements in
@@ -122,24 +116,23 @@ final class QuickChatPresentationTests: XCTestCase {
 
         controller.toggleReply()
         try await self.waitForDisclosure(in: panel, expanded: false)
-        XCTAssertTrue(controller.replyBinding.viewModel === reply)
-        XCTAssertEqual(model.text, "Can you show me what changed?")
+        #expect(controller.replyBinding.viewModel === reply)
+        #expect(model.text == "Can you show me what changed?")
         try await self.captureQuickChat(content, name: "collapsed-with-draft")
-        XCTAssertEqual(self.composerCount(in: content), 1)
+        #expect(self.composerCount(in: content) == 1)
 
         controller.toggleReply()
         try await self.waitForDisclosure(in: panel, expanded: true)
-        XCTAssertTrue(controller.replyBinding.viewModel === reply)
-        XCTAssertEqual(model.text, "Can you show me what changed?")
-        XCTAssertEqual(
-            reply.streamingAssistantText,
-            streamingText,
+        #expect(controller.replyBinding.viewModel === reply)
+        #expect(model.text == "Can you show me what changed?")
+        #expect(
+            reply.streamingAssistantText == streamingText,
             "Reopening must retain the live reply while history is unavailable")
-        XCTAssertFalse(reply.isLoading, "Reopening must not restart history bootstrap")
+        #expect(!reply.isLoading, "Reopening must not restart history bootstrap")
         releaseHistory.open()
 
         try await self.captureQuickChat(content, name: "thinking")
-        XCTAssertEqual(model.text, "Can you show me what changed?")
+        #expect(model.text == "Can you show me what changed?")
 
         let sendEntered = AsyncTestGate()
         let acknowledgeSend = AsyncTestGate()
@@ -151,7 +144,7 @@ final class QuickChatPresentationTests: XCTestCase {
         try await self.waitForDisclosure(in: panel, expanded: false)
         acknowledgeSend.open()
         let followupAccepted = await pendingSend.value
-        XCTAssertTrue(followupAccepted)
+        #expect(followupAccepted)
         controller.handleSendAcceptedForTesting(openChat: false)
         try await self.waitForDisclosure(in: panel, expanded: false)
         model.text = "Keep this next draft."
@@ -162,13 +155,13 @@ final class QuickChatPresentationTests: XCTestCase {
             elements.first { $0.accessibilityLabel?() == "Continue a recent conversation" }
         }
         try await AppKitTestSupport.openMenu(history, in: panel) { menu in
-            let index = try XCTUnwrap(menu.items.firstIndex { $0.title.hasPrefix("Release notes") })
+            let index = try #require(menu.items.firstIndex { $0.title.hasPrefix("Release notes") })
             menu.performActionForItem(at: index)
         }
         try await self.waitUntil { model.sessionKey == "agent:main:notes" }
-        XCTAssertNil(controller.replyBinding.route)
-        XCTAssertNil(controller.replyBinding.viewModel, "Hidden replies cannot retain another conversation's context")
-        XCTAssertEqual(model.text, "Keep this next draft.")
+        #expect(controller.replyBinding.route == nil)
+        #expect(controller.replyBinding.viewModel == nil, "Hidden replies cannot retain another conversation's context")
+        #expect(model.text == "Keep this next draft.")
     }
 
     private func waitForDisclosure(in panel: NSWindow, expanded: Bool) async throws {
@@ -194,7 +187,7 @@ final class QuickChatPresentationTests: XCTestCase {
                 return
             }
         } while ContinuousClock.now < deadline
-        XCTFail("The conversation disclosure animation must settle")
+        Issue.record("The conversation disclosure animation must settle")
     }
 
     private func composerCount(in view: NSView) -> Int {
@@ -209,29 +202,23 @@ final class QuickChatPresentationTests: XCTestCase {
             let output = URL(fileURLWithPath: directory, isDirectory: true)
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
             try await AppKitTestSupport.recordCompositedWindow(
-                XCTUnwrap(view.window), name: "quickchat-\(name)", directory: output)
+                #require(view.window), name: "quickchat-\(name)", directory: output)
             return
         }
         // Capture after the panel's presentation and content-size animation settle.
         try await Task.sleep(for: .milliseconds(350))
         view.layoutSubtreeIfNeeded()
-        let image = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        let image = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: image)
         let output = URL(fileURLWithPath: directory, isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        try XCTUnwrap(image.representation(using: .png, properties: [:]))
+        try #require(image.representation(using: .png, properties: [:]))
             .write(to: output.appendingPathComponent("\(name).png"))
     }
 
-    func testShortcutPresentsAnEditorWithoutRequiringForegroundOwnership() throws {
-        try AppKitTestSupport.runAsyncXCTest {
-            try await self.checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership()
-        }
-    }
-
-    private func checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership() async throws {
+    func checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership() async throws {
         let application = AppKitTestSupport.application
-        XCTAssertTrue(AppKitTestSupport.didSetActivationPolicy)
+        #expect(AppKitTestSupport.didSetActivationPolicy)
         var shortcut: (() -> Void)?
         let model = QuickChatModel(
             sessionKeyProvider: { "agent:main:main" },
@@ -256,37 +243,39 @@ final class QuickChatPresentationTests: XCTestCase {
         controller.setEnabled(true)
         application.deactivate()
         try await self.waitUntil { !application.isActive }
-        try XCTUnwrap(shortcut)()
+        let registeredShortcut = try #require(shortcut)
+        registeredShortcut()
 
         try await self.waitUntil { controller.isVisible && !model.isLoadingModelControls }
-        let panel = try XCTUnwrap(application.windows.first {
+        let panel = try #require(application.windows.first {
             ($0.contentView as? NSHostingView<QuickChatView>)?.rootView.model === model
         })
-        XCTAssertTrue(panel.isVisible)
-        XCTAssertFalse(panel.hidesOnDeactivate)
+        #expect(panel.isVisible)
+        #expect(!panel.hidesOnDeactivate)
         try await self.waitUntil { panel.firstResponder is NSTextView }
-        XCTAssertTrue(panel.firstResponder is NSTextView)
+        #expect(panel.firstResponder is NSTextView)
         print(
             "Quick Chat presented: visible=\(panel.isVisible), active=\(application.isActive), key=\(panel.isKeyWindow), editorReady=\(panel.firstResponder is NSTextView)")
 
-        let content = try XCTUnwrap(panel.contentView)
+        let content = try #require(panel.contentView)
         content.layoutSubtreeIfNeeded()
-        let image = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
+        let image = try #require(content.bitmapImageRepForCachingDisplay(in: content.bounds))
         content.cacheDisplay(in: content.bounds, to: image)
         let output = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent("quick-chat-proof", isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        try XCTUnwrap(image.representation(using: .png, properties: [:]))
+        try #require(image.representation(using: .png, properties: [:]))
             .write(to: output.appendingPathComponent("presented.png"))
 
         controller.dismiss()
-        try XCTUnwrap(shortcut)()
+        let reopenedShortcut = try #require(shortcut)
+        reopenedShortcut()
         try await self.waitUntil { controller.isVisible }
-        XCTAssertTrue(panel.isVisible)
+        #expect(panel.isVisible)
         print("Quick Chat reopened: visible=\(panel.isVisible)")
         controller.setEnabled(false)
-        XCTAssertFalse(controller.isVisible)
-        XCTAssertNil(shortcut)
+        #expect(!controller.isVisible)
+        #expect(shortcut == nil)
         print("Quick Chat disabled: visible=\(controller.isVisible), shortcutRegistered=\(shortcut != nil)")
     }
 
@@ -295,7 +284,7 @@ final class QuickChatPresentationTests: XCTestCase {
         while !condition(), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
-        XCTAssertTrue(condition())
+        #expect(condition())
     }
 }
 

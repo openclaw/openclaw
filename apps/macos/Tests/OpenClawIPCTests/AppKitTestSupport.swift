@@ -2,7 +2,6 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Testing
-import XCTest
 
 @MainActor
 enum AppKitTestSupport {
@@ -21,50 +20,6 @@ enum AppKitTestSupport {
 
     static var didSetActivationPolicy: Bool {
         self.initializedApplication.didSetActivationPolicy
-    }
-
-    static func runAsyncXCTest(
-        file: StaticString = #filePath,
-        line: UInt = #line,
-        _ operation: @escaping @MainActor () async throws -> Void) throws
-    {
-        let completed = XCTestExpectation(description: "Async AppKit test completed")
-        let drained = XCTestExpectation(description: "Async AppKit test unwound")
-        var result: Result<Void, Error>?
-        let task = Task { @MainActor () -> Result<Void, Error> in
-            do {
-                try await operation()
-                return .success(())
-            } catch {
-                return .failure(error)
-            }
-        }
-        let completionTask = Task { @MainActor in
-            let outcome = await task.value
-            // Leave the Swift task before XCTest advances its synchronous invocation.
-            DispatchQueue.main.async {
-                result = outcome
-                completed.fulfill()
-                drained.fulfill()
-            }
-        }
-        defer {
-            task.cancel()
-            completionTask.cancel()
-        }
-
-        // Optional composited captures each have their own 30-second acknowledgement.
-        let outcome = XCTWaiter.wait(for: [completed], timeout: 300)
-        guard outcome == .completed else {
-            task.cancel()
-            let cleanup = XCTWaiter.wait(for: [drained], timeout: 30)
-            guard cleanup == .completed else {
-                XCTFail("Async AppKit test did not unwind after cancellation", file: file, line: line)
-                fatalError("Cannot run another AppKit test with an unfinished task")
-            }
-            throw InteractionFailure(message: "Async AppKit test did not complete: \(outcome)")
-        }
-        try XCTUnwrap(result, file: file, line: line).get()
     }
 
     static func accessibilityElements(in root: AnyObject) async throws -> [AnyObject] {
