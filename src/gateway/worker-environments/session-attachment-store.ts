@@ -111,6 +111,8 @@ export function createWorkerEnvironmentSessionAttachmentStore(options: {
     }
   };
   return {
+    hasSessionAttachment: (environmentId: string) =>
+      hasWorkerEnvironmentSessionAttachment(read(), environmentId),
     getSessionAttachmentRecord: (sessionId: string) => get(read(), sessionId),
     listSessionAttachmentRecords: () => {
       const db = read();

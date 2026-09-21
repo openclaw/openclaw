@@ -330,8 +330,10 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       nodeBuild = await options.ensureNodeWorkerBundle({
         deviceId: lease.node.deviceId,
         artifact,
-        // Remote execution uses its harness runtime; unspecified mode retains worker prewarming.
-        prewarm: record.profileSnapshot.executionMode !== "remote-exec",
+        // Conversation attachments do not run the agent; only worker turns need its prewarm.
+        prewarm:
+          record.profileSnapshot.executionMode !== "remote-exec" &&
+          !options.store.hasSessionAttachment(record.environmentId),
         signal: cancellation?.signal,
         assertCurrent,
       });
