@@ -76,7 +76,11 @@ it.each(["recovered", "unreadable", "retained", "settlement-failed"] as const)(
     expect(reported).toMatchObject({
       result: {
         status: "error",
-        steps: [expect.objectContaining({ stderrTail: original.message })],
+        steps: [
+          expect.objectContaining({
+            failureFacts: [expect.objectContaining({ message: original.message })],
+          }),
+        ],
       },
     });
     const recorded = getUpdateRun(run.runId, { env });

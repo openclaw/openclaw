@@ -9,18 +9,16 @@ export function updateStepDiagnostics(
   step: Pick<UpdateStepResult, "failureFacts" | "stdoutTail" | "stderrTail">,
 ): { tails: string[]; reasonDetails?: string } {
   const stderr = step.stderrTail ?? "";
-  const messages = new Set(
-    step.failureFacts?.flatMap((fact) => (fact.message ? [fact.message] : [])),
-  );
-  const tails = [step.stdoutTail ?? "", stderr].map((tail) =>
-    messages.has(tail.trim()) ? "" : tail,
-  );
+  const tails = [step.stdoutTail ?? "", stderr];
   if (
     !step.failureFacts?.length ||
     !/^\[openclaw\] (?:The CLI command failed\.|Reason: )/mu.test(stderr)
   ) {
     return { tails };
   }
+  const messages = new Set(
+    step.failureFacts.flatMap((fact) => (fact.message ? [fact.message] : [])),
+  );
   const reason =
     /(?:^|\n)\[openclaw\] Reason: ([\s\S]*?)(?=\n\[openclaw\] (?:Debug: |Stack:|Try: |Help: )|$)/u.exec(
       stderr,

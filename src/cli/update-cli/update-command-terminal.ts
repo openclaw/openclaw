@@ -3,7 +3,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
 import {
-  createUpdateErrorFact,
   normalizeUpdateFailureFacts,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
@@ -73,7 +72,7 @@ export async function prepareUnexpectedUpdateCommandFailure(
   const failure = {
     mode: "unknown" as const,
     durationMs: 0,
-    failure: { cause: error, detail: createUpdateErrorFact("update", error, opts.run.env).message },
+    failure: { cause: error },
   };
   let fact: UpdateFailureFact;
   try {
