@@ -458,7 +458,9 @@ describe("transcript capture ownership", () => {
   it.each(["terminal", "rejected", "thrown"] as const)(
     "fences old callbacks after a %s startup",
     async (outcome) => {
+      const realNow = Date.now.bind(Date);
       vi.useFakeTimers({ toFake: ["Date"] });
+      vi.spyOn(Date, "now").mockImplementation(realNow);
       vi.setSystemTime(new Date("2026-07-01T10:00:00.000Z"));
       const h = harness();
       let retained!: TranscriptStartRequest;
@@ -537,7 +539,11 @@ describe("transcript capture ownership", () => {
         details: { active: [{ sessionId: "notes" }] },
       });
       expect(h.provider.stop).not.toHaveBeenCalled();
-      await h.execute({ action: "stop", sessionId: "notes" });
+      const summaryPath = path.join(h.store.sessionDir(replacement), "summary.md");
+      await expect(h.execute({ action: "stop", sessionId: "notes" })).resolves.toMatchObject({
+        details: { summaryPath },
+      });
+      expect((await fs.stat(summaryPath)).isFile()).toBe(true);
     },
   );
 
@@ -624,7 +630,9 @@ describe("transcript capture ownership", () => {
   it.each(["inference", "commit"] as const)(
     "does not overwrite a completed reopen with a historical summary snapshot (%s)",
     async (phase) => {
+      const realNow = Date.now.bind(Date);
       vi.useFakeTimers({ toFake: ["Date"] });
+      vi.spyOn(Date, "now").mockImplementation(realNow);
       const h = harness();
       await h.execute({ action: "start", providerId: h.provider.id });
       const sessionId = h.requests[0]!.session.sessionId;
@@ -744,7 +752,9 @@ describe("transcript capture ownership", () => {
   ] as const)(
     "revalidates capture identity after awaited $action authorization via $key without reusing startup authority",
     async ({ action, key }) => {
+      const realNow = Date.now.bind(Date);
       vi.useFakeTimers({ toFake: ["Date"] });
+      vi.spyOn(Date, "now").mockImplementation(realNow);
       vi.setSystemTime(new Date("2026-07-01T10:00:00.000Z"));
       const h = harness();
       let callerActive = true;
@@ -816,7 +826,9 @@ describe("transcript capture ownership", () => {
   );
 
   it("does not persist or export a summary after its capture retires during the read", async () => {
+    const realNow = Date.now.bind(Date);
     vi.useFakeTimers({ toFake: ["Date"] });
+    vi.spyOn(Date, "now").mockImplementation(realNow);
     vi.setSystemTime(new Date("2026-07-01T10:00:00.000Z"));
     const h = harness();
     await h.start();
