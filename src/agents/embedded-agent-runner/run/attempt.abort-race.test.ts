@@ -37,10 +37,8 @@ describe("runEmbeddedAttempt abort races", () => {
   });
 
   it("preserves the approval budget through the production attempt entrypoint", async () => {
-    vi.useRealTimers();
-    const originalDateNow = Date.now;
-    let wallClockOffsetMs = 0;
-    Date.now = () => originalDateNow() + wallClockOffsetMs;
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
     const publishedDeadlines: Array<{ kind: string; deadlineAtMs?: number }> = [];
     const broker = new EmbeddedPluginApprovalBroker();
     const approvalRequested = createDeferred();
@@ -49,7 +47,7 @@ describe("runEmbeddedAttempt abort races", () => {
       approvalEvents.push(event.event);
       if (event.event === "plugin.approval.requested") {
         approvalRequested.resolve();
-        wallClockOffsetMs = 60_000;
+        vi.setSystemTime(60_000);
         emitAgentEvent({
           runId: "run-context-engine-forwarding",
           sessionId: "embedded-session",
@@ -69,7 +67,7 @@ describe("runEmbeddedAttempt abort races", () => {
     setEmbeddedPluginApprovalBroker(broker);
 
     try {
-      const result = await createContextEngineAttemptRunner({
+      const resultPromise = createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),
         sessionKey: "agent:main:telegram:direct:approval-clock-step",
         tempPaths,
@@ -97,9 +95,6 @@ describe("runEmbeddedAttempt abort races", () => {
               "approval broker did not publish a pending request before hook settled",
             );
           }
-          if (!broker.resolve(approval.id, "allow-once")) {
-            throw new Error("approval broker did not resolve the pending request");
-          }
           await approvalPromise;
           await new Promise<void>((resolve) => {
             setTimeout(resolve, 80);
@@ -110,6 +105,17 @@ describe("runEmbeddedAttempt abort races", () => {
           onAttemptDeadlineChanged: (deadline) => publishedDeadlines.push(deadline),
         },
       });
+
+      await vi.advanceTimersByTimeAsync(40);
+      const approval = broker.listPending()[0];
+      if (!approval) {
+        throw new Error("approval broker did not publish a pending request");
+      }
+      if (!broker.resolve(approval.id, "allow-once")) {
+        throw new Error("approval broker did not resolve the pending request");
+      }
+      await vi.advanceTimersByTimeAsync(80);
+      const result = await resultPromise;
 
       expect(result.terminal).toEqual({ kind: "ok" });
       expect(publishedDeadlines.map(({ kind }) => kind)).toEqual([
@@ -131,7 +137,6 @@ describe("runEmbeddedAttempt abort races", () => {
       broker.stop();
       setEmbeddedPluginApprovalBroker(null);
       setEmbeddedMode(false);
-      Date.now = originalDateNow;
     }
   });
 
