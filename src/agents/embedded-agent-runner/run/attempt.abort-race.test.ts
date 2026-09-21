@@ -87,10 +87,15 @@ describe("runEmbeddedAttempt abort races", () => {
               config: { skills: { workshop: { approvalPolicy: "pending" } } },
             },
           });
-          await Promise.race([approvalRequested.promise, approvalPromise.then(() => undefined)]);
+          await Promise.race([
+            approvalRequested.promise,
+            approvalPromise.then(() => undefined),
+          ]);
           const approval = broker.listPending()[0];
           if (!approval) {
-            throw new Error("approval broker did not publish a pending request before hook settled");
+            throw new Error(
+              "approval broker did not publish a pending request before hook settled",
+            );
           }
           if (!broker.resolve(approval.id, "allow-once")) {
             throw new Error("approval broker did not resolve the pending request");
