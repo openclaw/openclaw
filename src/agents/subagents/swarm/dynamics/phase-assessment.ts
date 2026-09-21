@@ -18,7 +18,7 @@ function validateUnitMetric(value: DynamicsMetric, name: string): void {
   }
 }
 
-export function validateDynamicsObservation(observation: LocalDynamicsObservation): void {
+function validateDynamicsObservation(observation: LocalDynamicsObservation): void {
   if (typeof observation.replicaId !== "string" || !observation.replicaId.trim()) {
     throw new Error("replicaId must be non-empty");
   }
@@ -122,6 +122,7 @@ export function assessLocalPhase(observation: LocalDynamicsObservation): LocalPh
 }
 
 export function phaseMixture(assessments: readonly LocalPhaseAssessment[]): PhaseMixture {
+  // SAFETY: every COGNITIVE_PHASES key is initialized to a numeric count.
   const counts = Object.fromEntries(COGNITIVE_PHASES.map((phase) => [phase, 0])) as PhaseMixture;
   if (assessments.length === 0) {
     counts.unknown = 1;
