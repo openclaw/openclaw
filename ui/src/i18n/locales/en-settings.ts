@@ -1149,9 +1149,9 @@ const enSettings = {
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
         "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
-      collapseTaskProgress: "Collapse task progress by default",
+      collapseTaskProgress: "Collapse task progress by default on desktop",
       collapseTaskProgressHint:
-        "Start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session.",
+        "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",
     },
     sessionSources: {
       title: "Session sources",
