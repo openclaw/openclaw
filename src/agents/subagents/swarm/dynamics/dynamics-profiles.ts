@@ -80,9 +80,13 @@ function validateProfileContract(profile: DynamicsProfile): void {
   }
   if (
     profile.requirements.candidateDigest === "required" &&
-    profile.contextBoundary === "isolated"
+    profile.contextBoundary !== "artifact-only" &&
+    profile.contextBoundary !== "evidence-only" &&
+    profile.contextBoundary !== "fork"
   ) {
-    throw new Error("Dynamics profile requires candidate identity across an isolated boundary");
+    throw new Error(
+      "Dynamics profile requires candidate identity across a boundary that drops candidate identity",
+    );
   }
 }
 
