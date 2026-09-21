@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -20,7 +21,8 @@ import {
   waitForApprovalRequested,
 } from "./server-methods/approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
-import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -68,7 +70,7 @@ describe("approval fixture request ownership", () => {
             },
           );
           try {
-            await entered.promise;
+            await Promise.race([entered.promise, ready]);
             expect(settled).toBe(false);
             expect(
               published.mock.calls.filter(([event]) => event === "plugin.approval.requested"),
@@ -101,6 +103,33 @@ describe("approval fixture request ownership", () => {
     await fixture.run(async () => {
       const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
       const respond = vi.fn();
+      const reviewer = makeGatewayClient({
+        connId: "fixture-reviewer",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        scopes: ["operator.approvals"],
+      });
+      const context = Object.assign(
+        createGatewayRequestContext(
+          makeContextParams({
+            clients: new Set([
+              {
+                ...reviewer,
+                usesSharedGatewayAuth: false,
+                socket: {
+                  ...reviewer.socket,
+                  bufferedAmount: 0,
+                  send: vi.fn(),
+                  terminate: vi.fn(),
+                  on: vi.fn(),
+                  off: vi.fn(),
+                  once: vi.fn(),
+                },
+              },
+            ]),
+          }),
+        ),
+        { getRuntimeConfig: () => ({}) },
+      );
       const params = {
         command: "echo fixture",
         host: "gateway",
@@ -117,12 +146,8 @@ describe("approval fixture request ownership", () => {
               client: null,
               isWebchatConnect: () => false,
               respond: observedRespond,
-              context: {
-                broadcast: vi.fn(),
-                getRuntimeConfig: () => ({}),
-                hasExecApprovalClients: () => true,
-              },
-            } as GatewayRequestHandlerOptions),
+              context,
+            }),
           ),
         ),
       );
@@ -135,7 +160,7 @@ describe("approval fixture request ownership", () => {
         },
       );
       try {
-        await entered.promise;
+        await Promise.race([entered.promise, ready]);
         expect(respond).not.toHaveBeenCalled();
         expect(settled).toBe(false);
         release.resolve();
@@ -227,7 +252,7 @@ describe("approval fixture request ownership", () => {
       },
     );
     try {
-      await unwinding.promise;
+      await Promise.race([unwinding.promise, body]);
       expect(settled).toBe(false);
       expect(database.db.isOpen).toBe(true);
       release.resolve();
