@@ -16,6 +16,7 @@ import { runGatewayConversationList } from "../../gateway/conversation-list.js";
 import { runGatewayConversationSend } from "../../gateway/conversation-send.js";
 import { completeDurableDelivery } from "../../infra/outbound/delivery-completion.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -53,8 +54,6 @@ import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
   markConversationDeliveryQueued,
-  markConversationDeliverySent,
-  markConversationDeliverySuppressed,
 } from "./conversation-delivery-store.js";
 import { listConversations, registerConversationAddresses } from "./conversation-registry.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
@@ -269,43 +268,36 @@ test.each(["directory discovery", "Gateway send", "durable completion"] as const
         );
       }
       if (operation === "Gateway send") {
-        return runGatewayConversationSend(
-          {
-            config,
-            agentId: "main",
-            senderIsOwner: true,
-            operationId,
-            conversationRef: conversation.conversationRef,
-            message: "synthetic message",
-          },
-          {
-            beginOperation: beginConversationDeliveryOperation,
-            getOperation: getConversationDeliveryOperation,
-            markSent: markConversationDeliverySent,
-            markSuppressed: markConversationDeliverySuppressed,
-            resolveConversation: () => conversation,
-            runMessageAction: async (input): Promise<MessageActionResult> => {
-              await queueConversationDeliveryForTest(input, "queue-admission");
-              return {
-                kind: "send",
+        vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation(
+          async (input): Promise<MessageActionResult> => {
+            await queueConversationDeliveryForTest(input, "queue-admission");
+            return {
+              kind: "send",
+              channel: "reef",
+              action: "send",
+              to: conversation.target,
+              handledBy: "core",
+              payload: {},
+              dryRun: false,
+              sendResult: {
                 channel: "reef",
-                action: "send",
                 to: conversation.target,
-                handledBy: "core",
-                payload: {},
-                dryRun: false,
-                sendResult: {
-                  channel: "reef",
-                  to: conversation.target,
-                  via: "direct",
-                  mediaUrl: null,
-                  result: { messageId: "outbound-admission" },
-                  deliveryStatus: "sent",
-                },
-              };
-            },
+                via: "direct",
+                mediaUrl: null,
+                result: { messageId: "outbound-admission" },
+                deliveryStatus: "sent",
+              },
+            };
           },
         );
+        return runGatewayConversationSend({
+          config,
+          agentId: "main",
+          senderIsOwner: true,
+          operationId,
+          conversationRef: conversation.conversationRef,
+          message: "synthetic message",
+        });
       }
       return completeDurableDelivery(
         { kind: "conversation", ...scope, operationId },

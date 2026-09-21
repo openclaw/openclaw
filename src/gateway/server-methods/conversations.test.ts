@@ -1,13 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cancelPendingConversationTurn } from "../../sessions/conversation-turns.js";
 import {
   ConversationInputError,
   ConversationOperationConflictError,
 } from "../conversation-errors.js";
-import type { runGatewayConversationList } from "../conversation-list.js";
-import type { runGatewayConversationSend } from "../conversation-send.js";
-import type { runGatewayConversationTurn } from "../conversation-turn.js";
-import { createConversationHandlers } from "./conversations.js";
+import { runGatewayConversationList } from "../conversation-list.js";
+import { runGatewayConversationSend } from "../conversation-send.js";
+import { runGatewayConversationTurn } from "../conversation-turn.js";
+import { conversationHandlers } from "./conversations.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
+
+vi.mock("../../sessions/conversation-turns.js", () => ({ cancelPendingConversationTurn: vi.fn() }));
+vi.mock("../conversation-list.js", () => ({ runGatewayConversationList: vi.fn() }));
+vi.mock("../conversation-send.js", () => ({ runGatewayConversationSend: vi.fn() }));
+vi.mock("../conversation-turn.js", () => ({ runGatewayConversationTurn: vi.fn() }));
+
+beforeEach(() => vi.resetAllMocks());
 
 const request = {
   agentId: "main",
@@ -61,7 +69,7 @@ function context(): GatewayRequestContext {
 }
 
 function invoke(params: {
-  handler: NonNullable<ReturnType<typeof createConversationHandlers>["conversations.turn"]>;
+  handler: NonNullable<(typeof conversationHandlers)["conversations.turn"]>;
   context: GatewayRequestContext;
   respond: RespondFn;
   request?: Record<string, unknown>;
@@ -77,7 +85,7 @@ function invoke(params: {
 }
 
 function invokeSend(params: {
-  handler: NonNullable<ReturnType<typeof createConversationHandlers>["conversations.send"]>;
+  handler: NonNullable<(typeof conversationHandlers)["conversations.send"]>;
   context: GatewayRequestContext;
   respond: RespondFn;
   request?: Record<string, unknown>;
@@ -93,7 +101,7 @@ function invokeSend(params: {
 }
 
 function invokeList(params: {
-  handler: NonNullable<ReturnType<typeof createConversationHandlers>["conversations.list"]>;
+  handler: NonNullable<(typeof conversationHandlers)["conversations.list"]>;
   context: GatewayRequestContext;
   respond: RespondFn;
   request?: Record<string, unknown>;
@@ -123,10 +131,12 @@ describe("conversations.list Gateway handler", () => {
         },
       ],
     };
-    const runConversationList = vi.fn(
-      async (_params: Parameters<typeof runGatewayConversationList>[0]) => listed,
-    );
-    const handler = createConversationHandlers({ runConversationList })["conversations.list"]!;
+    const runConversationList = vi
+      .mocked(runGatewayConversationList)
+      .mockImplementation(
+        async (_params: Parameters<typeof runGatewayConversationList>[0]) => listed,
+      );
+    const handler = conversationHandlers["conversations.list"]!;
     const respond = vi.fn<RespondFn>();
 
     await invokeList({ handler, context: context(), respond });
@@ -144,8 +154,8 @@ describe("conversations.list Gateway handler", () => {
   });
 
   it("rejects invalid limits before directory discovery", async () => {
-    const runConversationList = vi.fn();
-    const handler = createConversationHandlers({ runConversationList })["conversations.list"]!;
+    const runConversationList = vi.mocked(runGatewayConversationList);
+    const handler = conversationHandlers["conversations.list"]!;
     const respond = vi.fn<RespondFn>();
 
     await invokeList({
@@ -166,8 +176,8 @@ describe("conversations.list Gateway handler", () => {
 
 describe("conversations.send Gateway handler", () => {
   it("rejects a source session owned by another agent", async () => {
-    const runConversationSend = vi.fn();
-    const handler = createConversationHandlers({ runConversationSend })["conversations.send"]!;
+    const runConversationSend = vi.mocked(runGatewayConversationSend);
+    const handler = conversationHandlers["conversations.send"]!;
     const respond = vi.fn<RespondFn>();
 
     await invokeSend({
@@ -186,12 +196,10 @@ describe("conversations.send Gateway handler", () => {
   });
 
   it("owns the send and rejects operation-id reuse with different source input", async () => {
-    const runConversationSend = vi.fn(async () => sendResult);
-    const handler = createConversationHandlers({
-      cancelConversationTurn: vi.fn(),
-      runConversationSend,
-      runConversationTurn: vi.fn(),
-    })["conversations.send"]!;
+    const runConversationSend = vi
+      .mocked(runGatewayConversationSend)
+      .mockImplementation(async () => sendResult);
+    const handler = conversationHandlers["conversations.send"]!;
     const gatewayContext = context();
     const respond = vi.fn<RespondFn>();
 
@@ -226,19 +234,16 @@ describe("conversations.send Gateway handler", () => {
   it("keeps concurrent operation IDs isolated between agents", async () => {
     let finishMain: ((value: typeof sendResult) => void) | undefined;
     const otherResult = { ...sendResult, messageId: "reef-outbound-other" };
-    const runConversationSend = vi.fn(
-      async ({ agentId }: Parameters<typeof runGatewayConversationSend>[0]) =>
+    const runConversationSend = vi
+      .mocked(runGatewayConversationSend)
+      .mockImplementation(async ({ agentId }: Parameters<typeof runGatewayConversationSend>[0]) =>
         agentId === "main"
           ? await new Promise<typeof sendResult>((resolve) => {
               finishMain = resolve;
             })
           : otherResult,
-    );
-    const handler = createConversationHandlers({
-      cancelConversationTurn: vi.fn(),
-      runConversationSend,
-      runConversationTurn: vi.fn(),
-    })["conversations.send"]!;
+      );
+    const handler = conversationHandlers["conversations.send"]!;
     const gatewayContext = context();
     const mainRespond = vi.fn<RespondFn>();
     const otherRespond = vi.fn<RespondFn>();
@@ -268,8 +273,8 @@ describe("conversations.send Gateway handler", () => {
 
 describe("conversations.turn Gateway handler", () => {
   it("rejects a source session owned by another agent", async () => {
-    const runConversationTurn = vi.fn();
-    const handler = createConversationHandlers({ runConversationTurn })["conversations.turn"]!;
+    const runConversationTurn = vi.mocked(runGatewayConversationTurn);
+    const handler = conversationHandlers["conversations.turn"]!;
     const respond = vi.fn<RespondFn>();
 
     await invoke({
@@ -288,12 +293,8 @@ describe("conversations.turn Gateway handler", () => {
   });
 
   it("validates requests before entering the correlation service", async () => {
-    const runConversationTurn = vi.fn();
-    const handler = createConversationHandlers({
-      cancelConversationTurn: vi.fn(),
-      runConversationSend: vi.fn(),
-      runConversationTurn,
-    })["conversations.turn"]!;
+    const runConversationTurn = vi.mocked(runGatewayConversationTurn);
+    const handler = conversationHandlers["conversations.turn"]!;
     const respond = vi.fn<RespondFn>();
 
     await invoke({ handler, context: context(), respond, request: { agentId: "main" } });
@@ -308,17 +309,13 @@ describe("conversations.turn Gateway handler", () => {
 
   it("joins concurrent retries and replays the completed idempotent result", async () => {
     let finish: ((value: typeof result) => void) | undefined;
-    const runConversationTurn = vi.fn(
+    const runConversationTurn = vi.mocked(runGatewayConversationTurn).mockImplementation(
       async () =>
         await new Promise<typeof result>((resolve) => {
           finish = resolve;
         }),
     );
-    const handler = createConversationHandlers({
-      cancelConversationTurn: vi.fn(),
-      runConversationSend: vi.fn(),
-      runConversationTurn,
-    })["conversations.turn"]!;
+    const handler = conversationHandlers["conversations.turn"]!;
     const gatewayContext = context();
     const firstRespond = vi.fn<RespondFn>();
     const secondRespond = vi.fn<RespondFn>();
@@ -378,19 +375,16 @@ describe("conversations.turn Gateway handler", () => {
   it("keeps concurrent turn IDs isolated between agents", async () => {
     let finish: ((value: typeof result) => void) | undefined;
     const otherResult = { ...result, messageId: "reef-outbound-other" };
-    const runConversationTurn = vi.fn(
-      async ({ agentId }: Parameters<typeof runGatewayConversationTurn>[0]) =>
+    const runConversationTurn = vi
+      .mocked(runGatewayConversationTurn)
+      .mockImplementation(async ({ agentId }: Parameters<typeof runGatewayConversationTurn>[0]) =>
         agentId === "main"
           ? await new Promise<typeof result>((resolve) => {
               finish = resolve;
             })
           : otherResult,
-    );
-    const handler = createConversationHandlers({
-      cancelConversationTurn: vi.fn(),
-      runConversationSend: vi.fn(),
-      runConversationTurn,
-    })["conversations.turn"]!;
+      );
+    const handler = conversationHandlers["conversations.turn"]!;
     const gatewayContext = context();
     const firstRespond = vi.fn<RespondFn>();
     const otherRespond = vi.fn<RespondFn>();
@@ -419,14 +413,10 @@ describe("conversations.turn Gateway handler", () => {
 
   it("retries transient unavailable failures instead of caching them", async () => {
     const runConversationTurn = vi
-      .fn()
+      .mocked(runGatewayConversationTurn)
       .mockRejectedValueOnce(new Error("temporary outage"))
       .mockResolvedValueOnce(result);
-    const handler = createConversationHandlers({
-      cancelConversationTurn: vi.fn(),
-      runConversationSend: vi.fn(),
-      runConversationTurn,
-    })["conversations.turn"]!;
+    const handler = conversationHandlers["conversations.turn"]!;
     const gatewayContext = context();
     const failedRespond = vi.fn<RespondFn>();
 
@@ -446,18 +436,14 @@ describe("conversations.turn Gateway handler", () => {
 
   it("does not let a durable operation conflict poison the authoritative retry identity", async () => {
     const runConversationTurn = vi
-      .fn()
+      .mocked(runGatewayConversationTurn)
       .mockRejectedValueOnce(
         new ConversationOperationConflictError(
           `Conversation delivery operation was reused with different input: ${request.turnId}`,
         ),
       )
       .mockResolvedValueOnce(result);
-    const handler = createConversationHandlers({
-      cancelConversationTurn: vi.fn(),
-      runConversationSend: vi.fn(),
-      runConversationTurn,
-    })["conversations.turn"]!;
+    const handler = conversationHandlers["conversations.turn"]!;
     const gatewayContext = context();
     const conflictRespond = vi.fn<RespondFn>();
 
@@ -484,14 +470,12 @@ describe("conversations.turn Gateway handler", () => {
   });
 
   it("maps unsupported conversation input to a stable invalid-request response", async () => {
-    const runConversationTurn = vi.fn(async () => {
-      throw new ConversationInputError("Channel matrix does not support correlated turns");
-    });
-    const handler = createConversationHandlers({
-      cancelConversationTurn: vi.fn(),
-      runConversationSend: vi.fn(),
-      runConversationTurn,
-    })["conversations.turn"]!;
+    const runConversationTurn = vi
+      .mocked(runGatewayConversationTurn)
+      .mockImplementation(async () => {
+        throw new ConversationInputError("Channel matrix does not support correlated turns");
+      });
+    const handler = conversationHandlers["conversations.turn"]!;
     const gatewayContext = context();
     const respond = vi.fn<RespondFn>();
 
@@ -522,13 +506,10 @@ describe("conversations.turn Gateway handler", () => {
   });
 
   it("cancels an abandoned turn through the active Gateway connection", async () => {
-    const cancelConversationTurn = vi.fn(() => true);
-    const handlers = createConversationHandlers({
-      cancelConversationTurn,
-      runConversationSend: vi.fn(),
-      runConversationTurn: vi.fn(),
-    });
-    const handler = handlers["conversations.turn.cancel"]!;
+    const cancelConversationTurn = vi
+      .mocked(cancelPendingConversationTurn)
+      .mockImplementation(() => true);
+    const handler = conversationHandlers["conversations.turn.cancel"]!;
     const respond = vi.fn<RespondFn>();
 
     await handler({
