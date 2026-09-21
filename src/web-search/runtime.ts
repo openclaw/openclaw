@@ -13,6 +13,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
@@ -400,14 +401,25 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
     providerId: params.providerId,
     providers: candidates,
   });
-  return await executeWebSearchCandidates({
-    candidates,
-    config,
-    searchConfig: search as Record<string, unknown> | undefined,
-    runtimeMetadata: runtimeWebSearch,
-    agentDir: params.agentDir,
-    args: params.args,
-    signal: params.signal,
-    allowFallback,
-  });
+  const assertCurrent = params.assertCurrent;
+  return await withGuardedFetchRequestAuthority(
+    assertCurrent
+      ? () => {
+          params.signal?.throwIfAborted();
+          return assertCurrent();
+        }
+      : undefined,
+    (assertRequestCurrent) =>
+      executeWebSearchCandidates({
+        candidates,
+        config,
+        searchConfig: search as Record<string, unknown> | undefined,
+        runtimeMetadata: runtimeWebSearch,
+        agentDir: params.agentDir,
+        args: params.args,
+        signal: params.signal,
+        assertCurrent: assertRequestCurrent,
+        allowFallback,
+      }),
+  );
 }

@@ -39,6 +39,8 @@ type WebSearchProviderContext = {
 
 export type WebSearchProviderToolExecutionContext = {
   signal?: AbortSignal;
+  /** Synchronous caller fence; non-HTTP transports must invoke it before each side effect. */
+  assertCurrent?: () => void;
 };
 
 type WebFetchProviderContext = {

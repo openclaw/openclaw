@@ -138,11 +138,11 @@ export const webSearchHandlers: GatewayRequestHandlers = {
         return;
       }
       const { status, config, agentDir } = prepared;
-      if (
-        !hasSearchAuthority(options, "admin") ||
-        resolveAuthenticatedProfileId(options.client) !== requesterProfileId ||
-        context.getRuntimeConfig() !== config
-      ) {
+      const hasCurrentAuthority = () =>
+        hasSearchAuthority(options, "admin") &&
+        resolveAuthenticatedProfileId(options.client) === requesterProfileId &&
+        context.getRuntimeConfig() === config;
+      if (!hasCurrentAuthority()) {
         respond(
           false,
           undefined,
@@ -194,6 +194,12 @@ export const webSearchHandlers: GatewayRequestHandlers = {
           providerId: provider,
           args: { query, count: 5 },
           signal,
+          assertCurrent: () => {
+            if (!hasCurrentAuthority()) {
+              throw new Error("Search settings or access changed during the test.");
+            }
+            assertSecretOwnerAvailable("capability", runtimeWebSecretOwnerId("search", provider));
+          },
         });
         const normalized = normalizeWebSearchOutput({ ...executed, query });
         const latencyMs = Date.now() - startedAt;
@@ -240,11 +246,7 @@ export const webSearchHandlers: GatewayRequestHandlers = {
           error: searchTestError(error),
         };
       }
-      if (
-        !hasSearchAuthority(options, "admin") ||
-        resolveAuthenticatedProfileId(options.client) !== requesterProfileId ||
-        context.getRuntimeConfig() !== config
-      ) {
+      if (!hasCurrentAuthority()) {
         respond(
           false,
           undefined,

@@ -162,6 +162,14 @@ Speech, media understanding, generation, web search, and the low-level media uti
     });
     ```
 
+    Search callers may supply a synchronous `assertCurrent` callback with `signal`
+    to retain their authority through provider preparation. Guarded HTTP requests
+    check it after transport preparation and before each request or redirect.
+    A registered search provider using another transport must call the execution
+    context's `assertCurrent` before each external side effect, after awaited
+    preparation. The callback belongs to the caller and expires when the search
+    finishes; providers must not replace it or treat its absence as permission.
+
   </Accordion>
   <Accordion title="api.runtime.media">
     Low-level media utilities.
