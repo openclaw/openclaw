@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { renderChatView } from "./chat-view.test-helpers.ts";
+import { renderChatInto, renderChatView } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -25,7 +25,12 @@ it("preserves diagnostic row identity, Reply, and safe context-copy after handof
   const onSetReply = vi.fn();
   const diagnostic = "Error: Request failed.\npassword=synthetic-password";
   const safeDiagnostic = "Error: Request failed.\npassword=[redacted]";
-  const container = renderChatView({
+  const runError = { runId: "failed-run", summary: safeDiagnostic };
+  const container = renderChatView({ onSetReply, messages: [], runError });
+  containers.push(container);
+  document.body.appendChild(container);
+  expect(container.querySelector(".agent-chat__composer-notices .chat-error")).not.toBeNull();
+  renderChatInto(container, {
     onSetReply,
     messages: [
       {
@@ -36,10 +41,8 @@ it("preserves diagnostic row identity, Reply, and safe context-copy after handof
         __openclaw: { id: "failure-entry", seq: 3, runId: "failed-run" },
       },
     ],
-    runError: { runId: "failed-run", summary: safeDiagnostic },
+    runError,
   });
-  containers.push(container);
-  document.body.appendChild(container);
   const bubble = expectDefined(
     container.querySelector<HTMLElement>(".chat-bubble--run-error"),
     "diagnostic bubble",

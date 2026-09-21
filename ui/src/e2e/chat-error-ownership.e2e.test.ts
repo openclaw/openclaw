@@ -42,7 +42,7 @@ suite.define(() => {
           state: "error",
           errorMessage: diagnostic,
         });
-        await page.locator(".agent-chat__composer-overlay .chat-error").waitFor();
+        await page.locator(".agent-chat__composer-notices .chat-error").waitFor();
         const rows = [
           {
             role: "user",
@@ -80,7 +80,7 @@ suite.define(() => {
           message: rows[2],
         });
         await expect.poll(() => page.locator(".chat-bubble .chat-error").count()).toBe(1);
-        expect(await page.locator(".agent-chat__composer-overlay .chat-error").count()).toBe(0);
+        expect(await page.locator(".agent-chat__composer-notices .chat-error").count()).toBe(0);
         // Reconnect recovers the same durable diagnostic rather than reviving its banner.
         await gateway.closeLatest();
         await expect.poll(async () => await gateway.getSocketCount()).toBeGreaterThan(1);
