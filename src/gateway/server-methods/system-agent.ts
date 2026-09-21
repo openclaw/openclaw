@@ -579,7 +579,11 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             !session.engine.getPendingOperatorProposal()
           ) {
             session.newAgentWelcome ??= await buildNewAgentWelcome({ engine: session.engine });
-            respond(true, { sessionId, reply: session.newAgentWelcome, action: "none" }, undefined);
+            respond(
+              true,
+              { sessionId, reply: session.newAgentWelcome, optionalWelcome: false, action: "none" },
+              undefined,
+            );
             // The caretaker warning was not displayed; its delivery cursor stays pending.
             return undefined;
           }
