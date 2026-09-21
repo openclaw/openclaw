@@ -17,6 +17,7 @@ import {
 import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { mapTaskFlowView } from "./task-domain-views.js";
+import { maintainTaskFlowInDatabase } from "./task-flow-maintenance.worker.js";
 import {
   runManagedTaskInFlowInDatabase,
   type ManagedTaskInFlowReceipt,
@@ -67,6 +68,9 @@ export function executeTaskRegistryCommand(
   options: OpenClawStateDatabaseOptions & { path: string },
   open: () => OpenClawStateDatabase,
 ): TaskRegistryWorkerOperations[keyof TaskRegistryWorkerOperations]["output"] {
+  if (command.type === "flows.maintain") {
+    return maintainTaskFlowInDatabase(open(), command.input);
+  }
   if (command.type === "tasks.bindExecution" || command.type === "flows.bindExecution") {
     const database = open();
     return runOpenClawStateWriteTransaction(
