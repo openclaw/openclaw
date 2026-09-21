@@ -283,6 +283,40 @@ describe("sessions_history redaction", () => {
     expect(Value.Check(tool.outputSchema!, details)).toBe(true);
   });
 
+  it("bounds oversized pending input ids before allocating message budget", async () => {
+    const items = Array.from({ length: 20 }, (_, index) => ({
+      id: `pending-${"x".repeat(5000)}-${index}`,
+      state: "queued",
+      acceptedAt: 1_700_000_000_000,
+      message: { role: "user", content: "queued input" },
+    }));
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
+        ({ messages: [], pendingInputs: { items, total: items.length } }) as T,
+    });
+
+    const result = await tool.execute("oversized-pending-id", { sessionKey: "main" });
+    const details = result.details as {
+      pendingInputs: { items: Array<{ id: string }>; total: number };
+      bytes: number;
+      truncated: boolean;
+    };
+
+    expect(details.pendingInputs.total).toBe(items.length);
+    expect(details.pendingInputs.items).toHaveLength(items.length);
+    expect(new Set(details.pendingInputs.items.map((item) => item.id)).size).toBe(items.length);
+    expect(
+      details.pendingInputs.items.every((item) => Buffer.byteLength(item.id, "utf8") <= 64),
+    ).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(details.pendingInputs), "utf8")).toBeLessThanOrEqual(
+      4096,
+    );
+    expect(details.bytes).toBeLessThanOrEqual(80 * 1024);
+    expect(details.truncated).toBe(true);
+    expect(Value.Check(tool.outputSchema!, details)).toBe(true);
+  });
+
   it("applies custom redaction patterns to recalled session text", async () => {
     useLoggingConfig("custom-patterns.json", {
       redactSensitive: "off",

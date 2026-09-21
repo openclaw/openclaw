@@ -19,6 +19,7 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import {
   describeSessionLinkRule,
@@ -97,6 +98,7 @@ const SessionsHistoryOutputSchema = Type.Union([
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 const SESSIONS_HISTORY_PENDING_MAX_BYTES = 4096;
+const MAX_PENDING_INPUT_ID_BYTES = 64;
 type ChatHistoryPaginationMetadata = Partial<
   Record<"offset" | "nextOffset" | "totalMessages", number> & { hasMore: boolean }
 >;
@@ -203,10 +205,27 @@ function sanitizeHistoryMessage(
   return { message: entry, truncated, redacted };
 }
 
+function boundPendingInputId(id: string, index: number): string {
+  // Pending IDs are opaque Gateway metadata; bound them before the shared page
+  // budget so malformed metadata cannot crowd every input message out.
+  if (Buffer.byteLength(id, "utf8") <= MAX_PENDING_INPUT_ID_BYTES) {
+    return id;
+  }
+  const suffix = `-${index + 1}`;
+  return `${truncateUtf8Prefix(
+    id,
+    MAX_PENDING_INPUT_ID_BYTES - Buffer.byteLength(suffix, "utf8"),
+  )}${suffix}`;
+}
+
 function boundPendingInputs(page: ChatPendingInputsPage) {
   // Pending input is context for an intentional next action, never executable
   // history. Keep the whole page addressable while sharing one hard byte cap.
-  const metadata = page.items.map(({ id, state, acceptedAt }) => ({ id, state, acceptedAt }));
+  const metadata = page.items.map(({ id, state, acceptedAt }, index) => ({
+    id: boundPendingInputId(id, index),
+    state,
+    acceptedAt,
+  }));
   const messageBudget = Math.floor(
     (SESSIONS_HISTORY_PENDING_MAX_BYTES -
       jsonUtf8Bytes({ ...page, items: metadata }) -
