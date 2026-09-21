@@ -1,5 +1,3 @@
-import type { ResolvedDynamicsProfile } from "./dynamics-types.js";
-
 type CognitiveReplica = {
   replicaId: string;
   campaignId: string;
@@ -7,7 +5,7 @@ type CognitiveReplica = {
   runId: string;
   requesterSessionKey: string;
   parentReplicaId?: string;
-  profile: ResolvedDynamicsProfile;
+  trajectoryLabel?: string;
   authority: "search-only";
 };
 
@@ -63,10 +61,10 @@ export type PopulationSnapshot = {
 };
 
 export type DynamicsAction =
-  | { kind: "spawn"; profile: string; count: number; reason: string }
+  | { kind: "spawn"; purpose: "coordinate"; count: number; reason: string }
   | { kind: "measure"; targetReplicaIds: readonly string[]; reason: string }
   | { kind: "freeze"; targetReplicaIds: readonly string[]; reason: string }
-  | { kind: "perturb"; profile: string; count: number; reason: string }
+  | { kind: "perturb"; purpose: "decorrelate"; count: number; reason: string }
   | { kind: "drain"; reason: string }
   | { kind: "hold"; reason: string };
 
