@@ -90,6 +90,7 @@ export function renderSessionSection(params: {
   const { host, section, personHeaders } = params;
   const totalRowCount = section.totalRowCount;
   const group = section.category;
+  const agentSection = section.id.startsWith("agent:");
   const personOwner = section.personOwner;
   const personIdentity = personOwner?.identity;
   const presence =
@@ -208,7 +209,7 @@ export function renderSessionSection(params: {
     : nothing;
   const labelText = renderHoverMarquee(label, "sidebar-recent-sessions__label-text");
   const headerStatus = html`${
-    collapsed && totalRowCount > 0
+    collapsed && totalRowCount > 0 && !agentSection
       ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
       : nothing
   }${
@@ -333,7 +334,7 @@ export function renderSessionSection(params: {
                     : nothing
                 }
                 ${
-                  group || section.id === "ungrouped"
+                  !agentSection && (group || section.id === "ungrouped")
                     ? renderNewSessionLink({
                         basePath: host.basePath,
                         agentId: host.expandedAgentId(),
@@ -348,7 +349,7 @@ export function renderSessionSection(params: {
                     : nothing
                 }
                 ${
-                  group
+                  group && !agentSection
                     ? html`
                         <button
                           type="button"

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { groupSidebarAgentSessionRows } from "../lib/sessions/grouping.ts";
 import { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
@@ -590,5 +591,48 @@ describe("SidebarSessionProjection running subtitle hold", () => {
       subtitle: undefined,
       narration: undefined,
     });
+  });
+});
+
+describe("agent category projection", () => {
+  it("bounds category rows, renders only category headers, and isolates collapse and limits", () => {
+    const projection = new SidebarSessionProjection();
+    const main = Array.from({ length: 45 }, (_, index) =>
+      sessionRow("main-" + index, { category: "Planning" }),
+    );
+    const other = [sessionRow("other", { category: "Planning" })];
+    const rows = [...main, ...other, sessionRow("pin", { pinned: true }), sessionRow("recent")];
+    const sections = [
+      ...groupSidebarAgentSessionRows("main", [...main, rows[46], rows[47]]),
+      ...groupSidebarAgentSessionRows("other", other),
+    ];
+    const input = projectionInput(rows, {
+      sections,
+      grouping: "none",
+      emptyGroupsMode: "never",
+      visibleSessionLimits: new Map([["agent:main:category:Planning", 3]]),
+      collapsedSections: new Set(["agent:other:category:Planning"]),
+    });
+    const result = projection.project(input);
+    const category = result.sections.find(
+      (section) => section.id === "agent:main:category:Planning",
+    )!;
+    expect(category.renderHeader).toBe(true);
+    expect(category.totalRowCount).toBe(45);
+    expect(category.rows).toHaveLength(3);
+    expect(
+      result.sections.find((section) => section.id === "agent:other:category:Planning")?.rows,
+    ).toHaveLength(1);
+    expect(
+      result.sections
+        .filter((section) => !section.category)
+        .every((section) => !section.renderHeader),
+    ).toBe(true);
+    expect(result.visibleRows.every((row) => rows.includes(row))).toBe(true);
+    expect(result.visibleRows.some((row) => row.key === "other")).toBe(false);
+    expect(
+      result.sections.find((section) => section.id === "agent:other:category:Planning")
+        ?.visibleRowCount,
+    ).toBe(0);
   });
 });

@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
+  groupSidebarAgentSessionRows,
   groupSidebarSessionRows,
   groupSessionRows,
   moveSessionSection,
@@ -701,5 +702,58 @@ describe("groupSessionRows", () => {
       "agent:main:discord:channel:1",
       "agent:main:discord:channel:2",
     ]);
+  });
+});
+
+describe("groupSidebarAgentSessionRows", () => {
+  const agentRow = (key: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+    key,
+    kind: "direct",
+    updatedAt: 1,
+    ...extra,
+  });
+
+  it("scopes shared names, keeps pins unique, and omits catalog-only empty groups", () => {
+    const rows = [
+      agentRow("a", { category: "Planning" }),
+      agentRow("pin", { category: "Planning", pinned: true }),
+      agentRow("b"),
+    ];
+    const first = groupSidebarAgentSessionRows("main", rows, [
+      "category:Empty",
+      "category:Planning",
+    ]);
+    const second = groupSidebarAgentSessionRows("other", [agentRow("c", { category: "Planning" })]);
+    expect(first.map((section) => section.id)).toEqual([
+      "agent:main:pinned",
+      "agent:main:category:Planning",
+      "agent:main:recent",
+    ]);
+    expect(first.flatMap((section) => section.rows.map((item) => item.key)).toSorted()).toEqual([
+      "a",
+      "b",
+      "pin",
+    ]);
+    expect(second.map((section) => section.id)).toEqual(["agent:other:category:Planning"]);
+    expect(groupSidebarAgentSessionRows("empty", [])).toEqual([]);
+  });
+
+  it("uses the shared category order and retains every loaded smart-zone row", () => {
+    const rows = [
+      agentRow("a", { category: "A" }),
+      agentRow("b", { category: "B" }),
+      agentRow("group", { kind: "group" }),
+      agentRow("work", { workSession: true }),
+    ];
+    const sections = groupSidebarAgentSessionRows("main", rows, ["category:B", "category:A"]);
+    expect(
+      sections.filter((section) => section.category).map((section) => section.category),
+    ).toEqual(["B", "A"]);
+    expect(
+      sections
+        .flatMap((section) => section.rows)
+        .map((item) => item.key)
+        .toSorted(),
+    ).toEqual(["a", "b", "group", "work"]);
   });
 });

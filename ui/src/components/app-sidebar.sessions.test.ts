@@ -9,6 +9,7 @@ import "../test-helpers/app-sidebar-cases/child-sessions.ts";
 import "../test-helpers/app-sidebar-cases/narration.ts";
 import "../test-helpers/app-sidebar-cases/outbox-badges.ts";
 import "../test-helpers/app-sidebar-cases/pull-request-state.ts";
+import "../test-helpers/app-sidebar-cases/roster-categories.ts";
 import "../test-helpers/app-sidebar-cases/session-indicators.ts";
 import "../test-helpers/app-sidebar-cases/session-delegated-activity.ts";
 import "../test-helpers/app-sidebar-cases/sessions.ts";
