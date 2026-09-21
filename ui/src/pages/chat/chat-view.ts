@@ -543,13 +543,11 @@ export function renderChat(props: ChatProps) {
                 ></openclaw-plugin-contributions>
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
                 <div class="chat-main__conversation-frame">
+                  <!-- Chromium can crash when DevTools inspects a blocking Lit object listener. -->
                   <div
                     class="chat-main__conversation"
-                    @wheel=${{
-                      handleEvent: (event: WheelEvent) =>
-                        forwardChatWheelToTranscript(event, props.transcript.scrollElement),
-                      passive: false,
-                    }}
+                    .onwheel=${(event: WheelEvent) =>
+                      forwardChatWheelToTranscript(event, props.transcript.scrollElement)}
                   >
                     ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}
                     ${scrollToBottomButton} ${gutterStack}

@@ -72,7 +72,10 @@ export function renderSidebarNavRoute(params: SidebarNavRouteParams) {
       @blur=${params.onCancelPreload}
       @pointerenter=${(event: Event) => params.onPreload(event)}
       @pointerleave=${params.onCancelPreload}
-      @touchstart=${(event: TouchEvent) => params.onPreload(event, true)}
+      @touchstart=${{
+        handleEvent: (event: TouchEvent) => params.onPreload(event, true),
+        passive: true,
+      }}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           return;
