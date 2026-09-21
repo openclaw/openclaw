@@ -1136,11 +1136,10 @@ async function startInitializedCodexAppServerClient(
       if (
         startOptions.transport === "stdio" &&
         nativeCommandAtStart &&
-        !desktopGeneration &&
-        !isManagedCodexDesktopCommand(startOptions.command) &&
+        (!isManagedCodexDesktopCommand(startOptions.command) || desktopGeneration) &&
         !isCodexAppServerProxyLaunch(startOptions.args)
       ) {
-        ownCodexInferenceClient(client);
+        ownCodexInferenceClient(client, desktopGeneration);
       }
       recordCodexAppServerAuthHandoff(client, authHandoff);
       if (runtimeArtifactModule && runtimeArtifact) {

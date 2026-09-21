@@ -19,6 +19,10 @@ import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
+import {
+  configureManagedDesktopInferenceFixture,
+  registerSharedClientInferenceTests,
+} from "./shared-client-inference.test-support.js";
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./shared-client-lifecycle.js";
 import { registerSharedClientLifetimeTests } from "./shared-client-lifetime.test-support.js";
 import { createClientHarness } from "./test-support.js";
@@ -251,22 +255,7 @@ function deferNextAuthProfileApplication(): () => void {
   return release;
 }
 
-function configureManagedDesktopFallback(): CodexAppServerStartOptions {
-  mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(async (startOptions) => ({
-    ...startOptions,
-    command: "/Applications/Codex.app/Contents/Resources/codex",
-    commandSource: "resolved-managed",
-    managedFallbackCommandPaths: ["/cache/openclaw/codex"],
-  }));
-  return {
-    transport: "stdio",
-    homeScope: "user",
-    command: "codex",
-    commandSource: "managed",
-    args: ["app-server", "--listen", "stdio://"],
-    headers: {},
-  };
-}
+const configureManagedDesktopFallback = () => configureManagedDesktopInferenceFixture(mocks);
 
 describe("shared Codex app-server client", () => {
   beforeEach(() => {
@@ -663,6 +652,8 @@ describe("shared Codex app-server client", () => {
       delete globalState[legacySlot];
     }
   });
+
+  registerSharedClientInferenceTests(mocks, sendInitializeResult);
 
   registerSharedClientLifetimeTests(() => {
     mocks.bridgeCodexAppServerStartOptions.mockImplementationOnce(async ({ startOptions }) => ({

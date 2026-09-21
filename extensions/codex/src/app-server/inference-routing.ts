@@ -4,12 +4,15 @@ import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
   readCodexEffectiveConfig,
 } from "./config-layer-policy.js";
+import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
+import { isCodexDesktopGenerationCurrent } from "./desktop-generation.js";
 import type { CodexInferenceProxy } from "./inference-proxy.js";
 import { isJsonObject, type CodexConfigReadResponse, type JsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
 type Owner = {
   closed: boolean;
+  desktopGeneration?: CodexDesktopGeneration;
   routes: Map<string, Promise<CodexInferenceProxy>>;
   threads: Map<string, CodexInferenceProxy>;
   handles: Set<CodexInferenceProxy>;
@@ -28,11 +31,20 @@ const NATIVE_OPENAI_UPSTREAMS = new Set([
 ]);
 
 /** Only managed native stdio startup calls this; locality or metadata cannot opt a client in. */
-export function ownCodexInferenceClient(client: CodexAppServerClient): void {
+export function ownCodexInferenceClient(
+  client: CodexAppServerClient,
+  desktopGeneration?: CodexDesktopGeneration,
+): void {
   if (owners.has(client)) {
     return;
   }
-  const owner: Owner = { closed: false, routes: new Map(), threads: new Map(), handles: new Set() };
+  const owner: Owner = {
+    closed: false,
+    desktopGeneration,
+    routes: new Map(),
+    threads: new Map(),
+    handles: new Set(),
+  };
   owners.set(client, owner);
   const close = () => {
     owner.closed = true;
@@ -84,7 +96,12 @@ async function prepareCodexInferenceRoute(params: {
     return undefined;
   }
   const assertClient = () => {
-    if (owner.closed || owners.get(params.client) !== owner) {
+    // Desktop clients may remain alive while an obsolete generation drains.
+    if (
+      owner.closed ||
+      owners.get(params.client) !== owner ||
+      (owner.desktopGeneration && !isCodexDesktopGenerationCurrent(owner.desktopGeneration))
+    ) {
       throw new Error("Codex inference route ownership changed; reconnect before retrying");
     }
   };

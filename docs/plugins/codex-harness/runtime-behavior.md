@@ -244,6 +244,14 @@ opening its upstream connection; queueing and its handshake share a 10-second
 deadline. HTTP admission and queued WebSocket requests wait at most 30 seconds.
 Cancelled or superseded work leaves the queue without reaching the provider.
 
+On macOS, this includes a managed Codex Desktop executable started by OpenClaw
+over stdio, including with `appServer.homeScope: "user"`. Current workspace
+persona, skills, and memory guidance reach the parent request without being
+added to native child histories. A Desktop update revokes the old process's
+relay even while its remaining clients drain. Explicit executable overrides,
+proxy launches, and externally attached connections retain their existing
+instruction-delivery behavior.
+
 These limits apply to requests across chats and native child agents, not to the
 number of saved conversations. Queue capacity or deadline exhaustion returns a
 retryable busy response. Sustained overload can still fail a turn after Codex
