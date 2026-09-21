@@ -1,4 +1,4 @@
-// Run with node --import tsx scripts/bench-plugin-invocation.ts.
+// Run with pnpm bench:plugins:invocation.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { PluginInstance } from "../src/plugins/plugin-instance.js";
