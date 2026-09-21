@@ -4571,8 +4571,8 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).toHaveBeenCalledTimes(2);
   });
 
-  it("tombstones when the final startup retry consumes the last charge", async () => {
-    const { storePath } = await makeMainSessionFixture({
+  it("tombstones when the final startup retry consumes the last charge", async ({ signal }) => {
+    const { storePath, sessionKey } = await makeMainSessionFixture({
       mainRestartRecovery: {
         cycleId: "cycle-final-startup-attempt",
         revision: 1,
@@ -4597,20 +4597,19 @@ describe("main-session-restart-recovery", () => {
       })
       .mockResolvedValueOnce({ runId: "run-resumed" });
 
-    scheduleRestartAbortedMainSessionRecovery({
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
       getConfig: () => ({ agents: { entries: { main: { default: true } } } }),
       delayMs: 0,
       maxRetries: 1,
       stateDir: tmpDir,
     });
 
-    await waitForFast(() => {
-      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
-        status: "failed",
-        mainRestartRecovery: { tombstone: expect.any(Object) },
-      });
+    const target = { sessionKey, storePath };
+    await mockRecoveryRuntime.expectFailedRecovery(2, recovery, signal, target);
+    expect(loadSessionEntry(target)).toMatchObject({
+      status: "failed",
+      mainRestartRecovery: { tombstone: expect.any(Object) },
     });
-    expect(callGateway).toHaveBeenCalledTimes(2);
     const freshEntry = loadSessionEntry({ sessionKey: "agent:main:fresh", storePath });
     expect(freshEntry).toMatchObject({
       sessionId: "fresh-session",
