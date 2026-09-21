@@ -9,7 +9,6 @@ import {
   createCodexAppServerToolResultExtensionRunner,
   extractMessagingToolSend,
   extractMessagingToolSendResult,
-  extractMessagingToolSourceReplyPayload,
   finalizeToolTerminalPresentation,
   formatToolExecutionErrorMessage,
   getBeforeToolCallFailureDisposition,
@@ -40,6 +39,7 @@ import {
 import {
   copyInternalToolResultState,
   createAgentHarnessToolExecutionBoundaryRegistry,
+  extractMessagingToolSourceReplyPayload,
   getCoreTtsToolResultMediaUrls,
   normalizeAcceptedSessionSpawnResult,
   recordAgentHarnessToolResultTelemetry,

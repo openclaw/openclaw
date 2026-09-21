@@ -10,6 +10,8 @@ export {
   isAsyncStartedToolResult,
   readAsyncStartedTaskIds,
 } from "../agents/embedded-agent-tool-results.js";
+export { extractMessagingToolSourceReplyPayload } from "../agents/embedded-agent-messaging-extraction.js";
+export { collectMessagingMediaUrlsFromRecord } from "../agents/embedded-agent-tool-media.js";
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
 export {
