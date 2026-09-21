@@ -621,7 +621,7 @@
       "count": 1,
       "kind": "object-property",
       "name": "description",
-      "path": "ui/src/pages/search/search-page.ts",
+      "path": "ui/src/pages/search/search-results.ts",
       "text": "snippet"
     },
     {

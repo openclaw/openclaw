@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
@@ -37,7 +37,6 @@ import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
-import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -45,21 +44,12 @@ import { renderSettingsSelectRow } from "../config/settings-select-row.ts";
 import { newSessionSearch } from "../new-session/location.ts";
 import { renderPluginCredential } from "../plugins/credential-editor.ts";
 import { pluginConfigSchema } from "../plugins/settings-model.ts";
+import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
+import { renderSearchTestResult } from "./search-results.ts";
 
 registerSettingsEnglish();
 
 type SearchProvider = WebSearchStatusResult["providers"][number];
-
-function readConfigValue(config: unknown, path: readonly (string | number)[]): unknown {
-  return path.reduce<unknown>((value, segment) => {
-    if (Array.isArray(value) && typeof segment === "number") {
-      return value[segment];
-    }
-    return isRecord(value) && typeof segment === "string" && Object.hasOwn(value, segment)
-      ? value[segment]
-      : undefined;
-  }, config);
-}
 
 class SearchPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -78,7 +68,7 @@ class SearchPage extends OpenClawLightDomElement {
   private generation = 0;
   private testGeneration = 0;
   private selectedAgent = "";
-  private configHash: string | null = null;
+  private configRevision = "";
 
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -98,9 +88,12 @@ class SearchPage extends OpenClawLightDomElement {
       () => this.context?.runtimeConfig,
       (runtime, notify) => runtime.subscribe(notify),
       (runtime) => {
-        const hash = runtime.state.configSnapshot?.hash ?? null;
-        if (hash !== this.configHash) {
-          this.configHash = hash;
+        if (!isSearchConfigSettled(runtime.state)) {
+          this.invalidateTest();
+        }
+        const revision = searchConfigRevision(runtime.state);
+        if (revision !== this.configRevision) {
+          this.configRevision = revision;
           void this.load();
         }
       },
@@ -261,6 +254,8 @@ class SearchPage extends OpenClawLightDomElement {
 
   private async test(scope: GatewayConnectionScope | null, statusGeneration: number) {
     const query = this.query.trim();
+    const runtime = this.context.runtimeConfig;
+    const revision = searchConfigRevision(runtime.state);
     if (
       !scope ||
       !this.gateway.isCurrent(scope) ||
@@ -270,14 +265,19 @@ class SearchPage extends OpenClawLightDomElement {
       query.length > 500 ||
       !(this.result?.testProvider || this.result?.route.testable) ||
       this.testing ||
-      this.busy ||
+      !isSearchConfigSettled(runtime.state) ||
       this.loading
     ) {
       return;
     }
     const generation = ++this.testGeneration;
     const current = () =>
-      this.isConnected && generation === this.testGeneration && this.gateway.isCurrent(scope);
+      this.isConnected &&
+      generation === this.testGeneration &&
+      this.gateway.isCurrent(scope) &&
+      this.context.runtimeConfig === runtime &&
+      isSearchConfigSettled(runtime.state) &&
+      searchConfigRevision(runtime.state) === revision;
     this.testing = true;
     this.testResult = null;
     this.testError = "";
@@ -472,46 +472,6 @@ class SearchPage extends OpenClawLightDomElement {
     </details>`;
   }
 
-  private renderTestResult() {
-    const result = this.testResult;
-    if (this.testError || result?.status === "error") {
-      return html`<div role="alert" class="callout danger">
-        ${this.testError || result?.error || t("searchPage.failure")}
-      </div>`;
-    }
-    if (!result) {
-      return nothing;
-    }
-    const sources = [...(result.results ?? []), ...(result.citations ?? [])];
-    const uniqueSources = sources.filter(
-      (source, index) => sources.findIndex((item) => item.url === source.url) === index,
-    );
-    return html`
-      ${result.content ? renderSettingsSection({ title: t("searchPage.result") }, renderSettingsRow({ title: result.content })) : nothing}
-      ${
-        uniqueSources.length
-          ? renderSettingsSection(
-              { title: t("searchPage.sources"), count: uniqueSources.length },
-              uniqueSources.map((source) => {
-                const safeUrl = resolveSafeExternalUrl(source.url, window.location.href);
-                const url = safeUrl && /^https?:/u.test(safeUrl) ? safeUrl : null;
-                return renderSettingsRow({
-                  title: url
-                    ? html`<a href=${url} target="_blank" rel="noopener noreferrer"
-                        >${source.title || source.url}</a
-                      >`
-                    : source.title || source.url,
-                  description: "snippet" in source ? source.snippet : source.url,
-                });
-              }),
-            )
-          : !result.content
-            ? renderSettingsEmpty(t("searchPage.noResults"))
-            : nothing
-      }
-    `;
-  }
-
   override render() {
     if (!this.context) {
       return nothing;
@@ -662,7 +622,7 @@ class SearchPage extends OpenClawLightDomElement {
                                 }}
                               />`,
                             })}
-                            ${renderSettingsRow({ title: t("searchPage.test"), description: !result.testProvider && !result.route.testable ? result.route.reason : undefined, control: html`<button class="btn" ?disabled=${!this.canEdit || !(result.testProvider || result.route.testable) || !this.query.trim() || this.query.trim().length > 500 || this.testing || this.loading || this.busy || !this.gateway.connected} @click=${() => this.test(scope, statusGeneration)}>${this.testing ? t("searchPage.testing") : result.testProvider ? t("searchPage.testProvider", { provider: result.testProvider.label }) : t("searchPage.test")}</button>` })}
+                            ${renderSettingsRow({ title: t("searchPage.test"), description: !result.testProvider && !result.route.testable ? result.route.reason : undefined, control: html`<button class="btn" ?disabled=${!this.canEdit || !(result.testProvider || result.route.testable) || !this.query.trim() || this.query.trim().length > 500 || this.testing || this.loading || !isSearchConfigSettled(configState) || !this.gateway.connected} @click=${() => this.test(scope, statusGeneration)}>${this.testing ? t("searchPage.testing") : result.testProvider ? t("searchPage.testProvider", { provider: result.testProvider.label }) : t("searchPage.test")}</button>` })}
                           `
                         : nothing
                     }
@@ -690,7 +650,7 @@ class SearchPage extends OpenClawLightDomElement {
                     }
                   `,
                 )}
-                ${this.renderTestResult()}
+                ${renderSearchTestResult(this.testResult, this.testError)}
                 ${renderSettingsSection(
                   { title: t("searchPage.setup"), description: t("searchPage.setupHint") },
                   html`

@@ -92,7 +92,7 @@ async function mount(
     },
   };
   const configState = {
-    ...createInitialConfigState(),
+    ...createInitialConfigState(snapshot),
     configForm: config,
     configSnapshot: { config, hash: "one", valid: true, issues: [] },
   };
