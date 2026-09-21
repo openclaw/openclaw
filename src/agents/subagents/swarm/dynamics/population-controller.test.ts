@@ -61,7 +61,7 @@ describe("mixed-phase population controller", () => {
     });
   });
 
-  it("uses a bounded glass-breaker rather than unbounded respawn", () => {
+  it("requests one bounded decorrelating perturbation rather than choosing a recipe", () => {
     const snapshot = buildPopulationSnapshot({
       campaignId: "c",
       groupId: "g",
@@ -72,7 +72,7 @@ describe("mixed-phase population controller", () => {
     });
     expect(assessPopulation(snapshot).actions).toContainEqual({
       kind: "perturb",
-      profile: "glass-breaker",
+      purpose: "decorrelate",
       count: 1,
       reason: "bounded fresh-context perturbation for stalled low-mobility search",
     });
