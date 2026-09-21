@@ -1,5 +1,5 @@
 /** Shared harness for node invoke plugin-policy tests. */
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -10,6 +10,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import type { NodeRegistry, NodeSession } from "./node-registry.js";
+import { waitForApprovalRequested } from "./server-methods/approval-request.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
 export const DEMO_PLUGIN_ID = "demo";
@@ -199,11 +200,28 @@ export async function invokeDemoPolicy(
 
 export async function expectSinglePendingApproval(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
+  context: GatewayRequestContext,
+  invocation: Promise<unknown>,
 ): Promise<PluginApprovalRecord> {
-  await vi.waitFor(async () => {
-    expect(await manager.listPendingRecords()).toHaveLength(1);
+  // Join the invocation before the manager fixture closes its database, even if an assertion fails.
+  onTestFinished(async () => {
+    await manager.drain();
+    await Promise.allSettled([invocation]);
   });
-  const [record] = await manager.listPendingRecords();
+  await waitForApprovalRequested(
+    context.broadcastToConnIds,
+    "plugin.approval.requested",
+    invocation,
+    // Reused contexts retain broadcasts for resolved approvals. Only the
+    // publication for a currently pending record establishes readiness.
+    (payload) =>
+      manager
+        .listLocalPendingRecords()
+        .some((record) => record.id === (payload as { id: string }).id),
+  );
+  const records = await manager.listPendingRecords();
+  expect(records).toHaveLength(1);
+  const [record] = records;
   if (!record) {
     throw new Error("expected pending approval");
   }

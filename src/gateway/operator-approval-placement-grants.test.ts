@@ -471,96 +471,111 @@ describe("placement standing grants", () => {
       },
     };
     const operationalRunInstance = createOperationalRunInstanceRef("identity-only-placement");
-    const identityOnlyLaunch = applyPluginNodeInvokePolicy({
-      context,
-      client: {
-        ...client,
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: SESSION_KEY,
-            operationalRunInstance,
-            delegatedAuthority: {
-              kind: "local",
+    const invocations: Promise<unknown>[] = [];
+    try {
+      const identityOnlyLaunch = applyPluginNodeInvokePolicy({
+        context,
+        client: {
+          ...client,
+          internal: {
+            agentRuntimeIdentity: {
+              kind: "agentRuntime",
+              agentId: "main",
+              sessionKey: SESSION_KEY,
               operationalRunInstance,
-              lifecycleGeneration: "identity-only-generation",
-              claimId: "identity-only-claim",
+              delegatedAuthority: {
+                kind: "local",
+                operationalRunInstance,
+                lifecycleGeneration: "identity-only-generation",
+                claimId: "identity-only-claim",
+              },
             },
           },
         },
-      },
-      nodeSession,
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
-      sessionKey: SESSION_KEY,
-    });
-    const identityOnlyApproval = await expectSinglePendingApproval(manager);
-    expect(identityOnlyApproval.request.allowedDecisions).not.toContain("allow-always");
-    expect(identityOnlyApproval.request.placementGrant).toBeNull();
-    expect(await manager.resolve(identityOnlyApproval.id, "deny")).toBe(true);
-    await expect(identityOnlyLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
-
-    const launch = () =>
-      withPluginRuntimeGatewayRequestScope(
-        { isWebchatConnect: () => false, nodePlacementGrantAuthority },
-        () =>
-          applyPluginNodeInvokePolicy({
-            context,
-            client,
-            nodeSession,
-            command: DEMO_COMMAND,
-            params: DEMO_PARAMS,
-            sessionKey: SESSION_KEY,
-          }),
+        nodeSession,
+        command: DEMO_COMMAND,
+        params: DEMO_PARAMS,
+        sessionKey: SESSION_KEY,
+      });
+      invocations.push(identityOnlyLaunch);
+      const identityOnlyApproval = await expectSinglePendingApproval(
+        manager,
+        context,
+        identityOnlyLaunch,
       );
+      expect(identityOnlyApproval.request.allowedDecisions).not.toContain("allow-always");
+      expect(identityOnlyApproval.request.placementGrant).toBeNull();
+      expect(await manager.resolve(identityOnlyApproval.id, "deny")).toBe(true);
+      await expect(identityOnlyLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
 
-    const legacyLaunch = launch();
-    const legacyApproval = await expectSinglePendingApproval(manager);
-    expect(legacyApproval.request.allowedDecisions).not.toContain("allow-always");
-    expect(legacyApproval.request.placementGrant).toBeNull();
-    expect(await manager.resolve(legacyApproval.id, "deny")).toBe(true);
-    await expect(legacyLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
+      const launch = () => {
+        const invocation = withPluginRuntimeGatewayRequestScope(
+          { isWebchatConnect: () => false, nodePlacementGrantAuthority },
+          () =>
+            applyPluginNodeInvokePolicy({
+              context,
+              client,
+              nodeSession,
+              command: DEMO_COMMAND,
+              params: DEMO_PARAMS,
+              sessionKey: SESSION_KEY,
+            }),
+        );
+        invocations.push(invocation);
+        return invocation;
+      };
 
-    policy.policy.standingApproval = { kind: "placement", scope: "demo.exec-placement" };
-    const firstLaunch = launch();
-    const firstApproval = await expectSinglePendingApproval(manager);
-    expect(firstApproval.request.placementGrant).toMatchObject({
-      sessionId: SESSION_ID,
-      nodeId: NODE_ID,
-      approvalScope: "demo.exec-placement",
-      placementGeneration: 4,
-    });
-    expect(await manager.resolve(firstApproval.id, "allow-always")).toBe(true);
-    await expect(firstLaunch).resolves.toMatchObject({ ok: true });
-    expect(invoke).toHaveBeenCalledTimes(1);
+      const legacyLaunch = launch();
+      const legacyApproval = await expectSinglePendingApproval(manager, context, legacyLaunch);
+      expect(legacyApproval.request.allowedDecisions).not.toContain("allow-always");
+      expect(legacyApproval.request.placementGrant).toBeNull();
+      expect(await manager.resolve(legacyApproval.id, "deny")).toBe(true);
+      await expect(legacyLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
 
-    await expect(launch()).resolves.toMatchObject({ ok: true });
-    expect(await manager.listPendingRecords()).toEqual([]);
-    expect(invoke).toHaveBeenCalledTimes(2);
+      policy.policy.standingApproval = { kind: "placement", scope: "demo.exec-placement" };
+      const firstLaunch = launch();
+      const firstApproval = await expectSinglePendingApproval(manager, context, firstLaunch);
+      expect(firstApproval.request.placementGrant).toMatchObject({
+        sessionId: SESSION_ID,
+        nodeId: NODE_ID,
+        approvalScope: "demo.exec-placement",
+        placementGeneration: 4,
+      });
+      expect(await manager.resolve(firstApproval.id, "allow-always")).toBe(true);
+      await expect(firstLaunch).resolves.toMatchObject({ ok: true });
+      expect(invoke).toHaveBeenCalledTimes(1);
 
-    const database = openOpenClawStateDatabase(databaseOptions);
-    const stateDb = getNodeSqliteKysely<PlacementTestDatabase>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      stateDb
-        .updateTable("worker_session_placements")
-        .set({ transition_generation: 5 })
-        .where("session_id", "=", SESSION_ID),
-    );
-    const staleLaunch = launch();
-    const staleApproval = await expectSinglePendingApproval(manager);
-    placementAuthorityActive = false;
-    expect(await manager.resolve(staleApproval.id, "allow-always")).toBe(false);
-    await expect(staleLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
-    placementAuthorityActive = true;
+      await expect(launch()).resolves.toMatchObject({ ok: true });
+      expect(await manager.listPendingRecords()).toEqual([]);
+      expect(invoke).toHaveBeenCalledTimes(2);
 
-    const movedLaunch = launch();
-    const movedApproval = await expectSinglePendingApproval(manager);
-    expect(movedApproval.id).not.toBe(firstApproval.id);
-    expect(movedApproval.request.placementGrant).toMatchObject({ placementGeneration: 5 });
-    expect(await manager.resolve(movedApproval.id, "deny")).toBe(true);
-    await expect(movedLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
-    expect(invoke).toHaveBeenCalledTimes(2);
+      const database = openOpenClawStateDatabase(databaseOptions);
+      const stateDb = getNodeSqliteKysely<PlacementTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        stateDb
+          .updateTable("worker_session_placements")
+          .set({ transition_generation: 5 })
+          .where("session_id", "=", SESSION_ID),
+      );
+      const staleLaunch = launch();
+      const staleApproval = await expectSinglePendingApproval(manager, context, staleLaunch);
+      placementAuthorityActive = false;
+      expect(await manager.resolve(staleApproval.id, "allow-always")).toBe(false);
+      await expect(staleLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
+      placementAuthorityActive = true;
+
+      const movedLaunch = launch();
+      const movedApproval = await expectSinglePendingApproval(manager, context, movedLaunch);
+      expect(movedApproval.id).not.toBe(firstApproval.id);
+      expect(movedApproval.request.placementGrant).toMatchObject({ placementGeneration: 5 });
+      expect(await manager.resolve(movedApproval.id, "deny")).toBe(true);
+      await expect(movedLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
+      expect(invoke).toHaveBeenCalledTimes(2);
+    } finally {
+      // afterEach closes this manual fixture database before onTestFinished hooks run.
+      await manager.drain();
+      await Promise.allSettled(invocations);
+    }
   });
 });

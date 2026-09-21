@@ -79,7 +79,7 @@ describe("private node policy transport", () => {
       onNodeCommandDispatched,
     });
 
-    const approval = await expectSinglePendingApproval(manager);
+    const approval = await expectSinglePendingApproval(manager, context, result);
     expect(privateTransport.invoke).not.toHaveBeenCalled();
     expect(await manager.resolve(approval.id, "allow-once")).toBe(true);
     await expect(result).resolves.toMatchObject({ ok: true, payload: { completed: true } });

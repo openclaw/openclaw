@@ -441,7 +441,7 @@ describe("session computer transport", () => {
       return await policy.invokeNode();
     });
     const operation = transport.invoke(request("type"));
-    const record = await expectSinglePendingApproval(manager);
+    const record = await expectSinglePendingApproval(manager, context, operation);
     expect(record.request).toMatchObject({
       agentId: "main",
       sessionKey: h.state.placement.sessionKey,
