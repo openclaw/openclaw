@@ -22,7 +22,9 @@ export default defineBundledChannelEntry({
     exportName: "inspectDiscordReadOnlyAccount",
   },
   registerFull(api) {
-    registerDiscordActivities(api);
+    if (api.registrationMode === "full") {
+      registerDiscordActivities(api);
+    }
     registerDiscordSubagentHooks(api);
   },
   registerCapabilities(api) {

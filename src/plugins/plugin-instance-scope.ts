@@ -18,6 +18,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   readonly hasRetainedConsumers: boolean;
   readonly owner?: PluginInstanceOwner;
   toolRegistrationComplete: boolean;
+  agentRuntimeRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
   adopt<T>(value: T): T;
   retainWork(): () => void;

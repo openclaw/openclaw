@@ -212,51 +212,54 @@ describe("defineBundledChannelEntry", () => {
     expect(fs.existsSync(runtimeMarker)).toBe(true);
   });
 
-  it("keeps setup-runtime and full registration wired to runtime sidecars", () => {
-    const tempRoot = tempDirs.make("openclaw-bundled-entry-runtime-");
-    const runtimeMarker = path.join(tempRoot, "runtime-loaded");
-    const pluginId = "bundled-runtime";
-    const { importerPath } = writeBundledChannelFixture({
-      pluginRoot: path.join(tempRoot, "dist", "extensions", pluginId),
-      pluginId,
-      runtimeMarker,
-    });
-    const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
-    const entry = createBundledChannelEntry({
-      importerPath,
-      pluginId,
-      registerCliMetadata,
-      registerFull,
-      registerCapabilities,
-    });
+  it.each(["full", "agent-runtime"] as const)(
+    "keeps setup-runtime and %s registration wired to runtime sidecars",
+    (mode) => {
+      const tempRoot = tempDirs.make("openclaw-bundled-entry-runtime-");
+      const runtimeMarker = path.join(tempRoot, "runtime-loaded");
+      const pluginId = "bundled-runtime";
+      const { importerPath } = writeBundledChannelFixture({
+        pluginRoot: path.join(tempRoot, "dist", "extensions", pluginId),
+        pluginId,
+        runtimeMarker,
+      });
+      const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
+      const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
+      const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
+      const entry = createBundledChannelEntry({
+        importerPath,
+        pluginId,
+        registerCliMetadata,
+        registerFull,
+        registerCapabilities,
+      });
 
-    const cliApi = createApi("cli-metadata");
-    entry.register(cliApi);
-    expect(registerCliMetadata).toHaveBeenCalledWith(cliApi);
-    expect(registerCapabilities).not.toHaveBeenCalled();
-    expect(fs.existsSync(runtimeMarker)).toBe(false);
-    registerCliMetadata.mockClear();
+      const cliApi = createApi("cli-metadata");
+      entry.register(cliApi);
+      expect(registerCliMetadata).toHaveBeenCalledWith(cliApi);
+      expect(registerCapabilities).not.toHaveBeenCalled();
+      expect(fs.existsSync(runtimeMarker)).toBe(false);
+      registerCliMetadata.mockClear();
 
-    entry.register(createApi("setup-only"));
-    expect(registerCapabilities).not.toHaveBeenCalled();
-    fs.rmSync(runtimeMarker, { force: true });
+      entry.register(createApi("setup-only"));
+      expect(registerCapabilities).not.toHaveBeenCalled();
+      fs.rmSync(runtimeMarker, { force: true });
 
-    entry.register(createApi("setup-runtime"));
-    expect(fs.existsSync(runtimeMarker)).toBe(true);
-    expect(registerCliMetadata).not.toHaveBeenCalled();
-    expect(registerFull).not.toHaveBeenCalled();
-    expect(registerCapabilities).not.toHaveBeenCalled();
+      entry.register(createApi("setup-runtime"));
+      expect(fs.existsSync(runtimeMarker)).toBe(true);
+      expect(registerCliMetadata).not.toHaveBeenCalled();
+      expect(registerFull).not.toHaveBeenCalled();
+      expect(registerCapabilities).not.toHaveBeenCalled();
 
-    fs.rmSync(runtimeMarker, { force: true });
-    const fullApi = createApi("full");
-    entry.register(fullApi);
-    expect(fs.existsSync(runtimeMarker)).toBe(true);
-    expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
-    expect(registerFull).toHaveBeenCalledWith(fullApi);
-    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(fullApi);
-  });
+      fs.rmSync(runtimeMarker, { force: true });
+      const fullApi = createApi(mode);
+      entry.register(fullApi);
+      expect(fs.existsSync(runtimeMarker)).toBe(true);
+      expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
+      expect(registerFull).toHaveBeenCalledWith(fullApi);
+      expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(fullApi);
+    },
+  );
 });
 
 describe("defineBundledChannelSetupEntry", () => {

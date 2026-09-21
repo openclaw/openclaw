@@ -9,7 +9,7 @@ import {
 import { createClickClackDiscussionTool } from "./tool.js";
 
 export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
-  if (api.registrationMode === "tool-discovery") {
+  if (api.registrationMode === "tool-discovery" || api.registrationMode === "agent-runtime") {
     api.registerTool(() => null, { name: "discussion" });
     return;
   }

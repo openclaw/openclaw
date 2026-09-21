@@ -45,7 +45,7 @@ export type PluginLoadOptions = {
   };
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
-  mode?: "full" | "validate" | "cli-metadata";
+  mode?: "full" | "validate" | "cli-metadata" | "agent-runtime";
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;

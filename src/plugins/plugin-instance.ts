@@ -41,6 +41,7 @@ export class PluginInstance {
   readonly controller = new AbortController();
   readonly lifecycle: PluginInstanceLifecycle;
   toolRegistrationComplete = false;
+  agentRuntimeRegistrationComplete = false;
   controlPlaneInitialized = false;
   sourceDigest?: string;
   private moduleLoader?: (source: string) => unknown;

@@ -34,7 +34,10 @@ export default defineChannelPluginEntry({
     api.registerCli(/* ... */);
   },
   registerFull(api) {
-    api.registerGatewayMethod(/* ... */);
+    api.on("before_tool_call", checkToolCall);
+    if (api.registrationMode === "full") {
+      api.registerGatewayMethod(/* ... */);
+    }
   },
   registerCapabilities(api) {
     api.registerTranscriptSourceProvider(/* ... */);
@@ -61,17 +64,22 @@ Callbacks run per registration mode (full table under
   `"tool-discovery"`. Store the runtime reference here, typically via
   `createPluginRuntimeStore`.
 - `registerCliMetadata` runs for `"cli-metadata"`, `"discovery"`, and
-  `"full"`. Use it as the canonical place for channel-owned CLI descriptors
+  `"full"`, and `"agent-runtime"`. Use it as the canonical place for channel-owned CLI descriptors
   so root help stays non-activating, discovery snapshots include static
   command metadata, and normal CLI registration stays compatible with full
   plugin loads.
-- `registerFull` runs only for `"full"` and `"tool-discovery"`. For
-  `"tool-discovery"` it runs _instead of_ channel registration: OpenClaw
-  skips `registerChannel`/`setRuntime` entirely and calls the full-runtime
-  callback followed by the capability callback. Keep tool registration in
-  `registerFull` and capability providers in `registerCapabilities`.
-- `registerCapabilities` runs for `"discovery"`, `"full"`, and
-  `"tool-discovery"`. Register inert advertised providers here so read-only
+- `registerFull` runs for `"full"`, `"agent-runtime"`, and `"tool-discovery"`.
+  Keep tool registration and its `before_tool_call` hooks or
+  `registerTrustedToolPolicy` registrations together here. Agent preparation
+  uses `"agent-runtime"` to collect these into the same executing generation,
+  after channel registration and `setRuntime`. It does not activate the
+  Gateway or start registered services. Guard sockets, workers, clients,
+  and other startup side effects with `api.registrationMode === "full"`.
+  For `"tool-discovery"`, OpenClaw skips `registerChannel`/`setRuntime`
+  entirely and calls the full-runtime callback followed by the capability
+  callback.
+- `registerCapabilities` runs for `"discovery"`, `"full"`, `"agent-runtime"`,
+  and `"tool-discovery"`. Register inert advertised providers here so read-only
   capability discovery can find them without starting sockets, clients,
   workers, or services.
 - Discovery registration is non-activating, not import-free: OpenClaw may

@@ -584,7 +584,7 @@ export function defineBundledChannelEntry<TPlugin = ChannelPlugin>({
         profile("bundled-register:registerCapabilities", () => registerCapabilities?.(api));
         return;
       }
-      if (api.registrationMode !== "full") {
+      if (api.registrationMode !== "full" && api.registrationMode !== "agent-runtime") {
         return;
       }
       profile("bundled-register:registerCliMetadata", () => registerCliMetadata?.(api));

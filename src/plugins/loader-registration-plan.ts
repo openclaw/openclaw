@@ -40,6 +40,7 @@ export function resolvePluginRegistrationPlan(params: {
   env: NodeJS.ProcessEnv;
   channelPluginLoadIntent: ChannelPluginLoadIntent;
   toolDiscovery: boolean;
+  agentRuntime?: boolean;
   cliMetadata?: boolean;
 }): PluginRegistrationPlan | null {
   if (params.cliMetadata) {
@@ -50,6 +51,9 @@ export function resolvePluginRegistrationPlan(params: {
   }
   if (!params.enableStateEnabled) {
     return null;
+  }
+  if (params.agentRuntime && params.manifestRecord.channels.length > 0) {
+    return createRegistrationPlan("agent-runtime");
   }
   if (params.toolDiscovery) {
     return createRegistrationPlan("tool-discovery");

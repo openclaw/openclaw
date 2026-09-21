@@ -220,6 +220,7 @@ export function loadRuntimePluginCandidate(params: {
     env: context.env,
     channelPluginLoadIntent: context.channelPluginLoadIntent,
     toolDiscovery: params.options.toolDiscovery === true,
+    agentRuntime: params.options.mode === "agent-runtime",
     cliMetadata,
   });
   if (!registrationPlan) {

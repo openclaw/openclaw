@@ -104,7 +104,11 @@ export function loadOpenClawPluginsCore(
   if (requestedOnlyPluginIdSet && requestedOnlyPluginIdSet.size === 0) {
     const emptyRegistry = createEmptyPluginRegistry();
     inspectionResources?.attach(emptyRegistry);
-    if (options.mode !== "cli-metadata" && options.activate !== false) {
+    if (
+      options.mode !== "cli-metadata" &&
+      options.mode !== "agent-runtime" &&
+      options.activate !== false
+    ) {
       const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
       activatePluginRegistry(
         emptyRegistry,

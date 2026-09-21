@@ -19,6 +19,7 @@ mode expects a plugin to register. Part of the
 | ------------------ | -------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------- |
 | `"full"`           | Normal gateway startup                             | Live        | Everything                                                                                                      |
 | `"discovery"`      | Read-only capability discovery                     | Live        | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
+| `"agent-runtime"`  | Executable agent preparation for channel plugins   | Live        | Channel runtime wiring, tools, hooks, and trusted policies; no startup side effects                             |
 | `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Live        | Capability/tool registration only; no channel activation                                                        |
 | `"setup-only"`     | Disabled/unconfigured channel                      | Unavailable | Channel registration only                                                                                       |
 | `"setup-runtime"`  | Setup flow with runtime available                  | Live        | Channel registration plus only the lightweight runtime needed during setup                                      |
@@ -73,6 +74,13 @@ for the service lifetime and is revoked after stop or failed start. Prefer
 version or invalidation payloads over full records so authorized clients reread
 canonical state through the plugin's scoped Gateway methods.
 
+Channel agent preparation uses `"agent-runtime"` so tools, typed hooks, and
+trusted tool policies belong to one prepared generation. Both channel entry
+helpers run `registerFull` in this mode, after channel runtime wiring. Keep
+registration side-effect-free; startup work must explicitly require `"full"`.
+Read-only model catalog requests continue to use `"discovery"`. Other plugin
+shapes retain their existing discovery registration behavior.
+
 Discovery mode builds a non-activating registry snapshot. It may still
 evaluate the plugin entry and the channel plugin object so OpenClaw can
 register channel capabilities and static CLI descriptors. Treat module
@@ -85,3 +93,7 @@ exist without re-entering the full bundled channel runtime. Good fits are
 channel registration, setup-safe HTTP routes, setup-safe gateway methods,
 and delegated setup helpers. Heavy background services, CLI registrars, and
 provider/client SDK bootstraps still belong in `"full"`.
+
+Handwritten channel entries must register their agent hooks and trusted tool policies
+in `agent-runtime` mode. The channel entry helpers handle this automatically.
+Existing tool discovery remains available for entries that only recognize older modes.

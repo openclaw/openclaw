@@ -106,6 +106,7 @@ function buildCacheKeys(params: {
   artifactPreference: PluginRuntimeArtifactPreference;
   resolveRawConfigEnvVars?: boolean;
   toolDiscovery?: boolean;
+  agentRuntime?: boolean;
   capabilityCatalogIdentity?: string;
   loadModules?: boolean;
   runtimeSubagentMode?: PluginRuntimeSubagentMode;
@@ -168,6 +169,7 @@ function buildCacheKeys(params: {
     resolveRawConfigEnvVars: params.resolveRawConfigEnvVars === true,
     loadModules: params.loadModules !== false,
     toolDiscovery: params.toolDiscovery === true,
+    agentRuntime: params.agentRuntime === true,
     runtimeSubagentMode: params.runtimeSubagentMode ?? "default",
     runtimeBindingIdentity: params.runtimeBindingIdentity ?? "{}",
     pluginSdkResolution: params.pluginSdkResolution ?? "auto",
@@ -352,9 +354,13 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     runtimeEntries: normalized.entries,
     sourceEntries: activationSource.plugins.entries,
   });
-  const shouldActivate = options.mode !== "cli-metadata" && options.activate !== false;
+  const shouldActivate =
+    options.mode !== "cli-metadata" &&
+    options.mode !== "agent-runtime" &&
+    options.activate !== false;
   // Staged runtime registration is independent of publishing the process registry.
-  const runtimeSideEffects = options.runtimeSideEffects ?? shouldActivate;
+  const runtimeSideEffects =
+    options.mode === "agent-runtime" ? false : (options.runtimeSideEffects ?? shouldActivate);
   const { cacheKey, resolveManifestCacheKey } = buildCacheKeys({
     discoveryContext,
     plugins: trustNormalized,
@@ -376,6 +382,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     artifactPreference,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
     toolDiscovery: options.toolDiscovery,
+    agentRuntime: options.mode === "agent-runtime",
     capabilityCatalogIdentity: options.capabilityCatalog
       ? JSON.stringify([
           options.capabilityCatalog.family,

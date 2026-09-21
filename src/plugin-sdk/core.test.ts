@@ -124,46 +124,49 @@ describe("defineChannelPluginEntry", () => {
     expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
   });
 
-  it("keeps setup-runtime and full registration wired to runtime helpers", () => {
-    const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
-    const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
-    const entry = defineChannelPluginEntry({
-      id: "runtime-activation",
-      name: "Runtime Activation",
-      description: "runtime activation test",
-      plugin: createChannelPlugin("runtime-activation"),
-      setRuntime,
-      registerCliMetadata,
-      registerFull,
-      registerCapabilities,
-    });
+  it.each(["full", "agent-runtime"] as const)(
+    "keeps setup-runtime and %s registration wired to runtime helpers",
+    (mode) => {
+      const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
+      const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
+      const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
+      const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
+      const entry = defineChannelPluginEntry({
+        id: "runtime-activation",
+        name: "Runtime Activation",
+        description: "runtime activation test",
+        plugin: createChannelPlugin("runtime-activation"),
+        setRuntime,
+        registerCliMetadata,
+        registerFull,
+        registerCapabilities,
+      });
 
-    const cliApi = createApi("cli-metadata");
-    entry.register(cliApi);
-    expect(registerCliMetadata).toHaveBeenCalledWith(cliApi);
-    expect(registerCapabilities).not.toHaveBeenCalled();
-    registerCliMetadata.mockClear();
+      const cliApi = createApi("cli-metadata");
+      entry.register(cliApi);
+      expect(registerCliMetadata).toHaveBeenCalledWith(cliApi);
+      expect(registerCapabilities).not.toHaveBeenCalled();
+      registerCliMetadata.mockClear();
 
-    entry.register(createApi("setup-only"));
-    expect(registerCapabilities).not.toHaveBeenCalled();
+      entry.register(createApi("setup-only"));
+      expect(registerCapabilities).not.toHaveBeenCalled();
 
-    const setupApi = createApi("setup-runtime");
-    entry.register(setupApi);
-    expect(setRuntime).toHaveBeenCalledWith(setupApi.runtime);
-    expect(registerCliMetadata).not.toHaveBeenCalled();
-    expect(registerFull).not.toHaveBeenCalled();
-    expect(registerCapabilities).not.toHaveBeenCalled();
+      const setupApi = createApi("setup-runtime");
+      entry.register(setupApi);
+      expect(setRuntime).toHaveBeenCalledWith(setupApi.runtime);
+      expect(registerCliMetadata).not.toHaveBeenCalled();
+      expect(registerFull).not.toHaveBeenCalled();
+      expect(registerCapabilities).not.toHaveBeenCalled();
 
-    setRuntime.mockClear();
-    const fullApi = createApi("full");
-    entry.register(fullApi);
-    expect(setRuntime).toHaveBeenCalledWith(fullApi.runtime);
-    expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
-    expect(registerFull).toHaveBeenCalledWith(fullApi);
-    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(fullApi);
-  });
+      setRuntime.mockClear();
+      const fullApi = createApi(mode);
+      entry.register(fullApi);
+      expect(setRuntime).toHaveBeenCalledWith(fullApi.runtime);
+      expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
+      expect(registerFull).toHaveBeenCalledWith(fullApi);
+      expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(fullApi);
+    },
+  );
 });
 
 describe("createChannelPluginBase", () => {

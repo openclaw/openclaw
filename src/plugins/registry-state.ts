@@ -27,7 +27,11 @@ type PluginRegistrationCapabilities = {
 export function resolvePluginRegistrationCapabilities(
   mode: import("./types.js").PluginRegistrationMode,
 ): PluginRegistrationCapabilities {
-  const capabilityHandlers = mode === "full" || mode === "discovery" || mode === "tool-discovery";
+  const capabilityHandlers =
+    mode === "full" ||
+    mode === "discovery" ||
+    mode === "tool-discovery" ||
+    mode === "agent-runtime";
   return {
     capabilityHandlers,
     setupRuntimeHandlers: mode === "setup-runtime",

@@ -571,7 +571,7 @@ export function defineChannelPluginEntry<TPlugin>({
         registerCapabilities?.(api);
         return;
       }
-      if (api.registrationMode !== "full") {
+      if (api.registrationMode !== "full" && api.registrationMode !== "agent-runtime") {
         return;
       }
       registerCliMetadata?.(api);

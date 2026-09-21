@@ -95,6 +95,8 @@ export function runPluginRegisterSyncInRegistry(
     owner.run(run);
     owner.toolRegistrationComplete ||=
       api.registrationMode === "full" || api.registrationMode === "tool-discovery";
+    owner.agentRuntimeRegistrationComplete ||=
+      api.registrationMode === "full" || api.registrationMode === "agent-runtime";
   } else {
     run();
   }
