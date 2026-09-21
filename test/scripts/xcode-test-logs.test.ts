@@ -77,7 +77,9 @@ it("routes each iOS simulator test through workflow-owned log capture and retain
       { steps: { name: string; run?: string; if?: string; with?: { path?: string } }[] }
     >;
   };
-  const steps = workflow.jobs["ios-build"].steps;
+  const job = workflow.jobs["ios-build"];
+  if (!job) throw new Error("The workflow must include the iOS build job");
+  const steps = job.steps;
   for (const [name, logPaths] of [
     ["Run focused iOS voice cleanup simulator tests", ["OpenClawVoiceCleanupTests.log"]],
     [

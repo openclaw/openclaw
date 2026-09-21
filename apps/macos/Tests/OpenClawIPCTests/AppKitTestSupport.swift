@@ -45,7 +45,7 @@ enum AppKitTestSupport {
         try #require(application.isRunning)
     }
 
-    static func sampleStalledProcess() -> DispatchWorkItem {
+    nonisolated static func sampleStalledProcess() -> DispatchWorkItem {
         let pid = ProcessInfo.processInfo.processIdentifier
         let diagnostic = DispatchWorkItem {
             FileHandle.standardError.write(Data("[appkit-test] sampling stalled rendered test\n".utf8))

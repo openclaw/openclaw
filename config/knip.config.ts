@@ -36,6 +36,8 @@ const repositoryScriptEntries = [
   "scripts/build-discord-activity-sdk.mts!",
   // package-mac-app.sh launches the architecture scheduler by path.
   "scripts/build-mac-swift.mts!",
+  // CI passes this native test launcher through the Apple command log wrapper.
+  "scripts/test-macos-native.mts!",
   "scripts/check-control-ui-performance.mts!",
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
