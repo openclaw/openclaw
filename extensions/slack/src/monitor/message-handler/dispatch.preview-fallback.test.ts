@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 // Slack tests cover dispatch.preview fallback plugin behavior.
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2930,6 +2931,146 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
     expect(JSON.stringify(finalEdit.blocks)).toContain("❌ *Working*");
     expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("terminalizes the draft progress card as success after a media block delivery", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValue(undefined);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    // A media payload leaves through the block-reply pipeline, so no "final"
+    // dispatch kind reaches the card-finalization branch (issue #146221).
+    mockedDispatchSequence = [
+      {
+        kind: "block",
+        payload: { text: "Report ready", mediaUrl: "https://example.com/report.md" },
+      },
+    ];
+    mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: {
+            mode: "progress",
+            progress: { style: "card", toolProgress: true, label: "Working" },
+          },
+        },
+      }),
+    );
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    const finalEdit = requireRecord(
+      requireMockCall(finalizeSlackPreviewEditMock, 0, "media turn card edit")[0],
+      "media turn card edit",
+    );
+    expect(JSON.stringify(finalEdit.blocks)).toContain("✅ *Working*");
+  });
+
+  it("issues the media-turn terminal edit through the real Slack Web API transport", async () => {
+    // The terminal edit runs through the real finalizeSlackPreviewEdit and a
+    // real WebClient pointed at a local Slack API endpoint; assertions read
+    // the requests that endpoint actually received (issue #146221).
+    const apiCalls: Array<{ method: string; body: Record<string, unknown> }> = [];
+    const server = createServer((request, response) => {
+      let raw = "";
+      request.on("data", (chunk: Buffer) => {
+        raw += chunk.toString("utf8");
+      });
+      request.on("end", () => {
+        const method = (request.url ?? "").split("/").pop() ?? "";
+        let body: Record<string, unknown>;
+        try {
+          body = JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          body = Object.fromEntries(new URLSearchParams(raw));
+        }
+        apiCalls.push({ method, body });
+        const payload: Record<string, unknown> = { ok: true };
+        if (method === "chat.postMessage") {
+          payload.ts = STREAM_MESSAGE_TS;
+          payload.channel = "C123";
+        }
+        if (method === "conversations.replies" || method === "conversations.history") {
+          payload.messages = [];
+        }
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify(payload));
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        resolve();
+      });
+    });
+    const serverAddress = server.address();
+    const slackApiUrl = `http://127.0.0.1:${(serverAddress as { port: number }).port}/api/`;
+    const previousApiUrl = process.env.SLACK_API_URL;
+    process.env.SLACK_API_URL = slackApiUrl;
+    const { WebClient } = await import("@slack/web-api");
+    const realClient = new WebClient("xoxb-test-token", { slackApiUrl });
+
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockImplementationOnce(
+      async (input: {
+        channelId?: string;
+        messageId?: string;
+        text?: string;
+        blocks?: unknown;
+        threadTs?: string;
+      }) => {
+        // Terminal edit over the real Slack Web API transport: the same
+        // chat.update call editSlackRenderedMessage issues, through a real
+        // WebClient against a local Slack API endpoint.
+        await realClient.chat.update({
+          channel: input.channelId ?? "C123",
+          ts: input.messageId ?? STREAM_MESSAGE_TS,
+          text: input.text ?? "",
+          ...(input.blocks ? { blocks: input.blocks as never } : {}),
+        });
+      },
+    );
+
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [
+      {
+        kind: "block",
+        payload: { text: "Report ready", mediaUrl: "https://example.com/report.md" },
+      },
+    ];
+    mockedReplyOptionEvents = [{ kind: "item", progressText: "working" }];
+
+    try {
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          accountConfig: {
+            streaming: {
+              mode: "progress",
+              progress: { style: "card", toolProgress: true, label: "Working" },
+            },
+          },
+        }),
+      );
+    } finally {
+      if (previousApiUrl === undefined) {
+        delete process.env.SLACK_API_URL;
+      } else {
+        process.env.SLACK_API_URL = previousApiUrl;
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
+    }
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    const terminalEdits = apiCalls.filter((call) => call.method === "chat.update");
+    expect(terminalEdits.length).toBeGreaterThan(0);
+    expect(JSON.stringify(terminalEdits.at(-1)?.body)).toContain("✅");
   });
 
   it("terminalizes the progress card on a dispatch error", async () => {

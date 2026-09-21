@@ -203,6 +203,9 @@ async function dispatchSlackMessageWithSetup(
   };
 
   let compactFinalDeliveryStarted = false;
+  // Whether the final-dispatch branch already attempted to terminalize the
+  // draft progress card; the end-of-dispatch settlement must not retry it.
+  let draftCardTerminalizedByFinalBranch = false;
   const clearCompactProgress = async () => {
     try {
       // clear also deletes this run's previews displaced by human replies.
@@ -254,6 +257,7 @@ async function dispatchSlackMessageWithSetup(
           kind: info.kind,
           forcedThreadTs: delivery.usedReplyThreadTs,
         });
+        draftCardTerminalizedByFinalBranch = true;
         const finalized = await progress.finalizeDraftProgressCard(
           payload.isError === true ? "error" : "success",
         );
@@ -658,6 +662,19 @@ async function dispatchSlackMessageWithSetup(
 
   if (dispatchError || agentRunFailed) {
     await progress.finalizeDraftProgressCard("error");
+  } else if (
+    progress.useDraftProgressCard &&
+    anyReplyDelivered &&
+    !draftCardTerminalizedByFinalBranch
+  ) {
+    // A payload carrying media is force-sent through the block-reply pipeline,
+    // so no "final" dispatch kind reaches the card-finalization branch and a
+    // delivered turn would linger in its Working state (issue #146221).
+    // Finalize is idempotent for cards already terminalized elsewhere.
+    const finalized = await progress.finalizeDraftProgressCard("success");
+    if (!finalized) {
+      await draftStream?.clear();
+    }
   }
   await progress.dropDetachedProgressCards();
 
