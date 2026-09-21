@@ -1,6 +1,10 @@
 // Embedded run entry helpers serialize runtime skill metadata for agent run records.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadSkillLibrarySelection } from "../library/selection.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  captureSkillLibrarySelection,
+  prepareSkillLibrarySelection,
+} from "../library/selection.js";
 import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
 import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
@@ -10,6 +14,7 @@ import {
   type SkillEntry,
   type SkillSnapshot,
 } from "../types.js";
+import { getSkillsSourceVersion } from "./refresh-state.js";
 
 /** Resolves skill entries embedded into a run payload into runtime-visible entries. */
 export async function resolveEmbeddedRunSkillEntries(params: {
@@ -48,9 +53,22 @@ export async function resolveEmbeddedRunSkillEntries(params: {
     if (cachedSkillEntries) {
       return cachedSkillEntries;
     }
+    params.assertCurrent?.();
+    const librarySelections = captureSkillLibrarySelection(
+      params.workspaceOnly === true ? [] : (params.skillsSnapshot?.librarySelections ?? []),
+    );
+    const libraryContext = librarySelections.length
+      ? captureOpenClawStateWorkerContext()
+      : undefined;
+    const assertPreparedEntriesCurrent = () => {
+      params.assertCurrent?.();
+      libraryContext?.maintenanceScope?.assertAdmission();
+      libraryContext?.admission.assertCurrent();
+    };
     const options = {
       config,
       agentId: params.agentId,
+      executionWorkspaceDir: skillRoots.executionWorkspaceDir,
       ...(params.eligibility ? { eligibility: params.eligibility } : {}),
       ...(params.skillsSnapshot?.skillFilter
         ? { skillFilter: params.skillsSnapshot.skillFilter }
@@ -60,20 +78,34 @@ export async function resolveEmbeddedRunSkillEntries(params: {
         : {}),
       ...(params.workspaceOnly === true ? { workspaceOnly: true } : {}),
     };
-    cachedSkillEntries = await prepareWorkspaceSkills(
-      skillRoots.agentWorkspaceDir,
-      {
-        ...options,
-        executionWorkspaceDir: skillRoots.executionWorkspaceDir,
-      },
-      params.assertCurrent,
-    );
-    if (params.skillsSnapshot?.librarySelections?.length && params.workspaceOnly !== true) {
-      cachedSkillEntries.push(
-        ...loadSkillLibrarySelection(params.skillsSnapshot.librarySelections),
+    for (;;) {
+      assertPreparedEntriesCurrent();
+      const sourceVersion = getSkillsSourceVersion(skillRoots.agentWorkspaceDir, options);
+      const workspaceEntries = await prepareWorkspaceSkills(
+        skillRoots.agentWorkspaceDir,
+        options,
+        params.assertCurrent,
       );
+      assertPreparedEntriesCurrent();
+      const libraryEntries = libraryContext
+        ? await prepareSkillLibrarySelection(
+            librarySelections,
+            { env: libraryContext.environment },
+            assertPreparedEntriesCurrent,
+          )
+        : undefined;
+      assertPreparedEntriesCurrent();
+      if (cachedSkillEntries) {
+        return cachedSkillEntries;
+      }
+      if (getSkillsSourceVersion(skillRoots.agentWorkspaceDir, options) !== sourceVersion) {
+        continue;
+      }
+      cachedSkillEntries = libraryEntries
+        ? [...workspaceEntries, ...libraryEntries]
+        : workspaceEntries;
+      return cachedSkillEntries;
     }
-    return cachedSkillEntries;
   };
   return {
     shouldLoadSkillEntries,

@@ -946,6 +946,17 @@ preparation. Database close or a shared ownership change prevents delayed scope
 entry. Nested and concurrent scopes keep separate read-through views; OAuth
 refresh material remains with its existing owner.
 
+Embedded-run lazy entry loading prepares pinned library descriptions through the
+shared read-only worker owner. Each uncached load captures its library pin values
+and state context before workspace preparation and publishes combined entries only after
+both preparations and current-owner checks finish. Database close invalidates
+pending preparation even when the library entries are cached. Workspace source
+changes during preparation retry the in-flight load; completed cached entries
+remain stable, and concurrent loads retain the first complete publication.
+Workspace filtering still precedes appended library pins; workspace-only loads omit them. Workspace
+plugin discovery retains its existing synchronous metadata path. Schemas,
+retention, and update behavior are unchanged.
+
 Model-context reads and session transcript preparation use the session-transcript
 worker with separate bounded queues. Background preparation cannot occupy the
 foreground context queue. Session exports read events, statistics, and session
