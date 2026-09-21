@@ -276,12 +276,11 @@ export function collectAgentHarnessMessagingMediaUrls(record: Record<string, unk
     }
   };
   const pushAttachment = (value: unknown) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (!isRecord(value)) {
       return;
     }
-    const attachment = value as Record<string, unknown>;
     for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
-      pushMediaUrl(attachment[key]);
+      pushMediaUrl(value[key]);
     }
   };
   for (const key of [
