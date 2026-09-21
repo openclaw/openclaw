@@ -205,34 +205,46 @@ function sanitizeHistoryMessage(
   return { message: entry, truncated, redacted };
 }
 
-function boundPendingInputId(id: string, index: number): string {
+function boundPendingInputId(
+  id: string,
+  index: number,
+  usedIds: Set<string>,
+): { id: string; truncated: boolean } {
   // Pending IDs are opaque Gateway metadata; bound them before the shared page
   // budget so malformed metadata cannot crowd every input message out.
-  if (Buffer.byteLength(id, "utf8") <= MAX_PENDING_INPUT_ID_BYTES) {
-    return id;
+  if (Buffer.byteLength(id, "utf8") <= MAX_PENDING_INPUT_ID_BYTES && !usedIds.has(id)) {
+    usedIds.add(id);
+    return { id, truncated: false };
   }
-  const suffix = `-${index + 1}`;
-  return `${truncateUtf8Prefix(
-    id,
-    MAX_PENDING_INPUT_ID_BYTES - Buffer.byteLength(suffix, "utf8"),
-  )}${suffix}`;
+  for (let attempt = 0; ; attempt += 1) {
+    const suffix = `-${index + 1}${attempt ? `-${attempt}` : ""}`;
+    const bounded = `${truncateUtf8Prefix(
+      id,
+      MAX_PENDING_INPUT_ID_BYTES - Buffer.byteLength(suffix, "utf8"),
+    )}${suffix}`;
+    if (!usedIds.has(bounded)) {
+      usedIds.add(bounded);
+      return { id: bounded, truncated: true };
+    }
+  }
 }
 
 function boundPendingInputs(page: ChatPendingInputsPage) {
   // Pending input is context for an intentional next action, never executable
   // history. Keep the whole page addressable while sharing one hard byte cap.
-  const metadata = page.items.map(({ id, state, acceptedAt }, index) => ({
-    id: boundPendingInputId(id, index),
-    state,
-    acceptedAt,
-  }));
+  const usedIds = new Set<string>();
+  let truncated = false;
+  const metadata = page.items.map(({ id, state, acceptedAt }, index) => {
+    const bounded = boundPendingInputId(id, index, usedIds);
+    truncated ||= bounded.truncated;
+    return { id: bounded.id, state, acceptedAt };
+  });
   const messageBudget = Math.floor(
     (SESSIONS_HISTORY_PENDING_MAX_BYTES -
       jsonUtf8Bytes({ ...page, items: metadata }) -
       page.items.length * 12) /
       Math.max(page.items.length, 1),
   );
-  let truncated = false;
   let redacted = false;
   const items = page.items.map((item, index) => {
     const result = sanitizeHistoryMessage(item.message, Math.max(1, Math.floor(messageBudget / 8)));

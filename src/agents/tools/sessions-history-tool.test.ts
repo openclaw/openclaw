@@ -285,7 +285,12 @@ describe("sessions_history redaction", () => {
 
   it("bounds oversized pending input ids before allocating message budget", async () => {
     const items = Array.from({ length: 20 }, (_, index) => ({
-      id: `pending-${"x".repeat(5000)}-${index}`,
+      id:
+        index === 0
+          ? "x".repeat(5000)
+          : index === 1
+            ? `${"x".repeat(62)}-1`
+            : `pending-${"x".repeat(5000)}-${index}`,
       state: "queued",
       acceptedAt: 1_700_000_000_000,
       message: { role: "user", content: "queued input" },
@@ -315,6 +320,38 @@ describe("sessions_history redaction", () => {
     expect(details.bytes).toBeLessThanOrEqual(80 * 1024);
     expect(details.truncated).toBe(true);
     expect(Value.Check(tool.outputSchema!, details)).toBe(true);
+  });
+
+  it("reports truncation when only a pending input id is shortened", async () => {
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(): Promise<T> =>
+        ({
+          messages: [],
+          pendingInputs: {
+            items: [
+              {
+                id: `pending-${"x".repeat(5000)}`,
+                state: "queued",
+                acceptedAt: 1_700_000_000_000,
+                message: { role: "user", content: "ok" },
+              },
+            ],
+            total: 1,
+          },
+        }) as T,
+    });
+
+    const result = await tool.execute("oversized-pending-id-only", { sessionKey: "main" });
+    const details = result.details as {
+      contentTruncated: boolean;
+      pendingInputs: { items: Array<{ id: string }> };
+      truncated: boolean;
+    };
+
+    expect(details.pendingInputs.items[0]?.id).toHaveLength(64);
+    expect(details.contentTruncated).toBe(true);
+    expect(details.truncated).toBe(true);
   });
 
   it("applies custom redaction patterns to recalled session text", async () => {
