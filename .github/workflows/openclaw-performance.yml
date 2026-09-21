@@ -15,6 +15,7 @@ on:
         options:
           - kova
           - vitest-pair
+          - gateway-concurrency
       target_ref:
         description: OpenClaw ref to benchmark; defaults to the workflow ref
         required: false
@@ -46,7 +47,7 @@ on:
         default: false
         type: boolean
       live_openai_candidate:
-        description: Run the live OpenAI GPT 5.6 agent-turn lane
+        description: Run the selected mode's live OpenAI lane
         required: false
         default: false
         type: boolean
@@ -140,6 +141,7 @@ jobs:
           TARGET_CHECKOUT_DIR: ${{ github.workspace }}/.artifacts/performance-target
           KOVA_REF_INPUT: ${{ inputs.kova_ref }}
           KOVA_CONFIG_CONTRACT_INPUT: ${{ inputs.kova_config_contract }}
+          PERFORMANCE_MODE: ${{ inputs.mode }}
         shell: bash
         run: |
           set -euo pipefail
@@ -153,6 +155,13 @@ jobs:
           if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::OpenClaw target ref resolved to invalid SHA '${resolved_sha}'."
             exit 1
+          fi
+
+          if [[ "${PERFORMANCE_MODE:-}" == "gateway-concurrency" ]]; then
+            echo "checkout_ref=$resolved_sha" >> "$GITHUB_OUTPUT"
+            echo "tested_ref=$tested_ref" >> "$GITHUB_OUTPUT"
+            echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           kova_ref="${KOVA_REF_INPUT:-}"
@@ -258,7 +267,7 @@ jobs:
   kova:
     name: ${{ matrix.title }}
     needs: resolve_target
-    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
+    if: ${{ github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency') }}
     permissions:
       contents: read
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
@@ -773,7 +782,7 @@ jobs:
   source_performance:
     name: OpenClaw source performance probes
     needs: resolve_target
-    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
+    if: ${{ github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency') }}
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 120
     env:
@@ -1122,7 +1131,7 @@ jobs:
   publish:
     name: Publish ${{ matrix.title }} report
     needs: [resolve_target, kova, source_performance]
-    if: ${{ always() && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
+    if: ${{ always() && (github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency')) && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -1579,7 +1588,7 @@ jobs:
   artifact_only_guard:
     name: Verify artifact-only report mode
     needs: [resolve_target, kova, publish]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.publish_reports != true }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency' && inputs.publish_reports != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -1600,6 +1609,157 @@ jobs:
             echo
             echo "Clawgrit report publication stayed disabled; Kova evidence is available only as workflow artifacts."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  gateway_concurrency:
+    name: Gateway concurrent sessions and turns
+    needs: resolve_target
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'gateway-concurrency' }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
+      CONCURRENCY_OUTPUT: ${{ github.workspace }}/.artifacts/gateway-concurrency
+      EXPECTED_TESTED_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      LIVE_REQUESTED: ${{ inputs.live_openai_candidate }}
+      SECRET_ELIGIBLE: ${{ needs.resolve_target.outputs.secret_eligible }}
+    steps:
+      - name: Admit Gateway concurrency request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CONCURRENCY_OUTPUT"
+          if [[ "$LIVE_REQUESTED" == "true" && "$SECRET_ELIGIBLE" != "true" ]]; then
+            echo "::error::Live Gateway concurrency requires the main workflow and its exact trusted target SHA."
+            exit 1
+          fi
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+
+      - name: Checkout Gateway concurrency target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve_target.outputs.checkout_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout Gateway concurrency helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .artifacts/performance-workflow
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Stage trusted Gateway concurrency setup
+        shell: bash
+        run: *stage_trusted_performance_setup
+
+      - name: Set up Gateway concurrency environment
+        uses: ./.artifacts/performance-workflow/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.resolve_target.outputs.cache_write_allowed == 'true' && 'restore' || 'off' }}
+          install-bun: "false"
+
+      - name: Build Gateway concurrency target
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CONCURRENCY_OUTPUT"
+          tested_sha="$(python3 -I -S "$CI_GIT_OWNER" --git 0 rev-parse HEAD)"
+          if [[ "$tested_sha" != "$EXPECTED_TESTED_SHA" ]]; then
+            echo "::error::Gateway concurrency checkout differs from the resolved target."
+            exit 1
+          fi
+          node --version > "$CONCURRENCY_OUTPUT/node-version.txt"
+          pnpm --version > "$CONCURRENCY_OUTPUT/pnpm-version.txt"
+          pnpm build 2>&1 | tee "$CONCURRENCY_OUTPUT/build.log"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          for (const name of ['.buildstamp', '.runtime-postbuildstamp']) {
+            if (JSON.parse(readFileSync(`dist/${name}`, 'utf8')).head !== process.env.EXPECTED_TESTED_SHA) {
+              throw new Error(`Build stamp ${name} differs from the resolved target`);
+            }
+          }
+          NODE
+          cp dist/.buildstamp "$CONCURRENCY_OUTPUT/buildstamp.json"
+          cp dist/.runtime-postbuildstamp "$CONCURRENCY_OUTPUT/runtime-postbuildstamp.json"
+
+      - name: Run mock Gateway concurrency
+        id: mock
+        timeout-minutes: 20
+        env:
+          BENCH_PROVIDER: mock
+        shell: bash
+        run: &run_gateway_concurrency |
+          set -euo pipefail
+          if [[ "$BENCH_PROVIDER" == "openai" && -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "::error::OPENAI_API_KEY is missing; requested live Gateway evidence cannot run."
+            exit 1
+          fi
+          node --import tsx "$PERFORMANCE_HELPER_DIR/scripts/bench-gateway-concurrency.ts" \
+            --provider "$BENCH_PROVIDER" --entry dist/entry.js \
+            --runs 1 --warmup 0 --agent-warmup-turns 0 \
+            --session-count 1000 --agent-count 32 --concurrency 32 --turns-per-session 3 \
+            --history-messages 20 --history-message-chars 1024 --probe-rounds 64 --cadence-ms 100 \
+            --session-updates 100 --session-update-clients 2 --history-clients 2 --history-burst 2 \
+            --subscribers 4 --control-plane --timeout-ms 120000 \
+            --load-cpu-prof-dir "$CONCURRENCY_OUTPUT/$BENCH_PROVIDER-profiles" \
+            --output "$CONCURRENCY_OUTPUT/$BENCH_PROVIDER.json" \
+            2>&1 | tee "$CONCURRENCY_OUTPUT/$BENCH_PROVIDER.log"
+
+      - name: Run live Gateway concurrency
+        id: live
+        if: ${{ inputs.live_openai_candidate == true && needs.resolve_target.outputs.secret_eligible == 'true' }}
+        timeout-minutes: 20
+        env:
+          BENCH_PROVIDER: openai
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
+        run: *run_gateway_concurrency
+
+      - name: Record Gateway concurrency outcome
+        if: ${{ always() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          MOCK_OUTCOME: ${{ steps.mock.outcome }}
+          LIVE_OUTCOME: ${{ steps.live.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CONCURRENCY_OUTPUT"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const { CONCURRENCY_OUTPUT, EXPECTED_TESTED_SHA, WORKFLOW_SHA, LIVE_REQUESTED, JOB_STATUS } = process.env;
+          writeFileSync(join(CONCURRENCY_OUTPUT, 'workflow-result.json'), JSON.stringify({
+            testedSha: EXPECTED_TESTED_SHA, workflowSha: WORKFLOW_SHA,
+            liveRequested: LIVE_REQUESTED === 'true', jobStatus: JOB_STATUS,
+            build: process.env.BUILD_OUTCOME, mock: process.env.MOCK_OUTCOME, live: process.env.LIVE_OUTCOME,
+          }, null, 2) + '\n');
+          NODE
+          {
+            echo "### Gateway concurrency"
+            echo "Tested SHA: $EXPECTED_TESTED_SHA"
+            echo "Workflow SHA: $WORKFLOW_SHA"
+            echo "Outcome: $JOB_STATUS; live requested: $LIVE_REQUESTED"
+            echo "Each selected provider: 32 concurrent agents, 1,000 sessions, 96 turns."
+            echo "Raw results, failure evidence, logs, and load-phase CPU profiles are in the workflow artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Gateway concurrency artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gateway-concurrency-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/gateway-concurrency
+          if-no-files-found: error
+          retention-days: 14
 
   vitest_pair:
     name: Vitest paired benchmark
