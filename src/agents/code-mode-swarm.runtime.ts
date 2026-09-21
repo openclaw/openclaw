@@ -38,9 +38,42 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sess
 const dynamicsGroups = new Set<string>();
 const dynamicsAdvisoryByGroup = new Map<string, string>();
 
+type DynamicsGroupLifetime = {
+  disposers?: Set<() => void>;
+  abortSignal?: AbortSignal;
+  dispose: () => void;
+};
+
+const dynamicsGroupLifetimes = new Map<string, DynamicsGroupLifetime>();
+
 function releaseDynamicsGroup(groupId: string): void {
   dynamicsGroups.delete(groupId);
   dynamicsAdvisoryByGroup.delete(groupId);
+  const lifetime = dynamicsGroupLifetimes.get(groupId);
+  if (!lifetime) {
+    return;
+  }
+  dynamicsGroupLifetimes.delete(groupId);
+  lifetime.disposers?.delete(lifetime.dispose);
+  lifetime.abortSignal?.removeEventListener("abort", lifetime.dispose);
+}
+
+function retainDynamicsGroup(groupId: string, ctx: ToolSearchToolContext): void {
+  retainDynamicsGroup(groupId, params.ctx);
+  if (dynamicsGroupLifetimes.has(groupId)) {
+    return;
+  }
+  const disposers = ctx.catalogRef
+    ? (ctx.catalogRef.onDispose ??= new Set<() => void>())
+    : undefined;
+  const abortSignal = ctx.abortSignal;
+  const dispose = () => releaseDynamicsGroup(groupId);
+  dynamicsGroupLifetimes.set(groupId, { disposers, abortSignal, dispose });
+  disposers?.add(dispose);
+  abortSignal?.addEventListener("abort", dispose, { once: true });
+  if (abortSignal?.aborted) {
+    dispose();
+  }
 }
 
 function resolveCodeModeRequesterSessionKey(ctx: ToolSearchToolContext): string {
@@ -183,7 +216,7 @@ async function runAgentSpawnBridge(params: {
     }
     assertCurrent();
     if (dynamicsEnabled) {
-      dynamicsGroups.add(groupId);
+      retainDynamicsGroup(groupId, params.ctx);
     }
     return replayedSpawnResult(existing);
   }
@@ -211,7 +244,7 @@ async function runAgentSpawnBridge(params: {
     throw new ToolInputError(`agents.run spawn failed: ${detail}`);
   }
   if (dynamicsEnabled) {
-    dynamicsGroups.add(groupId);
+    retainDynamicsGroup(groupId, params.ctx);
   }
   return value;
 }
@@ -231,21 +264,13 @@ async function runAgentWaitBridge(params: {
   }
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
   const groupId = resolveCodeModeSwarmGroupId(params.ctx);
-  let completion: CollectorCompletionResult;
-  try {
-    completion = await waitForCollectorCompletion({
-      runId: runId.trim(),
-      currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
-      currentAgentId: params.ctx.agentId,
-      config: params.ctx.runtimeConfig ?? params.ctx.config,
-      signal: params.signal,
-    });
-  } catch (error) {
-    // Dynamics state is advisory-only and owned by this parent run. Releasing it
-    // on an aborted/failed wait cannot cancel or mutate still-live collectors.
-    releaseDynamicsGroup(groupId);
-    throw error;
-  }
+  const completion = await waitForCollectorCompletion({
+    runId: runId.trim(),
+    currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
+    currentAgentId: params.ctx.agentId,
+    config: params.ctx.runtimeConfig ?? params.ctx.config,
+    signal: params.signal,
+  });
   if (dynamicsGroups.has(groupId)) {
     const records = listSwarmRunsForGroup(groupId, requesterSessionKey, params.ctx.agentId);
     const decision = assessHostCollectorPopulation({
