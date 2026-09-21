@@ -68,11 +68,7 @@ struct QuickChatCatalogPresentationTests {
             #expect(panel.isVisible)
             let content = try #require(panel.contentView)
             content.layoutSubtreeIfNeeded()
-            let elements = try await AppKitTestSupport.accessibilityElements(in: content)
-            let button = try #require(elements.first {
-                $0.accessibilityRole?() == .button &&
-                    $0.accessibilityLabel?() == "Model"
-            })
+            let button = try await self.waitForModelButton(in: panel, value: "Current fixture")
 
             try await AppKitTestSupport.openMenu(button, in: panel) { menu in
                 try AppKitTestSupport.record(menu: menu, content: content, name: "catalog")
@@ -92,7 +88,8 @@ struct QuickChatCatalogPresentationTests {
             #expect(model.selectedModelSelectionID == "fixture/allowed")
             #expect(model.displayedModelSelectionID == "fixture/allowed")
 
-            try await AppKitTestSupport.openMenu(button, in: panel) { menu in
+            let selectedButton = try await self.waitForModelButton(in: panel, value: "Allowed fixture")
+            try await AppKitTestSupport.openMenu(selectedButton, in: panel) { menu in
                 try AppKitTestSupport.record(menu: menu, content: content, name: "selected")
                 let provider = try #require(menu.items.first { $0.submenu != nil })
                 let selected = try #require(provider.submenu?.items.first {
@@ -137,7 +134,8 @@ struct QuickChatCatalogPresentationTests {
             #expect(model.selectedThinkingLevel == "high")
             effort = try await self.waitForEffort(in: panel, value: "Thorough")
             #expect(effort.accessibilityPerformPress?() == true)
-            try await AppKitTestSupport.openMenu(button, in: panel) { menu in
+            let inheritedButton = try await self.waitForModelButton(in: panel, value: "Allowed fixture")
+            try await AppKitTestSupport.openMenu(inheritedButton, in: panel) { menu in
                 try AppKitTestSupport.record(menu: menu, content: content, name: "inherited")
                 let choices = try #require(menu.items.first { $0.title == "Fixture" }?.submenu)
                 let unknown = try #require(choices.items.firstIndex { $0.title == "Unknown fixture" })
@@ -153,6 +151,19 @@ struct QuickChatCatalogPresentationTests {
             controller.stop()
             await gateway.shutdown()
             throw error
+        }
+    }
+
+    private func waitForModelButton(in window: NSWindow, value expectedValue: String) async throws -> AnyObject {
+        // SwiftUI can reuse the previous Model accessibility node for its loading indicator.
+        try await AppKitTestSupport.waitForAccessibilityElement(
+            in: window, description: "the enabled Model button for \(expectedValue)")
+        { elements in
+            elements.first { element in
+                let value: Any? = element.accessibilityValue?()
+                return element.accessibilityRole?() == .button && element.accessibilityLabel?() == "Model" &&
+                    element.isAccessibilityEnabled?() == true && value as? String == expectedValue
+            }
         }
     }
 
