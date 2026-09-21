@@ -141,6 +141,28 @@ execution promises and argument/start snapshots through
 republished by late completion. Core tool guards and `observeToolTerminal`
 remain authoritative; native decoding and result encoding stay with the harness.
 
+## Shared host-tool result facts
+
+Official harnesses use the private JavaScript-only
+`openclaw/plugin-sdk/agent-harness-tool-runtime` to record portable tool facts.
+`resolveAgentHarnessToolResultPresentation` preserves execution failures when
+presentation middleware rewrites a result. `recordAgentHarnessMessagingDelivery`
+records an already-confirmed messaging delivery, and
+`recordAgentHarnessToolResultMedia` collects and trust-filters presented media.
+Callers retain their native receipt, routing, cancellation, and result-encoding
+contracts; these helpers do not establish delivery or grant execution authority.
+
+For final argument validation, wrap the host-bound tool's execution in
+`runWithToolExecutionValidation(callId, validate, execute)` from the same private
+subpath. The validator runs at the existing execution boundary after policy and
+before-call hooks adjust the arguments. It uses one per-invocation context across
+host and SDK chunks and does not dispatch a second before-call hook.
+
+Accepted background task metadata is available through `isAsyncStartedToolResult`
+and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-runtime`.
+Retain accepted work independently of result presentation so recovery cannot
+replay it.
+
 ## Terminal outcome classification
 
 Native harnesses that own their own protocol projection can use

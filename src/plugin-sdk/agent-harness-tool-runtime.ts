@@ -9,6 +9,14 @@ export {
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
 export {
+  recordAgentHarnessMessagingDelivery,
+  recordAgentHarnessToolResultMedia,
+  resolveAgentHarnessToolResultPresentation,
+  type AgentHarnessMessagingDeliveryFacts,
+  type AgentHarnessToolMediaFacts,
+} from "../agents/harness/tool-result-facts.js";
+export { runWithToolExecutionValidation } from "../agents/agent-tools.execution-validation.js";
+export {
   createAgentHarnessToolExecutionRegistry,
   createAgentHarnessToolExecutionBoundaryRegistry,
   type AgentHarnessToolExecutionSnapshot,

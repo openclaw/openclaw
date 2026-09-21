@@ -182,28 +182,6 @@ export function applyToolSendReceiptForExtraction(
   };
 }
 
-export function isAsyncStartedToolResult(result: unknown): boolean {
-  const details = readToolResultDetails(result);
-  return details?.async === true && details.status === "started";
-}
-
-export function readAsyncStartedTaskIds(result: unknown): {
-  asyncTaskRunId?: string;
-  asyncTaskId?: string;
-} {
-  const details = readToolResultDetails(result);
-  if (!details) {
-    return {};
-  }
-  const nestedTask = readRecordField(details.task);
-  const asyncTaskRunId = readStringValue(details.runId) ?? readStringValue(nestedTask?.runId);
-  const asyncTaskId = readStringValue(details.taskId) ?? readStringValue(nestedTask?.taskId);
-  return {
-    ...(asyncTaskRunId ? { asyncTaskRunId } : {}),
-    ...(asyncTaskId ? { asyncTaskId } : {}),
-  };
-}
-
 export function readExecToolDetails(result: unknown): ExecToolDetails | null {
   const details = readToolResultDetails(result);
   if (!details || typeof details.status !== "string") {

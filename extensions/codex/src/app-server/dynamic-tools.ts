@@ -49,6 +49,7 @@ import {
   createAgentHarnessToolExecutionBoundaryRegistry,
   getCoreTtsToolResultMediaUrls,
   normalizeAcceptedSessionSpawnResult,
+  runWithToolExecutionValidation,
   type AcceptedSessionSpawn,
   type AgentHarnessToolExecutionSnapshot,
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
@@ -121,7 +122,6 @@ type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
 
 type ProjectedCodexDynamicTool = ProjectedTool<AnyAgentTool>;
 
-const INTERNAL_TOOL_EXECUTION_VALIDATION = Symbol.for("openclaw.internalToolExecutionValidation");
 const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS = 4;
 const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS = 160;
 const CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX = " [detail truncated]";
@@ -159,17 +159,6 @@ function assertCodexDynamicToolInputMatchesSchema(params: {
   const omitted = validation.errors.length - visibleErrors.length;
   const omittedSuffix = omitted > 0 ? `; ${omitted} more violation(s) omitted` : "";
   throw new Error(`Invalid arguments for tool "${params.toolName}": ${details}${omittedSuffix}.`);
-}
-
-function createCodexDynamicToolValidationControl(params: {
-  toolCallId: string;
-  validate: (value: unknown) => void;
-}): Record<PropertyKey, unknown> {
-  return {
-    [INTERNAL_TOOL_EXECUTION_VALIDATION]: true,
-    toolCallId: params.toolCallId,
-    validate: params.validate,
-  };
 }
 
 function applyCurrentMessageProvider(
@@ -473,21 +462,19 @@ export function createCodexDynamicToolBridge(params: {
             : undefined,
         };
         executionBoundary.markDispatched();
-        const executionArgs: unknown[] = [call.callId, preparedArgs, signal];
-        if (shouldValidateCodexDynamicToolInput(tool)) {
-          executionArgs.push(
-            createCodexDynamicToolValidationControl({
-              toolCallId: call.callId,
-              validate: (value) =>
+        const execute = () => tool.execute(call.callId, preparedArgs, signal);
+        const rawResult = shouldValidateCodexDynamicToolInput(tool)
+          ? await runWithToolExecutionValidation(
+              call.callId,
+              (value) =>
                 assertCodexDynamicToolInputMatchesSchema({
                   toolName,
                   schema: toolEntry.inputSchema,
                   value,
                 }),
-            }),
-          );
-        }
-        const rawResult = await Reflect.apply(tool.execute, tool, executionArgs);
+              execute,
+            )
+          : await execute();
         executionBoundary.capture();
         const executedArgs = executionBoundary.executedArguments;
         const rawIsError = isToolResultError(rawResult);

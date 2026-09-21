@@ -54,12 +54,10 @@ import {
   extractExecOutput,
   extractLiveExecOutput,
   hasMessagingRichContent,
-  isAsyncStartedToolResult,
   isCronAddAction,
   isMiddlewareToolResultError,
   loadHookRunnerGlobal,
   readApplyPatchSummary,
-  readAsyncStartedTaskIds,
   readExecToolDetails,
   readMessagingText,
   resolveFallbackToolTerminalObserver,
@@ -86,7 +84,9 @@ import {
   capLiveExecResult,
   extractToolErrorCode,
   extractToolErrorMessage,
+  isAsyncStartedToolResult,
   isToolResultTimedOut,
+  readAsyncStartedTaskIds,
   sanitizeToolResult,
 } from "./embedded-agent-tool-results.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
