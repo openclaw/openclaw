@@ -10,7 +10,7 @@ import { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-ins
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 import * as support from "./service.test-support.js";
 
-function createHeldInstaller(boundary: "discovery" | "installation") {
+function createHeldInstaller(boundary: "attachment read" | "discovery" | "installation") {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const node: NodeWorkerSupervisorNodeProof = {
@@ -47,6 +47,26 @@ function createHeldInstaller(boundary: "discovery" | "installation") {
     invoke,
   };
   const destroy = vi.fn(async () => {});
+  if (boundary === "attachment read") {
+    const readAttachment = support.testState.store.hasSessionAttachment.bind(
+      support.testState.store,
+    );
+    vi.spyOn(support.testState.store, "hasSessionAttachment").mockImplementation(
+      async (environmentId) => {
+        const attached = await readAttachment(environmentId);
+        entered.resolve();
+        await release.promise;
+        return attached;
+      },
+    );
+  }
+  const install = vi.fn(
+    createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-owner-test",
+      getTransport: () => transport,
+      transfer,
+    }),
+  );
   const service = support.createService(
     support.createProvider({
       supportedExecutionModes: ["worker-turn"],
@@ -59,23 +79,25 @@ function createHeldInstaller(boundary: "discovery" | "installation") {
       destroy,
     }),
     {
-      ensureNodeWorkerBundle: createGatewayNodeWorkerBundleInstaller({
-        gatewayNamespace: "gateway-owner-test",
-        getTransport: () => transport,
-        transfer,
-      }),
+      ensureNodeWorkerBundle: install,
     },
   );
-  return { node, service, entered, release, transfer, grant, invoke, destroy };
+  return { node, service, entered, release, transfer, grant, invoke, install, destroy };
 }
 
 describe("node provisioning installer ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(["destroy intent", "replacement owner"] as const)(
-    "refuses installation after %s changes during node discovery",
-    async (change) => {
-      const fixture = createHeldInstaller("discovery");
+  it.each([
+    { boundary: "discovery", change: "destroy intent" },
+    { boundary: "discovery", change: "replacement owner" },
+    { boundary: "attachment read", change: "destroy intent" },
+    { boundary: "attachment read", change: "replacement owner" },
+    { boundary: "attachment read", change: "cancellation" },
+  ] as const)(
+    "refuses installation after $change during $boundary",
+    async ({ boundary, change }) => {
+      const fixture = createHeldInstaller(boundary);
       const controller = new AbortController();
       const creation = fixture.service
         .createWithRequest({
@@ -92,7 +114,9 @@ describe("node provisioning installer ownership", () => {
         await Promise.race([fixture.entered.promise, creation]);
         const record = support.testState.store.list()[0]!;
         expect(record.state).toBe("provisioning");
-        if (change === "destroy intent") {
+        if (change === "cancellation") {
+          controller.abort(new DOMException("Provisioning cancelled", "AbortError"));
+        } else if (change === "destroy intent") {
           support.testState.store.requestDestroy({
             environmentId: record.environmentId,
             state: record.state,
@@ -111,12 +135,15 @@ describe("node provisioning installer ownership", () => {
           });
         }
         const replacement = support.testState.store.get(record.environmentId);
-        expect(controller.signal.aborted).toBe(false);
+        expect(controller.signal.aborted).toBe(change === "cancellation");
         fixture.release.resolve();
         expect(await creation).toHaveProperty("error");
         expect(fixture.grant).not.toHaveBeenCalled();
         expect(fixture.invoke).not.toHaveBeenCalled();
-        if (change === "destroy intent") {
+        if (boundary === "attachment read") {
+          expect(fixture.install).not.toHaveBeenCalled();
+        }
+        if (change !== "replacement owner") {
           expect(fixture.destroy).toHaveBeenCalledOnce();
           expect(support.testState.store.get(record.environmentId)?.state).toBe("destroyed");
         } else {

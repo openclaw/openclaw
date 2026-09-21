@@ -263,6 +263,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "workspace.snapshot") {
     return bytes + Buffer.byteLength(command.workspaceDir, "utf8");
   }
+  if (command.type === "workerEnvironments.hasSessionAttachment") {
+    return bytes + Buffer.byteLength(command.environmentId, "utf8");
+  }
   if (command.type === "audit.run.inspect") {
     const input = command.input;
     // Each supplied numeric scalar retains one eight-byte JavaScript number.

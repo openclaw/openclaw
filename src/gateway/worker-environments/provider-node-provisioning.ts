@@ -327,13 +327,15 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       if (preparation && artifact.tarballSha256 !== preparation.artifacts.workerArchiveSha256) {
         throw new Error("Worker bundle differs from its admitted preparation");
       }
+      // Conversation attachments do not run the agent; only worker turns need its prewarm.
+      const prewarm =
+        record.profileSnapshot.executionMode !== "remote-exec" &&
+        !(await options.store.hasSessionAttachment(record.environmentId));
+      assertCurrent();
       nodeBuild = await options.ensureNodeWorkerBundle({
         deviceId: lease.node.deviceId,
         artifact,
-        // Conversation attachments do not run the agent; only worker turns need its prewarm.
-        prewarm:
-          record.profileSnapshot.executionMode !== "remote-exec" &&
-          !options.store.hasSessionAttachment(record.environmentId),
+        prewarm,
         signal: cancellation?.signal,
         assertCurrent,
       });
