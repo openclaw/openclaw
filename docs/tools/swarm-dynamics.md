@@ -14,9 +14,9 @@ const result = await agents.run("Explore alternate explanations for this failure
 });
 ```
 
-This uses the existing `agents.run` to `sessions_spawn` bridge. It does not install a
-controller service, add a scheduler, change tool permissions, or add dependencies.
-Calls without `dynamics` keep their existing behavior.
+This uses the existing `agents.run` to `sessions_spawn` bridge. It does not
+install a controller service, add a scheduler, change tool permissions, or add
+dependencies. Calls without `dynamics` keep their existing behavior.
 
 ## Profiles
 
@@ -27,8 +27,32 @@ Calls without `dynamics` keep their existing behavior.
 - `glass-breaker`: a fresh trajectory intended for stalled search.
 
 Effective temperature and mutation budget are search guidance, not model sampling
-parameters or enforced filesystem permissions. Model and thinking overrides retain
-their existing meanings.
+parameters or enforced filesystem permissions.
+
+Profiles are **execution trajectories, not permissions**. Their native value is
+that OpenClaw can bind the chosen trajectory into the prepared launch, constrain
+the explicit handoff, and require the existing sandbox owner for the verifier path.
+
+## The Liquid invariant
+
+The search side is allowed to be heterogeneous and nondeterministic:
+
+```text
+explorer -> builder -> critic
+    \          |         /
+     \      competing   /
+      +---- candidates -+
+               |
+               v
+        exact candidate
+               |
+               v
+     independent verifier
+```
+
+As work approaches convergence, ambiguity must decrease. Search may be stochastic;
+launch identity, replay, sandbox requirements, and eventual effect authority must
+not be.
 
 ## Verifier handoff
 
@@ -47,33 +71,26 @@ const review = await agents.run("Check this candidate against the stated accepta
 The bridge filters the explicit handoff, uses `context: "isolated"`, and passes
 `sandbox: "require"` to the existing native spawn owner for verifier profiles.
 Missing sandbox support is an error; it never silently retries without a sandbox.
+
 References are caller-provided data, not fetched automatically or treated as authority.
-Each reference is limited to 512 characters, each reference array to 32 entries,
-and a supplied summary to 4096 characters.
 
-The resolved profile, handoff, and host-derived run identities are serialized into
-the prepared task before the existing launch fingerprint is computed. A changed
-profile or candidate cannot reuse the same persisted launch payload. No new
-persistent store or schema is introduced.
-
-## Limits and trust
+## Trust boundary
 
 Handoff filtering is not a complete independence guarantee. It does not sanitize
 the caller's original task, disable shared memory, mount candidate artifacts
 read-only, or prove that another permitted tool cannot reach sibling data.
-The verifier profile name describes its intended role, not an attestation. The
-runtime and operator's existing policies must establish any stronger isolation.
 
-The population, verification, and consolidation helpers in the dependent PRs are
-experimental assessments; this spawn integration does not automatically execute
-population recommendations, attest measurement receipts, approve effects, or
-adopt a learned policy. Existing OpenClaw owners retain those responsibilities.
+The verifier profile name describes its intended role, not an attestation. Existing
+OpenClaw admission, sandbox, policy, cancellation, and approval owners remain
+authoritative.
+
+The current layer does not attest measurements, approve effects, merge code,
+publish artifacts, or adopt policy.
 
 ## Validation
 
-The native bridge regression tests exercise profile dispatch, denied admission,
-revoked execution, legacy calls, and sandbox errors with mocked execution services.
-An isolated Node test harness also exercised unchanged replay and changed-profile
-and changed-candidate rejection. These are boundary tests, not a live model or
-sandbox qualification. Full repository CI and a live native Swarm run remain
-required before claiming end-to-end readiness.
+Repository tests cover deterministic profile resolution, bounded handoff filtering,
+replay/source-revocation behavior, unchanged legacy calls, and refusal to downgrade
+a sandbox-required verifier.
+
+A real native collector transcript remains the strongest missing end-to-end proof.
