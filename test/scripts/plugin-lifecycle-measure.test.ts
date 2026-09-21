@@ -63,17 +63,30 @@ function waitForNonEmptyPath(filePath: string, timeoutMs: number): boolean {
 function waitForChildClose(
   child: ChildProcess,
   timeoutMs: number,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+): Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }> {
   return new Promise((resolve, reject) => {
+    let stderr = "";
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+    });
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error("timed out waiting for measured wrapper to exit"));
     }, timeoutMs);
     child.once("close", (code, signal) => {
       clearTimeout(timer);
-      resolve({ code, signal });
+      resolve({ code, signal, stderr });
     });
   });
+}
+
+function expectDrainedBeforeGraceDeadline(stderr: string) {
+  const termination = stderr.match(
+    /reason=(\S+) signal=SIGTERM exit_ms=([\d.]+) grace_deadline_ms=([\d.]+)/u,
+  );
+  expect(termination, stderr).not.toBeNull();
+  expect(termination?.[1]).toBe("descendants-drained");
+  expect(Number(termination?.[2])).toBeLessThan(Number(termination?.[3]));
 }
 
 describe("plugin lifecycle resource sampler", () => {
@@ -386,7 +399,7 @@ fs.readdirSync = (target, options) => {
               OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
               PID_FILE: pidFile,
             },
-            stdio: "ignore",
+            stdio: ["ignore", "ignore", "pipe"],
           },
         );
 
@@ -395,6 +408,7 @@ fs.readdirSync = (target, options) => {
         result.kill("SIGTERM");
         const close = await waitForChildClose(result, 5000);
         expect(close.signal).toBe("SIGTERM");
+        expect(close.stderr).toContain("reason=grace-elapsed signal=SIGTERM");
         expect(waitForPidExit(descendantPid, 1000)).toBe(true);
       } finally {
         if (descendantPid !== undefined && descendantPid > 0 && pidExists(descendantPid)) {
@@ -404,9 +418,9 @@ fs.readdirSync = (target, options) => {
     },
   );
 
-  it.runIf(process.platform === "linux")(
-    "exits promptly when externally terminated phases stop during grace",
-    async () => {
+  it.runIf(process.platform === "linux").each(["open", "closed"])(
+    "exits promptly when externally terminated phases stop during grace (stderr %s)",
+    async (stderr) => {
       const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const readyFile = path.join(dir, "ready.pid");
@@ -435,18 +449,20 @@ fs.readdirSync = (target, options) => {
             OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "1500",
             READY_FILE: readyFile,
           },
-          stdio: "ignore",
+          stdio: ["ignore", "ignore", "pipe"],
         },
       );
 
-      // Nested shell startup is not the latency under test; the prompt-exit clock
-      // below starts after readiness, so give startup the phase timeout budget.
       expect(waitForNonEmptyPath(readyFile, 5000)).toBe(true);
-      const started = Date.now();
+      if (stderr === "closed") {
+        result.stderr.destroy();
+      }
       result.kill("SIGTERM");
       const close = await waitForChildClose(result, 5000);
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      if (stderr === "open") {
+        expectDrainedBeforeGraceDeadline(close.stderr);
+      }
       expect(close.signal).toBe("SIGTERM");
     },
   );
@@ -476,18 +492,15 @@ fs.readdirSync = (target, options) => {
             OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "1500",
             READY_FILE: readyFile,
           },
-          stdio: "ignore",
+          stdio: ["ignore", "ignore", "pipe"],
         },
       );
 
-      // Nested shell startup is not the latency under test; the prompt-exit clock
-      // below starts after readiness, so give startup the phase timeout budget.
       expect(waitForNonEmptyPath(readyFile, 5000)).toBe(true);
-      const started = Date.now();
       result.kill("SIGTERM");
       const close = await waitForChildClose(result, 5000);
 
-      expect(Date.now() - started).toBeLessThan(1000);
+      expectDrainedBeforeGraceDeadline(close.stderr);
       expect(close.signal).toBe("SIGTERM");
     },
   );

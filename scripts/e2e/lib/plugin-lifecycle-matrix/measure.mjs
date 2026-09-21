@@ -182,6 +182,7 @@ let forwardedParentSignal = null;
 let killTimer;
 let parentSignalTimer;
 let parentSignalPollTimer;
+let parentSignalDeadline = null;
 let childGroupDrainTimer;
 // The leader can exit before descendants in its detached process group.
 // Keep the wrapper alive so timeout cleanup still owns those descendants.
@@ -274,8 +275,18 @@ function clearRuntimeTimers() {
   }
 }
 
-function rethrowParentSignal(signal) {
+function rethrowParentSignal(signal, reason) {
+  const exitedAt = performance.now();
   clearRuntimeTimers();
+  // Flush the exit decision before rethrowing a signal can discard buffered output.
+  try {
+    fs.writeSync(
+      2,
+      `plugin lifecycle termination: phase=${phase} reason=${reason} signal=${signal} exit_ms=${exitedAt} grace_deadline_ms=${parentSignalDeadline}\n`,
+    );
+  } catch {
+    // Closed stderr must not prevent propagation of the original signal.
+  }
   process.removeAllListeners(signal);
   process.kill(process.pid, signal);
   process.exit(128);
@@ -284,26 +295,27 @@ function rethrowParentSignal(signal) {
 function handleParentSignal(signal) {
   if (parentSignalInFlight) {
     terminateChildGroup("SIGKILL");
-    rethrowParentSignal(signal);
+    rethrowParentSignal(signal, "signalled");
     return;
   }
   parentSignalInFlight = true;
   if (finished) {
-    rethrowParentSignal(signal);
+    rethrowParentSignal(signal, "signalled");
     return;
   }
   finished = true;
   forwardedParentSignal = signal;
   clearRuntimeTimers();
   terminateChildGroup(signal);
+  parentSignalDeadline = performance.now() + timeoutKillGraceMs;
   parentSignalTimer = setTimeout(() => {
     terminateChildGroup("SIGKILL");
-    rethrowParentSignal(signal);
+    rethrowParentSignal(signal, "grace-elapsed");
   }, timeoutKillGraceMs);
   parentSignalPollTimer = setInterval(
     () => {
       if (!childGroupExists()) {
-        rethrowParentSignal(signal);
+        rethrowParentSignal(signal, "descendants-drained");
       }
     },
     Math.min(50, timeoutKillGraceMs),
@@ -375,7 +387,7 @@ child.on("error", (error) => {
 child.on("exit", (code, signal) => {
   if (parentSignalInFlight && forwardedParentSignal) {
     if (!childGroupExists()) {
-      rethrowParentSignal(forwardedParentSignal);
+      rethrowParentSignal(forwardedParentSignal, "descendants-drained");
     }
     return;
   }
