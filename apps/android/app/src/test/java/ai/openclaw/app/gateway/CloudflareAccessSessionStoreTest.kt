@@ -3,10 +3,12 @@ package ai.openclaw.app.gateway
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -133,36 +135,61 @@ class CloudflareAccessSessionStoreTest {
       }
     }
 
-  @Test fun differentApplicationBeforeDispatchDoesNotStartOrRetainTheOldTransfer() =
+  @Test fun queuedApplicationReplacementRetiresTheOriginalTransferWithoutClearingItsSuccessor() =
     runTest {
       val replacement = application.copy(audience = "other-audience")
-      val session = sessionFor(replacement)
-      val grant = CompletableDeferred<CloudflareAccessSession>()
+      val firstSession = CloudflareAccessTestTokens.session()
+      val secondSession = sessionFor(replacement)
+      val firstGrant = CompletableDeferred<CloudflareAccessSession>()
+      val secondGrant = CompletableDeferred<CloudflareAccessSession>()
+      val firstEntered = CompletableDeferred<Unit>()
+      val secondEntered = CompletableDeferred<Unit>()
       val applications = mutableListOf<CloudflareAccessApplication>()
       val storage = Storage()
+      val owner = SupervisorJob()
+      val scope = CoroutineScope(owner + StandardTestDispatcher(testScheduler))
       val store =
-        CloudflareAccessSessionStore(backgroundScope, storage.persistence, authenticate = { selected, _ ->
+        CloudflareAccessSessionStore(scope, storage.persistence, authenticate = { selected, _ ->
           applications += selected
-          grant.await()
+          if (selected == application) {
+            firstEntered.complete(Unit)
+            withContext(NonCancellable) { firstGrant.await() }
+          } else {
+            assertEquals(replacement, selected)
+            secondEntered.complete(Unit)
+            secondGrant.await()
+          }
         }, retireTransports = { storage.events += "retire" })
       val first = store.signIn(application) {}
-      val second = store.signIn(replacement) {}
+      // The original task already queues for the Mutex. A suspending replacement
+      // call must wait behind it, so record that queue before allowing either to run.
+      val acquisition = async(start = CoroutineStart.UNDISPATCHED) { store.signIn(replacement) {} }
       try {
+        assertFalse(acquisition.isCompleted)
+        assertFalse(firstEntered.isCompleted)
+        assertFalse(secondEntered.isCompleted)
+        assertTrue(applications.isEmpty())
+        firstEntered.await()
+        val second = acquisition.await()
+        secondEntered.await()
         assertNotSame(first, second)
         assertTrue(first.isCancelled)
-        assertTrue(applications.isEmpty())
-        runCurrent()
-        assertTrue(runCatching { first.await() }.exceptionOrNull() is CancellationException)
-        assertEquals(listOf(replacement), applications)
+        assertEquals(listOf(application, replacement), applications)
         assertSame(second, store.signIn(replacement.copy()) {})
-        grant.complete(session)
+        secondGrant.complete(secondSession)
         val snapshot = second.await()
+        assertEquals(replacement, snapshot.session.application)
+        firstGrant.complete(firstSession)
+        assertTrue(runCatching { first.await() }.exceptionOrNull() is CancellationException)
         assertSame(snapshot, store.snapshot(application.origin))
+        assertEquals(CloudflareAccessSessionStore.State.Authenticated, store.states.value[application.origin])
         assertEquals(listOf("retire", "delete", "save"), storage.events)
+        assertEquals(secondSession.encode(), storage.values[application.origin])
       } finally {
-        grant.complete(session)
-        first.cancelAndJoin()
-        second.cancelAndJoin()
+        firstGrant.complete(firstSession)
+        secondGrant.complete(secondSession)
+        acquisition.cancelAndJoin()
+        owner.cancelAndJoin()
       }
     }
 
