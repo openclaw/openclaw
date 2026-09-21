@@ -58,6 +58,7 @@ try {
     let frames = 0;
     let wraps = 0;
     let entries = 0;
+    // oxlint-disable-next-line typescript/unbound-method -- Interception forwards the original receiver with Reflect.apply and restores this exact method.
     const run = AsyncLocalStorage.prototype.run;
     const ProxyConstructor = Proxy;
     const enter = Reflect.get(PluginInstance.prototype, "enter");
