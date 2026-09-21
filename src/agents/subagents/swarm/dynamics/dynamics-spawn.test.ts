@@ -7,7 +7,12 @@ const base = {
   targetReplicaId: "child",
 };
 const verifier = {
-  profile: "independent-verifier",
+  boundary: "artifact-only",
+  requirements: {
+    sandbox: "require",
+    candidateDigest: "required",
+    artifactRefs: "required",
+  },
   handoff: {
     candidateDigest: "candidate:a",
     artifactRefs: ["artifact:a"],
@@ -16,12 +21,12 @@ const verifier = {
   },
 };
 
-describe("native dynamics spawn preparation", () => {
+describe("native dynamics launch contract", () => {
   it("leaves calls without dynamics unchanged", () => {
     expect(prepareDynamicsSpawn({ ...base, dynamics: undefined })).toEqual({ task: base.task });
   });
 
-  it("filters the explicit verifier handoff and requires the existing sandbox owner", () => {
+  it("filters an artifact-only handoff and requests the existing sandbox owner", () => {
     const result = prepareDynamicsSpawn({ ...base, dynamics: verifier });
     expect(result.context).toBe("isolated");
     expect(result.sandbox).toBe("require");
@@ -29,20 +34,25 @@ describe("native dynamics spawn preparation", () => {
     expect(result.task).toContain("candidate:a");
     expect(result.task).not.toContain("builder rationale");
     expect(result.task).not.toContain("other-reviewer-conclusion");
-    expect(result.task).toContain("not tool permissions or evidence of independence");
+    expect(result.task).toContain("grants no authority");
   });
 
-  it("binds resolved profile and host-owned lineage into reproducible task bytes", () => {
-    const first = prepareDynamicsSpawn({ ...base, dynamics: { profile: "explorer" } });
-    expect(first).toEqual(prepareDynamicsSpawn({ ...base, dynamics: { profile: "explorer" } }));
+  it("binds the generic contract and host-owned lineage into reproducible task bytes", () => {
+    const first = prepareDynamicsSpawn({
+      ...base,
+      dynamics: { boundary: "isolated" },
+    });
+    expect(first).toEqual(
+      prepareDynamicsSpawn({ ...base, dynamics: { boundary: "isolated" } }),
+    );
     expect(first.task).not.toBe(
-      prepareDynamicsSpawn({ ...base, dynamics: { profile: "builder" } }).task,
+      prepareDynamicsSpawn({ ...base, dynamics: { boundary: "summary-only" } }).task,
     );
     expect(first.task).not.toBe(
       prepareDynamicsSpawn({
         ...base,
         targetReplicaId: "replacement",
-        dynamics: { profile: "explorer" },
+        dynamics: { boundary: "isolated" },
       }).task,
     );
   });
@@ -50,25 +60,49 @@ describe("native dynamics spawn preparation", () => {
   it.each([
     null,
     [],
-    { profile: "constructor" },
-    { profile: "explorer", authority: "admin" },
-    { profile: "independent-verifier" },
-  ])("rejects invalid or misleading configuration %j", (dynamics) => {
+    { boundary: "constructor" },
+    { boundary: "isolated", authority: "admin" },
+    {
+      boundary: "artifact-only",
+      requirements: { artifactRefs: "required" },
+    },
+  ])("rejects invalid or incomplete configuration %j", (dynamics) => {
     expect(() => prepareDynamicsSpawn({ ...base, dynamics })).toThrow();
+  });
+
+  it("rejects requirements incompatible with the selected handoff boundary", () => {
+    expect(() =>
+      prepareDynamicsSpawn({
+        ...base,
+        dynamics: {
+          boundary: "summary-only",
+          requirements: { candidateDigest: "required" },
+        },
+      }),
+    ).toThrow("drops candidate identity");
+    expect(() =>
+      prepareDynamicsSpawn({
+        ...base,
+        dynamics: {
+          boundary: "evidence-only",
+          requirements: { artifactRefs: "required" },
+        },
+      }),
+    ).toThrow("drops artifacts");
   });
 
   it("bounds handoffs and snapshots their content before returning", () => {
     expect(() =>
       prepareDynamicsSpawn({
         ...base,
-        dynamics: { profile: "builder", handoff: { summary: "x".repeat(4097) } },
+        dynamics: { boundary: "summary-only", handoff: { summary: "x".repeat(4097) } },
       }),
     ).toThrow();
     expect(() =>
       prepareDynamicsSpawn({
         ...base,
         dynamics: {
-          profile: "critic",
+          boundary: "evidence-only",
           handoff: { evidenceRefs: Array(33).fill("ref") },
         },
       }),
