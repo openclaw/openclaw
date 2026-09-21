@@ -1,6 +1,9 @@
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
-import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
@@ -60,6 +63,7 @@ suite.define(() => {
             methodResponses: { "sessions.list": list([home, mentioned]) },
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
+          await waitForControlUiRoute(page, { routeId: "chat" });
           const target = page.locator('[data-session-key="' + sessionKey + '"]');
           await expectBrowser(target).toBeVisible();
           await target.hover();
@@ -96,6 +100,7 @@ suite.define(() => {
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
+        await waitForControlUiRoute(page, { routeId: "chat" });
         const target = page.locator('[data-session-key="' + sessionKey + '"]');
         await expectBrowser(target).toBeVisible();
         const chooseFilter = async (label: string) => {
@@ -158,6 +163,7 @@ suite.define(() => {
         await chooseFilter("Involving me");
         await expectBrowser(target).toBeVisible();
         await page.reload();
+        await waitForControlUiRoute(page, { routeId: "chat" });
         await expectBrowser(target).toBeVisible();
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       },
