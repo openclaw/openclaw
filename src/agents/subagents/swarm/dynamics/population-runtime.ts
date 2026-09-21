@@ -1,7 +1,7 @@
 import { assessPopulation, buildPopulationSnapshot } from "./population-controller.js";
 import type { PopulationDecision } from "./population-types.js";
 
-export type HostCollectorTerminalStatus = "done" | "failed" | "killed" | "timeout" | null;
+type HostCollectorTerminalStatus = "done" | "failed" | "killed" | "timeout" | null;
 
 export type HostCollectorDynamicsRecord = {
   runId: string;
