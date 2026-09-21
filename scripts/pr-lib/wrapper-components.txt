@@ -706,6 +706,7 @@ src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
 src/infra/sqlite-schema-sql.ts
 src/infra/sqlite-snapshot-policy.ts
+src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-snapshot-source.ts
 src/infra/sqlite-snapshot-staging-owner.ts
