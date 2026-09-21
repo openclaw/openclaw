@@ -5,7 +5,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import { onSqliteWalCheckpoint } from "../../infra/sqlite-wal-checkpoint.js";
+import * as nodeSqlite from "../../infra/node-sqlite.js";
+import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
+import * as walCheckpoint from "../../infra/sqlite-wal-checkpoint.js";
 import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -31,6 +33,7 @@ import {
 
 const hooks = vi.hoisted(() => ({
   beforeAuthorization: undefined as (() => void) | undefined,
+  afterAuthorization: undefined as (() => void) | undefined,
   onWorker: undefined as ((worker: SqliteReclamationWorker) => void) | undefined,
 }));
 vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal) => {
@@ -50,7 +53,11 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
               ...params,
               onCommitRequest: () => {
                 hooks.beforeAuthorization?.();
-                return params.onCommitRequest();
+                try {
+                  return params.onCommitRequest();
+                } finally {
+                  hooks.afterAuthorization?.();
+                }
               },
             }),
           );
@@ -68,6 +75,7 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   hooks.beforeAuthorization = undefined;
+  hooks.afterAuthorization = undefined;
   hooks.onWorker = undefined;
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
@@ -91,6 +99,7 @@ test.each(["reclaim", "worker-close"] as const)(
   "reclaims pages off-thread and releases budget deferral through %s",
   async (recovery) => {
     const { database, databaseOptions } = createFixture();
+    const databasePathKey = sqliteReaderDatabasePathKey(database.path);
     database.db.exec(`INSERT INTO cache_entries(scope, key, blob, updated_at)
     VALUES ('wal-proof', 'pages', zeroblob(4194304), 1);
     DELETE FROM cache_entries WHERE scope = 'wal-proof';`);
@@ -107,6 +116,51 @@ test.each(["reclaim", "worker-close"] as const)(
       maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
     };
     const budget = getBudgetKickState(params.storePath, params.maintenance);
+    let capturingProbe = false;
+    let parentReleaseNs: bigint | undefined;
+    hooks.beforeAuthorization = () => {
+      capturingProbe = true;
+    };
+    hooks.afterAuthorization = () => {
+      capturingProbe = false;
+    };
+    const open = nodeSqlite.openNodeSqliteDatabase;
+    const observeProbe = vi
+      .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+      .mockImplementation((...args) => {
+        const opened = open(...args);
+        if (capturingProbe && sqliteReaderDatabasePathKey(args[0]) === databasePathKey) {
+          const close = opened.close.bind(opened);
+          vi.spyOn(opened, "close").mockImplementation(() => {
+            close();
+            parentReleaseNs = process.hrtime.bigint();
+          });
+        }
+        return opened;
+      });
+    let completedAt: number | undefined;
+    const relayedCompletions: number[] = [];
+    const publish = walCheckpoint.publishSqliteWalCheckpointObservation;
+    const relay = vi
+      .spyOn(walCheckpoint, "publishSqliteWalCheckpointObservation")
+      .mockImplementation((databasePath, snapshot) => {
+        if (
+          sqliteReaderDatabasePathKey(databasePath) !== databasePathKey ||
+          snapshot.health.state !== "complete" ||
+          completedAt === undefined
+        ) {
+          return publish(databasePath, snapshot);
+        }
+        relayedCompletions.push(completedAt);
+        return publish(databasePath, {
+          ...snapshot,
+          health: {
+            ...snapshot.health,
+            observedAtMs: completedAt,
+            lastCompletedAtMs: completedAt,
+          },
+        });
+      });
     let retainedWorker: SqliteReclamationWorker | undefined;
     hooks.onWorker = (worker) => {
       retainedWorker = worker;
@@ -133,16 +187,21 @@ test.each(["reclaim", "worker-close"] as const)(
             const blocked = await reclaim();
             expect(blocked).toMatchObject({
               checkpointCompleted: false,
-              checkpoint: { state: "blocked" },
+              checkpoint: { health: { state: "blocked" } },
               checkpointIncomplete: 1,
               vacuumPasses: 0,
             });
             expect(freePages()).toBe(original);
             deferPhysicalBudgetForCheckpoint(params, database.path, blocked.checkpoint);
+            assert(blocked.checkpoint);
+            completedAt = blocked.checkpoint.health.observedAtMs - 1;
             if (recovery === "reclaim") {
               reader.exec("ROLLBACK");
               const completed = await reclaim(7);
               expect(completed.vacuumPagesRequested).toBe(7);
+              assert(parentReleaseNs !== undefined);
+              assert(completed.checkpoint);
+              expect(completed.checkpoint.observedAtNs).toBeGreaterThanOrEqual(parentReleaseNs);
               expect(original - freePages()).toBeGreaterThan(0);
               expect(original - freePages()).toBeLessThanOrEqual(7);
             }
@@ -161,8 +220,8 @@ test.each(["reclaim", "worker-close"] as const)(
         expect(database.db.isOpen).toBe(false);
         expect(budget.checkpointBlocked).toBeDefined();
         const observed: string[] = [];
-        const unsubscribe = onSqliteWalCheckpoint(({ databasePath, health }) => {
-          if (databasePath === database.path) {
+        const unsubscribe = walCheckpoint.onSqliteWalCheckpoint(({ databasePath, health }) => {
+          if (databasePath === databasePathKey) {
             observed.push(health.state);
           }
         });
@@ -175,14 +234,17 @@ test.each(["reclaim", "worker-close"] as const)(
         } finally {
           unsubscribe();
         }
-        expect(budget.checkpointBlocked).toBeUndefined();
       }
+      expect(relayedCompletions.length).toBeGreaterThan(0);
+      expect(budget.checkpointBlocked).toBeUndefined();
     } finally {
       if (reader.isTransaction) {
         reader.exec("ROLLBACK");
       }
       reader.close();
       parentReclaim.mockRestore();
+      relay.mockRestore();
+      observeProbe.mockRestore();
     }
   },
 );

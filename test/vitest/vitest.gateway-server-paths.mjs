@@ -46,6 +46,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/link-understanding.product.test.ts",
   "src/gateway/local-request-context.session-tools.test.ts",
   "src/gateway/local-request-context.test.ts",
+  "src/gateway/managed-image-attachments.authority.test.ts",
   "src/gateway/managed-image-attachments.sqlite-visibility.test.ts",
   "src/gateway/managed-image-attachments.test.ts",
   "src/gateway/managed-image-record-store.test.ts",

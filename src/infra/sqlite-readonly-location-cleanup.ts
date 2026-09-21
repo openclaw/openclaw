@@ -3,19 +3,21 @@ import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { getChildLogger } from "../logging/logger.js";
-import { walkDirectorySync } from "./fs-safe.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
-import { SQLITE_STAGING_TOKEN_FILES as SQLITE_SNAPSHOT_CONTROL_FILES } from "./sqlite-staging-token.js";
-
-export { SQLITE_SNAPSHOT_CONTROL_FILES };
+import {
+  beginSqliteSnapshotRetirement,
+  drainPendingSqliteSnapshotTokens,
+} from "./sqlite-snapshot-retirement.js";
+import { SQLITE_STAGING_TOKEN_FILES, type SqliteStagingToken } from "./sqlite-staging-token.js";
 
 export class SqliteSnapshotCleanupError extends Error {}
 
 type SnapshotDirectory = {
-  release?: (retire: boolean) => void;
+  release?: SqliteStagingToken;
   releaseAsync?: () => Promise<void>;
   retiring?: Promise<void>;
   retirementStarted?: boolean;
+  retired?: boolean;
   readers: Set<symbol>;
 };
 const pendingTempDirectoryCleanup = new Map<string, SnapshotDirectory>();
@@ -73,7 +75,7 @@ export function retainSnapshotWork<T>(work: Promise<T>, stop: () => void = () =>
 
 export function registerSnapshotTempDirectory(
   directory: string,
-  release?: (retire: boolean) => void,
+  release?: SqliteStagingToken,
 ): void {
   const owner = snapshotDirectory(directory);
   owner.release = release ?? owner.release;
@@ -169,37 +171,35 @@ function assertSnapshotReadersRetired(owner: SnapshotDirectory | undefined): voi
   }
 }
 
-function retireSnapshotTempDirectory(directory: string): void {
+function prepareSnapshotRetirement(directory: string) {
+  drainPendingSqliteSnapshotTokens(directory);
   const owner = pendingTempDirectoryCleanup.get(directory);
   assertSnapshotReadersRetired(owner);
   if (owner?.releaseAsync) {
     throw new SqliteSnapshotCleanupError("SQLite snapshot requires asynchronous cleanup");
   }
-  owner?.release?.(true);
-  if (owner) {
-    owner.release = undefined;
+  if (
+    owner?.retired ||
+    (!owner?.release && !fs.existsSync(path.join(directory, SQLITE_STAGING_TOKEN_FILES[0])))
+  ) {
+    return undefined;
   }
+  if (owner) {
+    owner.retirementStarted = true;
+  }
+  return beginSqliteSnapshotRetirement(directory, { token: owner?.release });
 }
 
-function prepareSnapshotRemoval(directory: string): string[] {
-  retireSnapshotTempDirectory(directory);
-  if (!fs.existsSync(path.join(directory, SQLITE_SNAPSHOT_CONTROL_FILES[0]))) {
-    return [directory];
+/** Delete in the token process: owner death must stop unlinking when its locks disappear. */
+export function retireSqliteSnapshotPayload(
+  retirement: ReturnType<typeof beginSqliteSnapshotRetirement>,
+): void {
+  for (const file of retirement.payload) {
+    fs.rmSync(file, tempDirectoryRemovalOptions);
   }
-  // Keep every token until all copied data is gone. A partial recursive rm must
-  // not leave a large modern snapshot whose lifetime can no longer be verified.
-  // Recursive readdir follows directory symlinks, including captured plugins' host links.
-  const scan = walkDirectorySync(directory, {
-    symlinks: "include",
-    include: (entry) =>
-      entry.kind !== "directory" &&
-      !SQLITE_SNAPSHOT_CONTROL_FILES.some((control) => control === entry.name),
-  });
-  const [failure] = scan.failedDirs;
-  if (failure) {
-    throw failure.error;
-  }
-  return scan.entries.map((entry) => entry.path).concat(directory);
+  // Free copied bytes before SQLite allocates its retirement page/journal.
+  // Controls stay intact until every marker commits and native handle closes.
+  retirement.retire();
 }
 
 export function removeTempDirectory(
@@ -207,8 +207,17 @@ export function removeTempDirectory(
   onFailure?: (error: unknown) => void,
 ): boolean {
   try {
-    for (const file of prepareSnapshotRemoval(tempDir)) {
-      fs.rmSync(file, tempDirectoryRemovalOptions);
+    const retirement = prepareSnapshotRetirement(tempDir);
+    try {
+      if (retirement) {
+        retireSqliteSnapshotPayload(retirement);
+        const owner = snapshotDirectory(tempDir);
+        owner.release = undefined;
+        owner.retired = true;
+      }
+      fs.rmSync(tempDir, tempDirectoryRemovalOptions);
+    } finally {
+      retirement?.release();
     }
     pendingTempDirectoryCleanup.delete(tempDir);
     return true;
@@ -232,13 +241,26 @@ export async function removeTempDirectoryAsync(
         .releaseAsync()
         .then(() => {
           owner.releaseAsync = undefined;
+          owner.retired = true;
         })
         .finally(() => {
           owner.retiring = undefined;
         }));
     }
-    for (const file of prepareSnapshotRemoval(tempDir)) {
-      await retainSnapshotWork(fs.promises.rm(file, tempDirectoryRemovalOptions));
+    const retirement = prepareSnapshotRetirement(tempDir);
+    try {
+      for (const file of retirement?.payload ?? []) {
+        await retainSnapshotWork(fs.promises.rm(file, tempDirectoryRemovalOptions));
+      }
+      if (retirement) {
+        retirement.retire();
+        const current = snapshotDirectory(tempDir);
+        current.release = undefined;
+        current.retired = true;
+      }
+      await retainSnapshotWork(fs.promises.rm(tempDir, tempDirectoryRemovalOptions));
+    } finally {
+      retirement?.release();
     }
     pendingTempDirectoryCleanup.delete(tempDir);
     return true;

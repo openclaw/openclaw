@@ -43,6 +43,7 @@ export type ShardTargetPlan = { kind: "target"; name: string; target: string };
 type ShardGroupConfig = {
   configs: string[];
   fallbackMaxWorkers?: number;
+  minTotalMemoryBytes?: number;
   env?: Record<string, unknown> | null;
   includePatterns?: string[] | null;
   shard_name?: string;
@@ -487,18 +488,24 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
     );
   }
-  const hasMeasuredHeadroom =
+  const measuredHost =
     hostResources !== null &&
     !isConstrainedCiCheckHost(hostResources) &&
     concurrency === 1 &&
     baseEnv.RUNNER_ENVIRONMENT === "self-hosted" &&
-    baseEnv.FROZEN_TARGET !== "true";
+    baseEnv.FROZEN_TARGET !== "true"
+      ? hostResources
+      : null;
   const admittedPlans = plans.map((entry): ShardPlan => {
     if (entry.kind !== "group" || entry.plan.fallbackMaxWorkers === undefined) {
       return entry;
     }
     const fallback = parsePositiveInt(entry.plan.fallbackMaxWorkers, "Fallback worker limit");
-    if (hasMeasuredHeadroom) {
+    const minTotalMemoryBytes =
+      entry.plan.minTotalMemoryBytes === undefined
+        ? 0
+        : parsePositiveInt(entry.plan.minTotalMemoryBytes, "Worker memory floor");
+    if (measuredHost && measuredHost.totalMemoryBytes >= minTotalMemoryBytes) {
       return entry;
     }
     return {

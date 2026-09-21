@@ -327,7 +327,9 @@ it("stops idle reclamation at the next directory boundary on shutdown", async ()
   let shutdown: Promise<void> | undefined;
   try {
     const entered = await f.entered;
-    const untouched = f.roots.filter((root) => fs.existsSync(root));
+    // Payload removal precedes the rename, so identify the fenced root directly.
+    const untouched = f.roots.filter((root) => root !== entered.claimedRoot && fs.existsSync(root));
+    expect(f.roots).toContain(entered.claimedRoot);
     expect(untouched).toHaveLength(f.roots.length - 1);
     shutdown = waitForSignalExitBarriers();
     await vi.waitFor(() => expect(f.worker().child.stdin?.writableEnded).toBe(true));

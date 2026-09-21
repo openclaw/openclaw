@@ -128,6 +128,7 @@ const PUBLIC_CODES = new Set<string>([
   "post-update-plugins",
   "post-plugin-doctor-execution-failed",
   "post-plugin-doctor-invalid-config",
+  "post-plugin-config-validation-execution-failed",
   "post-plugin-update-readiness-execution-failed",
   "post-plugin-update-readiness-failed",
   "invalid-config",

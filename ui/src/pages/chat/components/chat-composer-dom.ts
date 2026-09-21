@@ -1,4 +1,5 @@
 import { captureChatSessionScrollPosition } from "../scroll.ts";
+import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "a[href]",
@@ -171,8 +172,12 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
   updateTextareaOverflow(el);
   // Once capped, the textarea can perturb the sibling transcript without
   // resizing its viewport, so ResizeObserver has no correction to apply.
-  if (thread && preserveBottomAnchor) {
-    thread.scrollTop = thread.scrollHeight;
+  if (thread) {
+    if (preserveBottomAnchor) {
+      thread.scrollTop = thread.scrollHeight;
+    }
+    // A following composer commit can hide this viewport from browser observers.
+    publishTranscriptScroll(thread, { type: "resize" });
   }
 }
 

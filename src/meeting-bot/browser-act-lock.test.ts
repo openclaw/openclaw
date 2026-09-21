@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runMeetingBrowserAct } from "./browser-act-lock.js";
 
 describe("meeting browser act lock", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
   it("serializes async evaluations for one browser target", async () => {
     let active = 0;
     let maxActive = 0;
@@ -10,6 +14,7 @@ describe("meeting browser act lock", () => {
       releaseFirst = resolve;
     });
     const events: string[] = [];
+    const entered = createDeferred();
     const run = async (name: string, gate?: Promise<void>) =>
       await runMeetingBrowserAct({
         deadline: Date.now() + 10_000,
@@ -18,6 +23,7 @@ describe("meeting browser act lock", () => {
           active += 1;
           maxActive = Math.max(maxActive, active);
           events.push(`start-${name}`);
+          entered.resolve();
           await gate;
           events.push(`end-${name}`);
           active -= 1;
@@ -26,10 +32,13 @@ describe("meeting browser act lock", () => {
 
     const first = run("first", firstGate);
     const second = run("second");
-    await Promise.resolve();
-    expect(events).toEqual(["start-first"]);
-    releaseFirst?.();
-    await Promise.all([first, second]);
+    try {
+      await Promise.race([entered.promise, first]);
+      expect(events).toEqual(["start-first"]);
+    } finally {
+      releaseFirst?.();
+      await Promise.all([first, second]);
+    }
 
     expect(maxActive).toBe(1);
     expect(events).toEqual(["start-first", "end-first", "start-second", "end-second"]);
@@ -56,7 +65,6 @@ describe("meeting browser act lock", () => {
   });
 
   it("does not start an evaluation after its queue deadline", async () => {
-    vi.useFakeTimers();
     let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
@@ -91,11 +99,9 @@ describe("meeting browser act lock", () => {
     await first;
     await expect(third).resolves.toBe("recovered");
     expect(expiredStarted).toBe(false);
-    vi.useRealTimers();
   });
 
   it("does not time out after the evaluation acquires the target", async () => {
-    vi.useFakeTimers();
     let release: (() => void) | undefined;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -114,6 +120,5 @@ describe("meeting browser act lock", () => {
     expect(settled).toBe(false);
     release?.();
     await expect(running).resolves.toBeUndefined();
-    vi.useRealTimers();
   });
 });

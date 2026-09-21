@@ -369,7 +369,9 @@ it("reads externally created state after an absent read without allocating a wor
   task.result.resolve(emptyReply);
   expect(await executeExistingOpenClawStateRead(options, command)).toEqual(emptyReply);
   expect(mock.selectSqlite).toHaveBeenCalledOnce();
-  expect(task.close).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(task.close).toHaveBeenCalledExactlyOnceWith(
+    process.versions.bun ? { retire: true } : undefined,
+  );
   expect(mock.closePool).not.toHaveBeenCalled();
 });
 
@@ -550,7 +552,9 @@ it("releases one completed read without closing the shared pool or aborting anot
   const siblingOptions = await sibling.submitted;
   first.result.resolve(emptyReply);
   expect(await firstRead).toEqual(emptyReply);
-  expect(first.close).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(first.close).toHaveBeenCalledExactlyOnceWith(
+    process.versions.bun ? { retire: true } : undefined,
+  );
   expect(sibling.close).not.toHaveBeenCalled();
   expect(siblingOptions.signal?.aborted).toBe(false);
   expect(mock.closePool).not.toHaveBeenCalled();
@@ -558,7 +562,9 @@ it("releases one completed read without closing the shared pool or aborting anot
 
   sibling.result.resolve(emptyReply);
   expect(await siblingRead).toEqual(emptyReply);
-  expect(sibling.close).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(sibling.close).toHaveBeenCalledExactlyOnceWith(
+    process.versions.bun ? { retire: true } : undefined,
+  );
   await closeOpenClawStateDatabaseAsync();
   expect(mock.closePool).toHaveBeenCalledOnce();
 });

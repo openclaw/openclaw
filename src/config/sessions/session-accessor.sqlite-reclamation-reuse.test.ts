@@ -16,6 +16,7 @@ import { runGatewayConversationList } from "../../gateway/conversation-list.js";
 import { runGatewayConversationSend } from "../../gateway/conversation-send.js";
 import { completeDurableDelivery } from "../../infra/outbound/delivery-completion.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -53,8 +54,6 @@ import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
   markConversationDeliveryQueued,
-  markConversationDeliverySent,
-  markConversationDeliverySuppressed,
 } from "./conversation-delivery-store.js";
 import { listConversations, registerConversationAddresses } from "./conversation-registry.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
@@ -269,43 +268,36 @@ test.each(["directory discovery", "Gateway send", "durable completion"] as const
         );
       }
       if (operation === "Gateway send") {
-        return runGatewayConversationSend(
-          {
-            config,
-            agentId: "main",
-            senderIsOwner: true,
-            operationId,
-            conversationRef: conversation.conversationRef,
-            message: "synthetic message",
-          },
-          {
-            beginOperation: beginConversationDeliveryOperation,
-            getOperation: getConversationDeliveryOperation,
-            markSent: markConversationDeliverySent,
-            markSuppressed: markConversationDeliverySuppressed,
-            resolveConversation: () => conversation,
-            runMessageAction: async (input): Promise<MessageActionResult> => {
-              await queueConversationDeliveryForTest(input, "queue-admission");
-              return {
-                kind: "send",
+        vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation(
+          async (input): Promise<MessageActionResult> => {
+            await queueConversationDeliveryForTest(input, "queue-admission");
+            return {
+              kind: "send",
+              channel: "reef",
+              action: "send",
+              to: conversation.target,
+              handledBy: "core",
+              payload: {},
+              dryRun: false,
+              sendResult: {
                 channel: "reef",
-                action: "send",
                 to: conversation.target,
-                handledBy: "core",
-                payload: {},
-                dryRun: false,
-                sendResult: {
-                  channel: "reef",
-                  to: conversation.target,
-                  via: "direct",
-                  mediaUrl: null,
-                  result: { messageId: "outbound-admission" },
-                  deliveryStatus: "sent",
-                },
-              };
-            },
+                via: "direct",
+                mediaUrl: null,
+                result: { messageId: "outbound-admission" },
+                deliveryStatus: "sent",
+              },
+            };
           },
         );
+        return runGatewayConversationSend({
+          config,
+          agentId: "main",
+          senderIsOwner: true,
+          operationId,
+          conversationRef: conversation.conversationRef,
+          message: "synthetic message",
+        });
       }
       return completeDurableDelivery(
         { kind: "conversation", ...scope, operationId },
@@ -807,6 +799,20 @@ test("joins a crashed reused Worker, releases its exact lease, and preserves the
 
 test("retains a crashed Worker's mismatched lease and retries only its restored receipt", async () => {
   const fixture = createFixture();
+  let closeRetained: (() => Promise<void>) | undefined;
+  const withWorker = reclamationWorker.withSqliteReclamationWorker;
+  vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
+    (options, claim, run, assertCurrent) =>
+      withWorker(
+        options,
+        claim,
+        async (worker) => {
+          closeRetained = worker.close.bind(worker);
+          return run(worker);
+        },
+        assertCurrent,
+      ),
+  );
   const received: { receipt?: OpenClawAgentDatabaseWorkerLeaseReceipt } = {};
   const spawned = observeReclamationWorkers((worker) => {
     worker.on("message", (message: reclamationWorker.SqliteReclamationWorkerMessage) => {
@@ -817,8 +823,9 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
   });
   await runSqliteSessionReclamation({ forceInProcess: false, plan: fixture.plans[0]! });
   const retainedReceipt = received.receipt;
-  if (!retainedReceipt) {
-    throw new Error("Expected the real Worker's admitted lease receipt");
+  const retireWorker = closeRetained;
+  if (!retainedReceipt || !retireWorker) {
+    throw new Error("Expected the real Worker's admitted lease receipt and retirement owner");
   }
   const child = spawned[0]!;
   await child.terminate();
@@ -852,7 +859,24 @@ test("retains a crashed Worker's mismatched lease and retries only its restored 
     state
       .prepare("UPDATE agent_database_leases SET owner_pid = ? WHERE lease_id = ?")
       .run(retainedReceipt.ownerPid, retainedReceipt.leaseId);
-    await closeOpenClawAgentDatabaseByPathAsync(fixture.database.path);
+    try {
+      // A live snapshot can still own this connection during native Worker retirement.
+      const hostWrites = vi.spyOn(state, "exec").mockImplementation(() => {
+        throw new Error("Reclamation cleanup accessed the live snapshot connection");
+      });
+      try {
+        await retireWorker();
+        expect(hostWrites).not.toHaveBeenCalled();
+      } finally {
+        hostWrites.mockRestore();
+      }
+      expect(readLeases()).toEqual(
+        before.filter((row) => row.lease_id !== retainedReceipt.leaseId),
+      );
+      expect(fixture.database.db.isOpen).toBe(true);
+    } finally {
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.database.path);
+    }
   }
   expect(readLeases()).toEqual(before.filter((row) => row.path === kept.path));
   expect(kept.db.isOpen).toBe(true);

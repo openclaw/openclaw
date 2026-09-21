@@ -361,6 +361,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   The canonical shard executor admits two CI children only with at least eight
   available CPUs and 24 GiB actual memory; otherwise it admits one. Inner project
   parallelism stays one and each overlapping child keeps two Vitest workers.
+  The measured Gateway server-isolated/database-worker family uses at most eight
+  workers only in a serial, non-frozen self-hosted job with at least eight actual
+  CPUs and 28 GiB memory. Its 20.70 GiB observed aggregate RSS leaves the existing
+  25% reserve at that floor. Preserve its two-worker fallback, other groups' pins,
+  hosted planning, complete inventory, and old timing generations until refit.
   The primary GitHub profile remains serial at 210s. Failed-job-only hybrid
   retries retain the original wider matrix on hosted Ubuntu, clamp to one child,
   and keep two workers per child; they can exceed the eight-minute normal-run

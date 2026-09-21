@@ -17,7 +17,7 @@ import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import {
-  disconnectAllSharedGatewayAuthClients,
+  disconnectStaleSharedGatewayAuthClients,
   enforceSharedGatewaySessionGenerationForConfigWrite,
 } from "./server-shared-auth-generation.js";
 import { recordClientPresenceActivity, refreshClientPresence } from "./server/client-presence.js";
@@ -471,16 +471,11 @@ export function createGatewayRequestContext(
         if (opts?.role && gatewayClient.connect.role !== opts.role) {
           continue;
         }
-        // Mark before closing so any RPCs already pipelined in the WS buffer
-        // are rejected at the per-request dispatch check, regardless of
-        // whether socket.close() takes effect synchronously.
-        gatewayClient.invalidated = true;
-        gatewayClient.invalidatedReason ??= "device-removed";
-        try {
-          gatewayClient.socket.close(4001, "device removed");
-        } catch {
-          /* ignore */
-        }
+        invalidateGatewayPolicyClient(gatewayClient, {
+          reason: "device-removed",
+          code: 4001,
+          message: "device removed",
+        });
       }
       disconnectDeviceTransports?.(deviceId, opts);
     },
@@ -497,7 +492,11 @@ export function createGatewayRequestContext(
       }
     },
     disconnectClientsUsingSharedGatewayAuth: () => {
-      disconnectAllSharedGatewayAuthClients(clients, sharedGatewaySessionGenerationState);
+      disconnectStaleSharedGatewayAuthClients({
+        clients,
+        expectedGeneration: null,
+        state: sharedGatewaySessionGenerationState,
+      });
     },
     enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig) => {
       enforceSharedGatewaySessionGenerationForConfigWrite({

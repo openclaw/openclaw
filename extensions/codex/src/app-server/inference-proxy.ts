@@ -2,6 +2,7 @@ import { createServer, type IncomingHttpHeaders, type IncomingMessage } from "no
 import { Writable } from "node:stream";
 import { promisify } from "node:util";
 import { zstdCompress, zstdDecompress } from "node:zlib";
+import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 import {
@@ -22,6 +23,10 @@ const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES = 1024 * 1024;
 const MAX_REQUESTS = 16;
 const MAX_WEBSOCKETS = 64;
+// One extra request batch absorbs bursts while retaining TCP room for busy replies.
+const MAX_PENDING_REQUESTS = MAX_REQUESTS;
+const REQUEST_TIMEOUT_MS = 30_000;
+const HANDSHAKE_TIMEOUT_MS = 10_000;
 const IDLE_WEBSOCKET_MS = 60_000;
 const OVERLOADED = "Codex inference relay is busy; retry on a fresh connection.";
 const OVERLOAD_HEADERS = { "content-type": "application/json", "retry-after": "1" };
@@ -66,7 +71,24 @@ export async function createCodexInferenceProxy(params: {
   // Keep the native backend suffix; Codex uses it to select Guardian/backend surfaces.
   const pathPrefix =
     "/" + generateSecureToken({ bytes: 32, redact: true }) + upstream.pathname.replace(/\/$/, "");
-  const active = new Set<AbortController>();
+  const permits = createPermitPool(MAX_REQUESTS);
+  let pendingCount = 0;
+  let pendingBytes = 0;
+  // Queue only bounded work, not whole turns: a parent may be waiting on children
+  // that need this same pool. HTTP waits before reading its body; WS frames own bytes.
+  const acquire = async (signal: AbortSignal, deadlineAtMs: number, bytes = 0) => {
+    if (pendingCount >= MAX_PENDING_REQUESTS || pendingBytes + bytes > MAX_BODY_BYTES) {
+      return null;
+    }
+    pendingCount++;
+    pendingBytes += bytes;
+    try {
+      return await permits.acquire({ signal, deadlineAtMs });
+    } finally {
+      pendingCount--;
+      pendingBytes -= bytes;
+    }
+  };
   const sockets = new Set<WebSocket>();
   const connections = new Set<() => void>();
   const idleConnections = new Set<() => void>();
@@ -128,6 +150,9 @@ export async function createCodexInferenceProxy(params: {
   };
   const server = createServer((req, res) => {
     const controller = new AbortController();
+    const signal = AbortSignal.any([lifetime.signal, controller.signal]);
+    const deadlineAtMs = Date.now() + REQUEST_TIMEOUT_MS;
+    let releasePermit: (() => void) | null = null;
     let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
     const abort = () => controller.abort();
     req.once("aborted", abort);
@@ -138,11 +163,13 @@ export async function createCodexInferenceProxy(params: {
         if (req.method !== "POST") {
           throw new Error(FAILURE);
         }
-        if (active.size >= MAX_REQUESTS) {
+        releasePermit = await acquire(signal, deadlineAtMs);
+        signal.throwIfAborted();
+        assertCurrent();
+        if (!releasePermit) {
           res.writeHead(503, { ...OVERLOAD_HEADERS, connection: "close" }).end(OVERLOAD_BODY);
           return;
         }
-        active.add(controller);
         const wire = await readProxyBody(req, MAX_BODY_BYTES);
         const encoding = req.headers["content-encoding"];
         if (encoding && encoding !== "identity" && encoding !== "zstd") {
@@ -157,15 +184,14 @@ export async function createCodexInferenceProxy(params: {
           encoding === "zstd" ? await compress(prepared.bytes) : prepared.bytes,
         );
         prepared.assertCurrent();
-        const signal = AbortSignal.any([
-          lifetime.signal,
-          controller.signal,
+        const requestSignal = AbortSignal.any([
+          signal,
           ...(prepared.signal ? [prepared.signal] : []),
         ]);
         guarded = await fetchWithSsrFGuard({
           url: target.toString(),
-          init: { method: "POST", headers: relayHeaders(req.headers), body, signal },
-          signal,
+          init: { method: "POST", headers: relayHeaders(req.headers), body, signal: requestSignal },
+          signal: requestSignal,
           beforeRequest: prepared.assertCurrent,
           requireHttps: true,
           maxRedirects: 0,
@@ -181,7 +207,7 @@ export async function createCodexInferenceProxy(params: {
         if (!guarded.response.body) {
           res.end();
         } else {
-          await guarded.response.body.pipeTo(Writable.toWeb(res), { signal });
+          await guarded.response.body.pipeTo(Writable.toWeb(res), { signal: requestSignal });
         }
       } catch {
         // Errors can contain headers, bodies, or the private URL: never log/reflect them.
@@ -191,7 +217,7 @@ export async function createCodexInferenceProxy(params: {
           res.destroy();
         }
       } finally {
-        active.delete(controller);
+        releasePermit?.();
         req.off("aborted", abort);
         res.off("close", abort);
         await guarded?.release().catch(() => undefined);
@@ -201,21 +227,28 @@ export async function createCodexInferenceProxy(params: {
   // Leave HTTP/failure-response headroom beyond the separately bounded WS pool.
   // This last-resort TCP ceiling must not be the normal inference admission limit.
   server.maxConnections = MAX_WEBSOCKETS + MAX_REQUESTS * 4;
-  server.requestTimeout = 30_000;
-  server.headersTimeout = 10_000;
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  server.headersTimeout = HANDSHAKE_TIMEOUT_MS;
   server.on("upgrade", (req, socket, head) => {
     void (async () => {
       let remote: WebSocket | undefined;
       let local: WebSocket | undefined;
       let proxyAgent: ReturnType<typeof createNodeProxyAgent>;
       const controller = new AbortController();
+      const deadlineAtMs = Date.now() + HANDSHAKE_TIMEOUT_MS;
+      let releasePermit: (() => void) | null = null;
+      let framePending = false;
       let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
       const close = () => {
         clearTimeout(idleTimer);
+        clearTimeout(handshakeTimer);
+        socket.off("end", close);
         connections.delete(close);
         idleConnections.delete(close);
         controller.abort();
-        active.delete(controller);
+        releasePermit?.();
+        releasePermit = null;
         remote?.terminate();
         local?.terminate();
         proxyAgent?.destroy();
@@ -247,14 +280,39 @@ export async function createCodexInferenceProxy(params: {
         connections.add(close);
         socket.once("close", close);
         socket.once("error", close);
+        // Raw HTTP upgrades stay half-open after FIN until ws owns the socket.
+        // Cancel pending admission before it can dial for a disconnected caller.
+        socket.once("end", close);
         const signal = AbortSignal.any([lifetime.signal, controller.signal]);
+        // Admission precedes the upstream dial. Complete the real upstream handshake
+        // before local 101 so native auth errors and negotiated headers stay intact.
+        releasePermit = await acquire(signal, deadlineAtMs);
+        signal.throwIfAborted();
+        assertCurrent();
+        if (!releasePermit) {
+          rejectWebSocketUpgrade(socket, {
+            status: 503,
+            headers: { "Retry-After": "1" },
+            body: { contentType: "application/json", text: OVERLOAD_BODY },
+          });
+          return;
+        }
+        // Queueing, DNS and the remote handshake share one native-compatible deadline.
+        handshakeTimer = setTimeout(close, Math.max(1, deadlineAtMs - Date.now()));
+        handshakeTimer.unref();
+        const assertHandshakeCurrent = () => {
+          assertCurrent();
+          signal.throwIfAborted();
+          if (Date.now() >= deadlineAtMs) {
+            throw new Error(FAILURE);
+          }
+        };
         // Trusted proxies own destination DNS; direct connections retain DNS pinning.
         proxyAgent = createNodeProxyAgent({ mode: "env", targetUrl: target.href });
         const lookup = proxyAgent
           ? undefined
           : (await resolvePinnedHostnameWithPolicy(target.hostname, { signal })).lookup;
-        assertCurrent();
-        signal.throwIfAborted();
+        assertHandshakeCurrent();
         target.protocol = "wss:";
         const headers = relayHeaders(req.headers);
         for (const key of Object.keys(headers)) {
@@ -268,7 +326,7 @@ export async function createCodexInferenceProxy(params: {
           followRedirects: false,
           perMessageDeflate: false,
           maxPayload: MAX_BODY_BYTES,
-          handshakeTimeout: 10_000,
+          handshakeTimeout: Math.max(1, deadlineAtMs - Date.now()),
         });
         sockets.add(remote);
         remote.once("upgrade", (response) => {
@@ -306,16 +364,19 @@ export async function createCodexInferenceProxy(params: {
         });
         remote.once("open", () => {
           try {
-            assertCurrent();
-            signal.throwIfAborted();
+            assertHandshakeCurrent();
             wss.handleUpgrade(req, socket, head, (accepted) => {
+              clearTimeout(handshakeTimer);
+              socket.off("end", close);
               local = accepted;
               sockets.add(accepted);
               accepted.once("error", close);
               accepted.once("close", close);
               let releaseFrame = () => {};
               const idle = () => {
-                active.delete(controller);
+                releasePermit?.();
+                releasePermit = null;
+                framePending = false;
                 idleConnections.delete(close);
                 idleConnections.add(close);
                 clearTimeout(idleTimer);
@@ -323,29 +384,23 @@ export async function createCodexInferenceProxy(params: {
                 idleTimer.unref();
               };
               idle();
-              accepted.on("message", (data, binary) => {
+              const forward = async (prepared: ReturnType<typeof prepare>) => {
                 try {
-                  if (binary) {
-                    throw new Error(FAILURE);
-                  }
-                  const prepared = prepare(rawBytes(data), true);
+                  const requestSignal = AbortSignal.any([
+                    signal,
+                    ...(prepared.signal ? [prepared.signal] : []),
+                  ]);
+                  releasePermit = await acquire(
+                    requestSignal,
+                    Date.now() + REQUEST_TIMEOUT_MS,
+                    prepared.bytes.length,
+                  );
+                  requestSignal.throwIfAborted();
                   prepared.assertCurrent();
-                  // Native serializes response.create calls on a reusable connection.
-                  if (active.has(controller)) {
-                    throw new Error(FAILURE);
-                  }
-                  if (active.size >= MAX_REQUESTS) {
+                  if (!releasePermit) {
                     accepted.send(OVERLOAD_BODY, { binary: false }, close);
                     return;
                   }
-                  clearTimeout(idleTimer);
-                  idleConnections.delete(close);
-                  active.add(controller);
-                  // A WS may serve later turns. Replace the old generation's abort listener.
-                  releaseFrame();
-                  const onAbort = () => close();
-                  prepared.signal?.addEventListener("abort", onAbort, { once: true });
-                  releaseFrame = () => prepared.signal?.removeEventListener("abort", onAbort);
                   if (
                     !remote ||
                     remote.readyState !== WebSocket.OPEN ||
@@ -358,6 +413,30 @@ export async function createCodexInferenceProxy(params: {
                       close();
                     }
                   });
+                } catch {
+                  close();
+                }
+              };
+              accepted.on("message", (data, binary) => {
+                try {
+                  if (binary) {
+                    throw new Error(FAILURE);
+                  }
+                  const prepared = prepare(rawBytes(data), true);
+                  prepared.assertCurrent();
+                  // Native serializes response.create calls on a reusable connection.
+                  if (framePending) {
+                    throw new Error(FAILURE);
+                  }
+                  framePending = true;
+                  clearTimeout(idleTimer);
+                  idleConnections.delete(close);
+                  // A WS may serve later turns. Replace the old generation's abort listener.
+                  releaseFrame();
+                  const onAbort = () => close();
+                  prepared.signal?.addEventListener("abort", onAbort, { once: true });
+                  releaseFrame = () => prepared.signal?.removeEventListener("abort", onAbort);
+                  void forward(prepared);
                 } catch {
                   close();
                 }
@@ -397,9 +476,6 @@ export async function createCodexInferenceProxy(params: {
   const close = () => {
     lifetime.abort();
     context.close();
-    for (const controller of active) {
-      controller.abort();
-    }
     for (const closeConnection of connections) {
       closeConnection();
     }

@@ -4,17 +4,26 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { resolveGatewayAuth } from "./auth.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
-import { createRequest, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
+import {
+  createRequest,
+  createResponse,
+  createTestGatewayServer,
+  dispatchRequest,
+  sendRequest,
+} from "./server-http.test-harness.js";
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import {
   createGatewayPluginRequestHandler,
@@ -215,3 +224,115 @@ describe.each(["write-default", "trusted-operator"] as const)(
     });
   },
 );
+
+it("retires prepared plugin effects when role or proxy policy changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const email = "policy-change@example.test";
+    const profile = ensureProfileForEmail(email);
+    const initial: OpenClawConfig = {
+      gateway: {
+        trustedProxies: [proxyAddress],
+        auth: proxyAuth,
+        roles: {
+          default: "writer",
+          definitions: {
+            writer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.write"] },
+            reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+          },
+        },
+      },
+    };
+    let current = initial;
+    let prepared = createDeferred();
+    let resume = createDeferred();
+    let effects = 0;
+    const registry = createGatewayTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "role-scoped-plugin",
+          source: "fixture",
+          path: routePath,
+          auth: "gateway",
+          match: "exact",
+          gatewayRuntimeScopeSurface: "trusted-operator",
+          handler: async (_req, res) => {
+            const scope = getPluginRuntimeGatewayRequestScope();
+            prepared.resolve();
+            await resume.promise;
+            await scope?.revalidate?.();
+            const allowed = observeRuntimeScope().writeAllowed;
+            if (allowed) {
+              effects += 1;
+            }
+            res.statusCode = allowed ? 200 : 403;
+            res.end();
+            return true;
+          },
+        },
+      ],
+    });
+    await withTempConfig({
+      cfg: initial,
+      run: async () => {
+        const server = createTestGatewayServer({
+          resolvedAuth: proxyAuth,
+          overrides: {
+            getRuntimeConfig: () => current,
+            getResolvedAuth: () => resolveGatewayAuth({ authConfig: current.gateway?.auth }),
+            handlePluginRequest: createGatewayPluginRequestHandler({
+              registry,
+              log: createSubsystemLogger("test/plugin-http-policy"),
+            }),
+            shouldEnforcePluginGatewayAuth: (path) => path.pathname === routePath,
+          },
+        });
+        const request = {
+          path: routePath,
+          method: "POST",
+          remoteAddress: proxyAddress,
+          headers: { "x-forwarded-user": email, "x-forwarded-for": "198.51.100.20" },
+        };
+        for (const change of [
+          "unrelated",
+          "role-definition",
+          "role-assignment",
+          "proxy-trust",
+        ] as const) {
+          current = structuredClone(initial);
+          setUserProfileRole(profile.id, null);
+          invalidateOperatorRolePolicy(profile.id);
+          setRuntimeConfigSnapshot(current, current);
+          prepared = createDeferred();
+          resume = createDeferred();
+          const response = createResponse();
+          const dispatch = dispatchRequest(server, createRequest(request), response.res);
+          await prepared.promise;
+          const before = effects;
+          if (change === "role-assignment") {
+            setUserProfileRole(profile.id, "reader");
+            invalidateOperatorRolePolicy(profile.id);
+          } else {
+            current = structuredClone(current);
+            if (change === "unrelated") {
+              current.logging = { level: "debug" };
+            } else if (change === "role-definition") {
+              current.gateway!.roles!.default = "reader";
+            } else {
+              current.gateway!.trustedProxies = [];
+            }
+            setRuntimeConfigSnapshot(current, current);
+          }
+          resume.resolve();
+          await dispatch;
+          expect(response.res.statusCode, change).toBe(change === "unrelated" ? 200 : 401);
+          expect(effects, change).toBe(before + (change === "unrelated" ? 1 : 0));
+          const next = await sendRequest(server, request);
+          expect(next.res.statusCode, `${change}: next request`).toBe(
+            change === "unrelated" ? 200 : 403,
+          );
+        }
+      },
+    });
+    invalidateOperatorRolePolicy(profile.id);
+  });
+});

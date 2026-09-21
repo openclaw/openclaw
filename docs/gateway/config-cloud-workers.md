@@ -21,13 +21,14 @@ Node-backed providers return an authenticated node device id for either `worker-
 
 ### Crabbox profile
 
-In **Settings → Connections → Cloud workers**, the profile editor's **Advanced** group edits warm images, setup environment names, ready workers, and suspend-after duration. The page also exposes the shared **Prepared pool** cap. Clearing optional values restores their defaults; selecting **Auto** for warm images restores automatic selection. These changes require a Gateway restart. After saving a profile, the restart notice points to **Snapshots → Build snapshot**. Saving does not start a build.
+In **Settings → Connections → Cloud workers**, the profile editor's **Advanced** group edits warm images, setup environment names, ready workers, and suspend-after duration. The page also exposes the shared **Prepared pool** cap. Clearing optional values restores their defaults; selecting **Auto** for warm images restores automatic selection. Changes apply without restarting the Gateway. To prepare an image after saving a profile, use **Snapshots → Build snapshot**. Saving does not start a build.
 
 Snapshot retention is plugin-wide, separate from profile settings. Configure
 `plugins.entries.crabbox.config.warmImages.refreshAfter` (default `24h`, minimum
 `1h`), `retainUnused` (default `14d`, minimum `1d`), and `keepPrevious` (`0` or `1`,
 default `0`) in the **Snapshots → Retention policy** card or config. Durations
-accept whole minutes, hours, or days. Changes require a Gateway restart. See
+accept whole minutes, hours, or days. Changes reload the Crabbox plugin without
+restarting the Gateway. See
 [Retention policy](/gateway/cloud-workers/warm-images#retention-policy) for the
 complete syntax, pinned exemptions, and previous-generation behavior.
 
@@ -122,7 +123,13 @@ Node-backed `worker-turn` launches the self-contained worker loop and proxies mo
 
 Each durable environment record retains its validated provider settings and resolved install method in a creation-time profile snapshot. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with that snapshot, provided the owning plugin remains available.
 
-Profile changes require a Gateway restart. With the default `gateway.reload.mode: "hybrid"`, the config watcher performs the restart automatically; `"off"` mode requires a manual restart.
+With the default `gateway.reload.mode: "hybrid"`, profile and pool changes apply
+without restarting the Gateway. New allocations use the updated profile; existing
+allocations keep their admitted provider settings. Unused reserves are checked
+against the current profile and pool limits, and incompatible or excess workers
+retire after their provider work settles. Suspend-after changes apply to existing
+idle sessions before their next automatic drain. With reload mode `"off"`, restart
+the Gateway to load configuration changes.
 
 <Warning>
   The `static-ssh` provider is a source-tree QA Lab `remote-exec` harness and is excluded from packaged distributions. A worker running on its shared host can read unrelated host data, so do not use this provider as a production isolation boundary.

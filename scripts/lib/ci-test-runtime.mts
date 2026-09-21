@@ -43,6 +43,8 @@ const runtimePartitions = new Map<
         "src/process/spawn-broker/startup.test.ts",
         "src/process/spawn-broker/stdin-handoff.test.ts",
         "src/process/spawn-broker/transports.test.ts",
+        // Preserve native Node process and SQLite lifecycle semantics for this benchmark.
+        "test/scripts/bench-session-history.test.ts",
         "test/scripts/update-restart-module-outcome.test.ts",
       ]),
     },

@@ -15,7 +15,8 @@ import {
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import {
   onSqliteWalCheckpoint,
-  publishSqliteWalCheckpointHealth,
+  publishSqliteWalCheckpointObservation,
+  type SqliteWalCheckpointSnapshot,
 } from "./sqlite-wal-checkpoint.js";
 import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
 
@@ -285,10 +286,12 @@ describe("SQLite WAL checkpoint observations", () => {
       busyTimeoutMs: 0,
     });
     const states: string[] = [];
+    const observations: SqliteWalCheckpointSnapshot[] = [];
     const unsubscribe = onSqliteWalCheckpoint((observation) => {
       if (observation.databasePath === databasePath) {
         expect(maintenance.health?.state).toBe(observation.health.state);
         states.push(observation.health.state);
+        observations.push({ health: observation.health, observedAtNs: observation.observedAtNs });
       }
     });
     try {
@@ -310,9 +313,9 @@ describe("SQLite WAL checkpoint observations", () => {
           expect(() =>
             assertNoActiveSqliteReaders(reader, "native transaction probe"),
           ).not.toThrow();
-          const observed = publishSqliteWalCheckpointHealth(databasePath, maintenance.health!);
-          expect(observed.activeReaders).toHaveLength(0);
-          expect(observed.readerDiagnostics).toHaveLength(1);
+          const observed = publishSqliteWalCheckpointObservation(databasePath, observations[0]!);
+          expect(observed.health.activeReaders).toHaveLength(0);
+          expect(observed.health.readerDiagnostics).toHaveLength(1);
         },
         { operationLabel: "fixture.named-transaction" },
       );

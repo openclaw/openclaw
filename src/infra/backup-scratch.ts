@@ -135,6 +135,20 @@ async function inspectScratchPayload(
   }
 }
 
+async function removeBackupScratchPayload(boundary: Root): Promise<void> {
+  for await (const entry of boundary.entries(".")) {
+    if (!SQLITE_STAGING_TOKEN_FILES.some((control) => control === entry.name)) {
+      await boundary.remove(entry.name, {
+        recursive: true,
+        force: true,
+        mutationSymlinks: "reject",
+        maxEntries: Infinity,
+        maxDepth: Infinity,
+      });
+    }
+  }
+}
+
 async function cleanupBackupScratchDirectory(
   initialDirectory: string,
   initialBoundary: Root | undefined,
@@ -177,20 +191,9 @@ async function cleanupBackupScratchDirectory(
         throw new Error("Retired backup scratch directory identity changed");
       }
     }
-    // Keep the lifetime token until all payload bytes are gone, so a partial
-    // cleanup can be retried without losing proof that its writer retired.
+    // Payload was removed under the exclusive token before committing retirement.
+    // Only the controls and empty directory remain after the handles close.
     if (boundary) {
-      for await (const entry of boundary.entries(".")) {
-        if (!SQLITE_STAGING_TOKEN_FILES.some((control) => control === entry.name)) {
-          await boundary.remove(entry.name, {
-            recursive: true,
-            force: true,
-            mutationSymlinks: "reject",
-            maxEntries: Infinity,
-            maxDepth: Infinity,
-          });
-        }
-      }
       for (const control of SQLITE_STAGING_TOKEN_FILES) {
         await boundary.remove(control, { force: true, mutationSymlinks: "reject" });
       }
@@ -215,6 +218,10 @@ export async function finishBackupScratch(
 ): Promise<string | undefined> {
   let retirementFailure: unknown;
   try {
+    scratch.release = scratch.release.beginRetirement();
+    // The exclusive token excludes readers while payload deletion makes space
+    // for SQLite's retirement page/journal without a filesystem-specific reserve.
+    await removeBackupScratchPayload(scratch.boundary);
     scratch.release(true);
   } catch (error) {
     retirementFailure = error;
@@ -312,6 +319,7 @@ export async function maintainBackupScratch(params: {
             throw new Error("Scratch directory identity changed");
           }
           await inspectScratchPayload(directory);
+          await removeBackupScratchPayload(boundary);
           release?.(true);
           const cleanup = await cleanupBackupScratchDirectory(directory, boundary, () => {});
           if (cleanup.status === "failed") {

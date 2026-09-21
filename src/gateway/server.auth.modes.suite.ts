@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   connectReq,
@@ -17,6 +18,7 @@ import {
   testState,
   testTailscaleWhois,
 } from "./server.auth.test-helpers.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 
 async function requestModels(port: number, secret: string): Promise<Response> {
   return await fetch(`http://127.0.0.1:${port}/v1/models`, {
@@ -298,6 +300,8 @@ export function registerAuthModesSuite(): void {
     beforeEach(() => {
       testState.gatewayAuth = { mode: "token", token: "secret", allowTailscale: true };
       testState.gatewayControlUi = { allowedOrigins: [tailscaleOrigin] };
+      // The shared-server reset published defaults before this suite restored its policy.
+      setRuntimeConfigSnapshot(loadGatewayTestConfig());
       testTailscaleWhois.value = { login: "peter", name: "Peter" };
     });
 

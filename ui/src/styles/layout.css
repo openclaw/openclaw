@@ -1964,11 +1964,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-session-tree__children {
   margin-left: var(--sidebar-lead);
-  background: linear-gradient(
-      color-mix(in srgb, var(--border-strong) 52%, transparent),
-      color-mix(in srgb, var(--border-strong) 52%, transparent)
-    )
-    calc(var(--sidebar-inset) + 10px) 0 / 1px 100% no-repeat;
 }
 
 .sidebar-session-tree__loading {

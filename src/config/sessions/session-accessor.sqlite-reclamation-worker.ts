@@ -5,8 +5,8 @@ import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import {
-  publishSqliteWalCheckpointHealth,
-  type SqliteWalHealth,
+  publishSqliteWalCheckpointObservation,
+  type SqliteWalCheckpointSnapshot,
 } from "../../infra/sqlite-wal-checkpoint.js";
 import { captureStateDatabaseCoordinatorRuntime } from "../../infra/state-database-coordinator.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -14,11 +14,9 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
-import {
-  releaseExitedOpenClawAgentDatabaseWorkerLease,
-  type OpenClawAgentDatabaseWorkerLeaseReceipt,
-} from "../../state/openclaw-agent-db-lease.js";
+import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
+import { cleanupRetiredAgentDatabaseLease } from "../../state/openclaw-agent-execution-cleanup.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -97,7 +95,7 @@ type WorkerCleanup = { cleanupWarnings: string[]; settled: boolean };
 export type SqliteReclamationWorkerMessage =
   | SqliteMutationWorkerMessage<SqliteSessionReclamationResult>
   | { type: "lease"; receipt: OpenClawAgentDatabaseWorkerLeaseReceipt }
-  | { type: "checkpoint"; operationId: number; health: SqliteWalHealth }
+  | { type: "checkpoint"; operationId: number; snapshot: SqliteWalCheckpointSnapshot }
   | ({ type: "closed" } & WorkerCleanup);
 
 const log = createSubsystemLogger("session-sqlite");
@@ -510,7 +508,7 @@ export class SqliteReclamationWorker {
       this.stateContext.admission.assertCurrent();
       this.assertPathCurrent();
       // Native close keeps its admitted custody after new requests are revoked.
-      publishSqliteWalCheckpointHealth(this.options.path, message.health);
+      publishSqliteWalCheckpointObservation(this.options.path, message.snapshot);
     } catch {
       // A retired state owner cannot publish late diagnostics or change native settlement.
     }
@@ -600,9 +598,26 @@ export class SqliteReclamationWorker {
         this.taskCustodyReleased = true;
         this.nativeExitProven ||= !this.healthyCloseAcknowledged;
       }
-      // Native exit is joined before exact receipt cleanup; PID-wide cleanup is never safe.
-      if (this.lease && this.nativeExitProven) {
-        releaseExitedOpenClawAgentDatabaseWorkerLease(this.lease);
+      // A settled close released the lease even when the request failed.
+      // Only unsettled cleanup needs the parent's exact receipt after native exit.
+      if (this.lease && this.nativeExitProven && !this.cleanup?.settled) {
+        const lease = this.lease;
+        await cleanupRetiredAgentDatabaseLease({
+          context: this.stateContext,
+          stopped: this.ended!,
+          lease,
+          assertOwned: () => {
+            if (
+              !this.revoked ||
+              this.retired ||
+              !this.nativeExitProven ||
+              this.transport !== transport ||
+              this.lease !== lease
+            ) {
+              throw new Error("SQLite reclamation Worker no longer owns its retired lease");
+            }
+          },
+        });
       } else if (
         transport &&
         (!this.cleanup?.settled || (transport.kind === "pooled" && !this.taskCustodyReleased))

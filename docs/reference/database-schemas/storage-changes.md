@@ -1449,6 +1449,12 @@ completion, checkpoint facts, and physical bytes before and after. Budget cleanu
 remains deferred until the checkpoint owner reports completion, preserving retained
 data instead of adding writes behind a pinned WAL.
 
+Checkpoint ordering uses a private monotonic observation shared by the host and
+its workers; health timestamps remain wall-clock diagnostics. Post-commit page
+maintenance also waits for the parent's commit-settlement probe to release its
+writer lock. Child transaction settlement and parent probe release are distinct
+facts in the existing commit gate; failed release cannot acknowledge success.
+
 Queued archive pruning prepares cold connections through the same asynchronous
 admission owner while retaining its existing writer section. File-backed page
 drains use the existing reclamation worker, acquired before the caller's writer

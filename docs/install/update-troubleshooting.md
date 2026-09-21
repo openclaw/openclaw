@@ -259,6 +259,20 @@ declared ClawHub source for the new core release cohort. The released 2026.9.4
 catalog omitted that source for Codex; the correction is on main in
 [#148518](https://github.com/openclaw/openclaw/pull/148518).
 
+### Missing temporary plugin captures
+
+An `ENOENT` path containing `openclaw-plugin-build-` can identify a missing
+runtime source capture even when the installed plugin files still exist.
+Reloading or replacing that plugin reports the unavailable recovery snapshot
+as a warning and loads the installed replacement after normal cleanup.
+Run `openclaw plugins reload <id>`, or reinstall the plugin if its installed
+payload also needs repair. If replacement fails, the missing previous code
+cannot be restored; healthy plugins retain their available recovery snapshots.
+
+Older releases can reject enable, uninstall, and reinstall while trying to copy
+that same missing capture. Restart the Gateway through its service owner before
+retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
 ## Reason codes
 
 - `dirty`, `no-upstream`: repair the source checkout before retrying.

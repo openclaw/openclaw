@@ -1,32 +1,15 @@
-import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import {
+  createPreparedTestApprovalManager,
+  createTestApprovalManager,
+} from "../exec-approval-manager.test-support.js";
+import { waitForApprovalRequested } from "./approval-request.test-support.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    for (const dir of tempDirs.dirs) {
-      closeOpenClawStateDatabaseByPath(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }));
-    }
-    cleanup();
-  }),
-);
-
-function databaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.realpathSync(tempDirs.make("plugin-approval-id-"));
-  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-}
 
 function executionIdentity() {
   return {
@@ -131,7 +114,8 @@ describe("plugin approval signed agent runtime", () => {
       validateAuthority: () => active,
     });
     const pending = requestHandler(manager)(opts);
-    await vi.waitFor(async () => expect(await manager.listPendingRecords()).toHaveLength(1));
+    await waitForApprovalRequested(opts.context.broadcast, "plugin.approval.requested", pending);
+    expect(await manager.listPendingRecords()).toHaveLength(1);
     const record = (await manager.listPendingRecords())[0]!;
     active = false;
 
@@ -168,13 +152,12 @@ describe("plugin approval signed agent runtime", () => {
     });
   });
 
-  it("uses signed runtime owner and route instead of forged request metadata", async () => {
-    const options = databaseOptions();
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      approvalKind: "plugin",
-      persistence: { runtimeEpoch: "runtime-a", databaseOptions: options },
-      validateAgentRuntimeDelegatedAuthority: () => true,
-    });
+  it("uses signed runtime owner and route instead of forged request metadata", async (testContext) => {
+    const { manager, databaseOptions: options } =
+      await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+        approvalKind: "plugin",
+        validateAgentRuntimeDelegatedAuthority: () => true,
+      });
     const opts = requestOptions({
       request: {
         pluginId: "forged-plugin",
@@ -207,7 +190,8 @@ describe("plugin approval signed agent runtime", () => {
     });
 
     const pending = requestHandler(manager)(opts);
-    await vi.waitFor(() => expect(opts.context.broadcast).toHaveBeenCalled());
+    await waitForApprovalRequested(opts.context.broadcast, "plugin.approval.requested", pending);
+    expect(opts.context.broadcast).toHaveBeenCalled();
     const broadcastPayload = vi.mocked(opts.context.broadcast).mock.calls[0]?.[1] as
       | { id?: unknown }
       | undefined;
@@ -236,13 +220,12 @@ describe("plugin approval signed agent runtime", () => {
     await pending;
   });
 
-  it("does not create execution identity storage when collection is disabled", async () => {
-    const options = databaseOptions();
-    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      approvalKind: "plugin",
-      persistence: { runtimeEpoch: "runtime-a", databaseOptions: options },
-      validateAgentRuntimeDelegatedAuthority: () => true,
-    });
+  it("does not create execution identity storage when collection is disabled", async (testContext) => {
+    const { manager, databaseOptions: options } =
+      await createPreparedTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+        approvalKind: "plugin",
+        validateAgentRuntimeDelegatedAuthority: () => true,
+      });
     const opts = requestOptions({
       request: { title: "Sensitive action", description: "D", twoPhase: true },
       identity: {
@@ -261,7 +244,8 @@ describe("plugin approval signed agent runtime", () => {
     });
 
     const pending = requestHandler(manager)(opts);
-    await vi.waitFor(() => expect(opts.context.broadcast).toHaveBeenCalled());
+    await waitForApprovalRequested(opts.context.broadcast, "plugin.approval.requested", pending);
+    expect(opts.context.broadcast).toHaveBeenCalled();
     const approvalId = String(
       (vi.mocked(opts.context.broadcast).mock.calls[0]?.[1] as { id?: unknown } | undefined)?.id,
     );

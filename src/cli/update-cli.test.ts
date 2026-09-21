@@ -62,6 +62,8 @@ import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
 import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-capture.js";
 import {
+  createChangedPostCoreUpdateOptions,
+  createConfigValidationFailure,
   createUpdateCliConfigFixtures,
   pluginSyncResult,
   npmPluginUpdateResult,
@@ -445,6 +447,7 @@ vi.mock("../process/exec.js", async (importOriginal) => {
     await import("./update-cli/update-command-transport.test-support.js");
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
+    isPlainCommandExitFailure: actual.isPlainCommandExitFailure,
     // The real snapshot worker has separate WAL/source-inode boundary coverage.
     // Retain real rehearsal config projection and drift checks in this CLI fixture.
     runCommandBuffered: async (argv: string[], options: { input: string; timeoutMs?: number }) => {
@@ -1359,29 +1362,7 @@ describe("update-cli", () => {
 
   const completeChangedPostCorePluginUpdate = (
     overrides: Partial<Parameters<typeof completePostCorePluginUpdate>[0]> = {},
-  ) =>
-    completePostCorePluginUpdate({
-      root: "/tmp/openclaw-updated-root",
-      pluginUpdate: {
-        status: "ok",
-        changed: true,
-        warnings: [],
-        sync: {
-          changed: false,
-          switchedToBundled: [],
-          switchedToNpm: [],
-          warnings: [],
-          errors: [],
-        },
-        npm: { changed: true, outcomes: [] },
-        integrityDrifts: [],
-      },
-      freshDoctorRequired: true,
-      yes: true,
-      json: true,
-      timeoutMs: 30_000,
-      ...overrides,
-    });
+  ) => completePostCorePluginUpdate(createChangedPostCoreUpdateOptions(overrides));
 
   const setupNpmUpdatedRootRefresh = () => {
     const updatedRoot = createCaseDir("openclaw-updated-root");
@@ -3837,13 +3818,14 @@ describe("update-cli", () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
     );
+    const issues = [{ path: "channels.signal.httpUrl", message: "legacy Signal transport field" }];
     vi.mocked(runExec)
       .mockRejectedValueOnce(new Error("doctor process failed"))
-      .mockRejectedValueOnce(new Error("config invalid"));
+      .mockRejectedValueOnce(createConfigValidationFailure(issues));
     vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce(
       configSnapshot(baseConfig, {
         valid: false,
-        issues: [{ path: "channels.signal.httpUrl", message: "legacy Signal transport field" }],
+        issues,
       }),
     );
 
@@ -3864,7 +3846,7 @@ describe("update-cli", () => {
 
     expect(result.pluginUpdate).toMatchObject({
       status: "error",
-      reason: "post-plugin-doctor-invalid-config",
+      reason: "post-plugin-doctor-execution-failed",
     });
     expect(result.pluginUpdate.warnings?.[0]?.reason).toContain("entrypoint lookup failed");
     expect(runExec).not.toHaveBeenCalled();
@@ -10708,7 +10690,10 @@ describe("update-cli", () => {
     mockGitUpdateAfterMutation();
     vi.mocked(runExec).mockImplementation(async (_file, args) => {
       if (args[1] === "config" && args[2] === "validate") {
-        throw new Error("target plugin config invalid");
+        throw createConfigValidationFailure(
+          invalidPostUpdateSnapshot.issues,
+          "target plugin config invalid",
+        );
       }
       return { stdout: new Date(Date.now() - 1000).toString(), stderr: "" };
     });

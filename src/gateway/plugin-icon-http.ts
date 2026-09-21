@@ -27,8 +27,6 @@ import {
   isPluginActivityToolName,
   PLUGIN_ACTIVITY_ICON_MAX_BYTES,
 } from "../plugins/portable-icon-paths.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound as sendNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
@@ -38,6 +36,7 @@ import {
   sendHttpImageResponse,
   type HttpImageRepresentation,
 } from "./http-image-response.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 
 const PLUGIN_ID_RE =
@@ -342,13 +341,9 @@ async function loadPluginIcon(
 export async function handlePluginIconHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
+  opts: GatewayHttpRequestAuthOptions & {
     config: OpenClawConfig;
     basePath?: string;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
   },
 ): Promise<boolean> {
   const requestUrl = req.url ? new URL(req.url, "http://localhost") : undefined;
@@ -384,16 +379,15 @@ export async function handlePluginIconHttpRequest(
     return true;
   }
   const requestAuth = await authorizeControlUiReadRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
+    cfg: opts.cfg ?? opts.config,
   });
   if (!requestAuth) {
     return true;
   }
+  requestAuth.assertCurrent();
 
   if (
     activityRequest.matched &&
@@ -419,6 +413,7 @@ export async function handlePluginIconHttpRequest(
           pluginId,
         })
     : undefined;
+  requestAuth.assertCurrent();
   const remoteIconUrl = catalogIconUrl
     ? (resolveManagedSetupCatalogIconUrl({
         config: opts.config,
@@ -459,6 +454,7 @@ export async function handlePluginIconHttpRequest(
               }
             : {}),
         });
+  requestAuth.assertCurrent();
   if (!icon) {
     sendNotFound(res);
     return true;

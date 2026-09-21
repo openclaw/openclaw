@@ -231,6 +231,14 @@ class ChatPositionRailDirective extends AsyncDirective {
           }
           this.followingResize = false;
           this.resizeScrollTarget = undefined;
+        } else if (
+          observation.type === "resize" &&
+          this.layoutVisible &&
+          this.scrollElement?.clientHeight
+        ) {
+          // Retain the committed viewport before another composer change can replace it.
+          this.syncReaderViewport();
+          this.scheduleLayout();
         }
       });
       // Publish the first visible pixel after an initially zero-area edge touch.
@@ -322,7 +330,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     }
   }
 
-  private syncVisibleMarks() {
+  private syncReaderViewport() {
     const root = this.transcriptElement;
     if (root) {
       const viewport = {
@@ -369,6 +377,10 @@ class ChatPositionRailDirective extends AsyncDirective {
       }
       this.readerViewport = viewport;
     }
+  }
+
+  private syncVisibleMarks() {
+    this.syncReaderViewport();
     const visible = new Set(
       Array.from(this.observedMessages.values())
         .filter((message) => message.visible)

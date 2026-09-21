@@ -7,10 +7,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
-  getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshotsRevision,
-} from "../agents/auth-profiles/runtime-snapshots.js";
-import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -25,6 +21,7 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
+import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
   hotReloadStatus: { current: "active" as "active" | "disabled" },
@@ -134,15 +131,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
         invalidate: vi.fn(),
       },
       channelManager: {} as never,
-      activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => ({
-        sourceConfig: config,
-        config,
-        authStores: [],
-        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-        authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
-        warnings: [],
-        webTools: {},
-      })) as never,
+      activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       prepareTerminalConfig: vi.fn(),

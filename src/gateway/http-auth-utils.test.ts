@@ -55,7 +55,12 @@ async function authenticate(
   user?: string,
 ) {
   authorize.mockResolvedValueOnce({ ok: true, method, ...(user ? { user } : {}) });
-  return checkGatewayHttpRequestAuth({ req, auth: { mode: "none", allowTailscale: false }, cfg });
+  return checkGatewayHttpRequestAuth({
+    req,
+    auth: { mode: "none", allowTailscale: false },
+    cfg,
+    getRuntimeConfig: () => cfg,
+  });
 }
 
 async function admitResponse(response: ReturnType<typeof makeMockHttpResponse>, email: string) {

@@ -1,4 +1,5 @@
 export type TranscriptScrollObservation =
+  | { type: "resize" }
   | { type: "input"; event: Event; touching: boolean }
   | {
       type: "offset";

@@ -557,7 +557,7 @@ export function configureSqliteWalMaintenance(
     if (!result) {
       throw new Error("SQLite page reclamation owner is unavailable");
     }
-    return { ...result, checkpoint: checkpointOwner.health };
+    return { ...result, checkpoint: checkpointOwner.snapshot };
   };
 
   let timer: IntervalHandle | null = null;

@@ -26,6 +26,7 @@ import { createGatewayAuxHandlers } from "../server-aux-handlers.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { computerHandlers } from "../server-methods/computer.js";
 import type { RespondFn } from "../server-methods/types.js";
+import { createTestRuntimeSecretsActivator } from "../server-startup-config.test-support.js";
 import { createGatewayComputerService } from "./computer-service.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -245,9 +246,7 @@ module.exports = {
     const aux = createGatewayAuxHandlers({
       log: {},
       getNativeApprovalRouteCoordinator: () => undefined,
-      activateRuntimeSecrets: async () => {
-        throw new Error("Unexpected secrets reload");
-      },
+      activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       clients: [],

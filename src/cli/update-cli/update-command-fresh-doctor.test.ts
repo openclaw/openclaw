@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readTriageUpdateFailure } from "../../commands/triage-update.js";
+import { readReleasedTriageUpdateFailure } from "../../commands/triage-update.released-reader.test-support.js";
 import { createConfigIO } from "../../config/io.js";
 import {
   consumeUpdatePostInstallDoctorResult,
@@ -13,12 +15,14 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import { writeTriageUpdateFailure } from "../../infra/update-failure-report-artifact.js";
 import {
   adoptUpdateRun,
   createUpdateRun,
   getUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -27,6 +31,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { createConfigValidationFailure } from "./update-cli-config.test-support.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 const mocks = vi.hoisted(() => ({
@@ -443,7 +448,10 @@ describe("post-plugin update readiness", () => {
           await fs.writeFile(configPath, '{"gateway":{"mode":"invalid"}}');
         }
         if (args.includes("validate")) {
-          throw new Error("Config invalid");
+          throw createConfigValidationFailure(
+            [{ path: "gateway.mode", message: "Invalid gateway mode" }],
+            "Config invalid",
+          );
         }
         return { stdout: "", stderr: "" };
       });
@@ -454,8 +462,185 @@ describe("post-plugin update readiness", () => {
       expect(result.pluginUpdate).toMatchObject({
         status: "error",
         reason: "post-plugin-doctor-invalid-config",
+        failureFacts: [
+          {
+            check: "config",
+            code: "candidate-config-failed",
+            affectedKey: "gateway.mode",
+            message: "Invalid gateway mode",
+          },
+        ],
       });
     });
+  });
+
+  it.each([
+    {
+      name: "runtime exception",
+      stdout: JSON.stringify({ valid: false, error: "Runtime failed" }),
+    },
+    { name: "missing output", stdout: "" },
+    { name: "malformed output", stdout: "not JSON" },
+    { name: "launch", code: "ENOENT", exitCode: undefined, stdout: "" },
+    { name: "timeout", timedOut: true },
+    { name: "cancellation", isCanceled: true },
+    { name: "signal", signal: "SIGTERM", isTerminated: true },
+    { name: "output limit", isMaxBuffer: true },
+    { name: "capture failure", cause: new Error("capture failed") },
+    { name: "unsettled cleanup", cleanup: "uncertain" },
+    { name: "nested cleanup", cause: new CommandProcessCleanupError() },
+  ])("retains a config validation $name as an execution failure", async (failure) => {
+    const { cause, ...metadata } = failure;
+    mocks.runExec.mockRejectedValueOnce(
+      Object.assign(new Error("private argv must not be copied", { cause }), {
+        failed: true,
+        exitCode: 1,
+        stdout: JSON.stringify({ valid: false, issues: [{ message: "Unconfirmed issue" }] }),
+        ...metadata,
+      }),
+    );
+    vi.mocked(defaultRuntime.log).mockClear();
+    vi.mocked(defaultRuntime.error).mockClear();
+
+    const { pluginUpdate: result } = await completePostCorePluginUpdate({
+      ...updateOptions,
+      freshDoctorRequired: false,
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "post-plugin-config-validation-execution-failed",
+      warnings: [
+        expect.objectContaining({
+          message: "Config validation could not complete; refusing to restart.",
+        }),
+      ],
+      failureFacts: [
+        expect.objectContaining({ code: "post-plugin-config-validation-execution-failed" }),
+        ...(failure.stdout === "" || failure.name === "launch"
+          ? []
+          : [expect.objectContaining({ code: "command-failed" })]),
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain("private argv");
+    expect(JSON.stringify(result)).not.toContain("doctor --fix");
+    expect(mocks.runUtf8).not.toHaveBeenCalled();
+    expect(defaultRuntime.log).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("preserves a missing target entrypoint failure despite an invalid parent snapshot", async () => {
+    mocks.resolveEntrypoint.mockResolvedValue(undefined);
+    mocks.readConfig.mockResolvedValue({ ...validConfigSnapshot, valid: false });
+    const { pluginUpdate: result } = await completePostCorePluginUpdate(updateOptions);
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-execution-failed",
+      warnings: [
+        expect.objectContaining({ reason: expect.stringContaining("entrypoint not found") }),
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain("invalid-config");
+    expect(mocks.runExec).not.toHaveBeenCalled();
+    expect(mocks.runUtf8).not.toHaveBeenCalled();
+  });
+
+  it("retains Doctor failure precedence and bounds combined validation facts", async () => {
+    const doctorFacts = Array.from({ length: 4 }, (_, index) => ({
+      check: "doctor",
+      code: "doctor-failed",
+      message: `Earlier failure ${index}`,
+    }));
+    mocks.runExec.mockImplementation(async (_command, args: string[], options) => {
+      if (args.includes("--repair")) {
+        await writeUpdatePostInstallDoctorResult({
+          resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+          result: { status: "error", failureFacts: doctorFacts },
+        });
+        throw Object.assign(new Error("Doctor failed"), { exitCode: 1 });
+      }
+      throw Object.assign(new Error("private argv"), {
+        failed: true,
+        timedOut: true,
+        cleanup: "uncertain",
+        stderr: "Validation process could not settle",
+      });
+    });
+    const { pluginUpdate: result } = await completePostCorePluginUpdate(updateOptions);
+    expect(result.reason).toBe("post-plugin-doctor-execution-failed");
+    expect(result.failureFacts).toHaveLength(5);
+    expect(result.failureFacts?.slice(0, 4)).toEqual(doctorFacts);
+    expect(result.failureFacts?.[4]?.message).toContain("cleanup=uncertain");
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings?.[0]?.message).toContain("migrations could not be run");
+    expect(mocks.runUtf8).not.toHaveBeenCalled();
+  });
+
+  it("captures a real validator failure for current and released diagnostic readers", async () => {
+    const root = tempDirs.make("post-plugin-validation-command-");
+    const stateDir = path.join(root, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const secret = "sk-test-validation-secret-1234567890";
+    const script = path.join(root, "validator.mjs");
+    await fs.writeFile(
+      script,
+      `import assert from 'node:assert/strict';
+       assert.deepEqual(process.argv.slice(2), ['config', 'validate', '--json']);
+       process.stderr.write(${JSON.stringify(`module loading failed token=${secret} ${"context ".repeat(100)}`)});
+       process.stdout.write(JSON.stringify({valid: false, error: 'Runtime failed'}));
+       process.exitCode = 7;`,
+    );
+    mocks.resolveEntrypoint.mockResolvedValue(script);
+    const { runExec } =
+      await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
+    mocks.runExec.mockImplementation(runExec);
+    const { pluginUpdate: result } = await completePostCorePluginUpdate({
+      ...updateOptions,
+      root,
+      nodeRunner: process.execPath,
+      freshDoctorRequired: false,
+    });
+    expect(result.reason).toBe("post-plugin-config-validation-execution-failed");
+    expect(result.failureFacts).toHaveLength(3);
+    expect(result.failureFacts?.[0]?.message).toContain("code 7");
+    expect(result.failureFacts?.[1]?.message).toContain("module loading failed");
+    expect(result.failureFacts?.every((fact) => (fact.message?.length ?? 0) <= 200)).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain(root);
+    const outputPath = await writeTriageUpdateFailure(
+      {
+        result: {
+          status: "error",
+          mode: "npm",
+          reason: "post-update-plugins",
+          postUpdate: { plugins: result },
+          steps: [{ name: "plugin-convergence", exitCode: 1, failureFacts: result.failureFacts }],
+        },
+      },
+      { env: process.env, outputPath: path.join(root, "failure.json") },
+    );
+    for (const read of [readTriageUpdateFailure, readReleasedTriageUpdateFailure]) {
+      const failure = await read(outputPath, { env: process.env, stateDir });
+      expect(failure).toMatchObject({
+        result: {
+          reason: "post-update-plugins",
+          postUpdate: {
+            plugins: {
+              reason: "post-plugin-config-validation-execution-failed",
+              warnings: [
+                expect.objectContaining({
+                  reason: expect.stringContaining("module loading failed"),
+                  message: "Config validation could not complete; refusing to restart.",
+                }),
+              ],
+            },
+          },
+        },
+      });
+      expect(JSON.stringify(failure)).not.toContain(secret);
+      expect(JSON.stringify(failure)).not.toContain("doctor --fix");
+    }
+    expect(mocks.runUtf8).not.toHaveBeenCalled();
   });
 
   it("consumes nonfatal Doctor warnings before reporting successful convergence", async () => {
@@ -481,25 +666,30 @@ describe("post-plugin update readiness", () => {
     expect(await consumeUpdatePostInstallDoctorResult(resultPath)).toBeNull();
   });
 
-  it.each([false, true])(
-    "preserves deferred repair advisory semantics (timed out: %s)",
-    async (timedOut) => {
+  it.each([
+    { timedOut: false, captureFailed: false },
+    { timedOut: true, captureFailed: false },
+    { timedOut: false, captureFailed: true },
+  ])(
+    "preserves deferred repair advisory semantics (timed out: $timedOut, capture failed: $captureFailed)",
+    async ({ timedOut, captureFailed }) => {
       mocks.runExec.mockImplementation(async (_command, _args, options) => {
         await writeUpdatePostInstallDoctorResult({
           resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
           result: createDeferredConfiguredPluginRepairDoctorResult(["plugin repair deferred"]),
         });
-        throw Object.assign(new Error("Doctor advisory"), {
-          failed: true,
-          exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-          timedOut,
-        });
+        throw Object.assign(
+          new Error("Doctor advisory", {
+            cause: captureFailed ? new Error("output capture failed") : undefined,
+          }),
+          { failed: true, exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE, timedOut },
+        );
       });
       const run = runUpdateFinalizationDoctorInFreshProcess({
         ...updateOptions,
         phase: "pre-plugin",
       });
-      if (timedOut) {
+      if (timedOut || captureFailed) {
         await expect(run).rejects.toThrow("Doctor advisory");
       } else {
         await expect(run).resolves.toBeUndefined();

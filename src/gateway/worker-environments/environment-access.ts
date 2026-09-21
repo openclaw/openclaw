@@ -556,17 +556,9 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     return { app: request.app, status: "ready" };
   };
 
-  const stopTunnelOwners = async (stops: Array<Promise<void> | undefined>): Promise<void> => {
-    const results = await Promise.allSettled(stops.filter((stop) => stop !== undefined));
-    const failure = results.find((result) => result.status === "rejected");
-    if (failure) {
-      throw failure.reason;
-    }
-  };
-
   const stopTunnel = async (environmentId: string, ownerEpoch?: number): Promise<void> => {
     await withLock(environmentId, async () =>
-      stopTunnelOwners([
+      joinWorkerTunnelStops([
         tunnels?.stop(environmentId, ownerEpoch),
         nodeTunnels?.stop(environmentId, ownerEpoch),
         nodeDesktop?.stop(environmentId, ownerEpoch),
@@ -589,7 +581,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (!enabled) {
       desktopPolicy.abort();
       // The registry also owns host and paired-node desktops; stop only worker sources.
-      await stopTunnelOwners([
+      await joinWorkerTunnelStops([
         ...store.list().map((record) => tunnels?.desktop.stop(record.environmentId)),
         nodeDesktop?.stopAll(),
       ]);
@@ -610,7 +602,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     resolveSshIdentity,
     startTunnel,
     stopAllTunnels: () =>
-      stopTunnelOwners([tunnels?.stopAll(), nodeTunnels?.stopAll(), nodeDesktop?.stopAll()]),
+      joinWorkerTunnelStops([tunnels?.stopAll(), nodeTunnels?.stopAll(), nodeDesktop?.stopAll()]),
     stopTunnel,
   };
 }

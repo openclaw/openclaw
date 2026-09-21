@@ -111,10 +111,10 @@ export function captureSharedGatewaySessionGenerationOwnership(
   };
 }
 
-/** Disconnect shared-auth clients whose generation no longer matches the expected one. */
+/** Disconnect stale shared-auth clients; null revokes every generation. */
 export function disconnectStaleSharedGatewayAuthClients(params: {
   clients: Iterable<SharedGatewayAuthClient>;
-  expectedGeneration: string | undefined;
+  expectedGeneration: string | undefined | null;
   state?: SharedGatewaySessionGenerationState;
   revokeSource?: boolean;
 }): void {
@@ -133,29 +133,13 @@ export function disconnectStaleSharedGatewayAuthClients(params: {
     });
   }
   if (params.revokeSource !== false) {
-    publishSharedAuthInvalidation(params.state, {
-      kind: "generation",
-      generation: params.expectedGeneration,
-    });
+    publishSharedAuthInvalidation(
+      params.state,
+      params.expectedGeneration === null
+        ? { kind: "all" }
+        : { kind: "generation", generation: params.expectedGeneration },
+    );
   }
-}
-
-/** Disconnect every shared-auth client regardless of generation. */
-export function disconnectAllSharedGatewayAuthClients(
-  clients: Iterable<SharedGatewayAuthClient>,
-  state?: SharedGatewaySessionGenerationState,
-): void {
-  for (const gatewayClient of clients) {
-    if (!gatewayClient.usesSharedGatewayAuth) {
-      continue;
-    }
-    invalidateGatewayPolicyClient(gatewayClient, {
-      reason: "gateway-auth-changed",
-      code: 4001,
-      message: "gateway auth changed",
-    });
-  }
-  publishSharedAuthInvalidation(state, { kind: "all" });
 }
 
 /** Resolve the generation clients must use, treating null as "current is required". */
@@ -163,16 +147,6 @@ export function getRequiredSharedGatewaySessionGeneration(
   state: SharedGatewaySessionGenerationState,
 ): string | undefined {
   return state.required === null ? state.current : state.required;
-}
-
-/** Claim current generation while preserving required until its transaction commits. */
-function claimSharedGatewaySessionGeneration(
-  state: SharedGatewaySessionGenerationState,
-  generation: string | undefined,
-): SharedGatewaySessionGenerationOwnership {
-  const previousGeneration = state.current;
-  state.current = generation;
-  return { generation, previousGeneration, revision: advanceStateRevision(state) };
 }
 
 /** Claim current only while no later generation-state writer has run. */
@@ -184,7 +158,9 @@ export function claimSharedGatewaySessionGenerationIfOwned(
   if (!isSharedGatewaySessionGenerationOwnershipCurrent(state, ownership)) {
     return null;
   }
-  return claimSharedGatewaySessionGeneration(state, generation);
+  const previousGeneration = state.current;
+  state.current = generation;
+  return { generation, previousGeneration, revision: advanceStateRevision(state) };
 }
 
 /** Check whether a transaction still owns all generation-state mutations. */
@@ -232,15 +208,6 @@ export function restoreOwnedCurrentSharedGatewaySessionGeneration(
   return true;
 }
 
-/** Update the required marker as one ownership-changing mutation. */
-function setRequiredSharedGatewaySessionGeneration(
-  state: SharedGatewaySessionGenerationState,
-  required: string | undefined | null,
-): void {
-  state.required = required;
-  advanceStateRevision(state);
-}
-
 /** Update required only while no later generation-state writer has run. */
 export function setRequiredSharedGatewaySessionGenerationIfOwned(
   state: SharedGatewaySessionGenerationState,
@@ -250,7 +217,8 @@ export function setRequiredSharedGatewaySessionGenerationIfOwned(
   if (!isSharedGatewaySessionGenerationOwnershipCurrent(state, ownership)) {
     return null;
   }
-  setRequiredSharedGatewaySessionGeneration(state, required);
+  state.required = required;
+  advanceStateRevision(state);
   return captureSharedGatewaySessionGenerationOwnership(state);
 }
 
@@ -286,21 +254,9 @@ export function enforceSharedGatewaySessionGenerationForConfigWrite(params: {
 }): void {
   const reloadMode = resolveGatewayReloadSettings(params.nextConfig).mode;
   const nextSharedGatewaySessionGeneration = params.resolveRuntimeSnapshotGeneration();
-  if (reloadMode === "off") {
-    replaceSharedGatewaySessionGenerationState(params.state, {
-      current: nextSharedGatewaySessionGeneration,
-      required: nextSharedGatewaySessionGeneration,
-    });
-    disconnectStaleSharedGatewayAuthClients({
-      state: params.state,
-      clients: params.clients,
-      expectedGeneration: nextSharedGatewaySessionGeneration,
-    });
-    return;
-  }
   replaceSharedGatewaySessionGenerationState(params.state, {
     current: nextSharedGatewaySessionGeneration,
-    required: null,
+    required: reloadMode === "off" ? nextSharedGatewaySessionGeneration : null,
   });
   disconnectStaleSharedGatewayAuthClients({
     state: params.state,

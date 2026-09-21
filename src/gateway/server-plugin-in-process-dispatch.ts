@@ -53,13 +53,14 @@ import {
 } from "./subagent-completion-tool-handoff.js";
 
 type OperatorToolGatewayAuthority = {
-  authenticatedUserProfile: NonNullable<
+  authenticatedUserProfile?: NonNullable<
     NonNullable<GatewayRequestOptions["client"]>["authenticatedUserProfile"]
   >;
   scopes: readonly string[];
   operatorRoleActor?: GatewayOperatorRoleActor;
   operatorRunAuthority?: AdmittedRunOperatorAuthority;
   signal: AbortSignal;
+  assertCurrent?: () => void;
 };
 
 const operatorToolGatewayAuthority = new AsyncLocalStorage<OperatorToolGatewayAuthority>();
@@ -127,11 +128,15 @@ export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
   const client = createSyntheticPluginRuntimeClient({
     authenticatedUserProfile: authority.authenticatedUserProfile,
     scopes: [...authority.scopes],
-    operatorRoleActor: authority.operatorRoleActor ??
-      scope?.client?.internal?.operatorRoleActor ?? {
-        kind: "operator",
-        profileId: authority.authenticatedUserProfile.profileId,
-      },
+    operatorRoleActor:
+      authority.operatorRoleActor ??
+      scope?.client?.internal?.operatorRoleActor ??
+      (authority.authenticatedUserProfile
+        ? {
+            kind: "operator",
+            profileId: authority.authenticatedUserProfile.profileId,
+          }
+        : undefined),
   });
   return operatorToolGatewayAuthority.exit(() =>
     withPluginRuntimeGatewayRequestScope(
@@ -178,6 +183,7 @@ type DispatchGatewayMethodInProcessOptions = {
 
 type ResolvedInProcessGatewayDispatch = {
   assertContextCurrent: () => void;
+  assertInvocationCurrent: () => void;
   client: NonNullable<GatewayRequestOptions["client"]>;
   context: GatewayRequestContext;
   delegatedToolPolicyHandoffId?: string;
@@ -200,17 +206,21 @@ function resolveInProcessGatewayDispatch(
   // Qualify that live owner before replacing the tool lifetime at admission.
   const assertSettleWakeCurrent =
     method === "agent" ? options?.settleWakeReplay?.assertCurrent : undefined;
-  assertSettleWakeCurrent?.();
   const isHostOwnedAgentRun =
     method === "agent" && Boolean(options?.agentRunTracking || assertSettleWakeCurrent);
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  if (!isHostOwnedAgentRun || !operatorRunAuthority) {
-    inheritedOperatorAuthority?.signal.throwIfAborted();
-  }
+  const assertInvocationCurrent = () => {
+    assertSettleWakeCurrent?.();
+    if (!isHostOwnedAgentRun || !operatorRunAuthority) {
+      inheritedOperatorAuthority?.signal.throwIfAborted();
+      inheritedOperatorAuthority?.assertCurrent?.();
+    }
+    operatorRunAuthority?.assertCurrent();
+  };
+  assertInvocationCurrent();
   if (!isHostOwnedAgentRun) {
     assertCallerCurrent?.(method);
   }
-  operatorRunAuthority?.assertCurrent();
   const scopedOperatorProfile = scope?.client?.authenticatedUserProfile;
   const scopedRoleActor = scope?.client?.internal?.operatorRoleActor;
   const scopedActor = resolveGatewayOperatorRoleActor(scope?.client);
@@ -232,7 +242,7 @@ function resolveInProcessGatewayDispatch(
   const operatorAuthority =
     !isHostOwnedAgentRun &&
     (!operatorRunAuthority ||
-      verifiedOperatorAuthority?.authenticatedUserProfile.profileId ===
+      verifiedOperatorAuthority?.authenticatedUserProfile?.profileId ===
         operatorRunAuthority.profileId)
       ? verifiedOperatorAuthority
       : undefined;
@@ -242,7 +252,7 @@ function resolveInProcessGatewayDispatch(
       : undefined) ??
     inheritedOperatorAuthority?.operatorRoleActor ??
     (isHostOwnedAgentRun
-      ? inheritedOperatorAuthority
+      ? inheritedOperatorAuthority?.authenticatedUserProfile
         ? {
             kind: "operator",
             profileId: inheritedOperatorAuthority.authenticatedUserProfile.profileId,
@@ -415,6 +425,7 @@ function resolveInProcessGatewayDispatch(
     bindInProcessSubagentResume(client.internal, resume);
   }
   return {
+    assertInvocationCurrent,
     assertContextCurrent: () => {
       operatorRunAuthority?.assertCurrent();
       if (method !== "agent") {
@@ -462,7 +473,7 @@ export function prepareInProcessAgentExecution(params: {
   const client = getPluginRuntimeGatewayRequestScope()?.client ?? resolved.client;
   const assertLifetime = () => {
     resolved.assertContextCurrent();
-    inheritedAuthority?.signal.throwIfAborted();
+    resolved.assertInvocationCurrent();
   };
   const assertCurrent = () => {
     assertLifetime();
@@ -561,6 +572,7 @@ export async function dispatchGatewayMethodInProcessRaw(
       requestIdPrefix: "plugin-subagent",
       sessionMutationCommitGuard: () => {
         resolved.assertContextCurrent();
+        resolved.assertInvocationCurrent();
         // Nested RPCs keep the original request owner through preparation and final I/O.
         throwIfGatewayDispatchAborted(method, options?.signal);
         if (resolved.hasCurrentClientAuthority?.() === false) {
@@ -605,7 +617,10 @@ export async function dispatchGatewayMethodInProcess<T>(
       });
       return method === "agent"
         ? await facade.dispatch<T>(params as AgentRunRequest, {
-            assertAdmissionCurrent: options?.sessionMutationCommitGuard,
+            assertAdmissionCurrent: () => {
+              resolved.assertInvocationCurrent();
+              options?.sessionMutationCommitGuard?.();
+            },
             privateCompletion: options?.privateCompletion,
             settleWakeReplay: options?.settleWakeReplay,
             cancelOnDeadline: options?.cancelOnDeadline,

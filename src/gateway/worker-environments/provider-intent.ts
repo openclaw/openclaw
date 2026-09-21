@@ -54,6 +54,20 @@ type WorkerProviderIntentPreparationOptions = {
   setupAuthorized?: boolean;
 };
 
+function allocationSnapshot(
+  profile: WorkerProfile,
+  { machineClass, os, executionMode }: WorkerProviderIntentPreparationOptions,
+): WorkerProfile {
+  // A new allocation admits its own project, even when it inherits provider settings.
+  const { project: _project, ...snapshot } = profile;
+  return {
+    ...snapshot,
+    ...(machineClass === undefined ? {} : { machineClass }),
+    ...(os === undefined ? {} : { os }),
+    ...(executionMode === undefined ? {} : { executionMode }),
+  };
+}
+
 function projectReplayIdentity(project: unknown): unknown {
   if (!isRecord(project)) {
     return project;
@@ -105,21 +119,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     if (!normalizedProfileId || normalizedProfileId !== profileId) {
       throw serviceError("invalid_profile", "Worker profile id must be non-empty and trimmed");
     }
-    const { machineClass, os, executionMode } = createOptions;
-    const inherited = createOptions.inherited
-      ? {
-          ...createOptions.inherited,
-          profileSnapshot: { ...createOptions.inherited.profileSnapshot },
-        }
-      : undefined;
-    if (inherited) {
-      delete inherited.profileSnapshot.project;
-    }
-    const provisionSnapshot = {
-      ...(machineClass === undefined ? {} : { machineClass }),
-      ...(os === undefined ? {} : { os }),
-      ...(executionMode === undefined ? {} : { executionMode }),
-    };
+    const { inherited } = createOptions;
     let provider: WorkerProvider;
     let providerId: string;
     let profileSnapshot: WorkerProfile;
@@ -145,10 +145,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       if (resolvedProviderId !== providerId) {
         throw serviceError("invalid_profile", "Inherited worker provider identity changed");
       }
-      profileSnapshot = requireWorkerProfile({
-        ...inherited.profileSnapshot,
-        ...provisionSnapshot,
-      });
+      profileSnapshot = inherited.profileSnapshot;
     } else {
       if (!configuredProfile) {
         throw serviceError("profile_not_found", `Unknown worker profile: ${normalizedProfileId}`);
@@ -156,13 +153,15 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       provider = providerFor(configuredProfile.provider);
       providerId = normalizeCapabilityProviderId(provider.id) ?? provider.id;
       const settings = requireWorkerProfile(configuredProfile.settings ?? {});
-      profileSnapshot = requireWorkerProfile({
-        install: configuredProfile.install ?? "bundle",
-        settings,
-        ...provisionSnapshot,
-      });
+      profileSnapshot = { install: configuredProfile.install ?? "bundle", settings };
     }
-    return { provider, providerId, profileSnapshot: structuredClone(profileSnapshot) };
+    return {
+      provider,
+      providerId,
+      profileSnapshot: structuredClone(
+        requireWorkerProfile(allocationSnapshot(profileSnapshot, createOptions)),
+      ),
+    };
   };
 
   const prepareIntent = async (
@@ -439,28 +438,17 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     createOptions: WorkerProviderIntentPreparationOptions = {},
     admittedIntent?: WorkerProviderPreparedIntent,
   ) => {
-    const {
-      inherited: requestedInherited,
-      machineClass,
-      os,
-      executionMode,
-      projectPath,
-      signal,
-    } = createOptions;
-    signal?.throwIfAborted();
-    const inherited = requestedInherited
-      ? { ...requestedInherited, profileSnapshot: { ...requestedInherited.profileSnapshot } }
+    const { machineClass, os, executionMode, projectPath, signal } = createOptions;
+    const inherited = createOptions.inherited
+      ? {
+          providerId: createOptions.inherited.providerId,
+          profileSnapshot: allocationSnapshot(
+            createOptions.inherited.profileSnapshot,
+            createOptions,
+          ),
+        }
       : undefined;
-    // Project authority belongs to this allocation. Ignore the source allocation's
-    // descriptor during both fresh admission and comparison with an existing intent.
-    if (inherited) {
-      delete inherited.profileSnapshot.project;
-    }
-    const provisionSnapshot = {
-      ...(machineClass === undefined ? {} : { machineClass }),
-      ...(os === undefined ? {} : { os }),
-      ...(executionMode === undefined ? {} : { executionMode }),
-    };
+    signal?.throwIfAborted();
     if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
@@ -505,21 +493,12 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             );
           }
         }
-        if (admittedIntent) {
-          assertPreparedIntentCurrent(profileId, admittedIntent);
-          if (
-            !isDeepStrictEqual(
-              projectReplayIdentity(existing.profileSnapshot.project),
-              projectReplayIdentity(admittedIntent.profileSnapshot.project),
-            )
-          ) {
-            throw serviceError(
-              "invalid_profile",
-              "Idempotency key belongs to another project preparation",
-            );
-          }
-        } else if (createOptions.repository || createOptions.projectRepository) {
-          const requested = await prepareIntent(profileId, createOptions);
+        const requested =
+          admittedIntent ??
+          (createOptions.repository || createOptions.projectRepository
+            ? await prepareIntent(profileId, createOptions)
+            : undefined);
+        if (requested) {
           signal?.throwIfAborted();
           assertPreparedIntentCurrent(profileId, requested);
           if (
@@ -540,7 +519,6 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             (existing.providerId !== inherited.providerId ||
               !isDeepStrictEqual(existing.profileSnapshot, {
                 ...inherited.profileSnapshot,
-                ...provisionSnapshot,
                 ...(existingProject ? { project: existing.profileSnapshot.project } : {}),
               }))) ||
           (inherited === undefined &&

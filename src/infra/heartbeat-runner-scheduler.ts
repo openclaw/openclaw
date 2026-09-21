@@ -175,13 +175,7 @@ export function startHeartbeatRunner(opts: {
   };
 
   const run: HeartbeatWakeHandler = async (params) => {
-    if (state.stopped) {
-      return {
-        status: "skipped",
-        reason: "disabled",
-      } satisfies HeartbeatRunResult;
-    }
-    if (!areHeartbeatsEnabled()) {
+    if (state.stopped || !areHeartbeatsEnabled()) {
       return {
         status: "skipped",
         reason: "disabled",

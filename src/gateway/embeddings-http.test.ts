@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { createConfigIO, resetConfigRuntimeState } from "../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/io.js";
 import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
@@ -719,6 +720,67 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(res.status).toBe(500);
     expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1);
   });
+
+  it.each(["provider acquisition", "embedding"] as const)(
+    "revalidates admission without canceling accepted work when policy changes during %s",
+    async (phase) => {
+      const operationStarted = createDeferred();
+      const releaseOperation = createDeferred();
+      const waitForPolicyChange = async () => {
+        operationStarted.resolve();
+        await releaseOperation.promise;
+      };
+      const embed = vi.fn(async () => {
+        if (phase === "embedding") {
+          await waitForPolicyChange();
+        }
+        return [[0.1, 0.2]];
+      });
+      const closed = createDeferred();
+      const close = vi.fn(() => closed.resolve());
+      createEmbeddingProviderMock.mockImplementationOnce(async (options) => {
+        if (phase === "provider acquisition") {
+          await waitForPolicyChange();
+        }
+        return {
+          provider: {
+            id: options.provider,
+            model: options.model,
+            embed: async () => [0.1, 0.2],
+            embedBatch: embed,
+            close,
+          },
+        };
+      });
+      const cfg = getRuntimeConfig();
+      const pending = postEmbeddings({ model: "openclaw/default", input: "hello" });
+      try {
+        await operationStarted.promise;
+        setRuntimeConfigSnapshot({
+          ...cfg,
+          gateway: {
+            ...cfg.gateway,
+            allowRealIpFallback: !cfg.gateway?.allowRealIpFallback,
+          },
+        });
+        releaseOperation.resolve();
+
+        const response = await pending;
+        if (phase === "provider acquisition") {
+          expect(response.status).toBe(401);
+          expect(embed).not.toHaveBeenCalled();
+        } else {
+          await expectDefaultEmbeddingResponse(response);
+        }
+        await closed.promise;
+        expect(close).toHaveBeenCalledTimes(1);
+      } finally {
+        releaseOperation.resolve();
+        await pending;
+        setRuntimeConfigSnapshot(cfg);
+      }
+    },
+  );
 
   it("aborts provider work when the HTTP client disconnects", async () => {
     const closesBefore = closeEmbeddingProviderMock.mock.calls.length;

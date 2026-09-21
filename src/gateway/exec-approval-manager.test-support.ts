@@ -31,6 +31,25 @@ export function createTestApprovalManager<TPayload = ExecApprovalRequestPayload>
   test: TestContext,
   options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence"> = {},
 ): ExecApprovalManager<TPayload> {
+  return createTestApprovalFixture(test, options).manager;
+}
+
+/** Prepare the real worker before a request starts its approval deadline. */
+export async function createPreparedTestApprovalManager<TPayload = ExecApprovalRequestPayload>(
+  test: TestContext,
+  options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence"> = {},
+) {
+  const fixture = createTestApprovalFixture(test, options);
+  await operatorApprovalStore.listPendingOperatorApprovals({
+    databaseOptions: fixture.databaseOptions,
+  });
+  return fixture;
+}
+
+function createTestApprovalFixture<TPayload>(
+  test: TestContext,
+  options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence">,
+) {
   test.signal.throwIfAborted();
   const restoreClock = installTestApprovalClock();
   test.onTestFinished(() => restoreClock?.());
@@ -60,7 +79,7 @@ export function createTestApprovalManager<TPayload = ExecApprovalRequestPayload>
       ...options,
       persistence: { runtimeEpoch: randomUUID(), databaseOptions },
     });
-    return manager;
+    return { manager, databaseOptions };
   } catch (error) {
     // A failed open can include failed closure of an unpublished handle.
     // Retain its inputs rather than certify cleanup from an empty cache.

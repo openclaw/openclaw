@@ -84,17 +84,25 @@ it("preserves a symlink target when scratch is replaced after transaction retire
   const protectedFile = path.join(outside, "config-0");
   await fs.writeFile(protectedFile, "unrelated data");
   const release = scratch.release;
-  scratch.release = (retiring) => {
-    release(retiring);
-    if (retiring) {
-      fsSync.renameSync(scratch.directory, `${scratch.directory}.original`);
-      fsSync.symlinkSync(
-        outside,
-        scratch.directory,
-        process.platform === "win32" ? "junction" : "dir",
-      );
-    }
-  };
+  scratch.release = Object.assign(
+    (retiring?: boolean) => {
+      release(retiring);
+      if (retiring) {
+        fsSync.renameSync(scratch.directory, `${scratch.directory}.original`);
+        fsSync.symlinkSync(
+          outside,
+          scratch.directory,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+    },
+    {
+      beginRetirement: () => {
+        release.beginRetirement();
+        return scratch.release;
+      },
+    },
+  );
   await expect(finishBackupScratch(scratch, () => {})).resolves.toContain(scratch.directory);
   await expect(fs.readFile(protectedFile, "utf8")).resolves.toBe("unrelated data");
 });

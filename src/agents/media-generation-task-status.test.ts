@@ -28,6 +28,9 @@ const taskRuntimeInternalMocks = vi.hoisted(() => {
 });
 
 vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
+vi.mock("../tasks/task-registry-state.js", () => ({
+  assertTaskRegistryOwnerCurrent: vi.fn(),
+}));
 
 function expectActiveImageGenerationTask(
   task: Awaited<ReturnType<typeof findDuplicateGuardImageGenerationTaskForSession>>,
