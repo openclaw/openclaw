@@ -6,10 +6,10 @@ read_when:
   - You need the Perplexity API key or OpenRouter proxy setup
 ---
 
-The Perplexity plugin registers a `web_search` provider with two transports: the
-native Perplexity Search API (structured results with filters) and Perplexity
-Sonar chat completions, direct or via OpenRouter (AI-synthesized answers with
-citations).
+The Perplexity plugin registers a `web_search` provider with three transports:
+the native Perplexity Search API (structured results with filters), the direct
+Perplexity Agent API (AI-synthesized answers with citations), and Sonar chat
+completions through OpenRouter or another compatible endpoint.
 
 <Note>
 This page covers the Perplexity **provider** setup. For the Perplexity **tool** (how the agent uses it), see [Perplexity search](/tools/perplexity-search).
@@ -65,7 +65,7 @@ on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#app
 
 The plugin resolves transport in this order:
 
-1. `webSearch.baseUrl` or `webSearch.model` set: always routes through Sonar chat completions against that endpoint, regardless of key type.
+1. `webSearch.baseUrl` or `webSearch.model` set: direct Perplexity endpoints route through Agent API; OpenRouter and other compatible endpoints keep Sonar chat completions.
 2. Otherwise, key source decides the endpoint: a configured key's prefix picks the transport (config beats environment variables); an environment key uses its matching endpoint directly.
 
 | Key prefix | Transport                                                  | Features                                         |
@@ -73,23 +73,25 @@ The plugin resolves transport in this order:
 | `pplx-`    | Native Perplexity Search API (`https://api.perplexity.ai`) | Structured results, domain/language/date filters |
 | `sk-or-`   | OpenRouter (`https://openrouter.ai/api/v1`), Sonar model   | AI-synthesized answers with citations            |
 
-A configured key with any other prefix also uses the native Search API. The
-chat-completions path defaults to the `perplexity/sonar-pro` model; override it
+A configured key with any other prefix also uses the native Search API. Setting
+a model or direct Perplexity base URL switches native credentials to Agent API;
+the legacy Sonar model names map to the corresponding Agent API presets. The
+OpenRouter/chat-completions path defaults to `perplexity/sonar-pro`; override it
 with `plugins.entries.perplexity.config.webSearch.model`.
 
 ## Native API filtering
 
-| Filter                               | Description                                                                             | Transport   |
-| ------------------------------------ | --------------------------------------------------------------------------------------- | ----------- |
-| `count`                              | Results per search, 1-10 (default 5); accepted but ignored on the chat-completions path | Both        |
-| `freshness`                          | Recency window: `day`, `week`, `month`, `year`                                          | Both        |
-| `country`                            | 2-letter country code (`us`, `de`, `jp`)                                                | Native only |
-| `language`                           | ISO 639-1 language code (`en`, `fr`, `zh`)                                              | Native only |
-| `date_after` / `date_before`         | Published-date range in `YYYY-MM-DD`                                                    | Native only |
-| `domain_filter`                      | Max 20 domains; allowlist or `-`-prefixed denylist, never mixed                         | Native only |
-| `max_tokens` / `max_tokens_per_page` | Content budget across all results / per page; `max_tokens` max 1000000                  | Native only |
+| Filter                               | Description                                                                            | Transport   |
+| ------------------------------------ | -------------------------------------------------------------------------------------- | ----------- |
+| `count`                              | Results per search, 1-10 (default 5); accepted but ignored on synthesized-answer paths | All         |
+| `freshness`                          | Recency window: `day`, `week`, `month`, `year`                                         | All         |
+| `country`                            | 2-letter country code (`us`, `de`, `jp`)                                               | Native only |
+| `language`                           | ISO 639-1 language code (`en`, `fr`, `zh`)                                             | Native only |
+| `date_after` / `date_before`         | Published-date range in `YYYY-MM-DD`                                                   | Native only |
+| `domain_filter`                      | Max 20 domains; allowlist or `-`-prefixed denylist, never mixed                        | Native only |
+| `max_tokens` / `max_tokens_per_page` | Content budget across all results / per page; `max_tokens` max 1000000                 | Native only |
 
-Native-only filters return a descriptive error on the chat-completions path.
+Native-only filters return a descriptive error on synthesized-answer paths.
 `freshness` cannot be combined with `date_after`/`date_before`.
 
 ## Advanced configuration

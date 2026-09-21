@@ -19,7 +19,7 @@ export type RuntimeWebDiagnostic = {
 /** Runtime selection metadata for the web search tool. */
 export type RuntimeWebSearchMetadata = RuntimeWebFetchMetadata & {
   /** Perplexity transport chosen from provider config or runtime default. */
-  perplexityTransport?: "search_api" | "chat_completions";
+  perplexityTransport?: "search_api" | "agent_api" | "chat_completions";
 };
 
 /** Runtime selection metadata for the web fetch tool. */
