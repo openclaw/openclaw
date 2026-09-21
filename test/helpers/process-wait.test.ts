@@ -60,8 +60,7 @@ it.each(["", "0"])("rejects PID contents %j at the deadline", async (contents) =
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it.each(["42stale", "42
-junk", "4.2", "0x2a"])(
+it.each(["42stale", "42\njunk", "4.2", "0x2a"])(
   "rejects non-decimal PID contents %j at the deadline",
   async (contents) => {
     vi.useFakeTimers();
