@@ -693,6 +693,57 @@ describe("mattermost inbound user posts", () => {
     }
   });
 
+  it("preserves conversation-wide admission order across interleaved senders in one channel", async () => {
+    // Releasing the per-channel ingress lane on defer (deferredLaneOccupancy:
+    // "release" in monitor-ingress.ts) lets independent per-sender debounce
+    // buffers admit and flush concurrently. Without the cross-sender flush
+    // guard, a later sender's post (B1) could flush ahead of an earlier
+    // sender's still-buffering post (A1), inverting conversation order.
+    const cfg = { ...testConfig, messages: { inbound: { debounceMs: 300 } } };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    mockState.dispatchInboundMessage.mockResolvedValue(undefined);
+    mockState.runtimeCore = createRuntimeCore(cfg, undefined, {
+      createInboundDebouncer,
+      resolveInboundDebounceMs,
+    });
+    const socket = new FakeWebSocket();
+    const abort = new AbortController();
+    const socketFactory = vi.fn(() => socket);
+    const monitor = monitorMattermostProvider({
+      config: cfg,
+      runtime: testRuntime(),
+      abortSignal: abort.signal,
+      webSocketFactory: socketFactory,
+    });
+    await vi.waitFor(() => expect(socket.openListenerCount).toBeGreaterThan(0));
+    socket.emitOpen();
+    const bodies = () =>
+      mockState.dispatchInboundMessage.mock.calls.map(([params]) => params.ctx.BodyForAgent);
+    try {
+      await emitMattermostChannelPost(socket, {
+        id: "order-a1",
+        message: "A1",
+        senderId: "user-a",
+      });
+      await emitMattermostChannelPost(socket, {
+        id: "order-b1",
+        message: "B1",
+        senderId: "user-b",
+      });
+      await emitMattermostChannelPost(socket, {
+        id: "order-a2",
+        message: "A2",
+        senderId: "user-a",
+      });
+      await vi.waitFor(() => expect(bodies()).toEqual(["A1", "B1", "A2"]));
+    } finally {
+      abort.abort();
+      socket.emitClose(1000);
+      await monitor;
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {
     vi.useFakeTimers();
     const now = Date.UTC(2026, 0, 2);

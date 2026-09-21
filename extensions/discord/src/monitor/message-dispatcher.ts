@@ -99,6 +99,8 @@ export function createDiscordMessageDispatcher(
     abortSignal?: AbortSignal;
     turnAdoptionLifecycle?: DiscordIngressLifecycle;
     debounceKey?: string;
+    laneKey?: string;
+    laneTracked?: boolean;
   };
   const pendingDebounceEntries = new Set<DiscordDebounceEntry>();
   const pendingCancellationSettlements = new Set<Promise<void>>();
@@ -118,26 +120,70 @@ export function createDiscordMessageDispatcher(
     const replyTargetId = resolveDiscordReferencedReplyMessageId(message);
     return `discord:${params.accountId}:${channelId}:${authorId}:reply:${replyTargetId ?? "none"}`;
   };
+  // The ingress monitor's admission lane is per channel (`channel:<channelId>`,
+  // see ingress.ts), coarser than the debounce key above, which also splits on
+  // author and reply target. Track it separately so a sender/reply-target
+  // change can be detected within one channel.
+  const resolveLaneKey = (entry: DiscordDebounceEntry) => {
+    const message = entry.data.message;
+    if (!message) {
+      return null;
+    }
+    const channelId = resolveDiscordMessageChannelId({
+      message,
+      eventChannelId: entry.data.channel_id,
+    });
+    return channelId ? `discord:${params.accountId}:${channelId}` : null;
+  };
+  const shouldDebounceEntry = (entry: DiscordDebounceEntry) => {
+    const message = entry.data.message;
+    if (!message) {
+      return false;
+    }
+    const baseText = resolveDiscordMessageText(message, { includeForwarded: false });
+    return shouldDebounceTextInbound({
+      text: baseText,
+      cfg: params.cfg,
+      hasMedia:
+        (message.attachments && message.attachments.length > 0) ||
+        hasDiscordMessageStickers(message),
+    });
+  };
+  // Reference-counted per-lane record of which debounce key currently holds
+  // the lane's pending batch, mirroring the cross-sender flush guard in
+  // extensions/whatsapp/src/inbound/message-debounce.ts. Releasing the
+  // per-channel ingress lane on defer (deferredLaneOccupancy: "release" in
+  // ingress.ts) lets independent author/reply-target debounce keys admit and
+  // flush concurrently; without this guard a later-arriving key can flush
+  // ahead of an earlier one still merging, inverting conversation order.
+  const pendingLaneKeys = new Map<string, { count: number; batchKey: string }>();
+  const trackLane = (laneKey: string, batchKey: string) => {
+    pendingLaneKeys.set(laneKey, {
+      count: (pendingLaneKeys.get(laneKey)?.count ?? 0) + 1,
+      batchKey,
+    });
+  };
+  const releaseLane = (entry: DiscordDebounceEntry) => {
+    if (!entry.laneKey || entry.laneTracked !== true) {
+      return;
+    }
+    const pending = pendingLaneKeys.get(entry.laneKey);
+    if (pending && pending.count > 1) {
+      pending.count -= 1;
+    } else {
+      pendingLaneKeys.delete(entry.laneKey);
+    }
+  };
   const { debouncer } = createChannelInboundDebouncer<DiscordDebounceEntry>({
     cfg: params.cfg,
     channel: "discord",
     resolveDebounceMs: () => resolveInboundDebounceMs({ cfg: readConfig(), channel: "discord" }),
     buildKey: resolveDebounceKey,
-    shouldDebounce: (entry) => {
-      const message = entry.data.message;
-      if (!message) {
-        return false;
-      }
-      const baseText = resolveDiscordMessageText(message, { includeForwarded: false });
-      return shouldDebounceTextInbound({
-        text: baseText,
-        cfg: params.cfg,
-        hasMedia:
-          (message.attachments && message.attachments.length > 0) ||
-          hasDiscordMessageStickers(message),
-      });
-    },
+    shouldDebounce: shouldDebounceEntry,
     onFlush: (entries, createFlush) => {
+      for (const entry of entries) {
+        releaseLane(entry);
+      }
       const ingress = fanInChannelIngressLifecycles(
         entries.map((entry) => entry.turnAdoptionLifecycle),
       );
@@ -204,6 +250,7 @@ export function createDiscordMessageDispatcher(
     onCancel: (entries) => {
       for (const entry of entries) {
         pendingDebounceEntries.delete(entry);
+        releaseLane(entry);
         const settlement = fanInChannelIngressLifecycles([entry.turnAdoptionLifecycle])
           .cancel()
           .catch((error: unknown) => {
@@ -260,6 +307,22 @@ export function createDiscordMessageDispatcher(
       if (debounceKey) {
         entry.debounceKey = debounceKey;
         pendingDebounceEntries.add(entry);
+        const laneKey = resolveLaneKey(entry);
+        if (laneKey) {
+          entry.laneKey = laneKey;
+          const pendingLane = pendingLaneKeys.get(laneKey);
+          // One channel lane orders admission; a sender/reply-target change
+          // ends the current batch so a later-arriving key cannot flush
+          // ahead of an earlier one still merging in the same channel.
+          if (pendingLane && pendingLane.batchKey !== debounceKey) {
+            await debouncer.flushKey(pendingLane.batchKey);
+          }
+          const debounceMsNow = resolveInboundDebounceMs({ cfg: readConfig(), channel: "discord" });
+          if (debounceMsNow > 0 && shouldDebounceEntry(entry)) {
+            entry.laneTracked = true;
+            trackLane(laneKey, debounceKey);
+          }
+        }
       }
       await debouncer.enqueue(entry);
       if (options?.turnAdoptionLifecycle) {

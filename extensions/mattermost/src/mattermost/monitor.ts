@@ -246,38 +246,81 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const handlePost = createMattermostPostHandler(monitor);
   const handleReactionEvent = createMattermostReactionHandler(monitor);
 
-  const debouncer = core.channel.debounce.createInboundDebouncer<{
+  type MattermostDebounceEntry = {
     post: MattermostIngressPost;
     payload: MattermostEventPayload;
     turnAdoptionLifecycle: MattermostIngressLifecycle;
-  }>({
+    laneKey?: string;
+    laneTracked?: boolean;
+  };
+  const resolveDebounceKey = (entry: MattermostDebounceEntry) => {
+    const channelId =
+      entry.post.channel_id ??
+      entry.payload.data?.channel_id ??
+      entry.payload.broadcast?.channel_id;
+    if (!channelId || !entry.post.user_id) {
+      return null;
+    }
+    const threadId = normalizeOptionalString(entry.post.root_id);
+    // Cross-sender merging would apply only the final post's identity during access checks.
+    return `mattermost:${account.accountId}:${channelId}:${threadId ? `thread:${threadId}` : "channel"}:${entry.post.user_id}`;
+  };
+  // The ingress monitor's admission lane is per channel (`channel:<channelId>`,
+  // see monitor-ingress.ts), coarser than the debounce key above, which also
+  // splits on thread and sender.
+  const resolveLaneKey = (entry: MattermostDebounceEntry) => {
+    const channelId =
+      entry.post.channel_id ??
+      entry.payload.data?.channel_id ??
+      entry.payload.broadcast?.channel_id;
+    return channelId ? `mattermost:${account.accountId}:${channelId}` : null;
+  };
+  const shouldDebounceEntry = (entry: MattermostDebounceEntry) => {
+    // Typed posts are dropped downstream; batching would let their text or type affect a user post.
+    if (normalizeOptionalString(entry.post.type) !== undefined || entry.post.file_ids?.length) {
+      return false;
+    }
+    const text = normalizeOptionalString(entry.post.message) ?? "";
+    // Same mention-stripped view as the post handler, so "@bot /new" is never batched.
+    return (
+      Boolean(text) &&
+      !core.channel.commands.isControlCommandMessage(normalizeMention(text, botUsername), cfg)
+    );
+  };
+  // Reference-counted per-lane record of which debounce key currently holds
+  // the lane's pending batch, mirroring the cross-sender flush guard in
+  // extensions/whatsapp/src/inbound/message-debounce.ts. Releasing the
+  // per-channel ingress lane on defer (deferredLaneOccupancy: "release" in
+  // monitor-ingress.ts) lets independent thread/sender debounce keys admit and
+  // flush concurrently; without this guard a later-arriving key can flush
+  // ahead of an earlier one still merging, inverting conversation order.
+  const pendingLaneKeys = new Map<string, { count: number; batchKey: string }>();
+  const trackLane = (laneKey: string, batchKey: string) => {
+    pendingLaneKeys.set(laneKey, {
+      count: (pendingLaneKeys.get(laneKey)?.count ?? 0) + 1,
+      batchKey,
+    });
+  };
+  const releaseLane = (entry: MattermostDebounceEntry) => {
+    if (!entry.laneKey || entry.laneTracked !== true) {
+      return;
+    }
+    const pending = pendingLaneKeys.get(entry.laneKey);
+    if (pending && pending.count > 1) {
+      pending.count -= 1;
+    } else {
+      pendingLaneKeys.delete(entry.laneKey);
+    }
+  };
+  const debouncer = core.channel.debounce.createInboundDebouncer<MattermostDebounceEntry>({
     debounceMs: resolveDebounceMs(),
     resolveDebounceMs,
-    buildKey: (entry) => {
-      const channelId =
-        entry.post.channel_id ??
-        entry.payload.data?.channel_id ??
-        entry.payload.broadcast?.channel_id;
-      if (!channelId || !entry.post.user_id) {
-        return null;
-      }
-      const threadId = normalizeOptionalString(entry.post.root_id);
-      // Cross-sender merging would apply only the final post's identity during access checks.
-      return `mattermost:${account.accountId}:${channelId}:${threadId ? `thread:${threadId}` : "channel"}:${entry.post.user_id}`;
-    },
-    shouldDebounce: (entry) => {
-      // Typed posts are dropped downstream; batching would let their text or type affect a user post.
-      if (normalizeOptionalString(entry.post.type) !== undefined || entry.post.file_ids?.length) {
-        return false;
-      }
-      const text = normalizeOptionalString(entry.post.message) ?? "";
-      // Same mention-stripped view as the post handler, so "@bot /new" is never batched.
-      return (
-        Boolean(text) &&
-        !core.channel.commands.isControlCommandMessage(normalizeMention(text, botUsername), cfg)
-      );
-    },
+    buildKey: resolveDebounceKey,
+    shouldDebounce: shouldDebounceEntry,
     onFlush: (entries, createFlush) => {
+      for (const entry of entries) {
+        releaseLane(entry);
+      }
       const last = entries.at(-1);
       const { lifecycle, settle } = fanInChannelIngressLifecycles(
         entries.map((entry) => entry.turnAdoptionLifecycle),
@@ -325,9 +368,28 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     runtime,
     abortSignal: opts.abortSignal,
     dispatch: async (post, payload, turnAdoptionLifecycle) => {
+      const entry: MattermostDebounceEntry = { post, payload, turnAdoptionLifecycle };
+      const debounceKey = resolveDebounceKey(entry);
+      if (debounceKey) {
+        const laneKey = resolveLaneKey(entry);
+        if (laneKey) {
+          entry.laneKey = laneKey;
+          const pendingLane = pendingLaneKeys.get(laneKey);
+          // One channel lane orders admission; a thread/sender change ends the
+          // current batch so a later-arriving key cannot flush ahead of an
+          // earlier one still merging in the same channel.
+          if (pendingLane && pendingLane.batchKey !== debounceKey) {
+            await debouncer.flushKey(pendingLane.batchKey);
+          }
+          if (resolveDebounceMs() > 0 && shouldDebounceEntry(entry)) {
+            entry.laneTracked = true;
+            trackLane(laneKey, debounceKey);
+          }
+        }
+      }
       // Deferred claims settle through lifecycle callbacks, so terminal flush
       // errors spend the drain's bounded retry budget before dead-lettering.
-      await debouncer.enqueue({ post, payload, turnAdoptionLifecycle });
+      await debouncer.enqueue(entry);
       return { kind: "deferred" };
     },
   });
