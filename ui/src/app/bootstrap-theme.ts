@@ -95,7 +95,20 @@ export function createApplicationTheme(
       }
       const previousMascot =
         typeof document === "undefined" ? undefined : document.documentElement.dataset.themeMascot;
+      const previousHat =
+        typeof document === "undefined"
+          ? undefined
+          : document.documentElement.dataset.themeAvatarHat;
       applyThemePresentation(settings, catalog?.theme(settings.theme));
+      if (
+        typeof document !== "undefined" &&
+        (previousMascot !== document.documentElement.dataset.themeMascot ||
+          previousHat !== document.documentElement.dataset.themeAvatarHat)
+      ) {
+        for (const listener of listeners) {
+          listener();
+        }
+      }
       if (
         typeof document !== "undefined" &&
         (previousMascot === "none" || document.documentElement.dataset.themeMascot === "none")

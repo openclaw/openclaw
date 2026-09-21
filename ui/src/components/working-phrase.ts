@@ -37,14 +37,24 @@ const WORKING_PHRASE_SHOW_AFTER_MS = 30_000;
 /** How long each phrase holds before rotating to the next. */
 const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
 
-/** Constant-time stride walk over the phrase list: any stride in
- * [1, len-1] guarantees adjacent buckets differ, and with a prime-length
- * list (currently 19) every stride cycles through all phrases before
- * repeating. Must stay O(1) in bucket — ChatItem.startedAt can be an
- * arbitrarily old timestamp, and this runs on a one-second poll. */
+function greatestCommonDivisor(first: number, second: number): number {
+  let left = first;
+  let right = second;
+  while (right !== 0) {
+    [left, right] = [right, left % right];
+  }
+  return left;
+}
+
+/** A coprime stride visits every authored phrase before repeating. Keep the
+ * existing seed walk for the prime-length default list and stay O(1) in bucket,
+ * since a persisted run can have an arbitrarily old start time. */
 function displayedPhraseIndex(seed: string, bucket: number, length: number): number {
   const offset = fnv1aUtf16(`${seed}:offset`) % length;
-  const stride = length === 1 ? 0 : 1 + (fnv1aUtf16(`${seed}:stride`) % (length - 1));
+  let stride = length === 1 ? 0 : 1 + (fnv1aUtf16(`${seed}:stride`) % (length - 1));
+  while (greatestCommonDivisor(stride, length) !== 1) {
+    stride = (stride % (length - 1)) + 1;
+  }
   return (offset + bucket * stride) % length;
 }
 

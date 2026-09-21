@@ -221,6 +221,15 @@ export function renderIdentityAvatarImage({
   />`;
 }
 
+export function renderAgentAvatarHat(agentId: string, branding = currentThemeBranding()) {
+  const hat = resolveAvatarHat(agentId, branding);
+  return hat
+    ? html`<span class=${`identity-avatar__hat identity-avatar__hat--${hat}`} aria-hidden="true"
+        >${AVATAR_HAT_SPRITES[hat]}</span
+      >`
+    : nothing;
+}
+
 /** Agent images and emoji share one fallback across every surface. */
 export function renderAgentIdentityAvatar(
   agent: {
@@ -258,7 +267,6 @@ export function renderAgentIdentityAvatar(
     sourceUrl: agent.avatar ?? undefined,
     pending: agent.pending ?? imageUrl !== null,
   };
-  const hat = agent.pending ? null : resolveAvatarHat(agent.id, branding);
   return html`<span
     class=${identityAvatarClass(`identity-avatar--agent ${className}`, view)}
     role=${agent.name ? "img" : nothing}
@@ -278,12 +286,6 @@ export function renderAgentIdentityAvatar(
         ),
       )}
     </span>
-    ${
-      hat
-        ? html`<span class=${`identity-avatar__hat identity-avatar__hat--${hat}`} aria-hidden="true"
-            >${AVATAR_HAT_SPRITES[hat]}</span
-          >`
-        : nothing
-    }
+    ${agent.pending ? nothing : renderAgentAvatarHat(agent.id, branding)}
   </span>`;
 }

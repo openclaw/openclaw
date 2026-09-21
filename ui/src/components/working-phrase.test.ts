@@ -51,23 +51,26 @@ describe("openclaw-working-phrase", () => {
     expect(await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS - 5_000)).toBe("");
   });
 
-  it("walks authored phrases without translation and restores the default vocabulary", async () => {
-    const defaultPhrase = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS);
-    const phrases = ["Building", "Compiling", "Reviewing"];
-    element.phrases = phrases;
-    const displayed = new Set<string>();
-    for (let bucket = 0; bucket < phrases.length; bucket++) {
-      displayed.add(
-        await textAt(
-          element,
-          WORKING_PHRASE_SHOW_AFTER_MS + bucket * WORKING_PHRASE_ROTATE_EVERY_MS,
-        ),
-      );
-    }
-    expect(displayed).toEqual(new Set(phrases.map((phrase) => `· ${phrase}…`)));
-    element.phrases = undefined;
-    expect(await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS)).toBe(defaultPhrase);
-  });
+  it.each([3, 4, 6, 8, 10, 12, 24])(
+    "walks all %i authored phrases without translation and restores the default vocabulary",
+    async (length) => {
+      const defaultPhrase = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS);
+      const phrases = Array.from({ length }, (_, index) => `Phrase ${index + 1}`);
+      element.phrases = phrases;
+      const displayed = new Set<string>();
+      for (let bucket = 0; bucket < phrases.length; bucket++) {
+        displayed.add(
+          await textAt(
+            element,
+            WORKING_PHRASE_SHOW_AFTER_MS + bucket * WORKING_PHRASE_ROTATE_EVERY_MS,
+          ),
+        );
+      }
+      expect(displayed).toEqual(new Set(phrases.map((phrase) => `· ${phrase}…`)));
+      element.phrases = undefined;
+      expect(await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS)).toBe(defaultPhrase);
+    },
+  );
 
   it("renders nothing for an empty authored list", async () => {
     element.phrases = [];

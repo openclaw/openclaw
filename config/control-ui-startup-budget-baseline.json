@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 367728,
-  "reason": "Portable theme branding, critters, and avatar hats measured 368304 B startup JS, 2467 B (0.6744%) above the original 365837 B enforcement limit. The approved sub-1% adjustment sets baseline and cap to 367728 B, preserving the 512 B growth and 64 B build-variance allowances. The CSS ceiling remains at its original 51200 B; measured CSS is 51180 B.",
+  "startupJsGzipBytes": 367983,
+  "reason": "Portable theme branding after CI and review fixes measured 368359 B startup JS locally. Add 200 B for the Linux build and subtract the unchanged 512 B growth and 64 B variance allowances: baseline and cap 367983 B, enforcement limit 368559 B. This is 2722 B (0.744%) above the original 365837 B limit, below the approved 1% increase. CSS remains 51180 B under its unchanged 51200 B ceiling.",
   "updatedAt": "2026-09-21"
 }

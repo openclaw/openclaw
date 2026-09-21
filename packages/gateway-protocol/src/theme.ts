@@ -165,14 +165,11 @@ export const BUILTIN_THEMES: readonly ThemeDescriptor[] = (
       description:
         "Hot magenta and cyan on violet-black or pale lavender, with Space Grotesk. Bright neon energy and a synthwave character.",
     },
-  ] satisfies Array<
-    Pick<
-      ThemeDescriptor,
-      "id" | "name" | "description" | "mascot" | "workingPhrases" | "critters" | "avatarHat"
-    >
-  >
+  ] satisfies Array<Pick<ThemeDescriptor, "id" | "name" | "description">>
 ).map<ThemeDescriptor>((theme) => ({
-  ...theme,
+  id: theme.id,
+  name: theme.name,
+  description: theme.description,
   source: "builtin",
   modes: ["light", "dark"],
 }));
@@ -312,7 +309,7 @@ export function normalizeThemeDefinition(value: unknown): ThemeDefinition {
     ...(record.dark !== undefined ? { dark: normalizePalette(record.dark, "dark") } : {}),
   };
   if (record.mascot !== undefined) {
-    const mascot = THEME_MASCOT_VALUES.find((value) => value === record.mascot);
+    const mascot = THEME_MASCOT_VALUES.find((candidate) => candidate === record.mascot);
     if (!mascot) {
       throw new Error(`theme.mascot must be one of ${THEME_MASCOT_VALUES.join(", ")}`);
     }
@@ -339,8 +336,8 @@ export function normalizeThemeDefinition(value: unknown): ThemeDefinition {
     if (!Array.isArray(record.critters) || record.critters.length > 8) {
       throw new Error("theme.critters must be an array of at most 8 entries");
     }
-    const critters = Array.from(record.critters, (value, index) => {
-      const critter = THEME_CRITTER_IDS.find((id) => id === value);
+    const critters = Array.from(record.critters, (entry, index) => {
+      const critter = THEME_CRITTER_IDS.find((id) => id === entry);
       if (!critter) {
         throw new Error(`theme.critters[${index}] must be one of ${THEME_CRITTER_IDS.join(", ")}`);
       }

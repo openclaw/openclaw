@@ -50,8 +50,8 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 const controlUiPerformanceBudgets = {
   startupJsRequests: 18,
   startupCssRequests: 1,
-  // Portable theme branding adds 2,467 B over the prior enforcement limit; allowances stay fixed.
-  startupJsGzipBytes: 367_728,
+  // Theme branding measured 368,359 B locally; allow 200 B for CI with unchanged allowances.
+  startupJsGzipBytes: 367_983,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,

@@ -10,12 +10,12 @@ import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/them
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
 import { patchSettings } from "../app/settings.ts";
 import * as dex from "./lobster-dex.ts";
-import { playLobsterPetChirp, type LobsterPetChirpKind } from "./lobster-pet-audio.ts";
 import * as contract from "./lobster-pet-contract.ts";
 import {
   renderLobsterPetDismissMenu,
   type LobsterPetDismissMenuPosition,
 } from "./lobster-pet-dismiss-menu.ts";
+import { LobsterPetInteractions } from "./lobster-pet-interactions.ts";
 import * as lobsterLook from "./lobster-pet-look.ts";
 import * as plans from "./lobster-pet-plans.ts";
 import { renderLobsterPetScene } from "./lobster-pet-scene-view.ts";
@@ -89,6 +89,25 @@ class LobsterPet extends LitElement {
     onPasserMidCross: () => this.reactToPasser(),
     onPasserDone: () => this.scheduleNextAct(),
   });
+  private readonly interactions = new LobsterPetInteractions(this, {
+    soundsEnabled: () => this.soundsEnabled,
+    canHuff: () => this.mode !== "offline",
+    canGaze: () => this.presence === "in" && this.act === null && !this.vigil,
+    onGrumpyChange: (grumpy) => {
+      this.grumpy = grumpy;
+    },
+    onAct: (act) => this.performAct(act),
+    onFacing: (facing) => {
+      this.facing = facing;
+    },
+    onHuff: () => {
+      this.clearVisitTimers();
+      this.scheduledVisiting = false;
+      this.armArrival(
+        lobsterLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]),
+      );
+    },
+  });
   @state() private shellVisible = false;
   private shellSpotPct = 50;
   private shellScale = 2;
@@ -112,13 +131,7 @@ class LobsterPet extends LitElement {
   private enterTimer: number | null = null;
   private visitTimer: number | null = null;
   private leaveTimer: number | null = null;
-  private grumpyTimer: number | null = null;
   private vigilTimer: number | null = null;
-  private holdTimer: number | null = null;
-  private holdPetted = false;
-  private audioCtx: AudioContext | null = null;
-  private pokeTimes: number[] = [];
-  private lastGazeAt = 0;
   private restartPending = false;
 
   override connectedCallback() {
@@ -128,7 +141,6 @@ class LobsterPet extends LitElement {
       this.requestUpdate();
     }
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    document.addEventListener("pointermove", this.handleGaze, { passive: true });
   }
 
   override disconnectedCallback() {
@@ -140,26 +152,14 @@ class LobsterPet extends LitElement {
     this.presence = "out";
     this.act = null;
     this.travel = null;
-    if (this.grumpyTimer !== null) {
-      window.clearTimeout(this.grumpyTimer);
-      this.grumpyTimer = null;
-    }
     if (this.shellTimer !== null) {
       window.clearTimeout(this.shellTimer);
       this.shellTimer = null;
     }
-    for (const timer of [this.vigilTimer, this.holdTimer]) {
-      if (timer !== null) {
-        window.clearTimeout(timer);
-      }
+    if (this.vigilTimer !== null) {
+      window.clearTimeout(this.vigilTimer);
+      this.vigilTimer = null;
     }
-    this.vigilTimer = null;
-    this.holdTimer = null;
-    if (this.audioCtx) {
-      this.audioCtx.close().catch(() => {});
-      this.audioCtx = null;
-    }
-    document.removeEventListener("pointermove", this.handleGaze);
     super.disconnectedCallback();
   }
 
@@ -376,90 +376,6 @@ class LobsterPet extends LitElement {
     }
   };
 
-  // Press-and-hold pets the lobster (content eyes, a floating heart); a
-  // quick tap is a poke. Pokes are fun until they are not: 3 fast pokes turn
-  // it grumpy for a minute, 10 send it off in a huff until a later visit.
-  // Offline pets are on duty and never huff.
-  private readonly handleHoldStart = (event: PointerEvent) => {
-    if (event.button !== 0 || plans.prefersReducedMotion()) {
-      return;
-    }
-    this.holdPetted = false;
-    if (this.holdTimer !== null) {
-      window.clearTimeout(this.holdTimer);
-    }
-    this.holdTimer = window.setTimeout(() => {
-      this.holdTimer = null;
-      this.holdPetted = true;
-      this.grumpy = false;
-      this.playChirp("pet");
-      this.performAct("pet");
-    }, 600);
-  };
-
-  private readonly handleHoldEnd = (event: PointerEvent) => {
-    if (event.button !== 0) {
-      return;
-    }
-    if (this.holdTimer !== null) {
-      window.clearTimeout(this.holdTimer);
-      this.holdTimer = null;
-      if (!this.holdPetted) {
-        this.pokeNow();
-      }
-    }
-    this.holdPetted = false;
-  };
-
-  private readonly handleHoldCancel = () => {
-    if (this.holdTimer !== null) {
-      window.clearTimeout(this.holdTimer);
-      this.holdTimer = null;
-    }
-    this.holdPetted = false;
-  };
-
-  private playChirp(kind: LobsterPetChirpKind) {
-    this.audioCtx = playLobsterPetChirp(this.audioCtx, this.soundsEnabled, kind);
-  }
-
-  private pokeNow() {
-    this.playChirp("poke");
-    const now = Date.now();
-    this.pokeTimes = [...this.pokeTimes.filter((at) => now - at < 6000), now];
-    if (this.pokeTimes.length >= 10 && this.mode !== "offline") {
-      this.huffOff();
-      return;
-    }
-    if (this.pokeTimes.length >= 3) {
-      this.enterGrumpy();
-    }
-    this.performAct("startle");
-  }
-
-  private enterGrumpy() {
-    this.grumpy = true;
-    if (this.grumpyTimer !== null) {
-      window.clearTimeout(this.grumpyTimer);
-    }
-    this.grumpyTimer = window.setTimeout(() => {
-      this.grumpyTimer = null;
-      this.grumpy = false;
-    }, 60_000);
-  }
-
-  private huffOff() {
-    this.pokeTimes = [];
-    this.grumpy = false;
-    // Ends the current visit only; unlike a menu dismissal the pet
-    // still returns on a later scheduled visit.
-    this.clearVisitTimers();
-    this.scheduledVisiting = false;
-    this.armArrival(
-      lobsterLook.randomBetween(this.visitRng, plans.VISIT_GAP_MS[0], plans.VISIT_GAP_MS[1]),
-    );
-  }
-
   // Long runs earn solidarity: after 10 minutes of busy the pet settles
   // into a quiet waiting pose until the run ends.
   private trackVigil() {
@@ -479,36 +395,13 @@ class LobsterPet extends LitElement {
     }
   }
 
-  // The pet watches your pointer: facing follows it between acts. Throttled,
-  // idle-only, and inert under reduced motion or while acting.
-  private readonly handleGaze = (event: PointerEvent) => {
-    if (this.presence !== "in" || this.act !== null || this.vigil || plans.prefersReducedMotion()) {
-      return;
-    }
-    const now = Date.now();
-    if (now - this.lastGazeAt < 120) {
-      return;
-    }
-    this.lastGazeAt = now;
-    const sprite = this.querySelector(".lobster-pet:not(.lobster-pet--shell)");
-    if (!sprite) {
-      return;
-    }
-    const rect = sprite.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const facing: 1 | -1 = event.clientX < centerX ? -1 : 1;
-    if (facing !== this.facing) {
-      this.facing = facing;
-    }
-  };
-
   private readonly openDismissMenu = (event: MouseEvent) => {
     if (!this.residentEnabled || !this.visitsEnabled) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    this.handleHoldCancel();
+    this.interactions.handleHoldCancel();
     this.dismissMenuPosition = { x: event.clientX, y: event.clientY };
   };
 
@@ -548,17 +441,15 @@ class LobsterPet extends LitElement {
   private suspendResident() {
     this.clearActTimers();
     this.clearVisitTimers();
-    this.handleHoldCancel();
-    for (const timer of [this.shellTimer, this.grumpyTimer, this.vigilTimer]) {
+    this.interactions.suspend();
+    for (const timer of [this.shellTimer, this.vigilTimer]) {
       if (timer !== null) {
         window.clearTimeout(timer);
       }
     }
     this.shellTimer = null;
-    this.grumpyTimer = null;
     this.vigilTimer = null;
     this.shellVisible = false;
-    this.grumpy = false;
     this.vigil = false;
     this.outcomePresenceOwner = null;
     this.dismissMenuPosition = null;
@@ -841,9 +732,9 @@ class LobsterPet extends LitElement {
       nameOverride: identity ? plans.lobsterLoadDisplayName(identity, this.seed) : null,
       flavor,
       bottle: this.traffic.bottle(),
-      onPointerDown: this.handleHoldStart,
-      onPointerUp: this.handleHoldEnd,
-      onPointerCancel: this.handleHoldCancel,
+      onPointerDown: this.interactions.handleHoldStart,
+      onPointerUp: this.interactions.handleHoldEnd,
+      onPointerCancel: this.interactions.handleHoldCancel,
       onContextMenu: this.openDismissMenu,
       onBottleOpen: this.traffic.openBottle,
     });

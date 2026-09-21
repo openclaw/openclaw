@@ -3,6 +3,7 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
+import { renderChatAvatar, renderForwardedAvatar } from "../pages/chat/chat-avatar.ts";
 import { resolveAvatarHat } from "./agent-avatar-hat.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 
@@ -28,7 +29,7 @@ describe("theme avatar hats", () => {
       null,
       "fedora",
     ]);
-    expect([...agentIds].reverse().map((id) => resolveAvatarHat(id, branding))).toEqual([
+    expect(agentIds.toReversed().map((id) => resolveAvatarHat(id, branding))).toEqual([
       "fedora",
       null,
       null,
@@ -43,6 +44,33 @@ describe("theme avatar hats", () => {
     expect(resolveAvatarHat("openclaw", branding)).toBeNull();
     expect(resolveAvatarHat("crestodian", branding)).toBeNull();
   });
+
+  it.each(["agent-5", "agent-0"])(
+    "applies the theme hat to loaded transcript and forwarded photos for %s",
+    (agentId) => {
+      document.documentElement.dataset.themeAvatarHat = "fedora";
+      const container = document.createElement("div");
+      const avatar = "data:image/png;base64,YQ==";
+      for (const view of [
+        renderChatAvatar("assistant", { agentId, name: "Scout", avatar }),
+        renderForwardedAvatar(agentId, {
+          agents: [{ id: agentId }],
+          senderAgentAvatars: new Map([[agentId, avatar]]),
+        }),
+      ]) {
+        render(view, container);
+        const image = container.querySelector("img")!;
+        image.dispatchEvent(new Event("load"));
+        const hat = image.parentElement?.querySelector(":scope > .identity-avatar__hat");
+        expect(Boolean(hat)).toBe(agentId === "agent-5");
+        if (hat) {
+          expect(hat.parentElement).toBe(image.parentElement);
+          expect(hat.parentElement?.getAttribute("data-avatar-state")).toBe("loaded");
+        }
+        render(nothing, container);
+      }
+    },
+  );
 
   it.each([
     { id: "agent-5", pending: false, mascot: "none", hat: true },

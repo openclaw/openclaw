@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { nothing } from "lit";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
+import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
@@ -604,10 +605,15 @@ export function projectChatTranscript(
   if (typingIndicator) {
     transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
   }
+  // Deferred palettes apply leaf branding after the preference snapshot.
+  const appliedBranding = currentThemeBranding();
   trackTranscriptRenderDependencies(state, [
     locale,
     props.branding?.mascot,
+    props.branding?.avatarHat,
     props.branding?.workingPhrases,
+    appliedBranding.mascot,
+    appliedBranding.avatarHat,
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
     expandedUserMessages,
