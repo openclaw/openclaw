@@ -20,6 +20,7 @@ import {
   waitForReliabilityWorkerExit,
   waitForReliabilityWorkerMessage,
 } from "./sqlite-reliability-process.js";
+import { resolveForwardedNodeCompilerArgs } from "./tsx-cli-shim.mjs";
 
 type IndexRepairProof = ReliabilityReport["indexRepairInterruptionProof"]["rollbackJournal"];
 
@@ -208,7 +209,7 @@ async function runJournalModeProof(params: {
   const expectedState = prepareIndexRepairDatabase(params.databasePath, params.journalMode);
   let stderr = "";
   const child = fork(INDEX_REPAIR_WORKER_PATH, [params.databasePath, params.journalMode], {
-    execArgv: ["--import", "tsx"],
+    execArgv: [...resolveForwardedNodeCompilerArgs(), "--import", "tsx"],
     serialization: "json",
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });
