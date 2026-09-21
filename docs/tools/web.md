@@ -275,7 +275,16 @@ OpenAI plugin and does not apply to OpenAI-compatible proxy base URLs or Azure
 routes. Set `tools.web.search.provider` to another provider such as `brave` to
 keep the managed `web_search` tool for OpenAI models, or set
 `tools.web.search.enabled: false` to disable both managed search and native
-OpenAI search.
+OpenAI search. The same route selection applies to ordinary tool calls,
+Tool Search, and Code Mode; hosted search does not leave a second managed
+`web_search` callable hidden in the catalog. If plugin policy disables or excludes
+the OpenAI provider plugin, the managed search route stays available.
+
+Managed provider failures return the selected provider's identity and a safe,
+actionable diagnostic. Authentication failures identify the HTTP status and
+ask you to check credentials or select another provider. Upstream response
+bodies are not included in model-facing diagnostics. Automatic selection may
+try another configured provider; explicit provider choices never fall back.
 
 ## Native Codex web search
 
@@ -318,7 +327,8 @@ the existing binding for later resume.
 Direct OpenAI ChatGPT Responses traffic can also use OpenAI's hosted
 `web_search` tool. That separate path remains opt-in through
 `tools.web.search.openaiCodex.enabled: true` and only applies to eligible
-`openai/*` models using `api: "openai-chatgpt-responses"`.
+`openai/*` models using `api: "openai-chatgpt-responses"`. An explicitly selected
+managed search provider takes precedence on this transport too.
 
 ```json5
 {
@@ -355,6 +365,26 @@ same `tools.web.search.openaiCodex` restrictions shown above. Authenticate the
 Codex app-server first with `openclaw models auth login --provider openai`.
 The parent agent can use any model or runtime; only the bounded search worker
 runs through Codex.
+
+## CLI harness search
+
+OpenClaw's Claude Code, Codex CLI, and Gemini CLI adapters disable their native
+search tool when `tools.web.search.provider` selects a managed provider. The
+selected provider remains available through OpenClaw's MCP connection, subject
+to the normal tool policy. If that connection or provider is unavailable, the
+adapter does not silently restore native search.
+
+Omit `tools.web.search.provider` to leave native search available. Automatic
+selection is represented by an omitted provider, not the strings `"auto"` or
+`"openai"`; configured provider IDs must be declared by a search plugin.
+`tools.web.search.enabled: false` disables search even when a session has a
+stale enable override. Changing the native search setting updates the CLI
+session fingerprint so a resumed process cannot keep the old search policy.
+Turning search off for a session also removes it from OpenClaw's MCP tool list
+and invocation grant, while leaving unrelated tools available.
+
+Other external harnesses own their native tool behavior; configuring OpenClaw's
+managed provider does not establish that a third-party harness uses it.
 
 ## Network safety
 

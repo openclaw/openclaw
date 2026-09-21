@@ -4,7 +4,7 @@ import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionCompactionCheckpoint, SessionsListResult } from "../../api/types.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
@@ -317,11 +317,8 @@ describe("sessions page managed roster", () => {
     await vi.waitFor(() => expect(page.result?.sessions.map((row) => row.key)).toEqual(["fresh"]));
   });
 
-  it("retires the old managed listener and checkpoint work after capability replacement", async () => {
-    const checkpoints = deferred<SessionCompactionCheckpoint[]>();
-    const previous = createManagedSessions({
-      listCheckpoints: vi.fn(() => checkpoints.promise),
-    });
+  it("retires the old managed listener after capability replacement", async () => {
+    const previous = createManagedSessions();
     const { gateway } = createGateway({} as GatewayBrowserClient);
     const context = createContext(gateway, previous.sessions);
     const page = await createRenderedPage(context, {
@@ -333,9 +330,6 @@ describe("sessions page managed roster", () => {
       throw new Error("Expected the previous capability subscription");
     }
 
-    const checkpointRequest = page.loadCheckpoint("main");
-    await vi.waitFor(() => expect(previous.sessions.listCheckpoints).toHaveBeenCalledOnce());
-
     const replacement = createManagedSessions();
     page.context = { ...context, sessions: replacement.sessions };
     page.requestUpdate();
@@ -346,13 +340,9 @@ describe("sessions page managed roster", () => {
       loading: false,
       error: null,
     });
-    checkpoints.resolve([{ checkpointId: "stale" }] as SessionCompactionCheckpoint[]);
-    await checkpointRequest;
 
     expect(page.result).toBeNull();
     expect(page.loading).toBe(false);
-    expect(page.checkpointItemsByKey).toEqual({});
-    expect(page.checkpointLoadingKey).toBeNull();
   });
 
   it("switches exact managed queries for selected and all-agent scopes", async () => {
@@ -467,65 +457,5 @@ describe("sessions page managed roster", () => {
     await page.updateComplete;
     expect(refresh?.textContent?.trim()).toBe("Refresh");
     expect(refresh?.disabled).toBe(false);
-  });
-
-  it("reconciles checkpoint caches only when the managed result pointer changes", async () => {
-    const key = "agent:main:checkpointed";
-    const checkpoint = (checkpointId: string): SessionCompactionCheckpoint => ({
-      checkpointId,
-      sessionKey: key,
-      sessionId: `session-${checkpointId}`,
-      createdAt: checkpointId === "old" ? 1 : 2,
-      reason: "manual",
-      preCompaction: { sessionId: `pre-${checkpointId}` },
-      postCompaction: { sessionId: `post-${checkpointId}` },
-    });
-    const oldCheckpoint = checkpoint("old");
-    const newCheckpoint = checkpoint("new");
-    const listCheckpoints = vi.fn(async () => [newCheckpoint]);
-    const managed = createManagedSessions({ listCheckpoints });
-    const context = createContext(
-      createGateway({} as GatewayBrowserClient).gateway,
-      managed.sessions,
-    );
-    const initialResult = {
-      count: 1,
-      sessions: [
-        {
-          key,
-          compactionCheckpointCount: 1,
-          latestCompactionCheckpoint: { checkpointId: "old" },
-        },
-      ],
-    } as SessionsListResult;
-    const page = await createRenderedPage(context, initialResult, "active", key);
-    await vi.waitFor(() => expect(listCheckpoints).toHaveBeenCalled());
-    listCheckpoints.mockClear();
-    page.checkpointItemsByKey = { [key]: [oldCheckpoint] };
-    const query = vi.mocked(managed.subscribeList).mock.calls[0]?.[0];
-    if (!query) {
-      throw new Error("Expected a managed query subscription");
-    }
-
-    managed.publish(query, { result: initialResult, agentId: "main", loading: true, error: null });
-    expect(listCheckpoints).not.toHaveBeenCalled();
-    managed.publish(query, {
-      result: {
-        count: 1,
-        sessions: [
-          {
-            key,
-            compactionCheckpointCount: 2,
-            latestCompactionCheckpoint: { checkpointId: "new" },
-          },
-        ],
-      } as SessionsListResult,
-      agentId: "main",
-      loading: false,
-      error: null,
-    });
-
-    await vi.waitFor(() => expect(listCheckpoints).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(page.checkpointItemsByKey[key]).toEqual([newCheckpoint]));
   });
 });

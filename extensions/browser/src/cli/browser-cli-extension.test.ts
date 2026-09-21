@@ -30,6 +30,7 @@ const installMocks = vi.hoisted(() => ({
   browserExtensionStatus: vi.fn(),
   installChromeExtensionBootstrap: vi.fn(),
   removeChromeStoreInstallRequests: vi.fn(),
+  repairChromeExtensionNativeHosts: vi.fn(),
   uninstallChromeExtensionNativeHosts: vi.fn(),
 }));
 
@@ -43,6 +44,7 @@ vi.mock("../browser/extension-install.js", async (importOriginal) => ({
   browserExtensionStatus: installMocks.browserExtensionStatus,
   installChromeExtensionBootstrap: installMocks.installChromeExtensionBootstrap,
   removeChromeStoreInstallRequests: installMocks.removeChromeStoreInstallRequests,
+  repairChromeExtensionNativeHosts: installMocks.repairChromeExtensionNativeHosts,
   uninstallChromeExtensionNativeHosts: installMocks.uninstallChromeExtensionNativeHosts,
 }));
 
@@ -81,8 +83,41 @@ describe("browser extension pairing Gateway URL", () => {
     installMocks.browserExtensionStatus.mockReset();
     installMocks.installChromeExtensionBootstrap.mockReset();
     installMocks.removeChromeStoreInstallRequests.mockReset();
+    installMocks.repairChromeExtensionNativeHosts.mockReset();
     installMocks.uninstallChromeExtensionNativeHosts.mockReset();
     resetRuntimeCapture();
+  });
+
+  it("repairs only the explicitly selected native target without profile discovery or pairing", async () => {
+    const report = {
+      changes: ["Repaired Google Chrome OpenClaw native messaging registration."],
+      warnings: [],
+      registrations: [],
+      retainedNativeHostPaths: ["/new/native-host-entry.js"],
+      retentionSafe: true,
+      manualRequired: false,
+    };
+    installMocks.repairChromeExtensionNativeHosts.mockResolvedValue(report);
+    const output = vi
+      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .mockImplementation(runtime.writeJson);
+    const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+    const program = new Command().exitOverride();
+    registerBrowserExtensionCommands(program.command("browser"), () => ({}), "/new/browser");
+    await program.parseAsync(
+      ["browser", "extension", "repair", "--from", "/old/native-host-entry.js", "--json"],
+      { from: "user" },
+    );
+    expect(output).toHaveBeenCalledWith(report);
+    expect(installMocks.repairChromeExtensionNativeHosts).toHaveBeenCalledWith({
+      bundledDir: "/new/browser/chrome-extension",
+      pluginRoot: "/new/browser",
+      fromNativeHostPath: "/old/native-host-entry.js",
+      dryRun: false,
+    });
+    expect(installMocks.browserExtensionStatus).not.toHaveBeenCalled();
+    expect(installMocks.installChromeExtensionBootstrap).not.toHaveBeenCalled();
+    expect(relayMocks.ensureExtensionRelayToken).not.toHaveBeenCalled();
   });
 
   it("prints the Store CTA only after native pre-registration is ready", async () => {

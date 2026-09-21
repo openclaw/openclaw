@@ -88,8 +88,27 @@ describe("security review workflow trust boundaries", () => {
       }
       const runtime = job.steps.filter((step) => step.uses === `./${runtimeActionPath}`);
       expect(runtime).toHaveLength(name === "review" ? 1 : 0);
+      const bootstrap = job.steps.filter((step) => step.uses?.startsWith("actions/setup-node@"));
+      expect(bootstrap).toEqual(
+        name === "resolve"
+          ? [
+              {
+                name: "Setup supported Node runtime",
+                uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+                with: { "node-version": "24.19.0", "package-manager-cache": false },
+              },
+            ]
+          : [],
+      );
+      if (name === "resolve") {
+        const bootstrapIndex = job.steps.findIndex((step) => step === bootstrap[0]);
+        expect(bootstrapIndex).toBeGreaterThan(
+          job.steps.findIndex((step) => step === checkouts[0]),
+        );
+        expect(bootstrapIndex).toBeLessThan(job.steps.findIndex((step) => step.run));
+      }
       for (const step of job.steps) {
-        if (step.uses && step.uses !== `./${runtimeActionPath}`) {
+        if (step.uses && step.uses !== `./${runtimeActionPath}` && step !== bootstrap[0]) {
           expect(step.uses).toMatch(
             /^actions\/(?:checkout|create-github-app-token)@[a-f0-9]{40}$/u,
           );

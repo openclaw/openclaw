@@ -13,7 +13,6 @@ import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
-import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import {
   withPluginDiagnosticsReport,
   buildPluginRegistrySnapshotReport,
@@ -361,16 +360,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
             message: expect.stringContaining("--accept-capabilities"),
           });
         }
-      }
-      if (consent === "current") {
-        expect(
-          collectPluginCapabilityConsentDiagnostics({ index, manifests: new Map() }),
-        ).toContainEqual(
-          expect.objectContaining({
-            level: "warn",
-            pluginId: fixture.pluginId,
-          }),
-        );
       }
       expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
     },

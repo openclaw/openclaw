@@ -398,12 +398,12 @@ describe("proxyUpgradeRequest loopback transport", () => {
   });
 
   it("returns a flushed 502 when the upstream connection is refused", async () => {
+    const { browser, proxySocket } = await openBrowserPair();
     const refusedServer = net.createServer();
     const refusedPort = await listenLoopback(refusedServer);
     await new Promise<void>((resolve) => {
       refusedServer.close(() => resolve());
     });
-    const { browser, proxySocket } = await openBrowserPair();
     const endSpy = vi.spyOn(proxySocket, "end");
     const responsePromise = readToEnd(browser);
 

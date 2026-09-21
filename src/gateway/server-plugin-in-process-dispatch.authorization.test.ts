@@ -1,22 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../packages/gateway-protocol/src/client-info.js";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import {
-  callAgentToolGatewayRequest,
-  callInProcessGatewayTool,
-} from "../agents/tools/in-process-gateway.js";
+  assertAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { resolveNodeInvokeRuntimeAuthorityError } from "./server-methods/nodes.invoke-authority.js";
 import type {
@@ -29,6 +21,10 @@ import {
   runWithOperatorToolGatewayCleanupContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "./server-plugin-in-process-dispatch.test-support.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
 const waitForTurn = vi.hoisted(() => vi.fn());
@@ -39,54 +35,6 @@ vi.mock("./agent-turn/agent-turn-service.js", () => ({
     waitForTurn,
   }),
 }));
-
-function createContext(): GatewayRequestContext {
-  const context = {
-    trackExecution: trackAsyncWork,
-    dedupe: new Map(),
-    getRuntimeConfig: () => ({}),
-    logGateway: { error: vi.fn(), warn: vi.fn() },
-  } as unknown as GatewayRequestContext;
-  context.createAgentTurnFacade = (principal) =>
-    createInternalAgentTurnFacade({
-      ...principal,
-      getContext: () => context,
-      ...(context.getGatewayMethodRegistry
-        ? { getMethodRegistry: context.getGatewayMethodRegistry }
-        : {}),
-    });
-  return context;
-}
-
-function createOperatorClient(params: {
-  caps?: string[];
-  profileId: string;
-  scopes: string[];
-}): NonNullable<GatewayRequestOptions["client"]> {
-  return {
-    connId: `conn-${params.profileId}`,
-    authenticatedUserId: `${params.profileId}@example.com`,
-    authenticatedUserProfile: {
-      profileId: params.profileId,
-      displayName: params.profileId,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-    connect: {
-      ...(params.caps ? { caps: params.caps } : {}),
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      role: "operator",
-      scopes: params.scopes,
-      client: {
-        id: GATEWAY_CLIENT_IDS.TEST,
-        version: "1",
-        platform: "test",
-        mode: GATEWAY_CLIENT_MODES.TEST,
-      },
-    },
-  };
-}
 
 async function dispatchScopedAgent(params: {
   client: NonNullable<GatewayRequestOptions["client"]>;
@@ -151,7 +99,12 @@ describe("typed in-process agent authorization", () => {
         result,
       );
       expect(createFacade).toHaveBeenCalledOnce();
-      expect(createFacade.mock.calls[0]?.[0].client).toBe(client);
+      const capturedClient = createFacade.mock.calls[0]?.[0].client;
+      expect(capturedClient).toMatchObject(client);
+      const authority = capturedClient?.internal?.operatorRunAuthority;
+      assertAdmittedRunOperatorAuthority(authority);
+      expect(authority).toMatchObject({ profileId: "owner", scopes: ["operator.write"] });
+      expect(client.internal?.operatorRunAuthority).toBeUndefined();
 
       delete context.createAgentTurnFacade;
       await expect(dispatchScopedMethod({ client, context, method, params })).rejects.toThrow(
@@ -245,73 +198,6 @@ describe("typed in-process agent authorization", () => {
         connect: { scopes: [requestedScope] },
         internal: { syntheticClient: true, ...(operatorRoleActor ? { operatorRoleActor } : {}) },
       });
-    },
-  );
-
-  it.each(["sessions_send", "subagent_announce", "subagent_settle"] as const)(
-    "preserves read access after %s admits a write-only continuation",
-    async (sourceTool) => {
-      const owner = createOperatorClient({
-        profileId: "continuation-owner",
-        scopes: ["operator.read", "operator.write"],
-      });
-      const readHandler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
-        expect(client?.connect.scopes).toEqual(["operator.read"]);
-        expect(client?.authenticatedUserProfile?.profileId).toBe("continuation-owner");
-        respond(true, { sessions: [] });
-      });
-      const context = createContext();
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "sessions.list",
-            scope: "operator.read",
-            owner: { kind: "core", area: "sessions" },
-            handler: readHandler,
-          },
-        ]);
-      const runId = `continuation-${sourceTool}`;
-      startTurn.mockImplementation(async ({ principal, io }) => {
-        expect(principal.connect.scopes).toEqual(["operator.write"]);
-        io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
-        await expect(callInProcessGatewayTool("sessions.list", {})).resolves.toEqual({
-          sessions: [],
-        });
-        io.emitFinal([true, { runId, status: "ok" }, undefined]);
-      });
-      const params = {
-        message: "Continue the delegated task",
-        idempotencyKey: runId,
-        inputProvenance: {
-          kind: "inter_session" as const,
-          sourceSessionKey: "agent:main:child",
-          sourceTool,
-        },
-      };
-      await expect(
-        withPluginRuntimeGatewayRequestScope(
-          { client: owner, context, isWebchatConnect: () => false },
-          async () => {
-            if (sourceTool === "sessions_send") {
-              return await callAgentToolGatewayRequest({
-                method: "agent",
-                params,
-                expectFinal: true,
-              });
-            }
-            const { runAnnounceAgentCall } =
-              await import("../agents/subagents/announce/subagent-announce-completion-delivery.js");
-            return await runAnnounceAgentCall({
-              agentParams: params,
-              expectFinal: true,
-              isExecutionAllowed: () => true,
-              resolveGatewayContext: () => context,
-            });
-          },
-        ),
-      ).resolves.toEqual({ runId, status: "ok" });
-      expect(startTurn).toHaveBeenCalledOnce();
-      expect(readHandler).toHaveBeenCalledOnce();
     },
   );
 

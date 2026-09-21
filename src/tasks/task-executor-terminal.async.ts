@@ -19,7 +19,10 @@ export async function finalizeActiveTaskRun(
     return;
   }
   const params = {
-    ...structuredClone(terminal),
+    status: terminal.status,
+    endedAt: terminal.endedAt,
+    error: terminal.error,
+    terminalSummary: terminal.terminalSummary,
     runId,
     runtime: task.runtime,
     sessionKey: task.childSessionKey,

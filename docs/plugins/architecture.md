@@ -162,7 +162,7 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 - plugin config schema and channel config schema validation
 - startup auto-enable decisions
 
-Startup and hot replacement share one prepared registry publisher. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
+Startup and hot replacement share one prepared registry publisher and the same inventory across all configured agent workspaces. Reload preserves workspace provenance so an unchanged linked plugin is not replaced when another plugin changes. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
 
 Replacement is refused before model invalidation or service shutdown when the affected instance still has retained work, including an agent turn between plugin callbacks or unfinished cleanup. This also applies when an agent awaits its own context engine’s `plugins.reload`: the tool returns a prepare-phase error, and the current runtime stays available. Retry after the work finishes; reload does not queue a replacement. Idle prepared publications do not block replacement. Once replacement is admitted, new retained work cannot acquire that instance until the operation releases its reservation.
 
@@ -237,9 +237,19 @@ creation-time capture; later inputs extend explicit source-current checks withou
 changing that digest. Invalid optional package metadata fails only when selected.
 Module acquisition uses the instance's current admission, and disposal closes
 further capture.
-Runtime and setup retirement remove captured artifacts asynchronously and wait
-for removal to finish. Plugin callback deadlines do not end custody of those
-files; synchronous source inspection and failed capture still clean up before returning.
+Runtime and setup retirement use the existing five-second instance shutdown budget.
+If calls, retained consumers, or cleanup exceed that budget, logical retirement
+returns a forced-retirement diagnostic with the still-running call and consumer
+counts. Ordinary invocation authority closes and late successful results are
+refused. Physical cleanup continues asynchronously: captured files and module
+resolvers remain until calls, consumers, and cleanup tails actually settle.
+An explicitly retained consumer keeps its admitted turn and cleanup authority until
+its host closes or releases it. Its callbacks and late results are refused after release.
+Shared writable state stays owned until its cleanup finishes; late cleanup
+failures remain failures of the resource handoff. Web provider
+descriptors keep their registration identity; runtime projections bind their
+factories and returned tools to the selected plugin instance. Synchronous source
+inspection and failed capture still clean up before returning.
 
 Default source captures live under
 `<stateDir>/tmp/plugin-captures/<instanceId>/captures/`, with a random instance ID
@@ -254,10 +264,14 @@ load a preserved source package from within that subtree.
 
 This follows the native lifetime-token pattern used for
 [interrupted SQLite snapshots](/reference/database-schemas/integrity-and-recovery).
-Executable CLI commands release captures through their existing invocation
-resource scope; Gateway captures remain with metadata retirement. Snapshot
+Executable CLI commands retire their plugin inventory through the existing invocation
+resource scope on success and failure. Inventory adopted by Gateway publication
+remains with Gateway metadata retirement. At process exit, the capture owner
+synchronously retires any remaining instance that holds this process's native
+custody, including explicit exits and CLI-handled signals. Forced termination
+still relies on startup reclamation. Snapshot
 cleanup owns SQLite staging files, while plugin cleanup owns this capture subtree.
-Neither adds a second process-shutdown owner. Reclamation removes captured
+Reclamation removes captured
 payload before its coordinator so a partial deletion remains retryable.
 
 Startup and hourly cleanup inspect only this owned subtree. An instance becomes
@@ -278,17 +292,42 @@ There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
 
 Older `openclaw-plugin-build-*` directories in the system temporary directory
-have no coordinator proving whether their producer is still alive. Startup,
-Doctor (including `--fix`), and update finalization preserve them. Neither age
-nor a lock for one state directory establishes ownership of captures from other
-profiles or containers sharing that temporary directory. No legacy files are
+have no coordinator proving whether their producer is still alive. Doctor reports
+tokenless `openclaw-plugin-build-*` and `openclaw-model-catalog-*` roots under the
+state temporary directory, `~/.openclaw/tmp` even when another state directory is
+selected, the current system temporary directory, `/tmp` on
+POSIX hosts, and recorded managed-service `TMPDIR` locations. It deduplicates
+directory aliases and reports each capture's path and regular-file size without
+following links inside captures.
+
+`openclaw doctor --fix` reclaims these legacy roots only while Doctor holds Gateway
+maintenance and a complete host process census finds no other OpenClaw producer.
+The rule rechecks both conditions before each removal and prints a receipt listing
+the paths removed and their sizes. A live sibling, unavailable census, or missing
+maintenance authority leaves the captures in place with an explanatory message.
+Captures created or changed during the current process and token-bearing captures
+remain untouched. Linux and macOS preserve native argument boundaries when
+inspecting processes. macOS can also identify native system services
+under another user by their kernel executable path and valid Apple platform signature; unavailable arguments for
+other live processes keep cleanup blocked with a reason.
+On hosts without a complete process census (including
+Windows and recognized container environments), Doctor reports legacy
+captures but skips their removal. For a container sharing the host's temporary
+directory, run maintenance on the host after stopping its OpenClaw containers.
+Modern captures retain their existing custody-token cleanup; no legacy files are
 moved or adopted by the new runtime.
-Doctor lists legacy `openclaw-plugin-build-*` and `openclaw-model-catalog-*` roots under the state temporary directory, their count and total size, and a bounded removal command to run only after every Gateway, CLI process, and container using that state directory has stopped; it never executes the command.
 
 Configured Gateway agents share one model-catalog worker per plugin-inventory
 lifetime. Agent and authentication facts belong to each task; plugin registrations
 and captured source remain with the shared inventory. Standalone hosts that supply
 their own environment retain an isolated catalog worker for that environment.
+Each worker retains one prepared catalog generation. Replacement releases the
+previous generation's registrations after its work settles. Successfully disposed
+registrations leave their plugin caches; unchanged registrations remain reusable
+across agent requests within the same inventory.
+Catalog workers use a 512 MiB V8 old-generation limit rather than inheriting the
+Gateway's default heap budget. Explicit process-wide heap flags override this
+limit; native and external allocations are outside it.
 
 Catalog and authentication refresh tasks carry the host's prepared Claw consent
 provenance. Worker config reconstruction and provider imports consume these facts

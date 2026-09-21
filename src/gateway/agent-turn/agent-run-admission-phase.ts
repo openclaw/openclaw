@@ -2,6 +2,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import {
   createOperationalRunInstanceRef,
   type OperationalRunInstanceRef,
+  type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
@@ -37,6 +38,7 @@ import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat
 import { retainGatewayDeviceRevocation } from "../device-revocation.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../session-subagent-resume.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
@@ -269,6 +271,7 @@ export async function prepareAgentRunDispatch(
   });
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
   let releaseCallerAuthority: (() => void) | undefined;
+  let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
   let registeredFollowupTask: RegisteredGatewayAgentTask | undefined;
   const cleanupPreaccept = async (admissionReleased = false, failure?: string) => {
     const lease = preparedModelRuntimeLease;
@@ -614,7 +617,10 @@ export async function prepareAgentRunDispatch(
   }
   try {
     // The transport request ends at acceptance; execution retains this exact caller.
-    releaseCallerAuthority = retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
+    const capturedOperator = captureGatewayOperatorRunAuthority(params);
+    operatorAuthority = capturedOperator?.authority;
+    releaseCallerAuthority =
+      capturedOperator?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
   } catch (error) {
     const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
     return rejectPreaccept(errorShapeFromError(ErrorCodes.INVALID_REQUEST, failure));
@@ -674,6 +680,7 @@ export async function prepareAgentRunDispatch(
       activeRunAbort,
       ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),
       ...(releaseCallerAuthority ? { releaseCallerAuthority } : {}),
+      ...(operatorAuthority ? { operatorAuthority } : {}),
       operationalRunInstance,
       effectiveProviderOverride,
       effectiveModelOverride,

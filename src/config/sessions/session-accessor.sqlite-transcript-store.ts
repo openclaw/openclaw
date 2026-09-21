@@ -54,6 +54,7 @@ import {
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 type TranscriptAppendOptions = {
   /** Exact event bytes, including canonical media, prepared by the message append owner. */
@@ -711,14 +712,6 @@ export function canonicalizeTranscriptEventMedia(event: TranscriptEvent): Transc
   }
   const canonical = canonicalizePersistedUserMessageMedia(message);
   return canonical.changed ? { ...event, message: canonical.message } : event;
-}
-
-export function readMessageIdempotencyKey(message: unknown): string | null {
-  if (!isRecord(message)) {
-    return null;
-  }
-  const value = message.idempotencyKey;
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 export function readEventTimestamp(event: unknown): number | undefined {

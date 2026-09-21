@@ -3,7 +3,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
  * Requester-agent handoff and direct delivery for subagent announcements.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -44,6 +43,7 @@ import {
   resolveRequesterSessionActivity,
 } from "./subagent-announce-active-wake.js";
 import {
+  buildRequesterCompletionDeliveryResult,
   deliverCompletionDirect,
   hasMessagingToolDeliveryToSource,
   isDirectMessageDeliveryTarget,
@@ -75,8 +75,6 @@ import {
   type DeliveryContext,
 } from "./subagent-announce-origin.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
-
-const REQUESTER_FINAL_VISIBLE_TEXT_MAX_CHARS = 12_000;
 
 export async function sendSubagentAnnounceDirectly(params: {
   requesterSessionKey: string;
@@ -487,7 +485,10 @@ export async function sendSubagentAnnounceDirectly(params: {
     const directAnnounceResult = getGatewayAgentResult(directAnnounceResponse);
     const directAnnounceRecord = asOptionalRecord(directAnnounceResponse);
     if (parentOnly) {
-      return resolvePrivateCompletionDeliveryResult(directAnnounceRecord);
+      return resolvePrivateCompletionDeliveryResult(
+        directAnnounceRecord,
+        params.requesterIsSubagent ? undefined : effectiveDirectOrigin,
+      );
     }
     const hasFinalMessagingToolDelivery = Boolean(
       directAnnounceResult &&
@@ -701,23 +702,10 @@ export async function sendSubagentAnnounceDirectly(params: {
           directAnnounceRecord?.status === "ok" &&
           hasVisibleNonSilentGatewayPayload &&
           hasVisibleCompletionReply));
-    const finalAssistantVisibleText =
-      requesterVisibleFinalCommitted &&
-      typeof directAnnounceResult?.meta?.finalAssistantVisibleText === "string"
-        ? truncateUtf16Safe(
-            directAnnounceResult.meta.finalAssistantVisibleText.trim(),
-            REQUESTER_FINAL_VISIBLE_TEXT_MAX_CHARS,
-          )
-        : "";
-
-    return {
-      delivered: true,
-      path: "direct",
-      // Synthetic wakes can commit their final to the requester transcript.
-      // A canceled partial payload or accepted handoff is not that receipt.
-      ...(requesterVisibleFinalCommitted ? { requesterVisibleFinalDelivered: true } : {}),
-      ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
-    };
+    return buildRequesterCompletionDeliveryResult(
+      requesterVisibleFinalCommitted,
+      directAnnounceResult?.meta?.finalAssistantVisibleText,
+    );
   } catch (err) {
     const disposition = hasAnnounceSendEvidence(err)
       ? "ambiguous"

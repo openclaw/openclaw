@@ -13,10 +13,7 @@ import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "..
 import type {
   GatewaySessionRow,
   SessionBranch,
-  SessionCompactionCheckpoint,
   SessionsBranchesSwitchResult,
-  SessionsCompactionBranchResult,
-  SessionsCompactionRestoreResult,
   SessionsForkResult,
   SessionsListResult,
   SessionsRewindResult,
@@ -310,20 +307,6 @@ export type SessionCapability = {
     options?: { agentId?: string | null; includeApprovals?: boolean },
   ) => Promise<SessionMessageSubscription>;
   unsubscribeMessages: (subscription: SessionMessageSubscription) => Promise<void>;
-  listCheckpoints: (
-    key: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionCompactionCheckpoint[]>;
-  branchCheckpoint: (
-    key: string,
-    checkpointId: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionsCompactionBranchResult>;
-  restoreCheckpoint: (
-    key: string,
-    checkpointId: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionsCompactionRestoreResult>;
   rewind: (
     key: string,
     entryId: string,

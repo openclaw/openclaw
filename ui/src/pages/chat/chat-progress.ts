@@ -132,10 +132,6 @@ export function buildCompactionDividerItem(
     ...(phase === "complete" && marker.kind === "compaction"
       ? {
           description: t("chat.compaction.description"),
-          action: {
-            kind: "session-checkpoints" as const,
-            label: t("chat.compaction.openCheckpoints"),
-          },
         }
       : {}),
     timestamp,

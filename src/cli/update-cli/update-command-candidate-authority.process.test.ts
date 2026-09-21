@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { waitForFixtureFile } from "../../../test/helpers/process-wait.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -12,8 +13,7 @@ import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
 import {
-  candidateAuthorityBundledPluginsDir,
-  candidateAuthorityWorker,
+  prepareCandidateAuthorityRuntime,
   writeCandidateAuthorityEntrypoints,
 } from "./update-command-candidate-authority.test-support.js";
 import {
@@ -22,7 +22,19 @@ import {
 } from "./update-command-executor.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 
+const runtimeFixture = createFixtureLifetime();
+let candidateAuthorityRuntime: Awaited<ReturnType<typeof prepareCandidateAuthorityRuntime>>;
+let candidateAuthorityWorker: URL;
+let candidateAuthorityBundledPluginsDir: string;
+beforeAll(async () => {
+  candidateAuthorityRuntime = await runtimeFixture.run(() =>
+    prepareCandidateAuthorityRuntime(runtimeFixture.createTempDir("candidate-authority-runtime-")),
+  );
+  candidateAuthorityWorker = candidateAuthorityRuntime.worker;
+  candidateAuthorityBundledPluginsDir = candidateAuthorityRuntime.bundledPluginsDir;
+});
 afterEach(() => vi.restoreAllMocks());
+afterAll(() => runtimeFixture.cleanup());
 
 type BoundaryObservation = {
   event: string;
@@ -106,6 +118,7 @@ it.each(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as cons
         const readyPath = state.path("ready");
         const proceed = state.path("proceed");
         const workerPath = writeCandidateAuthorityEntrypoints({
+          runtime: candidateAuthorityRuntime,
           root,
           events,
           ready: readyPath,
@@ -172,6 +185,7 @@ it.each(["healthy", "candidate-owner-replaced", "doctor-owner-replaced"] as cons
                 }
               },
             });
+            void runtimeFixture.track(pending);
             try {
               await waitForFixtureFile(readyPath, pending);
               const boundary: BoundaryObservation = JSON.parse(fs.readFileSync(readyPath, "utf8"));

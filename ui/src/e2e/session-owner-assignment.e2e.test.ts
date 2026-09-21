@@ -184,9 +184,7 @@ suite.define(() => {
         if (surface === "sidebar") {
           const row = page.locator(`[data-session-key="${sessionKey}"]`);
           await row.hover();
-          await row
-            .getByRole("button", { name: "Open session menu: Owner outcome", exact: true })
-            .click();
+          await row.click({ button: "right" });
         } else {
           await page
             .getByRole("button", { name: "Actions for Owner outcome", exact: true })
@@ -270,9 +268,7 @@ suite.define(() => {
       await installOwnerGateway(page);
       const row = page.locator('[data-session-key="agent:main:ada-research"]');
       await row.hover();
-      await row
-        .getByRole("button", { name: "Open session menu: Ada research", exact: true })
-        .click();
+      await row.click({ button: "right" });
       const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
       await assignTo.hover();
 
@@ -292,11 +288,8 @@ suite.define(() => {
       const gateway = await installOwnerGateway(page);
       const row = page.locator(`[data-session-key="${sessionKey}"]`);
       await row.hover();
-      const trigger = row.getByRole("button", {
-        name: "Open session menu: Owner outcome",
-        exact: true,
-      });
-      await trigger.click();
+      const trigger = row.locator(".sidebar-recent-session__link");
+      await row.click({ button: "right" });
 
       const menu = page.locator("openclaw-session-menu");
       const rootAssignmentLabels = await menu
@@ -341,7 +334,7 @@ suite.define(() => {
 
       await gateway.deferNext("sessions.assignOwner");
       await row.hover();
-      await trigger.press("Enter");
+      await trigger.press("Shift+F10");
       await openSessionMenuSubmenu(page, "Assign to…");
       const keyboardAssignTo = page.getByRole("menuitem", {
         name: "Assign to…",
@@ -351,8 +344,9 @@ suite.define(() => {
         page.getByRole("menuitemradio", { name: "Me", exact: true }),
       ).toBeFocused();
       await page.keyboard.press("Escape");
-      await expectBrowser(trigger).toHaveAttribute("aria-expanded", "false");
-      await trigger.press("Enter");
+      await expectBrowser(menu).toHaveCount(0);
+      await expectBrowser(trigger).toBeFocused();
+      await trigger.press("Shift+F10");
       await openSessionMenuSubmenu(page, "Assign to…");
       await expectBrowser(keyboardAssignTo).toHaveAttribute("aria-expanded", "true");
       await expectBrowser(
@@ -392,9 +386,7 @@ suite.define(() => {
           if (surface === "sidebar") {
             const row = page.locator(`[data-session-key="${sessionKey}"]`);
             await row.hover();
-            await row
-              .getByRole("button", { name: "Open session menu: Owner outcome", exact: true })
-              .click();
+            await row.click({ button: "right" });
           } else {
             await activePane.getByRole("button", { name: "Actions for Owner outcome" }).click();
           }
@@ -512,9 +504,7 @@ suite.define(() => {
 
         const row = page.locator(`[data-session-key="${sessionKey}"]`);
         await row.hover();
-        await row
-          .getByRole("button", { name: "Open session menu: Owner outcome", exact: true })
-          .click();
+        await row.click({ button: "right" });
         const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
         await assignTo.hover();
         await assignTo.getByRole("menuitemradio", { name: "Me", exact: true }).waitFor();
@@ -600,9 +590,7 @@ suite.define(() => {
       const gateway = await installOwnerGateway(page);
       const row = page.locator(`[data-session-key="${sessionKey}"]`);
       await row.hover();
-      await row
-        .getByRole("button", { name: "Open session menu: Owner outcome", exact: true })
-        .click();
+      await row.click({ button: "right" });
       await chooseMe(page);
       await expectAssignmentRequest(gateway);
 

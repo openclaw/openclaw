@@ -5,7 +5,7 @@ import type { NativeErrorResponse } from "../../infra/native-error-response-sche
 import { serializeNativeErrorResponse } from "../../infra/native-error-response.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { SqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
-import { serveWorkerTasks } from "../../infra/worker-task-pool.js";
+import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import { assertSupportedStateSchemaVersion } from "../../state/openclaw-state-db-schema-version.js";
 import { readNativeHookRelayBridgeRow } from "./native-hook-relay-bridge-query.js";

@@ -1,8 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { openRootFileSync, readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
+import { readRootJsonObjectSync } from "../../infra/json-files.js";
 import type { OpenClawSkillMetadata, ParsedSkillFrontmatter } from "../types.js";
 import { resolveSkillManifestMetadata } from "./frontmatter.js";
 import { SKILL_SOURCE_ORIGIN_RELATIVE_PATH } from "./skill-entry-metadata-path.js";
@@ -22,26 +20,18 @@ function readSourceInstallSkillKey(skillDir: string): string | undefined {
       return undefined;
     }
     // Preserve contained parent aliases while refusing final symlinks.
-    const opened = openRootFileSync({
-      absolutePath: path.join(parentRealPath, path.basename(sourceOriginPath)),
-      rootPath: skillDirRealPath,
+    const result = readRootJsonObjectSync({
+      rootDir: skillDirRealPath,
       rootRealPath: skillDirRealPath,
+      relativePath: path.relative(
+        skillDirRealPath,
+        path.join(parentRealPath, path.basename(sourceOriginPath)),
+      ),
       boundaryLabel: "skill directory",
       rejectHardlinks: false,
       maxBytes: MAX_SKILL_SOURCE_ORIGIN_BYTES,
     });
-    if (!opened.ok) {
-      return undefined;
-    }
-    try {
-      const raw = readFileDescriptorBoundedSync(opened.fd, MAX_SKILL_SOURCE_ORIGIN_BYTES).toString(
-        "utf8",
-      );
-      const parsed = asOptionalRecord(JSON.parse(raw) as unknown);
-      return normalizeOptionalString(parsed?.slug);
-    } finally {
-      fs.closeSync(opened.fd);
-    }
+    return result.ok ? normalizeOptionalString(result.value.slug) : undefined;
   } catch {
     return undefined;
   }

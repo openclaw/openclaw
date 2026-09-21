@@ -614,8 +614,9 @@ suite.define(() => {
       await page.locator("#new-session-checkout-trigger").click();
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
       await expect
-        .poll(() => checkout.getByLabel("From", { exact: true }).inputValue())
+        .poll(() => checkout.getByLabel("From", { exact: true }).getAttribute("placeholder"))
         .toBe("beta");
+      expect(await checkout.getByLabel("From", { exact: true }).inputValue()).toBe("");
       await page.keyboard.press("Escape");
 
       await gateway.resolveDeferred("fs.listDir", {

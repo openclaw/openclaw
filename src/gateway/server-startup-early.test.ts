@@ -37,6 +37,16 @@ const mocks = vi.hoisted(() => ({
   configureTaskRegistryMaintenance: vi.fn(),
   startTaskRegistryMaintenance: vi.fn(),
   getInspectableActiveTaskRestartBlockers: vi.fn(),
+  startGatewayMaintenanceTimers: vi.fn(() => ({
+    startMediaCleanup: vi.fn(),
+    stopMediaCleanup: vi.fn(async () => "drained" as const),
+    stopPeriodicTasks: vi.fn(async () => {}),
+    skillUsageCleanup: vi.fn(async () => {}),
+  })),
+}));
+
+vi.mock("./server-maintenance.js", () => ({
+  startGatewayMaintenanceTimers: mocks.startGatewayMaintenanceTimers,
 }));
 
 vi.mock("../infra/machine-name.js", () => ({
@@ -93,6 +103,7 @@ function earlyRuntimeInput(
   });
   return {
     minimalTestGateway: true,
+    isClosing: () => false,
     cfgAtStart: {} as never,
     port: 18_789,
     gatewayTls: { enabled: false },
@@ -134,6 +145,7 @@ describe("startGatewayEarlyRuntime", () => {
     mocks.startTaskRegistryMaintenance.mockReset();
     mocks.getInspectableActiveTaskRestartBlockers.mockReset();
     mocks.getInspectableActiveTaskRestartBlockers.mockReturnValue([]);
+    mocks.startGatewayMaintenanceTimers.mockClear();
   });
 
   it("does not eagerly start the MCP loopback server", async () => {
@@ -141,6 +153,32 @@ describe("startGatewayEarlyRuntime", () => {
 
     expect(earlyRuntime).not.toHaveProperty("mcpServer");
   });
+
+  it.each([false, true])(
+    "starts maintenance only while its Gateway is open (closesDuringImport=%s)",
+    async (closesDuringImport) => {
+      let closing = false;
+      const earlyRuntime = await startGatewayEarlyRuntime(
+        earlyRuntimeInput({ minimalTestGateway: false, isClosing: () => closing }),
+      );
+      try {
+        const starting = earlyRuntime.startMaintenance({});
+        closing = closesDuringImport;
+        const maintenance = await starting;
+
+        expect(mocks.startGatewayMaintenanceTimers).toHaveBeenCalledTimes(
+          closesDuringImport ? 0 : 1,
+        );
+        if (closesDuringImport) {
+          expect(maintenance).toBeNull();
+        } else {
+          expect(maintenance).toBe(mocks.startGatewayMaintenanceTimers.mock.results[0]?.value);
+        }
+      } finally {
+        await earlyRuntime.skillsChangeUnsub();
+      }
+    },
+  );
 
   it("wires non-minimal skills runtime through lazy startup imports", async () => {
     const nodeRegistry = { node: { id: "node" } };
@@ -382,7 +420,7 @@ describe("early startup task maintenance", () => {
   });
 
   afterEach(async () => {
-    maintenance.stopTaskRegistryMaintenance();
+    await maintenance.stopTaskRegistryMaintenance();
     vi.useRealTimers();
     resetDetachedTaskLifecycleRuntimeForTests();
     maintenance.resetTaskRegistryMaintenanceRuntimeForTests();
@@ -461,7 +499,7 @@ describe("early startup task maintenance", () => {
             }
           }
         } finally {
-          maintenance.stopTaskRegistryMaintenance();
+          await maintenance.stopTaskRegistryMaintenance();
           try {
             await Promise.allSettled(scheduledSweeps);
             await earlyRuntime.skillsChangeUnsub();

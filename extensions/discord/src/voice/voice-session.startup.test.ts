@@ -79,7 +79,7 @@ defineDiscordVoiceTests(
         });
 
         expect(manager.status()).toEqual([]);
-        expect(connection.receiver.speaking.on).not.toHaveBeenCalled();
+        expect(connection.receiver.subscribe).not.toHaveBeenCalled();
         expect(realtimeSessionMock.close).toHaveBeenCalled();
         expect(getLastAudioPlayer().stop).toHaveBeenCalledWith(true);
       } finally {
@@ -120,7 +120,7 @@ defineDiscordVoiceTests(
           });
 
           expect(manager.status()).toEqual([]);
-          expect(connection.receiver.speaking.on).not.toHaveBeenCalled();
+          expect(connection.receiver.subscribe).not.toHaveBeenCalled();
           expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
           expect(connection.destroy).toHaveBeenCalledTimes(1);
           expect(getLastAudioPlayer().stop).toHaveBeenCalledWith(true);

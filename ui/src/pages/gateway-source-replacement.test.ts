@@ -819,19 +819,16 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const page = createPage("openclaw-sessions-page", contextWithClient(client)) as TestPage & {
       result: unknown;
       selectedKeys: Set<string>;
-      checkpointItemsByKey: Record<string, unknown>;
     };
     document.body.append(page);
     await page.updateComplete;
     page.result = { sessions: [{ key: "old" }] };
     page.selectedKeys = new Set(["old"]);
-    page.checkpointItemsByKey = { old: [{}] };
 
     await replaceContext(page, client);
 
     expect(page.result).toBeNull();
     expect(page.selectedKeys.size).toBe(0);
-    expect(page.checkpointItemsByKey).toEqual({});
   });
 
   it("clears usage loaded by the previous provider", async () => {

@@ -7,11 +7,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  claimDeliveryQueueEntryPlatformSend,
-  promoteDeliveryQueueEntryPlatformSend,
-  renewDeliveryQueueEntryPlatformSendLease,
-} from "./delivery-queue-sqlite-claim.js";
+import { promoteDeliveryQueueEntryPlatformSend } from "./delivery-queue-sqlite-claim.js";
 import { commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase } from "./delivery-queue-sqlite-namespace.kernel.js";
 import {
   countFailedDeliveryQueueEntries,
@@ -26,6 +22,10 @@ import {
 } from "./delivery-queue-sqlite.js";
 import { completeDeliveryQueueEntryInDatabase } from "./delivery-queue-sqlite.kernel.js";
 import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
+import {
+  claimDeliveryQueueEntryForTest,
+  renewDeliveryQueueEntryLeaseForTest,
+} from "./outbound/delivery-queue.test-helpers.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 describe("delivery-queue-sqlite corrupt JSON resilience", () => {
@@ -651,11 +651,9 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         stateDir,
       });
 
-      const claimId = claimDeliveryQueueEntryPlatformSend({ queueName: QUEUE, id, stateDir });
+      const claimId = claimDeliveryQueueEntryForTest({ queueName: QUEUE, id, stateDir });
       expect(claimId).toEqual(expect.any(String));
-      expect(
-        claimDeliveryQueueEntryPlatformSend({ queueName: QUEUE, id, stateDir }),
-      ).toBeUndefined();
+      expect(claimDeliveryQueueEntryForTest({ queueName: QUEUE, id, stateDir })).toBeUndefined();
       expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
         id,
         recoveryState: "producer_claimed",
@@ -678,7 +676,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         stateDir,
       });
 
-      const claimId = claimDeliveryQueueEntryPlatformSend({
+      const claimId = claimDeliveryQueueEntryForTest({
         queueName: QUEUE,
         id,
         stateDir,
@@ -710,7 +708,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           stateDir,
         });
 
-        const staleClaimId = claimDeliveryQueueEntryPlatformSend({
+        const staleClaimId = claimDeliveryQueueEntryForTest({
           queueName: QUEUE,
           id,
           stateDir,
@@ -729,7 +727,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           }),
         ).toBe(false);
         expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)?.platformSendStartedAt).toBeUndefined();
-        const recoveredClaimId = claimDeliveryQueueEntryPlatformSend({
+        const recoveredClaimId = claimDeliveryQueueEntryForTest({
           queueName: QUEUE,
           id,
           stateDir,
@@ -800,7 +798,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           vi.setSystemTime(Date.now() + 1_000);
 
           expect(
-            renewDeliveryQueueEntryPlatformSendLease({
+            renewDeliveryQueueEntryLeaseForTest({
               queueName: QUEUE,
               id,
               claimId,
@@ -865,7 +863,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           });
 
           expect(
-            renewDeliveryQueueEntryPlatformSendLease({
+            renewDeliveryQueueEntryLeaseForTest({
               queueName: QUEUE,
               id: entry.id,
               claimId: entry.claimId,
@@ -899,11 +897,9 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         stateDir,
       });
 
+      expect(claimDeliveryQueueEntryForTest({ queueName: QUEUE, id, stateDir })).toBeUndefined();
       expect(
-        claimDeliveryQueueEntryPlatformSend({ queueName: QUEUE, id, stateDir }),
-      ).toBeUndefined();
-      expect(
-        claimDeliveryQueueEntryPlatformSend({
+        claimDeliveryQueueEntryForTest({
           queueName: QUEUE,
           id,
           stateDir,
@@ -912,7 +908,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         }),
       ).toBeUndefined();
 
-      const claimId = claimDeliveryQueueEntryPlatformSend({
+      const claimId = claimDeliveryQueueEntryForTest({
         queueName: QUEUE,
         id,
         stateDir,
@@ -921,7 +917,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       });
       expect(claimId).toEqual(expect.any(String));
       expect(
-        claimDeliveryQueueEntryPlatformSend({
+        claimDeliveryQueueEntryForTest({
           queueName: QUEUE,
           id,
           stateDir,
@@ -952,7 +948,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           stateDir,
         });
 
-        const firstAttemptId = claimDeliveryQueueEntryPlatformSend({
+        const firstAttemptId = claimDeliveryQueueEntryForTest({
           queueName: QUEUE,
           id,
           stateDir,
@@ -969,7 +965,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           }),
         ).toBe(true);
         const firstStartedAt = Date.now();
-        const secondAttemptId = claimDeliveryQueueEntryPlatformSend({
+        const secondAttemptId = claimDeliveryQueueEntryForTest({
           queueName: QUEUE,
           id,
           stateDir,
@@ -997,7 +993,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         // A late proof for A must not reclaim live attempt B merely because
         // both provider boundaries observed the same clock millisecond.
         expect(
-          claimDeliveryQueueEntryPlatformSend({
+          claimDeliveryQueueEntryForTest({
             queueName: QUEUE,
             id,
             stateDir,

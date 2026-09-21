@@ -61,6 +61,24 @@ describe("source-preserving JSON tree", () => {
     ).toBe(source);
   });
 
+  it.each([false, true])("preserves authored indentation in Raw and Copy (fenced=%s)", (fenced) => {
+    const source = '\t{\n\t\t"nested": {\n\t\t\t"text": "  keep these spaces  "\n\t\t}\n\t}';
+    const body = renderJson(source, fenced);
+    body.addEventListener("click", handleMarkdownCodeBlockClick);
+    try {
+      body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!.click();
+      expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
+        true,
+      );
+      expect(body.querySelector("pre code")?.textContent).toBe(source + (fenced ? "\n" : ""));
+      expect(
+        readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
+      ).toBe(source);
+    } finally {
+      body.removeEventListener("click", handleMarkdownCodeBlockClick);
+    }
+  });
+
   it("switches views through the existing owner without replacing source or node state", () => {
     const body = renderJson('{"nested":{"value":true}}');
     body.addEventListener("click", handleMarkdownCodeBlockClick);

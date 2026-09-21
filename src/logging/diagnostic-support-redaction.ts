@@ -482,6 +482,7 @@ export function redactPublicSupportDiagnosticLine(
       "managed update handoff control input closed",
       "managed update ownership transfer failed",
       "requester-revoked",
+      "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
     ].includes(line)
   ) {
     return line;

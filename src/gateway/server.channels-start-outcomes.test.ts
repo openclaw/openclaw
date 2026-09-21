@@ -17,9 +17,9 @@ import { writeJsonAtomic } from "../infra/json-files.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   connectWebchatClient,
-  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
@@ -137,8 +137,8 @@ describe("channels.start account outcomes", () => {
           { durable: false, trailingNewline: true },
         );
         resetConfigRuntimeState();
-        const port = await getGatewayTestPort();
-        server = await startTestGatewayServer(port, {
+        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        server = await startTestGatewayServer(portClaim, {
           auth: { mode: "none" },
           channelAutostartSuppression: {
             reason: "crash-loop-breaker",
@@ -159,7 +159,7 @@ describe("channels.start account outcomes", () => {
         });
         expect(startAccount).not.toHaveBeenCalled();
 
-        const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+        const ws = await connectWebchatClient({ port: portClaim.port, scopes: ["operator.admin"] });
         try {
           const plaintext = await rpcReqWithActiveRuntime(ws, "channels.start", {
             channel: "telegram",
@@ -254,15 +254,15 @@ describe("channels.start account outcomes", () => {
           },
           channels: { telegram: { enabled: true, healthMonitor: { enabled: false } } },
         });
-        const port = await getGatewayTestPort();
-        server = await startTestGatewayServer(port, {
+        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        server = await startTestGatewayServer(portClaim, {
           auth: { mode: "none" },
           channelAutostartSuppression: {
             reason: "crash-loop-breaker",
             message: "synthetic safe mode",
           },
         });
-        const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+        const ws = await connectWebchatClient({ port: portClaim.port, scopes: ["operator.admin"] });
         try {
           expect(startAccount).not.toHaveBeenCalled();
           const invalidOverride = await rpcReq(ws, "channels.start", {

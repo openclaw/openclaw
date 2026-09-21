@@ -42,6 +42,16 @@ export const updateExecutorNativeEntrypoints = {
     sourceWorkerName: "update-command-executor",
     distWorkerPath: "cli/update-cli/update-command-executor.js",
   },
+  commandConfig: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-config",
+    distWorkerPath: "cli/update-cli/update-command-config.js",
+  },
+  config: {
+    currentModuleUrl,
+    sourceWorkerName: "../../config/config",
+    distWorkerPath: "config/config.js",
+  },
   migratedFinalize: {
     currentModuleUrl,
     sourceWorkerName: "../../infra/update-migrated-finalize.worker",

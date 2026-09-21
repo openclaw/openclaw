@@ -15,7 +15,7 @@ Optional typed evaluations, not a conversational model provider.
 ## Distribution
 
 - Package: `@openclaw/typesafe`
-- Install route: included in OpenClaw
+- Install route: npm or ClawHub: `clawhub:@openclaw/typesafe`
 
 ## Surface
 

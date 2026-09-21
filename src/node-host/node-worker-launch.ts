@@ -166,7 +166,7 @@ export async function startNodeWorkerChild(
   void active.done.catch(() => undefined);
   let running: NodeWorkerLaunchReceipt;
   try {
-    running = context.store.markRunning({
+    running = await context.store.markRunning({
       launchId: active.launchId,
       planHash: active.planHash,
       supervisor: params.supervisor,
@@ -179,7 +179,7 @@ export async function startNodeWorkerChild(
     if (container) {
       await context.stopChild(active, "interrupted");
       context.active.delete(active.launchId);
-      finishFailed(
+      await finishFailed(
         sanitizeNodeWorkerDiagnostic(
           error,
           "node worker container identity could not be persisted",
@@ -194,7 +194,7 @@ export async function startNodeWorkerChild(
   releaseJournal();
   if (running.state === "cancelled" || running.state === "interrupted") {
     await context.stopChild(active, running.state);
-    return context.store.get(active.launchId) ?? running;
+    return (await context.store.get(active.launchId)) ?? running;
   }
   if (running.state !== "running") {
     if (container) {
@@ -206,7 +206,7 @@ export async function startNodeWorkerChild(
   }
   if (context.isClosed() || params.signal?.aborted || active.turn?.cancelled) {
     await context.stopChild(active, context.isClosed() ? "interrupted" : "cancelled");
-    return context.store.get(active.launchId) ?? running;
+    return (await context.store.get(active.launchId)) ?? running;
   }
   try {
     await startNodeWorkerLaunchTransport({
@@ -227,9 +227,9 @@ export async function startNodeWorkerChild(
         ? "cancelled"
         : undefined;
     await context.stopChild(active, stopState);
-    return context.store.get(active.launchId) ?? running;
+    return (await context.store.get(active.launchId)) ?? running;
   }
-  return context.turns.get(params.input.launchId) ?? running;
+  return (await context.turns.get(params.input.launchId)) ?? running;
 }
 
 export function requireNodeWorkerContainerLifecycle(

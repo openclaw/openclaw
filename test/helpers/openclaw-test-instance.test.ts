@@ -30,7 +30,7 @@ import {
   type GatewayReadinessDiagnostic,
   testing,
 } from "./openclaw-test-instance.js";
-import { isProcessAlive, waitForDead, waitForFile } from "./process-wait.js";
+import { isProcessAlive, waitForDead, waitForFile, waitForFixtureFile } from "./process-wait.js";
 import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
@@ -300,6 +300,7 @@ if (kind === "cli" || kind === "cli-drain") {
   process.stderr.write("cli diagnostic\\n");
   if (argv[0] === "wait") {
     setInterval(() => {}, 1_000);
+    writeFileSync(tracePath + ".cli-ready", "ready");
     await new Promise(() => {});
   }
   if (kind === "cli-drain") {
@@ -1027,7 +1028,7 @@ describe("openclaw test instance", () => {
     );
     const command = trackOperation(instance.cli(["wait"], { timeoutMs: 1_000 }));
     const outcome = command.catch((error: unknown) => error);
-    await waitForFile(tracePath, 5_000);
+    await waitForFixtureFile(`${tracePath}.cli-ready`, command, "ready");
     const [attempt] = await readAttempts();
     expect(isProcessAlive(attempt!.pid)).toBe(true);
     controller.abort(new Error("instance owner cancelled during CLI"));
@@ -1255,7 +1256,17 @@ describe("openclaw test instance", () => {
         context.skip();
       }
       const { instance, readAttempts } = await createFakeGateway(`${action},ready`);
-      await expect(instance.startGateway()).rejects.toThrow("gateway exited before readiness");
+      const startup = instance.startGateway();
+      try {
+        await expect(startup).rejects.toThrow("gateway exited before readiness");
+      } catch (error) {
+        console.error(
+          `Unexpected ${action} fake Gateway startup outcome`,
+          instance.logs(),
+          await startup.catch((startupError: unknown) => startupError),
+        );
+        throw error;
+      }
       expect(await readAttempts()).toHaveLength(1);
       expect(instance.logs()).not.toContain(RESTART_MARKER);
       expect(instance.child).toBeUndefined();

@@ -76,8 +76,16 @@ keeps questions in the running process; they do not survive exiting the TUI.
 Codex async questions use the same panel above the Control UI composer. They open
 without taking keyboard focus and leave the message box available while the agent
 continues working. Collapse the panel to keep a compact unanswered-question count
-and the current question visible. New messages, completed turns, and collapsed
-work history do not dismiss the question or reopen a minimized panel.
+and the current question visible. New messages, the question's own completed
+turn, and collapsed work history do not dismiss the question or reopen a minimized
+panel. When a later run completes successfully, older reminders leave the dock.
+Overlapping runs, commentary, interruptions, and failed runs do not retire a
+question. Successful restart recovery also moves older reminders into history;
+restarting alone does not.
+The transcript keeps the question with **No longer pending** and an **Answer**
+button to reopen it. Reopening preserves the draft until you submit, skip, or a
+later run completes. Moving a reminder into history never answers it, grants
+permission, or marks its underlying task complete.
 The question dock also stays available when a plugin replaces the composer.
 
 Use the panel's request arrows to switch between pending requests without losing

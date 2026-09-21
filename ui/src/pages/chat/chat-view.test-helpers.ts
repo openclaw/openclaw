@@ -193,7 +193,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onQueueRemove: () => undefined,
     onQueueSteer: () => undefined,
     onClearHistory: () => undefined,
-    onOpenSessionCheckpoints: () => undefined,
     agentsList: null,
     currentAgentId: "main",
     onAgentChange: () => undefined,

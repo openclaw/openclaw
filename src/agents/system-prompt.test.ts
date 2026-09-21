@@ -826,7 +826,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "- exec: Run JavaScript/TypeScript Code Mode; call exact catalog tools from code, never shell/Python/imports",
+      "- exec: Run JavaScript Code Mode; call exact catalog tools from code, never shell/Python/imports",
     );
     expect(prompt).toContain("- wait: Resume a suspended Code Mode exec");
     expect(prompt).not.toContain("- exec: Run shell");

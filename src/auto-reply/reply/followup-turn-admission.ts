@@ -119,12 +119,17 @@ export async function admitFollowupTurn(params: {
   defaults: FollowupRunnerParams;
   onCompactionNoticePayload?: (payload: ReplyPayload, turn: AdmittedFollowupTurn) => Promise<void>;
 }): Promise<FollowupAdmissionResult> {
+  const assertOperatorCurrent = () => {
+    params.queued.operatorAuthority?.assertCurrent();
+  };
+  assertOperatorCurrent();
   const resolvedConfig = await resolveQueuedReplyExecutionConfig(params.queued.run.config, {
     originatingChannel: params.queued.originatingChannel,
     messageProvider: params.queued.run.messageProvider,
     originatingAccountId: params.queued.originatingAccountId,
     agentAccountId: params.queued.run.agentAccountId,
   });
+  assertOperatorCurrent();
   const config = resolveQueuedReplyRuntimeConfig(resolvedConfig);
   const replySessionKey = params.queued.run.sessionKey ?? params.defaults.sessionKey;
   const initialStoredEntry = replySessionKey
@@ -174,6 +179,7 @@ export async function admitFollowupTurn(params: {
     // callbacks in that closure so retried non-routable items use the newest transport owner.
     queuedFollowupAdmitted = true;
     await params.defaults.opts?.onQueuedFollowupAdmitted?.();
+    assertOperatorCurrent();
     if (operation.sessionId !== run.sessionId) {
       run = {
         ...run,

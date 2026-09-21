@@ -117,6 +117,7 @@ describe("update.run handoff refusal diagnostics", () => {
             "OpenClaw update failed: managed-service-handoff-failed",
           ),
         }),
+        expect.any(Object),
       );
     },
   );

@@ -343,6 +343,30 @@ describe("saved update failure resolution", () => {
     },
   );
 
+  it("formats every pending migration with the supplied update environment", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/fixture/state", OPENCLAW_UPDATE_IN_PROGRESS: "1" };
+    vi.mocked(readDeferredPluginMigrations).mockReturnValue(
+      ["first", "second"].map((pluginId) => ({
+        pluginId,
+        reason: "State migration is incomplete.",
+        command: "openclaw doctor --fix",
+      })),
+    );
+    const result = await validateTriageUpdateResolution({
+      failure: failure(),
+      installRoot: "/fixture/openclaw",
+      env,
+      signal: new AbortController().signal,
+      validateDoctor,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.summary).toContain('Plugin "first"');
+    expect(result.summary).toContain('Plugin "second"');
+    expect(result.summary.match(/Let the current update or repair finish/g)).toHaveLength(2);
+    expect(readDeferredPluginMigrations).toHaveBeenCalledWith({ env });
+    expect(validateDoctor).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "keeps mixed plugin installation failures unresolved after Doctor is clean (completed update: %s)",
     async (completed) => {

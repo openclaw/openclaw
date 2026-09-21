@@ -20,6 +20,7 @@ import {
 } from "./model-fallback-attempt.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
+import { recordModelFallbackStop as recordLightweightStop } from "./model-fallback-stop.js";
 import {
   createSessionPlacementSettlementClosedAbortError,
   isSessionPlacementSettlementClosedError,
@@ -47,6 +48,14 @@ function maxTurns() {
 }
 
 const terminalStops = [
+  {
+    name: "lightweight recorded metadata stop",
+    make: () => {
+      const error = Object.freeze(new Error("401 invalid API key"));
+      recordLightweightStop(error);
+      return error;
+    },
+  },
   { name: "recorded supersession", make: createAgentRunSupersededAbortError },
   { name: "max turns", make: maxTurns },
   {

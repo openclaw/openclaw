@@ -926,7 +926,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     );
     expect(inspectorRun.env).toEqual({
       OPENCLAW_PLUGIN_INSPECTOR_ROOT: ".artifacts/plugin-inspector",
-      OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.21",
+      OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.26",
     });
     expect(inspectorRun.run).toContain("extensions/");
     expect(inspectorRun.run).toContain(

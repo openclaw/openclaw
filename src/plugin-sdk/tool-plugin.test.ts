@@ -111,8 +111,6 @@ describe("defineToolPlugin", () => {
     applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...captured.tools] });
     const result = resultDetails(
       await h.tools[0]!.execute("sdk-actions", {
-        language: "typescript",
-        typecheck: true,
         code: 'return { rows: (await sdk_records({kind:"list"})).rows, ready: (await sdk_records({kind:"status"})).ready };',
       }),
     );

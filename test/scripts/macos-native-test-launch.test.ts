@@ -262,6 +262,9 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
         "--build-system",
         "native",
         "--enable-code-coverage",
+        "--disable-index-store",
+        "-Xswiftc",
+        "-gline-tables-only",
         "--build-tests",
       ]);
       expect(build.env.HOME).toBe(f.env.HOME);
@@ -274,6 +277,9 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
           "--build-system",
           "native",
           "--enable-code-coverage",
+          "--disable-index-store",
+          "-Xswiftc",
+          "-gline-tables-only",
           "--skip-build",
           "--experimental-maximum-parallelization-width",
           expectedWidth,
@@ -688,6 +694,9 @@ child.once('message', () => process.exit(0));
           "--build-system",
           "native",
           "--enable-code-coverage",
+          "--disable-index-store",
+          "-Xswiftc",
+          "-gline-tables-only",
           "--skip-build",
           "--no-parallel",
         ]);

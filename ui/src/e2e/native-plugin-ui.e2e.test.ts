@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
@@ -16,6 +15,7 @@ import {
 } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  captureNativePluginUiProof,
   catalog,
   expectComposerFooterLayout,
   pluginId,
@@ -25,6 +25,7 @@ import {
 } from "./native-plugin-ui.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native plugin UI ownership" });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const hungPluginModule = `export default { id:"hung-ui", async activate(host) {
   await host.request("fixture.peerStarted");
   await new Promise(resolve => { globalThis.nativePluginProof.release = resolve; });
@@ -257,7 +258,9 @@ suite.define(() => {
       {
         viewport: { width: 1280, height: 900 },
         serviceWorkers: "block",
-        recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
+        recordVideo: captureUiProof
+          ? { dir: suite.artifactDir, size: { width: 1280, height: 900 } }
+          : undefined,
       },
       async ({ page }) => {
         const sessionKey = "agent:main:native-widget";
@@ -323,7 +326,7 @@ suite.define(() => {
         await cell.locator(".board-widget__body").waitFor();
         expect(await loading.count()).toBe(1);
         expect(await disabled.count()).toBe(0);
-        await page.screenshot({ path: path.join(suite.artifactDir, "widget-loading.png") });
+        await captureNativePluginUiProof(suite, page, "widget-loading.png");
 
         await gateway.rejectDeferred("fixture.activationStarted", {
           message: "Widget initialization failed",
@@ -332,7 +335,7 @@ suite.define(() => {
         expect(await error.locator("code").textContent()).toContain("Widget initialization failed");
         expect(await loading.count()).toBe(0);
         expect(await disabled.count()).toBe(0);
-        await page.screenshot({ path: path.join(suite.artifactDir, "widget-failed.png") });
+        await captureNativePluginUiProof(suite, page, "widget-failed.png");
         await gateway.setMethodResponse("plugins.controlUi.list", catalog("one"));
         await error.getByRole("button", { name: "Retry", exact: true }).click();
         await expectHealthy("one");
@@ -353,7 +356,7 @@ suite.define(() => {
         await reload("two");
         await expectHealthy("two");
         expect(await cell.getByText("Fixture widget one", { exact: true }).count()).toBe(0);
-        await page.screenshot({ path: path.join(suite.artifactDir, "widget-reloaded.png") });
+        await captureNativePluginUiProof(suite, page, "widget-reloaded.png");
         await gateway.setMethodResponse("plugins.controlUi.list", {
           revision: "empty",
           plugins: [],
@@ -365,7 +368,7 @@ suite.define(() => {
         expect(
           await disabled.getByRole("button", { name: "Delete", exact: true }).isEnabled(),
         ).toBe(true);
-        await page.screenshot({ path: path.join(suite.artifactDir, "widget-removed.png") });
+        await captureNativePluginUiProof(suite, page, "widget-removed.png");
 
         const listed = (await gateway.getRequests("plugins.controlUi.list")).length;
         await gateway.deferNext("plugins.controlUi.list");
@@ -392,7 +395,9 @@ suite.define(() => {
       {
         viewport: { width: 1280, height: 900 },
         serviceWorkers: "block",
-        recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
+        recordVideo: captureUiProof
+          ? { dir: suite.artifactDir, size: { width: 1280, height: 900 } }
+          : undefined,
       },
       async ({ page }) => {
         const initial = catalog("pending");
@@ -459,7 +464,7 @@ suite.define(() => {
           await gateway.waitForRequest("fixture.peerStarted");
           await waitForPendingPluginInitializer(page);
           await expectLoading();
-          await page.screenshot({ path: path.join(suite.artifactDir, "startup-loading.png") });
+          await captureNativePluginUiProof(suite, page, "startup-loading.png");
           await page.evaluate(() => {
             const release = (window as NativePluginWindow).nativePluginProof?.release;
             if (!release) {
@@ -486,7 +491,7 @@ suite.define(() => {
             .toBe("completed");
           const activation = await gateway.waitForRequest("plugins.controlUi.report");
           expect(activation.params).toMatchObject({ pluginId, status: "activated" });
-          await page.screenshot({ path: path.join(suite.artifactDir, "startup-ready.png") });
+          await captureNativePluginUiProof(suite, page, "startup-ready.png");
         } finally {
           bootstrapGate.resolve();
         }
@@ -499,7 +504,9 @@ suite.define(() => {
       {
         viewport: { width: 1280, height: 900 },
         serviceWorkers: "block",
-        recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
+        recordVideo: captureUiProof
+          ? { dir: suite.artifactDir, size: { width: 1280, height: 900 } }
+          : undefined,
       },
       async ({ page }) => {
         const sessionKey = "agent:main:main";
@@ -581,7 +588,7 @@ suite.define(() => {
         await page.locator('[data-region-header="side"] .side-panel__minimize').click();
         await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
         await expectOneAccessory();
-        await page.screenshot({ path: path.join(suite.artifactDir, "before.png"), fullPage: true });
+        await captureNativePluginUiProof(suite, page, "before.png", { fullPage: true });
         expect(await page.getByRole("button", { name: "Customize UI", exact: true }).count()).toBe(
           0,
         );
@@ -620,10 +627,7 @@ suite.define(() => {
         expect(await page.getByLabel("Fixture draft", { exact: true }).inputValue()).toBe(
           "Send through the canonical composer",
         );
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "composer-input.png"),
-          fullPage: true,
-        });
+        await captureNativePluginUiProof(suite, page, "composer-input.png", { fullPage: true });
         await page.getByRole("button", { name: "Fixture send", exact: true }).click();
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({
@@ -644,10 +648,7 @@ suite.define(() => {
             Number.parseFloat(getComputedStyle(element).borderTopLeftRadius),
           ),
         ).toBeGreaterThan(0);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "composer-sent.png"),
-          fullPage: true,
-        });
+        await captureNativePluginUiProof(suite, page, "composer-sent.png", { fullPage: true });
         await selectView(page, "Transcript", "ui-fixture/failing-transcript");
         const transcriptError = page
           .getByRole("alert")
@@ -655,18 +656,14 @@ suite.define(() => {
         await transcriptError
           .getByRole("button", { name: "Retry plugin view", exact: true })
           .waitFor();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "transcript-recovery.png"),
+        await captureNativePluginUiProof(suite, page, "transcript-recovery.png", {
           fullPage: true,
         });
         await selectView(page, "Workspace", "ui-fixture/default-workspace");
         await selectView(page, "Workspace", "");
         await selectView(page, "Workspace", "ui-fixture/workspace");
         await page.getByRole("heading", { name: "Custom workspace" }).waitFor();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "custom-workspace.png"),
-          fullPage: true,
-        });
+        await captureNativePluginUiProof(suite, page, "custom-workspace.png", { fullPage: true });
         await openCustomizeUi(page);
         await page.getByRole("combobox", { name: "Workspace", exact: true }).selectOption("");
         await closeCustomizeUi(page);
@@ -677,7 +674,7 @@ suite.define(() => {
         await expect
           .poll(() => page.getByLabel("Fixture outcome").textContent())
           .toContain("view has ended");
-        await page.screenshot({ path: path.join(suite.artifactDir, "after.png"), fullPage: true });
+        await captureNativePluginUiProof(suite, page, "after.png", { fullPage: true });
         await page.locator(".nav-item--home").click();
         await expectOneAccessory();
         await page
@@ -689,8 +686,7 @@ suite.define(() => {
         await page.locator(".nav-item--home").click();
         await expectOneAccessory();
         expect(await accessory.getAttribute("data-presented")).toBe("true");
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "session-accessory-returned.png"),
+        await captureNativePluginUiProof(suite, page, "session-accessory-returned.png", {
           fullPage: true,
         });
       },
@@ -702,7 +698,9 @@ suite.define(() => {
       {
         viewport: { width: 1280, height: 900 },
         serviceWorkers: "block",
-        recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
+        recordVideo: captureUiProof
+          ? { dir: suite.artifactDir, size: { width: 1280, height: 900 } }
+          : undefined,
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
@@ -820,10 +818,14 @@ suite.define(() => {
               .filter({ hasText: error })
               .waitFor();
           }
-          await page.screenshot({
-            path: path.join(suite.artifactDir, `selection-${attempt + 1}-${revision}.png`),
-            fullPage: true,
-          });
+          await captureNativePluginUiProof(
+            suite,
+            page,
+            `selection-${attempt + 1}-${revision}.png`,
+            {
+              fullPage: true,
+            },
+          );
           await closeCustomizeUi(page);
         }
         await reload("pending");
@@ -831,10 +833,7 @@ suite.define(() => {
         await waitForPendingPluginInitializer(page);
         await reload("three");
         await page.getByRole("heading", { name: "Fixture revision three" }).waitFor();
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "reloaded.png"),
-          fullPage: true,
-        });
+        await captureNativePluginUiProof(suite, page, "reloaded.png", { fullPage: true });
         await page.getByRole("button", { name: "Release pending initializer" }).click();
         await expect.poll(() => page.getByLabel("Fixture outcome").textContent()).toBe("released");
         expect(await gateway.getRequests("fixture.staleInitializer")).toHaveLength(0);
@@ -894,7 +893,7 @@ suite.define(() => {
         expect(
           await pluginPage.getByText("Plugin panel unavailable", { exact: true }).count(),
         ).toBe(0);
-        await page.screenshot({ path: path.join(suite.artifactDir, "reconnecting.png") });
+        await captureNativePluginUiProof(suite, page, "reconnecting.png");
         await gateway.resolveDeferred("connect");
         const reconnected = await gateway.waitForRequest("plugins.controlUi.report", {
           after: reported,
@@ -916,7 +915,9 @@ suite.define(() => {
       {
         viewport: { width: 1280, height: 900 },
         serviceWorkers: "block",
-        recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
+        recordVideo: captureUiProof
+          ? { dir: suite.artifactDir, size: { width: 1280, height: 900 } }
+          : undefined,
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
@@ -974,8 +975,7 @@ suite.define(() => {
           })
           .waitFor();
         await expect.poll(() => reload.isEnabled()).toBe(true);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "peer-timeout-recovery.png"),
+        await captureNativePluginUiProof(suite, page, "peer-timeout-recovery.png", {
           fullPage: true,
         });
         await closeCustomizeUi(page);

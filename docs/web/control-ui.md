@@ -23,7 +23,7 @@ It speaks **directly to the Gateway WebSocket** on the same port.
 
 If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
 
-While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
+While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
 The selected chat loads before automatic sidebar task lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
 
@@ -43,6 +43,10 @@ Hover the row or focus it with the keyboard for a tooltip explaining the exact
 status. Reduced motion keeps the claw still. Tasks without a display title keep
 the generic **Subagent** label. Select a row to open its details.
 
+Select a session's title in the chat header to rename it. Enter saves the name;
+Escape cancels the edit. While an input method is composing text, Enter and
+Escape stay with composition. Finish composing before saving or canceling.
+
 Dragging a session between sidebar groups updates its placement immediately. A successful
 save keeps that placement even if the subsequent list refresh fails; the UI reports
 the refresh error separately. If a connection failure leaves the save unconfirmed,
@@ -58,8 +62,16 @@ Choose **New agent** in the sidebar or Agents home to open the custodian chat.
 It recommends a chief of staff, researcher, writer, reviewer, or a small team
 with all four. Reply with a choice, or describe custom work and a name. Role
 choices use the same [role templates](/cli/agents#role-templates) as the CLI;
-creation waits for operator approval. Created agents appear in Agents home and
+creation waits for operator approval. For custom work, the approved purpose is
+saved in the new workspace's `AGENTS.md`; the normal identity ceremony still runs.
+With `skipBootstrap` enabled, only these requested instructions are seeded, without
+the generic identity or bootstrap files.
+Existing workspace instructions are never overwritten. If `AGENTS.md` already
+contains different instructions, choose a new workspace for the custom agent.
+Created agents appear in Agents home and
 the agent switcher.
+Opening **New agent** keeps your existing Ask OpenClaw conversation. Finish any
+pending wizard or approval before opening the creation choices.
 If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
 

@@ -683,7 +683,17 @@ if (
   !isSourceCheckoutLauncher()
 ) {
   try {
-    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
+    const directory = resolvePackagedCompileCacheDirectory();
+    const baseDirectory = path.resolve(directory);
+    const result = module.enableCompileCache(directory);
+    const enabled = module.constants?.compileCacheStatus?.ENABLED;
+    if (enabled !== undefined && result?.status === enabled) {
+      // Bootstrap adapter for src/infra/node-compile-cache-env.ts: preserve the first
+      // successful input without importing runtime code before cache activation.
+      const key = Symbol.for("openclaw.nodeCompileCacheBase");
+      const owner = (globalThis[key] ??= {});
+      owner.baseDirectory ??= baseDirectory;
+    }
   } catch {
     // Ignore errors
   }

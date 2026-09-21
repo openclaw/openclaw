@@ -9,6 +9,8 @@ import path from "node:path";
 // Roots are canonicalized (realpath) because macOS tmpdir sits behind a symlink
 // (/var -> /private/var) while production code realpaths state/session paths;
 // symlinked roots break tests that compare or intercept fs paths by equality.
+// Keep case directories private even with group-writable host umasks: secure
+// filesystem helpers validate every ancestor of their workspace.
 type PrefixRootState = {
   path: string;
   activeCount: number;
@@ -125,10 +127,10 @@ export async function withTestDir<T>(
   const base = path.join(root.path, `dir-${String(nextAsyncDirIndex)}`);
   nextAsyncDirIndex += 1;
   try {
-    await fs.mkdir(base, { recursive: true });
+    await fs.mkdir(base, { recursive: true, mode: 0o700 });
     const dir = options.subdir ? path.join(base, options.subdir) : base;
     if (options.subdir) {
-      await fs.mkdir(dir, { recursive: true });
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
     }
     return await run(dir);
   } finally {
@@ -158,7 +160,7 @@ export function createSuiteTempRootTracker(options: { prefix: string; parentDir?
     },
     make: async (prefix = "case"): Promise<string> => {
       const dir = path.join(root, `${prefix}-${nextIndex++}`);
-      await fs.mkdir(dir, { recursive: true });
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       return dir;
     },
     cleanup: async (): Promise<void> => {
@@ -190,10 +192,10 @@ export function withTempDirSync<T>(
   const base = path.join(root.path, `dir-${String(nextSyncDirIndex)}`);
   nextSyncDirIndex += 1;
   try {
-    fsSync.mkdirSync(base, { recursive: true });
+    fsSync.mkdirSync(base, { recursive: true, mode: 0o700 });
     const dir = options.subdir ? path.join(base, options.subdir) : base;
     if (options.subdir) {
-      fsSync.mkdirSync(dir, { recursive: true });
+      fsSync.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
     return run(dir);
   } finally {

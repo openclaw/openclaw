@@ -322,7 +322,7 @@ export function renderWhereChip(params: {
         <span class="new-session-page__trigger-label">${label}</span>
         ${
           configurationSummary
-            ? html`<span class="new-session-page__trigger-summary">· ${configurationSummary}</span>`
+            ? html`<span class="new-session-page__trigger-summary">${configurationSummary}</span>`
             : nothing
         }
         <span

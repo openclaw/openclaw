@@ -845,7 +845,7 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["media", "stopTelemetryChecks", "skillUsageCleanup"] as const)(
+  it.each(["media", "stopPeriodicTasks", "skillUsageCleanup"] as const)(
     "waits for in-flight %s cleanup before shared state closes",
     async (owner) => {
       const stopped = createDeferredCore();

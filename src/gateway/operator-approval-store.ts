@@ -5,12 +5,10 @@ import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { sql, type Selectable } from "kysely";
-import {
-  type DecisionReceiptV1,
-  type ApprovalPresentation,
-  isWellFormedApprovalId,
-  validateApprovalPresentation,
-} from "../../packages/gateway-protocol/src/index.js";
+import { validateApprovalPresentation } from "../../packages/gateway-protocol/src/approval-result-validators.js";
+import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approval-id.js";
+import type { ApprovalPresentation } from "../../packages/gateway-protocol/src/schema/approvals.js";
+import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import {
   buildApprovalResolutionRef,

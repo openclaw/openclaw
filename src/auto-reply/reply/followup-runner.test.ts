@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -524,6 +525,28 @@ describe("createFollowupRunner", () => {
         payloads: [],
       }),
     );
+  });
+
+  it("consumes revoked operator input instead of retrying a pre-execution refusal", async () => {
+    const typing = createTypingController();
+    const turn = createTurn();
+    const failure = new Error("original operator role changed");
+    turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+      assertCurrent: () => {
+        throw failure;
+      },
+    });
+    state.admit.mockRejectedValueOnce(failure);
+
+    await expect(
+      createFollowupRunner({ typing, typingMode: "never", defaultModel: "claude" })(turn.queued),
+    ).resolves.toBeUndefined();
+
+    expect(state.execute).not.toHaveBeenCalled();
+    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
+    expect(typing.markRunComplete).toHaveBeenCalledOnce();
   });
 
   it("does not replay a returned execution when terminal delivery fails", async () => {

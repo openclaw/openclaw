@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as atomicFiles from "../infra/json-files.js";
-import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
+import {
+  writeTriageUpdateFailure,
+  writeUpdateRunReportArtifact,
+} from "../infra/update-failure-report-artifact.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import {
   readTriageUpdateFailure,
@@ -13,6 +16,10 @@ import {
 import { readReleasedTriageUpdateFailure } from "./triage-update.released-reader.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("node:crypto", async () => ({
+  ...(await vi.importActual<typeof import("node:crypto")>("node:crypto")),
+  randomUUID: () => "10000000-0000-4000-8000-000000000001",
+}));
 
 describe("rollback-readable update diagnostics", () => {
   it.each([
@@ -92,7 +99,7 @@ describe("rollback-readable update diagnostics", () => {
       };
       const originalError =
         errorCount === 40
-          ? `Initial activation failure ${"diagnostic context ".repeat(100)}`
+          ? `Initial activation failure account 987654321098 ${"diagnostic context ".repeat(100)}`
           : undefined;
       const outputPath = await writeTriageUpdateFailure(
         { result, error: originalError },
@@ -105,6 +112,8 @@ describe("rollback-readable update diagnostics", () => {
       );
       const raw = await fs.readFile(outputPath, "utf8");
       expect(raw).not.toContain(secret);
+      expect(raw).not.toContain(stateDir);
+      expect(raw).not.toContain("987654321098");
       expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(8 * 1024);
       const released = await readReleasedTriageUpdateFailure(outputPath, { env, stateDir });
       if (!released.error) {
@@ -123,6 +132,7 @@ describe("rollback-readable update diagnostics", () => {
       const inventory = JSON.parse(inventoryRaw);
       expect(inventory.result.steps[0].doctorLintFindings).toHaveLength(findingCount);
       expect(inventoryRaw).not.toContain(secret);
+      expect(inventoryRaw).not.toContain("987654321098");
       for (const finding of findings) {
         expect(inventoryRaw).toContain(finding.checkId);
         expect(inventoryRaw).toContain(finding.message);
@@ -152,6 +162,22 @@ describe("rollback-readable update diagnostics", () => {
       }
       if (errorCount === 40) {
         expect(receipt.omitted).toBeGreaterThan(0);
+        const reportPath = await writeUpdateRunReportArtifact({
+          result,
+          report: { markdown: "Synthetic update report" },
+          env,
+        });
+        const markdown = await fs.readFile(reportPath, "utf8");
+        const link = /^Bounded diagnostic JSON: ([^\r\n]+)$/mu.exec(markdown)?.[1];
+        expect(link).toBeDefined();
+        await expect(
+          readReleasedTriageUpdateFailure(path.resolve(path.dirname(reportPath), link!), {
+            env,
+            stateDir,
+          }),
+        ).resolves.toMatchObject({
+          error: expect.stringContaining("Complete Doctor lint inventory:"),
+        });
       }
       expect(bounded.result.steps[0]).toMatchObject(physical);
       expect(bounded.result.steps[0]).not.toHaveProperty("doctorLintFindings");

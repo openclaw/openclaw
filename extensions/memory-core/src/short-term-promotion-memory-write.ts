@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
-import { resolvePathPrefixSync } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  resolvePathPrefixSync,
+  writeFileWindowFully,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import type { MemoryWorkspaceFiles } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { getMemoryWorkspaceMaintenance, readWorkspaceText } from "./memory-workspace-files.js";
@@ -114,21 +117,7 @@ async function writeExistingMemoryInPlace(params: {
   } catch (error) {
     const original = Buffer.from(params.expectedContent, "utf-8");
     try {
-      let restored = 0;
-      while (restored < original.length) {
-        const { bytesWritten } = await handle.write(
-          original,
-          restored,
-          original.length - restored,
-          restored,
-        );
-        if (bytesWritten <= 0) {
-          throw new Error(`${path.basename(params.filePath)} restore write made no progress`, {
-            cause: error,
-          });
-        }
-        restored += bytesWritten;
-      }
+      await writeFileWindowFully(handle, original, 0);
       await handle.truncate(original.length);
       await handle.sync();
     } catch (restoreError) {

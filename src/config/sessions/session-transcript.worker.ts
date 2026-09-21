@@ -2,7 +2,7 @@ import type {
   UsageCostWorkerInput,
   UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
-import { serveWorkerTasks } from "../../infra/worker-task-pool.js";
+import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
@@ -20,12 +20,15 @@ import type {
   SessionTargetInventoryWorkerInput,
   SessionIdentityEvidenceWorkerInput,
   SessionMembersWorkerInput,
+  SessionPreviewWorkerInput,
+  SessionTitleFieldsWorkerInput,
   SessionModelContextWorkerInput,
   SessionRowPresenceWorkerInput,
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
   SessionUsageCacheWorkerInput,
+  SessionTranscriptSearchWorkerInput,
 } from "./session-transcript-worker.types.js";
 
 // Keep target switching within the existing serialized worker; no read snapshot survives a task.
@@ -92,9 +95,12 @@ serveWorkerTasks(
       | SessionTargetInventoryWorkerInput
       | SessionIdentityEvidenceWorkerInput
       | SessionTranscriptHistoryWorkerInput
+      | SessionPreviewWorkerInput
+      | SessionTitleFieldsWorkerInput
       | SessionRowPresenceWorkerInput
       | SessionMembersWorkerInput
       | SessionUsageCacheWorkerInput
+      | SessionTranscriptSearchWorkerInput
       | SessionBranchSummaryWorkerInput
       | UsageCostWorkerInput;
     if (request.kind === "usage-cost") {
@@ -127,6 +133,20 @@ serveWorkerTasks(
       }
     }
     try {
+      if (request.kind === "transcript-search") {
+        const { searchSessionTranscriptsReadOnlySync } =
+          await import("./session-transcript-search.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => ({
+            kind: "transcript-search" as const,
+            result: searchSessionTranscriptsReadOnlySync(request.params, {
+              ...request.database,
+              env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
+            }),
+          }))),
+        };
+      }
       if (request.kind === "session-target-inventory") {
         const { readSessionStoreTargetInventory } =
           await import("./session-store-target-inventory.js");
@@ -219,6 +239,37 @@ serveWorkerTasks(
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues>> => {
+          if (request.kind === "session-title-fields") {
+            const { readSessionTitleFieldsFromTranscript } =
+              await import("../../gateway/session-transcript-title-reader.js");
+            return {
+              ok: true,
+              ...(await withHistoryDatabase(request.database, () => ({
+                kind: "session-title-fields" as const,
+                fields: readSessionTitleFieldsFromTranscript(request.scope, {
+                  includeInterSession: request.includeInterSession,
+                  readOnly: true,
+                }),
+              }))),
+            };
+          }
+          if (request.kind === "session-preview") {
+            const { readSessionPreviewItemsFromTranscript } =
+              await import("../../gateway/session-transcript-preview.js");
+            return {
+              ok: true,
+              ...(await withHistoryDatabase(request.database, () => ({
+                kind: "session-preview" as const,
+                items: readSessionPreviewItemsFromTranscript(
+                  request.scope,
+                  request.maxItems,
+                  request.maxChars,
+                  "display",
+                  { readOnly: true },
+                ),
+              }))),
+            };
+          }
           if (request.kind === "model-context") {
             const { readSessionTranscriptModelContext } =
               await import("./session-accessor.sqlite-model-context.js");
@@ -248,6 +299,23 @@ serveWorkerTasks(
                     deferProfileDisplay: true,
                     resolveCronJobName: () => undefined,
                   };
+                  if (request.request.kind === "message-lookup") {
+                    return {
+                      kind: "message-lookup",
+                      messages: await options.readers.readSessionMessagesMatchingIdAsync(
+                        request.request.params.target,
+                        request.request.params.messageId,
+                      ),
+                    };
+                  }
+                  if (request.request.kind === "delta") {
+                    return {
+                      kind: "delta",
+                      delta: options.readers.readTranscriptDisplayDelta(
+                        request.request.params.limits,
+                      ),
+                    };
+                  }
                   if (request.request.kind === "rpc") {
                     const { readChatHistoryPageKernel } =
                       await import("../../gateway/server-methods/chat-history-page-kernel.js");
@@ -289,6 +357,13 @@ serveWorkerTasks(
         },
       );
     } catch (error) {
+      if (
+        error instanceof SyntaxError &&
+        request.kind === "history-page" &&
+        request.request.kind === "message-lookup"
+      ) {
+        return { ok: false, error: { kind: "syntax", message: error.message } };
+      }
       if (error instanceof SessionTranscriptColdError) {
         return { ok: false, error: { kind: "cold", sessionId: error.sessionId } };
       }

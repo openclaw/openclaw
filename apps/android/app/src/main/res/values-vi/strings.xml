@@ -164,6 +164,7 @@
     <string name="native_155106be1173d757" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tên thiết bị"</string>
     <string name="native_155f816c0407310c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gửi"</string>
     <string name="native_15b61974b2707a7b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Vị trí"</string>
+    <string name="native_160db55194b1967c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chế độ trò chuyện gốc: chuyển tiếp qua Gateway không khả dụng với cấu hình này; đang sử dụng tính năng nhận dạng giọng nói của thiết bị và giọng nói đã cấu hình cho chế độ trò chuyện."</string>
     <string name="native_16196f98cecd6839" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ví dụ: America/New_York"</string>
     <string name="native_16524d7409d37507" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Phiên đích"</string>
     <string name="native_1669ad8d6f188594" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Xem xét kỹ năng ClawHub"</string>
@@ -967,6 +968,7 @@
     <string name="native_84aebc69a1bf739a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đã cấu hình"</string>
     <string name="native_84db8228370efedd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera list"</string>
     <string name="native_84f9cb5c5662fa3b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 mục đã áp dụng"</string>
+    <string name="native_8581125e3bd6b2fe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Talk gốc: sử dụng tính năng nhận dạng giọng nói của thiết bị và giọng Talk đã cấu hình."</string>
     <string name="native_859270e63a2904d7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera clip"</string>
     <string name="native_85a39ab345d672ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Có"</string>
     <string name="native_85bb24ced460372b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kiểm tra âm thanh"</string>
@@ -1148,6 +1150,7 @@
     <string name="native_9d988c13c67e88e6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đọc vị trí của điện thoại này"</string>
     <string name="native_9db0df0afb47b562" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Khóa Kỹ Năng"</string>
     <string name="native_9dd17090e788442d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Quyền truy cập chỉ đọc; các quy tắc phê duyệt công cụ gốc vẫn áp dụng."</string>
+    <string name="native_9df78be02eef04b3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Native Talk: Gateway không công bố khả năng hỗ trợ chuyển tiếp GPT-Live; đang sử dụng tính năng nhận dạng giọng nói của thiết bị và giọng nói Talk đã cấu hình."</string>
     <string name="native_9e37aa0704a3cf44" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Đã cài đặt %1$s."</string>
     <string name="native_9e4635769f0aaf0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Các Gateway"</string>
     <string name="native_9e7b2578a4302921" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"hành động: %1$s"</string>

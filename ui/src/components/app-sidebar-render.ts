@@ -485,16 +485,8 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     : gateway
       ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
       : buildSubtitle;
-  const outboxLabel = host.queuedOutboxCount
-    ? t("connection.queuedCount", { count: String(host.queuedOutboxCount) })
-    : null;
-  const accessibleDetail = [identityDetail, outboxLabel].filter(Boolean).join(" · ");
-  const announcement = [
-    statusLabel ? statusLabel : host.connected ? t("nav.gateway.connected") : null,
-    outboxLabel,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const accessibleDetail = identityDetail;
+  const announcement = statusLabel ?? (host.connected ? t("nav.gateway.connected") : "");
   return html`
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
       <button
@@ -513,7 +505,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
             connectionStatus
               ? renderGatewayStatus({
                   kind: connectionStatus,
-                  queuedOutboxCount: host.queuedOutboxCount,
                   lastError: host.lastError,
                   announce: false,
                 })
@@ -526,7 +517,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                         </span>`
                       : nothing
                   }
-                  ${renderGatewayStatus({ kind: null, queuedOutboxCount: host.queuedOutboxCount, announce: false })}
                 `
           }
         </span>

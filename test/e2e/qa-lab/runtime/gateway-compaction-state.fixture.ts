@@ -422,6 +422,7 @@ export function snapshotCompactionSession(
   const entry = readCompactionEntry(runtime, gateway, proof);
   const manager = runtime.sessions.SessionManager.open(target, gateway.workspaceDir);
   const branch = manager.getBranch();
+  const compactions = manager.getEntries().filter((event) => event.type === "compaction");
   const toolEntries = branch.filter(
     (event) =>
       event.type === "message" &&
@@ -445,12 +446,9 @@ export function snapshotCompactionSession(
           : 0),
       0,
     ),
-    compactionIds: manager
-      .getEntries()
-      .filter((event) => event.type === "compaction")
-      .map((event) => event.id),
+    compactionIds: compactions.map((event) => event.id),
+    compactionSummaries: compactions.map((event) => event.summary),
     compactionCount: entry.compactionCount ?? 0,
-    compactionCheckpoints: entry.compactionCheckpoints,
     transcriptByteCompactionLatch: entry.transcriptByteCompactionLatch,
     agentRuntimeOverride: entry.agentRuntimeOverride,
     agentHarnessId: entry.agentHarnessId,
@@ -497,11 +495,6 @@ export function assertUncommittedCompactionHistory(
     after.compactionCount,
     before.compactionCount,
     "Interrupted recovery changed compaction accounting",
-  );
-  assert.deepEqual(
-    after.compactionCheckpoints,
-    before.compactionCheckpoints,
-    "Interrupted recovery changed compaction checkpoints",
   );
   assert.deepEqual(
     after.transcriptByteCompactionLatch,
@@ -555,11 +548,6 @@ export function assertResetWithoutCompaction(
     "Revoked heartbeat changed compaction accounting",
   );
   assert.deepEqual(
-    after.compactionCheckpoints,
-    before.compactionCheckpoints,
-    "Revoked heartbeat changed compaction checkpoints",
-  );
-  assert.deepEqual(
     after.transcriptByteCompactionLatch,
     before.transcriptByteCompactionLatch,
     "Revoked heartbeat changed the transcript byte latch",
@@ -577,11 +565,6 @@ export function assertCommittedCompactionHistory(
     "Late stop lost or repeated compaction",
   );
   assert.equal(after.compactionCount, 1, "Late stop lost completed compaction accounting");
-  assert.deepEqual(
-    after.compactionCheckpoints,
-    committed.compactionCheckpoints,
-    "Late stop changed the committed compaction checkpoints",
-  );
   for (const id of committed.compactionIds) {
     assert.ok(
       after.activeEntryIds.includes(id),

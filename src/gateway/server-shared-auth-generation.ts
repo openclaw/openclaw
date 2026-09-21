@@ -2,6 +2,7 @@
 // Disconnects clients when config writes invalidate shared credentials.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import {
   invalidateGatewayPolicyClient,
@@ -27,6 +28,13 @@ export type SharedGatewaySessionGenerationOwnership = {
 };
 
 const stateRevisions = new WeakMap<SharedGatewaySessionGenerationState, number>();
+type SharedAuthInvalidation =
+  | { kind: "generation"; generation: string | undefined }
+  | { kind: "all" };
+const invalidationListeners = new WeakMap<
+  SharedGatewaySessionGenerationState,
+  Set<(event: SharedAuthInvalidation) => void>
+>();
 
 const generationReaderStates = resolveGlobalSingleton(
   Symbol.for("openclaw.sharedGatewaySessionGenerationReaders"),
@@ -47,6 +55,43 @@ export function getSharedGatewaySessionGenerationReaderState(
   read: (() => string | undefined) | undefined,
 ): SharedGatewaySessionGenerationState | undefined {
   return read ? generationReaderStates.get(read) : undefined;
+}
+
+/** Follow this Gateway's committed authentication policy after its client leaves the socket set. */
+export function onSharedGatewayAuthInvalidated(
+  read: (() => string | undefined) | undefined,
+  generation: string | undefined,
+  listener: () => void,
+): (() => void) | undefined {
+  const state = getSharedGatewaySessionGenerationReaderState(read);
+  if (!state) {
+    return undefined;
+  }
+  let listeners = invalidationListeners.get(state);
+  if (!listeners) {
+    listeners = new Set();
+    invalidationListeners.set(state, listeners);
+  }
+  const unsubscribe = registerListener(listeners, (event) => {
+    if (event.kind === "all" || event.generation !== generation) {
+      listener();
+    }
+  });
+  return () => {
+    unsubscribe();
+    if (listeners.size === 0 && invalidationListeners.get(state) === listeners) {
+      invalidationListeners.delete(state);
+    }
+  };
+}
+
+function publishSharedAuthInvalidation(
+  state: SharedGatewaySessionGenerationState | undefined,
+  event: SharedAuthInvalidation,
+): void {
+  if (state) {
+    notifyListeners(invalidationListeners.get(state) ?? [], event);
+  }
 }
 
 function advanceStateRevision(state: SharedGatewaySessionGenerationState): number {
@@ -70,6 +115,8 @@ export function captureSharedGatewaySessionGenerationOwnership(
 export function disconnectStaleSharedGatewayAuthClients(params: {
   clients: Iterable<SharedGatewayAuthClient>;
   expectedGeneration: string | undefined;
+  state?: SharedGatewaySessionGenerationState;
+  revokeSource?: boolean;
 }): void {
   for (const gatewayClient of params.clients) {
     if (!gatewayClient.usesSharedGatewayAuth) {
@@ -82,6 +129,13 @@ export function disconnectStaleSharedGatewayAuthClients(params: {
       reason: "gateway-auth-changed",
       code: 4001,
       message: "gateway auth changed",
+      revokeSource: params.revokeSource,
+    });
+  }
+  if (params.revokeSource !== false) {
+    publishSharedAuthInvalidation(params.state, {
+      kind: "generation",
+      generation: params.expectedGeneration,
     });
   }
 }
@@ -89,6 +143,7 @@ export function disconnectStaleSharedGatewayAuthClients(params: {
 /** Disconnect every shared-auth client regardless of generation. */
 export function disconnectAllSharedGatewayAuthClients(
   clients: Iterable<SharedGatewayAuthClient>,
+  state?: SharedGatewaySessionGenerationState,
 ): void {
   for (const gatewayClient of clients) {
     if (!gatewayClient.usesSharedGatewayAuth) {
@@ -100,6 +155,7 @@ export function disconnectAllSharedGatewayAuthClients(
       message: "gateway auth changed",
     });
   }
+  publishSharedAuthInvalidation(state, { kind: "all" });
 }
 
 /** Resolve the generation clients must use, treating null as "current is required". */
@@ -214,6 +270,10 @@ export function finalizeOwnedSharedGatewaySessionGeneration(
     state.required = null;
   }
   advanceStateRevision(state);
+  publishSharedAuthInvalidation(state, {
+    kind: "generation",
+    generation: getRequiredSharedGatewaySessionGeneration(state),
+  });
   return true;
 }
 
@@ -232,6 +292,7 @@ export function enforceSharedGatewaySessionGenerationForConfigWrite(params: {
       required: nextSharedGatewaySessionGeneration,
     });
     disconnectStaleSharedGatewayAuthClients({
+      state: params.state,
       clients: params.clients,
       expectedGeneration: nextSharedGatewaySessionGeneration,
     });
@@ -242,6 +303,7 @@ export function enforceSharedGatewaySessionGenerationForConfigWrite(params: {
     required: null,
   });
   disconnectStaleSharedGatewayAuthClients({
+    state: params.state,
     clients: params.clients,
     expectedGeneration: nextSharedGatewaySessionGeneration,
   });

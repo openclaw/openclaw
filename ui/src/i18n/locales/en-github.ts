@@ -61,8 +61,6 @@ const enGitHub = {
     githubConfiguredHere: "Configured here",
     githubInheritedHere: "Inherited",
     githubKindNative: "Native GitHub CLI",
-    githubNativeAccountHint:
-      "Native GitHub lookup uses the Gateway process environment and the GitHub CLI login of the OS account running the Gateway. Other OS users' logins are separate.",
     githubKindPat: "Managed personal access token",
     githubKindOAuth: "Managed GitHub authorization",
     githubRefreshAvailable: "Available",

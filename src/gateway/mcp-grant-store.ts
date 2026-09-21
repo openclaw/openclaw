@@ -66,6 +66,8 @@ export type McpLoopbackRequestContext = {
    * hard enforcement. Unset keeps the full session-scoped surface.
    */
   toolsAllow?: string[];
+  /** Host-minted search exclusion; independent of coding-tool authority in toolsAllow. */
+  webSearchDisabled?: true;
   /** Canonical observed native authority; null awaits this turn's initialization. */
   nativeCronCreatorToolAllowlist?: string[] | null;
   skillWorkshop?: Pick<SkillWorkshopRunOptions, "proposalRevision">;

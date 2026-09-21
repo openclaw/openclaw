@@ -24,6 +24,7 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
@@ -63,6 +64,7 @@ export async function runUpdateCommandRepair(
   ),
 ) {
   const retained = params.phase === "validating" ? params.validation.retainedRehearsal : undefined;
+  let cleanupUncertain = false;
   try {
     const candidateRoot = params.phase === "validating" ? params.candidateRoot : params.root;
     const result: UpdateRunResult =
@@ -262,16 +264,28 @@ export async function runUpdateCommandRepair(
             params.onEvent?.(event);
           },
         });
+      } catch (error: unknown) {
+        cleanupUncertain = hasCommandProcessCleanupError(error);
+        throw error;
       } finally {
         // Cancellation must drain the oracle before its caller activates or discards
         // a candidate, or restores the installation environment.
-        await pending?.catch(() => undefined);
-        if (!retained) {
+        await pending?.catch((error: unknown) => {
+          if (!cleanupUncertain && hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+        });
+        if (!cleanupUncertain && !retained) {
           await rehearsal?.cleanup();
         }
       }
     });
+  } catch (error: unknown) {
+    cleanupUncertain ||= hasCommandProcessCleanupError(error);
+    throw error;
   } finally {
-    await retained?.cleanup();
+    if (!cleanupUncertain) {
+      await retained?.cleanup();
+    }
   }
 }

@@ -4,6 +4,8 @@ import type {
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
+import type { SessionTitleFields } from "../../gateway/session-transcript-title-reader.js";
+import type { SessionPreviewItem } from "../../gateway/session-utils.types.js";
 import type {
   SessionCostUsageCacheRead,
   SessionCostUsageCacheReadResult,
@@ -26,6 +28,7 @@ import type {
   SessionAccessScope,
   SessionEntryListScope,
   SessionEntrySummary,
+  SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
@@ -38,7 +41,22 @@ import type {
   SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
+import type {
+  SessionTranscriptSearchParams,
+  SessionTranscriptSearchResult,
+} from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+
+export type SessionTranscriptSearchWorkerInput = {
+  kind: "transcript-search";
+  database: { agentId: string; path: string };
+  params: SessionTranscriptSearchParams;
+};
+
+export type SessionTranscriptSearchWorkerResult = {
+  kind: "transcript-search";
+  result: SessionTranscriptSearchResult;
+};
 
 export type SessionModelContextWorkerInput = {
   kind: "model-context";
@@ -66,6 +84,33 @@ export type SessionTranscriptHistoryWorkerInput = {
   request: SessionHistoryWorkerRequest;
   target: Omit<PreparedSessionHistoryReadTarget, "database">;
   admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
+export type SessionPreviewWorkerInput = {
+  kind: "session-preview";
+  database: { agentId: string; path: string };
+  scope: SessionTranscriptReadScope;
+  maxItems: number;
+  maxChars: number;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
+export type SessionPreviewWorkerResult = {
+  kind: "session-preview";
+  items: SessionPreviewItem[];
+};
+
+export type SessionTitleFieldsWorkerInput = {
+  kind: "session-title-fields";
+  database: { agentId: string; path: string };
+  scope: SessionTranscriptReadScope;
+  includeInterSession?: boolean;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+};
+
+export type SessionTitleFieldsWorkerResult = {
+  kind: "session-title-fields";
+  fields: SessionTitleFields;
 };
 
 export type SessionRowPresenceWorkerInput = {
@@ -123,8 +168,11 @@ export type SessionBranchSummaryWorkerInput = {
 };
 
 export type SessionTranscriptWorkerValues = {
+  "transcript-search": SessionTranscriptSearchWorkerResult;
   "branch-summaries": SessionBranchSummaryReadResult;
   "history-page": SessionHistoryWorkerResult;
+  "session-preview": SessionPreviewWorkerResult;
+  "session-title-fields": SessionTitleFieldsWorkerResult;
   "session-row-presence": boolean;
   "session-members": SessionMember[];
   "session-entry-list": SessionEntryListWorkerResult;
@@ -149,5 +197,6 @@ export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWor
       error:
         | { kind: "cold"; sessionId: string }
         | { kind: "projection"; sessionId: string }
-        | { kind: "fence"; message: string };
+        | { kind: "fence"; message: string }
+        | { kind: "syntax"; message: string };
     };

@@ -4,6 +4,7 @@ import { createServer, request, type IncomingHttpHeaders, type Server } from "no
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTeamReportsHttpHandler } from "./http.js";
@@ -13,6 +14,9 @@ import { githubCounts } from "./reports.fixtures.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { Period, Person, ReportDocument, SummaryDocument } from "./types.js";
+import type { WorkSessions } from "./work-sessions.js";
+
+vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({ dispatchGatewayMethod: vi.fn() }));
 
 const runtimeScopeMock = vi.hoisted(() => vi.fn());
 const workerReads = vi.hoisted(() => ({ enabled: false, calls: 0, bytes: 0 }));
@@ -109,12 +113,27 @@ let server: Server;
 let port: number;
 let available = true;
 let currentOrgs = ["configured-example"];
+let currentMainKey = "home";
 const getStore = vi.fn(() => (available ? store : undefined));
+const workSessions =
+  vi.fn<(offset?: number, limit?: number, profileId?: string) => Promise<WorkSessions>>();
 
 beforeEach(() => {
   runtimeScopeMock.mockReturnValue({ client: { connect: { scopes: ["operator.read"] } } });
+  vi.mocked(dispatchGatewayMethod)
+    .mockReset()
+    .mockResolvedValue({
+      ok: true,
+      payload: {
+        profiles: [
+          { id: "alice-profile", mergedInto: null, githubIdentity: { login: "ALICE-ALIAS" } },
+        ],
+      },
+    });
   getStore.mockClear();
+  workSessions.mockReset().mockResolvedValue({ available: true, sessions: [] });
   currentOrgs = ["configured-example"];
+  currentMainKey = "home";
 });
 
 function fetchPath(
@@ -191,6 +210,8 @@ beforeAll(async () => {
   const handler = createTeamReportsHttpHandler({
     basePath: "/reports",
     displayTimezone: "UTC",
+    sessionRouting: () => ({ controlUiBasePath: "/control", mainKey: currentMainKey }),
+    workSessions,
     assetsDir: fileURLToPath(new URL("../assets", import.meta.url)),
     getStore,
     status: async () => ({ running: false, lastRun: "fixture-run" }),
@@ -243,6 +264,7 @@ describe("Team Reports HTTP responses", () => {
         "/reports/assets/crab.avif",
         "/reports/assets/icon.png",
         "/reports/status",
+        "/reports/sessions/",
         "/reports/index.json",
         "/reports/latest/",
         "/reports/people/",
@@ -269,6 +291,7 @@ describe("Team Reports HTTP responses", () => {
         }
       }
       expect(getStore).not.toHaveBeenCalled();
+      expect(workSessions).not.toHaveBeenCalled();
     },
   );
 
@@ -564,6 +587,75 @@ describe("Team Reports HTTP responses", () => {
     }
   });
 
+  it("renders current session links, owners and pagination without changing report exports", async () => {
+    workSessions.mockResolvedValue({
+      available: true,
+      sessions: [
+        {
+          key: "agent:writer:dashboard:demo",
+          agentId: "writer",
+          displayName: "Fix <navigation>",
+          owner: { actor: { type: "human", label: "Alice & Bob" } },
+          status: "running",
+        },
+      ],
+      nextOffset: 80,
+    });
+    const page = await fetchPath("/reports/sessions/?offset=40");
+    expect(page.status).toBe(200);
+    expect(workSessions).toHaveBeenLastCalledWith(40, 40);
+    expect(page.body).toContain('href="/control/chat/writer/dashboard/demo"');
+    expect(page.body).toContain("Fix &lt;navigation&gt;");
+    expect(page.body).toContain("Alice &amp; Bob");
+    expect(page.body).toContain('data-work-session-key="agent:writer:dashboard:demo"');
+    expect(page.body).toContain('href="/reports/sessions/?offset=80"');
+    expect(page.body).toContain('href="/reports/sessions/?offset=0"');
+    const home = await fetchPath("/reports/");
+    expect(home.body).toContain("Fix &lt;navigation&gt;");
+    expect(workSessions).toHaveBeenLastCalledWith(0, 8);
+    workSessions.mockClear();
+    await fetchPath("/reports/day/2026-08-20/data.json");
+    await fetchPath("/reports/day/2026-08-20/report.md");
+    expect(workSessions).not.toHaveBeenCalled();
+  });
+
+  it("keeps a named main session distinct from the configured home session", async () => {
+    workSessions.mockResolvedValue({
+      available: true,
+      sessions: [
+        { key: "agent:writer:main", displayName: "Named main" },
+        { key: "agent:writer:home", displayName: "Home session" },
+      ],
+    });
+    const page = await fetchPath("/reports/sessions/");
+    expect(page.body).toContain('href="/control/chat/writer/~key/main"');
+    expect(page.body).toContain('href="/control/chat/writer"');
+    currentMainKey = "main";
+    const reloaded = await fetchPath("/reports/sessions/");
+    expect(reloaded.body).toContain('href="/control/chat/writer/home"');
+    expect(reloaded.body).not.toContain('href="/control/chat/writer/~key/main"');
+  });
+
+  it.each(["-1", "1.5", "NaN", "9007199254740992"])(
+    "rejects invalid session offset %s",
+    async (offset) => {
+      expect((await fetchPath(`/reports/sessions/?offset=${offset}`)).status).toBe(400);
+      expect(workSessions).not.toHaveBeenCalled();
+    },
+  );
+
+  it("distinguishes unavailable session discovery from an empty visible list", async () => {
+    expect((await fetchPath("/reports/sessions/")).body).toContain(
+      "No work sessions are visible to you",
+    );
+    workSessions.mockResolvedValue({ available: false });
+    const page = await fetchPath("/reports/");
+    expect(page.status).toBe(200);
+    expect(page.body).toContain("Work sessions unavailable");
+    expect(page.body).toContain("Day History");
+    expect(page.body).not.toContain("No work sessions are visible to you");
+  });
+
   it("reports unavailable service state without touching a closed store", async () => {
     available = false;
     try {
@@ -573,5 +665,65 @@ describe("Team Reports HTTP responses", () => {
     } finally {
       available = true;
     }
+  });
+});
+
+describe("per-member session links through HTTP", () => {
+  it.each([
+    "/people/alice-alias/",
+    "/day/2026-08-20/?person=alice-alias",
+    "/week/2026-W34/",
+    "/month/2026-08/",
+  ])("links current owned sessions inside %s", async (route) => {
+    workSessions.mockResolvedValue({
+      available: true,
+      sessions: [{ key: "agent:writer:dashboard:alice-work", label: "Current Alice work" }],
+      nextOffset: 3,
+    });
+    const response = await fetchPath("/reports" + route);
+    expect(response.status).toBe(200);
+    expect(response.body).toContain("Current work / owned sessions");
+    expect(response.body).toContain('href="/control/chat/writer/dashboard/alice-work"');
+    expect(response.body).toContain('data-work-session-key="agent:writer:dashboard:alice-work"');
+    expect(response.body).toContain("not activity from this report period");
+    expect(response.body).toContain("?person=alice");
+    expect(workSessions).toHaveBeenCalledExactlyOnceWith(0, 3, "alice-profile");
+    expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("users.list", {});
+  });
+
+  it("keeps person selection in directory pagination and resolves configured aliases", async () => {
+    workSessions.mockResolvedValue({ available: true, sessions: [], nextOffset: 80 });
+    const response = await fetchPath("/reports/sessions/?person=ALICE-ALIAS&offset=40");
+    expect(response.body).toContain("owned sessions for @alice");
+    expect(response.body).toContain("person=alice&offset=80");
+    expect(response.body).toContain("person=alice&offset=0");
+    expect(workSessions).toHaveBeenCalledExactlyOnceWith(40, 40, "alice-profile");
+  });
+
+  it.each([
+    { profiles: [], message: "No linked GitHub profile" },
+    {
+      profiles: [
+        { id: "one", mergedInto: null, githubIdentity: { login: "alice" } },
+        { id: "two", mergedInto: null, githubIdentity: { login: "alice-alias" } },
+      ],
+      message: "Multiple or unresolved linked profiles",
+    },
+  ])("shows $message without global-session fallback", async ({ profiles, message }) => {
+    vi.mocked(dispatchGatewayMethod).mockResolvedValue({ ok: true, payload: { profiles } });
+    const response = await fetchPath("/reports/people/alice/");
+    expect(response.body).toContain(message);
+    expect(workSessions).not.toHaveBeenCalled();
+  });
+
+  it("keeps current metadata out of stored JSON and Markdown exports", async () => {
+    const json = await fetchPath("/reports/day/2026-08-20/data.json");
+    const markdown = await fetchPath("/reports/day/2026-08-20/report.md");
+    expect(JSON.parse(json.body)).toEqual(report("day", "2026-08-20"));
+    expect(markdown.body).toBe(
+      renderMarkdown(report("day", "2026-08-20"), summary) + markdownSuffix,
+    );
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    expect(workSessions).not.toHaveBeenCalled();
   });
 });

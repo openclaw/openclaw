@@ -813,6 +813,7 @@ CREATE TABLE IF NOT EXISTS session_transcript_index_state (
   needs_rebuild INTEGER NOT NULL DEFAULT 0,
   active_event_count INTEGER NOT NULL DEFAULT 0,
   active_message_count INTEGER NOT NULL DEFAULT 0,
+  fts_row_count INTEGER,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
 ) STRICT;
@@ -837,6 +838,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_active_messages
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_context_pending
   ON session_transcript_active_events(session_id)
   WHERE context_eligible IS NULL;
+
+CREATE TABLE IF NOT EXISTS session_transcript_fts_rows (
+  session_id TEXT NOT NULL,
+  fts_rowid INTEGER NOT NULL PRIMARY KEY
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_transcript_fts_rows_session
+  ON session_transcript_fts_rows(session_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
   text,

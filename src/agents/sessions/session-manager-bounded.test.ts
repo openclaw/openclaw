@@ -24,6 +24,7 @@ import {
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -44,8 +45,9 @@ vi.mock("node:crypto", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
     for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
       closeOpenClawAgentDatabasesForTest(dir);
     }
     cleanup();
@@ -111,7 +113,7 @@ it("keeps generated entry ids unique outside a bounded transcript tail", async (
 
   expect(appended).toMatchObject({ entryId: messageId, anchor: { effectiveParentId: "tail" } });
   uuidQueue.push(thinkingId);
-  expect(manager.appendThinkingLevelChange("high")).toBe(thinkingId);
+  expect(await manager.appendThinkingLevelChange("high")).toBe(thinkingId);
   await expect(loadTranscriptEvents(scope)).resolves.toEqual(
     expect.arrayContaining([
       expect.objectContaining({ id: messageId, parentId: "tail" }),
@@ -159,7 +161,7 @@ it("retries a stale bounded append without parsing transcript rows outside the b
     message: { role: "assistant", content: "late" },
   });
 
-  const appendedId = manager.appendModelChange("openai", "gpt-5.6");
+  const appendedId = await manager.appendModelChange("openai", "gpt-5.6");
 
   expect(
     database.db

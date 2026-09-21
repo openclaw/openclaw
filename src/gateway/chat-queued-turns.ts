@@ -33,6 +33,8 @@ type RegisterQueuedChatTurnParams = {
   agentId?: string;
   ownerConnId?: string;
   ownerDeviceId?: string;
+  /** Record cancellation while the exact queued entry is still current. */
+  onAborted?: () => void;
 };
 
 function resolveExactRunId(runId: string): string | undefined {
@@ -98,8 +100,12 @@ export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): bo
   params.chatQueuedTurns.set(runId, entry);
   entry.abortListener = () => {
     // Retired collect entries remain idempotency guards until aggregate completion.
-    if (entry.abortable !== false) {
-      deleteQueuedChatTurnEntry(params.chatQueuedTurns, runId, entry);
+    if (entry.abortable !== false && params.chatQueuedTurns.get(runId) === entry) {
+      try {
+        params.onAborted?.();
+      } finally {
+        deleteQueuedChatTurnEntry(params.chatQueuedTurns, runId, entry);
+      }
     }
   };
   params.controller.signal.addEventListener("abort", entry.abortListener, { once: true });

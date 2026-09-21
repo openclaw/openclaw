@@ -1,6 +1,45 @@
 import { describe, expect, test } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
+describe("Cloudflare Access OIDC GitHub identity config", () => {
+  const trusted = {
+    issuer: "https://example.cloudflareaccess.com",
+    providerId: "verified-provider",
+    githubAccountIdClaim: "https://openclaw.ai/github-account-id",
+  };
+
+  test.each([
+    { name: "explicit mapping", mapping: trusted, success: true },
+    {
+      name: "non-Access issuer",
+      mapping: { ...trusted, issuer: "https://example.test" },
+      success: false,
+    },
+    {
+      name: "HTTP issuer",
+      mapping: { ...trusted, issuer: "http://example.cloudflareaccess.com" },
+      success: false,
+    },
+    { name: "blank provider", mapping: { ...trusted, providerId: " " }, success: false },
+    { name: "blank claim", mapping: { ...trusted, githubAccountIdClaim: " " }, success: false },
+    { name: "incomplete mapping", mapping: { issuer: trusted.issuer }, success: false },
+  ])("validates $name", ({ mapping, success }) => {
+    expect(
+      OpenClawSchema.safeParse({
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "cf-access-authenticated-user-email",
+              cloudflareAccessOidc: mapping,
+            },
+          },
+        },
+      }).success,
+    ).toBe(success);
+  });
+});
+
 describe("gateway trusted-proxy device auto-approval config", () => {
   test("accepts bounded non-admin scopes", () => {
     const result = OpenClawSchema.safeParse({

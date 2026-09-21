@@ -376,6 +376,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core", "utf16-slice"),
     sourcePackageAlias("normalization-core"),
     sourcePackageAlias("session-url-contract", "parse"),
+    sourcePackageAlias("session-url-contract", "session-key-normalization"),
     sourcePackageAlias("session-url-contract", "share-build"),
     sourcePackageAlias("session-url-contract", "public-share"),
     sourcePackageAlias("session-url-contract"),

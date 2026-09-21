@@ -162,10 +162,10 @@ The default matrix above is unchanged.
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `invoices-auto-retention` | Return an oversized unfamiliar export, then calculate from its automatically retained reference in a later cell, with one fetch and bounded model-visible data. The prompt does not ask the agent to save it. |
 | `inventory-join`          | Solve a natural reorder-summary request across nested, heterogeneous inventory and supplier data, including missing quantities and unavailable prices.                                                        |
-| `automation-contracts`    | Use checked TypeScript for a disabled job's create/read/update/history/delete flow, then verify that pre-existing jobs remain unchanged.                                                                      |
-| `process-contracts`       | Start one supplied finite helper, use the real process tools through checked TypeScript, and verify its output and successful exit.                                                                           |
+| `automation-contracts`    | Use the tool declarations to compose JavaScript for a disabled job's create/read/update/history/delete flow, then verify that pre-existing jobs remain unchanged.                                             |
+| `process-contracts`       | Start one supplied finite helper, use the real process tools through JavaScript guided by their declarations, and verify its output and successful exit.                                                      |
 | `partial-failure`         | A synthetic tool records an effect before returning malformed declared output. Verify one dispatch, useful validation details, and a subsequent read of actual state.                                         |
-| `checked-cell-cache`      | Complete three separate checked cells. This records live outcomes, not inferred compiler-cache hits.                                                                                                          |
+| `javascript-contracts`    | Read typed tool declarations, catch and report an invalid read argument, then read, write, and read back a verification code using JavaScript.                                                                |
 
 Build clean baseline and candidate checkouts first. Use the same harness,
 models, prompts, fixtures, thinking setting, timeout, and repetitions for both:
@@ -207,9 +207,9 @@ Per-cell artifacts include actual task/interview transcripts, tool-effect
 receipts, checks, and sanitized diagnostics. Task receipts are captured before
 the interview; separate task and interview receipt files preserve that boundary
 alongside the complete ledger. The process helper's exact written source bytes
-are part of its workload fingerprint. Checked-cell tasks validate each cell's
-returned value, including completion through `wait`, and require that completion
-before the next cell starts. Preview-completeness checks use the observed metadata
+are part of its workload fingerprint. The JavaScript contract task verifies
+declaration discovery, runtime input validation, and the dependent file operation
+sequence, including completion through `wait`. Preview-completeness checks use the observed metadata
 for probed references; missing or conflicting metadata remains unknown.
 Keep transcripts local unless their
 publication is explicitly requested. Interview claims about sample coverage,
@@ -227,9 +227,7 @@ overall pass flags and comparison deltas still require complete success.
 `taskBehavior.deltas` reports task-only differences when both paired task-behavior
 checks pass and the requested model identities are verified, even if an interview has inconsistent flags. Missing traces or
 check results remain unavailable, and all original failures are retained.
-These are observations, not statistical
-speed guarantees. Compiler cache microbenchmarks need their own controlled
-measurements because model latency and worker-pool routing obscure cache hits.
+These are observations, not statistical speed guarantees.
 
 ### `agent exec` options
 

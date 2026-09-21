@@ -1,6 +1,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Browser, Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import * as navigationGuard from "../navigation-guard.js";
 import { getPlaywrightCore } from "../playwright-core.runtime.js";
 import { createExistingSessionAgentSharedModule } from "./existing-session.test-support.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
@@ -134,6 +136,80 @@ describe.runIf(process.env.OPENCLAW_BROWSER_WAIT_E2E === "1")(
         fn: "async () => { await Promise.resolve(); return true; }",
       });
       expect(ready.statusCode).toBe(200);
+    });
+
+    it("readmits a changed URL before running the predicate after an awaited policy check", async () => {
+      await page.goto("about:blank#before");
+      await page.setContent('<button id="target">Ready</button>');
+      const readmissionStarted = createDeferred<void>();
+      const readmissionAllowed = createDeferred<void>();
+      const observedUrls: string[] = [];
+      const policy = vi
+        .spyOn(navigationGuard, "assertBrowserNavigationResultAllowed")
+        .mockImplementation(async ({ url }) => {
+          observedUrls.push(url);
+          if (url === "about:blank#before") {
+            await page.evaluate(() => history.replaceState(null, "", "#after"));
+          } else {
+            readmissionStarted.resolve();
+            await readmissionAllowed.promise;
+          }
+        });
+      const pending = waitForSelector("#target", {
+        timeoutMs: 2_000,
+        fn: '() => { document.title = "predicate ran"; return true; }',
+      });
+      try {
+        await Promise.race([
+          readmissionStarted.promise,
+          pending.then(() => {
+            throw new Error("Wait completed before the changed URL was readmitted");
+          }),
+        ]);
+        expect(await page.title()).toBe("");
+        readmissionAllowed.resolve();
+        expect((await pending).statusCode).toBe(200);
+        expect(observedUrls).toEqual(["about:blank#before", "about:blank#after"]);
+        expect(await page.title()).toBe("predicate ran");
+      } finally {
+        readmissionAllowed.resolve();
+        await pending.catch(() => {});
+        policy.mockRestore();
+        await page.goto("about:blank");
+      }
+    });
+
+    it("ignores page-controlled globalThis when admitting the document URL", async () => {
+      await page.goto("about:blank");
+      await page.setContent('<button id="target">Ready</button>');
+      await page.evaluate(() => {
+        Object.defineProperty(window, "globalThis", {
+          value: { document, location: { href: "https://spoof.example" } },
+          configurable: true,
+          writable: true,
+        });
+      });
+      const observedUrls: string[] = [];
+      const policy = vi
+        .spyOn(navigationGuard, "assertBrowserNavigationResultAllowed")
+        .mockImplementation(async ({ url }) => {
+          observedUrls.push(url);
+          if (url === "about:blank") {
+            throw new Error("Actual document URL denied");
+          }
+        });
+      try {
+        await expect(
+          waitForSelector("#target", {
+            fn: '() => { document.title = "predicate ran"; return true; }',
+          }),
+        ).rejects.toThrow("Actual document URL denied");
+        expect(observedUrls).toEqual(["about:blank"]);
+        expect(await page.title()).toBe("");
+      } finally {
+        policy.mockRestore();
+        await page.goto("about:blank");
+      }
     });
   },
 );

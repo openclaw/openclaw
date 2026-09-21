@@ -724,7 +724,7 @@ function writeMockWorkerPair(root: string, sourceCommit: string): void {
     mkdirSync(path.join(worker, "bin"), { recursive: true });
     mkdirSync(dist, { recursive: true });
     writeExecutable(path.join(worker, "bin", "node"), "fixture-node");
-    writeFileSync(path.join(dist, "entry.js"), "fixture-entry");
+    writeFileSync(path.join(dist, "mac-node-worker.js"), "fixture-entry");
     writeFileSync(
       path.join(dist, "build-info.json"),
       JSON.stringify({

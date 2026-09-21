@@ -20,6 +20,14 @@ function requireEvidence(condition, message) {
   }
 }
 
+function requireRestSupport(condition, message) {
+  if (!condition) {
+    const error = new Error(`REST merge: ${message}; use GraphQL.`);
+    error.code = "OPENCLAW_REST_UNSUPPORTED";
+    throw error;
+  }
+}
+
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 const nonemptyString = (value) => typeof value === "string" && value.length > 0;
 
@@ -110,13 +118,14 @@ function readPolicy(repo) {
     }
   }
   const protection = parseGithubResponse(response);
-  requireEvidence(
+  requireRestSupport(
     protection.status === "404" && protection.body?.message === "Branch not protected",
     "classic branch protection is not supported",
   );
   const rules = pageArrays(read(repo, "/rules/branches/main?per_page=100", true));
   for (const rule of rules) {
-    requireEvidence(RULE_TYPES.has(rule?.type), "unsupported or missing effective branch rule");
+    requireEvidence(nonemptyString(rule?.type), "missing effective branch rule");
+    requireRestSupport(RULE_TYPES.has(rule.type), "unsupported effective branch rule");
     if (rule.type === "pull_request") {
       const methods = rule.parameters?.allowed_merge_methods;
       requireEvidence(
@@ -164,7 +173,7 @@ function readPullRequest(repo, authority, pr) {
         ["squash", "merge", "rebase"].includes(record.auto_merge?.merge_method)),
     "invalid PR identity or lifecycle evidence",
   );
-  requireEvidence(
+  requireRestSupport(
     record.state !== "open" || (!record.merged && record.auto_merge === null),
     "open PR already has an auto-merge request or inconsistent lifecycle",
   );
@@ -218,7 +227,7 @@ function beginRead(repo, pr, observe) {
   // An already-merged receipt proves a historical action. New protection or
   // reduced privileges cannot invalidate the retained head and tree proof.
   const receipt = observe && record.merged;
-  requireEvidence(
+  requireRestSupport(
     receipt || authority.permissions?.admin === true,
     "policy-reader admin access changed",
   );
@@ -226,7 +235,7 @@ function beginRead(repo, pr, observe) {
   return { authority, main: mainSha, record, policy };
 }
 
-function finishRead(repo, pr, snapshot) {
+function finishRead(repo, pr, snapshot, requireStableMain) {
   const current = readPullRequest(repo, snapshot.authority, pr);
   const identity = (record) => {
     const {
@@ -242,7 +251,7 @@ function finishRead(repo, pr, snapshot) {
   );
   const mainSha = readMain(repo);
   requireEvidence(
-    current.merged || mainSha === snapshot.main,
+    !requireStableMain || current.merged || mainSha === snapshot.main,
     "main changed while reading evidence",
   );
   snapshot.main = mainSha;
@@ -321,7 +330,7 @@ function latestRequiredChecks(repo, head, checks) {
   }
   const runs = checkPages(
     repo,
-    `/actions/runs?head_sha=${head}&per_page=100`,
+    `/actions/runs?head_sha=${head}&exclude_pull_requests=true&per_page=100`,
     "workflow_runs",
     head,
   );
@@ -533,7 +542,7 @@ function mergeBody(value) {
 
 function main([mode, repository, prValue, head, bodySnapshot, expectedObservation, ...extra]) {
   requireEvidence(
-    ["observe", "checks", "preview", "merge"].includes(mode) &&
+    ["observe", "observe-admission", "checks", "preview", "merge"].includes(mode) &&
       /^[1-9][0-9]*$/.test(prValue ?? "") &&
       Number.isSafeInteger(Number(prValue)) &&
       extra.length === 0 &&
@@ -546,10 +555,17 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
   );
   const repo = parseRepository(repository);
   const pr = Number(prValue);
+  const observing = mode === "observe" || mode === "observe-admission";
   const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
-  const snapshot = beginRead(repo, pr, mode === "observe");
+  const snapshot = beginRead(repo, pr, observing);
+  if (observing && snapshot.record.state === "open") {
+    requireRestSupport(
+      ["clean", "unknown"].includes(snapshot.record.mergeable_state),
+      "merge projection requires GraphQL admission",
+    );
+  }
   const checks =
-    mode === "checks" || (["observe", "merge"].includes(mode) && snapshot.record.state === "open")
+    mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
       ? requiredChecks(repo, snapshot)
       : undefined;
   if (mode !== "checks" && checks !== undefined) {
@@ -559,7 +575,7 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
     );
     snapshot.policy.requiredChecks = checks;
   }
-  const current = finishRead(repo, pr, snapshot);
+  const current = finishRead(repo, pr, snapshot, mode === "observe");
   let result;
   if (mode === "checks") {
     result = checks;
@@ -573,6 +589,8 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
     result = {
       data: {
         repository: {
+          squashMergeCommitTitle: snapshot.authority.squash_merge_commit_title,
+          squashMergeCommitMessage: snapshot.authority.squash_merge_commit_message,
           pullRequest: {
             headRefOid: current.head.sha,
             author: { login: current.user.login, __typename: current.user.type },
@@ -583,7 +601,7 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
       },
       transport: "rest",
     };
-  } else if (mode === "observe") {
+  } else if (observing) {
     result = {
       data: {
         repository: {
@@ -608,22 +626,20 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
         nonemptyString(current.title),
       "immediate squash requires the prepared open, non-draft, clean PR head",
     );
+    const { main: _main, ...expectedFacts } = JSON.parse(expectedObservation);
     requireEvidence(
       JSON.stringify(
         canonical({
-          main: snapshot.main,
           pr: pullRequest(current),
           transport: "rest",
           restPolicy: snapshot.policy,
         }),
-      ) === JSON.stringify(canonical(JSON.parse(expectedObservation))),
-      "PR, main, or policy changed before merge dispatch",
+      ) === JSON.stringify(canonical(expectedFacts)),
+      "PR or policy changed before merge dispatch",
     );
-    const suffix = ` (#${pr})`;
     const payload = {
       sha: head,
       merge_method: "squash",
-      commit_title: current.title.endsWith(suffix) ? current.title : `${current.title}${suffix}`,
       commit_message: body,
     };
     result = execPrGhJson(
@@ -648,6 +664,13 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         ? error.message
         : String(error.stderr || error.message).trim(),
     );
-    process.exitCode = Number.isInteger(error.status) && error.status > 0 ? error.status : 1;
+    if (
+      ["observe", "observe-admission", "checks", "preview"].includes(process.argv[2]) &&
+      (error.coreQuotaExhausted || error.code === "OPENCLAW_REST_UNSUPPORTED")
+    ) {
+      process.stdout.write('{"restUnavailable":true}\n');
+    } else {
+      process.exitCode = Number.isInteger(error.status) && error.status > 0 ? error.status : 1;
+    }
   }
 }

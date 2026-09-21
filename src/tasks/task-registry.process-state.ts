@@ -95,6 +95,7 @@ export type TaskProgressBatch = {
   abortController: AbortController;
   lastPublishedContent?: string;
   typingStarted?: boolean;
+  finalReplyDelivered?: true;
   members: Map<string, TaskProgressMember>;
   pendingItems: Map<string, TaskProgressItem>;
   pendingPlan?: TaskProgressPlan;

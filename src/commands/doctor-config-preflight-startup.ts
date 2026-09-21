@@ -237,7 +237,7 @@ async function assertStartupStateMigrationReady(params: {
   );
   await measureDoctorConfigPreflightStep(
     "admission.session-readiness",
-    () => assertSessionStoreMigrationComplete({ ...params, targets }),
+    () => assertSessionStoreMigrationComplete({ ...params, targets, registeredDatabases }),
     undefined,
     () => ({ targetCount: targets.length }),
   );

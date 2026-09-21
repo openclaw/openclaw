@@ -122,6 +122,7 @@ survival_assert_stage="survival"
 baseline_spec=""
 baseline_version=""
 baseline_plugin_version=""
+baseline_plugin_tarball=""
 baseline_companion_availability=""
 baseline_version_expected="0"
 candidate_version=""
@@ -697,7 +698,7 @@ assert_prepublish_fixture_idle() {
 
 assert_prepublish_plugin_install() {
   local allow_pending="${1:-0}" plugin_id="whatsapp" help consent
-  local consent_supported=0 pending_args=()
+  local consent_supported=0 pending_args=("" "" "") published_companion_tarball=""
   if [ "$SCENARIO" = "legacy-operator-state" ]; then
     [ "$baseline_companion_availability" != "unavailable" ] || return 0
     plugin_id="discord"
@@ -712,11 +713,14 @@ assert_prepublish_plugin_install() {
   if [ "$allow_pending" = "1" ] && [ "$update_repair_required" = "1" ]; then
     pending_args=("$UPDATE_JSON" "$initial_update_observation_root" "$baseline_version")
   fi
-  # A served npm primary must match the prepared artifact. An empty ClawHub ledger alone
-  # cannot prove installation; explicit ClawHub companion installs have their own audit.
+  if [ -n "$baseline_plugin_tarball" ] && [ "$baseline_plugin_version" = "$candidate_version" ]; then
+    published_companion_tarball="$baseline_plugin_tarball"
+  fi
+  # Verify the selected archive, including a retained published companion. An empty
+  # ClawHub ledger alone cannot prove that the npm primary installed successfully.
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-npm-plugin-install "$plugin_id" "@openclaw/$plugin_id" "$candidate_version" \
-    "$consent_supported" ${pending_args[@]+"${pending_args[@]}"} || return "$?"
+    "$consent_supported" "${pending_args[@]}" "$published_companion_tarball" || return "$?"
   [ "$SCENARIO" = "legacy-operator-state" ] && return 0
   assert_prepublish_fixture_idle
 }
@@ -770,11 +774,15 @@ NODE
       if [ "$baseline_companion_availability" = "available" ]; then
         baseline_tarball="$(npm pack "@openclaw/$baseline_plugin@$baseline_plugin_version" \
           --registry=https://registry.npmjs.org --pack-destination "$fixture_root/baseline" --silent)"
-        registry_args+=("@openclaw/$baseline_plugin" "$baseline_plugin_version" "$fixture_root/baseline/$baseline_tarball")
+        baseline_plugin_tarball="$fixture_root/baseline/$baseline_tarball"
       fi
       registry_dist_tags="latest=$baseline_plugin_version,beta=$baseline_plugin_version,alpha=$baseline_plugin_version"
     else
       registry_dist_tags="latest=$candidate_version,beta=$candidate_version,alpha=$candidate_version"
+    fi
+    # Published name/version pairs keep their archive across registry phases.
+    if [ -n "$baseline_plugin_tarball" ]; then
+      registry_args+=("@openclaw/$baseline_plugin" "$baseline_plugin_version" "$baseline_plugin_tarball")
     fi
     registry_args+=("openclaw" "$candidate_version" "$CANDIDATE_SPEC")
   fi
@@ -1065,10 +1073,15 @@ install_companion_plugins() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-baseline-plugin "$baseline_plugin_version" "$plugin" "$tag"
 }
 
-seed_legacy_operator_gateway() {
+start_legacy_operator_mock() {
   export MOCK_REQUEST_LOG="$ARTIFACT_ROOT/legacy-operator-requests.jsonl"
-  mock_openai_pid="$(openclaw_e2e_start_mock_openai 44081 "$ARTIFACT_ROOT/legacy-operator-mock.log")"
-  openclaw_e2e_wait_mock_openai 44081
+  local log="$ARTIFACT_ROOT/legacy-operator-mock.log"
+  mock_openai_pid="$(openclaw_e2e_start_mock_openai 0 "$log")"
+  OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT="$(openclaw_e2e_wait_mock_openai 0 80 400 "" "$mock_openai_pid" "$log")" || return "$?"
+  export OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT
+}
+
+seed_legacy_operator_gateway() {
   start_gateway
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-legacy-operator-default-cron
   stop_gateway
@@ -2240,6 +2253,10 @@ if [ "$SCENARIO" = "abandoned-update" ]; then
   run_abandoned_update_survivor
   run_completed="1"
   exit 0
+fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # The baseline CLI must author the endpoint already owned by the model mock.
+  phase start-legacy-operator-mock start_legacy_operator_mock
 fi
 phase apply-baseline-config-recipe apply_baseline_config_recipe
 run_missing_load_path_fixture seed

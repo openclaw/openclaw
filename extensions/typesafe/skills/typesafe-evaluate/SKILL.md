@@ -1,6 +1,6 @@
 ---
 name: typesafe-evaluate
-description: Make explicit typed TypeSafe/Jev decisions with the typesafe_evaluate tool.
+description: Make explicit typed hosted Jev or local Kev decisions with the typesafe_evaluate tool.
 ---
 
 # TypeSafe evaluations
@@ -8,7 +8,9 @@ description: Make explicit typed TypeSafe/Jev decisions with the typesafe_evalua
 Use `typesafe_evaluate` for semantic decisions over explicit supplied state. It
 returns typed decisions, not generated explanations or permission to act. If the
 tool is unavailable, report that; do not substitute shell/HTTP calls or ask for a
-credential in chat. Calls send the supplied data to TypeSafe and may incur charges.
+credential in chat. Hosted calls send the supplied data to TypeSafe and may incur
+charges. With a configured local System One origin, calls go to that server
+without a hosted credential.
 
 Supply `{state, questions}`; see [mixed request example](references/request-example.json).
 State and descriptions accept text, JSON objects/arrays, or null. Each question
@@ -26,6 +28,8 @@ Only send necessary evidence authorized for sharing. Never include credentials.
 Do not silently truncate evidence or split competing Choice options to fit a
 request. The plugin bounds JSON to 4 MiB, 262144 nodes, and depth 64; vendor token
 limits are separate. A model override is optional; pin a version when comparing runs.
+For local Kev, the server's loaded checkpoint determines the model; an override
+only labels the request and does not change the checkpoint.
 
 Reported probabilities may be rounded and need not sum exactly to one. Preserve the
 vendor-selected label and score; normalization or selecting the largest reported

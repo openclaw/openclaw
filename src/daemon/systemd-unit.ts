@@ -33,6 +33,36 @@ function renderFixedPolicy(section: string): string[] {
     .map(([key, value]) => `${key.slice(section.length + 1)}=${value}`);
 }
 
+/** Keep installed launch arguments and environment while migrating installer policy. */
+export function refreshSystemdUnitPolicy(content: string): string {
+  const lines: string[] = [];
+  const sections = new Set<string>();
+  let section = "";
+  for (const raw of splitSystemdLogicalLines(content)) {
+    const line = raw.trim();
+    if (line.startsWith("[") && line.endsWith("]")) {
+      lines.push(...renderFixedPolicy(section));
+      section = line.slice(1, -1);
+      sections.add(section);
+    }
+    const separator = line.indexOf("=");
+    if (
+      separator > 0 &&
+      Object.hasOwn(SYSTEMD_FIXED_POLICY, `${section}.${line.slice(0, separator).trim()}`)
+    ) {
+      continue;
+    }
+    lines.push(raw);
+  }
+  lines.push(...renderFixedPolicy(section));
+  for (const name of new Set(Object.keys(SYSTEMD_FIXED_POLICY).map((key) => key.split(".")[0]!))) {
+    if (!sections.has(name)) {
+      lines.push(`[${name}]`, ...renderFixedPolicy(name));
+    }
+  }
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
 function assertNoSystemdLineBreaks(value: string, label: string): void {
   if (SYSTEMD_LINE_BREAKS.test(value)) {
     throw new Error(`${label} cannot contain CR or LF characters.`);

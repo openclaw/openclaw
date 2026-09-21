@@ -679,7 +679,6 @@ async function runWrapperCleanupProof(proof: WrapperCleanupProof): Promise<void>
       const runSpawnedPath = path.join(fixtureRoot, "run.spawned");
       const removalFailurePath = path.join(fixtureRoot, "removal.json");
       const releasePath = path.join(fixtureRoot, "escaped.release");
-      const wrapperPidPath = path.join(fixtureRoot, "wrapper.pid");
       const wrapperExitPath = path.join(fixtureRoot, "wrapper-exit.json");
       const terminalCommandPidPath = path.join(fixtureRoot, "terminal-command.pid");
       const phasesPath = path.join(fixtureRoot, "readiness-phases.json");
@@ -701,9 +700,9 @@ const phase = (name) => {
 if (entry === ${JSON.stringify(wrapperPath)}) phase("entrypoint started");
 if (entry === ${JSON.stringify(implementationPath)}) {
   phase("loading wrapper");
-  fs.writeFileSync(${JSON.stringify(wrapperPidPath)}, String(process.pid));
-  process.once("exit", (code) => fs.writeFileSync(${JSON.stringify(wrapperExitPath)}, JSON.stringify({ code })));
+  // Stall at phase publication; teardown must already own this PID.
   if (${proof.kind === "readiness"}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  process.once("exit", (code) => fs.writeFileSync(${JSON.stringify(wrapperExitPath)}, JSON.stringify({ code })));
   const childProcess = require("node:child_process");
   const spawn = childProcess.spawn;
   childProcess.spawn = (command, args, options) => {
@@ -1020,7 +1019,8 @@ child.once("exit", (code, signal) => {
                 ? 130
                 : 143;
         expect(result, output).toEqual({ status: expectedStatus, signal: null });
-        const wrapperPid = Number.parseInt(readFileSync(wrapperPidPath, "utf8"), 10);
+        const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
+        const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")!.pid!;
         // A pnpm interruption status is not the implementation's cleanup receipt.
         await waitForCondition(() => !isProcessAlive(wrapperPid), 12_000);
         expect(JSON.parse(readFileSync(wrapperExitPath, "utf8")), output).toEqual({
@@ -1138,9 +1138,8 @@ child.once("exit", (code, signal) => {
             }
           }
         }
-        const wrapperPid = existsSync(wrapperPidPath)
-          ? Number.parseInt(readFileSync(wrapperPidPath, "utf8"), 10)
-          : 0;
+        const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
+        const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")?.pid ?? 0;
         identity ??= existsSync(identityPath)
           ? JSON.parse(readFileSync(identityPath, "utf8"))
           : undefined;
@@ -1154,9 +1153,10 @@ child.once("exit", (code, signal) => {
           ? Number.parseInt(readFileSync(terminalCommandPidPath, "utf8"), 10)
           : 0;
         const ownedPids = new Set([
+          // The atomic phase record owns its PID even before later readiness receipts.
+          ...phases.map(({ pid }) => pid),
           entrypointPid,
           terminalCommandPid,
-          wrapperPid,
           identity?.pid,
           preparationIdentity?.pid,
           descendantPid,

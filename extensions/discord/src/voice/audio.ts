@@ -9,7 +9,7 @@ import {
   type OpusEncoderHandle as LibopusEncoder,
 } from "libopus-wasm";
 import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
-import { createStreamingPcmResampler } from "openclaw/plugin-sdk/realtime-voice";
+import { createStreamingPcmResampler } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";

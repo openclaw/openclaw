@@ -501,30 +501,40 @@ export function readRecentSessionTranscriptMessageEvents(
 /** Reads a message page from either end with index range predicates, never OFFSET scanning. */
 export function readSessionTranscriptMessageEventPage(
   scope: SessionTranscriptReadScope,
-  options: { maxMessages: number; offset: number; offsetFrom?: "start" | "end" },
+  options: {
+    maxMessages: number;
+    offset: number;
+    offsetFrom?: "start" | "end";
+    readOnly?: boolean;
+  },
 ): SessionTranscriptMessageEventPage {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    const visible = resolveVisibleMessagePositions(projection);
-    const totalMessages = visible.total;
-    const offset = Math.min(
-      Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
-      totalMessages,
-    );
-    const maxMessages = Math.max(
-      0,
-      Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
-    );
-    const endExclusive =
-      options.offsetFrom === "start"
-        ? Math.min(totalMessages, offset + maxMessages)
-        : totalMessages - offset;
-    const start = options.offsetFrom === "start" ? offset : Math.max(0, endExclusive - maxMessages);
-    return {
-      activeLeafEntryId: projection.state.leafEventId,
-      events: readVisibleMessageRange(projection, start, endExclusive),
-      totalMessages,
-    };
-  });
+  return withCurrentProjectionSnapshot(
+    scope,
+    (projection) => {
+      const visible = resolveVisibleMessagePositions(projection);
+      const totalMessages = visible.total;
+      const offset = Math.min(
+        Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
+        totalMessages,
+      );
+      const maxMessages = Math.max(
+        0,
+        Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
+      );
+      const endExclusive =
+        options.offsetFrom === "start"
+          ? Math.min(totalMessages, offset + maxMessages)
+          : totalMessages - offset;
+      const start =
+        options.offsetFrom === "start" ? offset : Math.max(0, endExclusive - maxMessages);
+      return {
+        activeLeafEntryId: projection.state.leafEventId,
+        events: readVisibleMessageRange(projection, start, endExclusive),
+        totalMessages,
+      };
+    },
+    options,
+  );
 }
 
 /** Reads a tail page whose materialized event payloads fit a hard byte budget. */

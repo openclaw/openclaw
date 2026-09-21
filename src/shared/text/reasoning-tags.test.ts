@@ -146,6 +146,8 @@ describe("stripReasoningTagsFromText", () => {
     it.each([
       ["<think>outer <think>inner</think> still outer</think>visible", "visible"],
       ["A<final>1</final>B<final>2</final>C", "A1B2C"],
+      ["<thi<final>nk>private</thi<final>nk>Visible", "Visible"],
+      ["private</thi<final>nk>Visible", "Visible"],
       ["`<final>` in code, <final>visible</final> outside", "`<final>` in code, visible outside"],
       ["  `<final>literal</final>`  ", "`<final>literal</final>`"],
       ["A <FINAL data-x='1'>visible</Final> B", "A visible B"],
@@ -277,6 +279,26 @@ describe("stripReasoningTagsFromText", () => {
 
   describe("trim options", () => {
     it.each([
+      ["keeps no-tag whitespace (none)", "\t text \r\n", "\t text \r\n", { trim: "none" as const }],
+      [
+        "keeps no-tag whitespace (start)",
+        "\t text \r\n",
+        "\t text \r\n",
+        { trim: "start" as const },
+      ],
+      ["keeps no-tag whitespace (both)", "\t text \r\n", "\t text \r\n", { trim: "both" as const }],
+      [
+        "keeps final-only whitespace with trim=none",
+        "  <final>result</final>  ",
+        "  result  ",
+        { trim: "none" as const },
+      ],
+      [
+        "trims only the start of final-only text",
+        "  <final>result</final>  ",
+        "result  ",
+        { trim: "start" as const },
+      ],
       [
         "applies default trim strategy",
         "  <think>x</think>  result  <think>y</think>  ",

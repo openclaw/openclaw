@@ -245,7 +245,14 @@ describe("startup admission before persistent writes", () => {
         if (repairedSession) {
           const legacyStore = path.join(stateDir, "external", "agent", "sessions.json");
           fs.mkdirSync(path.dirname(legacyStore), { recursive: true });
-          fs.writeFileSync(legacyStore, "{}\n");
+          fs.writeFileSync(
+            legacyStore,
+            JSON.stringify({ "agent:agent:main": { sessionId: "unimported", updatedAt: 1 } }),
+          );
+          fs.writeFileSync(
+            path.join(path.dirname(legacyStore), "unimported.jsonl"),
+            JSON.stringify({ type: "session", version: 3, id: "unimported" }) + "\n",
+          );
         }
         if (workspace) {
           fs.writeFileSync(

@@ -112,13 +112,26 @@ export async function waitForSnapshotQuiescence(
   };
 }
 
+function snapshotRetryDelayMs(attempt: number): number {
+  if (attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
+    return 0;
+  }
+  return Math.min(SNAPSHOT_RETRY_MAX_MS, SNAPSHOT_RETRY_BASE_MS * 2 ** attempt);
+}
+
+export function waitForSnapshotRetrySync(attempt: number): void {
+  const delayMs = snapshotRetryDelayMs(attempt);
+  if (delayMs > 0) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+  }
+}
+
 export async function waitForSnapshotRetry(attempt: number, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted();
-  if (attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
-    return;
+  const delayMs = snapshotRetryDelayMs(attempt);
+  if (delayMs > 0) {
+    await sleepForSnapshot(delayMs, signal);
   }
-  const delayMs = Math.min(SNAPSHOT_RETRY_MAX_MS, SNAPSHOT_RETRY_BASE_MS * 2 ** attempt);
-  await sleepForSnapshot(delayMs, signal);
 }
 
 export function createSnapshotAttemptReporter(

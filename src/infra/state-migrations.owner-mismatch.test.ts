@@ -78,7 +78,7 @@ it("preserves refused archives when a healthy database shares their directory", 
   });
 });
 
-it("continues Doctor after an identical database copy has the wrong agent owner", async () => {
+it("recovers an identical wrong-owner copy despite unequal short reads", async () => {
   await withOpenClawTestState({ prefix: "openclaw owner mismatch " }, async (state) => {
     const cfg = { agents: { entries: { main: {}, cleaner: {} } } };
     await state.writeConfig(cfg);
@@ -89,6 +89,37 @@ it("continues Doctor after an identical database copy has the wrong agent owner"
     const original = fs.readFileSync(source);
     expect(fs.readFileSync(target).equals(original)).toBe(true);
     const discovery = vi.spyOn(migrationTargets, "resolveAgentDatabaseMigrationTargets");
+    const files = [
+      { identity: fs.statSync(source), maxBytes: 8191, shortReads: 0 },
+      { identity: fs.statSync(target), maxBytes: 4093, shortReads: 0 },
+    ];
+    const read = fs.readSync.bind(fs);
+    const reads = vi
+      .spyOn(fs, "readSync")
+      .mockImplementation(
+        (
+          descriptor: number,
+          buffer: NodeJS.ArrayBufferView,
+          offsetOrOptions: number | fs.ReadOptions = {},
+          length?: number,
+          position?: fs.ReadPosition | null,
+        ) => {
+          const options =
+            typeof offsetOrOptions === "number"
+              ? { offset: offsetOrOptions, length, position }
+              : offsetOrOptions;
+          const opened = fs.fstatSync(descriptor);
+          const file = files.find(
+            ({ identity }) => identity.dev === opened.dev && identity.ino === opened.ino,
+          );
+          const requested = options.length ?? buffer.byteLength - (options.offset ?? 0);
+          if (file && file.shortReads === 0 && requested > file.maxBytes) {
+            file.shortReads += 1;
+            return read(descriptor, buffer, { ...options, length: file.maxBytes });
+          }
+          return read(descriptor, buffer, options);
+        },
+      );
 
     const result = await autoMigrateLegacyState({
       cfg,
@@ -97,7 +128,9 @@ it("continues Doctor after an identical database copy has the wrong agent owner"
       homedir: () => state.home,
       legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     });
+    reads.mockRestore();
 
+    expect(files.every((file) => file.shortReads === 1)).toBe(true);
     expect(result.warnings.join("\n")).toContain("cleaner");
     expect(discovery).toHaveBeenCalledTimes(1);
     expect(result.stepReceipts.find((receipt) => receipt.id === "media-persistence")).toMatchObject(

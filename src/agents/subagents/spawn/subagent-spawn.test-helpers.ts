@@ -5,6 +5,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { expect, vi } from "vitest";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
+import type {
+  RegisterSubagentRunOptions,
+  RegisterSubagentRunParams,
+} from "../registry/subagent-registry.types.js";
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -438,8 +442,36 @@ export async function loadSubagentSpawnModuleForTest(params: {
     completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
-    registerSubagentRun:
-      params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
+    registerSubagentRun: vi.fn(
+      (record: RegisterSubagentRunParams, options?: RegisterSubagentRunOptions) => {
+        if (!record.queued || !options?.retainOwnership) {
+          return params.registerSubagentRunMock?.(record, options);
+        }
+        let retained = false;
+        const result = params.registerSubagentRunMock?.(record, {
+          ...options,
+          retainOwnership(scope) {
+            retained = true;
+            options.retainOwnership?.(scope);
+          },
+        } satisfies RegisterSubagentRunOptions);
+        return Promise.resolve(result).then(() => {
+          // Successful queued registration transfers custody; stricter test scopes win.
+          if (!retained) {
+            options.retainOwnership?.({
+              canLaunch: () => true,
+              canAcceptLaunch: () => true,
+              canCleanupSession: () => true,
+              canRetireReservation: () => true,
+              waitForClaim: () => undefined,
+              settleFailedLaunch: async (error) => {
+                params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
+              },
+            });
+          }
+        });
+      },
+    ),
     resetSubagentRegistryForTests,
     settleFailedQueuedSubagentLaunch:
       params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),

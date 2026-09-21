@@ -4,7 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathInside, sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveWindowsExecutablePath } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
@@ -25,7 +25,6 @@ const MAX_ARTIFACT_DEPTH = 64;
 const MAX_ARTIFACT_ENTRIES = 32_768;
 const MAX_ARTIFACT_FILES = 8192;
 const MAX_ARTIFACT_TOTAL_BYTES = 1024n * 1024n * 1024n;
-const READ_CHUNK_BYTES = 64 * 1024;
 const SAFE_NODE_OPTIONS_BOOLEAN_FLAGS = new Set([
   "--enable-network-family-autoselection",
   "--network-family-autoselection",
@@ -151,30 +150,23 @@ async function readRegularFileFingerprint(params: {
     if (params.budget.totalBytes + before.size > MAX_ARTIFACT_TOTAL_BYTES) {
       throw new Error("Codex runtime artifact exceeds the bounded content size");
     }
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(READ_CHUNK_BYTES);
-    let offset = 0n;
-    while (offset < before.size) {
-      throwIfAborted(params.signal);
-      const length = Number(
-        before.size - offset < BigInt(buffer.length) ? before.size - offset : BigInt(buffer.length),
-      );
-      const { bytesRead } = await handle.read(buffer, 0, length, Number(offset));
-      if (bytesRead === 0) {
-        throw new Error(`Codex runtime artifact changed while reading: ${params.filePath}`);
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      offset += BigInt(bytesRead);
-    }
+    const hash = await sha256File(handle, {
+      maxBytes: Number(before.size),
+      signal: params.signal,
+    });
     const after = await handle.stat({ bigint: true });
     const current = await fs.stat(params.filePath, { bigint: true });
-    if (!sameOpenedFile(before, after) || !sameOpenedFile(after, current)) {
+    if (
+      BigInt(hash.bytes) !== before.size ||
+      !sameOpenedFile(before, after) ||
+      !sameOpenedFile(after, current)
+    ) {
       throw new Error(`Codex runtime artifact changed while reading: ${params.filePath}`);
     }
     params.budget.fileCount += 1;
     params.budget.totalBytes += after.size;
     return {
-      contentHash: hash.digest("hex"),
+      contentHash: hash.digest,
       mode: String(after.mode),
       size: String(after.size),
     };

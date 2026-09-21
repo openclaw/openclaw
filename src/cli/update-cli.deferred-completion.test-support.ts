@@ -14,6 +14,8 @@ export const updateNpmInstalledPlugins = vi.fn();
 export const loadInstalledPluginIndexInstallRecords = vi.fn();
 export const pathExists = vi.fn();
 export const spawn = vi.fn();
+export const observeUpdateGatewayReadiness =
+  vi.fn<typeof import("./update-cli/update-command-readiness.js").observeUpdateGatewayReadiness>();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
 const sqliteHostPlatform = process.platform;
 
@@ -115,6 +117,12 @@ vi.mock("../daemon/gateway-entrypoint.js", async (importOriginal) => {
     resolveGatewayInstallEntrypoint: vi.fn(actual.resolveGatewayInstallEntrypoint),
   };
 });
+
+vi.mock("./update-cli/update-command-readiness.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-cli/update-command-readiness.js")>()),
+  observeUpdateGatewayReadiness: (...args: Parameters<typeof observeUpdateGatewayReadiness>) =>
+    observeUpdateGatewayReadiness(...args),
+}));
 
 vi.mock("./update-cli/update-command-post-plugin-readiness.js", async (importOriginal) => {
   const actual =
@@ -458,6 +466,22 @@ export function installDeferredCompletionFixture() {
     readPackageVersion.mockResolvedValue("1.0.0");
     vi.mocked(defaultRuntime.exit).mockImplementation(() => {});
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
+    // Finalization failure observes the fixture's absent Gateway without contacting the host.
+    observeUpdateGatewayReadiness.mockImplementation(async ({ gatewayPort, assertCurrent }) => {
+      assertCurrent?.();
+      return {
+        health: {
+          healthy: false,
+          waitOutcome: "stopped-free",
+          runtime: { status: "stopped" },
+          portUsage: { port: gatewayPort, status: "free", listeners: [], hints: [] },
+          staleGatewayPids: [],
+        },
+        readyz: false,
+        http: undefined,
+        launchAgentRecovery: null,
+      };
+    });
     setupConfigMutationWithRetryMock();
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => pluginSyncResult(config));

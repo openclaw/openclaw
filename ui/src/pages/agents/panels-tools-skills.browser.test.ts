@@ -231,8 +231,7 @@ describe("agents tools panel (browser)", () => {
     expect(section.querySelector(".settings-segmented")).toBeNull();
     expect(section.querySelector(".settings-secret input")).toBeNull();
     expect(section.textContent).toContain("Manage connections in Profile");
-    expect(section.textContent).toContain("OS account running the Gateway");
-    expect(section.textContent).toContain("Other OS users' logins are separate.");
+    expect(section.textContent).not.toContain("OS account running the Gateway");
     expect(section.textContent).not.toContain("Advanced: agent GitHub override");
   });
 

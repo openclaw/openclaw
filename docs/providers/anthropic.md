@@ -196,6 +196,13 @@ OpenClaw release:
     openclaw models auth login --provider anthropic --method setup-token
     ```
 
+    Direct Messages API requests using a setup token advertise a maintained
+    Claude Code client version, or the installed CLI version when newer.
+    Anthropic uses that identity to gate newer models. A missing, older, or
+    failed CLI probe uses OpenClaw's maintained version floor. Discovery is
+    shared with the CLI backend and cached until process restart; API-key
+    requests do not run the probe.
+
     ### Config example
 
     Prefer the canonical Anthropic model ref plus a CLI runtime override:

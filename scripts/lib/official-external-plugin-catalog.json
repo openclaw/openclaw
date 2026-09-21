@@ -826,6 +826,24 @@
       }
     },
     {
+      "name": "@openclaw/typesafe",
+      "description": "OpenClaw TypeSafe typed decisions and optional evaluation tool",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "typesafe",
+          "label": "TypeSafe AI"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/typesafe",
+          "npmSpec": "@openclaw/typesafe",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/voice-call",
       "description": "OpenClaw voice-call plugin",
       "source": "official",

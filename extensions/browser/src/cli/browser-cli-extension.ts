@@ -11,6 +11,7 @@ import {
   FOUNDATION_CHROME_WEB_STORE_URL,
   installChromeExtensionBootstrap,
   normalizeExtensionInstallWaitMs,
+  repairChromeExtensionNativeHosts,
   removeChromeStoreInstallRequests,
   resolveChromeExtensionLoadPath,
   uninstallChromeExtensionNativeHosts,
@@ -219,6 +220,39 @@ export function registerBrowserExtensionCommands(
           defaultRuntime.exit(1);
         },
       );
+    });
+
+  extension
+    .command("repair")
+    .description("Inspect or repair existing native hosts without browser profile discovery")
+    .option(
+      "--from <entrypoint>",
+      "Repair only registrations referencing this exact absolute entrypoint",
+    )
+    .option("--dry-run", "Inspect registered targets without changing files", false)
+    .option("--json", "Print a machine-readable repair report")
+    .action(async (opts, command) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const result = await repairChromeExtensionNativeHosts({
+          bundledDir: resolveChromeExtensionDir(pluginRoot),
+          pluginRoot: resolveBrowserPluginRoot(pluginRoot),
+          fromNativeHostPath: opts.from,
+          dryRun: opts.dryRun === true,
+        });
+        if (opts.json === true || parentOpts(command).json === true) {
+          defaultRuntime.writeJson(result);
+        } else {
+          for (const message of [...result.changes, ...result.warnings]) {
+            defaultRuntime.log(message);
+          }
+          defaultRuntime.log(
+            `Registered native entries: ${result.retainedNativeHostPaths.join(", ") || "none"}`,
+          );
+        }
+        if (result.manualRequired || !result.retentionSafe || result.warnings.length > 0) {
+          defaultRuntime.exit(1);
+        }
+      });
     });
 
   extension

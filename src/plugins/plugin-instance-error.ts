@@ -21,6 +21,10 @@ export const PluginInstanceDrainTimeoutError = resolveGlobalSingleton(
         message: string,
         readonly settled: Promise<void>,
         options: ErrorOptions,
+        readonly forcedRetirement?: {
+          activeCallCount: number;
+          retainedConsumerCount: number;
+        },
       ) {
         super(message, options);
         this.name = "PluginInstanceDrainTimeoutError";

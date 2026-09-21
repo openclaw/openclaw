@@ -517,7 +517,7 @@ describe("ManagedWorktreeService provisioned state", () => {
     expect(await service.removeIfLossless(created.id)).toBe(true);
     await fs.writeFile(path.join(repo, "large.local"), Buffer.from("new source"));
     const restored = await service.restore({ id: created.id });
-    expect((await fs.readFile(path.join(restored.path, "large.local"))).at(-1)).toBe(0x62);
+    expect(await fs.readFile(path.join(restored.path, "large.local"))).toEqual(copy);
   });
 
   it("keeps provisioned files protected after manifest removal or pattern changes", async () => {

@@ -11,7 +11,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
-import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
+import { findTaskByRunId, listTaskRecords } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -730,7 +730,7 @@ function expectTaskRun(params: {
 function findCronTaskByBaseRunId(baseRunId: string) {
   return (
     findTaskByRunId(baseRunId) ??
-    listTaskRecordsUnsorted().find((task) => task.runId?.startsWith(`${baseRunId}:`))
+    listTaskRecords().find((task) => task.runId?.startsWith(`${baseRunId}:`))
   );
 }
 

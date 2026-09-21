@@ -165,6 +165,9 @@ return sanitized task summaries, not raw runtime state.
     use their recorded terminal activity time, then creation time, as the
     canonical completion timestamp before pagination.
   - Result: `{ "tasks": TaskSummary[], "nextCursor"?: string }`.
+  - Cursors are bound to the current task data, caller access, and task database.
+    If those change, request a fresh first page. Unrelated database lifecycle
+    activity preserves the cursor.
   - Failed session-metadata reads return `UNAVAILABLE` with the recorded cause
     instead of an empty or partial page when an existing store cannot be read,
     its schema is not ready, or a required table is missing. An absent database

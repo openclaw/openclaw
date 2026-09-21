@@ -123,6 +123,10 @@ export function resolveShardTimingKey(spec: VitestShardTimingSpec): string {
 // files use the default, which mostly reflects the per-file module-graph
 // re-evaluation cost that dominates these serial suites.
 const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
+  // Healthy two-worker Gateway proof: native-fork case spans were 24.8-29.9s
+  // and 37.1s. Keep conservative serial floors; group weights retain import overhead.
+  ["src/gateway/server.sessions.fixture-lifecycle.test.ts", 30],
+  ["src/gateway/server.startup-fixture-lifetime.test.ts", 42],
   // Serial file-boundary intervals from run 33364935118, including import/setup.
   // Runtime prerequisites are charged once per batch, separately from test work.
   ["test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts", 6],

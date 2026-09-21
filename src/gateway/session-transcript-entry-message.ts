@@ -96,6 +96,16 @@ export function projectTranscriptEntryMessage(
       ...(typeof compactionIdentity?.itemId === "string"
         ? { itemId: compactionIdentity.itemId }
         : {}),
+      ...(kind === "compaction" &&
+      typeof record.tokensBefore === "number" &&
+      Number.isFinite(record.tokensBefore)
+        ? { tokensBefore: record.tokensBefore }
+        : {}),
+      ...(kind === "compaction" &&
+      typeof record.tokensAfter === "number" &&
+      Number.isFinite(record.tokensAfter)
+        ? { tokensAfter: record.tokensAfter }
+        : {}),
       transcriptPosition,
       seq,
     },

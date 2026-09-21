@@ -8,7 +8,6 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
-import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
@@ -31,8 +30,6 @@ import "./sidebar-build-chip.ts";
 import "./viewer-facepile.ts";
 import { syncDropdownItemRadio, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
-registerSidebarAttentionEnglish();
-
 type SidebarIdentityMenuParams = {
   position: { x: number; bottom: number; width: number };
   canPairDevice: boolean;
@@ -41,7 +38,6 @@ type SidebarIdentityMenuParams = {
   updateAttentionDismissed: boolean;
   profileViewer?: PresenceViewer;
   canRetryConnection: boolean;
-  queuedOutboxCount: number;
   themeMode: ThemeMode;
   triggerWidth: number;
   onTabAway: () => void;
@@ -246,17 +242,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         </span>
       </wa-dropdown-item>
       <div class="sidebar-customize-menu__separator" role="separator"></div>
-      ${
-        params.queuedOutboxCount > 0
-          ? html`<div class="sidebar-identity-menu__outbox">
-                <strong
-                  >${t("connection.queuedCount", { count: String(params.queuedOutboxCount) })}</strong
-                >
-                <p>${t("connection.outboxDescription")}</p>
-              </div>
-              <div class="sidebar-customize-menu__separator" role="separator"></div>`
-          : nothing
-      }
       ${renderIdentityGateways(params.onClose)}
       <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
         <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>

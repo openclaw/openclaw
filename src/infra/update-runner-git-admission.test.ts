@@ -15,7 +15,7 @@ import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.j
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 
-function fixture(relativeRemote = false, partialClone = false) {
+function fixture(relativeRemote = false, partialClone = false, shallow = false) {
   const root = temporary.make("openclaw-git-admission-test-");
   const source = path.join(root, "remote with spaces");
   const install = path.join(root, "installed");
@@ -56,9 +56,20 @@ function fixture(relativeRemote = false, partialClone = false) {
     return git(source, "rev-parse", "HEAD");
   };
   commit("2026.7.1", 13);
+  if (shallow) {
+    commit("2026.7.1-beta.1", 13);
+    commit("2026.7.1-beta.2", 13);
+  }
   if (partialClone) {
     git(source, "config", "uploadpack.allowFilter", "true");
-    git(root, "clone", "--filter=blob:none", pathToFileURL(source).href, install);
+    git(
+      root,
+      "clone",
+      "--filter=blob:none",
+      ...(shallow ? ["--depth=2"] : []),
+      pathToFileURL(source).href,
+      install,
+    );
   } else {
     git(root, "clone", source, install);
   }
@@ -92,6 +103,7 @@ function fixture(relativeRemote = false, partialClone = false) {
       env: { ...env, ...options.env },
       encoding: "utf8",
       input: options.input,
+      stdio: [options.stdinFileDescriptor ?? "pipe", "pipe", "pipe"],
       timeout: 15_000,
     });
     return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
@@ -127,14 +139,15 @@ function snapshotTree(root: string): string[] {
 
 describe("Git database admission", () => {
   it.each([
-    { channel: "stable", publish: false, downgrade: false },
-    { channel: "dev", publish: false, downgrade: false },
-    { channel: "stable", publish: true, downgrade: false },
-    { channel: "dev", publish: false, downgrade: true },
+    { channel: "stable", publish: false, downgrade: false, shallow: false },
+    { channel: "dev", publish: false, downgrade: false, shallow: false },
+    { channel: "stable", publish: true, downgrade: false, shallow: false },
+    { channel: "dev", publish: false, downgrade: true, shallow: false },
+    { channel: "dev", publish: false, downgrade: false, shallow: true },
   ] as const)(
-    "activates a partial clone without upstream access after admission ($channel, publish=$publish, downgrade=$downgrade)",
-    async ({ channel, publish, downgrade }) => {
-      const state = fixture(false, true);
+    "activates a partial clone without upstream access after admission ($channel, publish=$publish, downgrade=$downgrade, shallow=$shallow)",
+    async ({ channel, publish, downgrade, shallow }) => {
+      const state = fixture(false, true, shallow);
       const published = path.join(state.root, "published");
       const target = downgrade
         ? state.git(state.source, "rev-parse", "v2026.7.2-beta.1")
@@ -178,9 +191,11 @@ describe("Git database admission", () => {
       const state = fixture();
       const published = path.join(state.root, "published");
       let repacked = false;
+      let descriptor: number | undefined;
       const command: CommandRunner = async (argv, options) => {
         const result = await state.runCommand(argv, options);
         if (argv[2] === state.install && argv[3] === "index-pack" && result.code === 0) {
+          descriptor = options.stdinFileDescriptor;
           state.git(state.install, "repack", "-a", "-d");
           repacked = true;
           expect(state.git(state.install, "cat-file", "-t", state.target)).toBe("commit");
@@ -203,6 +218,8 @@ describe("Git database admission", () => {
       );
       const installed = publish ? published : state.install;
       expect(repacked).toBe(true);
+      expect(descriptor).toBeTypeOf("number");
+      expect(() => fs.fstatSync(descriptor!)).toThrow();
       expect(result.status, JSON.stringify(result)).toBe("ok");
       expect(state.git(installed, "rev-parse", "HEAD")).toBe(state.target);
       const packs = path.join(installed, ".git", "objects", "pack");
@@ -215,8 +232,10 @@ describe("Git database admission", () => {
     let keepPath = "";
     const command: CommandRunner = async (argv, options) => {
       if (argv[2] === state.install && argv[3] === "index-pack") {
-        const pack = options.input as Buffer;
-        const hash = pack.subarray(-20).toString("hex");
+        const descriptor = options.stdinFileDescriptor!;
+        const trailer = Buffer.alloc(20);
+        fs.readSync(descriptor, trailer, 0, trailer.length, fs.fstatSync(descriptor).size - 20);
+        const hash = trailer.toString("hex");
         keepPath = path.join(state.install, ".git", "objects", "pack", `pack-${hash}.keep`);
         fs.writeFileSync(keepPath, "operator retention\n");
       }
@@ -664,10 +683,19 @@ process.exit(result.status ?? 93);
     expect(publish).toHaveBeenCalledTimes(refuse ? 0 : 1);
     expect(fs.existsSync(published)).toBe(!refuse);
   });
-  it.each([false, true])(
-    "refuses before installed Git writes (relative remote=%s)",
-    async (relative) => {
-      const state = fixture(relative);
+  it.each([
+    { relative: false, shallow: false },
+    { relative: true, shallow: false },
+    { relative: false, shallow: true },
+  ])(
+    "refuses before installed Git writes (relative remote=$relative, shallow=$shallow)",
+    async ({ relative, shallow }) => {
+      const state = fixture(relative, shallow, shallow);
+      if (shallow) {
+        expect(
+          state.git(state.install, "rev-list", "--objects", "--missing=print", "--all"),
+        ).toMatch(/^\?/m);
+      }
       // Unchanged content with a stale index stat cache must remain read-only too.
       fs.utimesSync(path.join(state.install, "package.json"), new Date(1000), new Date(1000));
       const before = snapshotTree(state.install);
@@ -683,7 +711,7 @@ process.exit(result.status ?? 93);
       await expect(state.run({ inspectGitTarget: inspect })).rejects.toBe(refusal);
       expect(inspect).toHaveBeenCalledOnce();
       expect(snapshotTree(state.install)).toEqual(before);
-      const mirror = state.calls.find((argv) => argv.includes("clone"))?.at(-1);
+      const mirror = state.calls.find((argv) => argv.includes("init"))?.at(-1);
       expect(mirror).toBeDefined();
       expect(fs.existsSync(mirror!)).toBe(false);
     },

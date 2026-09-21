@@ -85,7 +85,7 @@ suite.define(() => {
           } else {
             const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
             await row.hover();
-            await row.getByRole("button", { name: "Open session menu: Release planning" }).click();
+            await row.click({ button: "right" });
             await openSessionMenuSubmenu(page, "Copy");
             const copy = page.locator("openclaw-session-menu").getByRole("menuitem", {
               name: "Conversation as Markdown",

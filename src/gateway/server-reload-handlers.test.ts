@@ -158,6 +158,15 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
+function createRecoveryRestartMock() {
+  const emitted = createDeferred();
+  const requestRecoveryRestart = vi.fn(() => {
+    emitted.resolve();
+    return { status: "emitted" as const };
+  });
+  return { requestRecoveryRestart, restartEmitted: emitted.promise };
+}
+
 const tempDirs: string[] = [];
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -812,7 +821,7 @@ async function createManagedRestartSequenceHarness(
   let recordPromotion: ((hash: string) => void) | undefined;
   let recordReloadError: ((message: string) => void) | undefined;
   let recordReloadWarning: ((message: string) => void) | undefined;
-  const restartEmitted = createDeferred();
+  const { requestRecoveryRestart, restartEmitted } = createRecoveryRestartMock();
   const nextPromotion = () =>
     new Promise<string>((resolve) => {
       recordPromotion = resolve;
@@ -863,12 +872,6 @@ async function createManagedRestartSequenceHarness(
     }
     return makePreparedSecretsSnapshot(config);
   });
-  const requestRecoveryRestart = vi.fn<NonNullable<ReloadHandlerParams["requestRecoveryRestart"]>>(
-    () => {
-      restartEmitted.resolve();
-      return { status: "emitted" };
-    },
-  );
   const sharedGatewaySessionGenerationState = { current: undefined, required: null };
   let generationInvalidated = false;
   const reloader = startManagedGatewayConfigReloader({
@@ -931,7 +934,7 @@ async function createManagedRestartSequenceHarness(
     nextPromotion,
     nextReloadError,
     nextReloadWarning,
-    restartEmitted: restartEmitted.promise,
+    restartEmitted,
     promoteSnapshot,
     reloader,
     replacementConfig,
@@ -1210,6 +1213,7 @@ async function withManagedChannelSecretFixture(
     prepareCount: () => number;
     commitRuntimePolicy: ReturnType<typeof vi.fn>;
     requestRecoveryRestart: ReturnType<typeof vi.fn>;
+    restartEmitted: Promise<void>;
   }) => Promise<void>,
 ) {
   const fixtureDir = fs.realpathSync(autoCleanupTempDirs.make("openclaw-channel-secret-reload-"));
@@ -1357,7 +1361,7 @@ async function withManagedChannelSecretFixture(
   );
   const writeListenerRef = createConfigWriteListenerRef();
   const commitRuntimePolicy = vi.fn();
-  const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+  const { requestRecoveryRestart, restartEmitted } = createRecoveryRestartMock();
   let currentSource = initialSource;
   let revision = 0;
   const reloader = startManagedGatewayConfigReloader({
@@ -1449,6 +1453,7 @@ async function withManagedChannelSecretFixture(
       prepareCount: () => preparationCount,
       commitRuntimePolicy,
       requestRecoveryRestart,
+      restartEmitted,
     });
   } finally {
     await reloader.stop();
@@ -1486,7 +1491,8 @@ describe("managed channel credential publication", () => {
         expect(fixture.commitRuntimePolicy).toHaveBeenCalledTimes(restartRecoveryAvailable ? 1 : 0);
         expect(fixture.stops).toEqual(restartRecoveryAvailable ? ["ada"] : []);
         if (restartRecoveryAvailable) {
-          await waitForFast(() => expect(fixture.requestRecoveryRestart).toHaveBeenCalledOnce());
+          await fixture.restartEmitted;
+          expect(fixture.requestRecoveryRestart).toHaveBeenCalledOnce();
         } else {
           expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
           expect(
@@ -1698,7 +1704,8 @@ describe("managed channel credential publication", () => {
           "applied-restart-required",
         );
         // Restart emission follows asynchronous secret preflight, after the write receipt.
-        await waitForFast(() => expect(fixture.requestRecoveryRestart).toHaveBeenCalledOnce());
+        await fixture.restartEmitted;
+        expect(fixture.requestRecoveryRestart).toHaveBeenCalledOnce();
         expect(fixture.commitRuntimePolicy).toHaveBeenCalledOnce();
       });
     },
@@ -2451,11 +2458,7 @@ describe("gateway hot reload model state", () => {
       const initialConfig = { cron: { enabled: false } } satisfies OpenClawConfig;
       const nextConfig = { cron: { enabled: true } } satisfies OpenClawConfig;
       activateSecretsRuntimeSnapshot(makePreparedSecretsSnapshot(initialConfig));
-      const recoveryRequested = createDeferred();
-      const requestRecoveryRestart = vi.fn(() => {
-        recoveryRequested.resolve();
-        return { status: "emitted" as const };
-      });
+      const { requestRecoveryRestart, restartEmitted } = createRecoveryRestartMock();
       const handlers = createReloadHandlersForTest(
         undefined,
         undefined,
@@ -2508,7 +2511,7 @@ describe("gateway hot reload model state", () => {
           await expect(reload).rejects.toThrow("secrets preparation failed");
         } else {
           await expect(reload).resolves.toBe("applied-restart-required");
-          await recoveryRequested.promise;
+          await restartEmitted;
         }
         expect(handlers.cron.stop).toHaveBeenCalledTimes(failure === "policy" ? 1 : 0);
         expect(requestRecoveryRestart).toHaveBeenCalledTimes(failure === "policy" ? 1 : 0);
@@ -5751,11 +5754,7 @@ describe("gateway Gmail hot reload handlers", () => {
         .mockImplementationOnce(() => {
           throw new Error("runtime publication refused");
         });
-      const recoveryRequested = createDeferred();
-      const requestRecoveryRestart = vi.fn(() => {
-        recoveryRequested.resolve();
-        return { status: "emitted" as const };
-      });
+      const { requestRecoveryRestart, restartEmitted } = createRecoveryRestartMock();
       const reloader = startManagedGatewayConfigReloader({
         initialConfig,
         readSnapshot: writer.readSnapshot,
@@ -5834,7 +5833,7 @@ describe("gateway Gmail hot reload handlers", () => {
         if (cronCleanupFails) {
           // Drive the idle poll without tying fake-clock progress to real polling ticks.
           await vi.advanceTimersByTimeAsync(500);
-          await recoveryRequested.promise;
+          await restartEmitted;
         }
         expect(requestRecoveryRestart).toHaveBeenCalledTimes(cronCleanupFails ? 1 : 0);
       } finally {

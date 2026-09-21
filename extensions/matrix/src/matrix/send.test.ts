@@ -2,16 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
-import {
-  resetPluginBlobStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 // Matrix tests cover send plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { getMatrixRuntime, setMatrixRuntime } from "../runtime.js";
-import { installMatrixTestRuntime } from "../test-runtime.js";
+import { installMatrixTestRuntime, resetMatrixTestStores } from "../test-runtime.js";
 import { voteMatrixPoll } from "./actions/polls.js";
 import {
   loadMatrixDeliveryPlan,
@@ -484,9 +480,8 @@ describe("sendMessageMatrix durable delivery", () => {
     setMatrixRuntime({ ...getMatrixRuntime(), media: runtimeStub.media });
   });
 
-  afterEach(() => {
-    resetPluginBlobStoreForTests({ closeDatabase: false });
-    resetPluginStateStoreForTests();
+  afterEach(async () => {
+    await resetMatrixTestStores();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 

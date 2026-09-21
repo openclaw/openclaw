@@ -258,8 +258,7 @@ defineDiscordVoiceTests(
             });
           });
           const player = target as ReturnType<typeof createAudioPlayerMock>;
-          const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1];
-          idleHandler?.();
+          player.emit("idle");
           await readinessFailure;
         }
       });
@@ -331,7 +330,7 @@ defineDiscordVoiceTests(
         await receiveRecordedSpeech(manager, undefined, entry, "u-guest");
         await vi.waitFor(() =>
           expect(entersStateMock).toHaveBeenCalledWith(
-            entry.player,
+            player,
             buffering ? "playing" : "idle",
             expect.any(AbortSignal),
           ),

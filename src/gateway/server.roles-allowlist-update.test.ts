@@ -51,6 +51,20 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
         progressed,
       });
   };
+  const observeAsync =
+    <Args extends [string, ...unknown[]], Prepared extends { location: string }>(
+      prepare: (...args: Args) => Promise<Prepared>,
+    ) =>
+    async (...args: Args) => {
+      const finish = observe(args[0]);
+      let prepared: Prepared | undefined;
+      try {
+        prepared = await prepare(...args);
+        return prepared;
+      } finally {
+        finish(prepared);
+      }
+    };
   return {
     ...actual,
     prepareSqliteReadOnlyLocationSync(pathname: string) {
@@ -63,18 +77,8 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
         finish(prepared);
       }
     },
-    async prepareSqliteReadOnlyLocation(
-      ...args: Parameters<typeof actual.prepareSqliteReadOnlyLocation>
-    ) {
-      const finish = observe(args[0]);
-      let prepared: Awaited<ReturnType<typeof actual.prepareSqliteReadOnlyLocation>> | undefined;
-      try {
-        prepared = await actual.prepareSqliteReadOnlyLocation(...args);
-        return prepared;
-      } finally {
-        finish(prepared);
-      }
-    },
+    prepareSqliteReadOnlyLocation: observeAsync(actual.prepareSqliteReadOnlyLocation),
+    prepareSqliteReadOnlyLocationAsync: observeAsync(actual.prepareSqliteReadOnlyLocationAsync),
   };
 });
 

@@ -415,7 +415,7 @@ class MarkdownPartsDirective extends AsyncDirective {
     // control choices and Markdown enhancements, which must stay on its nodes.
     return keyed(
       this.generation,
-      html`${this.fragments.map((fragment) => renderMarkdownMedia(fragment, positionedMedia))}${renderMarkdownMedia(tailHtml, positionedMedia)}`,
+      html`${this.fragments.map((fragment) => renderMarkdownMedia(fragment, positionedMedia))}${renderMarkdownMedia(tailHtml, positionedMedia, true)}`,
     );
   }
 }

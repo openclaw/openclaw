@@ -202,10 +202,6 @@ export function isEquivalentTaskRecord(current: TaskRecord, next: TaskRecord): b
   return isDeepStrictEqual(fields(current), fields(next));
 }
 
-export function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecord[] {
-  return [...source.values()].map((record) => cloneTaskRecord(record));
-}
-
 /** Observer notifications need detached metadata, never runtime-owned detail. */
 export function cloneTaskRecordForObserver(record: TaskRecord): Omit<TaskRecord, "detail"> {
   const { detail: _detail, executionOwner: _executionOwner, ...snapshot } = record;

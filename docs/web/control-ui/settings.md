@@ -407,8 +407,10 @@ Find **Labs** in the **System** section of the Settings sidebar, after **Infrast
 
 **Settings → Labs → Custom plugin UI** enables native pages, widgets, actions,
 and view replacements from user-installed plugins. It defaults to off and
-writes `gateway.controlUi.experimental.customPlugins`. Restart the Gateway and
-reload connected browser tabs after changing it.
+writes `gateway.controlUi.experimental.customPlugins`. Changes apply without
+restarting the Gateway, and connected pages refresh their plugin views
+automatically. After disabling it, reload browser tabs to clear plugin
+JavaScript that already ran.
 
 Only enable it for plugin authors you trust: native UI runs in the Control UI
 origin with the signed-in operator's Gateway authority. Native UI from enabled

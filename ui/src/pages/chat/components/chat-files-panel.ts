@@ -24,6 +24,7 @@ function nextFilesPanelId(): string {
 /** Projection of the workspace controller; tab order and selection have no second store here. */
 class ChatFilesPanel extends OpenClawLightDomElement {
   private readonly contentId = nextFilesPanelId();
+  private hostedTabsChangeKey = "";
   @property({ attribute: false }) previews: SessionWorkspacePreview[] = [];
   @property({ attribute: false }) activeId: string | null = null;
   @property({ type: Boolean }) tabsInHeader = true;
@@ -76,7 +77,15 @@ class ChatFilesPanel extends OpenClawLightDomElement {
   }
 
   protected override updated() {
-    this.dispatchEvent(new CustomEvent(PANEL_HOSTED_TABS_CHANGE_EVENT, { bubbles: true }));
+    const hostedTabsChangeKey = JSON.stringify([
+      this.activeHostedTabId,
+      t("chat.sidePanel.files"),
+      this.hostedTabs.map(({ id, label, title, className }) => [id, label, title, className]),
+    ]);
+    if (hostedTabsChangeKey !== this.hostedTabsChangeKey) {
+      this.hostedTabsChangeKey = hostedTabsChangeKey;
+      this.dispatchEvent(new CustomEvent(PANEL_HOSTED_TABS_CHANGE_EVENT, { bubbles: true }));
+    }
   }
 
   override render() {

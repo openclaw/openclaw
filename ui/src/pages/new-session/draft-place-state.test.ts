@@ -97,6 +97,34 @@ function createRepositoryFixture(
 }
 
 describe("DraftPlaceState repository selection", () => {
+  it("leaves the worktree base to the Gateway unless a branch was selected", async () => {
+    const { state, request, requestUpdate } = createRepositoryFixture({ workspaceGit: true });
+    const discovered = createDeferred();
+    request.mockResolvedValue({
+      repositoryStatus: "git",
+      branches: [{ name: "main", kind: "local" }],
+      defaultBranch: "main",
+      headBranch: "old-feature",
+    });
+    requestUpdate.mockImplementation(() => {
+      if (state.repository.kind === "git") {
+        discovered.resolve();
+      }
+    });
+    state.adoptAgentDefaults();
+    await discovered.promise;
+    const create = () =>
+      buildSelectedSessionCreateParams(state, { message: "new task", visibility: "normal" });
+
+    expect(create()).toMatchObject({ worktree: true });
+    expect(create()).not.toHaveProperty("worktreeBaseRef");
+    expect(state.preferenceSelection().baseRef).toBe("");
+    state.setBaseRef("main");
+    expect(create()).toHaveProperty("worktreeBaseRef", "main");
+    state.setBaseRef("");
+    expect(create()).not.toHaveProperty("worktreeBaseRef");
+  });
+
   it("captures pending placement preferences instead of transient discovery defaults", () => {
     const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
     const discovery = createDeferred<WorktreesBranchesResult>();
@@ -322,7 +350,7 @@ describe("DraftPlaceState repository selection", () => {
       expect(state.baseRef).toBe("my-branch");
       state.applyFolder("/another-repo");
       await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
-      expect(state.baseRef).toBe("main");
+      expect(state.baseRef).toBe("");
       expect(state.worktreeName).toBe("");
       expect(persistPreference).toHaveBeenCalledWith("main", "/workspace", {
         baseRef: "",

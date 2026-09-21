@@ -186,16 +186,16 @@ describe("update candidate canary", () => {
     try {
       const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
       expect(result).toMatchObject({ status: "error", phase: "doctor" });
-      expect(result.logTail.join("\n")).toContain("deadline exceeded");
-      expect(result.steps.at(-1)).toMatchObject({ exitCode: 1 });
-      expect(result.steps.at(-1)?.stderrTail).toContain("deadline exceeded");
+      expect(result.logTail.join("\n")).toContain("checks phase timed out");
+      expect(result.steps.at(-1)).toMatchObject({ exitCode: null, termination: "timeout" });
+      expect(result.steps.at(-1)?.stderrTail).toContain("checks phase timed out");
       const detail = updateRunStepsFromResultStep(result.steps.at(-1)!).at(-1)?.detail;
       expect(detail).toContain("Distinct connection detail");
-      expect(detail).toContain("deadline exceeded");
+      expect(detail).toContain("checks phase timed out");
       const report = renderUpdateRunReport(
         updateRunReportInputFromResult({ ...result, mode: "git", root }),
       );
-      expect(report.markdown).toContain("deadline exceeded");
+      expect(report.markdown).toContain("checks phase timed out");
     } finally {
       clock.mockRestore();
     }

@@ -13,7 +13,7 @@ import {
   type GitWorkerHostRequest,
   type GitWorkerReply,
 } from "./git-worker-contract.js";
-import type { WorkerTaskChannel } from "./worker-task-pool.js";
+import type { WorkerTaskChannel } from "./worker-task-server.js";
 import { ownedWorkerBytes } from "./worker-transfer-bytes.js";
 
 type PendingHostRequest = {

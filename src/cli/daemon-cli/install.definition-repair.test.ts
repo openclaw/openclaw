@@ -135,7 +135,13 @@ afterEach(() => {
 });
 
 async function fixture(
-  edit?: "Nice" | "ExecStartPre" | "foreign-unit" | "foreign-root" | "old-installation",
+  edit?:
+    | "Nice"
+    | "ExecStartPre"
+    | "foreign-unit"
+    | "foreign-root"
+    | "old-installation"
+    | "native-policy",
   layout: "direct" | "user-prefix shim" = "direct",
 ) {
   const home = await fs.realpath(dirs.make("candidate-service-repair-"));
@@ -237,7 +243,15 @@ async function fixture(
       ? path.join(home, "foreign-unit", "gateway.service")
       : resolveSystemdUnitPath(process.env);
   await fs.mkdir(path.dirname(native.source), { recursive: true, mode: 0o700 });
+  if (edit === "native-policy") {
+    plan.environment.OPENCLAW_SERVICE_VERSION = "2026.7.1-2";
+  }
   let original = buildSystemdUnit(plan).replace("KillMode=mixed\n", "");
+  if (edit === "native-policy") {
+    original = original
+      .replace("TimeoutStartSec=30", "TimeoutStartSec=45")
+      .replace("TimeoutStopSec=330", "TimeoutStopSec=600");
+  }
   if (edit === "Nice" || edit === "ExecStartPre") {
     original = original.replace(
       "[Service]",
@@ -400,7 +414,11 @@ it.skipIf(process.platform === "win32")(
     expect(response().error).toContain("unknown or foreign installation");
     expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
     expect(await fs.readdir(path.dirname(f.source))).toEqual(before);
-    expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
+    expect(
+      native.systemctl.mock.calls.some(
+        ([, args]) => args[0] === "daemon-reload" || args[0] === "restart",
+      ),
+    ).toBe(false);
   },
 );
 
@@ -499,7 +517,7 @@ it.skipIf(process.platform === "win32")(
 
 it
   .skipIf(process.platform === "win32")
-  .each(["Nice", "ExecStartPre", "foreign-unit", "foreign-root"] as const)(
+  .each(["Nice", "ExecStartPre", "foreign-unit", "foreign-root", "native-policy"] as const)(
   "preserves the entire definition when candidate repair finds %s",
   async (edit) => {
     const f = await fixture(edit);
@@ -509,7 +527,10 @@ it
     expect(result.ok).toBe(false);
     expect(result.error).toContain("SERVICE_DEFINITION_UNKNOWN");
     expect(result.definitionBackup).toBeUndefined();
-    if (edit === "Nice" || edit === "ExecStartPre") {
+    if (edit === "native-policy") {
+      expect(result.warnings).toContainEqual(expect.stringContaining("Service.TimeoutStartSec"));
+      expect(result.warnings).toContainEqual(expect.stringContaining("Service.TimeoutStopSec"));
+    } else if (edit === "Nice" || edit === "ExecStartPre") {
       expect(result.warnings).toContainEqual(expect.stringContaining(`Service.${edit}`));
     } else {
       expect(result.warnings).toContainEqual(

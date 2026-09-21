@@ -138,7 +138,7 @@ const runPath = "repos/openclaw/openclaw/actions/runs/33155056361";
 const scanned = calls.some((call) => call[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/"));
 const currentGraphql = scanned && fixture.afterAliasScan !== undefined ? fixture.afterAliasScan : fixture.graphql;
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }
@@ -257,7 +257,7 @@ const pr = {
   ...(runReads >= 2 ? ${JSON.stringify(afterRun)} : {}),
 };
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
@@ -352,7 +352,7 @@ const checkPages = fixture.checkPages ?? [{ total_count: 1, check_runs: [${JSON.
 const page = Number(new URLSearchParams(args[1]?.split("?")[1]).get("page") ?? 1);
 const collected = calls.some((call) => call[1]?.includes("/check-suites?"));
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
@@ -496,7 +496,7 @@ describe("watch-pr-ci", () => {
       const result = await runWatcher(
         `#!/usr/bin/env bash
 case "$1 $2" in
-  "browse --no-browser") printf 'https://github.com/openclaw/openclaw\\n' ;;
+  "browse "*) printf 'https://github.com/openclaw/openclaw\\n' ;;
   "api --hostname")
     if [ "$4" != "repos/openclaw/openclaw/pulls/42" ]; then exit 2; fi
     printf '{"state":"open","mergeable":true,"head":{"sha":"${sha}"}}\\n'
@@ -554,7 +554,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
@@ -710,7 +710,7 @@ const pullPath = ${JSON.stringify(pullPath)};
 const reads = calls.filter((call) => call.includes(pullPath)).length;
 if (${notifier} && (args[0] === "browse" || args.includes(pullPath))) fs.writeSync(3, args[0] + "\\n");
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   if (args[args.indexOf("--repo") + 1] !== ${JSON.stringify(repo)}) throw new Error("wrong repository selection");
   console.log("https://" + ${JSON.stringify(host)} + "/" + ${JSON.stringify(repo)});
   process.exit(0);
@@ -781,8 +781,10 @@ console.log(JSON.stringify(value));
     },
   );
 
+  // These replay groups own their CLI process, files, and polling clock per case.
+  // Vitest bounds concurrent cases; real-deadline coverage stays in serial groups.
   describe.skipIf(process.platform === "win32")("summary polling", () => {
-    it("avoids repeating summaries while superseded failures require full polling", async () => {
+    it.concurrent("avoids repeating summaries while superseded failures require full polling", async () => {
       const result = await replaySummary({ state: "FAILURE", supersededFailure: true });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(result.stdout.match(/STATUS rollup=pending/g)).toHaveLength(2);
@@ -795,7 +797,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.at(-1)).toContain("repos/openclaw/openclaw/pulls/42");
     });
 
-    it("returns to summary polling when failures clear while CI remains active", async () => {
+    it.concurrent("returns to summary polling when failures clear while CI remains active", async () => {
       const result = await replaySummary({
         state: "FAILURE",
         supersededFailure: true,
@@ -811,7 +813,7 @@ console.log(JSON.stringify(value));
       ).toHaveLength(2);
     });
 
-    it.each<[string, unknown]>([
+    it.concurrent.each<[string, unknown]>([
       ["missing contexts", null],
       ["missing nodes", { totalCount: 0, pageInfo: { hasNextPage: false } }],
       ["missing count", { nodes: [], pageInfo: { hasNextPage: false } }],
@@ -836,7 +838,7 @@ console.log(JSON.stringify(value));
       expect(result.stdout).not.toContain("\nGREEN");
     });
 
-    it.each([
+    it.concurrent.each([
       { label: "complete counts", counts: undefined, pending: "1" },
       { label: "missing counts", counts: {}, pending: "unknown" },
       {
@@ -876,7 +878,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.filter((call) => call[0] === "browse")).toHaveLength(1);
     });
 
-    it.each([
+    it.concurrent.each([
       { label: "unchanged success", afterRun: {}, exitCode: 0, output: "GREEN" },
       {
         label: "moved head",
@@ -919,7 +921,7 @@ console.log(JSON.stringify(value));
   });
 
   describe.skipIf(process.platform === "win32")("GraphQL quota fallback", () => {
-    it("stays on REST across pending polls and verifies success without retrying GraphQL", async () => {
+    it.concurrent("stays on REST across pending polls and verifies success without retrying GraphQL", async () => {
       const result = await replayRestRollup({
         runStatuses: ["in_progress", "in_progress", "in_progress", "completed"],
         checkPages: [
@@ -942,7 +944,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.some((call) => call[1]?.includes("/actions/runs?head_sha="))).toBe(false);
     });
 
-    it.each([
+    it.concurrent.each([
       "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again.",
       "gh: Resource not accessible by integration (HTTP 403)",
       "gh: Bad Gateway (HTTP 502)",
@@ -956,7 +958,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.some((call) => call[1]?.includes("/commits/"))).toBe(false);
     });
 
-    it("keeps a required failure on the second status page blocking", async () => {
+    it.concurrent("keeps a required failure on the second status page blocking", async () => {
       const statuses = Array.from({ length: 100 }, (_, index) => ({
         id: index + 1,
         context: `status ${index}`,
@@ -984,7 +986,7 @@ console.log(JSON.stringify(value));
       expect(result.calls.filter((call) => call[1]?.includes("/check-suites?"))).toHaveLength(1);
     });
 
-    it.each(["pending", "failure"])(
+    it.concurrent.each(["pending", "failure"])(
       "reobserves a same-head %s status after attached-run success",
       async (state) => {
         const result = await replayRestRollup({
@@ -1004,7 +1006,7 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each([
+    it.concurrent.each([
       { label: "moved head", afterCollection: { head: { sha: "b".repeat(40) } }, exitCode: 11 },
       { label: "closed PR", afterCollection: { state: "closed" }, exitCode: 10 },
       { label: "conflicting PR", afterCollection: { mergeable: false }, exitCode: 14 },
@@ -1015,7 +1017,7 @@ console.log(JSON.stringify(value));
     });
 
     const failedCheck = restCheck(1, { conclusion: "failure" });
-    it("keeps an unknown completed REST outcome pending", async () => {
+    it.concurrent("keeps an unknown completed REST outcome pending", async () => {
       const result = await replayRestRollup({
         checkPages: [{ total_count: 1, check_runs: [restCheck(1, { conclusion: "new_outcome" })] }],
       });
@@ -1030,7 +1032,7 @@ console.log(JSON.stringify(value));
       event: "pull_request",
       head_sha: sha,
     };
-    it.each([
+    it.concurrent.each([
       {
         label: "missing check page",
         checkPages: [
@@ -1138,7 +1140,7 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each([
+    it.concurrent.each([
       { status: "completed", conclusion: "skipped" },
       { status: "queued", conclusion: null },
     ])(
@@ -1172,7 +1174,7 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each([
+    it.concurrent.each([
       { label: "same workflow and event", kind: "matching", exitCode: 0 },
       {
         label: "same workflow and event while active",
@@ -1227,7 +1229,7 @@ console.log(JSON.stringify(value));
   });
 
   describe.skipIf(process.platform === "win32")("proxy failures", () => {
-    it.each([
+    it.concurrent.each([
       ...[
         "407 Proxy Authentication Required",
         'Post "https://api.github.com/graphql": Proxy Authentication Required',
@@ -1258,7 +1260,7 @@ if (phase === ${JSON.stringify(phase)}) {
 }
 const args = process.argv.slice(2);
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }
@@ -1798,7 +1800,7 @@ if (metadataRead && ${Boolean(afterMetadataState)}) pr.statusCheckRollup.state =
 const runs = ${JSON.stringify(listedRuns)};
 const previousRuns = ${JSON.stringify(previousRuns)};
 let value;
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
 }

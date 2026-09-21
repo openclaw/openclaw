@@ -22,7 +22,7 @@ export type BrokerRequest =
   | { type: "disconnect"; id: number }
   | { type: "cancel"; id: number }
   | { type: "pipe-received"; id: number; fd: number }
-  | { type: "output-drained"; id: number; fd: number; error?: string }
+  | { type: "output-drained"; id: number; fd: number; error?: BrokerError }
   | { type: "shutdown" };
 export type BrokerError = {
   message: string;

@@ -9,6 +9,7 @@ import {
   createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import {
@@ -180,6 +181,7 @@ async function preparePrompt(config: ReturnType<typeof resolveMemoryWikiConfig>)
 
 describe("Memory Wiki compiled cache lifecycle", () => {
   beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginBlobStoreForTests();
     configureMemoryWikiCompiledCacheStore(undefined);
     blobStateDir = await createTempDir("memory-wiki-compiled-cache-state-");
@@ -189,6 +191,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
   afterEach(async () => {
     configureMemoryWikiCompiledCacheStore(undefined);
+    await closeOpenClawStateDatabaseAsync();
     resetPluginBlobStoreForTests();
     blobStateDir = "";
     blobStoreEnv = {};

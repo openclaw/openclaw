@@ -163,12 +163,24 @@ function createEnvironmentSummarySchema() {
 export const EnvironmentSummarySchema = closedObject({
   ...createEnvironmentSummaryProperties(),
   requiredNodeCommand: Type.Optional(RequiredNodeCommandSchema),
+  desktopSetup: Type.Optional(
+    closedObject({
+      state: Type.Union([
+        Type.Literal("ready"),
+        Type.Literal("needs-server"),
+        Type.Literal("unsupported"),
+        Type.Literal("managed"),
+      ]),
+      detail: Type.Optional(NonEmptyString),
+    }),
+  ),
 });
 
 /** Optional runtime scope or profile-only projection for environment discovery. */
 export const EnvironmentsListParamsSchema = closedObject({
   runtimeId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   projection: Type.Optional(Type.Literal("profiles")),
+  includeDesktopSetup: Type.Optional(Type.Boolean()),
 });
 
 /** Provider-authored machine choice for one configured worker profile. */

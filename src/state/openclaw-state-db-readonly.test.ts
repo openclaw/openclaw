@@ -22,11 +22,11 @@ import {
   acquireOpenClawStateDatabaseFileExclusion,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
+import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 import {
   isOpenClawStateDatabaseDefinitelyAbsent,
   withSynchronousArtifactPreservingStateSnapshot,
   isArtifactPreservingStateRead,
-  iterateOpenClawStateDatabaseReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
   withExistingOpenClawStateDatabaseReadOnly,

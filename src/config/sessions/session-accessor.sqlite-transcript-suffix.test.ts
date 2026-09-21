@@ -852,7 +852,7 @@ describe("SQLite exact transcript suffix replacement", () => {
   });
 
   it.each([1, 405])(
-    "removes %i searchable suffix rows in one scan while preserving other sessions",
+    "removes %i searchable suffix rows by rowid lookup while preserving other sessions",
     async (count) => {
       const specialIds = ["suffix-\0-end", "suffix-\\u0000-end", "suffix-🦀", 'suffix-"quote'];
       const ids = Array.from(
@@ -881,9 +881,21 @@ describe("SQLite exact transcript suffix replacement", () => {
             .all(sibling.sessionId);
         const siblingSearch = readSiblingSearch();
         const before = snapshot();
-        const work = trackSqliteStatementExecutions(db, ["ftsDeletes"], (sql) =>
-          /^delete from "session_transcript_fts"/i.test(sql) ? "ftsDeletes" : null,
-        );
+        const deletePlans: string[] = [];
+        const work = trackSqliteStatementExecutions(db, ["ftsDeletes"], (sql) => {
+          if (!/^delete from "session_transcript_fts"/i.test(sql)) {
+            return null;
+          }
+          const placeholders = sql.match(/\?/g)?.length ?? 0;
+          deletePlans.push(
+            ...db
+              .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+              .all(...Array.from({ length: placeholders }, () => 0))
+              .map((row) => String(row.detail))
+              .filter((detail) => detail.includes("VIRTUAL TABLE INDEX")),
+          );
+          return "ftsDeletes";
+        });
         try {
           replaceTranscriptSuffixForTest(scope, events, events.slice(0, 2), 2);
         } finally {
@@ -897,7 +909,11 @@ describe("SQLite exact transcript suffix replacement", () => {
         expect(after.active).toHaveLength(2);
         expect(after.search).toMatchObject([{ message_id: "user", text: "question" }]);
         expect(readSiblingSearch()).toEqual(siblingSearch);
-        expect(work.counts.ftsDeletes).toBe(1);
+        expect(work.counts.ftsDeletes).toBeGreaterThan(0);
+        expect(deletePlans.length).toBeGreaterThan(0);
+        for (const plan of deletePlans) {
+          expect(plan).toMatch(/VIRTUAL TABLE INDEX .*:=/);
+        }
         expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
       }, events);
     },

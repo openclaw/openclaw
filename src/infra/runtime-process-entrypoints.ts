@@ -134,6 +134,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "update-candidate-state.worker",
     distWorkerPath: "infra/update-candidate-state.worker.js",
   },
+  doctorLint: {
+    currentModuleUrl,
+    sourceWorkerName: "../commands/doctor-lint.worker",
+    distWorkerPath: "commands/doctor-lint.worker.js",
+  },
   databaseVerify: {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-database-verify.worker",
@@ -153,6 +158,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../config/sessions/session-transcript.worker",
     distWorkerPath: "config/sessions/session-transcript.worker.js",
+  },
+  sessionManagerMetadata: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/sessions/session-manager-metadata.worker",
+    distWorkerPath: "agents/sessions/session-manager-metadata.worker.js",
   },
   sessionTranscriptReconcile: {
     currentModuleUrl,

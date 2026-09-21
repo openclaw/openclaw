@@ -130,6 +130,23 @@ export function findMatrixAccountEntry(
   return isRecord(entry) ? entry : null;
 }
 
+export function hasImplicitMatrixAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const normalized = normalizeAccountId(accountId);
+  return (
+    (normalized === DEFAULT_ACCOUNT_ID ||
+      listMatrixEnvAccountIds(env).some((id) => normalizeAccountId(id) === normalized)) &&
+    hasUsableEffectiveMatrixAccountSource({
+      channel: resolveMatrixChannelConfig(cfg),
+      accountId: normalized,
+      env,
+    })
+  );
+}
+
 export function resolveConfiguredMatrixAccountIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,

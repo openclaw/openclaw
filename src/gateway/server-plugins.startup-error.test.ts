@@ -6,7 +6,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { getFreePort } from "../test-utils/ports.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   clearInstanceBindingProbeCoordinators,
   installInstanceBindingProbeCoordinator,
@@ -117,9 +117,10 @@ it.each(["module-load", "entry-open"] as const)(
         },
       }),
     );
-    const port = await getFreePort();
     const recovery = vi.fn(() => ({ status: "emitted" as const }));
-    const server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const port = portClaim.port;
+    const server = await startTestGatewayServer(portClaim, {
       auth: { mode: "none" },
       controlUiEnabled: false,
       sidecarStartup: "start",

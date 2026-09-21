@@ -70,6 +70,13 @@ import {
   stableWhatsAppConfig,
 } from "./update-cli/update-cli-config.test-support.js";
 import {
+  mockUnbuiltRecoveryFixture,
+  recoveryVerificationStep,
+  recoveryVersionMismatch,
+  registerFailureSelectorTests,
+  registerForegroundFailureRecoveryTests,
+} from "./update-cli/update-cli-failure-recovery.test-support.js";
+import {
   createUpdateCliPackageFixtures,
   createCurrentProcessFreshDoctorFixture,
   writeJsonFixture,
@@ -127,6 +134,9 @@ const managedUpdateHandoff = vi.hoisted(() => ({
   cancel: vi.fn(),
 }));
 const candidateValidation = vi.hoisted(() => vi.fn());
+const systemdPolicy = vi.hoisted(() =>
+  vi.fn<typeof import("../daemon/systemd-maintenance.js").prepareSystemdGatewayMaintenance>(),
+);
 const sourceRuntimeCompletion = vi.hoisted(() =>
   vi.fn<typeof import("./update-cli/update-command-runtime.js").completeSourceUpdateRuntime>(),
 );
@@ -589,6 +599,14 @@ vi.mock("../daemon/service.js", async () => {
     })),
   };
 });
+
+vi.mock("./update-cli/update-command-service-drain.js", () => ({
+  withGatewayMaintenanceDrain: async (_params: unknown, stop: () => Promise<unknown>) =>
+    await stop(),
+}));
+vi.mock("../daemon/systemd-maintenance.js", () => ({
+  prepareSystemdGatewayMaintenance: systemdPolicy,
+}));
 
 vi.mock("../daemon/launchd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/launchd.js")>()),
@@ -1545,6 +1563,7 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    systemdPolicy.mockResolvedValue(false);
     mockUpdateStateSnapshotWorker(fixtureStateDatabases);
     // Service simulations do not provide foreign-platform ACL libraries. Keep
     // real exclusive host creation; actual Windows runs retain the native DACL path.
@@ -3890,43 +3909,16 @@ describe("update-cli", () => {
     expect(runExec).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { exitCode: 2, handoff: undefined, expectedExit: 1 },
-    { exitCode: 2, handoff: "1", expectedExit: 79 },
-    { exitCode: 78, handoff: "1", expectedExit: 79 },
-    { exitCode: 79, handoff: "1", expectedExit: 79 },
-    { exitCode: 80, handoff: "1", expectedExit: 79 },
-  ])(
-    "preserves foreground failure $exitCode without granting handoff $handoff authority",
-    async ({ exitCode, handoff, expectedExit }) => {
-      setupUpdatedRootRefresh();
-      spawn.mockImplementationOnce(() => {
-        const child = new EventEmitter() as EventEmitter & {
-          once: EventEmitter["once"];
-        };
-        queueMicrotask(() => {
-          child.emit("exit", exitCode, null);
-          child.emit("close", exitCode, null);
-        });
-        return child;
-      });
-
-      await withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, async () => {
-        await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(
-          new ExitError(expectedExit),
-        );
-      });
-
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(spawnCall()?.[2]?.env?.OPENCLAW_UPDATE_RUN_HANDOFF).toBe(handoff);
-      expect(lastWriteJsonCall()).toMatchObject({
-        status: "error",
-        reason: "post-core-update-failed",
-        recovery: { serviceRestartSafe: false },
-      });
-      expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-    },
-  );
+  registerForegroundFailureRecoveryTests({
+    setupUpdatedRootRefresh,
+    spawn,
+    updateCommand,
+    defaultRuntime,
+    ExitError,
+    spawnCall,
+    lastWriteJsonCall,
+    updateNpmInstalledPlugins,
+  });
 
   it("stages plugin-changing post-core config before updated plugin migrations run", async () => {
     syncPluginsForUpdateChannel.mockImplementationOnce(async ({ config }) =>
@@ -4995,6 +4987,7 @@ describe("update-cli", () => {
     ["plugin sync", syncPluginsForUpdateChannel],
     ["npm update", updateNpmInstalledPlugins],
   ] as const)("fails unexpected post-core %s exceptions", async (phase, updatePlugins) => {
+    await mockUnbuiltRecoveryFixture();
     const message = `${phase} invariant broke`;
     updatePlugins.mockRejectedValueOnce(new Error(message));
 
@@ -5003,7 +4996,10 @@ describe("update-cli", () => {
     expect(lastWriteJsonCall()).toMatchObject({
       status: "error",
       reason: "post-update-failed",
-      steps: [expect.objectContaining({ exitCode: 1, stderrTail: message })],
+      steps: [
+        expect.objectContaining({ exitCode: 1, stderrTail: message }),
+        recoveryVerificationStep([recoveryVersionMismatch]),
+      ],
     });
   });
 
@@ -6584,15 +6580,7 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { restart: true, running: true, failure: undefined },
-    { restart: false, running: true, failure: undefined },
-    { restart: true, running: false, failure: undefined },
-    { restart: true, running: true, failure: "doctor" },
-    { restart: true, running: true, failure: "stop" },
-    { restart: true, running: true, failure: undefined, platform: "linux" as const },
-    { restart: true, running: true, failure: "changed owner" },
-  ])(
+  it.each(runtimeRecovery.alreadyCurrentConvergenceCases)(
     "converges plugins on an already-current core (restart=$restart, running=$running, failure=$failure, platform=$platform)",
     async ({ restart, running, failure, platform }) => {
       if (platform) {
@@ -6721,28 +6709,25 @@ describe("update-cli", () => {
     },
   );
 
-  it.each([
-    {
-      packageInstallSpec: "file:/owned/candidate.tgz",
-      channel: "stable" as const,
-      expectedTag: "file:/owned/candidate.tgz",
-    },
-    {
-      packageInstallSpec: "https://example.invalid/candidate.tgz",
-      channel: "stable" as const,
-      expectedTag: "https://example.invalid/candidate.tgz",
-    },
-    {
-      packageInstallSpec: `openclaw@${VERSION}`,
-      channel: "stable" as const,
-      expectedTag: VERSION,
-    },
-    {
-      packageInstallSpec: `openclaw@${VERSION}`,
-      channel: "extended-stable" as const,
-      expectedTag: undefined,
-    },
-  ])(
+  it("refreshes stale systemd policy on an already-current core without stopping the Gateway", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const root = await mockPackageInstallAtCaseDir("openclaw-update", VERSION);
+    await writeOpenClawPackageFixture(root, VERSION);
+    mockFileBackedPathExists();
+    vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
+    readPackageVersion.mockResolvedValue(VERSION);
+    primeNpmChannelTag("latest", VERSION);
+    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+    systemdPolicy.mockResolvedValue(true);
+
+    await updateCommand({ yes: true, json: true });
+
+    expect(systemdPolicy).toHaveBeenCalledWith(expect.objectContaining({ root, stopping: false }));
+    expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
+    expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
+  });
+
+  it.each(runtimeRecovery.alreadyCurrentHandoffCases(VERSION))(
     "keeps the selected target through already-current managed handoff ($packageInstallSpec, $channel)",
     async ({ packageInstallSpec, channel, expectedTag }) => {
       const { finishAlreadyCurrentUpdate } = await import("./update-cli/update-command-noop.js");
@@ -7540,6 +7525,16 @@ describe("update-cli", () => {
         expect.objectContaining({
           stderrTail: expect.stringContaining("would kill this command"),
         }),
+        recoveryVerificationStep(
+          [
+            {
+              check: "versionMatch",
+              code: "build-id-mismatch",
+              message: "Expected Gateway build fixture-original-build; observed unavailable.",
+            },
+          ],
+          root,
+        ),
       ],
     });
     expect(preparations).toEqual([]);
@@ -9075,12 +9070,7 @@ describe("update-cli", () => {
   ])(
     "leaves the stopped Gateway down when Git mutation throws without a recovery verdict (json=$json)",
     async ({ json, handoff, expectedExitCode }) => {
-      mockRunningManagedGateway([
-        "node",
-        path.join(process.cwd(), "dist", "index.js"),
-        "gateway",
-        "run",
-      ]);
+      mockStoppedManagedGitGateway();
       setTty(true);
       setStdoutTty(true);
       const cause = new Error("ENOSPC while replacing runtime files");
@@ -9090,6 +9080,14 @@ describe("update-cli", () => {
       );
       vi.mocked(runGatewayUpdate).mockImplementationOnce(async (opts) => {
         await opts?.beforeGitMutation?.({});
+        restartHealthTestControl.snapshot = {
+          runtime: { status: "stopped", pid: null, state: "stopped" },
+          portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+          healthy: false,
+          staleGatewayPids: [],
+          waitOutcome: "timeout",
+          probeError: "Gateway remains stopped after interrupted mutation.",
+        };
         throw failure;
       });
 
@@ -9110,8 +9108,16 @@ describe("update-cli", () => {
           mode: "git",
           reason: "update-failed",
           recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          verification: { serviceRunning: false, readyz: false, settled: false },
           steps: [
             expect.objectContaining({ exitCode: 1, stderrTail: formatErrorMessage(failure) }),
+            recoveryVerificationStep([
+              {
+                check: "settled",
+                code: "timeout",
+                message: "Gateway remains stopped after interrupted mutation.",
+              },
+            ]),
           ],
         },
       });
@@ -9132,32 +9138,13 @@ describe("update-cli", () => {
     },
   );
 
-  it.each([
-    { name: "update", run: updateCommand },
-    { name: "repair", run: updateFinalizeCommand },
-  ])("$name pins relative installation selectors before failed-update triage", async ({ run }) => {
-    const failure = new Error("Config snapshot failed");
-    vi.mocked(readConfigFileSnapshot).mockRejectedValueOnce(failure);
-    const cwd = process.cwd();
-    const selectors = {
-      OPENCLAW_STATE_DIR: path.relative(cwd, profileStateDir()),
-      OPENCLAW_CONFIG_PATH: path.relative(cwd, path.join(profileStateDir(), "custom.json")),
-      OPENCLAW_WORKSPACE_DIR: "relative-workspace",
-    };
-    await withEnvAsync(selectors, async () => {
-      const reported = run === updateCommand;
-      const error = await run({ yes: true, json: true, restart: false }).catch(
-        (caught: unknown) => caught,
-      );
-      expect(runUpdateFailureTriage).toHaveBeenCalledOnce();
-      const triageCall = vi.mocked(runUpdateFailureTriage).mock.calls[0]?.[0];
-      expectSelectorTriageFailure(error, triageCall?.failure, failure, reported);
-      for (const [key, value] of Object.entries(selectors)) {
-        expect(triageCall?.target.env[key], key).toBe(path.resolve(cwd, value));
-        expect(process.env[key]).toBe(value);
-      }
-      expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
-    });
+  registerFailureSelectorTests({
+    updateCommand,
+    updateFinalizeCommand,
+    readConfigFileSnapshot,
+    profileStateDir,
+    runUpdateFailureTriage,
+    expectSelectorTriageFailure,
   });
 
   it("does not inspect or mutate a Windows host service from an isolated install", async () => {
@@ -9461,8 +9448,15 @@ describe("update-cli", () => {
           result: {
             status: "error",
             recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+            verification: {
+              runningVersion: "1.0.0",
+              versionMatch: true,
+              readyz: true,
+              settled: true,
+            },
             steps: [
               expect.objectContaining({ stderrTail: expect.stringContaining("enable denied") }),
+              recoveryVerificationStep(undefined, root),
             ],
           },
         },
@@ -12668,6 +12662,7 @@ describe("update-cli", () => {
   it.each(["success", "failure"] as const)(
     "starts interactive update triage after cleanup and preserves update status after agent %s",
     async (agentOutcome) => {
+      await mockUnbuiltRecoveryFixture();
       setTty(true);
       setStdoutTty(true);
       const stateDir = profileStateDir("update-triage");
@@ -12764,7 +12759,7 @@ describe("update-cli", () => {
               before: update.before,
               after: update.after,
               recovery: update.recovery,
-              steps: [],
+              steps: [recoveryVerificationStep([recoveryVersionMismatch])],
             },
           },
         },

@@ -186,6 +186,11 @@ describe("worktrees cli", () => {
       removed: [],
       orphansDeleted: 0,
       snapshotsPruned: 0,
+      outcome: "completed",
+      issues: [],
+      issueCount: 0,
+      protectedCount: 0,
+      limitsSatisfied: true,
     });
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     const program = new Command().name("openclaw");
@@ -198,5 +203,35 @@ describe("worktrees cli", () => {
       shouldProtectOwner: expect.any(Function),
       shouldRemoveOwner: expect.any(Function),
     });
+  });
+
+  it("prints partial cleanup details before returning failure", async () => {
+    setRuntimeConfigSnapshot({}, {});
+    const result = {
+      removed: ["removed"],
+      orphansDeleted: 0,
+      snapshotsPruned: 0,
+      outcome: "partial" as const,
+      issues: [
+        {
+          id: "retained",
+          stage: "idle" as const,
+          outcome: "failed" as const,
+          reason: "cleanup-failed: repository unavailable",
+        },
+      ],
+      issueCount: 1,
+      protectedCount: 0,
+      limitsSatisfied: false,
+    };
+    vi.spyOn(managedWorktrees, "gc").mockResolvedValue(result);
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+    const program = new Command().name("openclaw");
+    registerWorktreesCli(program);
+
+    await expect(
+      program.parseAsync(["worktrees", "gc", "--json"], { from: "user" }),
+    ).rejects.toThrow();
+    expect(output).toHaveBeenCalledWith(result);
   });
 });

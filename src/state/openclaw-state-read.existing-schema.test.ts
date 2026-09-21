@@ -4,8 +4,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listFleetCells, reserveFleetCell } from "../fleet/registry.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 import {
-  iterateOpenClawStateDatabaseReadOnly,
   withArtifactPreservingStateReads,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";

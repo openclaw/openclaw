@@ -708,9 +708,10 @@ suite.define(() => {
     const page = await openPage({ nativeNav: false });
 
     await page.keyboard.press("ControlOrMeta+K");
-    const palette = page.locator(".cmd-palette");
-    const paletteDialog = page.locator("openclaw-modal-dialog.palette");
-    await page.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
+    // The loading dialog is replaced during handoff; measure the full palette.
+    const palette = page.locator("openclaw-command-palette .cmd-palette");
+    const paletteDialog = page.locator("openclaw-command-palette openclaw-modal-dialog.palette");
+    await palette.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
     const paletteAnimationName = await palette.evaluate(
       (element) => getComputedStyle(element).animationName,
     );
@@ -833,7 +834,7 @@ suite.define(() => {
 
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
-    await row.getByRole("button", { name: "Open session menu" }).click();
+    await row.click({ button: "right" });
     const sessionMenu = page.getByRole("menu", { name: /Actions for/ });
     await expect.poll(() => sessionMenu.isVisible()).toBe(true);
     await page.keyboard.press("Escape");

@@ -1,6 +1,7 @@
 /** Runs ACP turns, failover, timeout cleanup, and detached-task progress mirroring. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { logVerbose } from "../../globals.js";
 import {
   recordSessionHumanDirectMessage,
@@ -97,7 +98,7 @@ export async function runManagerTurn(params: {
         input.admittedRunContext.operationalRunInstance.instanceId,
       )
     : undefined;
-  let taskExecutionBound = false;
+  let taskExecutionBinding: Promise<void> | undefined;
   let taskProgressSummary = "";
   const initialResolution = params.resolveSession({
     cfg: input.cfg,
@@ -125,6 +126,10 @@ export async function runManagerTurn(params: {
   });
   const backendAttempts: BackendAttempt[] = [];
   const recordBackendFailure = async (error: AcpRuntimeError) => {
+    await taskExecutionBinding;
+    if (!params.isCurrentActor()) {
+      throw createSupersededActorError(sessionKey);
+    }
     const failedBackends = backendAttempts
       .map((attempt) => `${attempt.backend}: ${attempt.error}`)
       .join(" | ");
@@ -305,9 +310,29 @@ export async function runManagerTurn(params: {
                 return;
               }
               promptStarted = authoritative;
-              if (authoritative && taskRecord && !taskExecutionBound) {
-                taskExecutionBound = true;
-                bindBackgroundTaskExecution(taskRecord, input.admittedRunContext);
+              if (authoritative && taskRecord) {
+                const assertAdmitted = resolveAdmittedRunActiveAssertion(input.admittedRunContext);
+                taskExecutionBinding ??= bindBackgroundTaskExecution(
+                  taskRecord,
+                  input.admittedRunContext,
+                  () => {
+                    if (!params.isCurrentActor()) {
+                      throw createSupersededActorError(sessionKey);
+                    }
+                    if (!assertAdmitted) {
+                      throw new Error("ACP execution authority closed before owner binding");
+                    }
+                    assertAdmitted();
+                  },
+                );
+                await taskExecutionBinding;
+                if (!params.isCurrentActor()) {
+                  return;
+                }
+                if (!assertAdmitted) {
+                  throw new Error("ACP execution authority closed before owner binding");
+                }
+                assertAdmitted();
               }
               try {
                 await input.onLifecycle?.({
@@ -546,6 +571,10 @@ export async function runManagerTurn(params: {
       }
     }
   } finally {
-    releaseActiveTurn?.();
+    try {
+      await taskExecutionBinding;
+    } finally {
+      releaseActiveTurn?.();
+    }
   }
 }

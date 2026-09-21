@@ -572,6 +572,49 @@ describe("global chat pane feature ownership", () => {
     },
   );
 
+  it("refreshes the captured global card without chat effects and ignores stale actions", async () => {
+    let revision = 1;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "progressCard.refresh") {
+        return { runId: "quiet-refresh", status: "accepted", revision: 1 };
+      }
+      const agentId = (params as { agentId?: string } | undefined)?.agentId ?? "research";
+      return { card: globalProgressCard(agentId, revision) };
+    });
+    const { pane, select, emit } = createGlobalFeaturePane(request, [
+      "progressCard.get",
+      "progressCard.refresh",
+    ]);
+    await vi.waitFor(() => expect(pane.chatProps?.progressCardRefresh).toBeDefined());
+    const original = pane.chatProps!.progressCard!;
+    const action = pane.chatProps!.progressCardRefresh!;
+    const messages = pane.chatProps!.messages;
+    const queue = pane.chatProps!.queue;
+    action.onRefresh(original);
+    expect(request).toHaveBeenLastCalledWith("progressCard.refresh", {
+      sessionKey: "global",
+      agentId: "research",
+      idempotencyKey: expect.any(String),
+    });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCardRefresh?.state).toBe("pending"));
+    expect(pane.chatProps!.progressCard).toBe(original);
+    expect(pane.chatProps!.messages).toBe(messages);
+    expect(pane.chatProps!.queue).toBe(queue);
+    revision = 2;
+    emit({ sessionKey: "agent:research:global", revision });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCardRefresh?.state).toBe("updated"));
+    select("main");
+    action.onRefresh(original);
+    await vi.waitFor(() =>
+      expect(pane.chatProps?.progressCard?.sessionKey).toBe("agent:main:global"),
+    );
+    expect(pane.chatProps?.progressCardRefresh?.state).toBeUndefined();
+    expect(request.mock.calls.filter(([method]) => method === "progressCard.refresh")).toHaveLength(
+      1,
+    );
+    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+  });
+
   it("loads, refreshes and dismisses the selected agent's global progress card", async () => {
     let card: ProgressCard | null = globalProgressCard("research");
     const request = vi.fn(async (method: string) => {

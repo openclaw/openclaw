@@ -3,7 +3,7 @@ import { executeGitWorktreeOperation } from "../agents/worktrees/git-worktree-op
 import { executeGitReadOperation } from "./git-read-operations.runtime.js";
 import { serializeGitWorkerFailure, withGitWorkerContext } from "./git-worker-context.js";
 import type { GitWorkerCommand, GitWorkerReply, GitWorkerResult } from "./git-worker-contract.js";
-import { serveWorkerTasks } from "./worker-task-pool.js";
+import { serveWorkerTasks } from "./worker-task-server.js";
 
 serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
   async (input, channel) => {

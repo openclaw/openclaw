@@ -13,7 +13,6 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { restoreTaskExecutionSnapshot } from "./task-execution-owner.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
-import { reconcileTaskFlowWorkerReceipts } from "./task-flow-runtime-internal.js";
 import {
   clearTaskFlowSyncRetries,
   receiveTaskRegistryRestoreResult,
@@ -338,15 +337,12 @@ export const ensureTaskRegistryReadyAsync = createAsyncRegistryRestore<
   getStore: getTaskRegistryStore,
   onReady: () => startTaskRegistryListener(),
   received: (result, context, store) => receiveTaskRegistryRestoreResult(result, context, store),
-  async reconcile(result, context, store) {
+  async reconcile(_result, context, store, reconcileFlows) {
     if (getTaskRegistryStore() !== store || !isCurrentTaskRegistryDatabase(context.admission)) {
       return;
     }
     try {
-      await reconcileTaskFlowWorkerReceipts(
-        context,
-        result.flowSyncs.flatMap((outcome) => (outcome.flowId ? [outcome.flowId] : [])),
-      );
+      await reconcileFlows();
     } catch (error) {
       if (taskRegistryRestoreState.status !== "failed") {
         throw error;
@@ -453,11 +449,18 @@ export function resetTaskRegistryRestoreState(): void {
 }
 
 const projection = taskRegistryProcessState.projection;
-const pendingMutations = projection.pending;
-const dirtyScopes = projection.dirtyScopes;
+const { pending: pendingMutations, dirtyScopes } = projection;
 
 registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind !== "opened") {
+  if (event.kind === "opened") {
+    return;
+  }
+  const admission = taskRegistryRestoreState.admission;
+  // Physical aliases share an owner; its path also covers failed or replaced opens.
+  if (
+    admission &&
+    (event.path === admission.databasePath || event.identity?.key === admission.identity.key)
+  ) {
     invalidateTaskRegistryProjection();
   }
 });

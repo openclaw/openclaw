@@ -1,4 +1,3 @@
-// chat.send owns admission, ACK timing, and detached dispatch handoff.
 import { performance } from "node:perf_hooks";
 import {
   createAgentRunRestartAbortError,
@@ -16,8 +15,9 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+// chat.send owns admission, ACK timing, and detached dispatch handoff.
+import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
-import { recordSessionGoalChanged } from "../../sessions/session-state-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -58,6 +58,7 @@ import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.j
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import type { GatewayRequestHandlerOptions, SessionMutationAuthorization } from "./types.js";
 
 type ChatSendInternalOptions = {
@@ -408,23 +409,13 @@ async function handleChatSendWithOptions(
             entry: persistedUserTurn.sessionEntry,
           });
         }
-        const goalChanged = recordSessionGoalChanged({
+        await publishCommittedSessionGoalChange(context, {
           sessionKey,
           agentId: preparedSession.value.agentId,
           entry: persistedUserTurn.sessionEntry,
           actor: gatewayClientSessionCreator(client),
           summary: `goal ${goalOperation.action}`,
         });
-        try {
-          // Publish the committed Goal before yielding; retain its event through terminalization.
-          emitSessionsChanged(context, {
-            sessionKey,
-            agentId: preparedSession.value.agentId,
-            reason: "goal",
-          });
-        } finally {
-          await goalChanged;
-        }
       }
       // A matching idempotency row and lifecycle claim commit atomically, so
       // retries adopt the durable turn without submitting it twice.
@@ -496,6 +487,7 @@ async function handleChatSendWithOptions(
       return admitted.value.rejectSessionRoutingChanged();
     }
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
+      operatorAuthority: admitted.value.operatorAuthority,
       target: messageInjectionTarget,
       abortSignal: activeRunAbort.controller.signal,
       request: normalizedRequest.value,
@@ -506,7 +498,11 @@ async function handleChatSendWithOptions(
       documentContext: steerDocumentContext,
       userTurnTranscriptRecorder: userTurnRecorder,
       logGateway: context.logGateway,
-      assertCurrent: req.expectedProfileId === undefined ? undefined : assertInputAdmissionCurrent,
+      assertCurrent:
+        req.expectedProfileId === undefined &&
+        !isProgressCardRefreshInputProvenance(systemInputProvenance)
+          ? undefined
+          : assertInputAdmissionCurrent,
     });
     const preAckReplyContextPromise =
       messageInjectionTarget && !isInternalTextSlashCommandTurn

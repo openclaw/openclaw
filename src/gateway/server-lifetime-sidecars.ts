@@ -12,7 +12,7 @@ import {
 import { attachSessionChangeEventLifetime } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 
 type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>;
 const SECRET_STORE_EXPIRY_INTERVAL_MS = 60_000;

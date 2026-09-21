@@ -149,7 +149,7 @@ export async function runUpdateLeaseChild(): Promise<void> {
       const runId = process.env.OPENCLAW_UPDATE_RUN_ID;
       assert.ok(runId, "Doctor did not inherit its invoking repair run ID");
       const { DatabaseSync } = await import("node:sqlite");
-      const { readUpdateRunRecord } = await import("../../infra/update-run-reader.js");
+      const { readUpdateRunRecord } = await import("../../infra/update-run-read.kernel.js");
       const { resolveOpenClawStateSqlitePath } =
         await import("../../state/openclaw-state-db.paths.js");
       const { inspectUpdateRepairDriverAdmission } =

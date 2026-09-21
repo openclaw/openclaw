@@ -145,7 +145,7 @@ async function readReferences(
   },
   repository: { owner: string; repo: string },
 ): Promise<{ references: number[]; indexing: boolean }> {
-  const candidates = searchSessionTranscripts({
+  const candidates = await searchSessionTranscripts({
     ...scope,
     sessionKeys: [scope.sessionKey],
     role: "assistant",

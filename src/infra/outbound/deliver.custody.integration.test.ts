@@ -25,6 +25,7 @@ import {
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
   readQueuedEntry,
+  setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
 vi.mock("../../agents/runtime-plan/build.js", () => ({
@@ -414,8 +415,7 @@ describe("retired caller delivery settlement", () => {
   );
 
   it("does not project rejection or alter a replacement producer after caller retirement", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-09-15T12:00:00.000Z"));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const completion = await import("./delivery-completion.js");
@@ -451,7 +451,7 @@ describe("retired caller delivery settlement", () => {
       await adapter.prepared;
       const originalClaim = readQueuedEntry(stateDir, queueId).producerClaimId;
       // Expire the lease without running its heartbeat so the queue CAS owns the rejection.
-      vi.setSystemTime(Date.now() + 60_001);
+      setQueuedEntryState(stateDir, queueId, { retryCount: 0, availableAt: Date.now() - 1 });
       const replacementClaim = await queueStorage.claimDeliveryPlatformSendAttempt(
         queueId,
         stateDir,

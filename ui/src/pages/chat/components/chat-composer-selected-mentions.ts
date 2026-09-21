@@ -98,7 +98,8 @@ export function renderSelectedHumanMentions(
   if (!mentions?.length) {
     return nothing;
   }
-  const people = mentions.map((mention) => {
+  const recipients = new Map(mentions.map((mention) => [mention.profileId, mention]));
+  const people = [...recipients.values()].map((mention) => {
     const label = text.slice(mention.start, mention.end);
     return { profileId: mention.profileId, label, name: label.replace(/^@/u, "") };
   });

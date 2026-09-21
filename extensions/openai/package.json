@@ -16,6 +16,12 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "build": {
+      "workerEntries": [
+        "./realtime-quicksilver-audio.worker.ts",
+        "./realtime-quicksilver-socket.worker.ts"
+      ]
+    }
   }
 }

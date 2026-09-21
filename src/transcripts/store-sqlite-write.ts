@@ -13,8 +13,11 @@ import {
   meetingTranscriptSessionQuery,
   type MeetingTranscriptSessionRow,
   readTranscriptSummaryInputRevision,
+  readStoredTranscriptSummaryRevision,
   sessionFromRow,
+  transcriptSummaryInputRevisionFromRow,
 } from "./store-sqlite.js";
+import type { TranscriptSummaryWriteGuard } from "./store-types.js";
 
 type TranscriptSessionValues = Pick<
   MeetingTranscriptSessionRow,
@@ -106,17 +109,28 @@ export function writeMeetingTranscriptSessionInDatabase(
 
 export function writeMeetingTranscriptSummaryInDatabase(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   summaryValues: TranscriptSummaryValues,
-  expectedInputRevision?: string,
+  guard?: TranscriptSummaryWriteGuard,
 ): void {
-  // Recheck under the writer lock; a concurrent writer can change the
-  // transcript after the caller's pre-check but before this commit.
-  if (
-    expectedInputRevision !== undefined &&
-    readTranscriptSummaryInputRevision(database, session) !== expectedInputRevision
-  ) {
-    throw new TranscriptsSummaryChangedError();
+  if (guard) {
+    // Recheck both transcript and prior notes under the same writer lock as publication.
+    const row = executeSqliteQueryTakeFirstSync(
+      database,
+      meetingTranscriptSessionQuery(database, session).selectAll(),
+    );
+    if (
+      !row ||
+      (guard.allowAppends && row.stopped_at !== null) ||
+      row.next_utterance_seq < guard.nextSequence ||
+      transcriptSummaryInputRevisionFromRow({
+        ...row,
+        ...(guard.allowAppends ? { next_utterance_seq: guard.nextSequence } : {}),
+      }) !== guard.inputRevision ||
+      (readStoredTranscriptSummaryRevision(database, session) ?? "") !== guard.summaryRevision
+    ) {
+      throw new TranscriptsSummaryChangedError();
+    }
   }
   executeSqliteQuerySync(
     database,

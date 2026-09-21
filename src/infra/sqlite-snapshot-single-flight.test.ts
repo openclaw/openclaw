@@ -2,7 +2,75 @@ import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareSingleFlightSqliteSnapshot } from "./sqlite-snapshot-single-flight.js";
 
+it.each([1, 2])("withdraws %i cancelled waiters before admitting snapshot work", async (count) => {
+  let copies = 0;
+  const controllers = Array.from({ length: count }, () => new AbortController());
+  const operations = controllers.map((controller) =>
+    prepareSingleFlightSqliteSnapshot(
+      `cancelled-demand-${count}.sqlite`,
+      "test",
+      async (signal) => {
+        signal.throwIfAborted();
+        copies += 1;
+        return {
+          location: "cancelled-snapshot.sqlite",
+          cleanup: () => true,
+          cleanupAsync: async () => true,
+        };
+      },
+      controller.signal,
+    ),
+  );
+  for (const controller of controllers) {
+    controller.abort(new Error("cancelled before admission"));
+  }
+  const results = await Promise.allSettled(operations);
+  expect(results).toEqual(
+    controllers.map((controller) => ({
+      status: "rejected",
+      reason: controller.signal.reason,
+    })),
+  );
+  expect(copies).toBe(0);
+});
+
+it.each([0, 1])("keeps shared snapshot demand when waiter %i cancels", async (cancelled) => {
+  let copies = 0;
+  let removed = false;
+  const controllers = [new AbortController(), new AbortController()];
+  const operations = controllers.map((controller) =>
+    prepareSingleFlightSqliteSnapshot(
+      `surviving-demand-${cancelled}.sqlite`,
+      "test",
+      async (signal) => {
+        signal.throwIfAborted();
+        copies += 1;
+        return {
+          location: "surviving-snapshot.sqlite",
+          cleanup: () => {
+            removed = true;
+            return true;
+          },
+          cleanupAsync: async () => {
+            removed = true;
+            return true;
+          },
+        };
+      },
+      controller.signal,
+    ),
+  );
+  controllers[cancelled]!.abort(new Error("one waiter cancelled"));
+  await expect(operations[cancelled]).rejects.toBe(controllers[cancelled]!.signal.reason);
+  const snapshot = await operations[1 - cancelled]!;
+  expect(copies).toBe(1);
+  expect(removed).toBe(false);
+  expect(await snapshot.cleanupAsync()).toBe(true);
+  expect(removed).toBe(true);
+});
+
 it("tracks the producer after a caller cancels its wait", async () => {
+  const admitted = createDeferred();
   const produced = createDeferred();
   const tracked: Promise<unknown>[] = [];
   const controller = new AbortController();
@@ -10,6 +78,7 @@ it("tracks the producer after a caller cancels its wait", async () => {
     "producer-drain.sqlite",
     "test",
     async () => {
+      admitted.resolve();
       await produced.promise;
       return {
         location: "snapshot.sqlite",
@@ -21,6 +90,7 @@ it("tracks the producer after a caller cancels its wait", async () => {
     { trackProducer: (producer) => tracked.push(producer) },
   );
 
+  await admitted.promise;
   controller.abort(new Error("caller stopped waiting"));
   await expect(pending).rejects.toThrow("caller stopped waiting");
   expect(tracked).toHaveLength(1);
@@ -35,6 +105,7 @@ it("tracks the producer after a caller cancels its wait", async () => {
 });
 
 it("joins orphan cleanup before the tracked producer settles", async () => {
+  const admitted = createDeferred();
   const produced = createDeferred();
   const cleanupStarted = createDeferred();
   const cleanupFinished = createDeferred();
@@ -44,6 +115,7 @@ it("joins orphan cleanup before the tracked producer settles", async () => {
     "orphan-drain.sqlite",
     "test",
     async () => {
+      admitted.resolve();
       await produced.promise;
       return {
         location: "orphan-snapshot.sqlite",
@@ -58,6 +130,7 @@ it("joins orphan cleanup before the tracked producer settles", async () => {
     controller.signal,
     { trackProducer: (producer) => tracked.push(producer) },
   );
+  await admitted.promise;
   controller.abort(new Error("caller cancelled"));
   await expect(pending).rejects.toThrow("caller cancelled");
   let settled = false;

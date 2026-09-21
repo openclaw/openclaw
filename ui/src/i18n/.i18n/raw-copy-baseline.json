@@ -262,6 +262,13 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Machine0"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/settings-sidebar.ts",

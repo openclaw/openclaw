@@ -95,9 +95,9 @@ export function renderMarkdownJsonTree({ text, root }: MarkdownJson): string {
       .join("");
     return `<details class="code-block-json-node"${depth < 2 ? " open" : ""}><summary>${prefix}<span class="code-block-json-node-opening">${opening}</span><span class="code-block-json-node-summary">${escapeMarkdownHtml(summary)}${suffix}</span></summary><div class="code-block-json-children">${rows}</div><span class="code-block-json-bracket">${closing}${suffix}</span></details>`;
   };
-  return `<div class="code-block-json-tree">${renderNode(root, 0)}</div>`;
+  return `<div class="code-block-json-tree" data-markdown-key="json-tree">${renderNode(root, 0)}</div>`;
 }
 
 export function renderMarkdownJsonModes(): string {
-  return `<div class="code-block-json-modes" role="group" aria-label="${escapeMarkdownHtml(t("chat.codeBlock.jsonView"))}">${(["tree", "raw"] as const).map((mode) => `<button type="button" class="code-block-json-mode" data-json-mode="${mode}" aria-pressed="${mode === "tree"}">${escapeMarkdownHtml(t(mode === "tree" ? "chat.codeBlock.jsonTree" : "chat.codeBlock.jsonRaw"))}</button>`).join("")}</div>`;
+  return `<div class="code-block-json-modes" data-markdown-key="json-modes" role="group" aria-label="${escapeMarkdownHtml(t("chat.codeBlock.jsonView"))}">${(["tree", "raw"] as const).map((mode) => `<button type="button" class="code-block-json-mode" data-json-mode="${mode}" aria-pressed="${mode === "tree"}">${escapeMarkdownHtml(t(mode === "tree" ? "chat.codeBlock.jsonTree" : "chat.codeBlock.jsonRaw"))}</button>`).join("")}</div>`;
 }

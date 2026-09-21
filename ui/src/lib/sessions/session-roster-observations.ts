@@ -333,7 +333,9 @@ export function createSessionRosterObservations(
               )
             : acceptsRowIdentity(entry, projected.row)))
           ? projected.row
-          : null;
+          : admitRead && projected.row
+            ? held // Rejecting a stale read must not remove the current descriptor.
+            : null;
       const decorated = row ? entry.decorate(row) : null;
       const visible =
         row &&

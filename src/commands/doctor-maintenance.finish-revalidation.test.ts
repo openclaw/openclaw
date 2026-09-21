@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as restartHealthProbe from "../cli/daemon-cli/restart-health-probe.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
 import {
   ServiceInspectionError,
@@ -15,9 +16,12 @@ import { createSystemdCommandQuery } from "../daemon/systemd-command-query.js";
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import * as packageJson from "../infra/package-json.js";
+import * as portsInspect from "../infra/ports-inspect.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
 import { acquireGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
+import * as updateGitRuntime from "../infra/update-git-runtime.js";
 import * as updateRunDriver from "../infra/update-run-driver.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import {
@@ -48,6 +52,14 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service.js")>()),
   resolveGatewayService: (...args: []) => mocks.resolveService(...args),
+}));
+
+vi.mock("../cli/update-cli/update-command-service-drain.js", () => ({
+  withGatewayMaintenanceDrain: async (_params: unknown, stop: () => Promise<unknown>) =>
+    await stop(),
+}));
+vi.mock("../daemon/systemd-maintenance.js", () => ({
+  prepareSystemdGatewayMaintenance: async () => false,
 }));
 
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
@@ -98,6 +110,23 @@ beforeEach(() => {
   mockSystemAccountHome();
   mocks.stops = 0;
   vi.mocked(waitForGatewayHealthyRestart).mockClear();
+  // Exercise the real owner-lease reader without depending on a host listener or dist build.
+  vi.spyOn(packageJson, "readPackageVersion").mockResolvedValue("2026.9.5");
+  vi.spyOn(updateGitRuntime, "readBuiltGatewayBuildId").mockResolvedValue("doctor-fixture-build");
+  vi.spyOn(portsInspect, "inspectPortUsage").mockImplementation(async (port) => ({
+    port,
+    status: "busy",
+    listeners: [],
+    hints: ["process details are unavailable"],
+  }));
+  vi.spyOn(restartHealthProbe, "confirmGatewayReachable").mockResolvedValue({
+    reachable: true,
+    gatewayVersion: "2026.9.5",
+    gatewayBuildId: "doctor-fixture-build",
+    activatedPluginErrors: [],
+    unavailablePlugins: [],
+    channelProbeErrors: [],
+  });
 });
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();

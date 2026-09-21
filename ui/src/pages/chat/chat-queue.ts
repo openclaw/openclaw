@@ -1,5 +1,6 @@
 import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import type { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { scopedAgentIdForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
@@ -163,6 +164,37 @@ export function updateQueuedMessage(
   update: (item: ChatQueueItem) => ChatQueueItem,
 ): ChatQueueItem | null {
   return chatOutboxOwner(host).update(host, [{ id, update }])?.[0] ?? null;
+}
+
+/** Positive custody settles uncertainty, not consumption or retry-payload ownership. */
+export function confirmQueuedMessageCustody(
+  host: ChatQueueScopedSessionHost,
+  expected: ChatQueueItem,
+  sessionId: string | undefined,
+): boolean {
+  if (!sessionId || (expected.sessionId && expected.sessionId !== sessionId)) {
+    return false;
+  }
+  const current = readQueuedMessageById(host, expected.id);
+  if (
+    !current ||
+    (current.sessionId && current.sessionId !== sessionId) ||
+    !sameQueuedDeliveryVersion(current, expected)
+  ) {
+    return false;
+  }
+  if (current.sessionId && current.sendState !== "unconfirmed") {
+    return true;
+  }
+  return (
+    updateQueuedMessage(host, expected.id, (item) => ({
+      ...item,
+      sessionId,
+      ...(item.sendState === "unconfirmed"
+        ? { sendState: "waiting-idle" as const, sendError: undefined }
+        : {}),
+    })) !== null
+  );
 }
 
 export function updateQueuedMessagesForSession(

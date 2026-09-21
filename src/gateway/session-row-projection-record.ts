@@ -178,11 +178,12 @@ export function present(
     excludedChildKeys: options.excludedChildKeys,
   });
   Object.assign(row, record.facts?.present());
+  // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
-    delete row.derivedTitle;
+    row.derivedTitle = undefined;
   }
   if (!options.includeLastMessage) {
-    delete row.lastMessagePreview;
+    row.lastMessagePreview = undefined;
   }
   return row;
 }

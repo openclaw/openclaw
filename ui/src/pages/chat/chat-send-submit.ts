@@ -7,6 +7,7 @@ import {
 } from "../../../../src/chat/work-context.js";
 import { normalizeChatFollowUpModeOverride } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { canSubmitBeforeChatHistory, parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
@@ -82,6 +83,8 @@ import {
   isChatStopCommand,
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+
+registerChatGoalsEnglish();
 
 export type ChatSendSubmitOptions = {
   intent?: ChatSendIntent;

@@ -160,6 +160,7 @@ describe("scheduled restart during gateway suspension", () => {
     expect(getGatewaySuspendStatus("suspension-failed-targeted-restart")).toEqual({
       status: "ready",
       expiresAtMs: expect.any(Number),
+      writeCustody: [],
     });
     expect(isGatewayWorkAdmissionClosed()).toBe(true);
     expect(resumeScheduling).not.toHaveBeenCalled();

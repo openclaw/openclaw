@@ -10,6 +10,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
+import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   MAX_USER_PROFILE_AVATAR_BYTES,
   USER_PROFILE_AVATAR_MIME_TYPES,
@@ -36,7 +37,10 @@ import {
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import { mergeUserProfiles } from "./user-profiles-merge.js";
-import { ensureGatewayOwnerProfileRow } from "./user-profiles-owner.js";
+import {
+  ensureGatewayOwnerProfileRow,
+  readGatewayOwnerProfileForEnsure,
+} from "./user-profiles-owner.js";
 import {
   ensureUserProfileRoleSchema,
   ensureUserProfilesSchema,
@@ -207,6 +211,25 @@ function ensureProfileForEmailWithInitialName(
   options: OpenClawStateDatabaseOptions,
 ): UserProfile {
   const normalizedEmail = normalizeEmail(email);
+  ensureUserProfilesSchema(options);
+  const { db: reader } = openOpenClawStateDatabase(options);
+  const selectExistingProfile = (database: DatabaseSync) => {
+    const alias = executeSqliteQueryTakeFirstSync(
+      database,
+      userProfilesDb(database)
+        .selectFrom("user_profile_emails")
+        .select("profile_id")
+        .where("email", "=", normalizedEmail),
+    );
+    return alias
+      ? toUserProfile(requireResolvedUserProfileMetadataById(database, alias.profile_id))
+      : undefined;
+  };
+  // Keep alias and merge-head reads coherent without taking writer admission.
+  const found = runSqliteDeferredTransactionSync(reader, () => selectExistingProfile(reader));
+  if (found) {
+    return found;
+  }
   const now = Date.now();
   const displayName =
     initialDisplayName ??
@@ -214,21 +237,13 @@ function ensureProfileForEmailWithInitialName(
       normalizedEmail.split("@", 1)[0] || normalizedEmail,
       MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
     );
-  ensureUserProfilesSchema(options);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const kysely = userProfilesDb(db);
-      const existingAlias = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("user_profile_emails")
-          .select("profile_id")
-          .where("email", "=", normalizedEmail),
-      );
-      if (existingAlias) {
-        // Authenticated avatar reads reuse this path; unchanged identities must not refresh rosters.
-        return toUserProfile(requireResolvedUserProfileMetadataById(db, existingAlias.profile_id));
+      const existing = selectExistingProfile(db);
+      if (existing) {
+        return existing;
       }
+      const kysely = userProfilesDb(db);
       const row = insertUserProfile(db, displayName, now);
       executeSqliteQuerySync(
         db,
@@ -260,29 +275,42 @@ function ensureProfileForProviderIdentity(params: {
   initialDisplayName: string | null;
   options: OpenClawStateDatabaseOptions;
 }): UserProfile {
-  const now = Date.now();
   const subject =
     params.provider === "github" ? githubAuthenticationSubject(params.subject) : params.subject;
   ensureUserProfilesSchema(params.options);
+  const { db: reader } = openOpenClawStateDatabase(params.options);
+  const selectExistingIdentity = (database: DatabaseSync) => {
+    let query = userProfilesDb(database)
+      .selectFrom("user_profile_identities")
+      .select(["profile_id", "subject"])
+      .where("provider", "=", params.provider);
+    query =
+      params.provider === "github"
+        ? query
+            .where((eb) =>
+              eb.or([
+                eb("subject", "=", subject),
+                eb.and([eb("subject", "=", params.subject), eb("canonical_login", "is", null)]),
+              ]),
+            )
+            .orderBy(sql`CASE WHEN subject = ${subject} THEN 0 ELSE 1 END`)
+        : query.where("subject", "=", subject);
+    return executeSqliteQueryTakeFirstSync(database, query);
+  };
+  const existing = runSqliteDeferredTransactionSync(reader, () => {
+    const identity = selectExistingIdentity(reader);
+    return identity?.subject === subject
+      ? toUserProfile(requireResolvedUserProfileMetadataById(reader, identity.profile_id))
+      : undefined;
+  });
+  if (existing) {
+    return existing;
+  }
+  const now = Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = userProfilesDb(db);
-      let existingQuery = kysely
-        .selectFrom("user_profile_identities")
-        .select(["profile_id", "subject"])
-        .where("provider", "=", params.provider);
-      existingQuery =
-        params.provider === "github"
-          ? existingQuery
-              .where((eb) =>
-                eb.or([
-                  eb("subject", "=", subject),
-                  eb.and([eb("subject", "=", params.subject), eb("canonical_login", "is", null)]),
-                ]),
-              )
-              .orderBy(sql`CASE WHEN subject = ${subject} THEN 0 ELSE 1 END`)
-          : existingQuery.where("subject", "=", subject);
-      const existingIdentity = executeSqliteQueryTakeFirstSync(db, existingQuery);
+      const existingIdentity = selectExistingIdentity(db);
       if (existingIdentity) {
         if (existingIdentity.subject !== subject) {
           executeSqliteQuerySync(
@@ -323,9 +351,12 @@ function adoptDisplayNameIfEmpty(
   displayName: string | null,
   options: OpenClawStateDatabaseOptions,
 ): UserProfile {
-  if (!displayName) {
-    const { db } = openOpenClawStateDatabase(options);
-    return toUserProfile(requireResolvedUserProfileMetadataById(db, profileId));
+  const { db: reader } = openOpenClawStateDatabase(options);
+  const existing = runSqliteDeferredTransactionSync(reader, () =>
+    requireResolvedUserProfileMetadataById(reader, profileId),
+  );
+  if (!displayName || existing.display_name?.trim()) {
+    return toUserProfile(existing);
   }
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
@@ -356,6 +387,16 @@ export function ensureGatewayOwnerProfile(
 ): UserProfile {
   const displayName = normalizeInitialDisplayName(initialDisplayName);
   ensureUserProfilesSchema(options);
+  const { db: reader } = openOpenClawStateDatabase(options);
+  const found = runSqliteDeferredTransactionSync(reader, () => {
+    const { existing, identified } = readGatewayOwnerProfileForEnsure(reader);
+    return existing && identified && (!displayName || existing.display_name?.trim())
+      ? existing
+      : undefined;
+  });
+  if (found) {
+    return toUserProfile(found);
+  }
   return runOpenClawStateWriteTransaction(
     ({ db }) => toUserProfile(ensureGatewayOwnerProfileRow(db, displayName)),
     options,
@@ -505,6 +546,8 @@ export function syncGitHubIdentity(
     identity: { accountId: number; login: string; name?: string };
     authenticationAlias: GitHubAuthenticationAlias;
     initialDisplayName?: string;
+    /** OIDC enrichment must retain the authenticated email profile and its credit preference. */
+    preserveEmailProfile?: boolean;
   },
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileListItem {
@@ -521,6 +564,7 @@ export function syncGitHubIdentity(
         db,
         alias,
         identity: params.identity,
+        preserveEmailProfile: params.preserveEmailProfile,
         createProfile: () => insertUserProfile(db, initialDisplayName, now).id,
         mergeProfiles: (sourceProfileId, targetProfileId) =>
           mergeUserProfiles(db, sourceProfileId, targetProfileId, now),

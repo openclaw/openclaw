@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as serviceChildControl from "../process/supervisor/service-child-control-reader.js";
+import type { NodeWorkerLaunchClaim } from "./node-worker-launch-store.js";
 import * as workerLaunchTransport from "./node-worker-launch-transport.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -42,6 +43,59 @@ function writeSupervisorOwnerScript(root: string): string {
     `,
   );
   return scriptPath;
+}
+
+export function spawnPendingSupervisorOwner({
+  root,
+  env,
+  claim,
+}: {
+  root: string;
+  env: NodeJS.ProcessEnv;
+  claim: NodeWorkerLaunchClaim;
+}): ChildProcess {
+  const storeUrl = pathToFileURL(path.resolve("src/node-host/node-worker-launch-store.ts")).href;
+  const turnsUrl = pathToFileURL(path.resolve("src/node-host/node-worker-turn-store.ts")).href;
+  const journalUrl = pathToFileURL(
+    path.resolve("src/node-host/node-worker-journal-worker.ts"),
+  ).href;
+  const identityUrl = pathToFileURL(
+    path.resolve("src/node-host/node-worker-process-identity.ts"),
+  ).href;
+  const claimPath = path.join(root, "claim.json");
+  const scriptPath = path.join(root, "pending-owner.mts");
+  fs.writeFileSync(claimPath, JSON.stringify(claim));
+  fs.writeFileSync(
+    scriptPath,
+    `
+        import fs from "node:fs";
+        import { NodeWorkerJournalWorker } from ${JSON.stringify(journalUrl)};
+        import { NodeWorkerLaunchStore } from ${JSON.stringify(storeUrl)};
+        import { NodeWorkerTurnStore } from ${JSON.stringify(turnsUrl)};
+        import { requireNodeWorkerProcessIdentity } from ${JSON.stringify(identityUrl)};
+        const [stateDir, claimPath] = process.argv.slice(2);
+        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+        const journal = new NodeWorkerJournalWorker({ env });
+        const store = new NodeWorkerLaunchStore(journal);
+        const claim = JSON.parse(fs.readFileSync(claimPath, "utf8"));
+        const supervisor = requireNodeWorkerProcessIdentity(process.pid);
+        const result = (await store.claim(
+          claim,
+          supervisor,
+          2,
+        ));
+        const turn = (await new NodeWorkerTurnStore(journal).claim({
+          claim, ownerLaunchId: result.receipt.launchId, supervisor,
+        }));
+        process.stdout.write(JSON.stringify(turn.receipt) + "\\n");
+        setInterval(() => {}, 1000);
+      `,
+  );
+  return spawn(
+    process.execPath,
+    ["--import", "tsx", scriptPath, env.OPENCLAW_STATE_DIR!, claimPath],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
 }
 
 export function spawnSupervisorOwner(params: {

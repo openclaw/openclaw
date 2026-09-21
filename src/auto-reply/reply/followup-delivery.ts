@@ -7,7 +7,10 @@ import {
   resolveSourceReplyDelivery,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import {
+  isSyntheticSourceReplyTurn,
+  resolveReplyCompletion,
+} from "../../agents/reply-completion.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
 import { logVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -41,7 +44,6 @@ import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./qu
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import {
-  isSyntheticSourceReplyTurn,
   resolveSourceReplyExpectation,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";

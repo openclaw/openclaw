@@ -92,7 +92,8 @@ import { assertGatewayCliMessageContext } from "./operator-cli-message-input.js"
 import {
   GatewayTransportError,
   type GatewayTransportErrorKind,
-  formatGatewayTimeoutError,
+  createGatewayCloseTransportError,
+  createGatewayTimeoutTransportError,
   isGatewayTransportError,
 } from "./transport-error.js";
 export type { GatewayConnectionDetails };
@@ -623,29 +624,6 @@ function ensureRemoteModeUrlConfigured(params: {
 
 export { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 
-function formatGatewayCloseError(
-  code: number,
-  reason: string,
-  connectionDetails: GatewayConnectionDetails,
-): string {
-  const reasonText = normalizeOptionalString(reason) || "no close reason";
-  const hint =
-    code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
-  const suffix = hint ? ` ${hint}` : "";
-  let message = `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
-  // Add troubleshooting hints for common issues
-  if (code === 1006) {
-    message +=
-      "\n\nPossible causes:" +
-      "\n- Connection dropped without a close frame (retry; check network and gateway load)" +
-      "\n- Gateway not yet ready to accept connections (retry after a moment)" +
-      "\n- TLS mismatch (connecting with ws:// to a wss:// gateway, or vice versa)" +
-      "\n- Gateway process stopped or became unreachable (confirm it is still running)" +
-      "\nRun `openclaw doctor` for diagnostics.";
-  }
-  return message;
-}
-
 /** Wrap raw socket-level connect failures (ECONNREFUSED etc.) into one actionable message. */
 function createGatewayUnreachableTransportError(params: {
   cause: Error;
@@ -661,35 +639,6 @@ function createGatewayUnreachableTransportError(params: {
       "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
       params.connectionDetails.message,
     ].join("\n"),
-  });
-}
-
-function createGatewayCloseTransportError(params: {
-  code: number;
-  reason: string;
-  connectionDetails: GatewayConnectionDetails;
-}): GatewayTransportError {
-  const reasonText = normalizeOptionalString(params.reason) || "no close reason";
-  return new GatewayTransportError({
-    kind: "closed",
-    code: params.code,
-    reason: reasonText,
-    connectionDetails: params.connectionDetails,
-    message: formatGatewayCloseError(params.code, params.reason, params.connectionDetails),
-  });
-}
-
-function createGatewayTimeoutTransportError(params: {
-  timeoutMs: number;
-  connectionDetails: GatewayConnectionDetails;
-  requestDispatched: boolean;
-}): GatewayTransportError {
-  const { timeoutMs, connectionDetails, requestDispatched } = params;
-  return new GatewayTransportError({
-    kind: "timeout",
-    timeoutMs,
-    connectionDetails,
-    message: formatGatewayTimeoutError(timeoutMs, connectionDetails, requestDispatched),
   });
 }
 
@@ -968,6 +917,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
             code,
             reason,
             connectionDetails: params.connectionDetails,
+            requestDispatched: primaryRequestStarted,
           }),
         );
       },

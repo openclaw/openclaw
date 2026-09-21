@@ -1,10 +1,6 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionCompactionCheckpoint,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type {
   SessionCapability,
@@ -33,15 +29,10 @@ export type TestSessionsPage = HTMLElement & {
   selectedKeys: Set<string>;
   sessionMenu: { key: string; x: number; y: number } | null;
   sessionMenuTrigger: HTMLElement | null;
-  checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
-  checkpointErrorByKey: Record<string, string>;
-  checkpointLoadingKey: string | null;
-  checkpointBusyKey: string | null;
   sessionMutationPending: boolean;
   transcriptSearchQuery: string;
   updateTranscriptSearchQuery: (query: string) => void;
   runTranscriptSearch: () => Promise<void>;
-  loadCheckpoint: (sessionKey: string) => Promise<void>;
   deleteSelected: () => Promise<void>;
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
   deleteAllArchived: () => Promise<void>;
@@ -61,8 +52,6 @@ export type TestSessionsPage = HTMLElement & {
   ) => Promise<unknown>;
   archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
   forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
-  branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
-  restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   runPluginAction: (id: string, session: GatewaySessionRow) => Promise<void>;
 };
 
@@ -186,14 +175,11 @@ export function createManagedSessions(overrides: Partial<SessionCapability> = {}
     listSnapshot,
     subscribeList,
     refreshList,
-    listCheckpoints: vi.fn(async () => []),
     deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
     patch: vi.fn(async () => null),
     archiveVisibility: archiveState.visibility,
     beginArchive: archiveState.beginPending,
     create: vi.fn(async () => null),
-    branchCheckpoint: vi.fn(async () => ({ key: "branch" })),
-    restoreCheckpoint: vi.fn(async () => ({ ok: true })),
     subscribe,
     ...overrides,
   } as unknown as SessionCapability;

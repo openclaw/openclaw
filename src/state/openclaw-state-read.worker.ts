@@ -1,5 +1,6 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { SKILL_LIBRARY_MAX_SELECTIONS } from "../../packages/gateway-protocol/src/schema/skill-library.js";
 import {
   readSandboxBrowserRegistryInDatabase,
   readSandboxRegistryEntryInDatabase,
@@ -15,7 +16,17 @@ import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
+import { readUpdateRunRecord, readUpdateRuns } from "../infra/update-run-read.kernel.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
+import {
+  pluginBlobLookupInDatabase,
+  pluginBlobEntriesInDatabase,
+} from "../plugin-state/plugin-blob-store.sqlite.js";
+import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
+import {
+  selectSkillLibraryRevisionMetadataBatch,
+  selectSkillLibraryRevisionManifestsBatch,
+} from "../skills/library/selection-read.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
@@ -25,6 +36,7 @@ import {
   readOpenClawStateReadOnlyLocation,
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
@@ -52,8 +64,17 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     isRecord(coordinatorRuntime) &&
     typeof coordinatorRuntime.directory === "string" &&
     typeof coordinatorRuntime.keepAlive === "boolean" &&
-    (input.command.type === "admit" ||
+    (isPluginBlobReadCommand(input.command) ||
+      input.command.type === "admit" ||
       input.command.type === "exec-approvals.read" ||
+      ((input.command.type === "skills.library.descriptions" ||
+        input.command.type === "skills.library.manifests") &&
+        Array.isArray(input.command.input) &&
+        input.command.input.length <= SKILL_LIBRARY_MAX_SELECTIONS &&
+        input.command.input.every(
+          (pin) =>
+            isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
+        )) ||
       input.command.type === "agentDatabaseRegistry.read" ||
       (input.command.type === "userProfiles.avatar.reconcile" &&
         typeof input.command.profileId === "string") ||
@@ -64,6 +85,17 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
           typeof input.command.input.executionId === "string")) ||
       (input.command.type === "workspace.snapshot" &&
         typeof input.command.workspaceDir === "string") ||
+      (input.command.type === "updateRuns.get" && typeof input.command.runId === "string") ||
+      (input.command.type === "updateRuns.list" &&
+        isRecord(input.command.input) &&
+        (input.command.input.limit === undefined ||
+          typeof input.command.input.limit === "number") &&
+        (input.command.input.active === undefined ||
+          typeof input.command.input.active === "boolean") &&
+        (input.command.input.reason === undefined ||
+          typeof input.command.input.reason === "string") &&
+        (input.command.input.includeRunId === undefined ||
+          typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
       input.command.type === "nodeHost.config" ||
       (input.command.type === "onboardingRecommendations.read" &&
@@ -136,12 +168,74 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "pluginBlob.lookup") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: pluginBlobLookupInDatabase(db, {
+                      ...command.input,
+                      env: input.context.environment,
+                      path: input.databasePath,
+                    }),
+                  };
+                }
+                if (command.type === "pluginBlob.entries") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: pluginBlobEntriesInDatabase(db, {
+                      ...command.input,
+                      env: input.context.environment,
+                      path: input.databasePath,
+                    }),
+                  };
+                }
+                if (command.type === "updateRuns.get") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    run: tableExists(db, "update_runs")
+                      ? readUpdateRunRecord(db, command.runId)
+                      : undefined,
+                  };
+                }
+                if (command.type === "updateRuns.list") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    runs: readUpdateRuns(db, command.input),
+                  };
+                }
                 if (command.type === "exec-approvals.read") {
                   return {
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
                     row: readExecApprovalsConfigRow(db),
+                  };
+                }
+                if (command.type === "skills.library.descriptions") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: tableExists(db, "skill_library_entries")
+                      ? selectSkillLibraryRevisionMetadataBatch(db, command.input)
+                      : undefined,
+                  };
+                }
+                if (command.type === "skills.library.manifests") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: tableExists(db, "skill_library_entries")
+                      ? selectSkillLibraryRevisionManifestsBatch(db, command.input)
+                      : undefined,
                   };
                 }
                 if (command.type === "onboardingRecommendations.read") {

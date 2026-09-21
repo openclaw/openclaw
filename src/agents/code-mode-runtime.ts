@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -14,7 +13,6 @@ import {
   MAX_CODE_MODE_PENDING_TOOL_CALLS,
   type CodeModeConfig as CodeModeWorkerConfig,
   type CodeModeFailurePhase,
-  type CodeModeLanguage,
   type CodeModeWorkerThreadResult,
 } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
@@ -36,9 +34,7 @@ export const MAX_HEADLESS_WALL_CLOCK_MS = 900_000;
 export const DEFAULT_HEADLESS_TOOL_CALLS = 5;
 export const MAX_HEADLESS_TOOL_CALLS = 200;
 
-export type { CodeModeLanguage } from "./code-mode-worker-types.js";
-
-/** Resolved Code Mode runtime limits and visible language options. */
+/** Resolved Code Mode runtime limits. */
 export type CodeModeConfig = CodeModeWorkerConfig & {
   /** Effective activation policy; "auto" follows the model catalog flag. */
   enabled: boolean | "auto";
@@ -139,17 +135,7 @@ export function readPositiveInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-function readLanguages(value: unknown): CodeModeLanguage[] {
-  if (!Array.isArray(value)) {
-    return ["javascript", "typescript"];
-  }
-  const languages = value.filter(
-    (entry): entry is CodeModeLanguage => entry === "javascript" || entry === "typescript",
-  );
-  return languages.length > 0 ? uniqueValues(languages) : ["javascript", "typescript"];
-}
-
-/** Resolves Code Mode runtime limits and language support from config. */
+/** Resolves Code Mode runtime limits from config. */
 export function resolveCodeModeConfig(
   config?: OpenClawConfig,
   agentId?: string,
@@ -165,7 +151,6 @@ export function resolveCodeModeConfig(
     enabled: readEnabled(raw.enabled),
     runtime: "quickjs-wasi",
     mode: "only",
-    languages: readLanguages(raw.languages),
     timeoutMs: clampNumber(readPositiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS), 100, 60_000),
     memoryLimitBytes: clampNumber(
       readPositiveInteger(raw.memoryLimitBytes, DEFAULT_MEMORY_LIMIT_BYTES),
@@ -273,9 +258,7 @@ export function codeModeFailureMessage(error: unknown): string {
 
 export function readCode(args: unknown): {
   code: string;
-  language?: CodeModeLanguage;
   restartSafe: boolean;
-  typecheck: boolean;
 } {
   const params = asToolParamsRecord(args);
   // Full-schema tool calls can materialize an unused alias as blank.
@@ -289,25 +272,18 @@ export function readCode(args: unknown): {
   if (code === undefined) {
     throw new ToolInputError("code or command must be a non-empty string.");
   }
-  const language = params.language;
-  if (language !== undefined && language !== "javascript" && language !== "typescript") {
-    throw new ToolInputError("language must be javascript or typescript.");
+  if (params.language !== undefined || params.typecheck !== undefined) {
+    throw new ToolInputError(
+      "Code Mode accepts JavaScript only. Remove language and typecheck; use API.read(...) for tool types.",
+    );
   }
   const restartSafe = params.restartSafe;
   if (restartSafe !== undefined && typeof restartSafe !== "boolean") {
     throw new ToolInputError("restartSafe must be a boolean.");
   }
-  if (params.typecheck !== undefined && typeof params.typecheck !== "boolean") {
-    throw new ToolInputError("typecheck must be a boolean.");
-  }
-  if (params.typecheck === true && language !== "typescript") {
-    throw new ToolInputError("typecheck requires language: typescript.");
-  }
   return {
     code,
-    language,
     restartSafe: restartSafe === true,
-    typecheck: params.typecheck === true,
   };
 }
 

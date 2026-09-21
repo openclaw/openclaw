@@ -22,6 +22,7 @@ import {
 } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRealpathOrAbsolute as canonicalFilePath } from "../infra/boundary-path.js";
 import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
@@ -134,6 +135,7 @@ export async function discoverLegacyHistoricalTranscripts(params: {
   ownershipRecords?: readonly LegacySessionRecord[];
   referencedPaths?: ReadonlySet<string>;
   archiveSources?: readonly SessionSqliteMigrationMove[];
+  verifiedSourcePaths?: ReadonlySet<string>;
   snapshot: ReadOnlySqliteValidationSnapshot;
   issues: DoctorSessionSqliteIssue[];
 }): Promise<LegacySessionRecord[]> {
@@ -150,6 +152,7 @@ export async function discoverLegacyHistoricalTranscripts(params: {
   );
   for (const filename of listLegacySessionTranscriptFiles(directory)) {
     if (
+      (!params.verifiedSourcePaths || params.verifiedSourcePaths.has(filename)) &&
       !referenced.has(canonicalMigrationFilePath(filename)) &&
       !params.referencedPaths?.has(canonicalMigrationFilePath(filename))
     ) {
@@ -415,4 +418,23 @@ export function readLegacySessionRecords(
     });
   }
   return records;
+}
+
+export function listUnreferencedJsonlFiles(
+  storePath: string,
+  referencedPaths: readonly string[],
+): string[] {
+  const sessionsDir = path.dirname(storePath);
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(sessionsDir);
+  } catch {
+    return [];
+  }
+  const referenced = new Set(referencedPaths.map((filePath) => canonicalFilePath(filePath)));
+  return entries
+    .filter((entry) => entry.endsWith(".jsonl"))
+    .map((entry) => path.join(sessionsDir, entry))
+    .filter((filePath) => !referenced.has(canonicalFilePath(filePath)))
+    .toSorted((a, b) => a.localeCompare(b));
 }

@@ -2,10 +2,12 @@
 export const gatewayPluginTestFiles = [
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/plugins/crabbox-allocation-authority.gateway.test.ts",
+  "test/plugins/team-reports-http.gateway.test.ts",
 ];
 
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
+  "src/gateway/agent-turn/agent-run-dispatch.execution-binding.test.ts",
   "src/gateway/agent-turn/agent-run-dispatch.sqlite.test.ts",
   "src/gateway/board-http.test.ts",
   "src/gateway/board-store.test.ts",
@@ -111,6 +113,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
   "src/gateway/startup-local-cli-pairing.test.ts",
+  "src/gateway/talk/handlers/client-native-actions.test.ts",
   "src/gateway/test-helpers.acquisition.test.ts",
   "src/gateway/tool-resolution.cron-capture.test.ts",
   "src/gateway/tui-session-description-wire.test.ts",
@@ -119,6 +122,13 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/provider-crabbox-runtime-preflight.test.ts",
   "src/gateway/worker-environments/workspace-result-ref-mutation.test.ts",
   "src/gateway/worker-environments/workspace-result-repository.test.ts",
+];
+
+// Native Vitest subprocesses cold-import the real Gateway; keep their collection
+// outside concurrent files instead of expanding their process-lifecycle deadlines.
+export const gatewayServerSerialTestFiles = [
+  "src/gateway/server.sessions.fixture-lifecycle.test.ts",
+  "src/gateway/server.startup-fixture-lifetime.test.ts",
 ];
 
 // Canonical file ownership for the non-isolated Gateway server Vitest project.
@@ -167,6 +177,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.cli-watchdog.test.ts",
   "src/gateway/server.codex-failure-recovery.test.ts",
   "src/gateway/server.incomplete-stream.test.ts",
+  "src/gateway/server.labs-hot-reload.test.ts",
   "src/gateway/server.encrypted-tool-continuation.test.ts",
   "src/gateway/server.message-buffer-caption.test.ts",
   "src/gateway/server.placement-abandonment.lifecycle.test.ts",

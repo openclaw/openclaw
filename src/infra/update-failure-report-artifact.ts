@@ -18,12 +18,17 @@ import type { PreparedUpdateFailureReport } from "./update-failure-report-prepar
 import type { UpdateRunReport } from "./update-run-report.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
+function updateDiagnosticArtifactName(kind: "lint" | "failure", id: string = randomUUID()): string {
+  // Shipped support redactors must not mistake a numeric UUID tail for an account ID.
+  return `openclaw-update-${kind}-${id.replaceAll("-", "_")}.json`;
+}
+
 /** Complete sanitized inventories are named artifacts, never restored-runtime input. */
 async function writeUpdateFailureLintArtifact(
   inventory: TriageUpdateFailure,
   directory: string,
 ): Promise<string> {
-  const outputPath = path.join(directory, `openclaw-update-lint-${randomUUID()}.json`);
+  const outputPath = path.join(directory, updateDiagnosticArtifactName("lint"));
   await writeTextAtomic(outputPath, `${JSON.stringify(inventory)}\n`, {
     mode: 0o600,
     dirMode: 0o700,
@@ -39,7 +44,7 @@ export async function writeTriageUpdateFailure(
   const stateDir = resolveStateDir(env);
   const outputPath =
     options.outputPath ??
-    path.join(stateDir, "logs", "support", `openclaw-update-failure-${randomUUID()}.json`);
+    path.join(stateDir, "logs", "support", updateDiagnosticArtifactName("failure"));
   const inventory = sanitizeTriageUpdateFailure(failure, { env, stateDir }, "inventory");
   if ("result" in inventory && inventory.result.steps.some((step) => step.doctorLintFindings)) {
     const detail = await writeUpdateFailureLintArtifact(inventory, path.dirname(outputPath)).then(
@@ -77,7 +82,7 @@ export async function writeUpdateRunReportArtifact(params: {
           {
             env,
             outputPath: params.detached
-              ? path.join(directory, `openclaw-update-failure-${id}.json`)
+              ? path.join(directory, updateDiagnosticArtifactName("failure", id))
               : undefined,
           },
         )

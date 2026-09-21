@@ -251,7 +251,7 @@ describe("Gateway code-mode matrix fixtures", () => {
   it.each([
     "automation-contracts",
     "process-contracts",
-    "checked-cell-cache",
+    "javascript-contracts",
     "gateway-config-read",
   ] as const)("%s relies on actual built-ins instead of synthetic replacements", (task) => {
     const { fixture, entry } = prepare(task);

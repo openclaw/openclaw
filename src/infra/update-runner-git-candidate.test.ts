@@ -45,6 +45,16 @@ describe("Git candidate activation", () => {
   let virtualStoreLayout: VirtualStoreLayout;
 
   beforeEach(async () => {
+    // Keep fixture-local identity authoritative during candidate rebases.
+    vi.stubEnv("GIT_CONFIG_COUNT", "0");
+    for (const key of [
+      "GIT_AUTHOR_NAME",
+      "GIT_AUTHOR_EMAIL",
+      "GIT_COMMITTER_NAME",
+      "GIT_COMMITTER_EMAIL",
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
     directory = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-candidate-")),
     );
@@ -647,7 +657,7 @@ describe("Git candidate activation", () => {
       if (localCommit) {
         expect(await fs.readFile(path.join(root, "local.txt"), "utf8")).toBe("operator change\n");
         const committer = await git(root, "log", "-1", "--format=%cn <%ce>");
-        expect.soft(committer === "OpenClaw Test <openclaw@example.com>").toBe(true);
+        expect.soft(committer).toBe("OpenClaw Test <openclaw@example.com>");
       }
       await expectRuntime(root, current);
       const manifest: { virtualStoreDir: string } = JSON.parse(

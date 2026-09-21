@@ -2454,9 +2454,9 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
     expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
     expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
-    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.24.0");
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.28.2");
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
-      "31790cb49baa206f6455fbc259f8f83ae27e86be908f5c8cac5ec2f8521f8382",
+      "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa",
     );
     expect(packageScript).toContain(
       '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',

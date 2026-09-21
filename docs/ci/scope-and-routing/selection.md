@@ -44,19 +44,48 @@ The iOS, macOS, and both shared OpenClawKit Periphery scans always use GitHub-ho
 - **macOS Swift build caches** retain the original nanosecond timestamps and content hashes of their source inputs inside `apps/macos/.build`. The restore helper replays timestamps only for byte-identical regular files with matching permissions in the current input inventory; changed, missing, linked, or invalid entries keep their checkout metadata and invalidate through SwiftPM normally. The v6 archive keys include the phase, helper, toolchain, package graph, and source identities, with same-phase, same-graph prefix reuse. Each phase starts with a cold seed instead of restoring the former combined build archive, then records metadata immediately before its own trusted save. Both phases may restore the shared SwiftPM dependency cache; its sole eligible writer is `tests` in regular CI or `release` in full validation. Candidate cache trust is unchanged: cache-off validation compiles every selected phase cold. Historical targets retain their target-owned build commands.
 - **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
-- **TUI PTY** runs two built-CLI artifact canaries in `build-artifacts`: a local model roundtrip and a real Gateway connection. The complete suite is defined in `test/vitest/vitest.tui-pty.config.ts`; canonical pull-request fallbacks and manual/release full plans retain its `core-runtime-tui-pty` descriptor. CI consumes that descriptor only through the built-artifact selection flag, so the full suite has no executing matrix row; manual and release CI also run only the canaries. Canonical `main` push compaction omits the full descriptor while keeping the canaries.
-- **SQLite session lifecycle** runs the built-CLI migration, restart, compaction, cleanup, and session RPC proof only when the diff touches its direct storage/session owners or a reachable session path in the embedded runner. The `build-artifacts` verifier wave runs it against the runtime already built in that job, after the isolated startup-memory measurement. It overlaps independent readers on Blacksmith and stays serial on hosted runners; manual and release dispatches always select it when the target contains the proof.
+- **TUI PTY** runs two built-CLI artifact canaries in `build-artifacts` on main and ordinary manual/release CI: a local model roundtrip and a real Gateway connection. The complete suite is defined in `test/vitest/vitest.tui-pty.config.ts`; canonical pull-request fallbacks and manual/release full plans retain its `core-runtime-tui-pty` descriptor. CI consumes that descriptor only through the built-artifact selection flag, so the full suite has no executing matrix row; manual and release CI also run only the canaries. Canonical `main` push compaction omits the full descriptor while keeping the canaries.
+- **SQLite session lifecycle** runs on main and ordinary manual/release CI. Main selects the built-CLI migration, restart, compaction, cleanup, and session RPC proof only when the diff touches its direct storage/session owners or a reachable session path in the embedded runner. The `build-artifacts` verifier wave runs it against the runtime already built in that job, after the isolated startup-memory measurement. It overlaps independent readers on Blacksmith and stays serial on hosted runners; manual and release dispatches always select it when the target contains the proof.
 - **CI routing-only edits, the small set of core-test fixtures the fast task runs directly, and narrow plugin contract helper edits** use a fast Node-only manifest path: `preflight`, `security-fast`, and only the fast lanes the change touches — a single `checks-fast-core` CI-routing task, the plugin contract job, or both. That path skips build artifacts, Node 24 minimum compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices.
-- **QA Smoke on pull requests and `main`** runs when the diff touches the qa-lab harness, `qa/` scenario data, the matrix/telegram channels the smoke profile drives, Docker packaging scripts, or the gate's orchestration. Generic runtime, UI, workspace-package, and dependency changes do not select smoke by themselves. Manual CI and Full Release Validation retain the complete smoke profile; missing changed paths or an older planner without the selector retain coverage when the target supports the smoke harness.
-- **Docker seed on canonical pull requests and `main`** uses the same `resolveChangedDockerSeedLanes` owner selection. Update, doctor, state/schema, and survivor changes select `published-upgrade-survivor`, which runs `legacy-operator-state` with `auto-auth` against an exact published predecessor. Source-tree tests and test helpers alone do not select this lane; survivor fixtures still do. Both schema-version constants remain covered. Other seed owners select their existing MCP, channel-switch, or fleet-cache lanes. Missing changed paths retain survivor coverage, and canonical manual CI always selects it when the target declares the Docker seed capability. Expanded release history stays in Package Acceptance and the weekly Update Migration workflow.
+- **QA Smoke on `main`** runs when the diff touches the qa-lab harness, `qa/` scenario data, the matrix/telegram channels the smoke profile drives, Docker packaging scripts, or the gate's orchestration. Generic runtime, UI, workspace-package, and dependency changes do not select smoke by themselves. Manual CI and Full Release Validation retain the complete smoke profile; missing changed paths or an older planner without the selector retain coverage when the target supports the smoke harness.
+- **Docker seed on canonical `main` pushes** uses `resolveChangedDockerSeedLanes` owner selection. Pull requests and exact-head `release_gate` fallbacks omit these Docker proofs and retain selector, scheduler, update, Doctor, and state unit/boundary coverage. Update, doctor, state/schema, and survivor changes select `published-upgrade-survivor` on main, which runs `legacy-operator-state` with `auto-auth` against an exact published predecessor. Source-tree tests and test helpers alone do not select this lane; survivor fixtures still do. Both schema-version constants remain covered. Other seed owners select their existing MCP, channel-switch, or fleet-cache lanes. Missing changed paths retain survivor coverage. Ordinary canonical manual CI, including Full Release Validation's `normal_ci` child, selects the survivor independently of changed paths when the target declares the Docker seed capability. Expanded release history stays in Package Acceptance and the weekly Update Migration workflow.
 - **Control UI performance** uses the dedicated `run_control_ui_performance` manifest output. Production UI files, plugin browser entries, workspace packages, dependency and build inputs, performance policies, and relative imports reached by the UI or performance tooling select it. All workspace packages remain conservative owners because the relative import graph does not resolve workspace package aliases. Test-only files and generic runtime changes outside that graph do not select it. Manual dispatches, unknown changed paths, and older planners without the selector retain coverage; historical targets keep their existing performance-script availability contract.
-- **Windows Node checks** are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes. Test-only changes to any explicit target in `test:windows:ci:1` or `test:windows:ci:2` also select the existing Windows lane; these package scripts own its test inventory.
+- **Windows Node checks** are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes. Test-only changes to any explicit target in `test:windows:ci:1` or `test:windows:ci:2` also select the existing Windows lane; these package scripts own its test inventory. The Windows planner balances their union into four or five whole-file rows (five with the current measured inventory); changing that planner also selects Windows.
 
-These gates trade integration detection on every admitted `main` run for owner-path
-PR/main checks and full release validation. A regression introduced outside the
-selected owners can remain undetected by these lanes until manual or release
-validation. Push gates compare the triggering event's `before` commit with its
-head, covering every commit in that push. They do not accumulate changes from
-earlier pushes whose pending runs were coalesced away. Owner changes in those
-skipped pushes therefore depend on owner-path PR checks or manual/release
-validation.
+Main proof gates use owner-path selection; PR unit/boundary checks do not replace
+their Docker or process proofs. A regression introduced outside the selected
+owners can remain undetected by these lanes until manual or release validation.
+Push gates compare the triggering event's `before` commit with its head, covering
+every commit in that push. They do not accumulate changes from earlier pushes
+whose pending runs were coalesced away (cancelled). If a coalesced or otherwise
+cancelled main run never executes a selected Docker proof, that proof can remain
+unexecuted until a later non-cancelled main run selects the same lane or applicable
+manual/release validation runs. The next main run alone does not guarantee that
+coverage. For the published-upgrade survivor, ordinary manual CI and Full Release
+Validation select the proof independently of changed paths, subject to the
+target's Docker seed capability.
+
+## Process proof tier
+
+Pull requests and exact-head `release_gate` fallbacks omit Docker seed, QA Smoke,
+real-Gateway UI, and the named browser-host, Doctor, Discord, SQLite, Gateway
+watch, and TUI built-process verifiers. Build artifacts, unit suites, native
+Windows boundaries, and mocked-Gateway browser projects remain selected by
+their existing owners. Main and ordinary manual CI retain the process proofs;
+Full Release Validation dispatches that ordinary manual CI child.
+
+`scripts/lib/ci-proof-test-inventory.mts` owns the complete files omitted from PR
+Node plans, including Doctor refusal and Codex process replacement proofs.
+Both compact and precise changed-target plans apply this inventory after owner
+resolution; proof-only changes retain boundary coverage. Main and release
+plans retain the complete files and all assertions. This explicit inventory
+does not exclude E2E-named package-contract tests or the ordinary mixed TUI
+suite when targeted directly.
+
+`test/scripts/ci-workflow-guards.test.ts` checks proof-tier selection for PR,
+main-push, ordinary manual, and PR-fallback events. Its Docker scheduler guard
+asserts that the selected `docker_seed_lanes` inventory reaches
+`pnpm test:docker:all` through `OPENCLAW_DOCKER_ALL_LANES`, and its release-child
+guard verifies that `normal_ci` dispatches `ci.yml` against the exact target.
+The Node planner tests separately assert that main retains the complete Doctor
+refusal and Codex recovery files while PR and PR-fallback plans omit them.

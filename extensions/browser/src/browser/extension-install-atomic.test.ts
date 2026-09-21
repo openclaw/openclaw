@@ -54,7 +54,12 @@ describe("native host publication recovery", () => {
       const rename = fs.rename.bind(fs);
       let interrupted = false;
       const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-        if (!interrupted && destination === targetPath) {
+        const selectedTarget =
+          target === "manifest"
+            ? destination === targetPath
+            : path.dirname(String(destination)) === directory &&
+              String(destination).endsWith(".sh");
+        if (!interrupted && selectedTarget) {
           interrupted = true;
           throw Object.assign(new Error("native host publication failed"), { code: "EIO" });
         }
@@ -71,11 +76,22 @@ describe("native host publication recovery", () => {
       expect(retried.issues).toEqual([]);
       expect(retried.manualSetupRequired).toBe(false);
       expect(retried.registrations).toEqual(before.registrations);
-      expect(await fs.readFile(manifest.path, "utf8")).toContain(nativeHostPath);
-      expect((await fs.readdir(directory)).toSorted()).toEqual(entries);
+      const current = JSON.parse(await fs.readFile(registration.manifestPath, "utf8")) as {
+        path: string;
+      };
+      expect(await fs.readFile(current.path, "utf8")).toContain(nativeHostPath);
+      expect((await fs.readdir(directory)).toSorted()).toEqual(
+        target === "launcher"
+          ? [
+              ...entries.filter((entry) => entry !== path.basename(manifest.path)),
+              path.basename(current.path),
+            ].toSorted()
+          : entries,
+      );
+      await expect(fs.stat(manifest.path)).rejects.toMatchObject({ code: "ENOENT" });
       if (process.platform !== "win32") {
         expect((await fs.stat(registration.manifestPath)).mode & 0o777).toBe(0o600);
-        expect((await fs.stat(manifest.path)).mode & 0o777).toBe(0o700);
+        expect((await fs.stat(current.path)).mode & 0o777).toBe(0o700);
       }
     },
   );

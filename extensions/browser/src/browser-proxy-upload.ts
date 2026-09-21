@@ -176,7 +176,8 @@ function sanitizeUploadName(name: string): string {
     .replace(/[. ]+$/u, "");
   const portable = WINDOWS_RESERVED_NAME.test(cleaned) ? `_${cleaned}` : cleaned;
   const safe = portable && portable !== "." && portable !== ".." ? portable : "upload";
-  return truncateUtf8Prefix(safe, MAX_STAGED_NAME_BYTES) || "upload";
+  const truncated = truncateUtf8Prefix(safe, MAX_STAGED_NAME_BYTES).replace(/[. ]+$/u, "");
+  return (WINDOWS_RESERVED_NAME.test(truncated) ? `_${truncated}` : truncated) || "upload";
 }
 
 function decodedBase64Size(value: string): number {

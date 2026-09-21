@@ -1,10 +1,15 @@
 /** Covers plugin runtime registration API behavior and registry mutation guards. */
+import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
+import { runGatewayCloseSteps } from "../gateway/server-shutdown.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getPluginRunContext, setPluginRunContext } from "./host-hook-runtime.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   capturePluginRegistryLifecycleEpoch,
@@ -12,9 +17,11 @@ import {
   isPluginRegistryRetired,
 } from "./registry-lifecycle.js";
 import type { PluginHttpRouteRegistration } from "./registry-types.js";
+import { getPluginRegistryState } from "./runtime-state.js";
 import {
   captureActivePluginRegistrySnapshot,
   clearActivePluginRegistry,
+  disposePluginRegistryInstances,
   getActivePluginRegistry,
   listImportedRuntimePluginIds,
   recordImportedPluginId,
@@ -207,6 +214,83 @@ describe("setActivePluginRegistry", () => {
     expect(listImportedRuntimePluginIds()).toEqual(["broken-plugin"]);
   });
 
+  it.each(["instance", "runtime"] as const)(
+    "keeps %s plugin cleanup admitted through the restart connection drain",
+    async (kind) => {
+      const owner = new GatewayConnectionWork();
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "closing-scope", status: "loaded" });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
+      const initialize = createDeferredCore();
+      const cleanupStarted = createDeferredCore();
+      const finishCleanup = createDeferredCore();
+      const cleaned = vi.fn();
+      const cleanup = () =>
+        trackAsyncWork(async () => {
+          cleanupStarted.resolve();
+          await finishCleanup.promise;
+          cleaned();
+        });
+      if (kind === "instance") {
+        instance.lifecycle.onDispose(cleanup);
+      } else {
+        registry.runtimeLifecycles.push({
+          pluginId: record.id,
+          source: record.source,
+          rootDir: record.rootDir,
+          lifecycle: { id: "tracked-store-close", cleanup },
+        });
+      }
+      let retirement: ReturnType<typeof disposePluginRegistryInstances> | undefined;
+      const request = owner.track(() => {
+        retirement = disposePluginRegistryInstances(registry, undefined, {
+          beforeDispose: () => initialize.promise,
+        });
+        void retirement.catch(() => {});
+      });
+      let closed = false;
+      const onError = vi.fn();
+      const drain = runGatewayCloseSteps({
+        owner: {
+          connectionWork: owner,
+          stopConnectionDependentSidecars() {},
+          stopRegisteredGatewayLifetimeSidecars() {},
+          stopRegisteredPostReadySidecars() {},
+          runClosePrelude() {},
+          sealAndJoinRegisteredSidecarStops() {},
+        },
+        disposeTerminalSessions: () => {
+          closed = true;
+        },
+        close: async () => {
+          await retirement;
+        },
+        onError,
+      });
+      try {
+        await request;
+        await nextTurn();
+        expect(closed).toBe(false);
+        initialize.resolve();
+        await cleanupStarted.promise;
+        await nextTurn();
+        expect(closed).toBe(false);
+        finishCleanup.resolve();
+        await expect(retirement).resolves.toMatchObject({ failures: [] });
+        await drain;
+        expect(cleaned).toHaveBeenCalledOnce();
+        expect(closed).toBe(true);
+        expect(onError).not.toHaveBeenCalled();
+        await expect(owner.track(() => undefined)).rejects.toThrow("Async work scope is closed");
+      } finally {
+        initialize.resolve();
+        finishCleanup.resolve();
+        await Promise.allSettled([retirement, drain]);
+      }
+    },
+  );
+
   it("clears the root only after its host cleanup completes", async () => {
     let cleanupCount = 0;
     const registry = createEmptyPluginRegistry();
@@ -235,29 +319,92 @@ describe("setActivePluginRegistry", () => {
     expect(cleanupCount).toBe(1);
   });
 
-  it("lets retired cleanup clear its successor without joining itself", async () => {
+  it("joins a displaced cleanup scope created before package replacement", async () => {
     const registry = createEmptyPluginRegistry();
-    const started = createDeferredCore();
-    const finished = createDeferredCore();
-    const cleanup = vi.fn(async () => {
-      started.resolve();
-      await clearActivePluginRegistry();
-      finished.resolve();
-    });
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
     registry.runtimeLifecycles.push({
-      pluginId: "reentrant-cleanup",
-      lifecycle: { id: "clear-successor", cleanup },
-      source: "/virtual/reentrant-cleanup/index.ts",
+      pluginId: "released-scope",
+      source: "/virtual/released-scope/index.ts",
+      lifecycle: {
+        id: "held-cleanup",
+        cleanup: async () => {
+          entered.resolve();
+          await finish.promise;
+        },
+      },
     });
     setActivePluginRegistry(registry);
     setActivePluginRegistry(createEmptyPluginRegistry());
-
-    await started.promise;
-    await waitForCleanupSignal(finished.promise, "reentrant retired cleanup");
-    await clearActivePluginRegistry();
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(getActivePluginRegistry()).toBeNull();
+    await entered.promise;
+    const pending = [...(getPluginRegistryState()?.retiredRegistryCleanups ?? [])].find(
+      ([, cleanup]) => cleanup.registry === registry,
+    );
+    assert(pending);
+    const [settled, { work }] = pending;
+    // The retained v2026.9.5 scope has no newer prototype method.
+    Object.defineProperty(work, "isActiveHere", { value: undefined });
+    const closing = clearActivePluginRegistry();
+    void closing.catch(() => {});
+    try {
+      finish.resolve();
+      await expect(closing).resolves.toBeUndefined();
+      expect(getActivePluginRegistry()).toBeNull();
+    } finally {
+      finish.resolve();
+      await settled;
+      await closing.catch(() => {});
+      await clearActivePluginRegistry();
+    }
   });
+
+  it.each(["host", "module", "module abort descendant"] as const)(
+    "lets retired %s cleanup clear its successor without joining itself",
+    async (kind) => {
+      const registry = createEmptyPluginRegistry();
+      const started = createDeferredCore();
+      const finished = createDeferredCore();
+      const escape = createDeferredCore();
+      let clearing: Promise<void> | undefined;
+      const cleanup = vi.fn(async () => {
+        started.resolve();
+        clearing = clearActivePluginRegistry();
+        await Promise.race([clearing, escape.promise]);
+        finished.resolve();
+      });
+      if (kind !== "host") {
+        const record = createPluginRecord({ id: "reentrant-cleanup", status: "loaded" });
+        registry.plugins.push(record);
+        const instance = new PluginInstance(record.id, { record, registry });
+        instance.onModuleDispose(() => undefined);
+        if (kind === "module abort descendant") {
+          instance.lifecycle.signal.addEventListener("abort", () => {
+            void trackAsyncWork(cleanup);
+          });
+        }
+      }
+      if (kind !== "module abort descendant") {
+        registry.runtimeLifecycles.push({
+          pluginId: "reentrant-cleanup",
+          lifecycle: { id: "clear-successor", cleanup },
+          source: "/virtual/reentrant-cleanup/index.ts",
+        });
+      }
+      setActivePluginRegistry(registry);
+      setActivePluginRegistry(createEmptyPluginRegistry());
+
+      try {
+        await started.promise;
+        await waitForCleanupSignal(finished.promise, "reentrant retired cleanup");
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(getActivePluginRegistry()).toBeNull();
+      } finally {
+        escape.resolve();
+        await clearing;
+        await clearActivePluginRegistry();
+      }
+    },
+  );
 
   it.each([
     "install",

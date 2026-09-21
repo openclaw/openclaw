@@ -49,6 +49,7 @@ import {
   getBrowserControlState,
   startBrowserControlServiceFromConfig,
 } from "../control-service.js";
+import { describeBrowserControlUnavailable } from "../plugin-enabled.js";
 import { withTimeout } from "../sdk-node-runtime.js";
 import { detectMime } from "../sdk-setup-tools.js";
 
@@ -156,11 +157,11 @@ async function ensureBrowserControlService(): Promise<void> {
     const cfg = loadBrowserConfigForRuntimeRefresh();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     if (!resolved.enabled) {
-      throw new Error("browser control disabled");
+      throw new Error(await describeBrowserControlUnavailable(cfg));
     }
     const started = await startBrowserControlServiceFromConfig();
     if (!started) {
-      throw new Error("browser control disabled");
+      throw new Error(await describeBrowserControlUnavailable(cfg));
     }
     admittedBrowserControlState = started;
   })();

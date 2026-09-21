@@ -59,6 +59,12 @@ for the backup, retention, and re-upgrade contract.
 
 Cloud Worker Desktop lets an administrator watch or control a capable worker from the Control UI without exposing its cloud node as an ordinary paired node. Enable the **Cloud Worker Desktop** lab, then set `settings.desktop: true` on a Crabbox profile. Linux, macOS, and native Windows use their own desktop setup, including when selected as a per-session OS override. Crabbox does not provide a desktop for Windows (WSL2); select native Windows for its desktop viewer. Desktop capability is fixed at warm time: changing the setting affects newly provisioned workers, while an existing non-desktop lease must be stopped and reprovisioned.
 
+The lab switch applies without restarting the Gateway. Connected Control UI
+pages update desktop availability automatically. Disabling it closes worker
+desktop observations; the workers and their applications keep running.
+Re-enabling it restores access to workers that already have desktop capability.
+Changing the lab does not provision or replace workers.
+
 The bundled Crabbox plugin supports direct AWS and Azure profiles. Coordinator-backed AWS, Azure, and Hetzner profiles are supported when the selected coordinator advertises Desktop and Browser capability. OpenClaw keeps worker execution node-only: `openclaw worker`, workspace transfer, desktop observation, and app launch all use the authenticated outbound node connection. It does not restore SSH execution, a reverse tunnel, or rsync. Direct Hetzner rejects OpenClaw's fixed lease ID, so desktop profiles fail before allocation unless Hetzner uses a capable managed coordinator.
 
 On Linux, Crabbox provisions XFCE on display `:99`, an authenticated RFB server on `127.0.0.1:5900`, a fresh lease-scoped browser profile with CDP on `127.0.0.1:9222`, and fixed zero-argument Browser and Terminal launchers. The provider also installs an OpenClaw worker wallpaper so the disposable desktop is easy to identify. Setup is idempotent and completes before the cloud desktop becomes available, including on provisioning replay. Ordinary desktop workers finish this setup in the node enrollment command after launching the node. Project image preparation keeps desktop setup before project setup and capture.

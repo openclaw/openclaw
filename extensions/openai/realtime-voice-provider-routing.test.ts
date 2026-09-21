@@ -26,6 +26,15 @@ vi.mock("ws", () => ({
   default: mocks.FakeWebSocket,
 }));
 
+vi.mock("./realtime-quicksilver-socket.js", async () => {
+  const { createTestMediaSocketFactory } = await import("./realtime-voice-test-support.js");
+  return {
+    OpenAIQuicksilverWorkerSocket: {
+      create: await createTestMediaSocketFactory(mocks.FakeWebSocket),
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));

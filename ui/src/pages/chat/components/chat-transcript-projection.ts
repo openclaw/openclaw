@@ -429,7 +429,7 @@ export function projectChatTranscript(
   };
   const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
-      return renderChatDivider(item, props.onOpenSessionCheckpoints);
+      return renderChatDivider(item);
     }
     if (item.kind === "notice") {
       return renderChatNotice(item);
@@ -634,6 +634,7 @@ export function projectChatTranscript(
     Boolean(props.waitingApproval),
     props.questionPrompts,
     state.asyncQuestionRevision,
+    props.asyncQuestions?.historyKey,
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,

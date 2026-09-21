@@ -132,11 +132,17 @@ describe("native Control UI browser assets", () => {
     },
   );
 
-  it("withdraws Custom plugin UI assets and receipts when the applied lab setting turns off", async () => {
+  it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
     await withTempConfig({
-      cfg: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      cfg: {},
       run: async () => {
         activateFixture("workspace");
+        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+        expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
+
+        setRuntimeConfigSnapshot({
+          gateway: { controlUi: { experimental: { customPlugins: true } } },
+        });
         const entry = (await listControlUiPluginCatalog()).plugins[0]!;
         expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(
           expect.objectContaining({ pluginId: entry.pluginId }),
@@ -161,7 +167,6 @@ describe("native Control UI browser assets", () => {
           gateway: { controlUi: { experimental: { customPlugins: false } } },
         });
 
-        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
         expect(listControlUiPluginTabAuthGrants(["operator.read"])).toEqual([]);
         expect(listControlUiPluginWidgetKinds(["operator.read"])).not.toContainEqual(
           expect.objectContaining({ pluginId: entry.pluginId }),
@@ -176,6 +181,26 @@ describe("native Control UI browser assets", () => {
           for (const asset of [entry.entryUrl, ...entry.styles]) {
             expect((await sendRequest(server, { path: asset, headers })).res.statusCode).toBe(404);
           }
+        }
+        expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
+
+        setRuntimeConfigSnapshot({
+          gateway: { controlUi: { experimental: { customPlugins: true } } },
+        });
+        expect((await listControlUiPluginCatalog()).plugins).toEqual([entry]);
+        expect(listControlUiPluginTabAuthGrants(["operator.read"])).toContainEqual(
+          expect.objectContaining({ pluginId: entry.pluginId }),
+        );
+        expect(listControlUiPluginWidgetKinds(["operator.read"])).toContainEqual(
+          expect.objectContaining({ pluginId: entry.pluginId }),
+        );
+        expect(listControlUiPluginActivations(browser)).toEqual([]);
+        expect(reportControlUiPluginActivation(browser, report)).toBe(true);
+        expect(listControlUiPluginActivations(browser)).toEqual([report]);
+        for (const asset of [entry.entryUrl, ...entry.styles]) {
+          expect(
+            (await sendRequest(server, { path: asset, headers: { cookie } })).res.statusCode,
+          ).toBe(200);
         }
       },
     });

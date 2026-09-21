@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const UpdateDoctorLintFindingSchema = z.object({
-  checkId: z.string(),
+  checkId: z.string().refine((value) => value.trim().length > 0),
   message: z.string(),
   source: z.string().optional(),
   errorCode: z.string().optional(),

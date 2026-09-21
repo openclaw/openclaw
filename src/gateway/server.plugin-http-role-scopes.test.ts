@@ -42,7 +42,7 @@ const roleCases: Array<{
   {
     role: "reader",
     scopes: ["operator.read"],
-    writeDefault: [],
+    writeDefault: ["operator.read"],
     trustedDefault: ["operator.read"],
     declaredRead: ["operator.read"],
   },
@@ -68,7 +68,9 @@ function observeRuntimeScope() {
   return {
     scopes,
     profileId: client?.authenticatedUserProfile?.profileId,
+    readAllowed: authorizeOperatorScopesForMethod("status", scopes ?? []).allowed,
     writeAllowed: authorizeOperatorScopesForMethod("node.invoke", scopes ?? []).allowed,
+    adminAllowed: authorizeOperatorScopesForMethod("config.set", scopes ?? []).allowed,
   };
 }
 
@@ -181,6 +183,10 @@ describe.each(["write-default", "trusted-operator"] as const)(
                 const expected = {
                   scopes: expectedScopes,
                   profileId: profile.id,
+                  readAllowed: expectedScopes.some((scope) =>
+                    ["operator.read", "operator.write", "operator.admin"].includes(scope),
+                  ),
+                  adminAllowed: expectedScopes.some((scope) => scope === "operator.admin"),
                   writeAllowed: expectedScopes.some(
                     (scope) => scope === "operator.write" || scope === "operator.admin",
                   ),

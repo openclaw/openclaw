@@ -1,11 +1,19 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { readUserProfileIdentity } from "../../../state/user-profile-list.js";
+import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
+import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
 import {
+  captureSharedGatewaySessionGenerationOwnership,
+  claimSharedGatewaySessionGenerationIfOwned,
   createRequiredSharedGatewaySessionGenerationReader,
+  disconnectStaleSharedGatewayAuthClients,
+  finalizeOwnedSharedGatewaySessionGeneration,
+  replaceOwnedSharedGatewaySessionGenerationState,
   type SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
 import {
@@ -28,6 +36,101 @@ beforeEach(() => {
 });
 
 describe("authenticated request mutation custody", () => {
+  it.each(["commit", "rollback"] as const)(
+    "retains the accepted source through tentative transport fencing until %s",
+    async (outcome) => {
+      const generation: SharedGatewaySessionGenerationState = {
+        current: "generation-a",
+        required: null,
+      };
+      const connection = new AbortController();
+      const access = new AbortController();
+      const client = createOperatorWsClient({
+        socket: { close: () => connection.abort() },
+      });
+      client.usesSharedGatewayAuth = true;
+      client.sharedGatewaySessionGeneration = "generation-a";
+      client.connectionSignal = connection.signal;
+      client.internal = { operatorRoleActor: { kind: "operator", profileId: "profile-owner" } };
+      const context = createDirectChatContext();
+      context.resolveGatewayContext = () => context;
+      let captured: ReturnType<typeof captureGatewayOperatorRunAuthority>;
+      const handler = vi.fn<(options: GatewayRequestHandlerOptions) => void>((options) => {
+        captured = captureGatewayOperatorRunAuthority({
+          client: options.client,
+          context,
+          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+          sourceAuthority: {
+            assertCurrent: () => access.signal.throwIfAborted(),
+            signal: access.signal,
+          },
+        });
+        options.respond(true, { accepted: true });
+      });
+      const harness = createDispatchTestHarness({
+        getRequiredSharedGatewaySessionGeneration:
+          createRequiredSharedGatewaySessionGenerationReader(generation),
+        buildRequestContext: () => context,
+        extraHandlers: { "test.source-custody": handler },
+      });
+      const dispatch = (id: string) =>
+        harness.dispatcher.dispatch(
+          { type: "req", id, method: "test.source-custody", params: {} },
+          client,
+        );
+      await dispatch("accepted-source");
+      const accepted = expectDefined(captured, "accepted source");
+      const releaseQueued = expectDefined(accepted.authority.retain, "source retention")();
+      accepted.release();
+      try {
+        const ownership = expectDefined(
+          claimSharedGatewaySessionGenerationIfOwned(
+            generation,
+            captureSharedGatewaySessionGenerationOwnership(generation),
+            "generation-b",
+          ),
+          "candidate generation owner",
+        );
+        disconnectStaleSharedGatewayAuthClients({
+          state: generation,
+          clients: [client],
+          expectedGeneration: "generation-b",
+          revokeSource: false,
+        });
+        expect(connection.signal.aborted).toBe(true);
+        await dispatch("buffered-after-fence");
+        expect(handler).toHaveBeenCalledOnce();
+        expect(accepted.authority.signal?.aborted).toBe(false);
+        expect(() => accepted.authority.assertCurrent()).not.toThrow();
+
+        if (outcome === "commit") {
+          expect(finalizeOwnedSharedGatewaySessionGeneration(generation, ownership)).toBe(true);
+          expect(accepted.authority.signal?.aborted).toBe(true);
+        } else {
+          expect(
+            replaceOwnedSharedGatewaySessionGenerationState(generation, ownership, {
+              current: "generation-a",
+              required: null,
+            }),
+          ).toBe(true);
+          // The original connection has left the socket set; rollback preserves its old source.
+          disconnectStaleSharedGatewayAuthClients({
+            state: generation,
+            clients: [],
+            expectedGeneration: "generation-a",
+          });
+          expect(accepted.authority.signal?.aborted).toBe(false);
+          expect(() => accepted.authority.assertCurrent()).not.toThrow();
+          access.abort(new Error("original access source revoked"));
+          expect(accepted.authority.signal?.aborted).toBe(true);
+        }
+      } finally {
+        releaseQueued();
+        accepted.release();
+      }
+    },
+  );
+
   it.each([
     "unchanged",
     "transport retirement",

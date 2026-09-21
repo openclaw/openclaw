@@ -58,6 +58,8 @@ export async function createFormatFixture(databasePath: string): Promise<void> {
       CREATE VIRTUAL TABLE memory_vec USING vec0(embedding float[2]);
       CREATE TABLE empty_table (id INTEGER PRIMARY KEY, value TEXT);
       CREATE TABLE session_transcript_index_state (id TEXT PRIMARY KEY, cursor INTEGER);
+      CREATE TABLE session_transcript_fts_rows (session_id TEXT NOT NULL, fts_rowid INTEGER PRIMARY KEY);
+      INSERT INTO session_transcript_fts_rows VALUES ('main', 99);
     `);
     database
       .prepare(

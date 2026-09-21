@@ -60,6 +60,9 @@ beforeEach(async () => {
   mocks.spawn.mockImplementation((_command: string, args: string[]) => {
     const child = new FakeChild(nextPid++);
     children.set(child.pid, child);
+    if (args.includes("--update-canary")) {
+      return child;
+    }
     completeCanaryCommand(child, args, () => ({
       pluginInventory: undefined,
       pluginErrors: false,
@@ -162,29 +165,40 @@ describe("canary teardown evidence", () => {
       });
       try {
         const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
-        const failed = result.steps.at(-1)!;
-        expect(result).toMatchObject({ status: "error", phase: "lint" });
-        expect(failed.termination).toBe("timeout");
-        if (["passed", "failed", "pipes", "natural", "unconfirmed"].includes(report)) {
-          const message = `Update health check completed, then ${report === "pipes" ? "output pipes stayed open" : "failed to exit"} (${["pipes", "natural", "unconfirmed"].includes(report) ? "termination requested" : "killed"} at 0.9 s)`;
-          if (report !== "failed") {
-            expect(failed.failureFacts?.[0]?.message).toBe(message);
-          }
-          const rendered = renderUpdateRunReport(
-            updateRunReportInputFromResult({ ...result, mode: "git", root }),
-          );
+        const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
+        expect(step.termination).toBe("timeout");
+        const completed = ["passed", "failed", "pipes", "natural", "unconfirmed"].includes(report);
+        const rendered = renderUpdateRunReport(
+          updateRunReportInputFromResult({ ...result, mode: "git", root }),
+        );
+        if (completed) {
+          const message = `Update lint exit phase timed out after 0ms (899ms total); checks completed; ${report === "pipes" ? "output pipes stayed open" : "process did not exit"}. Continuing with recorded check results.`;
+          expect(step.warnings).toEqual([message]);
           expect(rendered.markdown).toContain(message);
           if (report === "failed") {
-            expect(failed.failureFacts?.map((fact) => fact.message)).toEqual(
+            expect(result).toMatchObject({ status: "error", phase: "lint" });
+            expect(step.failureFacts?.map((fact) => fact.message)).toEqual(
               lintFindings.map((finding) => finding.message),
             );
+          } else {
+            expect(result).toMatchObject({ status: "ok", phase: "readiness" });
+            expect(step.failureFacts).toBeUndefined();
           }
         } else {
-          expect(failed.failureFacts?.[0]?.message).toBe(
-            "Update health check failed (deadline exceeded)",
-          );
-          expect(result.logTail.join("\n")).toContain("deadline exceeded");
-          expect(JSON.stringify(result)).not.toContain("completed, then failed to exit");
+          expect(result).toMatchObject({
+            status: "error",
+            phase: "lint",
+            reason: "candidate-checks-timeout",
+          });
+          expect(step.failureFacts).toEqual([
+            {
+              check: "lint",
+              code: "candidate-checks-timeout",
+              message: "Update lint checks phase timed out (899ms)",
+            },
+          ]);
+          expect(rendered.markdown).toContain("checks phase");
+          expect(JSON.stringify(result)).not.toContain("exit phase");
         }
       } finally {
         clock.mockRestore();

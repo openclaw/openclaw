@@ -287,7 +287,11 @@ function readRestRollup(
   // REST already collected the check rows; finish failure analysis in this snapshot.
   const details = requestedDetails || failed;
   const runs = details
-    ? pages(`actions/runs?head_sha=${sha}`, "workflow_runs", RestRunSchema).items
+    ? pages(
+        `actions/runs?head_sha=${sha}&exclude_pull_requests=true`,
+        "workflow_runs",
+        RestRunSchema,
+      ).items
     : [];
   if (
     runs.some((run) => run.head_sha !== sha) ||

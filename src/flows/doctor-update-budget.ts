@@ -14,6 +14,7 @@ export type DoctorUpdateWork =
 export type DoctorUpdateBudget = {
   readonly agentCount: number;
   readonly inspectionDeadlineMs: number;
+  readonly disposalDeadlineMs?: number;
   readonly phase: "validation" | "activation";
   readonly source: "validation-ledger" | "activation-policy" | "unavailable-validation-origin";
   readonly deferred: Map<string, HealthFinding>;
@@ -61,6 +62,9 @@ export async function resolveDoctorUpdateBudget(params: {
   return {
     agentCount: Math.max(listAgentIds(params.cfg).length, params.preparedAgentCount ?? 0),
     phase: rehearsal ? "validation" : "activation",
+    ...(rehearsal && validationStartedAt !== undefined
+      ? { disposalDeadlineMs: validationStartedAt + PUBLISHED_VALIDATION_WORK_MS }
+      : {}),
     inspectionDeadlineMs: rehearsal
       ? validationStartedAt === undefined
         ? Date.now()

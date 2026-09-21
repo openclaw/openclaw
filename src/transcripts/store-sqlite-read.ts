@@ -25,6 +25,41 @@ type TranscriptSessionEntry = {
 };
 type TranscriptSessionMatchEntry = TranscriptSessionEntry & { inputRevision: string };
 
+export function readTranscriptExportOwnership(
+  database: DatabaseSync,
+  session: TranscriptSessionIdentity,
+) {
+  return executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptSessionQuery(database, session).select([
+      "export_manifest_json",
+      "export_pending_json",
+    ]),
+  );
+}
+
+export function readTranscriptExportPathCollisions(database: DatabaseSync, exportKey: string) {
+  return executeSqliteQuerySync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_sessions")
+      .select(["session_id", "started_at", "selector", "export_pending_json"])
+      .where("export_key", "=", exportKey)
+      .orderBy("selector", "asc"),
+  ).rows;
+}
+
+export function readTranscriptExportPathOwners(database: DatabaseSync, exportKey: string) {
+  return executeSqliteQuerySync(
+    database,
+    meetingTranscriptDb(database)
+      .selectFrom("meeting_transcript_sessions")
+      .select(["session_id", "started_at", "export_manifest_json", "export_pending_json"])
+      .where("export_key", "=", exportKey)
+      .orderBy("selector", "asc"),
+  ).rows;
+}
+
 /** Runs inside the read worker's transaction so input and replacement basis agree. */
 export function readTranscriptSummarySnapshot(
   database: DatabaseSync,

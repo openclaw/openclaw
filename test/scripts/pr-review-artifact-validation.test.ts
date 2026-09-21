@@ -160,6 +160,7 @@ function runMergeVerification(
         'fixture_root="$2"',
         'source "$script_parent_dir/pr-lib/common.sh"',
         'source "$script_parent_dir/pr-lib/worktree.sh"',
+        'source "$script_parent_dir/pr-lib/merge-outcome.sh"',
         'repo_root() { printf "%s\\n" "$fixture_root"; }',
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
@@ -180,7 +181,9 @@ function runMergeVerification(
         'node() { case "$1" in */watch-pr-ci.mjs) return 0;; *) command node "$@";; esac; }',
         "MERGE_REPO_NAME=fixture/repo",
         "MERGE_REPO_HOST=github.com",
-        `pr_gh_plain() { case "$*" in *"issues/42/comments?per_page=100"*) printf '%s\\n' ${JSON.stringify(reviewComments)};; *"--json name,bucket,state"*) ${checksResponse};; *"--json state,isDraft,headRefOid"*) printf '%s\\n' '{"isDraft":false,"headRefOid":"${head}"}';; *) return 0;; esac; }`,
+        `pr_gh_plain() { case "$*" in "issue-comments "*) printf '%s\\n' ${JSON.stringify(reviewComments)};; *"--json name,bucket,state"*) ${checksResponse};; *"--json state,isDraft,headRefOid"*) printf '%s\\n' '{"isDraft":false,"headRefOid":"${head}"}';; *) return 0;; esac; }`,
+        'pr_gh_quota_read() { pr_gh_plain "$@"; }',
+        `merge_rest() { echo 'REST policy requires GraphQL' >&2; printf '%s\\n' '{"restUnavailable":true}'; }`,
         "pr_gh() {",
         '  test "$*" = "pr view 42 --json headRefName,headRefOid,headRepository,headRepositoryOwner" || return 99',
         `  printf '%s\\n' '{"headRefOid":"${head}","headRefName":"review-branch","headRepository":{"nameWithOwner":"fixture/repo"},"headRepositoryOwner":{"login":"fixture"}}'`,
@@ -482,7 +485,11 @@ describePosix("scripts/pr review artifact validation", () => {
       const result = runMergeVerification(checks);
 
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain("GitHub returned invalid required-check evidence");
+      expect(result.stderr).toContain(
+        checks === "invalid-json"
+          ? "unable to verify the required GitHub checks"
+          : "GitHub returned invalid required-check evidence",
+      );
       expect(result.stdout).not.toContain("merge-verify passed");
     },
   );

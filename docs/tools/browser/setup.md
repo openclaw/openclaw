@@ -21,6 +21,12 @@ openclaw browser --browser-profile openclaw snapshot
 "Browser disabled" means the plugin or `browser.enabled` is off; see
 [Configuration](/tools/browser/configuration#configuration) and [Plugin control](#plugin-control).
 
+Browser control errors name the recorded policy refusal or plugin load failure.
+If `browser` is excluded from `plugins.allow`, add it to the existing list before
+running `openclaw plugins enable browser`; restarting alone cannot repair that
+policy. Follow the error's enablement or Doctor command. If no availability
+reason is recorded, run `openclaw doctor` and check the Gateway logs.
+
 If `openclaw browser` is missing entirely, or the agent says the browser tool
 is unavailable, jump to [Missing browser command or tool](#missing-browser-command-or-tool).
 

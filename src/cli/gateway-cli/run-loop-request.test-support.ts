@@ -25,6 +25,7 @@ type RequestFixtures = {
   runLoopWithStart: (params: {
     start: ReturnType<typeof createSignaledStart>["start"];
     runtime: ReturnType<typeof createRuntimeWithExitSignal>["runtime"];
+    ownsProcessLifecycle?: boolean;
     beginBoot?: (startedAtMs: number) => void | Promise<void>;
     completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
   }) => Promise<unknown>;
@@ -36,6 +37,10 @@ type RequestFixtures = {
   >;
   respawnGatewayProcessForUpdate: UpdateRespawnFixtures["respawnGatewayProcessForUpdate"];
   captureForegroundUpdateHandoffStop: UpdateRespawnFixtures["captureForegroundUpdateHandoffStop"];
+  readCgroup: Mock;
+  systemctl: Mock;
+  armShutdownHardExitWatchdog: Mock;
+  cancelShutdownHardExitWatchdog: Mock;
   consumeGatewayRestartIntent: Mock<() => GatewayRestartIntent | null>;
   consumeGatewayRestartIntentPayloadSync: Mock<
     () => Pick<GatewayRestartIntent, "reason" | "force" | "waitMs"> | null
@@ -57,6 +62,10 @@ export function registerGatewayRequestTests({
   restartGatewayProcessWithFreshPid,
   respawnGatewayProcessForUpdate,
   captureForegroundUpdateHandoffStop,
+  readCgroup,
+  systemctl,
+  armShutdownHardExitWatchdog,
+  cancelShutdownHardExitWatchdog,
   consumeGatewayRestartIntent,
   consumeGatewayRestartIntentPayloadSync,
   peekGatewayRestartReason,
@@ -66,6 +75,92 @@ export function registerGatewayRequestTests({
   gatewayLog,
 }: RequestFixtures): void {
   const idleActiveWorkSnapshot = createActiveWorkSnapshot();
+  it("keeps a captured pre-park Stop ahead of native budget refresh and drain completion", async () => {
+    const nativeReply = {
+      code: 0,
+      stdout: "LoadState=loaded\nTimeoutStopUSec=90s",
+      stderr: "",
+    };
+    readCgroup.mockResolvedValue("0::/system.slice/setup_and_run_blacksmith.service\n");
+    systemctl.mockResolvedValue(nativeReply);
+    const probing = createDeferredCore();
+    const refreshed = createDeferredCore<typeof nativeReply>();
+    const draining = createDeferredCore();
+    const drained = createDeferredCore();
+    const closing = createDeferredCore();
+    const joined = createDeferredCore<boolean>();
+    const settle = vi.fn(() => joined.promise);
+    captureForegroundUpdateHandoffStop.mockReturnValueOnce({ settle, canPark: () => false });
+    consumeGatewayRestartIntent.mockReturnValueOnce({ reason: "gateway.restart" });
+    waitForGatewayActiveWork.mockImplementationOnce(async () => {
+      draining.resolve();
+      await drained.promise;
+      return { drained: true, snapshot: idleActiveWorkSnapshot };
+    });
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      let cleanupBudget: ReturnType<
+        typeof import("../../process/supervisor/cleanup-budget.js").getProcessCleanupBudget
+      >;
+      const close = createCloseMock().mockImplementationOnce(async () => {
+        const { getProcessCleanupBudget } =
+          await import("../../process/supervisor/cleanup-budget.js");
+        cleanupBudget = getProcessCleanupBudget();
+        closing.resolve();
+      });
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      await runLoopWithStart({ start, runtime, ownsProcessLifecycle: true });
+      await waitForStart(started);
+      systemctl.mockImplementationOnce(() => {
+        probing.resolve();
+        return refreshed.promise;
+      });
+      vi.useFakeTimers();
+      try {
+        captureSignal("SIGUSR2")();
+        await probing.promise;
+        expect(armShutdownHardExitWatchdog).toHaveBeenCalledOnce();
+        captureSignal("SIGINT")();
+        expect(settle).toHaveBeenCalledOnce();
+        expect(cancelShutdownHardExitWatchdog).toHaveBeenCalledOnce();
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        expect(close).not.toHaveBeenCalled();
+
+        refreshed.resolve(nativeReply);
+        await draining.promise;
+        expect
+          .soft(armShutdownHardExitWatchdog, "native reread rearmed the watchdog")
+          .toHaveBeenCalledOnce();
+        expect(runtime.exit).not.toHaveBeenCalled();
+
+        drained.resolve();
+        await closing.promise;
+        expect
+          .soft(armShutdownHardExitWatchdog, "post-drain fallback rearmed the watchdog")
+          .toHaveBeenCalledOnce();
+        expect.soft(cleanupBudget).toBeUndefined();
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(settle).toHaveBeenCalledOnce();
+        joined.resolve(true);
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(exited).resolves.toBe(0);
+        expect(close).toHaveBeenCalledOnce();
+        expect(start).toHaveBeenCalledOnce();
+      } finally {
+        refreshed.resolve(nativeReply);
+        drained.resolve();
+        joined.resolve(true);
+        await vi.advanceTimersByTimeAsync(0);
+        vi.useRealTimers();
+        await waitForLoopCondition(
+          () => runtime.exit.mock.calls.length > 0,
+          "captured Stop fixture did not settle after releasing its owned work",
+        );
+        await exited;
+      }
+    });
+  });
+
   it("keeps replacement shutdown behind an owned pre-park Stop settlement", async () => {
     const joined = createDeferredCore<boolean>();
     const settle = vi.fn(() => joined.promise);

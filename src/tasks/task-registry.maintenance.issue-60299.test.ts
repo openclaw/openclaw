@@ -41,8 +41,8 @@ function makeStaleTask(overrides: Partial<TaskRecord>): TaskRecord {
   };
 }
 
-afterEach(() => {
-  stopTaskRegistryMaintenance();
+afterEach(async () => {
+  await stopTaskRegistryMaintenance();
   resetTaskRegistryMaintenanceRuntimeForTests();
   resetDetachedTaskLifecycleRuntimeForTests();
 });

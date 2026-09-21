@@ -98,11 +98,9 @@ vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
 }));
 
-const {
-  collectGatewayDaemonFindings,
-  collectProviderCatalogProjectionFindings,
-  collectRuntimeToolSchemaFindings,
-} = await import("./doctor-core-checks.runtime.js");
+const { collectGatewayDaemonFindings, collectProviderCatalogProjectionFindings } =
+  await import("./doctor-core-checks.runtime.js");
+const { collectRuntimeToolSchemaFindings } = await import("./doctor-tool-schema-runtime.js");
 
 function tool(name: string, parameters: unknown): AnyAgentTool {
   return {

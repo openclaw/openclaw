@@ -260,19 +260,19 @@ function syncFile(fd: number) {
   }
 }
 
-function writeAtomic(root: string, name: string, bytes: string) {
+function writeAtomic(root: string, name: string, bytes: string, durable = true) {
   const temporary = join(root, "." + name + "." + randomUUID());
   try {
     let fileDurable = false;
     const fd = openSync(temporary, "wx", 0o600);
     try {
       writeFileSync(fd, bytes);
-      fileDurable = syncFile(fd);
+      fileDurable = durable && syncFile(fd);
     } finally {
       closeSync(fd);
     }
     renameSync(temporary, join(root, name));
-    return syncDirectory(root) && fileDurable;
+    return fileDurable && syncDirectory(root);
   } finally {
     rmSync(temporary, { force: true });
   }
@@ -436,11 +436,11 @@ export function createStaging(
     };
     if (
       recorded &&
-      !writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n") &&
+      !writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", receipt.durable) &&
       receipt.durable
     ) {
       receipt.durable = false;
-      writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n");
+      writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", false);
     }
   } catch (error) {
     try {
@@ -460,9 +460,14 @@ export function createStaging(
     if (!recorded) {
       return;
     }
-    if (!writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n") && receipt.durable) {
+    // Unsupported durability is terminal for this generation, including later
+    // metadata writes. The live producer still owns ordinary cleanup.
+    if (
+      !writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", receipt.durable) &&
+      receipt.durable
+    ) {
       receipt.durable = false;
-      writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n");
+      writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", false);
     }
   };
   let disposed = false;
@@ -489,7 +494,7 @@ export function createStaging(
       if (Buffer.byteLength(bytes) > manifestLimit) {
         throw new Error("staging manifest exceeds the recovery metadata limit");
       }
-      const durable = writeAtomic(root, manifestName, bytes) && receipt.durable;
+      const durable = writeAtomic(root, manifestName, bytes, receipt.durable);
       let claims: ClaimNamespace | undefined;
       try {
         claims = captureClaimNamespace(join(payload, "source"));
@@ -512,7 +517,7 @@ export function createStaging(
         return;
       }
       assertIdentity(root, receipt.rootIdentity);
-      const saved = writeArtifactRecord(root, artifacts);
+      const saved = writeArtifactRecord(root, artifacts, receipt.durable);
       update({
         state: "preserved",
         durable: saved.durable && receipt.durable && artifacts.durable,
@@ -548,15 +553,14 @@ function readManifest(root: string, receipt: Receipt): Manifest {
   }
 }
 
-function writeArtifactRecord(root: string, artifacts: CrabboxArtifactEvidence) {
+function writeArtifactRecord(root: string, artifacts: CrabboxArtifactEvidence, durable = true) {
   const bytes = JSON.stringify(artifacts) + "\n";
   if (Buffer.byteLength(bytes) > manifestLimit) {
     throw new Error("staging artifact evidence exceeds the recovery metadata limit");
   }
   const digest = createHash("sha256").update(bytes).digest("hex");
   // Keep the previous committed generation readable until the receipt advances.
-  const durable = writeAtomic(root, "artifacts-" + digest + ".json", bytes);
-  return { digest, durable };
+  return { digest, durable: writeAtomic(root, "artifacts-" + digest + ".json", bytes, durable) };
 }
 
 function readArtifactRecord(root: string, digest: string) {
@@ -936,7 +940,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       receipt = next;
       if (!writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n")) {
         receipt.durable = false;
-        writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n");
+        writeAtomic(root, receiptName, JSON.stringify(receipt) + "\n", false);
         throw new Error("Durable recovery updates are unavailable; staging remains protected.");
       }
     };

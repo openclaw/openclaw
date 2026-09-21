@@ -59,6 +59,7 @@ export async function settleTaskRecordTransitionAsync(
     {
       scope,
       admission: context.admission,
+      readIdentity: "preserved",
       taskRowsWritten: () => committed?.persisted ?? false,
       publicationRecords: () =>
         new Map<string, TaskRecord>(committed ? [[committed.task.taskId, committed.task]] : []),

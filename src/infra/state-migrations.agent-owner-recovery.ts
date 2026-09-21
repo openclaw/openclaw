@@ -9,6 +9,8 @@ import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-mai
 import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
+import { sameFileContentsSync } from "./fs-safe-advanced.js";
+import { FsSafeError } from "./fs-safe.js";
 import {
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
@@ -42,22 +44,18 @@ function filesEqual(left: string, right: string): boolean {
   try {
     const rightFd = fs.openSync(right, "r");
     try {
-      const a = Buffer.allocUnsafe(1024 * 1024);
-      const b = Buffer.allocUnsafe(a.length);
-      for (let offset = 0; offset < leftStat.size;) {
-        const aRead = fs.readSync(leftFd, a, 0, a.length, offset);
-        const bRead = fs.readSync(rightFd, b, 0, b.length, offset);
-        if (aRead === 0 || aRead !== bRead || !a.subarray(0, aRead).equals(b.subarray(0, bRead))) {
-          return false;
-        }
-        offset += aRead;
-      }
       return (
+        sameFileContentsSync(leftFd, rightFd, { maxBytes: Number(leftStat.size) }) &&
         sameFileMutationFingerprint(leftStat, fs.fstatSync(leftFd, { bigint: true })) &&
         sameFileMutationFingerprint(rightStat, fs.fstatSync(rightFd, { bigint: true })) &&
         sameFileMutationFingerprint(leftStat, fs.lstatSync(left, { bigint: true })) &&
         sameFileMutationFingerprint(rightStat, fs.lstatSync(right, { bigint: true }))
       );
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "too-large") {
+        return false;
+      }
+      throw error;
     } finally {
       fs.closeSync(rightFd);
     }

@@ -41,6 +41,7 @@ export function createPluginReloadCleanup({
   port,
   pluginWorkspaceDir,
   getCron,
+  abortSignal,
   log,
   recordCleanup,
   retainRetirement,
@@ -50,6 +51,7 @@ export function createPluginReloadCleanup({
   port: number;
   pluginWorkspaceDir: string | undefined;
   getCron: () => PluginHookGatewayCronService;
+  abortSignal: AbortSignal;
   log: ReturnType<typeof createSubsystemLogger>;
   recordCleanup: (result: PluginHostCleanupResult) => void;
   retainRetirement: (retire: () => Promise<PluginHostCleanupResult>) => void;
@@ -191,6 +193,7 @@ export function createPluginReloadCleanup({
       config,
       workspaceDir: pluginWorkspaceDir,
       getCron,
+      ...(start ? { abortSignal } : {}),
     };
     await withPluginHttpRouteRegistry(registry, () =>
       start

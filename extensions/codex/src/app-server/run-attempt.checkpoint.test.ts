@@ -8,6 +8,7 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
+import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
   attachSqliteSessionTarget,
   readTranscriptMessagesByIdentity,
@@ -27,6 +28,8 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "output-sessions.json"),
       "output-session",
     );
+    // Prepare the history reader before the attempt budget starts.
+    await readCodexMirroredSessionHistoryMessages(params);
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");

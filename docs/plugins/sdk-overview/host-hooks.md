@@ -218,6 +218,28 @@ ports.
 Tabs backed by plugin-managed auth keep their direct iframe behavior and do not
 request or require this Gateway grant.
 
+Authenticated, same-origin plugin tabs can request session navigation without
+loosening the iframe sandbox. Send this session-only message to the parent
+after a user click:
+
+```typescript
+window.parent.postMessage(
+  { type: "openclaw-plugin-session-open", sessionKey: "agent:writer:project-review" },
+  window.location.origin,
+);
+```
+
+Only `type`, `sessionKey`, and an optional `agentId` are accepted. Omit absent
+fields. The key must be routable, at most 512 UTF-16 code units, and contain no
+control characters or surrounding whitespace. An explicit agent must match the
+agent in a qualified key. The host checks the currently mounted frame,
+authenticated descriptor, connection, and frame-grant lifetime before using
+normal session navigation. This message grants no session access, accepts no
+arbitrary URL, and returns no credentials or session content. Standalone pages
+should retain an ordinary Control UI link as their non-embedded path. Use
+`buildControlUiSessionPath` from `openclaw/plugin-sdk/session-discussion` to build
+that path.
+
 ```typescript
 api.session.controls.registerControlUiDescriptor({
   surface: "tab",

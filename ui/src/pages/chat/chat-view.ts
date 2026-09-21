@@ -162,7 +162,14 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const canCompose = props.canSend;
   const questionState = getTranscriptState(props.paneId);
-  const asyncQuestions = createAsyncQuestionPresentation(questionState, props);
+  const asyncQuestions = createAsyncQuestionPresentation(questionState, {
+    ...props,
+    onReopen: (itemId, scope) => {
+      const composerState = getChatComposerState(props.paneId);
+      composerState.activeQuestionKey = JSON.stringify([scope, itemId]);
+      composerState.questionCollapsed = false;
+    },
+  });
   const openImage = props.onOpenImage
     ? (item: ImageLightboxItem, requestVersion?: number) =>
         requestVersion === undefined
@@ -535,17 +542,17 @@ export function renderChat(props: ChatProps) {
                   .presented=${props.presented ?? true}
                 ></openclaw-plugin-contributions>
                 ${renderTranscriptSearch(props.paneId, requestUpdate)}
-                <div
-                  class="chat-main__conversation"
-                  @wheel=${{
-                    handleEvent: (event: WheelEvent) =>
-                      forwardChatWheelToTranscript(event, props.transcript.scrollElement),
-                    passive: false,
-                  }}
-                >
-                  ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}
-                  ${scrollToBottomButton} ${gutterStack}
-                  <div class="chat-footer">${chatColumnFooter}</div>
+                <div class="chat-main__conversation-frame">
+                  <!-- Chromium can crash when DevTools inspects a blocking Lit object listener. -->
+                  <div
+                    class="chat-main__conversation"
+                    .onwheel=${(event: WheelEvent) =>
+                      forwardChatWheelToTranscript(event, props.transcript.scrollElement)}
+                  >
+                    ${historyRefreshNotice} ${historyError === nothing ? thread : historyError}
+                    ${scrollToBottomButton} ${gutterStack}
+                    <div class="chat-footer">${chatColumnFooter}</div>
+                  </div>
                 </div>
               </div>
             </div>

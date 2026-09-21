@@ -958,6 +958,7 @@ describe("verified package rollback", () => {
     "restart-unhealthy",
     "restart-refused",
     "restart-threw",
+    "restart-cleanup",
     "restart-timeout",
     "restart-verified",
   ] as const)("retains active installation identity after %s", async (failure) => {

@@ -20,8 +20,7 @@ import {
 } from "../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import { captureOpenClawAgentDatabaseRegistration } from "./openclaw-agent-db-registry-listing.js";
-import { getOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
-import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
+import { getOpenClawAgentDatabaseValidationForTransfer } from "./openclaw-agent-db-validation-cache.js";
 import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
 import type {
   AgentDatabaseExecutionIdentity,
@@ -186,13 +185,8 @@ export function createAgentDatabaseNativeGeneration(
               sharedStatePath: context.admission.databasePath,
               sharedStateIdentity: context.admission.identity.key,
             };
-            const database = getOpenClawAgentDatabaseIfOpen({
-              agentId,
-              path: pathname,
-              env: context.environment,
-            });
             facts.validationPort.postMessage(
-              database ? getOpenClawAgentDatabaseValidation(database) : undefined,
+              getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname }),
               [],
             );
           } finally {

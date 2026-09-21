@@ -160,6 +160,8 @@ export type GatewaySystemAgentSession = {
     dispose: () => Promise<void>;
   };
   welcome: string;
+  /** Passive creation entry, retained so reconnects do not append duplicate history. */
+  newAgentWelcome?: string;
   welcomeQuestion?: SystemAgentChatQuestion;
   /** Audit cursor captured with the pending caretaker welcome; cleared after delivery. */
   welcomeAuditSequence?: number;
@@ -188,6 +190,8 @@ type GatewayKernelContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
+  getCommittedRuntimeConfig?: () => OpenClawConfig;
   sessionRowProjectionOwner?: object;
   ensureSessionRowProjection?: () => Promise<void>;
   /** Live reload owner, including same-config restart work and shutdown. */

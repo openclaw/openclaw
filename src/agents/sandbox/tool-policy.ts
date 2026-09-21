@@ -6,7 +6,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentConfig } from "../agent-scope.js";
+import { resolveAgentConfig } from "../agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./constants.js";

@@ -46,6 +46,10 @@ import {
 } from "./session-transcript-worker-resources.js";
 import type {
   SessionTranscriptHistoryWorkerInput,
+  SessionPreviewWorkerInput,
+  SessionPreviewWorkerResult,
+  SessionTitleFieldsWorkerInput,
+  SessionTitleFieldsWorkerResult,
   SessionRowPresenceWorkerInput,
   SessionMembersWorkerInput,
   SessionEntryListWorkerInput,
@@ -53,15 +57,26 @@ import type {
   SessionIdentityEvidenceWorkerInput,
   SessionIdentityEvidenceWorkerResult,
   SessionUsageCacheWorkerInput,
+  SessionTranscriptSearchWorkerInput,
+  SessionTranscriptSearchWorkerResult,
 } from "./session-transcript-worker.types.js";
 
 export type SessionHistoryWorkerDatabase = {
+  searchTranscripts: (
+    params: SessionTranscriptSearchWorkerInput["params"],
+  ) => Promise<SessionTranscriptSearchWorkerResult["result"]>;
   generation: number;
   assertCurrent: () => void;
   run: (
     prepare: () => Omit<SessionTranscriptHistoryWorkerInput, "database">,
     inputBytes: number,
   ) => Promise<SessionHistoryWorkerResult>;
+  readPreview: (
+    input: Omit<SessionPreviewWorkerInput, "kind" | "database">,
+  ) => Promise<SessionPreviewWorkerResult["items"]>;
+  readTitleFields: (
+    input: Omit<SessionTitleFieldsWorkerInput, "kind" | "database">,
+  ) => Promise<SessionTitleFieldsWorkerResult["fields"]>;
   readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
   readIdentityEvidence: (
     input: Omit<SessionIdentityEvidenceWorkerInput, "kind" | "database">,
@@ -166,20 +181,26 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
     const runRequest = async <TResult>(
       prepare: () =>
         | Omit<SessionTranscriptHistoryWorkerInput, "database">
+        | Omit<SessionPreviewWorkerInput, "database">
+        | Omit<SessionTitleFieldsWorkerInput, "database">
         | Omit<SessionRowPresenceWorkerInput, "database">
         | Omit<SessionMembersWorkerInput, "database">
         | Omit<SessionEntryListWorkerInput, "database">
         | Omit<SessionIdentityEvidenceWorkerInput, "database">
+        | Omit<SessionTranscriptSearchWorkerInput, "database">
         | Omit<SessionUsageCacheWorkerInput, "database">,
       inputBytes: number,
       receive: (
         value:
           | SessionHistoryWorkerResult
+          | SessionPreviewWorkerResult
+          | SessionTitleFieldsWorkerResult
           | boolean
           | SessionMember[]
           | SessionEntryListWorkerResult
           | SessionStoreTargetInventoryResult
           | SessionIdentityEvidenceWorkerResult
+          | SessionTranscriptSearchWorkerResult
           | SessionCostUsageCacheReadResult,
       ) => TResult,
     ): Promise<TResult> => {
@@ -200,12 +221,15 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
         const value = receive(
           unwrapSessionTranscriptWorkerReply<
             | "history-page"
+            | "session-preview"
+            | "session-title-fields"
             | "session-row-presence"
             | "session-members"
             | "session-entry-list"
             | "session-target-inventory"
             | "session-identity-evidence"
             | "usage-cache"
+            | "transcript-search"
           >(reply),
         );
         if (reply.ok && reply.closedHistoryDatabase) {
@@ -226,6 +250,21 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
       }
     };
     const owner: SessionHistoryWorkerDatabase = {
+      searchTranscripts: async (params) =>
+        await runRequest(
+          () => ({ kind: "transcript-search", params }),
+          JSON.stringify(params).length * 2,
+          (value) => {
+            if (
+              typeof value === "boolean" ||
+              Array.isArray(value) ||
+              value.kind !== "transcript-search"
+            ) {
+              throw new Error("Session history worker returned another result instead of search");
+            }
+            return value.result;
+          },
+        ),
       generation: owned.generation,
       assertCurrent,
       run: async (prepare, inputBytes) =>
@@ -233,16 +272,53 @@ function retainSessionHistoryWorkerDatabase(options: OpenClawAgentDatabaseOption
           if (
             typeof value === "boolean" ||
             Array.isArray(value) ||
+            value.kind === "session-preview" ||
+            value.kind === "session-title-fields" ||
             value.kind === "session-entry-list" ||
             value.kind === "session-target-inventory" ||
             value.kind === "session-target-registry-required" ||
             value.kind === "session-identity-evidence" ||
+            value.kind === "transcript-search" ||
             value.kind === "usage-refresh-lock"
           ) {
             throw new Error("Session history worker returned metadata instead of history");
           }
           return value;
         }),
+      readPreview: async (input) =>
+        await runRequest(
+          () => ({ kind: "session-preview", ...input }),
+          JSON.stringify(input).length * 2,
+          (value) => {
+            if (
+              typeof value === "boolean" ||
+              Array.isArray(value) ||
+              value.kind !== "session-preview"
+            ) {
+              throw new Error(
+                "Session history worker returned another result instead of a preview",
+              );
+            }
+            return value.items;
+          },
+        ),
+      readTitleFields: async (input) =>
+        await runRequest(
+          () => ({ kind: "session-title-fields", ...input }),
+          JSON.stringify(input).length * 2,
+          (value) => {
+            if (
+              typeof value === "boolean" ||
+              Array.isArray(value) ||
+              value.kind !== "session-title-fields"
+            ) {
+              throw new Error(
+                "Session history worker returned another result instead of title fields",
+              );
+            }
+            return value.fields;
+          },
+        ),
       readUsageCache: async (input) =>
         await runRequest(
           () => ({ kind: "usage-cache", ...input }),

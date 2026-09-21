@@ -28,6 +28,7 @@ import {
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.ts";
 import { ISSUE_TABS, issueTabLabel, type IssueTab } from "./sidebar-issues-tabs.ts";
+import { renderSidebarOutboxItem } from "./sidebar-outbox-item.ts";
 import "./menu-surface.ts";
 
 registerSidebarAttentionEnglish();
@@ -82,6 +83,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
   const canDismissShown = visibleDismissals.length > 0 || mentionDismissals.length > 0;
   const mentionsTab = params.selectedTab === "mentions";
   const showMentionStatus =
+    params.context.gateway.snapshot.phase === "connected" &&
     (mentionsTab || params.selectedTab === "all") &&
     (mentions.error !== null ||
       mentions.phase === "loading" ||
@@ -91,6 +93,12 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
     const dismissal = entry.dismissal;
     const onDismiss = dismissal ? () => params.onDismiss(dismissal) : undefined;
     switch (entry.type) {
+      case "outbox":
+        return renderSidebarOutboxItem({
+          entry,
+          context: params.context,
+          onClosePanel: () => params.onClose(false),
+        });
       case "approval":
         return renderSidebarApprovalItem({
           approval: entry.approval,
@@ -164,7 +172,6 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
               style=${hasVisibleDismissals ? nothing : "visibility:hidden"}
               ?disabled=${!canDismissShown}
               aria-hidden=${hasVisibleDismissals ? nothing : "true"}
-              aria-describedby="sidebar-issues-dismiss-help"
               @click=${() => {
                 for (const dismissal of visibleDismissals) {
                   params.onDismiss(dismissal);
@@ -217,9 +224,6 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           variant: "sub",
           onSelect: params.onSelectTab,
         })}
-        <p id="sidebar-issues-dismiss-help" class="sidebar-issues-panel__dismiss-help">
-          ${t("attention.dismissHelp")}
-        </p>
         <div class="sidebar-issues-panel__list-wrap">
           <div
             id="sidebar-issues-tabpanel"

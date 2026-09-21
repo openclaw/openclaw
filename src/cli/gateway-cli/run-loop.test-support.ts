@@ -121,6 +121,7 @@ export const createActiveWorkSnapshot = (
     queuedTurns: 0,
     terminalPersistence: 0,
     terminalSessions: 0,
+    lifecycleWrites: 0,
     totalActive: 0,
     ...counts,
   };
@@ -128,7 +129,12 @@ export const createActiveWorkSnapshot = (
     (total, [key, count]) => total + (key === "totalActive" ? 0 : count),
     0,
   );
-  return { idle: resolvedCounts.totalActive === 0, counts: resolvedCounts, blockers };
+  return {
+    idle: resolvedCounts.totalActive === 0,
+    counts: resolvedCounts,
+    blockers,
+    writeCustody: [],
+  };
 };
 
 export function expectRestartCloseCall(
@@ -163,36 +169,6 @@ export function createSignaledStart(
   );
   return { start, started };
 }
-
-export const shutdownBudgetCases: {
-  signal: "SIGTERM" | "SIGUSR2";
-  honorsAbort: boolean;
-  supervisor: "systemd" | "external-systemd" | "launchd" | "foreground";
-  waitMs?: number;
-  installedStopMs?: number;
-}[] = [
-  { signal: "SIGTERM", honorsAbort: false, supervisor: "systemd", installedStopMs: 90_000 },
-  {
-    signal: "SIGTERM",
-    honorsAbort: false,
-    supervisor: "external-systemd",
-    installedStopMs: 90_000,
-  },
-  {
-    signal: "SIGUSR2",
-    honorsAbort: false,
-    supervisor: "external-systemd",
-    installedStopMs: 90_000,
-  },
-  { signal: "SIGTERM", honorsAbort: false, supervisor: "systemd" },
-  { signal: "SIGTERM", honorsAbort: false, supervisor: "foreground" },
-  { signal: "SIGTERM", honorsAbort: true, supervisor: "systemd" },
-  { signal: "SIGUSR2", honorsAbort: false, supervisor: "systemd" },
-  { signal: "SIGTERM", honorsAbort: false, supervisor: "launchd" },
-  { signal: "SIGUSR2", honorsAbort: false, supervisor: "launchd" },
-  { signal: "SIGUSR2", honorsAbort: false, supervisor: "systemd", waitMs: 0 },
-  { signal: "SIGUSR2", honorsAbort: false, supervisor: "systemd", waitMs: 600_000 },
-];
 
 export const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -626,6 +602,7 @@ export function registerGatewayRestartOwnershipTests({
         await waitForStart(started);
         const failures: unknown[] = [];
         vi.useFakeTimers();
+        const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
         try {
           captureSignal("SIGUSR2")();
           await vi.advanceTimersByTimeAsync(0);
@@ -703,6 +680,7 @@ export function registerGatewayRestartOwnershipTests({
         } catch (error) {
           failures.push(error);
         } finally {
+          clock.mockRestore();
           vi.useRealTimers();
         }
         if (failures.length > 1) {

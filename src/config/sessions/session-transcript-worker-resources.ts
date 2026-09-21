@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { channel } from "node:diagnostics_channel";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -34,32 +35,42 @@ import type {
   SessionTargetInventoryWorkerInput,
   SessionIdentityEvidenceWorkerInput,
   SessionMembersWorkerInput,
+  SessionPreviewWorkerInput,
+  SessionTitleFieldsWorkerInput,
   SessionRowPresenceWorkerInput,
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerReply,
   SessionUsageCacheWorkerInput,
+  SessionTranscriptSearchWorkerInput,
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 export const historyPages = new WorkerTaskPool<
   | SessionTranscriptHistoryWorkerInput
+  | SessionPreviewWorkerInput
+  | SessionTitleFieldsWorkerInput
   | SessionRowPresenceWorkerInput
   | SessionMembersWorkerInput
   | SessionEntryListWorkerInput
   | SessionTargetInventoryWorkerInput
   | SessionIdentityEvidenceWorkerInput
-  | SessionUsageCacheWorkerInput,
+  | SessionUsageCacheWorkerInput
+  | SessionTranscriptSearchWorkerInput,
   SessionTranscriptWorkerReply<
     | "history-page"
+    | "session-preview"
+    | "session-title-fields"
     | "session-row-presence"
     | "session-members"
     | "session-entry-list"
     | "session-target-inventory"
     | "session-identity-evidence"
     | "usage-cache"
+    | "transcript-search"
   >
 >({
   workerUrl,
+  workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
   maxWorkers: 1,
   idleTimeoutMs: 0,
   prepareWorker: () => {
@@ -71,6 +82,7 @@ export const historyPages = new WorkerTaskPool<
 function createUsageCostPool(kind: "read" | "refresh") {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
     workerUrl,
+    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
     maxWorkers: 1,
     // Foreground reads must remain available while refresh awaits a host writer.
     sharedCompute: kind === "refresh",
@@ -142,6 +154,18 @@ export const costRefreshLane: SessionCostWorkerLane = {
   retiredSequence: 0,
   pending: 0,
 };
+
+channel("openclaw.memory.critical").subscribe(() => {
+  for (const lane of [historyLane, costReadLane, costRefreshLane]) {
+    if (lane.pending > 0 || lane.rotation || lane.nativeSequence <= lane.retiredSequence) {
+      continue;
+    }
+    historyClearTimeout(lane.idleTimer);
+    void runInHistoryOwnerContext(() => rotateDatabaseWorkers(lane)).catch((error: unknown) => {
+      process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
+    });
+  }
+});
 
 export function pruneHistoryDatabases(): void {
   for (const [key, resource] of historyDatabases) {
@@ -357,12 +381,15 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           );
           const result = unwrapSessionTranscriptWorkerReply<
             | "history-page"
+            | "session-preview"
+            | "session-title-fields"
             | "session-row-presence"
             | "session-members"
             | "session-entry-list"
             | "session-target-inventory"
             | "session-identity-evidence"
             | "usage-cache"
+            | "transcript-search"
           >(reply);
           if (
             typeof result === "boolean" ||

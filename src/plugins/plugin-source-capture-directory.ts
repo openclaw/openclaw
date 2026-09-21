@@ -26,13 +26,42 @@ type Instance = {
 };
 const { instances, ownedRoots, sweeps, warningBackoff } = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginSourceCaptureInstances"),
-  () => ({
-    instances: new Map<string, Instance>(),
-    ownedRoots: new Set<string>(),
-    sweeps: new Map<string, Promise<void>>(),
-    warningBackoff: new Map<string, { next: number; delay: number }>(),
-  }),
+  () => {
+    process.once("exit", () => {
+      // Explicit exits cannot await generation disposal. These native leases belong
+      // only to this exiting process; worker overrides remain with their parent.
+      for (const [key, instance] of instances) {
+        try {
+          const root = retireInstance(key, instance);
+          if (root) {
+            fs.rmSync(root, { recursive: true, force: true });
+          }
+        } catch (error) {
+          process.stderr.write(`Plugin source capture exit cleanup failed: ${String(error)}\n`);
+        }
+      }
+    });
+    return {
+      instances: new Map<string, Instance>(),
+      ownedRoots: new Set<string>(),
+      sweeps: new Map<string, Promise<void>>(),
+      warningBackoff: new Map<string, { next: number; delay: number }>(),
+    };
+  },
 );
+
+function retireInstance(key: string, instance: Instance): string | undefined {
+  instance.closing = true;
+  // Keep custody and the retryable handle if native close fails.
+  instance.lease?.release();
+  if (instance.root) {
+    ownedRoots.delete(instance.root);
+  }
+  instance.references = 0;
+  instances.delete(key);
+  clearInterval(instance.timer);
+  return instance.root;
+}
 
 function instanceDirectory(stateDir: string): string {
   return path.join(stateDir, "tmp", "plugin-captures");
@@ -263,17 +292,9 @@ export function retainPluginSourceCaptureInstance(stateDir = resolveStateDir()) 
       released = true;
       return undefined;
     }
-    retained.closing = true;
-    // Keep custody and the retryable handle if native close fails.
-    retained.lease?.release();
-    if (retained.root) {
-      ownedRoots.delete(retained.root);
-    }
+    const root = retireInstance(key, retained);
     released = true;
-    retained.references = 0;
-    instances.delete(key);
-    clearInterval(retained.timer);
-    return retained.root;
+    return root;
   };
   return {
     get managedRoot() {

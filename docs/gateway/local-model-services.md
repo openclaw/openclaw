@@ -23,6 +23,8 @@ OpenClaw does not install launchd, systemd, Docker, or any daemon for this. The 
 
 Startup is serialized per configured provider and command/argument/env set, so concurrent chat and embedding requests for the same service do not spawn duplicate servers. Each request holds its own lease until response handling completes, so idle shutdown waits for every in-flight model and embedding request. Configured provider aliases remain distinct: two aliases can point at different GPU hosts without collapsing onto the same Ollama, LM Studio, or OpenAI-compatible adapter id.
 
+OpenClaw waits for any idle shutdown already in progress when it closes local services. A new request for the same service waits for that stop before acquiring a replacement. Shutdown errors remain visible; subsequent requests recheck the owned process before starting a replacement.
+
 If another OpenClaw process already has a healthy server at the same `healthUrl`, this process reuses it without adopting it (each process only manages the child it personally started). Startup and exit logs include bounded, redacted child-output tails plus timing and exit details; configured environment values are never emitted.
 
 ## Managed llama.cpp

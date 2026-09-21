@@ -469,7 +469,7 @@ suite.define(() => {
       await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
       await expect.poll(() => currentCheckout.getAttribute("aria-pressed")).toBe("false");
       await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
-        "New worktree from main",
+        "New worktree",
       );
       await checkoutSelect.getByLabel("From", { exact: true }).waitFor();
       await checkoutSelect.getByLabel("Name", { exact: true }).waitFor();
@@ -506,9 +506,9 @@ suite.define(() => {
         agentId: "main",
         message: "fix the flaky test",
         worktree: true,
-        worktreeBaseRef: "main",
         cwd: PICKED,
       });
+      expect(createRequest.params).not.toHaveProperty("worktreeBaseRef");
 
       await expect
         .poll(() => new URL(page.url()).pathname)
@@ -611,8 +611,8 @@ suite.define(() => {
         message: "inspect the project",
         projectId: "recorded-openclaw",
         worktree: true,
-        worktreeBaseRef: "main",
       });
+      expect(create.params).not.toHaveProperty("worktreeBaseRef");
       expect(create.params).not.toHaveProperty("cwd");
       expect(create.params).not.toHaveProperty("execNode");
     } finally {

@@ -186,6 +186,7 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
 
     | Legacy key                                                                                    | Current key                                                                 |
     | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+    | `tools.codeMode.languages`, `agents.entries.*.tools.codeMode.languages`                         | removed (Code Mode executes JavaScript; activation and limits are preserved) |
     | `routing.allowFrom`                                                                              | `channels.whatsapp.allowFrom`                                                |
     | `routing.groupChat.requireMention`                                                               | `channels.whatsapp/telegram/imessage.groups."*".requireMention`             |
     | `routing.groupChat.historyLimit`                                                                 | `messages.groupChat.historyLimit`                                            |

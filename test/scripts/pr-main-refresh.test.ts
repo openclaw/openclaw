@@ -14,6 +14,7 @@ import {
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
 import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,7 +24,7 @@ const fixture = () => createMainRefreshFixture(tempDirs.make("openclaw-pr-main-r
 function recoverFixtureLock(f: ReturnType<typeof fixture>, oid: string) {
   const pgid = Number(/^pgid=(\d+)$/m.exec(f.git(f.canonical, "cat-file", "blob", oid))?.[1]);
   expect(pgid).toBeGreaterThan(1);
-  expect(() => process.kill(-pgid, 0)).toThrowError(expect.objectContaining({ code: "ESRCH" }));
+  assertFixtureProcessGroupStopped(pgid);
   const result = f.run(["lock-recover", "42", oid, "--confirmed-no-running-tools"]);
   expect(result.status, result.stdout + result.stderr).toBe(0);
   expect(
@@ -1177,22 +1178,28 @@ fi`,
     expect(f.events().some((e) => e.kind === "main-fetch")).toBe(false);
   });
 
-  it("stops native merge on writer quota failure before fetch or dispatch and releases its lock", () => {
+  it("stops native merge when both writer quotas are exhausted before fetch or dispatch and releases its lock", () => {
     const f = fixture();
     f.configure({ writerRateLimited: true });
     const result = f.run("merge-run");
     expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("GitHub API request failed (resource=core)");
+    expect(result.stderr).toContain("GitHub API request failed (resource=graphql)");
     expect(result.stderr).toContain("original response: HTTP 403");
-    expect(result.stderr).toContain("resource=core; remaining=0; limit=unknown; reset=unknown");
+    expect(result.stderr).toContain("resource=graphql; remaining=0; limit=unknown; reset=unknown");
     expect(result.stderr).not.toContain("Supplemental quota probe");
     expect(f.events().some((e) => e.kind === "main-fetch")).toBe(false);
     const ghCalls = f.events().filter((e) => e.kind === "gh");
     const apiCalls = ghCalls.filter((e) => e.args?.[0] === "api").map((e) => e.args);
-    expect(apiCalls.at(-1)).toEqual(["api", "user", "--include"]);
+    expect(apiCalls.at(-1)).toEqual([
+      "api",
+      "graphql",
+      "--include",
+      "-f",
+      "query=query{viewer{login}}",
+    ]);
     expect(apiCalls.filter((args) => args?.includes("rate_limit"))).toHaveLength(0);
     expect(apiCalls.filter((args) => args?.includes("user"))).toHaveLength(1);
-    expect(apiCalls.some((args) => args?.includes("graphql"))).toBe(false);
+    expect(apiCalls.filter((args) => args?.includes("graphql"))).toHaveLength(1);
     expect(ghCalls.some((e) => e.args?.includes("merge"))).toBe(false);
     expect(ghCalls.some((e) => e.args?.[0] === "workflow")).toBe(false);
     expect(f.git(f.origin, "rev-parse", "refs/heads/main")).toBe(f.main);

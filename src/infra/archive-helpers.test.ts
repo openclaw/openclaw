@@ -3,24 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import {
-  createTarEntryPreflightChecker,
-  resolveArchiveKind,
-  resolvePackedRootDir,
-} from "./archive.js";
+import { resolveArchiveKind, resolvePackedRootDir } from "./archive.js";
 import { pathExists, withTimeout } from "./fs-safe.js";
 import { JsonFileReadError, readJsonFileStrict } from "./json-files.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-archive-helper-test-");
-
-function expectTarPreflightError(
-  checker: ReturnType<typeof createTarEntryPreflightChecker>,
-  entry: Parameters<ReturnType<typeof createTarEntryPreflightChecker>>[0],
-  expected: string | RegExp,
-): void {
-  expect(() => checker(entry)).toThrow(expected);
-}
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -103,57 +91,6 @@ describe("archive helpers", () => {
     const pending = expect(result).rejects.toThrow("extract tar timed out after 1ms");
     await vi.advanceTimersByTimeAsync(1);
     await pending;
-  });
-
-  it("preflights tar entries for blocked link types, path escapes, and size budgets", () => {
-    const createChecker = () =>
-      createTarEntryPreflightChecker({
-        rootDir: "/tmp/dest",
-        limits: {
-          maxEntries: 1,
-          maxEntryBytes: 8,
-          maxExtractedBytes: 12,
-        },
-      });
-
-    expectTarPreflightError(
-      createChecker(),
-      { path: "package/link", type: "SymbolicLink", size: 0 },
-      "tar entry is a link: package/link",
-    );
-    expectTarPreflightError(
-      createChecker(),
-      { path: "../escape.txt", type: "File", size: 1 },
-      /escapes destination|absolute/i,
-    );
-
-    const checker = createChecker();
-    checker({ path: "package/ok.txt", type: "File", size: 8 });
-    expectTarPreflightError(
-      checker,
-      { path: "package/second.txt", type: "File", size: 1 },
-      "archive entry count exceeds limit",
-    );
-  });
-
-  it("treats stripped-away tar entries as no-ops and enforces extracted byte budgets", () => {
-    const checker = createTarEntryPreflightChecker({
-      rootDir: "/tmp/dest",
-      stripComponents: 1,
-      limits: {
-        maxEntries: 4,
-        maxEntryBytes: 16,
-        maxExtractedBytes: 10,
-      },
-    });
-
-    checker({ path: "package", type: "Directory", size: 0 });
-    checker({ path: "package/a.txt", type: "File", size: 6 });
-    expectTarPreflightError(
-      checker,
-      { path: "package/b.txt", type: "File", size: 6 },
-      "archive extracted size exceeds limit",
-    );
   });
 
   it("reads JSON files and reports file existence", async () => {

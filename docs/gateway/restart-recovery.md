@@ -151,17 +151,38 @@ The spawn broker stays available while its Gateway connection is alive, even if
 it receives the stop signal too, so cleanup can still launch commands and observe
 child exits. This does not protect other child runtimes; `KillMode=mixed` remains
 required.
-After upgrading, run `openclaw gateway install --force` for the same profile to
-rewrite and restart the managed unit. Ordinary updates leave existing Linux
-service definitions unchanged. Doctor reports incompatible effective settings.
+Updates and `openclaw doctor --fix` refresh outdated OpenClaw-managed Linux unit
+policy. Maintenance reads the resident shutdown budget from Gateway status.
+Older Gateways without that fact follow the short-budget path: fence admission
+and observe lifecycle drain until idle or the update step deadline. At the
+deadline, outstanding write custody refuses the stop with its owner phase;
+remaining turns can be interrupted with a recorded warning.
 Operator-owned drop-ins must be inspected and updated separately because reinstalling
 the base unit preserves them. See [Linux services](/platforms/linux).
 
+### Maintenance custody observations
+
+Gateway `status` reports its process-owned `shutdownBudget`, with `activeWork`
+counts and a separate `writeCustody` array. Suspension preparation and status
+responses also include optional `writeCustody` entries with `phase` and `count`.
+Current phases identify migration, backup, coordinator writes, session lifecycle
+mutation, and terminal persistence. These are recorded by their operation owners;
+ordinary root requests and cron runs do not imply write custody. Counts can overlap.
+
+The optional field is additive. Older Gateways, including published 2026.9.5,
+can omit it. Missing custody information never refuses maintenance. If the update
+step deadline expires, maintenance stops with a warning that includes the latest
+root-request and cron-run counts, explains the resident's missing distinction,
+and identifies the next Gateway's refreshed stop policy. Only a reported live
+write-custody phase refuses that deadline stop.
+
 ### Systemd stop deadlines
 
-At startup, the Gateway reads its running systemd unit's effective
-`TimeoutStopUSec`, including drop-ins. It logs the source and reconciled stop
-budget at startup and again when shutdown begins. Active-work drain uses at most
+At startup and when accepting shutdown, the Gateway reads its running systemd
+unit's effective `TimeoutStopUSec`, including drop-ins. It logs the source and
+reconciled stop budget at both points, so a repaired unit takes effect without
+restarting first. Inspection and any wait for startup to finish consume the same
+shutdown deadline. Active-work drain uses at most
 315 seconds, with 10 seconds reserved for final chat writes and server cleanup
 and another 5 seconds before systemd's deadline. A unit with the default
 90-second stop timeout therefore gets a 75-second drain and an 85-second Gateway
@@ -186,10 +207,13 @@ account running the Gateway or its restart owner. This also covers hand-written
 system units with `User=openclaw` and externally managed deployments. Reading
 the system unit's timeout does not require sudo or notification support.
 
-If the unit cannot be inspected, the Gateway warns with the manager, unit, and
-failure reason and uses systemd's 90-second default as a conservative fallback.
-An explicitly unlimited timeout keeps the normal Gateway budget. The startup reading is retained for that
-process; restart the Gateway after changing its unit settings.
+If the unit cannot be inspected at startup, the Gateway warns with the manager,
+unit, and failure reason and uses systemd's 90-second default as a conservative
+fallback. A failed shutdown reread retains the startup budget, with elapsed time
+deducted, instead of assuming a longer timeout. An explicitly unlimited timeout
+keeps the normal Gateway budget. Already-running `v2026.9.5` Gateways retain their
+startup reading until they restart; installing newer files cannot change the
+shutdown budget captured by that older process.
 
 An already-installed old unit benefits from the clamp as soon as the new Gateway
 starts, without a service rewrite. This leaves time for orderly shutdown instead
@@ -211,7 +235,7 @@ TimeoutStopSec=330
 
 Run `sudo systemctl daemon-reload` and verify with
 `systemctl show openclaw-gateway.service -p TimeoutStopUSec`. Restart through your
-service's deployment owner to refresh the Gateway's startup reading. For a user
+service's deployment owner. For a user
 unit, use `systemctl --user edit openclaw-gateway.service` and the corresponding
 `--user` reload/show commands. Retain `KillMode=mixed` as described above; a longer
 timeout does not protect children from `KillMode=control-group`'s initial signal.
@@ -614,9 +638,13 @@ For updates, the sentinel carries `stats.runId`, linking the detached updater to
 its durable `update_runs` record. The new Gateway records its observed running
 version, build, and startup facts there. It preserves a terminal outcome already
 written by the updater and waits while a managed handoff is still pending.
-If the existing restart-verification retry window expires, a still-running row
-finishes as failed with `restart-unhealthy`. An already-finalized CLI outcome
-stays intact.
+Before preparing notices or continuations, it reconciles a newer final sentinel
+for that same run and handoff. A pending sentinel keeps its existing bounded
+retry window even when the ledger is already terminal; an unrelated replacement
+remains untouched. If the helper never publishes its final sentinel, expiry
+reports the recorded terminal outcome without changing it. A still-running
+Gateway-owned row finishes as failed with `restart-unhealthy`; CLI-owned runs
+retain their updater's authority and outcome.
 The post-restart notice is rendered from that row using the same report as
 `openclaw update status`. Consuming the sentinel does not remove run history.
 Sentinels left by older releases retain their existing delivery route.

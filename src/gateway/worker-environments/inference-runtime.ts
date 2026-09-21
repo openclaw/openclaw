@@ -513,6 +513,7 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
     const trace = createDiagnosticTraceContextFromActiveScope();
     let modelCallSeq = 0;
     const stream = wrapStreamFnWithDiagnosticModelCallEvents(scopedStream, {
+      config: approved.config,
       runId: request.runId,
       sessionKey: target.sessionKey,
       sessionId: request.sessionId,

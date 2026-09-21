@@ -824,6 +824,11 @@
   --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20'/%3E%3C/svg%3E");
 }
 
+/* Same glyph as icons.pencilSparkles, using the file-kind mask convention. */
+:is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="skill"]::before {
+  --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 3H8'/%3E%3Cpath d='m15.007 5.008 3.987 3.986'/%3E%3Cpath d='M20 15v4'/%3E%3Cpath d='M21.174 6.813a2.82 2.82 0 0 0-3.986-3.987L3.842 16.175a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z'/%3E%3Cpath d='M22 17h-4'/%3E%3Cpath d='M4 5v4'/%3E%3Cpath d='M6 7H2'/%3E%3Cpath d='M9 2v2'/%3E%3C/svg%3E");
+}
+
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="component"]::before {
   --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='7' height='7' x='3' y='3' rx='1'/%3E%3Crect width='7' height='7' x='14' y='3' rx='1'/%3E%3Crect width='7' height='7' x='14' y='14' rx='1'/%3E%3Crect width='7' height='7' x='3' y='14' rx='1'/%3E%3C/svg%3E");
 }

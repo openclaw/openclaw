@@ -100,6 +100,8 @@ export type DoctorHealthCheckContext = HealthCheckContext & {
   readonly lintConfigSnapshot?: Pick<ConfigFileSnapshot, "exists" | "issues" | "warnings">;
   readonly runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   readonly agentDatabaseRefusals?: readonly AgentDatabaseAdmissionRefusal[];
+  /** The isolated lint worker retains its private state until these disposers settle. */
+  readonly deferInspectionDisposal?: (dispose: () => Promise<void>) => void;
 };
 
 export type DoctorHealthContribution = FlowContribution & {

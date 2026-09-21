@@ -410,6 +410,9 @@ export async function startCodexAttemptThread(params: {
                     // retain run cancellation after this function returns.
                     signal: AbortSignal.any([params.signal, startupAbandonController.signal]),
                     onExecutionDisconnect: params.onExecutionDisconnect,
+                    requireProcessAuthority: Boolean(
+                      attemptParams.hostCapabilities.retainSourceAuthority,
+                    ),
                   })
                 : undefined;
               startupSandboxEnvironmentAcquired = Boolean(startupSandboxEnvironment);

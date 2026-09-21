@@ -365,7 +365,9 @@ export async function updateGitCheckout(params: {
       const { step: inspectionStep, workStep: inspectionWorkStep } =
         forRunner(runInspectionCommand);
       const importCandidate = async (candidateSha: string, upstreamRef?: string) => {
-        const transfer = await prepareGitCandidateTransfer({
+        // Close the pinned pack on every exit, including admission refusal,
+        // before the surrounding inspection checkout is removed.
+        await using transfer = await prepareGitCandidateTransfer({
           candidateSha,
           beforeSha,
           installedRoot: gitRoot,

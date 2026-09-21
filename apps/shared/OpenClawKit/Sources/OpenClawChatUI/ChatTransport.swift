@@ -729,7 +729,7 @@ public struct OpenClawChatModelCatalogSnapshot: Sendable, Equatable {
             return String(
                 localized: "Update your Gateway to use session model choices. Slash commands are still available.")
         }
-        return self.refreshFailed ? String(localized: "Model choices could not refresh. Reconnect and try again.") : nil
+        return nil
     }
 
     public init(

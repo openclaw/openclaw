@@ -16,6 +16,7 @@ import {
 } from "../tools/ask-user-tool.js";
 import {
   QuestionAnswerUnconfirmedError,
+  QuestionDispatchUnsupportedError,
   resolveAgentQuestionGatewayCall,
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
@@ -460,6 +461,9 @@ describe("question dispatch ownership", () => {
           const result = await outcome;
           if (mode === "legacy-source" || mode === "v2-closed") {
             expect(result).toBeInstanceOf(Error);
+            if (mode === "legacy-source") {
+              expect(result).toBeInstanceOf(QuestionDispatchUnsupportedError);
+            }
             expect(fixture.requests.filter((frame) => frame.method === "question.resolve")).toEqual(
               [],
             );

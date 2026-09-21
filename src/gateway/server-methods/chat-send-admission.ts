@@ -23,6 +23,10 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
+  isProgressCardRefreshInputProvenance,
+  progressCardRefreshRunProjection,
+} from "../../sessions/input-provenance.js";
+import {
   beginSessionWorkAdmission,
   interruptSessionWorkAdmissions,
   isCompetingSessionWorkAdmissionActive,
@@ -35,6 +39,7 @@ import {
 } from "../chat-abort.js";
 import { retainGatewayDeviceRevocation } from "../device-revocation.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
 import {
@@ -78,6 +83,7 @@ export async function admitChatSend(params: {
   params.assertCurrent?.();
   const { request, session, respond, context, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind } = request;
+  const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
   const {
     rawSessionKey,
     sessionLoadKey,
@@ -390,6 +396,7 @@ export async function admitChatSend(params: {
       isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
       kind: "chat-send",
       turnKind,
+      ...(progressRefresh ? { controlUiVisible: false, projectSessionActive: false } : {}),
       lifecycleGeneration,
     });
   };
@@ -533,6 +540,9 @@ export async function admitChatSend(params: {
   }
   let releaseGatewayRootContinuation = () => {};
   let releaseCallerAuthority: (() => void) | undefined;
+  let operatorAuthority:
+    | import("../../agents/admitted-run-context.js").AdmittedRunOperatorAuthority
+    | undefined;
   // Until dispatch takes custody, interruption and callback failures release every admission hold.
   const cleanupPreDispatchAdmission = () => {
     try {
@@ -546,7 +556,10 @@ export async function admitChatSend(params: {
   };
   let interruptedActiveRun = false;
   try {
-    releaseCallerAuthority = retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
+    const capturedOperator = captureGatewayOperatorRunAuthority(params);
+    operatorAuthority = capturedOperator?.authority;
+    releaseCallerAuthority =
+      capturedOperator?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
     let interruptionSettled = true;
     if (runInterruptTarget) {
       interruptedActiveRun = true;
@@ -614,7 +627,8 @@ export async function admitChatSend(params: {
       !acquiredGatewayWorkAdmission.isActive() ||
       !isChatAbortControllerEntryAbortable(sessionBinding) ||
       sessionBinding.registrationCleanupRequested ||
-      sessionBinding.projectSessionActive === false ||
+      // Refresh starts hidden; its presentation bit is not admission liveness.
+      (sessionBinding.projectSessionActive === false && !progressRefresh) ||
       sessionBinding.projectSessionTerminalPending ||
       sessionBinding.projectSessionTerminalPersisted
     ) {
@@ -664,12 +678,14 @@ export async function admitChatSend(params: {
     sessionKey,
     sessionId: admittedSessionId,
     lifecycleGeneration,
+    ...progressCardRefreshRunProjection(request.systemInputProvenance),
   });
 
   return {
     ok: true as const,
     value: {
       activeRunAbort,
+      operatorAuthority,
       admittedSessionSettings,
       admittedSessionId,
       ...(expectedActiveReplyOperation ? { expectedActiveReplyOperation } : {}),
