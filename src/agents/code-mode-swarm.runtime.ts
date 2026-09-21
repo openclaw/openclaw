@@ -11,9 +11,11 @@ import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import {
   getSwarmRunByLaunchReplayKey,
   initSubagentRegistry,
+  listSwarmRunsForGroup,
 } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import { prepareDynamicsSpawn } from "./subagents/swarm/dynamics/dynamics-spawn.js";
+import { assessHostCollectorPopulation } from "./subagents/swarm/dynamics/population-runtime.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -32,6 +34,10 @@ import {
 } from "./tools/agents-wait-tool.js";
 import { ToolInputError } from "./tools/common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-resolution.js";
+
+const dynamicsGroups = new Set<string>();
+const dynamicsAdvisoryByGroup = new Map<string, string>();
+
 
 function resolveCodeModeRequesterSessionKey(ctx: ToolSearchToolContext): string {
   const sessionKey = ctx.sessionKey?.trim();
@@ -125,15 +131,17 @@ async function runAgentSpawnBridge(params: {
     runAgentToolSourceExecutionGuard(spawnTool);
   };
   assertCurrent();
+  const groupId = resolveCodeModeSwarmGroupId(params.ctx);
+  const dynamicsEnabled = options.dynamics !== undefined;
   const spawnInput: Record<PropertyKey, unknown> = {
     ...prepareDynamicsSpawn({
       task: prompt.trim(),
       dynamics: options.dynamics,
-      sourceReplicaId: resolveCodeModeSwarmGroupId(params.ctx),
+      sourceReplicaId: groupId,
       targetReplicaId: `${params.codeModeRunId}:${params.request.id}`,
     }),
     collect: true,
-    groupId: resolveCodeModeSwarmGroupId(params.ctx),
+    groupId,
     ...(label ? { label } : {}),
     ...(model ? { model } : {}),
     ...(thinking ? { thinking } : {}),
@@ -170,6 +178,9 @@ async function runAgentSpawnBridge(params: {
       }
     }
     assertCurrent();
+    if (dynamicsEnabled) {
+      dynamicsGroups.add(groupId);
+    }
     return replayedSpawnResult(existing);
   }
   Object.defineProperty(spawnInput, SWARM_CODE_MODE_IDEMPOTENCY_KEY, {
@@ -195,6 +206,9 @@ async function runAgentSpawnBridge(params: {
         : "collector spawn was not accepted";
     throw new ToolInputError(`agents.run spawn failed: ${detail}`);
   }
+  if (dynamicsEnabled) {
+    dynamicsGroups.add(groupId);
+  }
   return value;
 }
 
@@ -212,13 +226,47 @@ async function runAgentWaitBridge(params: {
     throw new ToolInputError("agents.run wait requires session identity.");
   }
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  return await waitForCollectorCompletion({
+  const completion = await waitForCollectorCompletion({
     runId: runId.trim(),
     currentSessionKeys: new Set([rawSessionKey, requesterSessionKey]),
     currentAgentId: params.ctx.agentId,
     config: params.ctx.runtimeConfig ?? params.ctx.config,
     signal: params.signal,
   });
+  const groupId = resolveCodeModeSwarmGroupId(params.ctx);
+  if (dynamicsGroups.has(groupId)) {
+    const records = listSwarmRunsForGroup(groupId, requesterSessionKey, params.ctx.agentId);
+    const decision = assessHostCollectorPopulation({
+      groupId,
+      maxConcurrent: resolveSwarmConfig(
+        params.ctx.runtimeConfig ?? params.ctx.config,
+        params.ctx.agentId,
+      ).maxConcurrent,
+      records: records.map((entry) => ({
+        runId: entry.swarmRunId ?? entry.runId,
+        terminalStatus: entry.collectorCompletion?.status ?? null,
+      })),
+    });
+    const actions = decision.actions.filter((action) => action.kind !== "hold");
+    if (actions.length > 0) {
+      const advisory = `Dynamics advisory: ${actions.map((action) => action.kind).join(", ")} — ${decision.rationale.join(" ")}`;
+      if (dynamicsAdvisoryByGroup.get(groupId) !== advisory) {
+        emitSessionLifecycleEvent({
+          sessionKey: rawSessionKey,
+          reason: "swarm-note",
+          swarmGroupId: groupId,
+          kind: "log",
+          text: advisory,
+        });
+        dynamicsAdvisoryByGroup.set(groupId, advisory);
+      }
+    }
+    if (records.length > 0 && records.every((entry) => entry.collectorCompletion)) {
+      dynamicsGroups.delete(groupId);
+      dynamicsAdvisoryByGroup.delete(groupId);
+    }
+  }
+  return completion;
 }
 
 function runSwarmNoteBridge(params: {
