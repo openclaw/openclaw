@@ -6,6 +6,8 @@ import {
   createTalkDriver,
   incomingCall,
   mocks,
+  pendingDialCancellationResult,
+  pendingDialState,
   resetRuntimeTestState,
 } from "./runtime.test-support.js";
 
@@ -92,5 +94,57 @@ describe("FaceTime runtime carrier aliases", () => {
     await vi.waitFor(async () => expect((await runtime.status()).calls).toEqual([]));
     expect(talk.close).toHaveBeenCalledWith("native-ended");
     await runtime.stop();
+  });
+  it("keeps the latest pending carrier after a cancellation reply without identity", async () => {
+    const state = await pendingDialState({ callUUID: "original-call" });
+    let resolveReply!: (result: ReturnType<typeof pendingDialCancellationResult>) => void;
+    const reply = new Promise<ReturnType<typeof pendingDialCancellationResult>>((resolve) => {
+      resolveReply = resolve;
+    });
+    mocks.helper.cancelOutgoingCall.mockResolvedValue(pendingDialCancellationResult());
+    mocks.helper.cancelOutgoingCall.mockImplementationOnce(() => reply);
+    const runtime = await createRuntime(state);
+    const cancellation = runtime.hangup();
+    try {
+      await vi.waitFor(() => expect(mocks.helper.cancelOutgoingCall).toHaveBeenCalledOnce());
+      await mocks.helperParams?.onMessage(
+        {
+          event: "ft-outbound-call-identified",
+          data: { dial_id: "approved-dial", call_uuid: "replacement-call" },
+        },
+        {
+          bundleIdentifier: "com.apple.FaceTime",
+          processId: 4321,
+          processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
+          connectionGeneration: 1,
+        },
+      );
+      resolveReply(pendingDialCancellationResult());
+      await cancellation;
+      expect(await state.lookup("active")).toMatchObject({
+        delivery: "cancelling",
+        callUUID: "replacement-call",
+        callUUIDAliases: ["original-call", "replacement-call"],
+      });
+      await runtime.hangup();
+      expect(mocks.helper.cancelOutgoingCall).toHaveBeenLastCalledWith(
+        expect.objectContaining({ dialID: "approved-dial", callUUID: "replacement-call" }),
+      );
+      expect(mocks.startTalk).not.toHaveBeenCalled();
+    } finally {
+      resolveReply(pendingDialCancellationResult());
+      await cancellation;
+      await mocks.helperParams?.onMessage({
+        event: "ft-call-status-changed",
+        data: {
+          dial_id: "approved-dial",
+          call_uuid: "replacement-call",
+          call_status: 6,
+          has_ended: true,
+          is_outgoing: true,
+        },
+      });
+      await runtime.stop();
+    }
   });
 });
