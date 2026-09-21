@@ -460,6 +460,12 @@ describe("pooled agent publication owner", () => {
     if (!tick) {
       throw new Error("Expected the canonical agent maintenance timer");
     }
+    db.exec(`INSERT INTO cache_entries(scope, key, blob, updated_at)
+      VALUES ('maintenance-proof', 'pages', zeroblob(4194304), 1);
+      DELETE FROM cache_entries WHERE scope = 'maintenance-proof';`);
+    const freePages = () => Number(db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0);
+    const before = freePages();
+    expect(before).toBeGreaterThan(512);
     const exec = vi.spyOn(db, "exec");
     const transactionMarker = path.join(root, "maintenance-transaction");
     const work = worker.run(
@@ -475,9 +481,12 @@ describe("pooled agent publication owner", () => {
     tick();
     expect(performance.now() - started).toBeLessThan(100);
     expect(exec.mock.calls.some(([sql]) => sql.includes("incremental_vacuum"))).toBe(false);
+    expect(freePages()).toBe(before);
     await work;
     await withOpenClawAgentDatabaseWrite(options, () => undefined, db);
     expect(exec.mock.calls.some(([sql]) => sql.includes("incremental_vacuum"))).toBe(true);
+    expect(before - freePages()).toBeGreaterThan(0);
+    expect(before - freePages()).toBeLessThanOrEqual(512);
     expect(db.prepare("SELECT value FROM worker_proof").all()).toEqual([{ value: "published" }]);
   });
 });

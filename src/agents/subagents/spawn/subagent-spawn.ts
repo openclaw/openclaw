@@ -168,7 +168,6 @@ export async function spawnSubagentDirect(
       resolvedModelMetadata,
     } = childPlan.resolved;
     let { childSessionOrigin } = childPlan.resolved;
-    const spawnedByKey = requesterInternalKey;
     const { resolvedModel, thinkingOverride } = plan;
     const initialSession = await createInitialSubagentSession({
       assertActive,
@@ -342,7 +341,7 @@ export async function spawnSubagentDirect(
         completionMode,
         spawnMode,
         message: envelope.message,
-        spawnedByKey,
+        spawnedByKey: requesterInternalKey,
         toolSpawnMetadata,
         spawnedWorkspaceDir,
         childSessionKey,
@@ -671,6 +670,8 @@ export async function spawnSubagentDirect(
       await emitSpawnLifecycleHooks(childRunId);
     }
 
+    // Publish only after preparation releases its hold and exposes the scheduler's capacity state.
+    await swarmReservation?.release();
     // Emit lifecycle event so the gateway can broadcast sessions.changed to SSE subscribers.
     emitSessionLifecycleEvent({
       sessionKey: childSessionKey,

@@ -16,6 +16,7 @@ import {
   listTasksFromIndex,
 } from "./task-registry-records.js";
 import type {
+  TaskExecutionRestoreStore,
   TaskRegistryMutationScope,
   TaskRegistryObserverEvent,
 } from "./task-registry.store.types.js";
@@ -25,6 +26,11 @@ export type PendingTaskRegistryMutation = {
   scope: TaskRegistryMutationScope;
   readEventTarget?: () => TaskAgentEventTarget | undefined;
   readIdentity?: "preserved";
+  readSettlement?: {
+    databaseKey: string;
+    store: TaskExecutionRestoreStore;
+    promise: Promise<void>;
+  };
   published: Map<string, Omit<TaskRecord, "detail"> | undefined>;
   publication?: {
     records: Map<string, TaskRecord>;
@@ -112,6 +118,7 @@ export type TaskProgressBatch = {
 export type TaskRegistryEventMutations = {
   prepare: () => { consume: () => void; release: () => void } | undefined;
   pending: (taskId?: string) => boolean;
+  pendingTaskIds: () => readonly string[];
   captureReadFence: (admission: OpenClawStateDatabaseReadAdmission) => Promise<void>;
 };
 
@@ -332,6 +339,28 @@ export function addTaskIndexes(task: TaskRecord): void {
   addOwnerKeyIndex(task.taskId, task);
   addParentFlowIdIndex(task.taskId, task);
   addRelatedSessionKeyIndex(task.taskId, task);
+}
+
+/** Update a published row without disturbing unchanged index insertion order. */
+export function updateTaskIndexes(current: TaskRecord, next: TaskRecord): void {
+  const taskId = next.taskId;
+  updateRunIdIndex(current, next);
+  if (current.ownerKey !== next.ownerKey) {
+    deleteOwnerKeyIndex(taskId, current);
+    addOwnerKeyIndex(taskId, next);
+  }
+  if (current.parentFlowId !== next.parentFlowId) {
+    deleteParentFlowIdIndex(taskId, current);
+    addParentFlowIdIndex(taskId, next);
+  }
+  if (
+    current.ownerKey !== next.ownerKey ||
+    current.requesterSessionKey !== next.requesterSessionKey ||
+    current.childSessionKey !== next.childSessionKey
+  ) {
+    deleteRelatedSessionKeyIndex(taskId, current);
+    addRelatedSessionKeyIndex(taskId, next);
+  }
 }
 
 export function taskIdsInScope(scope?: TaskRegistryMutationScope): Iterable<string> {

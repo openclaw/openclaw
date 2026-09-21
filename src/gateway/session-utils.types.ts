@@ -113,6 +113,11 @@ void sessionRowSchemaDriftGuard;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
+export type SessionTitleFields = {
+  firstUserMessage: string | null;
+  lastMessagePreview: string | null;
+};
+
 export type SessionPreviewItem = {
   role: "user" | "assistant" | "tool" | "system" | "other";
   text: string;

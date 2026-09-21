@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -43,7 +44,11 @@ function openIndependentStateDatabase(path: string): OpenClawStateDatabase {
   return {
     db: openNodeSqliteDatabase(path),
     path,
-    walMaintenance: { checkpoint: () => true, close: () => true },
+    walMaintenance: {
+      checkpoint: () => true,
+      close: () => true,
+      reclaimFreePages: createSqliteWalReclamationResult,
+    },
   };
 }
 

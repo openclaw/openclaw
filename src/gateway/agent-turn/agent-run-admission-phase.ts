@@ -2,7 +2,6 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import {
   createOperationalRunInstanceRef,
   type OperationalRunInstanceRef,
-  type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
@@ -35,10 +34,9 @@ import {
 } from "../../sessions/input-provenance.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
-import { retainGatewayDeviceRevocation } from "../device-revocation.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../session-subagent-resume.js";
 import { loadSessionEntry, resolveSessionModelRef } from "../session-utils.js";
@@ -270,8 +268,7 @@ export async function prepareAgentRunDispatch(
     cwd: params.sessionEntry?.spawnedCwd,
   });
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
-  let releaseCallerAuthority: (() => void) | undefined;
-  let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
+  let capturedOperator: ReturnType<typeof retainGatewayOperatorRun> | undefined;
   let registeredFollowupTask: RegisteredGatewayAgentTask | undefined;
   const cleanupPreaccept = async (admissionReleased = false, failure?: string) => {
     const lease = preparedModelRuntimeLease;
@@ -298,7 +295,7 @@ export async function prepareAgentRunDispatch(
       try {
         await lease?.[Symbol.asyncDispose]();
       } finally {
-        releaseCallerAuthority?.();
+        capturedOperator?.release();
         activeRunAbort.cleanup();
         if (!admissionReleased) {
           activeGatewayWorkAdmission.release();
@@ -617,10 +614,7 @@ export async function prepareAgentRunDispatch(
   }
   try {
     // The transport request ends at acceptance; execution retains this exact caller.
-    const capturedOperator = captureGatewayOperatorRunAuthority(params);
-    operatorAuthority = capturedOperator?.authority;
-    releaseCallerAuthority =
-      capturedOperator?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
+    capturedOperator = retainGatewayOperatorRun({ ...params, entry: activeRunAbort.entry });
   } catch (error) {
     const failure = releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
     return rejectPreaccept(errorShapeFromError(ErrorCodes.INVALID_REQUEST, failure));
@@ -657,6 +651,7 @@ export async function prepareAgentRunDispatch(
     // may reject its execution after this synchronous ownership transfer.
     assertInputAdmissionCurrent = undefined;
     params.io.emitAcceptance([true, accepted, undefined], { runId: params.runId });
+    capturedOperator.armCancellation();
     recordAgentRunUserTurnParticipant(
       { ...params, inputProvenance: userTurn.inputProvenance },
       userTurn,
@@ -679,8 +674,8 @@ export async function prepareAgentRunDispatch(
       activeGatewayWorkAdmission,
       activeRunAbort,
       ...(cronCreatorAuthority ? { cronCreatorAuthority } : {}),
-      ...(releaseCallerAuthority ? { releaseCallerAuthority } : {}),
-      ...(operatorAuthority ? { operatorAuthority } : {}),
+      releaseCallerAuthority: capturedOperator.release,
+      ...(capturedOperator.authority ? { operatorAuthority: capturedOperator.authority } : {}),
       operationalRunInstance,
       effectiveProviderOverride,
       effectiveModelOverride,

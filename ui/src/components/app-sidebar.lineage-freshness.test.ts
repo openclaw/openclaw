@@ -670,16 +670,14 @@ describe("sidebar routed-lineage freshness", () => {
                 activeRunIds: pendingSelection === "introduced-overlap" ? ["remaining-run"] : [],
               });
             } else if (pendingSelection === "introduced-event") {
-              expect(
-                sessions.reconcileChanged({
-                  key,
-                  sessionId: child.sessionId,
-                  updatedAt: 5,
-                  hasActiveRun: true,
-                  status: "running",
-                  archived: false,
-                }).applied,
-              ).toBe(true);
+              gatewayHarness.publishEvent("sessions.changed", {
+                key,
+                sessionId: child.sessionId,
+                updatedAt: 5,
+                hasActiveRun: true,
+                status: "running",
+                archived: false,
+              });
               expect(sessions.state.result?.sessions.find((row) => row.key === key)?.status).toBe(
                 "running",
               );
@@ -773,7 +771,7 @@ describe("sidebar routed-lineage freshness", () => {
             "Latest filtered child",
           );
           if (pendingSelection === "deletion") {
-            sessions.reconcileChanged({
+            gatewayHarness.publishEvent("sessions.changed", {
               key,
               sessionId: child.sessionId,
               agentId: "main",

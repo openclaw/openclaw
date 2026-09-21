@@ -149,12 +149,12 @@ tokenizer preparation, before loading the replacement native session. `threads`
 sets CPU intra-operation parallelism from 1 to 8.
 
 Cold-loading a large model can exhaust a request's deadline on slower machines.
-The host allows up to ten seconds; consumers can request less.
+The host allows up to 30 seconds; consumers can request less.
 When agents use several models, set `maxLoadedModels` to
 hold the active models if memory permits, or select a smaller model. The default
 cache holds two models; the maximum is five.
 
-The host still enforces its ten-second decision deadline and four-call provider
+The host still enforces its 30-second decision deadline and four-call provider
 limit. The worker serializes native operations. A queued cancellation leaves the
 warm process intact; cancelling active native work terminates and joins that
 process before releasing the request. The next live request starts a fresh worker.

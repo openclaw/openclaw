@@ -1,3 +1,4 @@
+import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import type {
@@ -10,6 +11,7 @@ import type {
 } from "./lobster-pet-contract.ts";
 import { canonicalLobsterLook, lobsterPetName, mulberry32 } from "./lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
+import { THEME_CRITTER_CROSS_MS } from "./theme-flair-sprites.ts";
 
 export type LobsterPetAct =
   | "wave"
@@ -162,6 +164,7 @@ export const LOBSTER_PASSER_CROSS_MS: Record<LobsterPasserKind, number> = {
   snail: 90_000,
   duck: 14_000,
   jellyfish: 16_000,
+  ...THEME_CRITTER_CROSS_MS,
 };
 
 export type LobsterPetAnchor = "top" | "floor";
@@ -197,24 +200,32 @@ export type LobsterPasserPlan = {
 // Once per load, someone else might just... pass through. Strangers are
 // other lobsters that never stop; the rest of the traffic is a crab (not a
 // lobster, refuses to discuss it), a snail, a rubber duck, or a jellyfish.
-// The 9.5% event gate is unchanged from the two-kind era — variety widened,
-// frequency did not. None of them count for the Lobsterdex.
-export function planLobsterPasser(seed: number): LobsterPasserPlan | null {
+// Theme visitors add their own rarity bands after the regulars. None count
+// for the Lobsterdex; one roll still admits at most one crossing per load.
+export type LobsterPasserOptions = { critters?: readonly ThemeCritterId[]; strangers?: boolean };
+
+export function planLobsterPasser(
+  seed: number,
+  { critters = [], strangers = true }: LobsterPasserOptions = {},
+): LobsterPasserPlan | null {
   const rng = mulberry32((seed ^ 0xcab) >>> 0);
-  const roll = rng();
-  if (roll >= 0.095) {
+  const roll = rng() * 1000;
+  const weights: Array<readonly [LobsterPasserKind, number]> = [
+    ["crab", 15],
+    ["snail", 12],
+    ["duck", 12],
+    ["jellyfish", 11],
+    ...(strangers ? ([["stranger", 45]] as const) : []),
+    ...critters.map((kind) => [kind, 20] as const),
+  ];
+  let limit = 0;
+  const kind = weights.find(([, weight]) => {
+    limit += weight;
+    return roll < limit;
+  })?.[0];
+  if (!kind) {
     return null;
   }
-  const kind: LobsterPasserKind =
-    roll < 0.015
-      ? "crab"
-      : roll < 0.027
-        ? "snail"
-        : roll < 0.039
-          ? "duck"
-          : roll < 0.05
-            ? "jellyfish"
-            : "stranger";
   const atMs = Math.round(2500 + rng() * 6500);
   const direction: 1 | -1 = rng() < 0.5 ? 1 : -1;
   const floor = rng() < 0.55;

@@ -32,11 +32,12 @@ import {
   abortControlledSubagents,
   descendantAbortError,
 } from "./chat-abort-runtime.js";
+import { captureAbortedPartial } from "./chat-aborted-partial.js";
 import {
   normalizeOptionalChatText as normalizeOptionalText,
   normalizeUnknownChatText as normalizeUnknownText,
 } from "./chat-text-normalization.js";
-import { captureAbortedPartial, persistAbortedPartials } from "./chat-transcript-persistence.js";
+import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 

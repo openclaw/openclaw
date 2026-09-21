@@ -2,9 +2,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import {
   captureTaskRegistryReadFence,
   hasPendingTaskRegistryEvents,
+  listPendingTaskRegistryEventTaskIds,
 } from "./task-registry-listener-state.js";
 import {
   cloneTaskRecord,
@@ -23,6 +25,7 @@ import {
 import {
   getTaskRegistryProcessState,
   matchesScope,
+  taskIdsInScope,
   type PendingTaskRegistryMutation,
 } from "./task-registry.process-state.js";
 import { getTaskRegistryStore, type TaskRegistryStore } from "./task-registry.store.js";
@@ -36,6 +39,7 @@ export type TaskRegistryRead = {
   isTaskCurrent: (taskId: string) => boolean;
   isTaskSettled: (taskId: string) => boolean;
   isChildSessionCurrent: (childSessionKey: string) => boolean;
+  hasPendingTasksForFlow: (flowId: string) => boolean;
   getTaskById: (taskId: string) => TaskRecord | undefined;
   getTasksByRunId: (runId: string) => TaskRecord[];
   listTaskRecordsForChildSessionKey: (childSessionKey: string) => TaskRecord[];
@@ -122,11 +126,23 @@ function canReadResidentTaskMetadata(): boolean {
 }
 
 /** External readers join a fixed accepted prefix; persistence preparation must never use this fence. */
-export async function prepareTaskRegistryReadOwner(): Promise<TaskRegistryReadOwner> {
-  const context = captureOpenClawStateWorkerContext();
-  const store = getTaskRegistryStore();
+export async function prepareTaskRegistryReadOwner(
+  context = captureOpenClawStateWorkerContext(),
+  store = getTaskRegistryStore(),
+  pendingMutations: readonly PendingTaskRegistryMutation[] = [],
+): Promise<TaskRegistryReadOwner> {
   const fence = captureTaskRegistryReadFence(context.admission);
-  const settled = await Promise.allSettled([ensureTaskRegistryReadyAsync(context), fence]);
+  const mutations = pendingMutations.flatMap((pending) => {
+    const settlement = pending.readSettlement;
+    return settlement?.store === store && settlement.databaseKey === context.admission.identity.key
+      ? [settlement.promise]
+      : [];
+  });
+  const settled = await Promise.allSettled([
+    ensureTaskRegistryReadyAsync(context),
+    fence,
+    ...mutations,
+  ]);
   const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   if (errors.length === 1) {
     throw errors[0];
@@ -137,6 +153,28 @@ export async function prepareTaskRegistryReadOwner(): Promise<TaskRegistryReadOw
   const assertCurrent = () => assertTaskRegistryOwnerCurrent(context, store);
   assertCurrent();
   return { context, store, assertCurrent };
+}
+
+/** Page requests join their initial mutation cohort and accepted events while retries refresh rows. */
+export function createTaskRegistryReadPreparation() {
+  let owner: TaskRegistryReadOwner | undefined;
+  return async (): Promise<TaskRegistryRead | undefined> => {
+    if (owner) {
+      const store = getTaskRegistryStore();
+      assertTaskRegistryOwnerCurrent(owner.context, store);
+      // A replacement store starts its own fence; an invalid database cannot be reopened here.
+      if (store !== owner.store) {
+        owner = undefined;
+      }
+    }
+    if (!owner) {
+      const context = captureOpenClawStateWorkerContext();
+      owner = await prepareTaskRegistryReadOwner(context, getTaskRegistryStore(), [
+        ...getTaskRegistryProcessState().projection.pending,
+      ]);
+    }
+    return prepareTaskRegistryRead(owner);
+  };
 }
 
 export async function prepareTaskRegistryRead(
@@ -192,6 +230,58 @@ export async function prepareTaskRegistryRead(
     isChildSessionCurrent(childSessionKey) {
       assertCurrent();
       return isTaskRegistryReadScopeCurrent("childSessionKey", childSessionKey.trim());
+    },
+    hasPendingTasksForFlow(flowId) {
+      assertCurrent();
+      const { projection, taskIdsByParentFlowId } = getTaskRegistryProcessState();
+      const intersects = (
+        scope: TaskRegistryMutationScope,
+        pending?: PendingTaskRegistryMutation,
+      ) => {
+        const targetId = pending?.readEventTarget?.()?.taskId ?? scope.taskId;
+        const records = [...new Set([...taskIdsInScope(scope), targetId])].flatMap((taskId) => {
+          const task = tasks.get(taskId);
+          return task ? [task] : [];
+        });
+        const facts = [
+          ...records,
+          ...[...(pending?.published.values() ?? [])].flatMap((task) => (task ? [task] : [])),
+          ...(pending?.publication?.records.values() ?? []),
+        ];
+        if (scope.flowId === flowId || facts.some((task) => task.parentFlowId?.trim() === flowId)) {
+          return true;
+        }
+        // A known target can belong to another flow or no flow. Only missing ownership is global.
+        return !scope.flowId && !facts.some((task) => task.taskId === targetId);
+      };
+      const pendingScopes = new Set<TaskRegistryMutationScope>();
+      for (const pending of projection.pending) {
+        pendingScopes.add(pending.scope);
+        if (intersects(pending.scope, pending)) {
+          return true;
+        }
+      }
+      for (const scope of projection.dirtyScopes) {
+        if (!pendingScopes.has(scope) && intersects(scope)) {
+          return true;
+        }
+      }
+      for (const taskId of listPendingTaskRegistryEventTaskIds()) {
+        const facts = [
+          tasks.get(taskId),
+          ...[...projection.pending].flatMap((pending) => [
+            pending.published.get(taskId),
+            pending.publication?.records.get(taskId),
+          ]),
+        ].filter((task) => task !== undefined);
+        if (facts.length === 0 || facts.some((task) => task.parentFlowId?.trim() === flowId)) {
+          return true;
+        }
+      }
+      return [...(taskIdsByParentFlowId.get(flowId) ?? [])].some((taskId) => {
+        const task = tasks.get(taskId);
+        return task !== undefined && isTaskFlowCancellationPending(task);
+      });
     },
     getTaskById(taskId) {
       if (!isTaskCurrent(taskId)) {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getProcessCleanupBudget,
   runWithProcessCleanupBudget,
@@ -13,8 +14,14 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
+import {
+  emitSessionsChanged,
+  flushPendingSessionsChangedEvents,
+} from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 const oauth = vi.hoisted(() => ({
   create: vi.fn(),
@@ -89,6 +96,60 @@ describe("gateway lifetime sidecars", () => {
     expect(metadataListener.stop).toHaveBeenCalledOnce();
     expect(sessionChange.stop).toHaveBeenCalledOnce();
     expect(worker.stop).toHaveBeenCalledOnce();
+  });
+
+  test("joins session events admitted after the initial sidecar drain", async () => {
+    const sessionKey = "agent:main:late";
+    const projection = createSessionRowProjectionFixture({
+      cfg: {},
+      agentId: "main",
+      store: { [sessionKey]: { sessionId: "late", updatedAt: 1 } },
+    });
+    vi.useFakeTimers();
+    const context = {
+      broadcastToConnIds: vi.fn(),
+      chatAbortControllers: new Map(),
+      getRuntimeConfig: () => ({}),
+      getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      ...bindSessionRowProjection({}, () => projection),
+    } as unknown as GatewayRequestContext;
+    const prepared = createDeferred();
+    const prepare = projection.withPreparedExactRows.bind(projection);
+    vi.spyOn(projection, "withPreparedExactRows").mockImplementation(async (queries, consume) => {
+      await prepared.promise;
+      return prepare(queries, consume);
+    });
+    const owner = createGatewaySidecarStopOwner();
+    try {
+      await attachInitialGatewayLifetimeSidecars({
+        chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
+        gatewayRequestContext: context,
+        flushPendingSessionsChangedEvents,
+        minimalTestGateway: true,
+        logWarning: vi.fn(),
+        publishSidecars: owner.publish,
+      });
+      await owner.stop();
+      emitSessionsChanged(context, { reason: "patch", sessionKey });
+      let sealed = false;
+      const seal = owner.sealAndJoin().then(() => {
+        sealed = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const sealedBeforePublication = sealed;
+      prepared.resolve();
+      await seal;
+      await flushPendingSessionsChangedEvents(context);
+      expect(sealedBeforePublication).toBe(false);
+      emitSessionsChanged(context, { reason: "patch", sessionKey });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      prepared.resolve();
+      await flushPendingSessionsChangedEvents(context);
+      projection.dispose();
+    }
   });
 
   test("retains the shutdown budget for sidecars published later from startup", async () => {

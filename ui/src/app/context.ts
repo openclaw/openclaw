@@ -1,6 +1,7 @@
 import { createContext } from "@lit/context";
 import type { RouteLocation, Router } from "@openclaw/uirouter";
 import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
+import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
@@ -46,6 +47,7 @@ export type ApplicationThemeServerSelection = {
 };
 
 export type ApplicationTheme = {
+  readonly branding: ThemeBranding;
   readonly catalog?: ThemeCatalogSnapshot;
   retryCatalog?: () => void;
   readonly settings: UiPreferences;

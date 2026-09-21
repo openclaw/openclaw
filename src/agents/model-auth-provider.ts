@@ -115,7 +115,9 @@ export async function resolveProviderEntryApiKeyAuth(params: {
   agentDir?: string;
   modelApi?: string;
   secretSentinels?: boolean;
+  signal?: AbortSignal;
 }): Promise<ResolvedProviderAuth | undefined> {
+  params.signal?.throwIfAborted();
   const { provider, cfg } = params;
   assertProviderAuthReady(params);
   const reference = authConfig.resolveProviderEntryApiKeyProfileReference(params);
@@ -131,6 +133,7 @@ export async function resolveProviderEntryApiKeyAuth(params: {
   // A matched binding is terminal: never replace a bad profile with a different
   // credential or send the profile id as literal bearer text.
   const binding = await authConfig.resolveProviderEntryApiKeyBinding(params);
+  params.signal?.throwIfAborted();
   if (binding.kind === "profile-resolved") {
     assertAuthModeAllowedForModel({
       provider,
@@ -173,6 +176,8 @@ export async function resolveApiKeyForProviderCore(input: {
   store?: AuthProfileStore;
   agentDir?: string;
   workspaceDir?: string;
+  /** Cancels this credential lookup, not an independently owned OAuth refresh. */
+  signal?: AbortSignal;
   /** When true, treat profileId as a user-locked selection that must not be
    *  silently replaced by another profile or env/config credentials. */
   lockedProfile?: boolean;
@@ -188,6 +193,7 @@ export async function resolveApiKeyForProviderCore(input: {
   /** Keep SecretRef-backed model credentials opaque until a sentinel-aware transport boundary. */
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
+  input.signal?.throwIfAborted();
   const modelAuthConfig = resolveModelProviderAuthConfig({
     provider: input.provider,
     config: input.cfg,
@@ -242,9 +248,11 @@ export async function resolveApiKeyForProviderCore(input: {
       store,
       profileId,
       agentDir,
+      signal: params.signal,
       forceRefresh: params.forceRefresh,
       allowProfileFallback: !params.lockedProfile,
     });
+    params.signal?.throwIfAborted();
     if (!resolved) {
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
@@ -296,7 +304,10 @@ export async function resolveApiKeyForProviderCore(input: {
         profileId: undefined,
         lockedProfile: true,
       }) //
-        .catch(() => result);
+        .catch(() => {
+          params.signal?.throwIfAborted();
+          return result;
+        });
     }
     return result;
   }
@@ -388,9 +399,11 @@ export async function resolveApiKeyForProviderCore(input: {
     provider,
     store: getScopedStore(),
     agentDir,
+    signal: params.signal,
     modelApi: params.modelApi,
     secretSentinels: params.secretSentinels,
   });
+  params.signal?.throwIfAborted();
   if (providerEntryAuth) {
     return providerEntryAuth;
   }
@@ -488,8 +501,10 @@ export async function resolveApiKeyForProviderCore(input: {
         store,
         profileId: candidate,
         agentDir,
+        signal: params.signal,
         forceRefresh: params.forceRefresh,
       });
+      params.signal?.throwIfAborted();
       if (resolved) {
         const resolvedProfileId = resolved.profileId ?? candidate;
         const mode = resolved.profileType ?? store.profiles[resolvedProfileId]?.type;
@@ -518,6 +533,7 @@ export async function resolveApiKeyForProviderCore(input: {
         return result;
       }
     } catch (err) {
+      params.signal?.throwIfAborted();
       if (err instanceof SecretSurfaceUnavailableError) {
         throw err;
       }
@@ -580,6 +596,7 @@ export async function resolveApiKeyForProviderCore(input: {
     secretSentinels: params.secretSentinels,
     allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
   });
+  params.signal?.throwIfAborted();
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
   }

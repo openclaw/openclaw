@@ -6,7 +6,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { TemplateContext } from "../templating.js";
 import {

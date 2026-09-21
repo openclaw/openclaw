@@ -1857,7 +1857,6 @@ src/agents/sessions/sdk.ts	3
 src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	3
-src/agents/sessions/session-manager-persistence.ts	2
 src/agents/sessions/session-manager.ts	2
 src/agents/sessions/settings-manager.ts	11
 src/agents/sessions/steering-message-identity.ts	2
@@ -2621,7 +2620,7 @@ src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	1
 src/gateway/node-registry.ts	2
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	22
+src/gateway/openai-http.ts	20
 src/gateway/operator-approval-snapshot.ts	4
 src/gateway/operator-approval-store.ts	8
 src/gateway/operator-scopes.ts	1
@@ -2883,7 +2882,6 @@ src/infra/openclaw-root.ts	1
 src/infra/outbound/agent-delivery.ts	2
 src/infra/outbound/channel-selection.ts	2
 src/infra/outbound/conversation-delivery.ts	1
-src/infra/outbound/current-conversation-bindings.ts	1
 src/infra/outbound/deliver-channel.ts	4
 src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
@@ -2976,7 +2974,6 @@ src/infra/unhandled-rejections.ts	6
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
-src/infra/update-runner-install-surface.ts	1
 src/infra/voicewake-routing.ts	4
 src/infra/warning-filter.ts	4
 src/infra/windows-gateway-firewall-diagnostics.ts	3

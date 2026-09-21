@@ -131,6 +131,10 @@ describe("manifest theme catalog", () => {
       JSON.stringify(
         createThemeDefinitionFixture({
           dark: createThemePaletteFixture({ primary: "#ff33aa" }),
+          mascot: "none",
+          workingPhrases: ["Building", "Compiling"],
+          critters: ["penguin", "fedora"],
+          avatarHat: "fedora",
         }),
       ),
     );
@@ -139,12 +143,26 @@ describe("manifest theme catalog", () => {
     );
     const after = plugin.readSnapshot();
     fs.unlinkSync(path.join(plugin.rootDir, "theme.json"));
-    expect(withPluginMetadataSnapshotScope(after, readTheme)?.definition?.dark?.primary).toBe(
-      "#ff33aa",
-    );
+    expect(withPluginMetadataSnapshotScope(after, readTheme)).toMatchObject({
+      mascot: "none",
+      workingPhrases: ["Building", "Compiling"],
+      critters: ["penguin", "fedora"],
+      avatarHat: "fedora",
+      definition: {
+        mascot: "none",
+        workingPhrases: ["Building", "Compiling"],
+        critters: ["penguin", "fedora"],
+        avatarHat: "fedora",
+        dark: { primary: "#ff33aa" },
+      },
+    });
     expect(withPluginMetadataSnapshotScope(before, readTheme)?.definition?.dark?.primary).toBe(
       "#b3ff33",
     );
+    expect(withPluginMetadataSnapshotScope(before, readTheme)).not.toHaveProperty("mascot");
+    expect(withPluginMetadataSnapshotScope(before, readTheme)).not.toHaveProperty("workingPhrases");
+    expect(withPluginMetadataSnapshotScope(before, readTheme)).not.toHaveProperty("critters");
+    expect(withPluginMetadataSnapshotScope(before, readTheme)).not.toHaveProperty("avatarHat");
   });
 
   it("hides a disabled owner's themes without changing retained palette bytes", () => {

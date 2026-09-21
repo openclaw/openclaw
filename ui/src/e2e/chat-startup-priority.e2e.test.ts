@@ -216,7 +216,11 @@ suite.define(() => {
           await gateway.waitForRequest(method);
           expect(await gateway.getRequests(method)).toHaveLength(method === "tasks.list" ? 2 : 1);
         }
-        await page.getByText("Current rollout progress", { exact: true }).waitFor();
+        await page
+          .locator(".chat-pane-cache__pane--active")
+          .getByRole("region", { name: "Progress note", exact: true })
+          .getByText("Current rollout progress", { exact: true })
+          .waitFor();
         await page.getByText(suggestion.title, { exact: true }).waitFor();
         const composer = page.locator(
           ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
@@ -388,7 +392,12 @@ suite.define(() => {
         if (pendingSnapshot) {
           await gateway.resolveDeferred("progressCard.get");
         }
-        await page.getByText("Resumed progress", { exact: true }).waitFor();
+        // Sidebar hovercards mirror this markdown; verify the active pane's card.
+        await page
+          .locator(".chat-pane-cache__pane--active")
+          .getByRole("region", { name: "Progress note", exact: true })
+          .getByText("Resumed progress", { exact: true })
+          .waitFor();
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(2);
       });
     },

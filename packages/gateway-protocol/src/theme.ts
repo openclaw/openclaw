@@ -36,6 +36,17 @@ export const THEME_COLOR_KEYS = [
   "ring",
 ] as const;
 export const THEME_FONT_KEYS = ["font-sans", "font-mono"] as const;
+export const THEME_MASCOT_VALUES = ["claw", "none"] as const;
+export type ThemeMascot = (typeof THEME_MASCOT_VALUES)[number];
+export const THEME_CRITTER_IDS = ["penguin", "fedora"] as const;
+export type ThemeCritterId = (typeof THEME_CRITTER_IDS)[number];
+export function isThemeCritterId(value: unknown): value is ThemeCritterId {
+  return THEME_CRITTER_IDS.some((id) => id === value);
+}
+export const THEME_AVATAR_HAT_IDS = ["fedora"] as const;
+export type ThemeAvatarHatId = (typeof THEME_AVATAR_HAT_IDS)[number];
+export const THEME_WORKING_PHRASES_MAX = 24;
+export const THEME_WORKING_PHRASE_MAX_LENGTH = 24;
 export const MAX_THEME_DEFINITION_BYTES = 4096;
 export const THEME_NAME_MAX_LENGTH = 80;
 export const THEME_DESCRIPTION_MAX_LENGTH = 320;
@@ -46,6 +57,10 @@ export type ThemePalette = Record<(typeof THEME_COLOR_KEYS)[number], string> &
 export type ThemeDefinition = {
   name: string;
   description: string;
+  mascot?: ThemeMascot;
+  workingPhrases?: string[];
+  critters?: ThemeCritterId[];
+  avatarHat?: ThemeAvatarHatId;
   light?: ThemePalette;
   dark?: ThemePalette;
 };
@@ -56,8 +71,31 @@ export type ThemeDescriptor = {
   source: "builtin" | "plugin" | "user";
   modes: ThemeColorMode[];
   pluginId?: string;
+  mascot?: ThemeMascot;
+  workingPhrases?: readonly string[];
+  critters?: readonly ThemeCritterId[];
+  avatarHat?: ThemeAvatarHatId;
 };
 export type ThemeCatalogEntry = ThemeDescriptor & { definition?: ThemeDefinition };
+export type ThemeBranding = {
+  mascot: ThemeMascot;
+  workingPhrases?: readonly string[];
+  critters: readonly ThemeCritterId[];
+  avatarHat?: ThemeAvatarHatId;
+};
+
+const DEFAULT_THEME_CRITTERS: readonly ThemeCritterId[] = [];
+
+export function resolveThemeBranding(
+  source: Pick<ThemeDescriptor, "mascot" | "workingPhrases" | "critters" | "avatarHat"> | undefined,
+): ThemeBranding {
+  return {
+    mascot: source?.mascot ?? "claw",
+    workingPhrases: source?.workingPhrases,
+    critters: source?.critters ?? DEFAULT_THEME_CRITTERS,
+    avatarHat: source?.avatarHat,
+  };
+}
 
 export const BUILTIN_THEMES: readonly ThemeDescriptor[] = (
   [
@@ -259,13 +297,64 @@ function normalizePalette(value: unknown, mode: ThemeColorMode): ThemePalette {
 /** Rejects executable CSS and incomplete palettes before they reach storage or a stylesheet. */
 export function normalizeThemeDefinition(value: unknown): ThemeDefinition {
   const record = requireRecord(value, "theme");
-  requireKeys(record, ["name", "description", "light", "dark"], "theme");
+  requireKeys(
+    record,
+    ["name", "description", "mascot", "workingPhrases", "critters", "avatarHat", "light", "dark"],
+    "theme",
+  );
   const definition: ThemeDefinition = {
     name: requireText(record.name, "theme.name", THEME_NAME_MAX_LENGTH),
     description: requireText(record.description, "theme.description", THEME_DESCRIPTION_MAX_LENGTH),
     ...(record.light !== undefined ? { light: normalizePalette(record.light, "light") } : {}),
     ...(record.dark !== undefined ? { dark: normalizePalette(record.dark, "dark") } : {}),
   };
+  if (record.mascot !== undefined) {
+    const mascot = THEME_MASCOT_VALUES.find((candidate) => candidate === record.mascot);
+    if (!mascot) {
+      throw new Error(`theme.mascot must be one of ${THEME_MASCOT_VALUES.join(", ")}`);
+    }
+    definition.mascot = mascot;
+  }
+  if (record.workingPhrases !== undefined) {
+    if (
+      !Array.isArray(record.workingPhrases) ||
+      record.workingPhrases.length > THEME_WORKING_PHRASES_MAX
+    ) {
+      throw new Error(
+        `theme.workingPhrases must be an array of at most ${THEME_WORKING_PHRASES_MAX} entries`,
+      );
+    }
+    const phrases = Array.from(record.workingPhrases, (phrase, index) =>
+      requireText(phrase, `theme.workingPhrases[${index}]`, THEME_WORKING_PHRASE_MAX_LENGTH),
+    );
+    if (new Set(phrases).size !== phrases.length) {
+      throw new Error("theme.workingPhrases must not contain duplicate entries after trimming");
+    }
+    definition.workingPhrases = phrases;
+  }
+  if (record.critters !== undefined) {
+    if (!Array.isArray(record.critters) || record.critters.length > 8) {
+      throw new Error("theme.critters must be an array of at most 8 entries");
+    }
+    const critters = Array.from(record.critters, (entry, index) => {
+      const critter = THEME_CRITTER_IDS.find((id) => id === entry);
+      if (!critter) {
+        throw new Error(`theme.critters[${index}] must be one of ${THEME_CRITTER_IDS.join(", ")}`);
+      }
+      return critter;
+    });
+    if (new Set(critters).size !== critters.length) {
+      throw new Error("theme.critters must not contain duplicate entries");
+    }
+    definition.critters = critters;
+  }
+  if (record.avatarHat !== undefined) {
+    const avatarHat = THEME_AVATAR_HAT_IDS.find((id) => id === record.avatarHat);
+    if (!avatarHat) {
+      throw new Error(`theme.avatarHat must be one of ${THEME_AVATAR_HAT_IDS.join(", ")}`);
+    }
+    definition.avatarHat = avatarHat;
+  }
   if (!definition.light && !definition.dark) {
     throw new Error("theme must provide at least one light or dark palette");
   }

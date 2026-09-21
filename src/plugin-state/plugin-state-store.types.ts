@@ -37,8 +37,7 @@ export type PluginStateMoveEntries = {
   entries: Array<{ sourceKey: string; targetKey: string }>;
 };
 
-/** Async plugin state API exposed to plugin runtimes. */
-export type PluginStateKeyedStore<T> = {
+type PluginStateKeyedStoreBase<T> = {
   /** Prepares a mutation observation through canonical writable admission; may create state. */
   observe?: (key: string) => Promise<PluginStateObservation<T>>;
   /** Compares the observed row before applying prepared data; only explicit conflicts may retry. */
@@ -86,6 +85,14 @@ export type PluginStateKeyedStore<T> = {
   count?: () => Promise<number>;
   clear(): Promise<void>;
 };
+
+/** Version 2 is an action-bound, data-only view; legacy stores remain source-compatible. */
+export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extends 2
+  ? Required<Omit<PluginStateKeyedStoreBase<T>, "update" | "deleteIf">>
+  : PluginStateKeyedStoreBase<T> & {
+      /** Bind current action authority through read completion and final write admission. */
+      withCurrent?: (authority: { assertCurrent: () => void }) => PluginStateKeyedStore<T, 2>;
+    };
 
 /**
  * Synchronous plugin-state compatibility contract.

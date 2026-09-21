@@ -51,6 +51,7 @@ import {
   formatGatewayStartupOutcomes,
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
+import { logGatewayReady, logGatewaySidecarsReady } from "./server-startup-readiness.js";
 import {
   scheduleGatewayGenerationTimer,
   schedulePostReadySidecarTask,
@@ -58,6 +59,7 @@ import {
 } from "./server-startup-sidecar-scheduler.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
+import type { ReadinessChecker } from "./server/readiness.js";
 import {
   beginMacOSSystemCaWarmupOnce,
   type warmMacOSSystemCaOffMainThread,
@@ -827,6 +829,7 @@ export async function startGatewayPostAttachRuntime(
     trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
     startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
     onSidecarsReady?: () => void;
+    getReadiness: ReadinessChecker;
     isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
     sidecarStartup?: GatewaySidecarStartupMode;
@@ -1025,7 +1028,7 @@ export async function startGatewayPostAttachRuntime(
             }
             params.unlockStartupMethods();
             params.onSidecarsReady?.();
-            params.log.info("candidate gateway ready; autonomous sidecars suppressed");
+            logGatewayReady(params, "candidate gateway ready; autonomous sidecars suppressed");
             return pluginRegistry;
           }
           const startupOutcomes = createGatewayStartupOutcomeRecorder({
@@ -1181,20 +1184,17 @@ export async function startGatewayPostAttachRuntime(
           if (params.isClosing?.()) {
             return pluginRegistry;
           }
-          params.startupTrace?.detail("sidecars.ready", [
-            [
-              "loadedPluginCount",
-              pluginRegistry.plugins.filter((plugin) => plugin.status === "loaded").length,
-            ],
-            [
-              "postReadySidecarCount",
+          logGatewaySidecarsReady({
+            log: params.log,
+            getReadiness: params.getReadiness,
+            startupTrace: params.startupTrace,
+            loadedPluginCount: pluginRegistry.plugins.filter((plugin) => plugin.status === "loaded")
+              .length,
+            postReadySidecarCount:
               postReadySidecarCount +
-                newGatewayLifetimeSidecars.length +
-                (controlUiAssetsSidecar ? 1 : 0),
-            ],
-          ]);
-          params.startupTrace?.mark("sidecars.ready");
-          params.log.info("gateway ready");
+              newGatewayLifetimeSidecars.length +
+              (controlUiAssetsSidecar ? 1 : 0),
+          });
           return pluginRegistry;
         });
   // Track original startup producers and their post-ready continuation so close

@@ -20,8 +20,8 @@ import type { SessionDeliveryRoute } from "../../../infra/session-delivery-queue
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../../../routing/session-key.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
+import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";

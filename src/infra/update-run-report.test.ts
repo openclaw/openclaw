@@ -458,7 +458,10 @@ describe("update run report", () => {
     }
   });
 
-  it("keeps advisory steps out of failures and shows only the final diagnostic lines", () => {
+  it.each([
+    { label: "single-line", stderrTail: "last error diagnostic" },
+    { label: "multiline", stderrTail: "earlier error\nlast error diagnostic" },
+  ])("keeps advisory steps out of failures and retains $label diagnostics", ({ stderrTail }) => {
     const report = renderUpdateRunReport(
       updateRunReportInputFromResult({
         status: "error",
@@ -484,7 +487,10 @@ describe("update run report", () => {
             exitCode: 1,
             termination: "timeout",
             stdoutTail: "earlier output\nlast build diagnostic",
-            stderrTail: "earlier error\nlast error diagnostic",
+            stderrTail,
+            failureFacts: [
+              { check: "build", code: "build-failed", message: "last error diagnostic" },
+            ],
           },
         ],
       }),

@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveStableNodePath } from "./stable-node-path.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { updateGitCheckout } from "./update-runner-git.js";
@@ -84,9 +83,6 @@ function fixture(relativeRemote = false, partialClone = false, shallow = false) 
   const target = commit("2026.7.2", 14);
   const calls: string[][] = [];
   const runCommand: CommandRunner = async (argv, options) => {
-    if (argv.includes("doctor") && argv[0] === (await resolveStableNodePath(process.execPath))) {
-      return { code: 0, stdout: "", stderr: "" };
-    }
     if (argv[0] === "pnpm") {
       if (argv.includes("build")) {
         const dist = path.join(options.cwd!, "dist");
@@ -108,14 +104,26 @@ function fixture(relativeRemote = false, partialClone = false, shallow = false) 
     });
     return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
   };
-  const run = (options: UpdateRunnerOptions, command: CommandRunner = runCommand) =>
+  const run = (options: Partial<UpdateRunnerOptions>, command: CommandRunner = runCommand) =>
     updateGitCheckout({
       gitRoot: install,
       runCommand: command,
       defaultCommandEnv: env,
       timeoutMs: 15_000,
       startedAt: Date.now(),
-      opts: { channel: "stable", inspectGitTarget: async () => undefined, ...options },
+      opts: {
+        channel: "stable",
+        inspectGitTarget: async () => undefined,
+        validateCandidate: async () => {},
+        runGitDoctor: async (doctorRoot) => ({
+          name: "openclaw doctor",
+          command: "CLI activation doctor",
+          cwd: doctorRoot,
+          durationMs: 0,
+          exitCode: 0,
+        }),
+        ...options,
+      },
     });
   return { root, source, install, globalConfig, git, commit, target, calls, runCommand, run };
 }
@@ -498,7 +506,12 @@ describe("Git database admission", () => {
         ...captured,
         timeoutMs: 15_000,
         startedAt: Date.now(),
-        opts: { channel: "stable", inspectGitTarget: admission },
+        opts: {
+          channel: "stable",
+          inspectGitTarget: admission,
+          validateCandidate: async () => {},
+          runGitDoctor: async () => null,
+        },
       });
       if (configured) {
         await expect(result).rejects.toBe(refused);

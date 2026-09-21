@@ -11,7 +11,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { finishSuccessfulPackageSwitch } from "./update-command-post-update.test-support.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 

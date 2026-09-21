@@ -227,8 +227,8 @@ describe("package update recovery safety", () => {
     },
   );
 
-  it.each(["validation", "activation", "transaction"] as const)(
-    "refuses an unsupported layout before mutation when %s requires staging",
+  it.each(["none", "validation", "activation", "transaction"] as const)(
+    "refuses an unsupported layout before mutation with %s hook",
     async (hook) => {
       await withTestDir({ prefix: "openclaw-package-unsupported-stage-" }, async (base) => {
         const globalRoot = path.join(base, "unsupported-global-root");
@@ -252,7 +252,9 @@ describe("package update recovery safety", () => {
             ? { validateCandidate }
             : hook === "activation"
               ? { beforeActivate }
-              : { onTransaction }),
+              : hook === "transaction"
+                ? { onTransaction }
+                : {}),
         });
         expect(result.failedStep).toMatchObject({ name: "package-stage", exitCode: 1 });
         expect(runStep).not.toHaveBeenCalled();
@@ -590,37 +592,31 @@ describe("package update recovery safety", () => {
   });
 
   it.each(
-    (["pnpm", "bun", "npm"] as const).flatMap((manager) =>
-      (["install exit", "install throw", "doctor throw"] as const).flatMap((failure) =>
-        (manager === "npm" && failure !== "doctor throw"
-          ? (["none", "replaced", "corrupt"] as const)
-          : (["none"] as const)
-        ).map((stagingSideEffect) => ({ manager, failure, stagingSideEffect })),
-      ),
+    (["install exit", "install throw", "doctor throw"] as const).flatMap((failure) =>
+      (failure !== "doctor throw"
+        ? (["none", "replaced", "corrupt"] as const)
+        : (["none"] as const)
+      ).map((stagingSideEffect) => ({ failure, stagingSideEffect })),
     ),
   )(
-    "verifies $manager recovery after $failure with $stagingSideEffect staging side effect",
-    async ({ manager, failure, stagingSideEffect }) => {
+    "verifies npm recovery after $failure with $stagingSideEffect staging side effect",
+    async ({ failure, stagingSideEffect }) => {
       await withTestDir({ prefix: "openclaw-package-recovery-" }, async (base) => {
-        const globalRoot =
-          manager === "npm" ? path.join(base, "lib", "node_modules") : path.join(base, "global");
+        const globalRoot = path.join(base, "lib", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
         await writePackageRoot(packageRoot, "1.0.0");
         const params = {
-          installTarget:
-            manager === "npm"
-              ? createNpmTarget(globalRoot)
-              : { manager, command: manager, globalRoot, packageRoot },
+          installTarget: createNpmTarget(globalRoot),
           installSpec: "openclaw@2.0.0",
           packageName: "openclaw",
           packageRoot,
           runCommand: createRootRunner(globalRoot),
           runStep: async ({ name, argv }: { name: string; argv: string[] }) => {
             const prefix = argv[argv.indexOf("--prefix") + 1];
-            const installRoot =
-              manager === "npm" && prefix
-                ? path.join(prefix, "lib", "node_modules", "openclaw")
-                : packageRoot;
+            if (!prefix) {
+              throw new Error("missing staged prefix");
+            }
+            const installRoot = path.join(prefix, "lib", "node_modules", "openclaw");
             await writePackageRoot(installRoot, "2.0.0");
             if (stagingSideEffect === "replaced") {
               await writePackageRoot(packageRoot, "2.0.0");
@@ -646,21 +642,17 @@ describe("package update recovery safety", () => {
         const result = await runGlobalPackageUpdateSteps(params);
 
         expect(result.failedStep).not.toBeNull();
-        const safe =
-          manager === "npm" && failure !== "doctor throw" && stagingSideEffect === "none";
+        const safe = failure !== "doctor throw" && stagingSideEffect === "none";
         expect(result.recovery).toEqual(
           safe
             ? { serviceRestartSafe: true, version: "1.0.0" }
             : {
                 serviceRestartSafe: false,
                 reason: "runtime-verification-failed",
-                ...(manager === "npm" && failure === "doctor throw"
-                  ? { packageRollbackVerified: true }
-                  : {}),
+                ...(failure === "doctor throw" ? { packageRollbackVerified: true } : {}),
               },
         );
-        const liveVersion =
-          manager === "npm" && stagingSideEffect !== "replaced" ? "1.0.0" : "2.0.0";
+        const liveVersion = stagingSideEffect !== "replaced" ? "1.0.0" : "2.0.0";
         if (failure === "doctor throw") {
           expect(result.afterVersion).toBe(liveVersion);
         }

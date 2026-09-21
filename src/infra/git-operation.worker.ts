@@ -1,6 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { executeGitWorktreeOperation } from "../agents/worktrees/git-worktree-operations.runtime.js";
-import { executeGitReadOperation } from "./git-read-operations.runtime.js";
 import { serializeGitWorkerFailure, withGitWorkerContext } from "./git-worker-context.js";
 import type { GitWorkerCommand, GitWorkerReply, GitWorkerResult } from "./git-worker-contract.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
@@ -55,9 +53,13 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
           case "worktree.git-size":
           case "worktree.checkout-transition-size":
           case "worktree.directory-size":
-            return executeGitWorktreeOperation(command);
+            return import("../agents/worktrees/git-worktree-operations.runtime.js").then(
+              ({ executeGitWorktreeOperation }) => executeGitWorktreeOperation(command),
+            );
           default:
-            return executeGitReadOperation(command);
+            return import("./git-read-operations.runtime.js").then(({ executeGitReadOperation }) =>
+              executeGitReadOperation(command),
+            );
         }
       });
       return { ok: true, value };

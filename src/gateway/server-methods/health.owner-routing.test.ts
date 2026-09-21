@@ -154,6 +154,63 @@ describe("Gateway status owner routing", () => {
     },
   );
 
+  it.each([
+    { changeDuringRead: true, reset: false },
+    { changeDuringRead: true, reset: true },
+    { changeDuringRead: false, reset: true },
+  ])(
+    "keeps cached health diagnostics current ($changeDuringRead, $reset)",
+    async ({ changeDuringRead, reset }) => {
+      await withStateDirEnv("openclaw-gateway-health-diagnostics-", async ({ stateDir }) => {
+        const initial = {
+          degraded: false,
+          degradedSinceMs: null,
+          reasons: [],
+          intervalMs: 1_000,
+          delayP99Ms: 20,
+          delayMaxMs: 25,
+          utilization: 0.2,
+          cpuCoreRatio: 0.1,
+        } satisfies NonNullable<HealthSummary["eventLoop"]>;
+        const cached: HealthSummary = {
+          ok: true,
+          ts: Date.now(),
+          durationMs: 1,
+          channels: {},
+          channelOrder: [],
+          channelLabels: {},
+          heartbeatSeconds: 0,
+          agents: [],
+          sessions: { path: path.join(stateDir, "sessions.json"), count: 0, recent: [] },
+          eventLoop: initial,
+        };
+        let current: HealthSummary["eventLoop"] = changeDuringRead ? initial : undefined;
+        const next = reset ? undefined : { ...initial, cpuCoreRatio: 1.2 };
+        const respond = vi.fn();
+        const request = healthHandlers.health!({
+          req: {} as never,
+          params: {},
+          respond: respond as never,
+          context: {
+            getHealthCache: () => cached,
+            refreshHealthSnapshot: vi.fn(async () => cached),
+            getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+            getEventLoopHealth: () => current,
+            logHealth: { error: vi.fn() },
+          } as never,
+          client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+          isWebchatConnect: () => false,
+        });
+        current = next;
+        await request;
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[1].eventLoop).toBe(next);
+        expect(respond.mock.calls[0]?.[3]).toEqual({ cached: true });
+        expect(cached.eventLoop).toBe(initial);
+      });
+    },
+  );
+
   it("projects requested CLI facts without choosing a fleet owner or widening read scopes", async () => {
     await withStateDirEnv("openclaw-gateway-cli-status-", async ({ stateDir }) => {
       const config = {

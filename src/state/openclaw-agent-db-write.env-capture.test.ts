@@ -83,6 +83,7 @@ vi.mock("../infra/sqlite-wal-write-admission.js", () => ({
 }));
 vi.mock("./openclaw-agent-db.js", async () => {
   const { DatabaseSync } = await import("node:sqlite");
+  const { createSqliteWalReclamationResult } = await import("../infra/sqlite-wal-reclamation.js");
   const { createOpenClawAgentDatabaseAdmissionOwner } =
     await import("./openclaw-agent-db-admission.js");
   const owner = createOpenClawAgentDatabaseAdmissionOwner(function* (
@@ -92,7 +93,11 @@ vi.mock("./openclaw-agent-db.js", async () => {
       agentId: options.agentId,
       path: boundary.route(options),
       db: new DatabaseSync(":memory:"),
-      walMaintenance: { checkpoint: () => false, close: () => true },
+      walMaintenance: {
+        checkpoint: () => false,
+        close: () => true,
+        reclaimFreePages: createSqliteWalReclamationResult,
+      },
     };
     yield { database: database.db, databaseLabel: database.path };
     boundary.open(options);

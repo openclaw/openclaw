@@ -21,9 +21,9 @@ vi.mock("../media/fetch.js", async () => {
   };
 });
 
-vi.mock("../plugin-sdk/temp-path.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugin-sdk/temp-path.js")>(
-    "../plugin-sdk/temp-path.js",
+vi.mock("../infra/temp-download.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/temp-download.js")>(
+    "../infra/temp-download.js",
   );
   return {
     ...actual,

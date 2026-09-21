@@ -22,7 +22,10 @@ import {
   retainAgentDatabase,
 } from "./openclaw-agent-db-lifecycle.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
-import type { OpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
+import {
+  getOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-cache.js";
 import { getOpenClawAgentDatabaseIfOpen, openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import type {
   AgentDatabaseExecutionIdentity,
@@ -73,6 +76,7 @@ export function openExistingSqliteWorkerBackend(
   let identity: AgentDatabaseExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
   const openWriter = () => {
+    let validation: OpenClawAgentDatabaseValidation | undefined;
     if (!database) {
       // Promotion needs the current command's source authority before any durable open work.
       admitOpen();
@@ -167,11 +171,12 @@ export function openExistingSqliteWorkerBackend(
         incarnation: nativeIdentity.incarnation,
         nativeLocation: nativeIdentity.filename,
       };
+      validation = getOpenClawAgentDatabaseValidation(opened);
     }
     if (!database || !database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options) !== database) {
       throw new Error("Agent execution lost its retained native database");
     }
-    requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: { identity } });
+    requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: { identity, validation } });
     return database;
   };
   const domain = createAgentDatabaseDomainOwner({

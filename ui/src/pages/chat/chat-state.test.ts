@@ -46,7 +46,7 @@ import {
   refreshChatModelAuthStatus,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
-import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
@@ -83,10 +83,6 @@ describe("canonical session message recovery", () => {
       ...overrides,
     });
     if (!overrides.sessions) {
-      vi.spyOn(host.sessions, "reconcileChanged").mockImplementation(() => ({
-        applied: false,
-        result: host.sessions.state.result,
-      }));
       vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
       vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
     }
@@ -2853,18 +2849,19 @@ describe("canonical session message recovery", () => {
       ],
       chatBranchesConnectionEpoch: 1,
       chatBranchesSessionKey: "agent:main:main",
-      sessions: {
-        listBranches,
-        reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
-        refresh: vi.fn().mockResolvedValue(undefined),
-      } as never,
     });
+    vi.spyOn(state.sessions, "listBranches").mockImplementation(listBranches);
 
-    handlePageGatewayEvent(state, {
-      type: "event",
-      event: "sessions.changed",
-      payload: { sessionKey: state.sessionKey, agentId: "main", reason: "branch-switch" },
-    });
+    handlePageGatewayEvent(
+      state,
+      {
+        type: "event",
+        event: "sessions.changed",
+        payload: { sessionKey: state.sessionKey, agentId: "main", reason: "branch-switch" },
+      },
+      undefined,
+      { applied: false },
+    );
 
     expect(state.chatBranches).toEqual([]);
     expect(state.chatBranchesSessionKey).toBeNull();
@@ -2894,16 +2891,11 @@ describe("canonical session message recovery", () => {
     expect(state.chatBranchesSessionKey).toBe("agent:main:main");
   });
 
-  it("keeps the routed row when a hidden pane observes its archive first", () => {
+  it("keeps the routed row when a hidden pane observes its archive first", async () => {
     const archivedKey = "agent:main:dashboard:archived";
-    const sharedHost = makeChatHost({
-      sessionKey: archivedKey,
-      sessionsResult: {
-        ts: 1,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
+    const client = createTestGatewayClient(async () =>
+      sessionsResult(
+        [
           {
             key: archivedKey,
             kind: "direct",
@@ -2912,24 +2904,42 @@ describe("canonical session message recovery", () => {
             updatedAt: 1,
           },
         ],
+        1,
+      ),
+    );
+    const { gateway, emitEvent } = createGatewayHarness(client);
+    gateway.snapshot.sessionKey = archivedKey;
+    const sessions = createTestSessionCapability(gateway);
+    const { state } = createSessionEventState({ sessions });
+    const delivered = vi.fn();
+    const hidden = sessions.observeRow({ key: state.sessionKey, agentId: "main" }, () => {}, {
+      onEvent: (event, result) => {
+        delivered(event, result);
+        handlePageGatewayEvent(state, event, () => false, result);
       },
     });
-    expect(sharedHost.sessions.state.result?.sessions).toHaveLength(1);
-    const { state } = createSessionEventState({ sessions: sharedHost.sessions });
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.result?.sessions).toHaveLength(1);
+      const event = {
+        type: "event" as const,
+        event: "sessions.changed",
+        payload: { key: archivedKey, sessionKey: archivedKey, archived: true, reason: "update" },
+      };
+      emitEvent(event);
 
-    handlePageGatewayEvent(state, {
-      type: "event",
-      event: "sessions.changed",
-      payload: { key: archivedKey, sessionKey: archivedKey, archived: true, reason: "update" },
-    });
-
-    expect(state.sessions.state.result?.sessions).toEqual([
-      expect.objectContaining({
-        key: archivedKey,
-        archived: true,
-        derivedTitle: "Archived title",
-      }),
-    ]);
+      expect(delivered).toHaveBeenCalledExactlyOnceWith(event, { applied: false });
+      expect(state.sessions.state.result?.sessions).toEqual([
+        expect.objectContaining({
+          key: archivedKey,
+          archived: true,
+          derivedTitle: "Archived title",
+        }),
+      ]);
+    } finally {
+      hidden.dispose();
+      sessions.dispose();
+    }
   });
 
   it("does not mistake identity-only message invalidation for a session reset", () => {
@@ -3037,7 +3047,6 @@ describe("canonical session message recovery", () => {
     state.sessions = {
       ...state.sessions,
       listBranches,
-      reconcileChanged: vi.fn().mockReturnValue({ applied: false }),
       refresh: vi.fn(async () => {
         await refreshFinished.promise;
         state.sessionsResult = {
@@ -3076,6 +3085,7 @@ describe("canonical session message recovery", () => {
         },
       },
       () => presented,
+      { applied: false },
     );
     presented = false;
     refreshFinished.resolve();
@@ -4191,19 +4201,6 @@ describe("image lightbox lifecycle", () => {
     expect(state.imageLightbox).toBeNull();
     expect(release).toHaveBeenCalledOnce();
     expect(invalidate).toHaveBeenCalledOnce();
-  });
-});
-
-describe("resolveChatAvatarUrl", () => {
-  it("prefers the authenticated avatar blob over persisted and protected URLs", () => {
-    const state = {
-      sessionKey: "agent:main:main",
-      chatAvatarUrl: "blob:authenticated-avatar",
-      assistantAvatar: "/avatar/main",
-      assistantAgentId: "main",
-    } as unknown as ChatPageHost;
-
-    expect(resolveChatAvatarUrl(state)).toBe("blob:authenticated-avatar");
   });
 });
 

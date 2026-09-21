@@ -1,5 +1,5 @@
 import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
-import type { CronRunReceiptRecoveryCandidate } from "../store/run-receipt-store.js";
+import type { CronRunReceiptRecoveryCandidate } from "../store/run-receipt.types.js";
 import type { CronServiceState } from "./state.js";
 
 // Lifecycle-owned freshness exception: only the bounded active foreign-receipt

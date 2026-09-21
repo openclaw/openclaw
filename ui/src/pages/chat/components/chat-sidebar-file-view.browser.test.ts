@@ -180,24 +180,44 @@ describe.runIf(browserMode)("chat file editor", () => {
     await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
   });
 
-  it("returns focus to the file search toggle on Escape and can reopen with the keyboard", async () => {
+  it("closes file search from every search control and preserves keyboard navigation", async () => {
     const panel = await mountFile({
       kind: "file",
       path: "search.json",
       name: "search.json",
-      content: '{"city":"雪"}\n',
+      content: '{\n"first":"雪",\n"second":"雪",\n"third":"雪"\n}\n',
     });
     const searchToggle = button(panel, "Search in file");
-    await userEvent.click(searchToggle);
-    const input = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
-    await expect.poll(() => document.activeElement).toBe(input);
-    await userEvent.fill(input, "雪");
-    expect(panel.querySelector(".file-view__search-counter")?.textContent?.trim()).toBe("1/1");
+    const counter = () => panel.querySelector(".file-view__search-counter")?.textContent?.trim();
+    for (const control of ["input", "Previous match", "Next match"]) {
+      await userEvent.click(searchToggle);
+      const input = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
+      await expect.poll(() => document.activeElement).toBe(input);
+      expect(input.value).toBe("");
+      await userEvent.fill(input, "雪");
+      expect(counter()).toBe("1/3");
 
-    await userEvent.keyboard("{Escape}");
-    await expect.poll(() => panel.querySelector('input[type="search"]')).toBeNull();
-    expect(document.activeElement).toBe(searchToggle);
-    expect(searchToggle.getAttribute("aria-pressed")).toBe("false");
+      if (control === "input") {
+        await userEvent.keyboard("{Enter}");
+        expect(counter()).toBe("2/3");
+        await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+        expect(counter()).toBe("1/3");
+      } else {
+        const navigation = button(panel, control);
+        await userEvent.click(navigation);
+        expect(document.activeElement).toBe(navigation);
+        expect(counter()).toBe(control === "Previous match" ? "3/3" : "2/3");
+        await userEvent.keyboard("{Enter}");
+        expect(counter()).toBe(control === "Previous match" ? "2/3" : "3/3");
+        await userEvent.keyboard(" ");
+        expect(counter()).toBe("1/3");
+      }
+
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => panel.querySelector('input[type="search"]')).toBeNull();
+      expect(document.activeElement).toBe(searchToggle);
+      expect(searchToggle.getAttribute("aria-pressed")).toBe("false");
+    }
 
     await userEvent.keyboard("{Enter}");
     await expect

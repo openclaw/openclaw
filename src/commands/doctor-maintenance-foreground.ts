@@ -5,7 +5,7 @@ import {
   GATEWAY_SERVICE_STOP_TIMEOUT_MS,
   GATEWAY_SHUTDOWN_RESERVE_MS,
 } from "../infra/gateway-shutdown-budget.js";
-import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
 import {
   acquireGatewayMaintenanceCoordinator,
   StateDatabaseCoordinatorContentionError,

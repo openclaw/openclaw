@@ -20,7 +20,10 @@ import {
 } from "../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import { captureOpenClawAgentDatabaseRegistration } from "./openclaw-agent-db-registry-listing.js";
-import { getOpenClawAgentDatabaseValidationForTransfer } from "./openclaw-agent-db-validation-cache.js";
+import {
+  captureOpenClawAgentDatabaseValidationTransfer,
+  getOpenClawAgentDatabaseValidationForTransfer,
+} from "./openclaw-agent-db-validation-cache.js";
 import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
 import type {
   AgentDatabaseExecutionIdentity,
@@ -102,6 +105,9 @@ export function createAgentDatabaseNativeGeneration(
   let nativeStopped: Promise<void> | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let quickCheckPending = false;
+  let receiveValidation:
+    | ReturnType<typeof captureOpenClawAgentDatabaseValidationTransfer>
+    | undefined;
 
   const assertCurrent = () => {
     assertLogicalCurrent();
@@ -185,6 +191,10 @@ export function createAgentDatabaseNativeGeneration(
               sharedStatePath: context.admission.databasePath,
               sharedStateIdentity: context.admission.identity.key,
             };
+            receiveValidation = captureOpenClawAgentDatabaseValidationTransfer({
+              agentId,
+              path: pathname,
+            });
             facts.validationPort.postMessage(
               getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname }),
               [],
@@ -261,6 +271,10 @@ export function createAgentDatabaseNativeGeneration(
           }
           source.assertCurrent();
           prepareGrant(request);
+          if (request.stage === "prepare" && nativeIdentity && isRecord(request.facts)) {
+            receiveValidation?.(nativeIdentity.physicalIdentity, request.facts.validation);
+            receiveValidation = undefined;
+          }
         },
       })(operation);
     };

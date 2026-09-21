@@ -5,17 +5,19 @@ import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
   formatSqliteErrorCodeSuffix,
   formatSqliteReadOnlyInspectionFailure,
+  isSqliteLockError,
 } from "./sqlite-error-diagnostics.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
 import { releaseSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import {
   createOnlineReadOnlyBackup,
   prepareSqliteReadOnlyLocationInProcess,
-  prepareSqliteReadOnlyLocationSyncFallbackInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
+  SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
 import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
+  SQLITE_INSPECTION_CONTENTION_PREFIX,
   isSqliteSnapshotStagingMode,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
@@ -33,16 +35,14 @@ import {
 
 const stagingTokens = new Map<string, (retiring?: boolean) => void>();
 
-// The sync strategy raw-copies without attaching SQLite to the source, so sync
-// callers stay byte-neutral on the live family; the async strategy holds a read
-// transaction on the source and may update its WAL index.
+// Artifact-preserving sync requests must not open SQLite on the source. Live
+// async backups pin committed pages with a read transaction and may update SHM.
 async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   const mode = args[0];
   const pathname = args[1];
   const stagingRoot = args[2];
   if (
     (mode !== "sync" &&
-      mode !== "sync-fallback" &&
       mode !== "async" &&
       mode !== "consolidated" &&
       mode !== "reclaim" &&
@@ -123,13 +123,15 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     const prepared =
       mode === "sync"
         ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot)
-        : mode === "sync-fallback"
-          ? await prepareSqliteReadOnlyLocationSyncFallbackInProcess(pathname, stagingRoot)
-          : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
+        : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
     return { ok: true, location: prepared.location };
   } catch (error) {
-    return { ok: false, message: formatSqliteReadOnlyInspectionFailure(error) };
+    const contention = error instanceof SqliteSourceChangedError || isSqliteLockError(error);
+    return {
+      ok: false,
+      message: `${contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : ""}${formatSqliteReadOnlyInspectionFailure(error)}`,
+    };
   }
 }
 
@@ -266,9 +268,7 @@ function runSession(): void {
       !Number.isSafeInteger(message.id) ||
       !("args" in message) ||
       !Array.isArray(message.args) ||
-      (message.args[0] !== "sync" &&
-        message.args[0] !== "sync-fallback" &&
-        !isSqliteSnapshotStagingMode(message.args[0])) ||
+      (message.args[0] !== "sync" && !isSqliteSnapshotStagingMode(message.args[0])) ||
       !message.args.every((arg): arg is string => typeof arg === "string")
     ) {
       process.exit(1);
@@ -283,7 +283,7 @@ function runSession(): void {
           : inspected;
       process.send?.({ id, result }, (error) => {
         if (error || (!result.ok && !staging)) {
-          // A failed inspection may still own a native handle and admission.
+          // Failed private recovery can retain a native handle until process exit.
           process.exit(1);
           return;
         }

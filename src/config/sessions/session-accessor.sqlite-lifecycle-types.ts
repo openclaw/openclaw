@@ -1,3 +1,4 @@
+import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -57,6 +58,7 @@ type SessionReclamationPlanBase = {
 };
 
 export type SqliteSessionReclamationPlan =
+  | (SessionReclamationPlanBase & { kind: "maintenance-pages"; maxPages?: number })
   | (SessionReclamationPlanBase & { kind: "maintenance-statistics" })
   | (SessionReclamationPlanBase & {
       kind: "maintenance-plan";
@@ -92,6 +94,7 @@ export type SqliteSessionReclamationPlan =
     });
 
 export type SqliteSessionReclamationResult =
+  | { kind: "maintenance-pages"; value: SqliteWalReclamationResult }
   | { kind: "maintenance-statistics"; value: true }
   | { kind: "maintenance-preservation-required" }
   | {

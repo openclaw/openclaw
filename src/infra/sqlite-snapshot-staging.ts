@@ -4,7 +4,6 @@ import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { getChildLogger } from "../logging/logger.js";
 import { formatErrorMessage } from "./errors.js";
-import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { markSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 import {
   createPrivateSqliteTempDirectorySync,
@@ -19,19 +18,21 @@ import {
   SqliteSnapshotCleanupError,
   SQLITE_SNAPSHOT_CONTROL_FILES,
 } from "./sqlite-readonly-location-cleanup.js";
+import {
+  acquireSqliteStagingToken,
+  type SqliteStagingToken as SnapshotToken,
+} from "./sqlite-staging-token.js";
 
 const prefix = "openclaw-sqlite-readonly-v2-";
 const suffix = "(?:[A-Za-z0-9]{6}|[\\da-f]{8}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{12})$";
 const legacyMarker = new RegExp(`^openclaw-sqlite-readonly-[1-9]\\d*-${suffix}`, "u");
 const tokenMarker = new RegExp(`^${prefix}${suffix}`, "u");
-const tokenName = SQLITE_SNAPSHOT_CONTROL_FILES[0];
 type ReclamationPass = { controller: AbortController; done: Promise<void> };
 const pendingReclamations = new Map<string, ReclamationPass>();
 const legacyAgeMs = 24 * 60 * 60 * 1000;
 const currentAgeMs = 15 * 60 * 1000;
 const reclamationByteBudget = 512 * 1024 * 1024;
 const isStagingName = (name: string) => legacyMarker.test(name) || tokenMarker.test(name);
-type SnapshotToken = (retiring?: boolean) => void;
 
 function stagingParent(root: string): string | undefined {
   const parent = path.basename(root) === "openclaw" ? path.dirname(root) : root;
@@ -50,58 +51,9 @@ function warn(message: string, error?: unknown): void {
 }
 
 function snapshotToken(directory: string, mode: "create" | "read" | "reclaim"): SnapshotToken {
-  const location = path.join(directory, tokenName);
-  // Check sidecars before SQLite may recover or remove a private journal.
-  const family = SQLITE_SNAPSHOT_CONTROL_FILES.map((file) =>
-    fs.lstatSync(path.join(directory, file), { throwIfNoEntry: false }),
-  );
-  const existing = family[0];
-  if (
-    family.some(
-      (file) => file && (!file.isFile() || (process.getuid && file.uid !== process.getuid())),
-    ) ||
-    (!existing && mode !== "create" && !legacyMarker.test(path.basename(directory)))
-  ) {
-    throw new Error("SQLite snapshot token ownership is unknown");
-  }
-  // Shipped drivers may supply a legacy parent without a token. Cooperating
-  // workers/reclaimers create the same inode; SQLite arbitrates admission.
-  // CREATE never recreates a missing parent directory.
-  const db = openNodeSqliteDatabase(existing ? resolveExistingSqliteFileUri(location) : location);
-  const release: SnapshotToken = (retiring = false) => {
-    if (!db.isOpen) {
-      return;
-    }
-    if (retiring) {
-      // Windows handles omit FILE_SHARE_DELETE: commit retirement while fenced,
-      // then close for removal. Late workers reject the committed marker.
-      if (!db.isTransaction) {
-        db.exec("BEGIN IMMEDIATE");
-      }
-      db.exec("PRAGMA user_version=1; COMMIT");
-    } else if (db.isTransaction) {
-      // Bun can retain statements after close_v2; end the transaction now so
-      // a released worker cannot keep its parent's retirement commit locked.
-      db.exec("ROLLBACK");
-    }
-    db.close();
-  };
-  try {
-    db.exec(
-      `PRAGMA busy_timeout=0; ${mode === "create" ? "BEGIN IMMEDIATE" : mode === "reclaim" ? "BEGIN EXCLUSIVE" : "BEGIN; SELECT rootpage FROM sqlite_schema LIMIT 1"}`,
-    );
-    if (db.prepare("PRAGMA journal_mode").get()?.journal_mode !== "delete") {
-      throw new Error("SQLite snapshot token journal mode is unknown");
-    }
-    const version = db.prepare("PRAGMA user_version").get()?.user_version;
-    if (version !== 0 && (mode !== "reclaim" || version !== 1)) {
-      throw new Error("SQLite snapshot parent retired; aborting snapshot allocation");
-    }
-    return release;
-  } catch (error) {
-    release();
-    throw error;
-  }
+  return acquireSqliteStagingToken(directory, mode, {
+    allowMissing: legacyMarker.test(path.basename(directory)),
+  });
 }
 
 /** A private reader protects its bytes independently of the staging child. */

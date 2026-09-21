@@ -245,9 +245,9 @@ android {
           "/META-INF/LICENSE*.txt",
           "DebugProbesKt.bin",
           "kotlin-tooling-metadata.json",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL1.bin.properties",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL3.bin.properties",
-          "org/bouncycastle/pqc/crypto/picnic/lowmcL5.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL1.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL3.bin.properties",
+          "org/bouncycastle/pqc/legacy/picnic/lowmcL5.bin.properties",
           "org/bouncycastle/x509/CertPathReviewerMessages*.properties",
         )
     }

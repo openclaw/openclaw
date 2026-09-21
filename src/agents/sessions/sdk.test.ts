@@ -13,7 +13,11 @@ import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+  disposeOpenClawAgentDatabaseByPath,
+} from "../../state/openclaw-agent-db.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 
 const thinkingMocks = vi.hoisted(() => ({
@@ -22,7 +26,14 @@ const thinkingMocks = vi.hoisted(() => ({
 const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
-const sdkSessionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sdkSessionTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of sdkSessionTempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 
 vi.mock("../../auto-reply/thinking.js", () => ({
   resolveThinkingDefaultForModel: thinkingMocks.resolveThinkingDefaultForModel,
@@ -130,6 +141,7 @@ describe("createAgentSession runtime ownership", () => {
       );
       session.dispose();
     } finally {
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
       disposeOpenClawAgentDatabaseByPath(databasePath);
     }
   });

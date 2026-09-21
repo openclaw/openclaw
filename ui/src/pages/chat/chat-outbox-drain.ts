@@ -3,6 +3,7 @@ import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   listStoredChatOutboxes,
+  readStoredChatOutbox,
   type StoredChatOutbox,
 } from "../../lib/chat/outbox-store-projection.ts";
 import {
@@ -27,11 +28,6 @@ import {
   type ChatCommandResetOptions,
 } from "./chat-commands.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import {
-  isInterruptedChatInput,
-  readCurrentStoredChatHistory,
-  readStoredChatOutbox,
-} from "./chat-outbox-receipts.ts";
 import {
   consumeChatOutboxRetry,
   scheduleChatOutboxRetry,
@@ -170,6 +166,22 @@ async function reconcileStoredChatOutboxHead(
     connectionEpoch,
     (delayMs: number) => scheduleStoredChatOutboxRetry(host, outbox, delayMs, dependencies),
   ] as const;
+  const isCurrent = () =>
+    host.connected && host.client === client && host.connectionEpoch === connectionEpoch;
+  let recovery: typeof import("./chat-outbox-receipts.ts");
+  try {
+    recovery = await import("./chat-outbox-receipts.ts");
+  } catch (error) {
+    if (isCurrent()) {
+      surfaceChatDeliveryFailure(host, outbox.sessionKey, outbox.agentId, formatUiError(error));
+      host.requestUpdate?.();
+    }
+    return "blocked";
+  }
+  if (!isCurrent()) {
+    return "blocked";
+  }
+  const { readCurrentStoredChatHistory, isInterruptedChatInput } = recovery;
   const history = await readCurrentStoredChatHistory(...historyArgs);
   if (
     typeof history !== "string" &&
@@ -247,9 +259,12 @@ async function drainStoredChatOutbox(
     if (!outbox) {
       return "empty";
     }
-    // Explicit active-run sends may bypass older queued rows; other admissions keep FIFO.
+    // Fresh active-run sends bypass older rows, including when the Gateway resolves the mode.
     const freshActiveRunItem = outbox.queue.find(
-      (entry) => lane.freshAdmissions.has(entry.id) && Boolean(entry.queueMode),
+      (entry) =>
+        lane.freshAdmissions.has(entry.id) &&
+        (entry.queueMode ||
+          (!entry.intent && lane.pendingOptions.get(entry.id)?.allowActiveRunSend)),
     );
     const storedItem =
       freshActiveRunItem ??

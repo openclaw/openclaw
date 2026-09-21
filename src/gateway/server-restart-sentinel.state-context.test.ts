@@ -181,10 +181,10 @@ it.each([false, true])(
     expect(await readRestartSentinel(originalEnv)).toEqual(retained);
     expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledOnce();
     const noticeId = `restart-sentinel-notice:agent:main:main:${original.revision}`;
-    expect(findDeliveryIntentOwner(noticeId, undefined, context)).toMatchObject({
+    expect(await findDeliveryIntentOwner(noticeId, undefined, context)).toMatchObject({
       status: "completed",
     });
-    expect(findDeliveryIntentOwner(noticeId, unrelatedRoot)).toBeNull();
+    expect(await findDeliveryIntentOwner(noticeId, unrelatedRoot)).toBeNull();
   },
 );
 
@@ -273,19 +273,21 @@ it.each([
     if (replacement === "stopped") {
       expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
       expect(
-        findDeliveryIntentOwner(`update-run-finished:${run.runId}`, undefined, context),
+        await findDeliveryIntentOwner(`update-run-finished:${run.runId}`, undefined, context),
       ).toBeNull();
     } else {
       expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledOnce();
       expect(
-        findDeliveryIntentOwner(`update-run-finished:${run.runId}`, undefined, context),
+        await findDeliveryIntentOwner(`update-run-finished:${run.runId}`, undefined, context),
       ).toMatchObject({ status: "completed" });
     }
     expect(await readRestartSentinel(originalEnv)).toEqual(
       replacement === "same" || replacement === "continuation" ? null : retained,
     );
     expect(await readRestartSentinel(unrelatedEnv)).toEqual(unrelated);
-    expect(findDeliveryIntentOwner(`update-run-finished:${run.runId}`, unrelatedRoot)).toBeNull();
+    expect(
+      await findDeliveryIntentOwner(`update-run-finished:${run.runId}`, unrelatedRoot),
+    ).toBeNull();
     if (replacement === "continuation") {
       expect(mocks.dispatchAssembledChannelTurn).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
@@ -472,9 +474,11 @@ it.each([
     expect(await readRestartSentinel(originalEnv)).toBeNull();
     expect(await readRestartSentinel(unrelatedEnv)).toEqual(unrelated);
     expect(
-      findDeliveryIntentOwner(`update-run-finished:${run.runId}`, undefined, context),
+      await findDeliveryIntentOwner(`update-run-finished:${run.runId}`, undefined, context),
     ).toMatchObject({ status: "completed" });
-    expect(findDeliveryIntentOwner(`update-run-finished:${run.runId}`, unrelatedRoot)).toBeNull();
+    expect(
+      await findDeliveryIntentOwner(`update-run-finished:${run.runId}`, unrelatedRoot),
+    ).toBeNull();
     expect(getUpdateRun(run.runId, { env: unrelatedEnv })).toBeUndefined();
     if (phase === "verifying") {
       expect(getUpdateRun(run.runId, { env: originalEnv })?.steps).toContainEqual(

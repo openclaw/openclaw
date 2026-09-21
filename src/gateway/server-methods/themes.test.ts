@@ -110,11 +110,20 @@ async function invoke(
 }
 
 function pluginTheme(): ThemeCatalogEntry {
-  const definition = createThemeDefinitionFixture();
+  const definition = createThemeDefinitionFixture({
+    mascot: "none",
+    workingPhrases: ["Building"],
+    critters: ["penguin", "fedora"],
+    avatarHat: "fedora",
+  });
   return {
     id: "space-pack/xenovessel",
     name: definition.name,
     description: definition.description,
+    mascot: definition.mascot,
+    workingPhrases: definition.workingPhrases,
+    critters: definition.critters,
+    avatarHat: definition.avatarHat,
     source: "plugin",
     pluginId: "space-pack",
     modes: ["dark"],
@@ -201,7 +210,12 @@ describe("theme RPC", () => {
     const requester = client(requesterProfileId);
     const other = { ...client(otherProfileId), connId: "other-browser" };
     const broadcastToConnIds = vi.fn();
-    const definition = createThemeDefinitionFixture();
+    const definition = createThemeDefinitionFixture({
+      mascot: "none",
+      workingPhrases: ["Building", "Compiling"],
+      critters: ["penguin", "fedora"],
+      avatarHat: "fedora",
+    });
     expect(
       await invoke(
         "themes.import",
@@ -222,7 +236,14 @@ describe("theme RPC", () => {
       ok: true,
       payload: {
         current: { id: "user/xenovessel", mode: "dark", scope: "profile" },
-        theme: { id: "user/xenovessel", source: "user" },
+        theme: {
+          id: "user/xenovessel",
+          source: "user",
+          mascot: "none",
+          workingPhrases: ["Building", "Compiling"],
+          critters: ["penguin", "fedora"],
+          avatarHat: "fedora",
+        },
         definition,
         application: "saved",
       },
@@ -244,6 +265,32 @@ describe("theme RPC", () => {
       "ui.themeMode": "dark",
     });
     expect(getUserPreferences(otherProfileId)).toEqual({});
+    expect(await invoke("themes.get", { id: "user/xenovessel" })).toMatchObject({
+      ok: true,
+      payload: {
+        theme: {
+          mascot: "none",
+          workingPhrases: ["Building", "Compiling"],
+          critters: ["penguin", "fedora"],
+          avatarHat: "fedora",
+        },
+        definition,
+      },
+    });
+    expect(await invoke("themes.list")).toMatchObject({
+      ok: true,
+      payload: {
+        themes: expect.arrayContaining([
+          expect.objectContaining({
+            id: "user/xenovessel",
+            mascot: "none",
+            workingPhrases: ["Building", "Compiling"],
+            critters: ["penguin", "fedora"],
+            avatarHat: "fedora",
+          }),
+        ]),
+      },
+    });
   });
 
   it("rolls back the imported definition when selecting it fails in storage", async () => {

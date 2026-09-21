@@ -10,12 +10,17 @@ import { UpdateCommandFailure } from "../cli/update-cli/update-command-result.js
 import { withUpdateFailureTriage } from "../cli/update-cli/update-command-triage.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
-import type { UpdateRunResult } from "../infra/update-runner.js";
+import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { triageAfterFailure } from "./triage-failure.js";
 import { triageCommand } from "./triage.js";
-import { createTriageRuntime, withTriageTerminal } from "./triage.test-support.js";
+import {
+  createTriageInferenceSelection,
+  createTriageRuntime,
+  resetTriageRepairRuntimeMocks,
+  withTriageTerminal,
+} from "./triage.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const failedUpdate: UpdateRunResult = {
@@ -34,7 +39,8 @@ const mocks = vi.hoisted(() => ({
   writeDiagnosticSupportExport: vi.fn(),
   gatherDaemonStatus: vi.fn(),
   runUpdateRepairLoop: vi.fn(),
-  agentExecCommand: vi.fn(),
+  prepareUpdateRepairInference: vi.fn(),
+  runUpdateRepairTurn: vi.fn(),
   resolveExecutablePath: vi.fn(),
   runUtf8CommandWithTimeout: vi.fn(),
   spawn: vi.fn(),
@@ -81,7 +87,10 @@ vi.mock("../infra/update-repair-agent.js", () => ({
   runUpdateRepairLoop: mocks.runUpdateRepairLoop,
 }));
 
-vi.mock("./agent-exec.js", () => ({ agentExecCommand: mocks.agentExecCommand }));
+vi.mock("../infra/update-repair-agent.runtime.js", () => ({
+  prepareUpdateRepairInference: mocks.prepareUpdateRepairInference,
+  runUpdateRepairTurn: mocks.runUpdateRepairTurn,
+}));
 
 describe("triageCommand", () => {
   let stateDir: string;
@@ -98,11 +107,7 @@ describe("triageCommand", () => {
     vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
     vi.stubEnv("OPENCLAW_WORKSPACE_DIR", undefined);
     mocks.collectDoctorFindings.mockResolvedValue([]);
-    mocks.runUpdateRepairLoop.mockResolvedValue({
-      status: "repaired",
-      attempts: [],
-      finalValidation: { ok: true, score: 0, summary: "Doctor lint reports no errors." },
-    });
+    resetTriageRepairRuntimeMocks(mocks, stateDir);
     mocks.resolveExecutablePath.mockReturnValue(undefined);
     mocks.runUtf8CommandWithTimeout.mockImplementation(async (argv, options) => {
       if (argv.at(-1) === "--help") {
@@ -145,7 +150,7 @@ describe("triageCommand", () => {
 
       expect(mocks.spawn).not.toHaveBeenCalled();
       expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
-      expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+      expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
       const output = runtime.log.mock.calls.flat().join("\n");
       expect(output).toContain("No repair agent was started.");
@@ -277,7 +282,17 @@ describe("triageCommand", () => {
       path.join(stateDir, "openclaw.json"),
       JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
     );
-    mocks.agentExecCommand.mockResolvedValue({ exitCode: 1 });
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    mocks.prepareUpdateRepairInference.mockImplementation(async () => {
+      now += 15_000;
+      return createTriageInferenceSelection(stateDir);
+    });
+    mocks.runUpdateRepairTurn.mockResolvedValue({
+      status: "completed",
+      toolCalls: 0,
+      envelope: { status: "error", final: "" },
+    });
     const runtime = createTriageRuntime();
     await expect(
       triageCommand(
@@ -296,13 +311,23 @@ describe("triageCommand", () => {
         },
       ),
     ).rejects.toMatchObject({ code: 1 });
-    expect(mocks.agentExecCommand).toHaveBeenCalledOnce();
+    expect(mocks.prepareUpdateRepairInference).toHaveBeenCalledOnce();
+    expect(mocks.runUpdateRepairTurn).toHaveBeenCalledOnce();
+    expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
     expect(mocks.runUtf8CommandWithTimeout).not.toHaveBeenCalled();
     expect(mocks.spawn).not.toHaveBeenCalled();
     expect(runtime.writeJson).not.toHaveBeenCalled();
     expect(runtime.writeStdout).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.agentExecCommand.mock.calls[0]?.[0]).toContain("listener never became healthy");
+    expect(mocks.runUpdateRepairTurn.mock.calls[0]?.[0].prompt).toContain(
+      "listener never became healthy",
+    );
+    expect(mocks.runUpdateRepairTurn.mock.calls[0]?.[0]).toMatchObject({
+      maxToolCalls: 40,
+      timeoutMs: expect.any(Number),
+    });
+    expect(mocks.prepareUpdateRepairInference.mock.calls[0]?.[1]).toBe(600_000);
+    expect(mocks.runUpdateRepairTurn.mock.calls[0]?.[0].timeoutMs).toBe(585_000);
   });
 
   it("fences the selected embedded effect after source loss without watchdog cancellation", async () => {
@@ -313,12 +338,12 @@ describe("triageCommand", () => {
     const controller = new AbortController();
     let current = true;
     let effectCount = 0;
-    mocks.agentExecCommand.mockImplementation(async (_prompt, _options, _runtime, deps) => {
+    mocks.runUpdateRepairTurn.mockImplementation(async (params) => {
       await Promise.resolve();
       current = false;
-      deps.assertSourceCurrent?.();
+      params.isCurrent();
       effectCount += 1;
-      return { exitCode: 0 };
+      return { status: "completed", toolCalls: 0, envelope: { status: "ok", final: "" } };
     });
     await expect(
       triageCommand(
@@ -362,7 +387,7 @@ describe("triageCommand", () => {
         kind === "cancelled" ? signal : undefined,
       );
       expect(mocks.collectDoctorFindings).not.toHaveBeenCalled();
-      expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+      expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
       expect(mocks.spawn).not.toHaveBeenCalled();
     },
   );
@@ -375,7 +400,10 @@ describe("triageCommand", () => {
           path.join(stateDir, "openclaw.json"),
           JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
         );
-        mocks.agentExecCommand.mockRejectedValue(new Error("Authentication required"));
+        mocks.prepareUpdateRepairInference.mockResolvedValue({
+          ok: false,
+          reason: "Authentication required",
+        });
       }
       const runtime = createTriageRuntime();
       await triageCommand(
@@ -406,9 +434,10 @@ describe("triageCommand", () => {
       expect(await fs.readFile(path.join(stateDir, "logs/support", promptFile!), "utf8")).toContain(
         "original build failure",
       );
-      expect(mocks.agentExecCommand).toHaveBeenCalledTimes(configured ? 1 : 0);
+      expect(mocks.prepareUpdateRepairInference).toHaveBeenCalledTimes(configured ? 1 : 0);
+      expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
       expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledTimes(configured ? 1 : 0);
     },
   );
 
@@ -419,7 +448,6 @@ describe("triageCommand", () => {
       path.join(stateDir, "openclaw.json"),
       JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
     );
-    mocks.agentExecCommand.mockResolvedValue({ exitCode: 0 });
     const runtime = createTriageRuntime();
 
     await triageAfterFailure(runtime, {
@@ -429,7 +457,8 @@ describe("triageCommand", () => {
       gateway: "verify-running",
     });
 
-    expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+    expect(mocks.prepareUpdateRepairInference).not.toHaveBeenCalled();
+    expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
     expect(runtime.error.mock.calls.flat().join("\n")).toContain("manual");
   });
 
@@ -638,7 +667,7 @@ describe("triageCommand", () => {
       }
     });
     expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
-    expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+    expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 

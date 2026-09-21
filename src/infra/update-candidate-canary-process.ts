@@ -11,7 +11,6 @@ export function launchCanary(params: {
   stateDir: string;
   assertCurrent?: () => void;
   capture: (line: string) => void;
-  onSpawn: () => void;
   onLine?: (line: string) => void;
   onStdout?: (stdout: string) => void;
 }) {
@@ -24,7 +23,6 @@ export function launchCanary(params: {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  params.onSpawn();
   let stdout = "";
   let firstStderrLine: string | undefined;
   let cliReason: string | undefined;

@@ -76,6 +76,15 @@ export function listStoredChatOutboxes(state: ChatComposerScope): StoredChatOutb
     );
 }
 
+export function readStoredChatOutbox(
+  state: ChatComposerScope,
+  scope: StoredChatOutboxScope,
+): StoredChatOutbox | undefined {
+  return listStoredChatOutboxes(state).find(
+    (outbox) => outbox.sessionKey === scope.sessionKey && outbox.agentId === scope.agentId,
+  );
+}
+
 export function summarizeStoredChatOutboxes(state: ChatComposerScope) {
   const idsByScope = new Map<string, { all: Set<string>; attention: Set<string> }>();
   const draftScopes = new Set<string>();

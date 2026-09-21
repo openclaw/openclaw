@@ -225,7 +225,7 @@ describe("runDoctorHealthFlow", () => {
           kind === "absent" ||
           kind === "windows-ready" ||
           kind === "windows-disabled" ||
-          kind.endsWith("loaded-disabled")
+          (kind.endsWith("loaded-disabled") && process.platform !== "darwin")
         ) {
           await run;
           expect(
@@ -679,9 +679,7 @@ describe("runDoctorHealthFlow", () => {
           );
           expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
           expect(runtime.error).toHaveBeenCalledWith(
-            expect.stringMatching(
-              /Doctor could not enter maintenance.*Agent main database is still open.*stop that process/,
-            ),
+            "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
           );
           expect(maintenanceOutcome()).toEqual({ outcome: "startup_failed" });
           expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
@@ -692,8 +690,9 @@ describe("runDoctorHealthFlow", () => {
               failureFacts: [
                 {
                   check: "doctor",
-                  code: "doctor-failed",
-                  message: expect.stringContaining("Doctor could not enter maintenance"),
+                  code: "agent-database-lease-active",
+                  message:
+                    "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
                 },
               ],
             },

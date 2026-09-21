@@ -11,7 +11,7 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -20,7 +20,7 @@ import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordUpdateResultNextAction,
   failUpdateCommandRun,
@@ -67,8 +67,13 @@ export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
 export async function prepareUnexpectedUpdateCommandFailure(
   error: unknown,
   opts: UpdateCommandOptions & { run: Run },
+  onPublishedRecord?: PublishedRecord,
 ): Promise<UpdateCommandFailure> {
-  const failure = { mode: "unknown" as const, durationMs: 0, failure: { cause: error } };
+  const failure = {
+    mode: "unknown" as const,
+    durationMs: 0,
+    failure: { cause: error },
+  };
   let fact: UpdateFailureFact;
   try {
     const recorded = failUpdateCommandRun(error, opts.run);
@@ -96,7 +101,7 @@ export async function prepareUnexpectedUpdateCommandFailure(
     );
   };
   if (!deferUpdateCommandTerminalResult(opts.run, publish)) {
-    await publish();
+    await publish(undefined, onPublishedRecord);
   }
   return new UpdateCommandFailure(result, 1, fact.message, { cause: error });
 }

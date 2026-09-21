@@ -329,7 +329,7 @@ describe("dashboard default activation and personal layout persistence", () => {
     });
     onTestFinished(stop);
     h.sync();
-    h.sessions.reconcileChanged({
+    h.emitGatewayEvent("sessions.changed", {
       ...session({ boardPresentation: "expanded", updatedAt: 20 }),
       sessionKey: key,
       reason: "patch",

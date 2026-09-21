@@ -1,7 +1,7 @@
 // Internal avatar-file tests cover pinned reads, limits, and workspace boundaries.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
@@ -45,19 +45,31 @@ describe("local agent avatar files", () => {
     expect(resolveAgentAvatarUrlFromSource(cfg, "main", "data:text/plain,avatar")).toBeUndefined();
   });
 
-  it("closes the pinned descriptor after inlining", () => {
+  it.each(["inlining", "a failed read"])("closes the pinned descriptor after %s", (outcome) => {
     const { cfg, workspace } = createWorkspace();
-    fs.writeFileSync(path.join(workspace, "avatar.png"), "avatar");
+    const avatarPath = path.join(workspace, "avatar.png");
+    fs.writeFileSync(avatarPath, "avatar");
     const opened = openLocalAgentAvatarFile({ cfg, agentId: "main", source: "avatar.png" });
     expect(opened.ok).toBe(true);
     if (!opened.ok) {
       throw new Error("expected a pinned avatar descriptor");
     }
+    if (outcome === "a failed read") {
+      fs.truncateSync(avatarPath, AVATAR_MAX_BYTES + 1);
+    }
 
-    expect(readOpenedLocalAgentAvatarDataUrl(opened.file)).toBe(
-      `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
-    );
-    expect(() => fs.fstatSync(opened.file.fd)).toThrow();
+    // Another thread can reuse the descriptor number immediately after close.
+    const close = vi.spyOn(fs, "closeSync");
+    try {
+      expect(readOpenedLocalAgentAvatarDataUrl(opened.file)).toBe(
+        outcome === "inlining"
+          ? `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`
+          : undefined,
+      );
+      expect(close).toHaveBeenCalledExactlyOnceWith(opened.file.fd);
+    } finally {
+      close.mockRestore();
+    }
   });
 
   it("rejects symlink escapes and hardlinks", () => {

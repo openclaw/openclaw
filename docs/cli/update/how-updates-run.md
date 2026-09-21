@@ -40,6 +40,10 @@ Changed plugins restart a running managed Gateway unless `--no-restart` is set; 
 Linux updates also refresh outdated OpenClaw-managed systemd policy when the core
 is already current or `--no-restart` is set. This policy-only refresh confirms
 `daemon-reload` without stopping the Gateway and preserves operator drop-ins.
+Native-definition reconciliation on launchd, Scheduled Tasks, and systemd keeps
+custom policy values with an advisory while refreshing recognized old defaults.
+For example, `TimeoutStartSec=45` stays unchanged while the old installer value
+`TimeoutStopSec=30` becomes `330`. Existing identity and command checks still apply.
 Maintenance stops also read the resident Gateway's recorded shutdown budget.
 Published 2026.9.5 residents keep their startup budget even after `daemon-reload`;
 their first stop therefore uses the short/unknown-budget path. The Gateway's
@@ -127,6 +131,11 @@ classification. The live plugin files and host links stay unchanged. Channels,
 cron, automatic updates, background task maintenance, and other side services are
 suppressed in this canary. Copied task records remain available for startup
 validation without recovery or pruning.
+The canary also defers session catalog hydration, worker recovery, and startup
+maintenance until activation, recording a warning. Required configuration,
+database ownership, schema, and migration checks still run before readiness;
+plugin runtime loading remains part of validation. The serving Gateway prepares
+its session catalogs and maintenance normally after activation.
 
 Update build and validation processes resolve source-linked plugin SDKs from
 the staged installation root, even when the serving source launcher passed its own checkout
@@ -136,6 +145,12 @@ Doctor warnings do not block update checks or readiness after plugin updates.
 The updater retains them in the run report shown by `openclaw update status`,
 including when an intentional open channel policy requires no configuration change.
 Error findings and failed check execution still refuse the update.
+
+These checks do not run an agent turn or require a usable model-auth route.
+OAuth-only installations and installations without provider credentials can update.
+Auth diagnostics are advisory; optional inference repair runs through triage only
+after a failed update has settled. It uses the normal runtime credential resolver,
+including shared profiles and OAuth refresh.
 
 The new version answers the updater's native service capability probe before
 loading configuration or initializing debug capture. Probing capability does not
@@ -223,8 +238,12 @@ TMPDIR=/var/tmp openclaw update --yes
 
 Subsequent updates use the new updater's measured destination selection.
 
-Schema checks also use private SQLite copies so inspection does not create or
-modify WAL sidecars beside live databases. Inspection budgets include database
+Live snapshots use SQLite read transactions and private backups while writers
+continue. Artifact-preserving planning and Doctor checks retain byte-neutral
+copies that leave source SHM unchanged. WAL copies capture a bounded prefix
+within one verified WAL generation, so appended commits do not require a quiet database.
+Incomplete WAL families and crash journals are recovered privately without
+creating missing source sidecars. Inspection budgets include database
 and journal sizes, cold startup, and repeated IO passes for every discovered
 store. Metadata checks remain cancellable. Copy progress renews the watchdog,
 and larger caller allowances are preserved. Workers stop before their private
@@ -234,6 +253,18 @@ Inspection failures report the database or known scope, inspection phase, elapse
 time, and the next action. Check access to the named path, concurrent writers,
 and storage performance before retrying. Older candidate workers that cannot
 report their current database identify the known scope instead.
+
+If the initial config inspection encounters SQLite lock contention or a changing
+snapshot source, the updater repeats that read once. A successful read records a
+warning and lets target selection continue. Corruption and other inspection errors
+remain failures. A pre-staging failure retains its original diagnostic and next
+action in update history once fresh database admission succeeds; unresolved
+recovery ownership still prevents terminal publication.
+
+This inspection behavior belongs to the invoking updater. A published 2026.9.4
+updater can still fail before staging the candidate. In that case, use the
+installation's [manual update method](/install/updating/update-methods), then run
+`openclaw update repair` from the updated installation.
 
 Before stopping the previous Gateway, the updater waits for affirmative readiness.
 Its observation window uses the canary's measured startup time with headroom for
@@ -262,29 +293,17 @@ The database-schema preflight still refuses incompatible downgrades. These older
 targets do not support automatic schema-neutral rollback; see
 [Downgrade finalization](/install/updating#roll-back-a-package-install).
 
-Blocking update validation failures enter a bounded `repairing` phase using
-configured inference. These include failed required Doctor checks, invalid config
-or state, invalid or unattributed plugin-registry results, and failed core startup
-or readiness checks. The updater reruns the failed check after each attempt and
-activates only after it passes. Failed or unavailable repair discards the
-staged update and leaves the serving Gateway untouched.
-After Doctor migrations complete and validation children shut down, repair reuses
-that private copy and its completed checks. If no usable inference route exists,
-the attempt is skipped without another snapshot or Doctor pass. Incomplete
-migrations or unconfirmed child shutdown require a fresh private copy instead.
-Successful repair of a private copy does not mean the update was applied:
-the updater validates a fresh copy of the update again before activation. If that check
-fails, the report retains the failed update and the command exits nonzero even
-when the previous Gateway remains healthy. Successful updates with warnings
-exit zero.
-Pre-activation repair uses disposable copied state and configuration, then
-independently validates surviving update changes before activation, and
-`repair-requires-config-change` reports changed top-level keys that require
-operator-run `openclaw doctor --fix` or `openclaw triage`. Post-activation
-finalization may use live repair when compatibility-checked package rollback is
-unsafe or fails. See
-[Unattended repair](/install/updating#unattended-repair-on-your-own-inference) for
-budgets, permitted repairs, and attempt reports.
+Blocking validation failures discard the staged update without stopping the
+serving Gateway. The updater does not run inference or repair the disposable
+validation copy. After a failed update has settled and released its ownership,
+eligible failures can enter post-failure triage. Triage preserves the original
+failed outcome; a repaired installation does not turn that update into success.
+See [Unattended repair](/install/updating#unattended-repair-on-your-own-inference).
+
+Published 2026.9.4 updaters can still request an inference-repair worker from the
+candidate. The candidate preserves that wire protocol and returns repair
+unavailable without loading inference or changing operator state. The installed
+updater still owns that first hop and its failure reporting.
 
 Only `activating` stops the managed service. Its offline work includes the package
 or checkout swap, required `doctor --fix` migrations, and state compatibility
@@ -423,16 +442,12 @@ authorize restarting the new version.
 
 If the config file changed after the activation Doctor pass or the databases are
 not schema-neutral, automatic rollback is refused with
-`state-migrated-no-rollback`. The updater enters `repairing` on the installed
-version, also used if rollback itself fails. If the previous package was
-already restored, repair targets that version. Between repair attempts, the
-updater starts or restarts a stopped or unhealthy service once and reruns the
-post-restart verification checks. Successful verification finishes the run as
-`succeeded` for the new version, or `rolled-back` for the restored release with a
-nonzero command exit. Failed repair preserves the original failure and attempt summaries.
-Use the recorded diagnostics and [Triage](/cli/triage) for remaining failures,
-preserving migrated state. These temporary validation
-snapshots are not a full-state backup; see [Rollback](/install/updating#rollback).
+`state-migrated-no-rollback`. The updater preserves the failed outcome and migrated state. If rollback
+itself fails, it retains the package and service recovery diagnostics. Optional
+post-failure [Triage](/cli/triage) starts only after update ownership and service
+compensation settle; it does not rewrite the failed update or grant new restart
+authority. These temporary validation snapshots are not a full-state backup;
+see [Rollback](/install/updating#rollback).
 If schema state cannot be verified, rollback is refused with
 `rollback-state-unverified`; unknown state never counts as schema-neutral.
 
@@ -441,7 +456,7 @@ If schema state cannot be verified, rollback is refused with
 Service-manager commands and helper acknowledgements share the activation or
 recovery allowance. Slow inspection or teardown does not impose a separate
 five- or thirty-second command cutoff. Service installation also forwards one
-caller budget through staging, sealing, and load; the parent owns cancellation.
+caller budget through installation and activation; the parent owns cancellation.
 
 When an agent runs `openclaw update` inside a systemd user service or macOS
 LaunchAgent Gateway, the CLI hands the update to the same managed-service helper
@@ -451,8 +466,7 @@ not a completed update. The acknowledging CLI exits with code `75` (`EX_TEMPFAIL
 so scripts cannot mistake accepted background work for a completed update. The
 detached helper remains the settlement authority; use the printed status and
 health commands to retrieve its terminal result. The helper launches staging and validation outside the
-Gateway process tree while the old Gateway keeps serving, including during
-bounded update repair. It parks the Gateway
+Gateway process tree while the old Gateway keeps serving. It parks the Gateway
 only when the orchestrator reaches `activating`, then completes the existing
 commit-or-cancel handoff. Keep stdout connected to the agent: stopping the service
 can terminate the surrounding exec shell (SIGTERM or exit 143), including commands

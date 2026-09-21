@@ -1,4 +1,5 @@
 // Target-aware runtime recovery; startup discovery retains its inherited-environment guards.
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { applyPathPrepend } from "../../infra/path-prepend.js";
@@ -12,6 +13,7 @@ import {
   withUpdateCommandExecutorChild,
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
+import { prepareUpdateCommandNativeGate } from "./update-command-native-gate.js";
 import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {
@@ -39,20 +41,32 @@ export function createPackageRuntimeRecovery(params: {
               params.root,
               async (_grant, bindChild) => {
                 authority.assertRequesterCurrent();
-                const result = await runCommandWithTimeout([command, ...args], {
-                  baseEnv: {},
-                  env,
-                  cwd: params.root,
-                  input: "",
-                  beforeInput: (pid, argv) => {
-                    authority.assertRequesterCurrent();
-                    bindChild(pid, argv);
+                const gate = prepareUpdateCommandNativeGate(randomUUID(), [env]);
+                const result = await runCommandWithTimeout(
+                  [
+                    process.execPath,
+                    "--input-type=module",
+                    "-e",
+                    gate.source,
+                    "--",
+                    command,
+                    ...args,
+                  ],
+                  {
+                    baseEnv: {},
+                    env: gate.env,
+                    cwd: params.root,
+                    input: gate.input,
+                    beforeInput: (pid, argv) => {
+                      authority.assertRequesterCurrent();
+                      bindChild(pid, argv);
+                    },
+                    timeoutMs: params.timeoutMs,
+                    killProcessTree: true,
+                    requireProcessTreeExtinction: true,
+                    maxOutputBytes: 64 * 1024,
                   },
-                  timeoutMs: params.timeoutMs,
-                  killProcessTree: true,
-                  requireProcessTreeExtinction: true,
-                  maxOutputBytes: 64 * 1024,
-                });
+                );
                 if (result.cleanup === "forced" || result.cleanup === "uncertain") {
                   throw new CommandProcessCleanupError();
                 }

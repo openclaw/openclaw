@@ -11,6 +11,11 @@
   overflow: hidden;
 }
 
+.identity-avatar--neutral > svg {
+  width: 100%;
+  height: 100%;
+}
+
 .identity-avatar--agent > .identity-avatar__image,
 .identity-avatar--agent > .identity-avatar__fallback {
   grid-area: 1 / 1;
@@ -22,6 +27,18 @@
 .identity-avatar__fallback {
   display: grid;
   place-items: center;
+}
+
+.identity-avatar__hat {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  grid-area: 1 / 1;
+}
+
+.identity-avatar__hat > svg {
+  width: 100%;
+  height: 100%;
 }
 
 .identity-avatar--agent:not(.is-fallback) > .identity-avatar__image + .identity-avatar__fallback,

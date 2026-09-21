@@ -22377,19 +22377,42 @@ public struct TerminalUploadResult: Codable, Sendable {
 public struct ThemeDefinition: Codable, Sendable {
     public let name: String
     public let description: String
+    public let mascot: AnyCodable?
+    public let workingphrases: [String]?
+    public let critters: [AnyCodable]?
+    public let avatarhat: AnyCodable?
     public let light: ThemePalette?
     public let dark: ThemePalette?
 
     public init(
         name: String,
         description: String,
+        mascot: AnyCodable? = nil,
+        workingphrases: [String]? = nil,
+        critters: [AnyCodable]? = nil,
+        avatarhat: AnyCodable? = nil,
         light: ThemePalette? = nil,
         dark: ThemePalette? = nil)
     {
         self.name = name
         self.description = description
+        self.mascot = mascot
+        self.workingphrases = workingphrases
+        self.critters = critters
+        self.avatarhat = avatarhat
         self.light = light
         self.dark = dark
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case mascot
+        case workingphrases = "workingPhrases"
+        case critters
+        case avatarhat = "avatarHat"
+        case light
+        case dark
     }
 }
 

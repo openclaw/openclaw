@@ -153,6 +153,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       (agentIdentity, notify) => agentIdentity.subscribe(notify),
     )
     .watch(
+      () => this.context?.theme,
+      (theme, notify) => theme.subscribe(notify),
+    )
+    .watch(
       () => this.context?.config,
       (config, notify) => config.subscribe(notify),
       () => this.syncCommunityInviteState(),

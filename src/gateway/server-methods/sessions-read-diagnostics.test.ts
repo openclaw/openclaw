@@ -18,6 +18,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as sessionPresentation from "../session-row-presentation.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import * as sessionModels from "../session-utils-model.js";
 import * as sessionRows from "../session-utils-row.js";
@@ -73,20 +74,19 @@ function expectNoCpuFields(record: unknown) {
   }
 }
 
-function controlProjectionClock(
-  projection: NonNullable<ReturnType<typeof getSessionRowProjection>>,
-  afterRow?: () => void,
-) {
+function controlProjectionClock(afterRow?: () => void) {
   vi.spyOn(performance, "now").mockImplementation(() => clock);
-  const select = projection.selectEntries.bind(projection);
-  vi.spyOn(projection, "selectEntries").mockImplementation((...args) => {
-    try {
-      return select(...args);
-    } finally {
-      cpu.user += 1_250;
-      cpu.system += 250;
-    }
-  });
+  const prepare = sessionPresentation.prepareProjectedSessionPresentation;
+  vi.spyOn(sessionPresentation, "prepareProjectedSessionPresentation").mockImplementation(
+    (...args) => {
+      try {
+        return prepare(...args);
+      } finally {
+        cpu.user += 1_250;
+        cpu.system += 250;
+      }
+    },
+  );
   const defaults = sessionModels.getSessionDefaults;
   vi.spyOn(sessionModels, "getSessionDefaults").mockImplementation((...args) => {
     try {
@@ -127,7 +127,7 @@ test.each(["channel-only", "slow-warning"])("attributes %s operations", async (m
       await ensure();
       clock += waitMs;
     });
-    const presentation = controlProjectionClock(owner);
+    const presentation = controlProjectionClock();
     const trace = createDiagnosticTraceContext();
     const events: unknown[] = [];
     const diagnostics = channel("openclaw.session.list");
@@ -218,7 +218,7 @@ test("reports materialized and reused selected rows after a keyed commit", async
     const initial = await listSessions({ client, context, request: { agentId: "main", limit: 1 } });
     const query = { agentId: "main", key: initial.sessions[0]!.key };
     const entry = projection.describe(query)!.entry;
-    controlProjectionClock(projection);
+    controlProjectionClock();
     const events: unknown[] = [];
     const diagnostics = channel("openclaw.session.list");
     const collect = (event: unknown) => events.push(event);
@@ -340,6 +340,7 @@ test.each([
           handlerElapsedMs: 25,
           handlerOutcome: "threw",
           responseOutcome: stage === "response" ? "threw" : "none",
+          prepareSyncMs: stage === "selection" ? 25 : 0,
         });
         if (cpuFailure === "none") {
           const metric = stage === "selection" ? "prepare" : stage;
@@ -377,7 +378,7 @@ test("attributes concurrent presentation and readiness waits to each request tra
         cpu.user += 500_000;
       });
     });
-    const presentation = controlProjectionClock(projection);
+    const presentation = controlProjectionClock();
     const traces = [createDiagnosticTraceContext(), createDiagnosticTraceContext()];
     const pending = traces.map((trace) =>
       runWithDiagnosticTraceContext(trace, () => listSessions({ client, context, request })),
@@ -444,7 +445,7 @@ test("reports fresh visibility after a readiness yield without charging the wait
     await initializeSessionReadContext(context);
     await getSessionRowProjection(context)!.ensureMaterialized();
     const projection = getSessionRowProjection(context)!;
-    controlProjectionClock(projection);
+    controlProjectionClock();
     const ensure = projection.ensureMaterialized.bind(projection);
     vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
       for (const name of ["first", "second", "third"]) {
@@ -490,7 +491,7 @@ test.each([
     await getSessionRowProjection(context)!.ensureMaterialized();
     const projection = getSessionRowProjection(context)!;
     const cpuThrows = mode === "cpu-start-throws" || mode === "cpu-finish-throws";
-    controlProjectionClock(projection, () => {
+    controlProjectionClock(() => {
       if (mode === "cpu-finish-throws") {
         cpuProbeFailure = new Error("synthetic CPU probe failure");
       }

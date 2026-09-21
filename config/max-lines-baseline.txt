@@ -430,7 +430,6 @@ src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts
 src/channels/plugins/setup-wizard-helpers.test.ts
 src/channels/plugins/setup-wizard-helpers.ts
-src/channels/plugins/types.adapters.ts
 src/channels/streaming.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
@@ -659,7 +658,6 @@ src/infra/state-migrations.storage.ts
 src/infra/state-migrations.test.ts
 src/infra/update-global.ts
 src/infra/update-managed-service-handoff.ts
-src/infra/update-runner.test.ts
 src/infra/update-startup.test.ts
 src/infra/update-startup.ts
 src/interactive/payload.ts

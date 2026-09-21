@@ -36,7 +36,7 @@ import type { SessionTranscriptHistoryWorkerInput } from "./session-transcript-w
 
 type QueuedHistoryRead = {
   promise: Promise<SessionHistoryWorkerResult>;
-  shared: boolean;
+  remainingReaders: number;
 };
 const queuedHistoryReads = new Map<string, QueuedHistoryRead>();
 let pendingHistoryReaders = 0;
@@ -46,9 +46,12 @@ function receivePage(
   queued: QueuedHistoryRead,
   signal?: AbortSignal,
 ): Promise<SessionHistoryWorkerResult> {
+  queued.remainingReaders++;
   return queued.promise.then((page) => {
+    queued.remainingReaders--;
     signal?.throwIfAborted();
-    return queued.shared ? structuredClone(page) : page;
+    // Dispatch closes the group; the final receiver owns the original after earlier clones finish.
+    return queued.remainingReaders === 0 ? page : structuredClone(page);
   });
 }
 
@@ -61,11 +64,10 @@ function readQueuedPage(
   signal?.throwIfAborted();
   const existing = queuedHistoryReads.get(key);
   if (existing) {
-    existing.shared = true;
     return receivePage(existing, signal);
   }
   const pending = createDeferredCore<SessionHistoryWorkerResult>();
-  const queued = { promise: pending.promise, shared: false };
+  const queued = { promise: pending.promise, remainingReaders: 0 };
   queuedHistoryReads.set(key, queued);
   void owner
     .run(() => {

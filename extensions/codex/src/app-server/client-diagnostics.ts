@@ -2,6 +2,24 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
+import type { CodexAppServerTransport } from "./transport.js";
+
+export function observeCodexAppServerStderr(
+  stderr: CodexAppServerTransport["stderr"],
+  consume: (chunk: string) => string,
+): void {
+  stderr.setEncoding("utf8");
+  stderr.on("data", (chunk: string) => {
+    const text = consume(chunk).trim();
+    if (text) {
+      embeddedAgentLog.debug(`codex app-server stderr: ${text}`);
+    }
+  });
+  // Diagnostic stream failure does not invalidate the JSON-RPC stdout connection.
+  stderr.on("error", (error) =>
+    embeddedAgentLog.warn("codex app-server stderr stream failed", { error }),
+  );
+}
 
 export function appendBoundedTail(current: string, next: string, maxLength: number): string {
   const combined = `${current}${next}`;

@@ -24,9 +24,11 @@ import type {
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
+import type { DevicePairingWorkerOperations } from "../infra/device-pairing-worker-contract.js";
 import type { ExecAuthorizationWorkerOperations } from "../infra/exec-approvals-contracts.js";
+import type { CurrentConversationBindingWorkerOperations } from "../infra/outbound/current-conversation-bindings.worker-contract.js";
 import type { PreparedPromotionClaim } from "../infra/promotions-feed.kernel.js";
-import type { ApnsRegistration } from "../infra/push-apns-store.types.js";
+import type { ApnsRegistrationWorkerOperations } from "../infra/push-apns-store.worker-contract.js";
 import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
 import type { SessionDeliveryWorkerOperations } from "../infra/session-delivery-queue.worker-contract.js";
 import type { PreparedSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
@@ -73,7 +75,10 @@ import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
+export type OpenClawStateWorkerOperations = CurrentConversationBindingWorkerOperations &
+  WebPushWorkerOperations &
+  ApnsRegistrationWorkerOperations &
+  DevicePairingWorkerOperations &
   ExecAuthorizationWorkerOperations &
   AuditWriterOperations &
   NativeHookRelayStoreWorkerOperations &
@@ -143,8 +148,6 @@ export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
       output: ReturnType<typeof deviceAuth.clearOriginDeviceTokenInDatabase>;
     };
 
-    "apns.registration.read": { input: string; output: ApnsRegistration | null };
-    "apns.registrations.read": { input: readonly string[]; output: Map<string, ApnsRegistration> };
     "authProfiles.read": { input: { artifactPreserving: boolean }; output: AuthProfileRowRead };
     "authProfiles.sharedOwnership": { input: { artifactPreserving: boolean }; output: unknown };
     "authProfiles.personal": {

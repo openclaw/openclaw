@@ -252,6 +252,8 @@ function fixture(
     mainAdvances: [] as string[],
     calls: [] as string[][],
     mutations: 0,
+    cancellations: 0,
+    cancellation: "success",
     mergeBody: null as string | null,
     previewBody: "Fixture body",
     tamperMergeBody: false,
@@ -553,6 +555,21 @@ else if(args[0]==="pr"&&args[1]==="view") {
     if(s.mutations===1&&["applied-open","applied-merged","unapplied"].includes(s.mode)) fail("non-200 OK status code: 502 Bad Gateway");
   }
   if(restMerge) out({merged:true,sha:s.pr.mergeCommit?.oid});
+} else if(args.includes("graphql")&&args.some(arg=>arg.includes("disablePullRequestAutoMerge("))) {
+  const record=JSON.parse(git(["show","refs/openclaw/pr-merge-outcomes/123:outcome.json"]));
+  if(record.cancellation?.state!=="requested"||!args.includes("id="+s.pr.id)) fail("cancellation intent not retained before dispatch");
+  s.cancellations++;
+  if(s.cancellation==="rejected") fail("cancellation rejected");
+  s.pr.autoMergeRequest=null;
+  if(s.cancellation==="merged") {
+    const parent=main();
+    const landed=git(["commit-tree",git(["merge-tree","--write-tree",parent,s.pr.headRefOid]),"-p",parent],"Concurrent merge\\n");
+    git(["push","-q","origin",landed+":refs/heads/main"]);
+    s.pr.state="MERGED";s.pr.mergeCommit={oid:landed};
+  }
+  save();
+  if(s.cancellation==="lost") fail("cancellation response lost");
+  out({data:{disablePullRequestAutoMerge:{pullRequest:{id:s.pr.id}}}});
 } else if(args.includes("graphql")&&args.some(arg=>arg.includes("addComment("))) {
   out({data:{addComment:{commentEdge:{node:{url:postComment(args.find(arg=>arg.startsWith("body="))?.slice(5))}}}}});
 } else if(args.includes("graphql")) {
@@ -661,7 +678,7 @@ begin_pr_operation_validation_phase
 if [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}"
 fi
 `,
   );
@@ -695,6 +712,7 @@ fi
     bodyPath = "",
     completionOid = "",
     legacyDirectory = "",
+    cancelAuto = false,
   ) => {
     const result = spawnSync(
       nodeExecutable,
@@ -708,6 +726,7 @@ fi
         bodyPath,
         completionOid,
         legacyDirectory,
+        String(cancelAuto),
       ],
       {
         cwd,
@@ -817,6 +836,7 @@ fi
     save,
     run,
     complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
+    cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),
     recover,
     advance,
     record,
@@ -3364,6 +3384,136 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(run.output).toContain("NO NET CHANGE");
     }
   });
+  it.each(["success", "lost"])(
+    "cancels accepted auto with %s response before recovering a reviewed replacement",
+    (cancellation) => {
+      const f = fixture();
+      f.save({
+        ...f.state(),
+        mode: "pending",
+        cancellation,
+        pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
+      });
+      const pending = f.run(true);
+      expect(pending.status, pending.output).toBe(0);
+      const accepted = f.git(["rev-parse", outcomeRef]);
+      const captures = f.captures();
+      const cancelled = f.cancel(accepted);
+      expect(cancelled.status, cancelled.output).toBe(0);
+      expect(f.state().pr.autoMergeRequest).toBeNull();
+      expect(f.record()).toMatchObject({
+        accepted: true,
+        route: "auto",
+        cancellation: { state: "confirmed", outcome: accepted, actor: "fixture-operator" },
+      });
+      const retired = f.git(["rev-parse", outcomeRef]);
+      const requested = f.git(["rev-list", "--parents", "-n", "1", retired]).split(" ").at(-1)!;
+      const replacement = f.replacePreparedHead();
+      f.save({ ...f.state(), mode: "success", pr: { ...f.state().pr, mergeStateStatus: "CLEAN" } });
+      const recovered = f.run(false, f.repo, "squash", retired, replacement);
+      expect(recovered.status, recovered.output).toBe(0);
+      expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 1 });
+      expect(f.record()).toMatchObject({
+        phase: "complete",
+        head: replacement,
+        recovery: { outcome: retired, replacementHead: replacement },
+      });
+      expect(f.git(["merge-base", "--is-ancestor", accepted, outcomeRef])).toBe("");
+      for (const [name, contents] of captures) {
+        expect(f.git(["show", `${requested}:${name}`])).toBe(contents.trim());
+      }
+    },
+  );
+  it("never repeats an uncertain auto cancellation and confirms its later observed retirement", () => {
+    const f = fixture();
+    f.save({
+      ...f.state(),
+      mode: "pending",
+      cancellation: "rejected",
+      pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
+    });
+    expect(f.run(true).status).toBe(0);
+    const first = f.cancel(f.git(["rev-parse", outcomeRef]));
+    expect(first.status, first.output).toBe(1);
+    expect(f.record().cancellation.state).toBe("requested");
+    f.recover();
+    const requested = f.git(["rev-parse", outcomeRef]);
+    const retry = f.cancel(requested);
+    expect(retry.status, retry.output).toBe(1);
+    expect(f.state().cancellations).toBe(1);
+    f.recover();
+    f.save({ ...f.state(), pr: { ...f.state().pr, autoMergeRequest: null } });
+    const confirmed = f.cancel(requested);
+    expect(confirmed.status, confirmed.output).toBe(0);
+    expect(f.state()).toMatchObject({ cancellations: 1, mutations: 1 });
+    expect(f.record().cancellation.state).toBe("confirmed");
+  });
+  it("reconciles a concurrent merge during auto cancellation without a second merge", () => {
+    const f = fixture();
+    f.save({
+      ...f.state(),
+      mode: "pending",
+      cancellation: "merged",
+      pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
+    });
+    expect(f.run(true).status).toBe(0);
+    const result = f.cancel(f.git(["rev-parse", outcomeRef]));
+    expect(result.status, result.output).toBe(0);
+    expect(f.record()).toMatchObject({ phase: "merged", landed: f.state().pr.mergeCommit?.oid });
+    expect(f.state()).toMatchObject({ cancellations: 1, mutations: 1, posts: 0 });
+  });
+  it.each(["head", "queue", "reread"])(
+    "preserves uncertain auto cancellation when %s changes during dispatch",
+    (change) => {
+      const f = fixture();
+      f.save({
+        ...f.state(),
+        mode: "pending",
+        pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
+      });
+      expect(f.run(true).status).toBe(0);
+      const changed = change === "queue" ? { isInMergeQueue: true } : { headRefOid: f.base };
+      f.save({
+        ...f.state(),
+        observations: [{}, {}, ...(change === "reread" ? [{}] : []), { pr: changed }],
+      });
+      const result = f.cancel(f.git(["rev-parse", outcomeRef]));
+      expect(result.status, result.output).toBe(1);
+      expect(f.state()).toMatchObject({ cancellations: 1, mutations: 1 });
+      expect(f.record().cancellation.state).toBe("requested");
+    },
+  );
+  it.each(["head", "queue", "method", "absent"])(
+    "refuses auto cancellation when %s no longer matches the retained request",
+    (change) => {
+      const f = fixture();
+      f.save({
+        ...f.state(),
+        mode: "pending",
+        pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
+      });
+      expect(f.run(true).status).toBe(0);
+      const accepted = f.git(["rev-parse", outcomeRef]);
+      const next = f.state();
+      if (change === "head") {
+        next.pr.headRefOid = f.base;
+      }
+      if (change === "queue") {
+        next.pr.isMergeQueueEnabled = true;
+      }
+      if (change === "method") {
+        next.pr.autoMergeRequest = { mergeMethod: "MERGE" };
+      }
+      if (change === "absent") {
+        next.pr.autoMergeRequest = null;
+      }
+      f.save(next);
+      const result = f.cancel(accepted);
+      expect(result.status, result.output).toBe(1);
+      expect(f.state()).toMatchObject({ cancellations: 0, mutations: 1 });
+      expect(f.git(["rev-parse", outcomeRef])).toBe(accepted);
+    },
+  );
   it.each([
     { auto: false, method: "squash" },
     { auto: false, method: "merge" },

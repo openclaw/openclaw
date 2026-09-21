@@ -5,15 +5,11 @@ import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { getChildLogger } from "../logging/logger.js";
 import { walkDirectorySync } from "./fs-safe.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
+import { SQLITE_STAGING_TOKEN_FILES as SQLITE_SNAPSHOT_CONTROL_FILES } from "./sqlite-staging-token.js";
+
+export { SQLITE_SNAPSHOT_CONTROL_FILES };
 
 export class SqliteSnapshotCleanupError extends Error {}
-
-export const SQLITE_SNAPSHOT_CONTROL_FILES = [
-  "owner.sqlite",
-  "owner.sqlite-journal",
-  "owner.sqlite-wal",
-  "owner.sqlite-shm",
-] as const;
 
 type SnapshotDirectory = {
   release?: (retire: boolean) => void;

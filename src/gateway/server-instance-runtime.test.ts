@@ -227,7 +227,9 @@ describe("createGatewayInstanceRuntime", () => {
         await runtime.recovery.sendRecoveryNotice(notice);
         await runtime.recovery.sendRecoveryNotice(notice);
 
-        expect(findDeliveryIntentOwner(idempotencyKey)).toMatchObject({ status: "completed" });
+        expect(await findDeliveryIntentOwner(idempotencyKey)).toMatchObject({
+          status: "completed",
+        });
         expect(visibleSend).toHaveBeenCalledOnce();
 
         let ownerCurrent = true;
@@ -241,7 +243,7 @@ describe("createGatewayInstanceRuntime", () => {
           isCurrent: () => ownerCurrent,
         });
         await vi.waitFor(() => expect(sendText).toHaveBeenCalledTimes(2));
-        const queuedResumption = findDeliveryIntentOwner(
+        const queuedResumption = await findDeliveryIntentOwner(
           "main-session-restart-recovery:run-2:failed-notice",
         );
         ownerCurrent = false;
@@ -269,12 +271,12 @@ describe("createGatewayInstanceRuntime", () => {
           isCurrent: () => true,
         };
         await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
-        expect(findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
+        expect(await findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
           status: "completed",
         });
         await runtime.recovery.sendRecoveryNotice(guardedDurableNotice);
         expect(visibleSend).toHaveBeenCalledTimes(2);
-        expect(findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
+        expect(await findDeliveryIntentOwner(guardedDurableNotice.idempotencyKey)).toMatchObject({
           status: "completed",
         });
       } finally {

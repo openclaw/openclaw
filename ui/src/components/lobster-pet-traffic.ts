@@ -4,6 +4,7 @@
 // a ReactiveController keeps the pet element focused on the resident.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { THEME_CRITTER_IDS } from "../../../packages/gateway-protocol/src/theme.ts";
 import {
   LOBSTER_BOTTLE_FORTUNES,
   LOBSTER_PASSER_CROSS_MS,
@@ -12,12 +13,14 @@ import {
   prefersReducedMotion,
   type LobsterBottlePlan,
   type LobsterPasserPlan,
+  type LobsterPasserOptions,
 } from "./lobster-pet-plans.ts";
 
 // Facing, reactions, and the act loop stay owned by the pet element; the
 // controller only reports crossing milestones.
 type LobsterTrafficHooks = {
   visitsEnabled: () => boolean;
+  passerOptions: () => LobsterPasserOptions;
   onPasserStart: (plan: LobsterPasserPlan) => void;
   // Fired at crossing start (toward the entry side) and mid-cross (travel
   // direction) so the resident can watch the traffic go by.
@@ -37,6 +40,8 @@ export class LobsterLedgeTraffic implements ReactiveController {
   private passerTimer: number | null = null;
   private passerEndTimer: number | null = null;
   private passerWatchTimer: number | null = null;
+  private seed: number | null = null;
+  private passerConsumed = false;
   private bottleTimer: number | null = null;
   private bottleEndTimer: number | null = null;
 
@@ -71,8 +76,12 @@ export class LobsterLedgeTraffic implements ReactiveController {
     this.host.requestUpdate();
   }
 
-  // Re-plans both events for a (re)seeded load.
+  // Only a new seed restores a crossing already consumed by this load.
   reset(seed: number) {
+    if (seed !== this.seed) {
+      this.seed = seed;
+      this.passerConsumed = false;
+    }
     this.clearTimers();
     this.passer = null;
     this.bottleVisible = false;
@@ -80,6 +89,28 @@ export class LobsterLedgeTraffic implements ReactiveController {
     if (this.connected && this.hooks.visitsEnabled()) {
       this.schedulePasser(seed);
       this.scheduleBottle(seed);
+    }
+  }
+
+  replanPasser(seed: number) {
+    const passer = this.passer;
+    const options = this.hooks.passerOptions();
+    const themeCritter = THEME_CRITTER_IDS.find((kind) => kind === passer?.kind);
+    if (
+      passer &&
+      (passer.kind !== "stranger" || options.strangers !== false) &&
+      (!themeCritter || options.critters?.includes(themeCritter))
+    ) {
+      return;
+    }
+    const wasCrossing = this.passer !== null;
+    this.clearPasserTimers();
+    this.passer = null;
+    if (wasCrossing) {
+      this.hooks.onPasserDone();
+    }
+    if (this.connected && this.hooks.visitsEnabled()) {
+      this.schedulePasser(seed);
     }
   }
 
@@ -112,13 +143,18 @@ export class LobsterLedgeTraffic implements ReactiveController {
   };
 
   private clearTimers() {
-    for (const timer of [
-      this.passerTimer,
-      this.passerEndTimer,
-      this.passerWatchTimer,
-      this.bottleTimer,
-      this.bottleEndTimer,
-    ]) {
+    this.clearPasserTimers();
+    for (const timer of [this.bottleTimer, this.bottleEndTimer]) {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    }
+    this.bottleTimer = null;
+    this.bottleEndTimer = null;
+  }
+
+  private clearPasserTimers() {
+    for (const timer of [this.passerTimer, this.passerEndTimer, this.passerWatchTimer]) {
       if (timer !== null) {
         window.clearTimeout(timer);
       }
@@ -126,17 +162,20 @@ export class LobsterLedgeTraffic implements ReactiveController {
     this.passerTimer = null;
     this.passerEndTimer = null;
     this.passerWatchTimer = null;
-    this.bottleTimer = null;
-    this.bottleEndTimer = null;
   }
 
   private schedulePasser(seed: number) {
-    const plan = planLobsterPasser(seed);
+    if (this.passerConsumed) {
+      return;
+    }
+    const plan = planLobsterPasser(seed, this.hooks.passerOptions());
     if (!plan || prefersReducedMotion()) {
       return;
     }
     this.passerTimer = window.setTimeout(() => {
       this.passerTimer = null;
+      // A crossing gets one chance per load, even after theme or preference refreshes.
+      this.passerConsumed = true;
       if (
         !this.connected ||
         !this.hooks.visitsEnabled() ||

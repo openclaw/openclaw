@@ -16,7 +16,6 @@ import type {
   stageSessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
@@ -35,6 +34,7 @@ import {
   waitForAssertion,
 } from "./agent-clock.test-helpers.js";
 import { agentIdentityHandlers } from "./agent-identity.js";
+import { createAgentTestSessionRowProjection } from "./agent-session-projection.test-support.js";
 import { agentHandlers } from "./agent.js";
 import { createAgentTestUserTurnRecorder } from "./agent.user-turn-recorder.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
@@ -421,16 +421,10 @@ export const makeContext = (session?: {
     ...bindSessionRowProjection(
       {},
       () =>
-        ({
-          get state() {
-            return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
-          },
-          capture: () => undefined,
-          ensureMaterialized: async () => {},
-          snapshot: ({ key, agentId }: { key: string; agentId: string }) => ({
-            row: session?.agentId === agentId && session.row.key === key ? session.row : null,
-          }),
-        }) as unknown as SessionRowProjection,
+        createAgentTestSessionRowProjection(
+          resolveAgentTestConfig,
+          session,
+        ) as unknown as SessionRowProjection,
     ),
   }) as unknown as GatewayRequestContext;
 

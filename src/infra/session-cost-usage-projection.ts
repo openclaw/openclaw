@@ -1,6 +1,5 @@
 import { createTimeZoneDayKeyFormatter } from "./format-time/format-datetime.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
-import type { UsageCostTranscriptFile } from "./session-cost-usage-collection.js";
 import {
   canUseUsageCostRollupForPartial,
   decodeUsageCostRollup,
@@ -16,6 +15,7 @@ import type {
   CostUsageTotals,
   SessionCostSummary,
   UsageCacheStatus,
+  UsageCostTranscriptFile,
   UsageDailyBucket,
 } from "./session-cost-usage.types.js";
 

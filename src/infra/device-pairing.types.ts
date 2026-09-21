@@ -36,6 +36,11 @@ export type DevicePairingPendingRecord = DevicePairingPendingRequest & {
   refreshedAtMs?: number;
 };
 
+export type DevicePairingStoreState = {
+  pendingById: Record<string, DevicePairingPendingRecord>;
+  pairedByDeviceId: Record<string, PairedDevice>;
+};
+
 /** Bearer token issued to one paired device role. */
 export type DeviceAuthToken = {
   token: string;

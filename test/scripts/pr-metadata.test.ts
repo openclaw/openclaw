@@ -16,6 +16,18 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const head = "a".repeat(40);
 const base = "c".repeat(40);
 
+function graphqlResponse(repository: unknown) {
+  return { data: { repository } };
+}
+
+function connectionPage(nodes: unknown[], hasNextPage: boolean) {
+  return {
+    nodes,
+    totalCount: 2,
+    pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
+  };
+}
+
 type Fixture = {
   changedFiles?: number | null;
   files?: unknown;
@@ -310,7 +322,7 @@ describe("PR metadata through REST", () => {
         const result = readPrMetadata(
           {
             coreQuotaAt: ["browse", "repos/base-owner/base-repo"],
-            graphqlResponses: [{ data: { repository } }],
+            graphqlResponses: [graphqlResponse(repository)],
             graphqlQuota,
           },
           "pr_gh_plain repo view --json id,nameWithOwner,url",
@@ -335,7 +347,7 @@ describe("PR metadata through REST", () => {
       const result = readPrMetadata(
         {
           coreQuotaAt: ["repos/Base-Owner/Base-Repo"],
-          graphqlResponses: [{ data: { repository } }],
+          graphqlResponses: [graphqlResponse(repository)],
         },
         "pr_gh_plain repo-authority Base-Owner/Base-Repo GitHub.com",
       );
@@ -351,17 +363,14 @@ describe("PR metadata through REST", () => {
     it.each(["exact", "absent", "unavailable"])(
       "resolves %s author permission without accepting a fuzzy collaborator match",
       (mode) => {
-        const page = (login: string, permission: string, hasNextPage: boolean) => ({
-          data: {
-            repository: {
-              collaborators: {
-                totalCount: 2,
-                edges: [{ permission, node: { login } }],
-                pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
-              },
+        const page = (login: string, permission: string, hasNextPage: boolean) =>
+          graphqlResponse({
+            collaborators: {
+              totalCount: 2,
+              edges: [{ permission, node: { login } }],
+              pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
             },
-          },
-        });
+          });
         const result = readPrMetadata(
           {
             coreQuotaAt: ["repos/base-owner/base-repo/collaborators/human/permission"],
@@ -399,19 +408,8 @@ describe("PR metadata through REST", () => {
           updatedAt: "2026-09-20T00:00:00Z",
           author: { id: "BOT_1", databaseId: 274271284, login: "clawsweeper", __typename: "Bot" },
         };
-        const page = (nodes: unknown[], hasNextPage: boolean) => ({
-          data: {
-            repository: {
-              pullRequest: {
-                comments: {
-                  nodes,
-                  totalCount: 2,
-                  pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
-                },
-              },
-            },
-          },
-        });
+        const page = (nodes: unknown[], hasNextPage: boolean) =>
+          graphqlResponse({ pullRequest: { comments: connectionPage(nodes, hasNextPage) } });
         const result = readPrMetadata(
           {
             coreQuotaAt: ["repos/base-owner/base-repo/issues/42/comments?per_page=100"],
@@ -452,24 +450,20 @@ describe("PR metadata through REST", () => {
           ],
           coreQuotaAt: [`repos/base-owner/base-repo/commits?sha=${second}&per_page=2`],
           graphqlResponses: [
-            {
-              data: {
-                repository: {
-                  commit0: {
-                    oid: first,
-                    author: {
-                      name: "Human",
-                      email: "human@example.invalid",
-                      user: { login: "human", __typename: "User" },
-                    },
-                  },
-                  commit1: {
-                    oid: second,
-                    author: { name: "Unlinked", email: "unlinked@example.invalid", user: null },
-                  },
+            graphqlResponse({
+              commit0: {
+                oid: first,
+                author: {
+                  name: "Human",
+                  email: "human@example.invalid",
+                  user: { login: "human", __typename: "User" },
                 },
               },
-            },
+              commit1: {
+                oid: second,
+                author: { name: "Unlinked", email: "unlinked@example.invalid", user: null },
+              },
+            }),
           ],
         },
         'printf "%s\\n" "$FAKE_GH_FIXTURE" | jq .authorSources | pr_gh commit-authors base-owner/base-repo github.com',
@@ -489,35 +483,27 @@ describe("PR metadata through REST", () => {
     it.each([false, true])(
       "returns complete PR file metadata through GraphQL (truncated=%s)",
       (truncated) => {
-        const page = (path: string, hasNextPage: boolean) => ({
-          data: {
-            repository: {
-              pullRequest: {
-                files: {
-                  totalCount: 2,
-                  nodes: [{ path, additions: 1, deletions: 0, changeType: "MODIFIED" }],
-                  pageInfo: { hasNextPage, endCursor: hasNextPage ? "next" : null },
-                },
-              },
+        const page = (path: string, hasNextPage: boolean) =>
+          graphqlResponse({
+            pullRequest: {
+              files: connectionPage(
+                [{ path, additions: 1, deletions: 0, changeType: "MODIFIED" }],
+                hasNextPage,
+              ),
             },
-          },
-        });
+          });
         const result = readPrMetadata(
           {
             coreQuotaAt: ["repos/base-owner/base-repo/pulls/42"],
             graphqlResponses: [
-              {
-                data: {
-                  repository: {
-                    pullRequest: {
-                      headRefOid: head,
-                      author: null,
-                      headRepository: null,
-                      headRepositoryOwner: null,
-                    },
-                  },
+              graphqlResponse({
+                pullRequest: {
+                  headRefOid: head,
+                  author: null,
+                  headRepository: null,
+                  headRepositoryOwner: null,
                 },
-              },
+              }),
               page("src/a.ts", !truncated),
               page("src/b.ts", false),
             ],
@@ -1077,7 +1063,7 @@ describe("PR metadata through REST", () => {
         additions: 0,
         deletions: 0,
       };
-      const response = (pullRequest: unknown) => ({ data: { repository: { pullRequest } } });
+      const response = (pullRequest: unknown) => graphqlResponse({ pullRequest });
       const emptyPage = { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false } };
       const result = readPrMetadata({
         cacheUntilRevalidated: true,

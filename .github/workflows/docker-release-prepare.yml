@@ -81,6 +81,12 @@ jobs:
           fetch-depth: 1
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Resolve exact preparation identity
         id: identity
         env:
@@ -214,6 +220,12 @@ jobs:
           sbom: true
           provenance: mode=max
           push: false
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Verify OCI bytes, attestations, and image smoke
         env:
           JOB_CONTEXT: ${{ toJSON(job) }}
@@ -264,6 +276,12 @@ jobs:
           pattern: ${{ needs.resolve.outputs.artifact_name }}-metadata-*
           merge-multiple: true
           path: ${{ runner.temp }}/docker-release/metadata
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Seal exact prepared image identities
         id: manifest
         env:

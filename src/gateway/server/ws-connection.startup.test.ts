@@ -30,6 +30,7 @@ import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/device-pairing-node.js";
 import { requestDevicePairing } from "../../infra/device-pairing.js";
 import { createSafeGatewayRestartPreflight } from "../../infra/restart-coordinator.js";
+import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -606,6 +607,23 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
           }
           const authenticationStarted = createDeferred();
           const releaseAuthentication = createDeferred();
+          const admissionReleased = createDeferred();
+          const beginAdmission =
+            gatewayWorkAdmission.tryBeginGatewayRestartStartupRootWorkAdmission;
+          const startupAdmission = vi
+            .spyOn(gatewayWorkAdmission, "tryBeginGatewayRestartStartupRootWorkAdmission")
+            .mockImplementation(() => {
+              const admission = beginAdmission();
+              return (
+                admission && {
+                  ...admission,
+                  release: () => {
+                    admission.release();
+                    admissionReleased.resolve();
+                  },
+                }
+              );
+            });
           const registeredRootCounts: number[] = [];
           const authorize = gatewayAuth.authorizeWsControlUiGatewayConnect;
           const authentication = vi
@@ -641,9 +659,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
             if (connectionKind === "paired shared-token") {
               expect(harness.pendingSetup).not.toHaveBeenCalled();
             }
-            await new Promise<void>((resolve) => {
-              setImmediate(resolve);
-            });
+            await admissionReleased.promise;
             expect(getActiveGatewayRootWorkCount()).toBe(0);
             expect(createSafeGatewayRestartPreflight()).toMatchObject({
               safe: true,
@@ -653,6 +669,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
           } finally {
             releaseAuthentication.resolve();
             authentication.mockRestore();
+            startupAdmission.mockRestore();
           }
         },
       );

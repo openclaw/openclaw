@@ -162,7 +162,7 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 - plugin config schema and channel config schema validation
 - startup auto-enable decisions
 
-Startup and hot replacement share one prepared registry publisher and the same inventory across all configured agent workspaces. Reload preserves workspace provenance so an unchanged linked plugin is not replaced when another plugin changes. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
+Startup and hot replacement share one prepared registry publisher and the same inventory across all configured agent workspaces. Reload preserves workspace provenance so an unchanged linked plugin is not replaced when another plugin changes. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. Reordering object keys in equivalent metadata or settings does not replace a registration; changed values, ordered lists, and explicit reload requests still do. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
 
 Replacement is refused before model invalidation or service shutdown when the affected instance still has retained work, including an agent turn between plugin callbacks or unfinished cleanup. This also applies when an agent awaits its own context engine’s `plugins.reload`: the tool returns a prepare-phase error, and the current runtime stays available. Retry after the work finishes; reload does not queue a replacement. Idle prepared publications do not block replacement. Once replacement is admitted, new retained work cannot acquire that instance until the operation releases its reservation.
 
@@ -321,6 +321,13 @@ Configured Gateway agents share one model-catalog worker per plugin-inventory
 lifetime. Agent and authentication facts belong to each task; plugin registrations
 and captured source remain with the shared inventory. Standalone hosts that supply
 their own environment retain an isolated catalog worker for that environment.
+Each worker retains one prepared catalog generation. Replacement releases the
+previous generation's registrations after its work settles. Successfully disposed
+registrations leave their plugin caches; unchanged registrations remain reusable
+across agent requests within the same inventory.
+Catalog workers use a 512 MiB V8 old-generation limit rather than inheriting the
+Gateway's default heap budget. Explicit process-wide heap flags override this
+limit; native and external allocations are outside it.
 
 Catalog and authentication refresh tasks carry the host's prepared Claw consent
 provenance. Worker config reconstruction and provider imports consume these facts

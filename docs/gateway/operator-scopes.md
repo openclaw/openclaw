@@ -59,9 +59,10 @@ interactive message. Session access and execution-lifetime checks still apply.
 ## Named operator roles
 
 Team Gateways can bind authenticated durable profiles to named operator roles.
-Each role combines four closed policies: access to other people's sessions,
+Each role controls access to other people's sessions,
 agents available for session creation and agent runs, a maximum set of operator
-scopes, and whether newly created sessions require sandboxing.
+scopes, and whether newly created sessions require sandboxing. It can also require
+an access policy supplied by a plugin.
 
 ```json5
 {
@@ -94,6 +95,18 @@ ceiling. `gateway.roles.default` is required whenever roles are configured,
 must name an existing definition, and applies to profiles without a valid
 assigned role. Omitting `gateway.roles` entirely leaves solo and shared-secret
 deployments unchanged.
+
+Set a role's optional `accessPolicyPlugin` to the exact plugin ID when that plugin
+must confirm the person's current access. For example, the Visitor Access plugin
+requires `accessPolicyPlugin: "visitor-access"` on its restricted default role.
+The requirement belongs to Gateway configuration and remains enforced when the
+plugin or its manifest is missing, disabled, broken, or still starting. A loaded
+plugin must return current authority for the person; another plugin's policy
+cannot satisfy the requirement. Configuration validation permits an unavailable
+plugin reference so the Gateway can still start for repair. Independent staff
+roles without this binding and the Gateway owner retain their existing access.
+Restore the required plugin to admit the bound role; removing or changing the
+binding is a role-policy change and follows the existing Gateway restart flow.
 
 When roles are configured, identity-authenticated operator connections do not
 receive reusable device or bootstrap tokens: those tokens are not bound to a

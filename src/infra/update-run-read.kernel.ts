@@ -58,6 +58,7 @@ export type UpdateRunListInput = {
   limit?: number;
   active?: boolean;
   reason?: string;
+  excludeReason?: string;
   includeRunId?: string;
 };
 
@@ -73,6 +74,12 @@ export function readUpdateRuns(db: DatabaseSync, input: UpdateRunListInput) {
   }
   if (input.reason) {
     query = query.where("reason", "=", input.reason);
+  }
+  const excludeReason = input.excludeReason;
+  if (excludeReason) {
+    query = query.where((eb) =>
+      eb.or([eb("reason", "is", null), eb("reason", "!=", excludeReason)]),
+    );
   }
   const runs = executeSqliteQuerySync(
     db,

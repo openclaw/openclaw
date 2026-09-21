@@ -1503,7 +1503,7 @@ export function estimateToolResultReductionPotential(params: {
   };
 }
 
-function truncateOversizedToolResultsInExistingSessionManager(params: {
+async function truncateOversizedToolResultsInExistingSessionManager(params: {
   sessionManager: SessionManager;
   contextWindowTokens: number;
   maxCharsOverride?: number;
@@ -1515,7 +1515,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   sessionKey?: string;
   agentId?: string;
   storePath?: string;
-}): { truncated: boolean; truncatedCount: number; reason?: string } {
+}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { sessionManager, contextWindowTokens } = params;
   const branch = Array.from(
     iterateSessionContextEntries(sessionManager.getBranch()),
@@ -1541,7 +1541,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
       reason: "no oversized or aggregate tool results",
     };
   }
-  const rewriteResult = rewriteTranscriptEntriesInSessionManager({
+  const rewriteResult = await rewriteTranscriptEntriesInSessionManager({
     sessionManager,
     replacements: plan.replacements,
   });
@@ -1592,7 +1592,7 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
   };
 }
 
-export function truncateOversizedToolResultsInSessionManager(params: {
+export async function truncateOversizedToolResultsInSessionManager(params: {
   sessionManager: SessionManager;
   contextWindowTokens: number;
   maxCharsOverride?: number;
@@ -1604,9 +1604,9 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   sessionKey?: string;
   agentId?: string;
   storePath?: string;
-}): { truncated: boolean; truncatedCount: number; reason?: string } {
+}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   try {
-    return truncateOversizedToolResultsInExistingSessionManager(params);
+    return await truncateOversizedToolResultsInExistingSessionManager(params);
   } catch (err) {
     const errMsg = formatErrorMessage(err);
     log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -238,7 +239,15 @@ it("rejects non-filesystem stream sources without interpreting their logical pat
     const db = new DatabaseSync(":memory:");
     const pathname = path.join(root, "logical-state.sqlite");
     const rows = iterateOpenClawStateDatabaseReadOnly(
-      { db, path: pathname, walMaintenance: { checkpoint: () => false, close: () => false } },
+      {
+        db,
+        path: pathname,
+        walMaintenance: {
+          checkpoint: () => false,
+          close: () => false,
+          reclaimFreePages: createSqliteWalReclamationResult,
+        },
+      },
       function* () {
         yield "unreachable";
       },

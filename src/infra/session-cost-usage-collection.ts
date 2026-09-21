@@ -40,6 +40,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveRealpathOrAbsolute } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
+import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 
@@ -54,20 +55,6 @@ export type UsageCostCollectionAccess = {
   readSqliteStats?: (
     markers: readonly SqliteSessionFileMarker[],
   ) => Promise<Array<SessionTranscriptStats | undefined>>;
-};
-
-export type UsageCostTranscriptFile = {
-  filePath: string;
-  /** Durable identity when filePath is a transient archive materialization. */
-  sourcePath: string;
-  kind: "jsonl" | "sqlite";
-  size: number;
-  mtimeMs: number;
-  sessionId?: string;
-  device?: number;
-  inode?: number;
-  eventCount?: number;
-  maxSeq?: number;
 };
 
 type UsageCostJsonlSource = {

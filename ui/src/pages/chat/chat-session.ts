@@ -23,6 +23,7 @@ import {
   type SessionRefreshTarget,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
+import type { SessionPatch } from "../../lib/sessions/patch.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
@@ -149,59 +150,69 @@ function setChatError(host: ChatModelSettingsHost, error: string | null, request
   }
 }
 
-// Immediate-apply pickers can overlap patches for the same session. Mirror the
-// pendingModelPatches token guard in sessions/index.ts: only the latest patch
-// may re-assert or roll back the optimistic row, so a slow earlier request
-// cannot clobber a newer selection.
-const chatFastModePatchTokens = new WeakMap<object, Map<string, symbol>>();
-const chatThinkingPatchTokens = new WeakMap<object, Map<string, symbol>>();
-const chatContextWindowPatchTokens = new WeakMap<object, Map<string, symbol>>();
-
-function claimChatSettingsPatch(
-  store: WeakMap<object, Map<string, symbol>>,
-  host: object,
-  sessionKey: string,
-): symbol {
-  let tokens = store.get(host);
-  if (!tokens) {
-    tokens = new Map();
-    store.set(host, tokens);
-  }
-  const token = Symbol(sessionKey);
-  tokens.set(sessionKey, token);
-  return token;
-}
-
-function isCurrentChatSettingsPatch(
-  store: WeakMap<object, Map<string, symbol>>,
-  host: object,
-  sessionKey: string,
-  token: symbol,
-): boolean {
-  return store.get(host)?.get(sessionKey) === token;
-}
-
-function patchSessionRow(
+function captureChatSettingsTarget(
   host: ChatModelSettingsHost,
   sessionKey: string,
-  patch: Partial<SessionsListResult["sessions"][number]>,
+  activeRow: GatewaySessionRow | undefined,
 ) {
-  // Mirror into the capability snapshot first: publishes replace the host copy
-  // wholesale, so without the mirror any mid-flight publish reverts this patch
-  // until the post-patch list refresh lands (visible slider snap-back that can
-  // swallow the next keyboard commit). The host copy still updates directly so
-  // hosts without a live capability subscription stay coherent.
-  host.sessions.patchRowLocal(sessionKey, patch);
-  const current = host.sessionsResult;
-  if (!current) {
-    return;
-  }
-  host.sessionsResult = {
-    ...current,
-    sessions: current.sessions.map((row) =>
-      areUiSessionKeysEquivalent(row.key, sessionKey) ? Object.assign({}, row, patch) : row,
-    ),
+  const sessions = host.sessions;
+  const scope = sessions.captureConnectionScope();
+  const client = host.client;
+  const agentId = scopedAgentListParamsForSession(host, sessionKey).agentId;
+  const target =
+    agentId && activeRow?.sessionId ? { agentId, sessionId: activeRow.sessionId } : undefined;
+  const matches = (row: GatewaySessionRow) =>
+    target &&
+    areUiSessionKeysEquivalent(row.key, sessionKey) &&
+    row.sessionId === target.sessionId &&
+    (row.agentId === undefined || row.agentId === target.agentId);
+  const isCurrent = () =>
+    Boolean(
+      scope &&
+      host.connected &&
+      host.client === client &&
+      host.sessions === sessions &&
+      sessions.isConnectionScopeCurrent(scope) &&
+      areUiSessionKeysEquivalent(host.sessionKey, sessionKey) &&
+      scopedAgentListParamsForSession(host, sessionKey).agentId === agentId &&
+      (!target || host.sessionsResult?.sessions.some(matches)),
+    );
+  return {
+    target,
+    agentParams: scopedAgentParamsForSession(host, sessionKey),
+    isCurrent,
+    row: () => host.sessionsResult?.sessions.find(matches),
   };
+}
+
+async function applyChatSetting(
+  host: ChatModelSettingsHost,
+  sessionKey: string,
+  captured: ReturnType<typeof captureChatSettingsTarget>,
+  patch: Pick<SessionPatch, "fastMode" | "thinkingLevel" | "contextWindow">,
+  setting: string,
+  synchronize?: () => void,
+): Promise<boolean> {
+  setChatError(host, null, true);
+  try {
+    if (!captured.isCurrent()) {
+      return false;
+    }
+    const pending = patchChatSessionSettings(host, sessionKey, patch, {
+      ...captured.agentParams,
+      expectedSessionId: captured.target?.sessionId,
+      reconcile: async () => refreshCurrentChatSessionList(host),
+    });
+    synchronize?.();
+    return (await pending) !== null;
+  } catch (err) {
+    if (captured.isCurrent()) {
+      setChatError(host, `Failed to set ${setting}: ${formatUiError(err)}`, true);
+    }
+    return false;
+  } finally {
+    synchronize?.();
+  }
 }
 
 export function switchChatFastMode(
@@ -215,54 +226,13 @@ export function switchChatFastMode(
   const activeRow = host.sessionsResult?.sessions?.find((row) =>
     areUiSessionKeysEquivalent(row.key, targetSessionKey),
   );
-  const previousFastMode = activeRow?.fastMode;
-  const previousEffectiveFastMode = activeRow?.effectiveFastMode;
+  const captured = captureChatSettingsTarget(host, targetSessionKey, activeRow);
   const next: FastMode | undefined =
     nextFastMode === "" ? undefined : nextFastMode === "auto" ? "auto" : nextFastMode === "on";
-  if (previousFastMode === next) {
+  if (activeRow?.fastMode === next) {
     return Promise.resolve(true);
   }
-  const token = claimChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey);
-  setChatError(host, null, true);
-  // Patch effectiveFastMode too: the toggle displays the effective value, and
-  // the server-resolved one stays stale until the session list refreshes.
-  patchSessionRow(host, targetSessionKey, { fastMode: next, effectiveFastMode: next });
-  const rollback = () => {
-    if (isCurrentChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey, token)) {
-      patchSessionRow(host, targetSessionKey, {
-        fastMode: previousFastMode,
-        effectiveFastMode: previousEffectiveFastMode,
-      });
-    }
-  };
-  const patchPromise = (async () => {
-    try {
-      const patched = await patchChatSessionSettings(
-        host,
-        targetSessionKey,
-        {
-          fastMode: next ?? null,
-        },
-        {
-          ...scopedAgentParamsForSession(host, targetSessionKey),
-          reconcile: async () => refreshCurrentChatSessionList(host),
-        },
-      );
-      if (!patched) {
-        rollback();
-        return false;
-      }
-      if (isCurrentChatSettingsPatch(chatFastModePatchTokens, host, targetSessionKey, token)) {
-        patchSessionRow(host, targetSessionKey, { fastMode: next });
-      }
-      return true;
-    } catch (err) {
-      rollback();
-      setChatError(host, `Failed to set speed: ${formatUiError(err)}`, true);
-      return false;
-    }
-  })();
-  return patchPromise;
+  return applyChatSetting(host, targetSessionKey, captured, { fastMode: next ?? null }, "speed");
 }
 
 type ChatModelSelection = {
@@ -584,6 +554,7 @@ export function switchChatThinkingLevel(
   const activeRow = host.sessionsResult?.sessions?.find((row) =>
     areUiSessionKeysEquivalent(row.key, targetSessionKey),
   );
+  const captured = captureChatSettingsTarget(host, targetSessionKey, activeRow);
   const previousThinkingLevel = activeRow?.thinkingLevel;
   const normalizedNext =
     (normalizeThinkLevel(nextThinkingLevel) ?? nextThinkingLevel.trim()) || undefined;
@@ -594,51 +565,19 @@ export function switchChatThinkingLevel(
   if ((normalizedPrev ?? "") === (normalizedNext ?? "")) {
     return Promise.resolve(true);
   }
-  const token = claimChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey);
-  setChatError(host, null, true);
-  patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
-  if (host.sessionKey === targetSessionKey) {
-    host.chatThinkingLevel = normalizedNext ?? null;
-  }
-  const rollback = () => {
-    if (isCurrentChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey, token)) {
-      patchSessionRow(host, targetSessionKey, { thinkingLevel: previousThinkingLevel });
-      if (host.sessionKey === targetSessionKey) {
-        host.chatThinkingLevel = normalizedPrev ?? null;
-      }
+  const synchronizeThinking = () => {
+    if (captured.target && captured.isCurrent()) {
+      host.chatThinkingLevel = captured.row()?.thinkingLevel ?? null;
     }
   };
-  const patchPromise = (async () => {
-    try {
-      const patched = await patchChatSessionSettings(
-        host,
-        targetSessionKey,
-        {
-          thinkingLevel: normalizedNext ?? null,
-        },
-        {
-          ...scopedAgentParamsForSession(host, targetSessionKey),
-          reconcile: async () => refreshCurrentChatSessionList(host),
-        },
-      );
-      if (!patched) {
-        rollback();
-        return false;
-      }
-      if (isCurrentChatSettingsPatch(chatThinkingPatchTokens, host, targetSessionKey, token)) {
-        patchSessionRow(host, targetSessionKey, { thinkingLevel: normalizedNext });
-        if (host.sessionKey === targetSessionKey) {
-          host.chatThinkingLevel = normalizedNext ?? null;
-        }
-      }
-      return true;
-    } catch (err) {
-      rollback();
-      setChatError(host, `Failed to set thinking level: ${formatUiError(err)}`, true);
-      return false;
-    }
-  })();
-  return patchPromise;
+  return applyChatSetting(
+    host,
+    targetSessionKey,
+    captured,
+    { thinkingLevel: normalizedNext ?? null },
+    "thinking level",
+    synchronizeThinking,
+  );
 }
 
 export function switchChatContextWindow(
@@ -652,39 +591,16 @@ export function switchChatContextWindow(
   const activeRow = host.sessionsResult?.sessions?.find((row) =>
     areUiSessionKeysEquivalent(row.key, targetSessionKey),
   );
-  const previous = activeRow?.contextWindow;
+  const captured = captureChatSettingsTarget(host, targetSessionKey, activeRow);
   const next = nextContextWindow.trim() || undefined;
-  if ((previous ?? "") === (next ?? "")) {
+  if ((activeRow?.contextWindow ?? "") === (next ?? "")) {
     return Promise.resolve(true);
   }
-  const token = claimChatSettingsPatch(chatContextWindowPatchTokens, host, targetSessionKey);
-  setChatError(host, null, true);
-  patchSessionRow(host, targetSessionKey, { contextWindow: next });
-  const rollback = () => {
-    if (isCurrentChatSettingsPatch(chatContextWindowPatchTokens, host, targetSessionKey, token)) {
-      patchSessionRow(host, targetSessionKey, { contextWindow: previous });
-    }
-  };
-  return (async () => {
-    try {
-      const patched = await patchChatSessionSettings(
-        host,
-        targetSessionKey,
-        { contextWindow: next ?? null },
-        {
-          ...scopedAgentParamsForSession(host, targetSessionKey),
-          reconcile: async () => refreshCurrentChatSessionList(host),
-        },
-      );
-      if (!patched) {
-        rollback();
-        return false;
-      }
-      return true;
-    } catch (err) {
-      rollback();
-      setChatError(host, `Failed to set context window: ${formatUiError(err)}`, true);
-      return false;
-    }
-  })();
+  return applyChatSetting(
+    host,
+    targetSessionKey,
+    captured,
+    { contextWindow: next ?? null },
+    "context window",
+  );
 }

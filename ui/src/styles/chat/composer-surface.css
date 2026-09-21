@@ -123,7 +123,7 @@
     .agent-chat__talk-status.callout
   ) {
   border-radius: var(--chat-composer-radius);
-  corner-shape: superellipse(1.5);
+  corner-shape: var(--chat-composer-corner-shape);
 }
 
 .agent-chat__input {

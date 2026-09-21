@@ -2,6 +2,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { releasePluginCacheInstance } from "./plugin-cache.js";
 import {
   PluginInstanceDrainTimeoutError,
   PluginInstanceUnavailableError,
@@ -68,7 +69,10 @@ export class PluginInstance {
   private readonly cleanups = new Map<() => void | Promise<void>, "plugin" | "module">();
   private readonly waiters = new Set<() => void>();
   private readonly originalValues = new WeakMap<object, object>();
-  readonly wrap = this.createValueView(<T>(run: () => T) => this.run(run));
+  readonly wrap = this.createValueView(
+    <T>(run: () => T) => this.run(run),
+    <T>(run: () => T) => this.runConsumer(run),
+  );
   private disposal?: Promise<PluginInstanceDisposalResult>;
   readonly owner?: PluginInstanceOwner;
 
@@ -256,7 +260,7 @@ export class PluginInstance {
     };
     return {
       run,
-      wrap: this.createValueView(run),
+      wrap: this.createValueView(run, run),
       close: (cleanup) => {
         if (!closing && this.consumers.has(token)) {
           // Close operation callbacks before entering a separate host teardown token.
@@ -399,7 +403,10 @@ export class PluginInstance {
     };
   }
 
-  private createValueView(admit: <T>(run: () => T) => T): <T>(value: T) => T {
+  private createValueView(
+    admit: <T>(run: () => T) => T,
+    admitCallback: <T>(run: () => T) => T = (run) => admit(() => this.invoke(run)),
+  ): <T>(value: T) => T {
     return createPluginValueView(
       {
         instance: this,
@@ -409,6 +416,7 @@ export class PluginInstance {
         hasToken: (token) => this.hasToken(token),
       },
       admit,
+      admitCallback,
     );
   }
 
@@ -693,6 +701,9 @@ export class PluginInstance {
     }
     if (hostFailure) {
       throw hostFailure.error;
+    }
+    if (failures.length === 0) {
+      releasePluginCacheInstance(this);
     }
     return { errors: failures };
   }

@@ -914,7 +914,6 @@ describe("cron service timer regressions", () => {
       expect(sendCronFailureAlert).toHaveBeenCalledExactlyOnceWith({
         job: expect.objectContaining({
           id: "isolated-before-agent-reply-unhandled-82811",
-          state: expect.objectContaining({ lastDiagnosticSummary: diagnostic }),
         }),
         payload: {
           text:

@@ -95,78 +95,100 @@ export function expireStagingAndLoadDeliveryQueueEntriesInDatabase(
   };
 }
 
+type DeliveryQueueOwner = { status: DeliveryQueueStoredStatus; settlementPending?: true };
+
 /** Keeps namespace reads and receipt pruning on the caller's exact transaction handle. */
 export function getDeliveryQueueEntryOwnersInDatabase(
   database: OpenClawStateDatabase,
   queueNames: readonly string[],
   id: string,
-): Map<string, { status: DeliveryQueueStoredStatus; settlementPending?: true }> {
-  if (queueNames.length === 0) {
+): Map<string, DeliveryQueueOwner> {
+  return getDeliveryQueueEntriesOwnersInDatabase(database, queueNames, [id]).get(id) ?? new Map();
+}
+
+export function getDeliveryQueueEntriesOwnersInDatabase(
+  database: OpenClawStateDatabase,
+  queueNames: readonly string[],
+  ids: readonly string[],
+): Map<string, Map<string, DeliveryQueueOwner>> {
+  if (queueNames.length === 0 || ids.length === 0) {
     return new Map();
   }
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const uniqueIds = [...new Set(ids)];
   return runSqliteImmediateTransactionSync(
     database.db,
     () => {
-      const readExact = () =>
-        executeSqliteQuerySync(
-          database.db,
-          queueDb
-            .selectFrom("delivery_queue_entries")
-            .select(["queue_name", "status", "recovery_state"])
-            .select((eb) =>
-              eb
-                .case("recovery_state")
-                .when("completed_bounded")
-                .then(eb.ref("entry_json"))
-                .else(null)
-                .end()
-                .as("entry_json"),
-            )
-            .where("queue_name", "in", queueNames)
-            .where("id", "=", id),
-        ).rows;
+      const readExact = () => {
+        const query = queueDb
+          .selectFrom("delivery_queue_entries")
+          .select(["id", "queue_name", "status", "recovery_state"])
+          .select((eb) =>
+            eb
+              .case("recovery_state")
+              .when("completed_bounded")
+              .then(eb.ref("entry_json"))
+              .else(null)
+              .end()
+              .as("entry_json"),
+          )
+          .where("queue_name", "in", queueNames);
+        const readChunk = (chunk: string[]) => {
+          const id = chunk.length === 1 ? chunk[0] : undefined;
+          return executeSqliteQuerySync(
+            database.db,
+            id === undefined ? query.where("id", "in", chunk) : query.where("id", "=", id),
+          ).rows;
+        };
+        // Bound parameter counts while retaining one transaction across the complete batch.
+        const rows = readChunk(uniqueIds.slice(0, 500));
+        for (let offset = 500; offset < uniqueIds.length; offset += 500) {
+          rows.push(...readChunk(uniqueIds.slice(offset, offset + 500)));
+        }
+        return rows;
+      };
       let rows = readExact();
       let pruned = false;
+      const prunedPrefixes = new Map<string, Set<string>>();
       for (const row of rows) {
         if (row.entry_json === null) {
           continue;
         }
         const entry = safeParseJsonRecord(row.entry_json);
-        const retention = parseDeliveryQueueCompletionRetention(entry?.completionRetention, id);
+        const retention = parseDeliveryQueueCompletionRetention(entry?.completionRetention, row.id);
         if (typeof retention === "object") {
-          pruneDeliveryQueueTombstones(database.db, Date.now(), {
+          const prefixes = prunedPrefixes.get(row.queue_name) ?? new Set<string>();
+          if (prefixes.has(retention.idPrefix)) {
+            continue;
+          }
+          prefixes.add(retention.idPrefix);
+          prunedPrefixes.set(row.queue_name, prefixes);
+          const changed = pruneDeliveryQueueTombstones(database.db, Date.now(), {
             queueName: row.queue_name,
             idPrefix: retention.idPrefix,
           });
-          pruned = true;
+          pruned = changed || pruned;
         }
       }
       if (pruned) {
         rows = readExact();
       }
-      return new Map(
-        rows.flatMap((row) =>
-          row.status
-            ? [
-                [
-                  row.queue_name,
-                  {
-                    status: row.status,
-                    ...(row.status === "failed" && row.recovery_state === "settlement_pending"
-                      ? { settlementPending: true as const }
-                      : {}),
-                  },
-                ],
-              ]
-            : [],
-        ),
-      );
+      const owners = new Map<string, Map<string, DeliveryQueueOwner>>();
+      for (const row of rows) {
+        if (row.status) {
+          const namespaces = owners.get(row.id) ?? new Map<string, DeliveryQueueOwner>();
+          namespaces.set(row.queue_name, {
+            status: row.status,
+            ...(row.status === "failed" && row.recovery_state === "settlement_pending"
+              ? { settlementPending: true as const }
+              : {}),
+          });
+          owners.set(row.id, namespaces);
+        }
+      }
+      return owners;
     },
-    {
-      databaseLabel: "openclaw-state",
-      operationLabel: "read delivery queue status",
-    },
+    { databaseLabel: "openclaw-state", operationLabel: "read delivery queue status" },
   );
 }
 

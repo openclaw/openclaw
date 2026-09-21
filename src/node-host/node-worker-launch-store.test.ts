@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -10,6 +12,7 @@ import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-o
 import { OpenClawStateExternalOwnershipError } from "../state/openclaw-state-ownership.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
+import { NodeWorkerLaunchKernel } from "./node-worker-launch-store.kernel.js";
 import { recordNodeWorkerLineageSettled } from "./node-worker-lineage-completion.js";
 import { requireNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import { projectNodeWorkerSupervisorReceipt } from "./node-worker-supervisor-contract.js";
@@ -298,7 +301,7 @@ describe("node worker terminal ownership", () => {
   it.each(["finish", "cancel"] as const)(
     "keeps the physical reservation when %s comes from a stale process owner",
     async (operation) => {
-      const { database, store } = await fixture();
+      const { database, env, store } = await fixture();
       insertLaunch({ database, launchId: "owned-launch", state: "running" });
       const running = (await store.get("owned-launch"))!;
       const finish = async (ownership: Pick<typeof running, "supervisor" | "worker">) =>
@@ -324,7 +327,37 @@ describe("node worker terminal ownership", () => {
       expect(await finish({ ...running, worker: null })).toEqual(running);
       expect(await store.get(running.launchId)).toEqual(running);
       expect(await store.nonterminalCount()).toBe(1);
-      expect((await finish(running))?.state).toBe(operation === "cancel" ? "cancelled" : "failed");
+      const kernel = new NodeWorkerLaunchKernel({
+        database: openOpenClawStateDatabase({ env }),
+        env,
+      });
+      const admission = vi
+        .spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission")
+        .mockImplementation(() => {});
+      const reads = trackSqliteStatementExecutions(database, ["launch"], (sql) =>
+        sql.startsWith("select ") && sql.includes('from "node_worker_launches"') ? "launch" : null,
+      );
+      let terminal: ReturnType<NodeWorkerLaunchKernel["finishCancelled"]>;
+      try {
+        terminal =
+          operation === "cancel"
+            ? kernel.finishCancelled({ expected: running, ...running })
+            : kernel.finish({
+                launchId: running.launchId,
+                planHash: running.planHash,
+                supervisor: running.supervisor,
+                worker: running.worker,
+                state: "failed",
+                errorText: "worker failed",
+              });
+        expect.soft(reads.counts.launch).toBeLessThanOrEqual(1);
+        expect.soft(reads.rowCounts.launch).toBe(1);
+      } finally {
+        reads.restore();
+        admission.mockRestore();
+      }
+      expect(terminal?.state).toBe(operation === "cancel" ? "cancelled" : "failed");
+      expect(await store.get(running.launchId)).toEqual(terminal);
       expect(await store.nonterminalCount()).toBe(0);
     },
   );
@@ -394,9 +427,25 @@ describe("node worker launch store container identity", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    expect(
-      await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get("container-launch"),
-    ).toEqual(receipt);
+    const reopened = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
+    expect(await reopened.get("container-launch")).toEqual(receipt);
+    const completed = await reopened.finish({
+      launchId: receipt.launchId,
+      planHash: receipt.planHash,
+      supervisor: receipt.supervisor,
+      worker: receipt.worker,
+      state: "completed",
+      resultJson: "{}",
+      nowMs: NOW_MS + 1,
+    });
+    expect(completed).toEqual({
+      ...receipt,
+      state: "completed",
+      resultJson: "{}",
+      completedAtMs: NOW_MS + 1,
+      updatedAtMs: NOW_MS + 1,
+    });
+    expect(await reopened.get("container-launch")).toEqual(completed);
   });
 
   it.each([
@@ -530,13 +579,26 @@ describe("node worker cleanup journal", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    const settled = await new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env })).get(
-      binding.launchId,
-    );
+    const reopened = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
+    const settled = await reopened.get(binding.launchId);
     expect(settled).toEqual({ ...receipt, workerLineageSettled: true });
     expect(projectNodeWorkerSupervisorReceipt(settled!)).toEqual(
       projectNodeWorkerSupervisorReceipt(receipt),
     );
+    const cancelled = await reopened.finishCancelled({
+      expected: receipt,
+      supervisor: receipt.supervisor,
+      worker: receipt.worker,
+      nowMs: NOW_MS + 1,
+    });
+    expect(cancelled).toEqual({
+      ...settled,
+      state: "cancelled",
+      errorText: "node worker launch cancelled",
+      completedAtMs: NOW_MS + 1,
+      updatedAtMs: NOW_MS + 1,
+    });
+    expect(await reopened.get(binding.launchId)).toEqual(cancelled);
   });
 
   it.each([

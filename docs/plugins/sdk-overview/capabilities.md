@@ -218,7 +218,7 @@ credential-refresh lifecycle; each plugin does not create its own provider clien
 No credential is returned to the consumer. Provider setup and refresh use the
 same prepared-secret path whether the caller is built-in or third-party.
 
-The host admits at most four requests, with no queue and a ten-second maximum.
+The host admits at most four requests, with no queue and a 30-second maximum.
 Consumers can request shorter deadlines and choose their own fallback policy.
 Three unhealthy responses open a ten-second circuit; recovery admits one trial.
 Retry-After is bounded to one minute. Auth errors latch until the prepared-secret

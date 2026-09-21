@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import { UpdateCommandFailure } from "../cli/update-cli/update-command-result.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
 import {
   approveNodePairing,
@@ -35,6 +36,7 @@ describe("migrateLegacyNodePairingStore", () => {
   });
 
   afterAll(async () => {
+    await closeStateDatabaseForTest();
     await suiteRootTracker.cleanup();
   });
 

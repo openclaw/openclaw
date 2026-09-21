@@ -23,6 +23,9 @@ const env = {
   NODE_ENV: "production",
 };
 
+// Supported hosts lack this binding; publish the canonical pure implementation with the plugin.
+const BUNDLED_GRAPHEME_SDK_IMPORT = "openclaw/plugin-sdk/text-grapheme";
+
 type JsonRecord = Record<string, unknown>;
 
 export type PluginPackageJson = JsonRecord & {
@@ -99,6 +102,9 @@ function getStringRecord(value: unknown) {
 function createNeverBundleDependencyMatcher(packageJson: PluginPackageJson) {
   const externalDependencies = collectExternalDependencyNames(packageJson);
   return (id: string) => {
+    if (id === BUNDLED_GRAPHEME_SDK_IMPORT) {
+      return false;
+    }
     if (id === "openclaw" || id.startsWith("openclaw/")) {
       return true;
     }
@@ -408,12 +414,24 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
     clean: false,
     config: false,
     dts: false,
+    alias: {
+      [BUNDLED_GRAPHEME_SDK_IMPORT]: path.join(
+        plan.repoRoot,
+        "packages/normalization-core/src/grapheme.ts",
+      ),
+    },
     deps: {
+      alwaysBundle: (id) => id === BUNDLED_GRAPHEME_SDK_IMPORT,
       neverBundle: createNeverBundleDependencyMatcher(plan.packageJson),
     },
     entry: plan.entry,
     plugins: [createPluginInventoryModuleRefsPlugin(plan.packageDir)],
     outputOptions: {
+      // Published plugins still support hosts predating these private source facades.
+      paths: {
+        "openclaw/plugin-sdk/media-ffmpeg": "openclaw/plugin-sdk/media-runtime",
+        "openclaw/plugin-sdk/realtime-voice-playback": "openclaw/plugin-sdk/realtime-voice",
+      },
       chunkFileNames: `.setup/[name]-[hash]${plan.runtimeFormat === "cjs" ? ".cjs" : ".mjs"}`,
       entryFileNames: (chunk) =>
         Object.hasOwn(plan.entry, chunk.name)

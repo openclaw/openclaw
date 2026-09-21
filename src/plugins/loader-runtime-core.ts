@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import { createUnavailableRuntime } from "./api-builder.js";
@@ -48,6 +49,16 @@ import { hasKind } from "./slots.js";
 
 type PluginLoadInput = { source: string; signature: string; config: PreparedPluginConfig };
 const registryInputs = new WeakMap<PluginRegistry, Map<string, PluginLoadInput>>();
+
+/** Captured JSON inputs ignore object key order, but preserve array order and values. */
+function samePluginLoadInput(left: string | undefined, right: string | undefined): boolean {
+  return (
+    left === right ||
+    (left !== undefined &&
+      right !== undefined &&
+      isDeepStrictEqual(JSON.parse(left), JSON.parse(right)))
+  );
+}
 
 type PluginModuleLoaderOverrides = Pick<
   Parameters<typeof createPluginModuleLoader>[0],
@@ -297,7 +308,12 @@ export function loadOpenClawPluginsCore(
       );
       const previousInput =
         options.previousRegistry && registryInputs.get(options.previousRegistry)?.get(manifest.id);
-      if (previous && !replacedIds.has(manifest.id) && previousInput?.signature === signature) {
+      if (
+        previous &&
+        previousInput &&
+        !replacedIds.has(manifest.id) &&
+        samePluginLoadInput(previousInput.signature, signature)
+      ) {
         // Reserve retained contributions before newcomers register. Reuse validation only after
         // matching policy/admission inputs, leaving excluded candidates on their existing path.
         if (previousInput.config.validation) {
@@ -308,7 +324,7 @@ export function loadOpenClawPluginsCore(
             preparedConfig,
           });
         }
-        if (previousInput.config.input === preparedConfig.input) {
+        if (samePluginLoadInput(previousInput.config.input, preparedConfig.input)) {
           retained.set(manifest.id, previous);
           projectPluginContributions(options.previousRegistry!, previous, registry);
         }

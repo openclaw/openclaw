@@ -14,7 +14,6 @@ import {
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import {
   resolveUsageCostTranscriptFile,
-  type UsageCostTranscriptFile,
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
 import {
@@ -38,7 +37,11 @@ import {
   type SessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
 import { createEmptyCostUsageTotals as emptyTotals } from "./session-cost-usage-totals.js";
-import type { CostUsageTotals, ParsedTranscriptEntry } from "./session-cost-usage.types.js";
+import type {
+  CostUsageTotals,
+  ParsedTranscriptEntry,
+  UsageCostTranscriptFile,
+} from "./session-cost-usage.types.js";
 
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
 

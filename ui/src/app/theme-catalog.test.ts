@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   ThemesGetResult,
@@ -15,6 +16,7 @@ import {
   createThemeDefinitionFixture,
   createThemePaletteFixture,
 } from "../../../test/helpers/theme-fixture.js";
+import { renderAgentIdentityAvatar } from "../components/identity-avatar-view.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import {
   createGatewayEvent,
@@ -63,8 +65,64 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("resolves built-in branding before the catalog loads", () => {
+  patchSettings({ theme: "claw" });
+  const { gateway } = createGatewayStoreTestStore();
+  const theme = createApplicationTheme(loadSettings(), gateway);
+  try {
+    expect(theme.branding).toEqual({
+      mascot: "claw",
+      workingPhrases: undefined,
+      critters: [],
+      avatarHat: undefined,
+    });
+  } finally {
+    theme.dispose();
+  }
+});
+
+it("notifies leaf branding consumers when a newly selected built-in palette loads", async () => {
+  const { gateway, current } = createGatewayStoreTestStore();
+  const theme = createApplicationTheme(loadSettings(), gateway);
+  const container = document.createElement("div");
+  const renderMark = vi.fn(() => render(renderAgentIdentityAvatar({ id: "openclaw" }), container));
+  const unsubscribe = theme.subscribe(renderMark);
+  gateway.start();
+  current().request.mockResolvedValue(
+    catalog({ ...definition, mascot: "none", avatarHat: "fedora" }),
+  );
+  current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+  try {
+    await vi.dynamicImportSettled();
+    expect(container.querySelector(".identity-avatar--neutral")).not.toBeNull();
+    renderMark.mockClear();
+    patchSettings({ theme: "knot" });
+    expect(theme.settings.theme).toBe("knot");
+    expect(renderMark).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".identity-avatar--neutral")).not.toBeNull();
+    const palette = document.getElementById("openclaw-theme-palette-knot")!;
+    expect(document.documentElement.dataset.themeId).toBe(descriptor.id);
+    palette.dispatchEvent(new Event("load"));
+    expect(renderMark).toHaveBeenCalledTimes(2);
+    expect(document.documentElement.dataset.themeId).toBe("knot");
+    expect(document.documentElement.dataset.themeAvatarHat).toBeUndefined();
+    expect(container.querySelector("img")?.getAttribute("src")).toBe("/favicon.svg");
+  } finally {
+    unsubscribe();
+    theme.dispose();
+    gateway.stop();
+    render(nothing, container);
+    document.getElementById("openclaw-theme-palette-knot")?.remove();
+  }
+});
+
 it("applies routed profile updates and plugin hot reloads, restoring an unavailable selection", async () => {
   const { gateway, current, clients } = createGatewayStoreTestStore();
+  const favicon = document.createElement("link");
+  favicon.rel = "icon";
+  favicon.type = "image/svg+xml";
+  favicon.setAttribute("href", "/favicon.svg");
+  document.head.append(favicon);
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
   gateway.start();
   let response = catalog();
@@ -88,9 +146,14 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
       "--bg: #111122;",
     );
     expect(applicationTheme.catalog?.themes).toContainEqual(descriptor);
+    expect(applicationTheme.branding.mascot).toBe("claw");
 
     response = catalog({
       ...definition,
+      mascot: "none",
+      workingPhrases: ["Building", "Compiling"],
+      critters: ["penguin", "fedora"],
+      avatarHat: "fedora",
       dark: createThemePaletteFixture({ background: "#221133" }),
     });
     current().opts.onEvent?.(
@@ -104,9 +167,21 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
         "--bg: #221133;",
       ),
     );
+    expect(applicationTheme.branding).toEqual({
+      mascot: "none",
+      workingPhrases: ["Building", "Compiling"],
+      critters: ["penguin", "fedora"],
+      avatarHat: "fedora",
+    });
+    expect(document.documentElement.dataset.themeMascot).toBe("none");
+    expect(document.documentElement.dataset.themeAvatarHat).toBe("fedora");
+    await vi.dynamicImportSettled();
+    expect(decodeURIComponent(favicon.href)).toContain("<rect");
 
     response = catalog({
       ...definition,
+      mascot: "none",
+      workingPhrases: [],
       dark: createThemePaletteFixture({ background: "#332244" }),
     });
     current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 1 }));
@@ -125,6 +200,11 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
     await vi.waitFor(() => expect(document.documentElement.dataset.themeId).toBe("claw"));
     expect(applicationTheme.settings.theme).toBe(descriptor.id);
     expect(applicationTheme.catalog?.unavailableId).toBe(descriptor.id);
+    expect(applicationTheme.branding.mascot).toBe("claw");
+    expect(document.documentElement.dataset.themeMascot).toBe("claw");
+    expect(document.documentElement.dataset.themeAvatarHat).toBeUndefined();
+    await vi.dynamicImportSettled();
+    expect(favicon.getAttribute("href")).toBe("/favicon.svg");
 
     response = catalog();
     current().opts.onEvent?.(createGatewayEvent("plugins.changed", { generation: 3 }));
@@ -134,6 +214,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   } finally {
     applicationTheme.dispose();
     gateway.stop();
+    favicon.remove();
   }
 });
 

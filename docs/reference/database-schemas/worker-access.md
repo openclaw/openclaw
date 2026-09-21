@@ -34,6 +34,11 @@ asynchronous planning first, then reread authoritative rows inside the admitted
 transaction. Preserve FIFO order, coordinator custody, transaction/commit grants,
 and settlement of accepted write-capable work.
 
+Worker authority requests wait for the retained host owner's grant or refusal;
+host scheduling delays do not expire that authority. The host still checks current
+authority before granting, and broker failure joins worker exit before releasing
+custody. Coordinator-lock and broker-capacity admission keep their own deadlines.
+
 ## Carry facts, publish after commit
 
 Before yielding, capture the physical store target, source/admission scope,

@@ -8,6 +8,7 @@ import {
   normalizeThemeDefinition,
   normalizeThemeMode,
   parseThemeDefinition,
+  resolveThemeBranding,
   THEME_COLOR_KEYS,
 } from "./theme.js";
 
@@ -27,6 +28,83 @@ describe("portable theme definition", () => {
     expect(definition.name).toBe("Xenovessel");
     expect(definition.light).toBeUndefined();
     expect(definition.dark?.accent).toBe("color(display-p3 0.2 0.9 1)");
+    expect(definition).not.toHaveProperty("mascot");
+    expect(definition).not.toHaveProperty("workingPhrases");
+    expect(definition).not.toHaveProperty("critters");
+    expect(definition).not.toHaveProperty("avatarHat");
+  });
+
+  it.each(["claw", "none"] as const)(
+    "accepts the %s mascot, authored critters and hat, and normalizes custom working phrases",
+    (mascot) => {
+      expect(
+        normalizeThemeDefinition(
+          createThemeDefinitionFixture({
+            mascot,
+            workingPhrases: [" Building ", "x".repeat(24)],
+            critters: ["fedora", "penguin"],
+            avatarHat: "fedora",
+          }),
+        ),
+      ).toMatchObject({
+        mascot,
+        workingPhrases: ["Building", "x".repeat(24)],
+        critters: ["fedora", "penguin"],
+        avatarHat: "fedora",
+      });
+    },
+  );
+
+  it.each([
+    { workingPhrases: [] },
+    { workingPhrases: Array.from({ length: 24 }, (_, index) => `Working ${index}`) },
+  ])("accepts working phrases at the entry-count boundaries: %j", ({ workingPhrases }) => {
+    expect(
+      normalizeThemeDefinition(createThemeDefinitionFixture({ workingPhrases })).workingPhrases,
+    ).toEqual(workingPhrases);
+  });
+
+  it("accepts an explicitly empty critter list", () => {
+    expect(
+      normalizeThemeDefinition(createThemeDefinitionFixture({ critters: [] })).critters,
+    ).toEqual([]);
+  });
+
+  it.each([
+    { fields: { mascot: "robot" }, message: "theme.mascot must be one of claw, none" },
+    { fields: { workingPhrases: "Building" }, message: "must be an array" },
+    {
+      fields: { workingPhrases: Array.from({ length: 25 }, (_, index) => `Working ${index}`) },
+      message: "at most 24 entries",
+    },
+    { fields: { workingPhrases: ["x".repeat(25)] }, message: "at most 24 characters" },
+    {
+      fields: { workingPhrases: ["Building", " Building "] },
+      message: "duplicate entries after trimming",
+    },
+    { fields: { workingPhrases: [" "] }, message: "nonempty text" },
+    { fields: { workingPhrases: ["Build\ning"] }, message: "nonempty text" },
+    { fields: { workingPhrases: ["Building\u007f"] }, message: "nonempty text" },
+    { fields: { critters: "penguin" }, message: "theme.critters must be an array" },
+    {
+      fields: { critters: Array.from({ length: 9 }, () => "penguin") },
+      message: "at most 8 entries",
+    },
+    { fields: { critters: ["penguin", "penguin"] }, message: "duplicate entries" },
+    {
+      fields: { critters: ["robot"] },
+      message: "theme.critters[0] must be one of penguin, fedora",
+    },
+    {
+      fields: { critters: [" Penguin "] },
+      message: "theme.critters[0] must be one of penguin, fedora",
+    },
+    { fields: { avatarHat: "beanie" }, message: "theme.avatarHat must be one of fedora" },
+    { fields: { avatarHat: null }, message: "theme.avatarHat must be one of fedora" },
+  ])("rejects invalid branding $fields", ({ fields, message }) => {
+    expect(() =>
+      normalizeThemeDefinition({ ...createThemeDefinitionFixture(), ...fields }),
+    ).toThrow(message);
   });
 
   it.each([
@@ -145,6 +223,34 @@ describe("portable theme definition", () => {
     [`${"a".repeat(252)}/neon`, false],
   ])("validates catalog identity %s", (id, expected) => {
     expect(isThemeId(id)).toBe(expected);
+  });
+});
+
+it("resolves omitted branding to the claw without critters or a hat and retains authored branding", () => {
+  const defaults = {
+    mascot: "claw",
+    workingPhrases: undefined,
+    critters: [],
+    avatarHat: undefined,
+  };
+  expect(resolveThemeBranding(undefined)).toEqual(defaults);
+  expect(resolveThemeBranding({})).toEqual(defaults);
+  expect(resolveThemeBranding({ workingPhrases: [] })).toEqual({
+    ...defaults,
+    workingPhrases: [],
+  });
+  expect(
+    resolveThemeBranding({
+      mascot: "none",
+      workingPhrases: ["Building"],
+      critters: ["penguin", "fedora"],
+      avatarHat: "fedora",
+    }),
+  ).toEqual({
+    mascot: "none",
+    workingPhrases: ["Building"],
+    critters: ["penguin", "fedora"],
+    avatarHat: "fedora",
   });
 });
 

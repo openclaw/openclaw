@@ -89,6 +89,7 @@ import {
 import {
   applyToolChoice,
   isToolChoiceConstraintSatisfied,
+  resolveResponsesToolChoice,
   resolveUnsatisfiedToolChoiceMessage,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
@@ -299,32 +300,6 @@ function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
       strict: tool.strict,
     },
   }));
-}
-
-function resolveToolChoice(
-  toolChoice: CreateResponseBody["tool_choice"],
-): ToolChoiceConstraint | "none" | undefined {
-  if (!toolChoice) {
-    return undefined;
-  }
-
-  if (toolChoice === "none") {
-    return "none";
-  }
-
-  if (toolChoice === "required") {
-    return { type: "required" };
-  }
-
-  if (typeof toolChoice === "object" && toolChoice.type === "function") {
-    const targetName = ("name" in toolChoice ? toolChoice.name : toolChoice.function.name).trim();
-    if (!targetName) {
-      throw new Error("tool_choice.name is required");
-    }
-    return { type: "function", name: targetName };
-  }
-
-  return undefined;
 }
 
 export { buildAgentPrompt } from "./openresponses-prompt.js";
@@ -550,7 +525,10 @@ export async function handleOpenResponsesHttpRequest(
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;
   let resolvedClientTools = clientTools;
   try {
-    const toolChoiceResult = applyToolChoice(clientTools, resolveToolChoice(payload.tool_choice));
+    const toolChoiceResult = applyToolChoice(
+      clientTools,
+      resolveResponsesToolChoice(payload.tool_choice),
+    );
     resolvedClientTools = toolChoiceResult.tools;
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
     toolChoiceConstraint = toolChoiceResult.constraint;
@@ -666,6 +644,8 @@ export async function handleOpenResponsesHttpRequest(
       runId: responseId,
       messageChannel,
       senderIsOwner,
+      requestAuth: handled.requestAuth,
+      operatorScopes: handled.operatorScopes,
       resolveGatewayContext: opts.resolveGatewayContext,
       abortSignal: abortController.signal,
     });

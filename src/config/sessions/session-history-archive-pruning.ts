@@ -1,11 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
-import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
-import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
+import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal-reclamation.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -49,105 +47,67 @@ async function withArchivePruningDatabase<T>(
   }
 }
 
-function checkpointArchivePruning(
-  database: OpenClawAgentDatabase,
-  diagnostics: SqliteSessionArchivePruningDiagnostics | undefined,
-): boolean {
-  const startedAt = performance.now();
-  try {
-    // Online cleanup must leave readers serviceable instead of holding the writer
-    // lock while their release waits for this same event loop. Retirement keeps its policy.
-    const completed = runWithSqliteBusyTimeout(database.db, 0, () =>
-      database.walMaintenance.checkpoint(),
-    );
-    if (diagnostics) {
-      diagnostics.checkpointCalls = (diagnostics.checkpointCalls ?? 0) + 1;
-      diagnostics.checkpointIncomplete =
-        (diagnostics.checkpointIncomplete ?? 0) + Number(!completed);
-    }
-    return completed;
-  } finally {
-    if (diagnostics) {
-      const elapsedMs = performance.now() - startedAt;
-      diagnostics.checkpointMs = (diagnostics.checkpointMs ?? 0) + elapsedMs;
-      diagnostics.checkpointMaxMs = Math.max(diagnostics.checkpointMaxMs ?? 0, elapsedMs);
-    }
-  }
-}
+type PageReclamation = {
+  reclaimPages?: (maxPages?: number) => Promise<SqliteWalReclamationResult>;
+  onCheckpointIncomplete?: (checkpoint: SqliteWalHealth | undefined) => void;
+};
+
+export type SessionArchivePruningResult = {
+  removedFiles: number;
+  usage: SessionPhysicalDiskUsage;
+  completed: boolean;
+  checkpointIncomplete: number;
+  checkpoint?: SqliteWalHealth;
+};
 
 export async function reclaimSqliteFreePages(
   databaseOptions: OpenClawAgentDatabaseOptions,
   diagnostics?: SqliteSessionArchivePruningDiagnostics,
-  limits?: { maxPasses?: number; assertCurrent?: () => void },
-): Promise<void> {
+  limits?: PageReclamation & { maxPasses?: number; assertCurrent?: () => void },
+): Promise<boolean> {
   let remaining: number | undefined;
   const maxPasses = limits?.maxPasses ?? Infinity;
   for (let pass = 0; pass < maxPasses && (remaining === undefined || remaining > 0); pass++) {
     if (remaining !== undefined) {
       await setImmediate();
     }
-    // Reacquire after yielding while the caller retains its writer section.
-    const nextRemaining = await withArchivePruningDatabase(
-      databaseOptions,
-      diagnostics,
-      (database) => {
-        limits?.assertCurrent?.();
-        if (!checkpointArchivePruning(database, diagnostics)) {
-          return undefined;
-        }
-        const freePages = () =>
-          timeArchivePruningSync(
-            diagnostics,
-            "queryMs",
-            () => Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0), // sqlite-allow-raw -- Physical page accounting.
-          );
-        const before = freePages();
-        if (!Number.isSafeInteger(before) || before <= 0) {
-          return undefined;
-        }
-        // Bound the entire drain to its initial freelist, even if other writers free more pages.
-        const passRemaining = Math.min(remaining ?? before, before);
-        const pages = Math.min(512, passRemaining);
-        if (diagnostics) {
-          diagnostics.vacuumPasses = (diagnostics.vacuumPasses ?? 0) + 1;
-          diagnostics.vacuumPagesRequested = (diagnostics.vacuumPagesRequested ?? 0) + pages;
-        }
-        let entered = false;
-        try {
-          timeArchivePruningSync(diagnostics, "vacuumMs", () =>
-            runWithSqliteBusyTimeout(database.db, 0, () =>
-              runSqliteImmediateTransactionSync(
-                database.db,
-                () => {
-                  entered = true;
-                  database.db.exec(`PRAGMA incremental_vacuum(${pages});`); // sqlite-allow-raw -- Bounded physical maintenance in one synchronous commit section.
-                },
-                { busyTimeoutMs: 0, operationLabel: "incremental-vacuum" },
-              ),
-            ),
-          );
-        } catch (error) {
-          // A writer can win after checkpointing. Defer only refused admission;
-          // failures after vacuum starts still belong to the transaction owner.
-          if (entered || !isSqliteLockError(error)) {
-            throw error;
-          }
-          return undefined;
-        }
-        if (!checkpointArchivePruning(database, diagnostics)) {
-          return undefined;
-        }
-        if (freePages() >= before) {
-          return undefined;
-        }
-        return passRemaining - pages;
-      },
-    );
-    if (nextRemaining === undefined) {
-      return;
+    limits?.assertCurrent?.();
+    const result = limits?.reclaimPages
+      ? await limits.reclaimPages(remaining)
+      : await withArchivePruningDatabase(databaseOptions, diagnostics, (database) => {
+          limits?.assertCurrent?.();
+          return database.walMaintenance.reclaimFreePages({ maxPages: remaining });
+        });
+    if (diagnostics) {
+      for (const key of [
+        "checkpointCalls",
+        "checkpointIncomplete",
+        "checkpointMs",
+        "queryMs",
+        "vacuumMs",
+        "vacuumPasses",
+        "vacuumPagesRequested",
+      ] as const) {
+        diagnostics[key] = (diagnostics[key] ?? 0) + result[key];
+      }
+      diagnostics.checkpointMaxMs = Math.max(
+        diagnostics.checkpointMaxMs ?? 0,
+        result.checkpointMaxMs,
+      );
+      diagnostics.checkpoint = result.checkpoint;
     }
-    remaining = nextRemaining;
+    if (!result.checkpointCompleted) {
+      limits?.onCheckpointIncomplete?.(result.checkpoint);
+      return false;
+    }
+    const before = result.freePagesBefore;
+    const after = result.remainingFreePages;
+    if (before === null || after === null || before <= 0 || after >= before) {
+      return true;
+    }
+    remaining = Math.min(remaining ?? before, before) - (before - after);
   }
+  return true;
 }
 
 export function hasCanonicalSessionTranscriptArchives(
@@ -210,13 +170,15 @@ function readUnpublishedSessionTranscriptArchiveNames(
   );
 }
 
-async function pruneCanonicalSessionTranscriptArchivesToHighWater(params: {
-  archiveDirectory: string;
-  databaseOptions: OpenClawAgentDatabaseOptions;
-  diagnostics?: SqliteSessionArchivePruningDiagnostics;
-  highWaterBytes: number;
-  storePath: string;
-}): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
+async function pruneCanonicalSessionTranscriptArchivesToHighWater(
+  params: PageReclamation & {
+    archiveDirectory: string;
+    databaseOptions: OpenClawAgentDatabaseOptions;
+    diagnostics?: SqliteSessionArchivePruningDiagnostics;
+    highWaterBytes: number;
+    storePath: string;
+  },
+): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
   const { diagnostics } = params;
   let usage = await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
     measureSessionPhysicalDiskUsage(params.storePath),
@@ -285,24 +247,58 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(params: {
         }, params.databaseOptions),
       ),
     );
-    await reclaimSqliteFreePages(params.databaseOptions, diagnostics);
+    const checkpointCompleted = await reclaimSqliteFreePages(
+      params.databaseOptions,
+      diagnostics,
+      params,
+    );
     usage = await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
       measureSessionPhysicalDiskUsage(params.storePath),
     );
+    if (!checkpointCompleted) {
+      break;
+    }
   }
   return { removedFiles, usage };
 }
 
-export async function pruneAllSessionTranscriptArchivesToHighWater(params: {
-  archiveDirectory: string;
-  databaseOptions: OpenClawAgentDatabaseOptions;
-  diagnostics?: SqliteSessionArchivePruningDiagnostics;
-  highWaterBytes: number;
-  storePath: string;
-}): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
-  const { diagnostics } = params;
-  // Reclaim committed free pages before pressure can destroy a retained archive.
-  await reclaimSqliteFreePages(params.databaseOptions, diagnostics);
+export async function pruneAllSessionTranscriptArchivesToHighWater(
+  input: PageReclamation & {
+    archiveDirectory: string;
+    databaseOptions: OpenClawAgentDatabaseOptions;
+    diagnostics?: SqliteSessionArchivePruningDiagnostics;
+    highWaterBytes: number;
+    storePath: string;
+  },
+): Promise<SessionArchivePruningResult> {
+  const diagnostics = input.diagnostics ?? { trigger: "initial" };
+  const params = { ...input, diagnostics };
+  const measure = () =>
+    timeArchivePruningAsync(diagnostics, "measurementMs", () =>
+      measureSessionPhysicalDiskUsage(params.storePath),
+    );
+  const before = await measure();
+  diagnostics.totalBytesBefore = before.totalBytes;
+  diagnostics.walBytesBefore = before.databaseWalBytes;
+  const finish = (result: {
+    removedFiles: number;
+    usage: SessionPhysicalDiskUsage;
+  }): SessionArchivePruningResult => {
+    diagnostics.totalBytesAfter = result.usage.totalBytes;
+    diagnostics.walBytesAfter = result.usage.databaseWalBytes;
+    const checkpointIncomplete = diagnostics.checkpointIncomplete ?? 0;
+    diagnostics.completed = checkpointIncomplete === 0 && !diagnostics.failedRemovals;
+    return {
+      ...result,
+      completed: diagnostics.completed,
+      checkpointIncomplete,
+      checkpoint: diagnostics.checkpoint,
+    };
+  };
+  // Unreclaimable WAL pressure must not destroy archives or create more WAL frames.
+  if (!(await reclaimSqliteFreePages(params.databaseOptions, diagnostics, params))) {
+    return finish({ removedFiles: 0, usage: await measure() });
+  }
   const canonical = (await withArchivePruningDatabase(
     params.databaseOptions,
     diagnostics,
@@ -312,17 +308,9 @@ export async function pruneAllSessionTranscriptArchivesToHighWater(params: {
       ),
   ))
     ? await pruneCanonicalSessionTranscriptArchivesToHighWater(params)
-    : {
-        removedFiles: 0,
-        usage: await timeArchivePruningAsync(diagnostics, "measurementMs", () =>
-          measureSessionPhysicalDiskUsage(params.storePath),
-        ),
-      };
-  if (canonical.usage.totalBytes <= params.highWaterBytes) {
-    if (diagnostics) {
-      diagnostics.completed = true;
-    }
-    return canonical;
+    : { removedFiles: 0, usage: await measure() };
+  if (diagnostics.checkpointIncomplete || canonical.usage.totalBytes <= params.highWaterBytes) {
+    return finish(canonical);
   }
   const legacy = await pruneSessionTranscriptArchivesToHighWater({
     diagnostics,
@@ -337,11 +325,8 @@ export async function pruneAllSessionTranscriptArchivesToHighWater(params: {
     highWaterBytes: params.highWaterBytes,
     storePath: params.storePath,
   });
-  if (diagnostics) {
-    diagnostics.completed = true;
-  }
-  return {
+  return finish({
     removedFiles: canonical.removedFiles + legacy.removedFiles,
     usage: legacy.usage,
-  };
+  });
 }

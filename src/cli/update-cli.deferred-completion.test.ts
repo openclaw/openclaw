@@ -5,12 +5,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { listUpdateRuns } from "../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../infra/update-runner.js";
+import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { VERSION } from "../version.js";
 import {
   installDeferredCompletionFixture,
   readPackageVersion,
-  runGatewayUpdate,
+  updateGitCheckout,
   runCommandWithTimeout,
   readConfigFileSnapshot,
   defaultRuntime,
@@ -73,7 +73,7 @@ describe("update-cli child-owned deferred completion", () => {
     readPackageVersion.mockResolvedValue("2026.9.4");
     await runPostCoreCommand({ restart: false }, { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" });
 
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(updateGitCheckout).not.toHaveBeenCalled();
     const installCall = (
       vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<[string[], unknown]>
     ).find(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
@@ -300,7 +300,7 @@ describe("update-cli child-owned deferred completion", () => {
       } else {
         expect(replaceConfigFile).not.toHaveBeenCalled();
       }
-      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      expect(updateGitCheckout).not.toHaveBeenCalled();
     },
   );
 

@@ -9,7 +9,7 @@ import {
   type UpdateFailureReportSubmitResult,
 } from "../../infra/update-failure-report.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 type UpdateFailureAction = "triage" | "report" | "dismiss";

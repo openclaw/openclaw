@@ -1,6 +1,12 @@
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
+} from "../infra/kysely-sync.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import {
   meetingTranscriptDb,
@@ -60,16 +66,58 @@ export function readTranscriptExportPathOwners(database: DatabaseSync, exportKey
   ).rows;
 }
 
+type SummarySnapshotRow = Pick<
+  MeetingTranscriptSessionRow,
+  | "next_utterance_seq"
+  | "title"
+  | "source_json"
+  | "metadata_json"
+  | "stopped_at"
+  | "created_at_ms"
+  | "updated_at_ms"
+>;
+const summarySnapshotQueries = new WeakMap<
+  DatabaseSync,
+  ReturnType<typeof prepareSqliteQueryTakeFirstSync<TranscriptSessionIdentity, SummarySnapshotRow>>
+>();
+
 /** Runs inside the read worker's transaction so input and replacement basis agree. */
 export function readTranscriptSummarySnapshot(
   database: DatabaseSync,
   session: TranscriptSessionIdentity,
   maxUtterances: number,
 ): TranscriptSummarySnapshot | undefined {
-  const row = executeSqliteQueryTakeFirstSync(
-    database,
-    meetingTranscriptSessionQuery(database, session).selectAll(),
-  );
+  let read = summarySnapshotQueries.get(database);
+  if (!read) {
+    read = prepareSqliteQueryTakeFirstSync<TranscriptSessionIdentity, SummarySnapshotRow>(
+      database,
+      (parameter) =>
+        meetingTranscriptDb(database)
+          .selectFrom("meeting_transcript_sessions")
+          .where(
+            "session_id",
+            "=",
+            parameter((value) => value.sessionId),
+          )
+          .where(
+            "started_at",
+            "=",
+            parameter((value) => value.startedAt),
+          )
+          // Retain native integer decoding while omitting unrelated export bookkeeping.
+          .select([
+            "next_utterance_seq",
+            "title",
+            "source_json",
+            "metadata_json",
+            "stopped_at",
+            "created_at_ms",
+            "updated_at_ms",
+          ]),
+    );
+    summarySnapshotQueries.set(database, read);
+  }
+  const row = read(session);
   if (!row) {
     return undefined;
   }
@@ -201,4 +249,18 @@ export function readStoredTranscriptSummary(
     ...(summary ? { summary } : {}),
     ...(row.markdown !== null ? { markdown: row.markdown } : {}),
   };
+}
+
+export function readTranscriptJsonlDigest(
+  database: DatabaseSync,
+  session: TranscriptSessionIdentity,
+): string {
+  const query = meetingTranscriptUtteranceQuery(database, session)
+    .selectAll()
+    .orderBy("sequence", "asc");
+  const digest = createHash("sha256");
+  for (const row of iterateSqliteQuerySync(database, query)) {
+    digest.update(`${JSON.stringify(utteranceFromRow(row))}\n`);
+  }
+  return digest.digest("hex");
 }

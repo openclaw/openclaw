@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -11,7 +12,9 @@ import {
   type SessionEventAgentScope,
 } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
+import { resolveSessionStoreKey } from "../session-store-key.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -35,25 +38,84 @@ type SessionChangeContext = Pick<
   | "mentionInbox"
 >;
 
-type PendingSessionChange = {
-  context: SessionChangeContext;
-  dirty: boolean;
-  firstDeferredAt?: number;
+type SessionChange = {
   key: string;
   payload: SessionChangedPayload;
   scope: SessionEventAgentScope | null;
+  captured?: ReturnType<SessionRowProjection["capture"]>;
+  captureFailed?: true;
+};
+
+type SessionChangeOwner = {
+  pending: Map<string, PendingSessionChange>;
+  registerStop?: () => () => void;
+  unregister?: () => void;
+};
+
+type PendingSessionChange = {
+  context: SessionChangeContext;
+  owner: SessionChangeOwner;
+  key: string;
+  scope: SessionEventAgentScope | null;
+  oldestTombstone?: SessionChange;
+  latest?: SessionChange;
+  refresh: boolean;
+  catalogChanged: boolean;
+  due: boolean;
+  firstDeferredAt?: number;
   timer: ReturnType<typeof setTimeout> | null;
-  publication?: Promise<void>;
+  work?: Promise<void>;
 };
 
 const SESSIONS_CHANGED_DEBOUNCE_MS = 100;
 const SESSIONS_CHANGED_MAX_WAIT_MS = 500;
 const log = createSubsystemLogger("gateway/session-events");
-const pendingChangesByContext = new WeakMap<object, Map<string, PendingSessionChange>>();
+const sessionChangeOwners = new WeakMap<object, SessionChangeOwner>();
 const pendingSessionChanges = new Set<PendingSessionChange>();
 
-function sessionChangeKey(payload: SessionChangedPayload, scope: SessionEventAgentScope | null) {
-  return `${scope?.[1] ?? payload.agentId ?? ""}\0${payload.sessionKey ?? ""}`;
+function ownerFor(context: object): SessionChangeOwner {
+  let owner = sessionChangeOwners.get(context);
+  if (!owner) {
+    owner = { pending: new Map() };
+    sessionChangeOwners.set(context, owner);
+  }
+  return owner;
+}
+
+function registerPendingLifetime(owner: SessionChangeOwner): void {
+  owner.unregister ??= owner.registerStop?.();
+}
+
+/** The Gateway sidecar owner admits late work until its existing shutdown seal. */
+export function attachSessionChangeEventLifetime(
+  context: object,
+  registerStop: () => () => void,
+): void {
+  const owner = ownerFor(context);
+  if (owner.registerStop && owner.registerStop !== registerStop) {
+    throw new Error("Session changes already belong to a Gateway lifetime");
+  }
+  owner.registerStop = registerStop;
+  if (owner.pending.size > 0) {
+    registerPendingLifetime(owner);
+  }
+}
+
+function sessionChangeKey(
+  cfg: OpenClawConfig,
+  payload: SessionChangedPayload,
+  scope: SessionEventAgentScope | null,
+) {
+  const routingAgentId = scope?.[1];
+  const key =
+    payload.sessionKey && routingAgentId
+      ? resolveSessionStoreKey({
+          cfg,
+          sessionKey: payload.sessionKey,
+          storeAgentId: routingAgentId,
+        })
+      : (payload.sessionKey ?? "");
+  return `${routingAgentId ?? payload.agentId ?? ""}\0${key}`;
 }
 
 function snapshotTarget(payload: SessionChangedPayload, scope: SessionEventAgentScope | null) {
@@ -69,6 +131,7 @@ function broadcastSessionsChanged(
   context: SessionChangeContext,
   payload: SessionChangedPayload,
   scope: SessionEventAgentScope | null,
+  includeSnapshot = true,
 ): void {
   const connIds = context.getSessionEventSubscriberConnIds();
   if (!hasSessionChangeReceivers(connIds)) {
@@ -78,17 +141,54 @@ function broadcastSessionsChanged(
     return;
   }
   const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = scope;
-  const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(payload.sessionKey, scope);
-  const broadcastAgentId = routingAgentId;
-  const broadcastOptions = {
-    ...(broadcastAgentId ? { agentId: broadcastAgentId } : {}),
-    ...privateBroadcastScope,
+  const routingOptions = {
+    ...(routingAgentId ? { agentId: routingAgentId } : {}),
     dropIfSlow: true,
   };
   const eventPayload = {
     ...payload,
     ...(eventAgentId ? { agentId: eventAgentId } : {}),
     ts: Date.now(),
+  };
+  if (!includeSnapshot) {
+    // Native plugins need the keyed notice, but a keyed WebSocket payload would
+    // ask recipient projection to read the unavailable row again.
+    if (payload.sessionKey) {
+      context.broadcastToConnIds(
+        "sessions.changed",
+        {
+          ...eventPayload,
+          ...(routingAgentId
+            ? {
+                sessionKey: resolveSessionStoreKey({
+                  cfg: context.getRuntimeConfig(),
+                  sessionKey: payload.sessionKey,
+                  storeAgentId: routingAgentId,
+                }),
+                agentId: routingAgentId,
+              }
+            : {}),
+        },
+        new Set<string>(),
+        routingOptions,
+      );
+    }
+    context.broadcastToConnIds(
+      "sessions.changed",
+      {
+        reason: "update",
+        ...(routingAgentId ? { agentId: routingAgentId } : {}),
+        ...(payload.catalogChanged ? { catalogChanged: true } : {}),
+        ts: eventPayload.ts,
+      },
+      connIds,
+      routingOptions,
+    );
+    return;
+  }
+  const broadcastOptions = {
+    ...routingOptions,
+    ...resolvePrivateSessionEventBroadcastScope(payload.sessionKey, scope),
   };
   // A deletion describes the removed generation, never the row now occupying its key.
   const query = snapshotTarget(payload, scope);
@@ -141,63 +241,142 @@ function broadcastSessionsChanged(
   );
 }
 
-function publish(pending: PendingSessionChange): Promise<void> {
-  if (pending.publication) {
-    return pending.publication;
+function releasePendingSessionChange(pending: PendingSessionChange): void {
+  pendingSessionChanges.delete(pending);
+  pending.owner.pending.delete(pending.key);
+  if (pending.owner.pending.size === 0) {
+    pending.owner.unregister?.();
+    pending.owner.unregister = undefined;
   }
-  pending.dirty = false;
-  pending.firstDeferredAt = undefined;
-  const { context, payload, scope } = pending;
-  const projection = getSessionRowProjection(context);
-  const query = snapshotTarget(payload, scope);
-  const captured = query ? projection?.capture(query) : undefined;
-  return (pending.publication = Promise.resolve().then(async () => {
-    try {
-      if (query && projection) {
-        do {
-          await projection.ensureMaterialized();
-        } while (projection.needsMaterialization);
-      }
-      if (!captured || projection?.isCurrent(captured)) {
-        broadcastSessionsChanged(context, payload, scope);
-      }
-    } catch (error) {
-      log.warn("Session change publication failed", { error });
-    } finally {
-      pending.publication = undefined;
-      if (!pending.timer) {
-        await finishPendingSessionChange(pending);
-      }
-    }
-  }));
 }
 
-function finishPendingSessionChange(pending: PendingSessionChange): Promise<void> | undefined {
+function captureSessionChange(
+  context: SessionChangeContext,
+  payload: SessionChangedPayload,
+  scope: SessionEventAgentScope | null,
+  key: string,
+): SessionChange {
+  const change: SessionChange = { key, payload, scope };
+  const query = snapshotTarget(payload, scope);
+  try {
+    change.captured = query ? getSessionRowProjection(context)?.capture(query) : undefined;
+  } catch (error) {
+    change.captureFailed = true;
+    log.warn("Session change capture failed", { error });
+  }
+  return change;
+}
+
+async function publishSessionChange(context: SessionChangeContext, change: SessionChange) {
+  const { payload, scope, captured } = change;
+  const projection = getSessionRowProjection(context);
+  const query = snapshotTarget(payload, scope);
+  let publicationStarted = false;
+  const broadcast = (includeSnapshot = true) => {
+    publicationStarted = true;
+    broadcastSessionsChanged(context, payload, scope, includeSnapshot);
+  };
+  try {
+    if (change.captureFailed) {
+      broadcast(false);
+    } else if (query && projection) {
+      const prepared = await projection.withPreparedExactRows(
+        () => [query],
+        () => {
+          broadcast(!captured || projection.isCurrent(captured));
+        },
+        { includeAncestors: true },
+      );
+      if (prepared.kind !== "complete") {
+        broadcast(false);
+      }
+    } else {
+      broadcast();
+    }
+  } catch (error) {
+    if (publicationStarted) {
+      throw error;
+    }
+    log.warn("Session change preparation failed", { error });
+    broadcast(false);
+  }
+}
+
+function startPendingSessionChange(pending: PendingSessionChange, leading?: SessionChange): void {
+  if (pending.work) {
+    return;
+  }
+  pending.work = Promise.resolve()
+    .then(async () => {
+      if (leading) {
+        await publishSessionChange(pending.context, leading);
+      }
+      while (pending.due) {
+        const next = pending.oldestTombstone ?? pending.latest;
+        if (next) {
+          if (pending.oldestTombstone === next) {
+            pending.oldestTombstone = undefined;
+          }
+          if (pending.latest === next) {
+            pending.latest = undefined;
+          }
+          await publishSessionChange(pending.context, next);
+        } else if (pending.refresh) {
+          pending.refresh = false;
+          // Condensed generations need an authoritative roster read; the latest keyed
+          // notice above also reaches plugin subscribers that ignore broad invalidations.
+          broadcastSessionsChanged(
+            pending.context,
+            {
+              reason: "update",
+              ...(pending.catalogChanged ? { catalogChanged: true } : {}),
+            },
+            pending.scope,
+            false,
+          );
+        } else {
+          break;
+        }
+      }
+    })
+    .catch((error: unknown) => {
+      log.warn("Session change publication failed", { error });
+    })
+    .then(() => {
+      pending.work = undefined;
+      if (pending.due && (pending.oldestTombstone || pending.latest || pending.refresh)) {
+        startPendingSessionChange(pending);
+      } else if (!pending.timer) {
+        releasePendingSessionChange(pending);
+      }
+    });
+}
+
+function finishPendingSessionChange(pending: PendingSessionChange): void {
   if (pending.timer) {
     clearTimeout(pending.timer);
     pending.timer = null;
   }
-  if (pending.dirty) {
-    return publish(pending);
+  pending.due = true;
+  if (pending.oldestTombstone || pending.latest || pending.refresh) {
+    startPendingSessionChange(pending);
+  } else if (!pending.work) {
+    releasePendingSessionChange(pending);
   }
-  if (pending.publication) {
-    return pending.publication;
-  }
-  pendingSessionChanges.delete(pending);
-  pendingChangesByContext.get(pending.context)?.delete(pending.key);
-  return undefined;
 }
 
-/** Flush trailing notifications and join publications before gateway shutdown. */
+/** Flush timers and join publications, including work admitted during the drain. */
 export async function flushPendingSessionsChangedEvents(context?: object): Promise<void> {
-  await Promise.all(
-    [...pendingSessionChanges]
-      .filter((pending) => !context || pending.context === context)
-      .flatMap((pending) => {
-        const publication = finishPendingSessionChange(pending);
-        return publication ? [publication] : [];
-      }),
-  );
+  for (;;) {
+    const pending = [...pendingSessionChanges].filter(
+      (entry) => !context || entry.context === context,
+    );
+    if (!pending.length) {
+      return;
+    }
+    pending.forEach(finishPendingSessionChange);
+    await Promise.all(pending.flatMap((entry) => (entry.work ? [entry.work] : [])));
+  }
 }
 
 export function emitSessionsChanged(
@@ -231,57 +410,81 @@ export function emitSessionsChanged(
   if (!hasSessionChangeReceivers(connIds)) {
     return;
   }
+  const cfg = context.getRuntimeConfig();
   const scope: SessionEventAgentScope | null = payload.sessionKey
-    ? resolveSessionEventAgentScope(context.getRuntimeConfig(), payload.sessionKey, payload.agentId)
+    ? resolveSessionEventAgentScope(cfg, payload.sessionKey, payload.agentId)
     : [payload.agentId, payload.agentId, undefined];
   if (options.preparedPublication) {
     return broadcastSessionsChanged(context, payload, scope);
   }
-  const key = sessionChangeKey(payload, scope);
-  const byKey = pendingChangesByContext.get(context) ?? new Map<string, PendingSessionChange>();
-  pendingChangesByContext.set(context, byKey);
-  const pending = byKey.get(key);
+  const publicationKey = sessionChangeKey(cfg, payload, scope);
+  const key = JSON.stringify([
+    scope,
+    payload.reason === "delete",
+    payload.sessionId,
+    payload.compacted,
+  ]);
+  const owner = ownerFor(context);
+  const pending = owner.pending.get(publicationKey);
   if (pending) {
-    pending.payload = {
-      ...payload,
-      ...(pending.payload.catalogChanged ? { catalogChanged: true } : {}),
-    };
     pending.scope = scope;
-    pending.dirty = true;
+    pending.catalogChanged ||= payload.catalogChanged === true;
+    const latestPayload = {
+      ...payload,
+      ...(pending.catalogChanged ? { catalogChanged: true as const } : {}),
+    };
+    if (pending.latest?.key === key) {
+      pending.latest.payload = latestPayload;
+      pending.latest.scope = scope;
+    } else {
+      const next = captureSessionChange(context, latestPayload, scope, key);
+      // Retain the first deletion and newest notice. Intermediate unpublished
+      // generations collapse to a broad refresh instead of an unbounded FIFO.
+      if (pending.latest && pending.latest !== pending.oldestTombstone) {
+        pending.refresh = true;
+      }
+      if (payload.reason === "delete") {
+        pending.oldestTombstone ??= next;
+      }
+      pending.latest = next;
+    }
+    if (pending.due) {
+      startPendingSessionChange(pending);
+      return;
+    }
     pending.firstDeferredAt ??= Date.now();
     if (pending.timer) {
       clearTimeout(pending.timer);
     }
-    // Keep resetting for a quiet-period trailing emit without letting a sustained
-    // mutation stream postpone the authoritative row forever.
     const maxWaitRemaining = pending.firstDeferredAt + SESSIONS_CHANGED_MAX_WAIT_MS - Date.now();
     pending.timer = setTimeout(
-      () => {
-        void finishPendingSessionChange(pending);
-      },
+      () => finishPendingSessionChange(pending),
       Math.max(0, Math.min(SESSIONS_CHANGED_DEBOUNCE_MS, maxWaitRemaining)),
     );
     pending.timer.unref?.();
     return;
   }
-
-  // Lead after a quiet period for responsive UI, then coalesce a burst into one trailing
-  // rebuild. The trailing row is loaded only when emitted, so it reflects the newest state.
+  try {
+    registerPendingLifetime(owner);
+  } catch (error) {
+    log.warn("Session change was not admitted", { error });
+    return;
+  }
   const next: PendingSessionChange = {
     context,
-    dirty: false,
-    key,
-    payload,
+    owner,
+    key: publicationKey,
     scope,
+    refresh: false,
+    catalogChanged: payload.catalogChanged === true,
+    due: false,
     timer: null,
   };
-  next.timer = setTimeout(() => {
-    void finishPendingSessionChange(next);
-  }, SESSIONS_CHANGED_DEBOUNCE_MS);
-  next.timer.unref?.();
-  byKey.set(key, next);
+  owner.pending.set(publicationKey, next);
   pendingSessionChanges.add(next);
-  void publish(next);
+  next.timer = setTimeout(() => finishPendingSessionChange(next), SESSIONS_CHANGED_DEBOUNCE_MS);
+  next.timer.unref?.();
+  startPendingSessionChange(next, captureSessionChange(context, payload, scope, key));
 }
 
 export function emitSessionArchived(

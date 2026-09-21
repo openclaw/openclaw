@@ -90,7 +90,10 @@ export async function rejectGatewayStartupConnect(
 }
 
 export async function rejectUnavailableProfileConnect(
-  context: GatewayConnectPhaseContext,
+  context: Pick<
+    GatewayConnectPhaseContext,
+    "markHandshakeFailure" | "sendHandshakeErrorResponse" | "releasePendingNodePairingCleanup"
+  > & { handler: Pick<GatewayConnectPhaseContext["handler"], "close"> },
   error: unknown,
 ): Promise<void> {
   // Role admission needs a verified profile; an empty-scope hello hides the

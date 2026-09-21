@@ -1,5 +1,6 @@
 import * as childProcess from "node:child_process";
 import { once } from "node:events";
+import { readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -7,10 +8,6 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
-import {
-  prepareUpdateCandidateRehearsal,
-  type UpdateCandidateRehearsal,
-} from "./update-candidate-rehearsal.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
@@ -27,7 +24,7 @@ it(
     const spawned = vi.mocked(childProcess.spawn);
     spawned.mockClear();
     const occupied = createServer();
-    let rehearsal: UpdateCandidateRehearsal | undefined;
+    const spawn = spawned.getMockImplementation()!;
     try {
       occupied.listen(0, "127.0.0.1");
       await once(occupied, "listening");
@@ -39,20 +36,22 @@ it(
         gateway: { mode: "local" },
         mcp: { apps: { enabled: true, sandboxPort: address.port } },
       };
-      rehearsal = await prepareUpdateCandidateRehearsal({
-        candidateRoot: process.cwd(),
-        stateDir,
-        config,
-        env: { PATH: process.env.PATH },
+      spawned.mockImplementation((...args) => {
+        if (Array.isArray(args[1]) && args[1].includes("--update-canary")) {
+          // Published updaters retain this setting and only supply --update-canary.
+          const configPath = args[2]?.env?.OPENCLAW_CONFIG_PATH;
+          if (!configPath) {
+            throw new Error("Missing candidate config path");
+          }
+          const copied: OpenClawConfig = JSON.parse(readFileSync(configPath, "utf8"));
+          writeFileSync(configPath, JSON.stringify({ ...copied, mcp: config.mcp }));
+        }
+        return spawn(...args);
       });
-      // Published updaters retain this setting and only supply --update-canary.
-      const copied: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
-      await fs.writeFile(rehearsal.configPath, JSON.stringify({ ...copied, mcp: config.mcp }));
       const result = await validateUpdateCandidateCanary({
         root: process.cwd(),
         stateDir,
         config,
-        rehearsal,
         env: { PATH: process.env.PATH },
         timeoutMs: 300_000,
       });
@@ -62,7 +61,6 @@ it(
       expect(phases[0]).toContain("startupz: started");
       expect(phases[1]).toContain("readyz: ready");
       expect(occupied.listening).toBe(true);
-      await rehearsal.cleanup();
       expect(await fs.readdir(stateDir)).toEqual([]);
       const callIndex = spawned.mock.calls.findIndex(
         ([, args]) => Array.isArray(args) && args.includes("--update-canary"),
@@ -77,13 +75,12 @@ it(
         code: "ENOENT",
       });
     } finally {
-      await rehearsal?.cleanup();
       if (occupied.listening) {
         await new Promise<void>((resolve, reject) => {
           occupied.close((error) => (error ? reject(error) : resolve()));
         });
       }
-      spawned.mockClear();
+      spawned.mockImplementation(spawn).mockClear();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   },

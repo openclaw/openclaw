@@ -2563,7 +2563,7 @@
     {"id":"native.apple.c1128e434326ada8","source":"Gateway setup cancelled. You can retry when ready.","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/CLIInstallPrompter.swift"}]},
     {"id":"native.apple.bb04f6b9ed26de98","source":"Gateway setup code has expired.","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/Sources/Gateway/GatewayConnectionController.swift"}]},
     {"id":"native.apple.07838448402bfe03","source":"Gateway setup, pairing, channels, and mobile node reference.","surface":"apple","sites":[{"kind":"ui-named-argument","path":"apps/ios/Sources/Design/OpenClawDocsScreen.swift"}]},
-    {"id":"native.apple.778ee016f8779750","source":"Gateway sign-in","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/GatewayBrowserOnboardingController.swift"}]},
+    {"id":"native.apple.778ee016f8779750","source":"Gateway sign-in","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift"},{"kind":"ui-localized-call","path":"apps/macos/Sources/OpenClaw/GatewayBrowserOnboardingController.swift"}]},
     {"id":"native.apple.ea765334d68d1a35","source":"Gateway sign-in expired","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift"}]},
     {"id":"native.apple.0fc8bd5d7e83da87","source":"Gateway sign-in required","surface":"apple","sites":[{"kind":"ui-named-argument","path":"apps/macos/Sources/OpenClaw/DashboardWindowController.swift"}]},
     {"id":"native.apple.024a73b3efb66dc4","source":"Gateway startup","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/DebugSettings.swift"}]},

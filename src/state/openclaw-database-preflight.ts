@@ -136,7 +136,9 @@ export async function assertOpenClawDatabasesReady(
   for (const refusal of schemas.agentRefusals ?? []) {
     if (
       !options.config ||
-      (refusal.code === "agent-database-ownership-mismatch" &&
+      ((refusal.code === "agent-database-ownership-mismatch" ||
+        (options.operation === "gateway-startup" &&
+          refusal.code !== "agent-database-inspection-pending")) &&
         !canIsolateAgentDatabase(options.config, refusal.agentId))
     ) {
       throw new AgentDatabaseAdmissionError(refusal);

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
-import type { UsageCostTranscriptFile } from "./session-cost-usage-collection.js";
 import {
   projectCostUsageSummary,
   projectSessionCostSummaries,
@@ -15,6 +14,7 @@ import {
   createSessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
 import { createEmptyCostUsageTotals } from "./session-cost-usage-totals.js";
+import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const pricingFingerprint = "synthetic-pricing";
 const dayStart = Date.UTC(2026, 8, 18);

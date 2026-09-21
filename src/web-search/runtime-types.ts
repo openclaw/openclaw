@@ -25,6 +25,8 @@ export type ResolveWebSearchDefinitionParams = {
 export type RunWebSearchParams = ResolveWebSearchDefinitionParams & {
   args: Record<string, unknown>;
   signal?: AbortSignal;
+  /** Caller-owned synchronous authority check, repeated immediately before external requests. */
+  assertCurrent?: () => void;
 };
 
 /** Normalized execution result that records which provider answered. */

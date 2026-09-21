@@ -2,6 +2,7 @@ import {
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   type ControlUiEnvironment,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { currentThemeBranding, neutralMarkSvg } from "../components/neutral-mark.ts";
 import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
 
 export function applyControlUiPresentation(params: {
@@ -92,9 +93,16 @@ function resolveFaviconPalette() {
   const environmentColor = environment
     ? style.getPropertyValue(`--control-ui-environment-${environment.color}`).trim()
     : "";
-  const environmentSvg = environmentColor
-    ? `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><path fill="${environmentColor}" d="M60 10C30 10 15 35 15 55c0 20 15 40 30 45v10h10v-10h10v10h10v-10c15-5 30-25 30-45 0-20-15-45-45-45Z"/></svg>`)}`
-    : null;
+  const artwork =
+    currentThemeBranding().mascot === "none"
+      ? neutralMarkSvg({
+          fill: style.getPropertyValue("--primary").trim(),
+          glyph: style.getPropertyValue("--primary-foreground").trim(),
+        })
+      : environmentColor
+        ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><path fill="${environmentColor}" d="M60 10C30 10 15 35 15 55c0 20 15 40 30 45v10h10v-10h10v10h10v-10c15-5 30-25 30-45 0-20-15-45-45-45Z"/></svg>`
+        : null;
+  const baseSvg = artwork ? `data:image/svg+xml,${encodeURIComponent(artwork)}` : null;
   const light = root.dataset.themeMode === "light";
   const token = {
     attention: light ? "--session-color-orange" : "--warn",
@@ -105,16 +113,16 @@ function resolveFaviconPalette() {
   }[faviconStatus];
   const color = token ? style.getPropertyValue(token).trim() : "";
   const ring = style.getPropertyValue("--bg").trim();
-  return { environmentSvg, color, ring };
+  return { baseSvg, color, ring };
 }
 
-function syncControlUiFavicon(): void {
-  const { environmentSvg, color, ring } = (faviconPalette ??= resolveFaviconPalette());
+export function syncControlUiFavicon(): void {
+  const { baseSvg, color, ring } = (faviconPalette ??= resolveFaviconPalette());
   if (!color) {
     faviconSources.clear();
   }
   for (const icon of document.querySelectorAll<HTMLLinkElement>('link[rel="icon"]')) {
-    if (!environmentSvg && !color) {
+    if (!baseSvg && !color) {
       faviconRequests.delete(icon);
       if (icon.dataset.openclawOriginalFavicon) {
         restoreFavicon(icon, JSON.parse(icon.dataset.openclawOriginalFavicon));
@@ -122,6 +130,7 @@ function syncControlUiFavicon(): void {
       }
       continue;
     }
+    // Snapshot only the static asset; theme and environment bases are rebuilt from the palette.
     icon.dataset.openclawOriginalFavicon ??= JSON.stringify([
       icon.getAttribute("href"),
       icon.getAttribute("type"),
@@ -129,8 +138,8 @@ function syncControlUiFavicon(): void {
     const original: [string | null, string | null] = JSON.parse(
       icon.dataset.openclawOriginalFavicon,
     );
-    const href = environmentSvg ?? original[0];
-    const type = environmentSvg ? "image/svg+xml" : original[1];
+    const href = baseSvg ?? original[0];
+    const type = baseSvg ? "image/svg+xml" : original[1];
     const signature = JSON.stringify([href, type, color, ring]);
     if (faviconRequests.get(icon)?.signature === signature) {
       continue;

@@ -14,6 +14,10 @@ import {
   type ResolvedIdentityAvatar,
 } from "../lib/identity-avatar.ts";
 import "../styles/identity-avatar.css";
+import { resolveAvatarHat } from "./agent-avatar-hat.ts";
+import { icons } from "./icons.ts";
+import { currentThemeBranding } from "./neutral-mark.ts";
+import { AVATAR_HAT_SPRITES } from "./theme-flair-sprites.ts";
 
 type IdentityAvatarFallback = Extract<ResolvedIdentityAvatar, { kind: "initials" }>;
 
@@ -217,6 +221,15 @@ export function renderIdentityAvatarImage({
   />`;
 }
 
+export function renderAgentAvatarHat(agentId: string, branding = currentThemeBranding()) {
+  const hat = resolveAvatarHat(agentId, branding);
+  return hat
+    ? html`<span class=${`identity-avatar__hat identity-avatar__hat--${hat}`} aria-hidden="true"
+        >${AVATAR_HAT_SPRITES[hat]}</span
+      >`
+    : nothing;
+}
+
 /** Agent images and emoji share one fallback across every surface. */
 export function renderAgentIdentityAvatar(
   agent: {
@@ -229,7 +242,17 @@ export function renderAgentIdentityAvatar(
   className = "",
   onImageError?: () => void,
 ) {
+  const branding = currentThemeBranding();
   if (isReservedSystemAgentId(agent.id)) {
+    if (branding.mascot === "none") {
+      return html`<span
+        class=${`identity-avatar--agent identity-avatar--neutral ${className}`}
+        role=${agent.name ? "img" : nothing}
+        aria-label=${agent.name ?? nothing}
+        aria-hidden=${agent.name ? nothing : "true"}
+        >${icons.mark}</span
+      >`;
+    }
     return html`<img
       class=${`identity-avatar--agent ${className}`}
       src=${inferControlUiPublicAssetPath("favicon.svg")}
@@ -263,5 +286,6 @@ export function renderAgentIdentityAvatar(
         ),
       )}
     </span>
+    ${agent.pending ? nothing : renderAgentAvatarHat(agent.id, branding)}
   </span>`;
 }

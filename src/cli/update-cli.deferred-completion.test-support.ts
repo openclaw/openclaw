@@ -18,6 +18,9 @@ export const observeUpdateGatewayReadiness =
   vi.fn<typeof import("./update-cli/update-command-readiness.js").observeUpdateGatewayReadiness>();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
 const sqliteHostPlatform = process.platform;
+const sourceRuntimeCompletion = vi.hoisted(() =>
+  vi.fn<typeof import("./update-cli/update-command-runtime.js").completeSourceUpdateRuntime>(),
+);
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -32,9 +35,12 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: runtimeCapture,
 }));
-vi.mock("../infra/update-runner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/update-runner.js")>()),
-  runGatewayUpdate: vi.fn(),
+vi.mock("../infra/update-runner-git.js", () => ({
+  updateGitCheckout: vi.fn(),
+}));
+// Runtime publication has its own fixture; this suite owns deferred completion and config writes.
+vi.mock("./update-cli/update-command-runtime.js", () => ({
+  completeSourceUpdateRuntime: sourceRuntimeCompletion,
 }));
 vi.mock("../infra/update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-check.js")>()),
@@ -181,7 +187,7 @@ const windowsPrivateDirectory = await import("../infra/windows-private-directory
 const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
 const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
-export const { runGatewayUpdate } = await import("../infra/update-runner.js");
+export const { updateGitCheckout } = await import("../infra/update-runner-git.js");
 export const { runExec, runCommandWithTimeout } = await import("../process/exec.js");
 export const { defaultRuntime, ExitError } = await import("../runtime.js");
 export const { readConfigFileSnapshot, replaceConfigFile, mutateConfigFileWithRetry } =
@@ -452,6 +458,7 @@ export function installDeferredCompletionFixture() {
     tempHome = await createTempHomeEnv("openclaw-deferred-completion-");
     fixtureRoot = dirs.make("openclaw-deferred-completion-fixtures-");
     vi.resetAllMocks();
+    sourceRuntimeCompletion.mockResolvedValue({ changed: false });
     resetRuntimeCapture();
     for (const key of [
       "OPENCLAW_COMPATIBILITY_HOST_VERSION",
@@ -503,7 +510,9 @@ export function installDeferredCompletionFixture() {
     vi.mocked(runCommandWithTimeout).mockRejectedValue(
       new Error("Completion must not run a core install"),
     );
-    vi.mocked(runGatewayUpdate).mockRejectedValue(new Error("Completion must not run core update"));
+    vi.mocked(updateGitCheckout).mockRejectedValue(
+      new Error("Completion must not run core update"),
+    );
     spawn.mockImplementation(() => {
       throw new Error("Completion must not spawn core update");
     });

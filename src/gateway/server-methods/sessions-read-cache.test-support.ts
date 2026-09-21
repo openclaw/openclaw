@@ -57,14 +57,30 @@ export function initializeSessionReadContext(context: GatewayRequestContext) {
       context,
       placementFactsReader: placements
         ? {
-            getProjectionFacts(sessionId) {
+            async readProjection(sessionIds) {
+              const records = placements.getMany(sessionIds);
+              const environments = new Map();
+              for (const placement of records.values()) {
+                const environmentId = placement.environmentId;
+                const environment = environmentId
+                  ? context.workerEnvironmentService?.get(environmentId)
+                  : undefined;
+                if (environmentId && environment) {
+                  environments.set(environmentId, {
+                    ...environment,
+                    environmentId,
+                    profileSnapshot: { settings: {} },
+                    nodeDeviceId: environment.nodeDeviceId ?? null,
+                    attachedSessionIds: [...(environment.attachedSessionIds ?? [])],
+                  });
+                }
+              }
               return {
-                placement: placements.getMany([sessionId]).get(sessionId),
-                move: placements.getPlacementMoves?.([sessionId]).get(sessionId),
-                workspaceResultReconciling:
-                  placements
-                    .getWorkspaceResultReconcilingSessionIds?.([sessionId])
-                    .has(sessionId) ?? false,
+                placements: records,
+                moves: placements.getPlacementMoves?.(sessionIds) ?? new Map(),
+                workspaceResultReconcilingSessionIds:
+                  placements.getWorkspaceResultReconcilingSessionIds?.(sessionIds) ?? new Set(),
+                environments,
               };
             },
           }

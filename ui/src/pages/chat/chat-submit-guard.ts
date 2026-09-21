@@ -50,7 +50,9 @@ export async function withChatSubmitHandoff(
     !options.pendingSettings &&
     queued.sendState === "waiting-idle" &&
     (queued.queueMode ||
-      ((options.allowActiveRunSend || (!isChatBusy(host) && !hasDirectSessionRun(host))) &&
+      (options.allowActiveRunSend && !queued.intent) ||
+      (!isChatBusy(host) &&
+        !hasDirectSessionRun(host) &&
         host.chatQueue.find((item) => item.sendState !== "failed" || item.localCommandName)?.id ===
           queued.id));
   // Admission is durable, but delivery has not made a transport attempt yet.

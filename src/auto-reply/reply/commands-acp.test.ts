@@ -76,23 +76,22 @@ const hoisted = vi.hoisted(() => {
 });
 
 function createAcpCommandSessionBindingService() {
-  const forward =
-    <A extends unknown[], T>(fn: (...args: A) => T) =>
-    (...args: A) =>
-      fn(...args);
   return {
     bind: (input: unknown) => hoisted.sessionBindingBindMock(input),
-    getCapabilities: forward((params: unknown) => hoisted.sessionBindingCapabilitiesMock(params)),
-    inspectByConversation: (
+    getCapabilities: (params: unknown) => hoisted.sessionBindingCapabilitiesMock(params),
+    inspectByConversationAsync: async (
       ref: unknown,
-    ): { status: "available"; binding: SessionBindingRecord | null } => ({
+    ): Promise<{ status: "available"; binding: SessionBindingRecord | null }> => ({
       status: "available",
       binding: hoisted.sessionBindingResolveByConversationMock(ref),
     }),
     listBySession: (targetSessionKey: string) =>
       hoisted.sessionBindingListBySessionMock(targetSessionKey),
     resolveByConversation: (ref: unknown) => hoisted.sessionBindingResolveByConversationMock(ref),
+    resolveByConversationAsync: async (ref: unknown) =>
+      hoisted.sessionBindingResolveByConversationMock(ref),
     touch: vi.fn(),
+    touchAsync: vi.fn(async () => {}),
     unbind: (input: unknown) => hoisted.sessionBindingUnbindMock(input),
   };
 }
@@ -141,11 +140,10 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
   const actual = await vi.importActual<
     typeof import("../../infra/outbound/session-binding-service.js")
   >("../../infra/outbound/session-binding-service.js");
-  const patched = { ...actual } as typeof actual & {
-    getSessionBindingService: () => ReturnType<typeof createAcpCommandSessionBindingService>;
-  };
-  patched.getSessionBindingService = () => createAcpCommandSessionBindingService();
-  return patched;
+  return {
+    ...actual,
+    getSessionBindingService: createAcpCommandSessionBindingService,
+  } satisfies typeof actual;
 });
 
 const { handleAcpCommand } = await import("./commands-acp.js");

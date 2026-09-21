@@ -75,6 +75,10 @@ const projection = {
     return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
   },
   ensureMaterialized: async () => {},
+  withPreparedExactRows: (async (queries, consume) => {
+    queries(runtimeConfigState.value);
+    return { kind: "complete", value: consume(projection) };
+  }) satisfies SessionRowProjection["withPreparedExactRows"],
   isCurrent: () => true,
   selectEntries(query: { key?: string; agentId?: string; storePath?: string }) {
     if (!query.key) {

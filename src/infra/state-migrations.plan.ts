@@ -242,6 +242,7 @@ export function createLegacyStateMigrationPlan(params: {
   snapshot: LegacyStateMigrationPlan["snapshot"];
   steps: readonly PreparedLegacyStateMigrationStep[];
   warnings?: readonly string[];
+  advisoryWarnings?: readonly string[];
   refusal?: { code: string; message: string };
 }): LegacyStateMigrationPlan {
   // This planner does not own staged package bytes. Keep every result closed until
@@ -284,15 +285,15 @@ export function createLegacyStateMigrationPlan(params: {
             : "planned",
     };
   });
-  const warnings = [...(params.warnings ?? [])];
+  const warnings = [...(params.warnings ?? []), ...(params.advisoryWarnings ?? [])];
   const candidateRefusal =
     candidate.artifact.outcome === "deferred" ? candidate.artifact.refusal : undefined;
   const refusal =
     params.refusal ??
-    (warnings.length > 0
+    (params.warnings?.length
       ? {
           code: "migration-planning-warning",
-          message: warnings.join("\n"),
+          message: params.warnings.join("\n"),
         }
       : candidateRefusal);
   const plan = {

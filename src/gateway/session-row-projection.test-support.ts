@@ -162,10 +162,10 @@ export function createSessionRowProjectionFixture(params: {
       const source = describe(row)!.materialized.source;
       return { ...source, catalogEntry: source.thinkingProjection.catalogEntry };
     },
-    withPreparedExactRows: async (_queries, consume) => ({
-      kind: "complete",
-      value: consume(projection),
-    }),
+    withPreparedExactRows: async (queries, consume) => {
+      queries(cfg);
+      return { kind: "complete", value: consume(projection) };
+    },
     present: (record, options) => {
       const now = options?.now ?? Date.now();
       const row = presentSessionRow(record.materialized, {

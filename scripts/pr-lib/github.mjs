@@ -1,8 +1,6 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { execGhRead, execPlainGh } from "../lib/plain-gh.mjs";
 import {
@@ -10,6 +8,7 @@ import {
   isCoreQuotaExhausted,
   parseGithubResponse,
   rateLimitRetryGuidance,
+  readWriterLogin,
 } from "./gh-api-preflight.mjs";
 
 function githubAccessFailure(error) {
@@ -480,11 +479,7 @@ function writerLogin(host) {
     response = `${error.stdout ?? ""}${error.stderr ?? ""}`;
     status = error.status || 1;
   }
-  return execFileSync(
-    process.execPath,
-    [fileURLToPath(new URL("./gh-api-preflight.mjs", import.meta.url)), String(status)],
-    { input: response, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
-  ).trim();
+  return readWriterLogin(status, response).trim();
 }
 
 function readAuthorPermission(repo, login, route) {
@@ -709,7 +704,27 @@ export function createPrMetadataReader(repository) {
   let repo;
   return (pr, fields, readOptions = () => ({})) => {
     repo ??= repositoryLocator(repository, "read", readOptions);
-    return readPr(repo, String(pr), fields, "read", { readOptions, revalidate: true });
+    return readPr(repo, String(pr), fields, "read", { readOptions });
+  };
+}
+
+function commitAuthor(author, account, changesTree) {
+  if (
+    typeof author?.name !== "string" ||
+    typeof author.email !== "string" ||
+    (account !== null &&
+      (typeof account?.login !== "string" ||
+        !account.login ||
+        typeof account.type !== "string" ||
+        !account.type))
+  ) {
+    throw invalidMetadata("Cannot establish the requested source commit author.");
+  }
+  return {
+    name: author.name,
+    email: author.email,
+    user: account === null ? null : { login: account.login, type: account.type },
+    changesTree,
   };
 }
 
@@ -755,25 +770,10 @@ function readCommitAuthorsRest(repository, hostname, commits, route) {
       if (!source) {
         continue;
       }
-      const author = commit.commit?.author;
-      const account = commit.author;
-      if (
-        typeof author?.name !== "string" ||
-        typeof author.email !== "string" ||
-        (account !== null &&
-          (typeof account?.login !== "string" ||
-            !account.login ||
-            typeof account.type !== "string" ||
-            !account.type))
-      ) {
-        throw invalidMetadata("Cannot establish the requested source commit author.");
-      }
-      authors.set(commit.sha, {
-        name: author.name,
-        email: author.email,
-        user: account === null ? null : { login: account.login, type: account.type },
-        changesTree: source.changesTree,
-      });
+      authors.set(
+        commit.sha,
+        commitAuthor(commit.commit?.author, commit.author, source.changesTree),
+      );
       remaining.delete(commit.sha);
       resolved += 1;
     }
@@ -811,26 +811,17 @@ function readCommitAuthors(repository, hostname, commits, route) {
         ).repository;
         for (const [index, source] of batch.entries()) {
           const commit = data?.[`commit${index}`];
-          const author = commit?.author;
-          const account = author?.user;
-          if (
-            commit?.oid !== source.oid ||
-            typeof author?.name !== "string" ||
-            typeof author.email !== "string" ||
-            (account !== null &&
-              (typeof account?.login !== "string" ||
-                !account.login ||
-                typeof account.__typename !== "string" ||
-                !account.__typename))
-          ) {
+          if (commit?.oid !== source.oid) {
             throw invalidMetadata("Cannot establish the requested source commit author.");
           }
-          result.push({
-            name: author.name,
-            email: author.email,
-            user: account === null ? null : { login: account.login, type: account.__typename },
-            changesTree: source.changesTree,
-          });
+          const account = commit.author?.user;
+          result.push(
+            commitAuthor(
+              commit.author,
+              account === null ? null : { login: account?.login, type: account?.__typename },
+              source.changesTree,
+            ),
+          );
         }
       }
       return result;

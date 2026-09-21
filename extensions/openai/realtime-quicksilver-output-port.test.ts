@@ -29,12 +29,13 @@ function gateway(
 
 describe("GPT-Live direct output endpoint ownership", () => {
   it("keeps the endpoint out of failed socket attempts and binds the adopted socket", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const { port1, port2 } = new MessageChannel();
     const state = new SharedArrayBuffer(4);
     const sockets: FakeSocket[] = [];
     const boundAttempts: number[] = [];
     const create = fakeQuicksilverMediaSocket(() => {
-      const socket = new FakeSocket(sockets.length ? "open" : "error");
+      const socket = new FakeSocket("manual");
       sockets.push(socket);
       return socket;
     });
@@ -47,10 +48,23 @@ describe("GPT-Live direct output endpoint ownership", () => {
       };
       return socket;
     });
+    let connecting: Promise<void> | undefined;
     try {
       bridge.setAudioOutputPort({ port: port1, state });
-      const connecting = bridge.connect();
-      await vi.waitFor(() => expect(sockets[1]?.sent).toHaveLength(1));
+      connecting = bridge.connect();
+      void connecting.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sockets).toHaveLength(1);
+      expect(boundAttempts).toEqual([]);
+      sockets[0]!.emit("error", new Error("first attempt failed"));
+      await vi.advanceTimersByTimeAsync(200);
+      expect(sockets[0]!.closed).toBe(true);
+      expect(sockets).toHaveLength(2);
+      expect(boundAttempts).toEqual([]);
+      sockets[1]!.readyState = 1;
+      sockets[1]!.emit("open");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sockets[1]!.sent).toHaveLength(1);
       expect(boundAttempts).toEqual([2]);
       expect(Atomics.load(new Int32Array(state), 0)).toBe(0);
       emitSideband(sockets[1]!, { type: "session.started", session: {} });
@@ -63,14 +77,19 @@ describe("GPT-Live direct output endpoint ownership", () => {
       emitSideband(sockets[1]!, { type: "session.closed", reason: "close_requested" });
       await closing;
     } finally {
-      for (const socket of sockets) {
-        if (!socket.closed) {
-          emitSideband(socket, { type: "session.closed", reason: "close_requested" });
+      try {
+        const closing = bridge.close();
+        for (const socket of sockets) {
+          if (!socket.closed) {
+            emitSideband(socket, { type: "session.closed", reason: "close_requested" });
+          }
         }
+        await Promise.allSettled([connecting, closing]);
+      } finally {
+        port1.close();
+        port2.close();
+        vi.useRealTimers();
       }
-      await Promise.allSettled([bridge.close()]);
-      port1.close();
-      port2.close();
     }
   });
 

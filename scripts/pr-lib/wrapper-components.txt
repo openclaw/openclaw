@@ -459,6 +459,7 @@ src/config/validation.types.ts
 src/config/value-tree.ts
 src/config/version.ts
 src/config/web-search-legacy-provider-keys.ts
+src/config/write-authority.ts
 src/config/write-lock.ts
 src/config/zod-schema.agent-defaults-base.ts
 src/config/zod-schema.agent-defaults.ts
@@ -468,6 +469,7 @@ src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.agents.ts
 src/config/zod-schema.allowdeny.ts
 src/config/zod-schema.approvals.ts
+src/config/zod-schema.channel-bot-loop.ts
 src/config/zod-schema.channels-config.ts
 src/config/zod-schema.channels.ts
 src/config/zod-schema.cloud-workers.ts
@@ -531,6 +533,7 @@ src/infra/abort-signal.ts
 src/infra/acquire-with-wait.ts
 src/infra/approval-resolution-ref.ts
 src/infra/backoff.ts
+src/infra/backup-scratch.ts
 src/infra/boundary-file-read.ts
 src/infra/boundary-path.ts
 src/infra/bun-sqlite-library.ts
@@ -621,6 +624,7 @@ src/infra/lifecycle-write-custody.ts
 src/infra/map-size.ts
 src/infra/net/configured-local-origin-bypass.ts
 src/infra/net/fetch-guard.ts
+src/infra/net/fetch-request-authority.ts
 src/infra/net/form-data.ts
 src/infra/net/guarded-body-stream.ts
 src/infra/net/hostname.ts
@@ -707,13 +711,16 @@ src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-snapshot-source.ts
 src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
+src/infra/sqlite-snapshot-wal-prefix.ts
 src/infra/sqlite-source-handle.ts
+src/infra/sqlite-staging-token.ts
 src/infra/sqlite-store.worker.ts
 src/infra/sqlite-strict.ts
 src/infra/sqlite-terminal-open-latch.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
+src/infra/sqlite-wal-reclamation.ts
 src/infra/sqlite-wal-split-brain.ts
 src/infra/sqlite-wal-write-admission.ts
 src/infra/sqlite-wal.ts
@@ -774,6 +781,7 @@ src/infra/windows-port-pids.ts
 src/infra/windows-private-directory.ts
 src/infra/windows-process-start.ts
 src/infra/worker-cpu.ts
+src/infra/worker-idle-gc.ts
 src/infra/worker-task-capacity.ts
 src/infra/worker-task-native-sections.ts
 src/infra/worker-task-pool-completion.ts
@@ -863,6 +871,7 @@ src/plugins/current-plugin-metadata-state.ts
 src/plugins/default-enablement.ts
 src/plugins/dev-source-root.ts
 src/plugins/discovery-availability.ts
+src/plugins/discovery-required-plugins.ts
 src/plugins/discovery.ts
 src/plugins/doctor-contract-artifact.ts
 src/plugins/doctor-contract-module.ts
@@ -1192,6 +1201,7 @@ src/state/openclaw-state-schema.sql
 src/state/openclaw-state-schema.ts
 src/state/openclaw-state-worker-context.ts
 src/state/openclaw-state-worker-error.ts
+src/state/openclaw-state-worker-operation.ts
 src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts

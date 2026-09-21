@@ -1,3 +1,4 @@
+import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export type {
@@ -16,6 +17,12 @@ export type {
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
+export type SessionTranscriptContextVersion = {
+  generation: string | null;
+  rawSeq: number | null;
+  updatedAt: number | null;
+};
+
 export type CanonicalSessionValidationResult = {
   validatedRows: number;
   certifiedRows: number;
@@ -33,6 +40,7 @@ export type SqliteSessionReclamationDiagnostics = {
     | "maintenance-plan"
     | "maintenance-finalize"
     | "maintenance-statistics"
+    | "maintenance-pages"
     | "cold-batch"
     | "cold-maintain"
     | "cold-restore";
@@ -75,6 +83,11 @@ export type SqliteSessionArchivePruningDiagnostics = {
   asyncAdmissions?: number;
   checkpointCalls?: number;
   checkpointIncomplete?: number;
+  checkpoint?: SqliteWalHealth;
+  totalBytesBefore?: number;
+  totalBytesAfter?: number;
+  walBytesBefore?: number;
+  walBytesAfter?: number;
   checkpointMs?: number;
   checkpointMaxMs?: number;
   vacuumMs?: number;

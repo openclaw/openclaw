@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { UsageCostTranscriptFile } from "./session-cost-usage-collection.js";
 import type { SessionUsageRollupData } from "./session-cost-usage-rollup.js";
+import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.

@@ -701,4 +701,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["themes.import", "themes", "operator.write", "2026.9"],
   ["controlUi.githubDetail", "control-ui", "operator.read", "2026.9"],
   ["progressCard.refresh", "progress-card", "operator.write", "2026.9"],
+  ["webSearch.status", "web-search", "operator.read", "2026.9"],
+  ["webSearch.test", "web-search", "operator.admin", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

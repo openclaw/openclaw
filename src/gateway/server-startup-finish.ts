@@ -30,6 +30,7 @@ import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
 import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
 import { createRequiredSharedGatewaySessionGenerationReader } from "./server-shared-auth-generation.js";
+import { logGatewayReady } from "./server-startup-readiness.js";
 import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
 import { collectGatewayWorkerPoolMetrics } from "./server/process-vitals.js";
@@ -153,6 +154,7 @@ export async function finishGatewayStartup(params: {
   } = runtime;
   const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
   const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
+  const getReadiness = runtime.createHttpTransportOptions().getReadiness;
   const { attachGatewayWsConnectionHandler } = await startupTrace.measure(
     "gateway.ws-imports",
     () => import("./server/ws-connection.js"),
@@ -359,6 +361,7 @@ export async function finishGatewayStartup(params: {
             kernel.markSidecarsReady();
             activateScheduledServicesWhenReady();
           },
+          getReadiness,
           isClosing: () => lifecycle.closePreludeStarted,
           startupTrace,
           sidecarStartup,
@@ -369,7 +372,7 @@ export async function finishGatewayStartup(params: {
     ),
   );
   kernel.setPostAttachHandles(postAttachHandles);
-  if (databaseStartupAdmission) {
+  if (databaseStartupAdmission && !opts.updateCanary) {
     void postAttachHandles.startupSettled
       .then(() => {
         if (!lifecycle.closePreludeStarted) {
@@ -391,9 +394,11 @@ export async function finishGatewayStartup(params: {
     ...collectGatewayProcessMemoryUsageMb(),
     ...(minimalTestGateway ? [] : await collectGatewayWorkerPoolMetrics()),
   ]);
-  startupTrace.mark("ready");
-  if (sidecarStartup === "defer") {
-    log.info("gateway ready");
+  if (getReadiness().ready) {
+    startupTrace.mark("ready");
+    if (sidecarStartup === "defer") {
+      logGatewayReady({ getReadiness, log });
+    }
   }
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
   if (opts.updateCanary) {

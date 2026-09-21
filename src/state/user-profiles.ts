@@ -9,7 +9,6 @@ import {
   type UserProfile as UserProfileListItem,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
-import { generateSecureUuid } from "../infra/secure-random.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   MAX_USER_PROFILE_AVATAR_BYTES,
@@ -22,6 +21,11 @@ import {
 } from "./openclaw-state-db.js";
 import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
 import {
+  ensureProfileForEmailInDatabase,
+  insertUserProfile,
+  normalizeProfileEmail as normalizeEmail,
+} from "./user-profile-email.kernel.js";
+import {
   applyVerifiedGitHubIdentity,
   githubAuthenticationSubject,
   selectUserProfileGitHubIdentities,
@@ -32,7 +36,6 @@ import {
   selectResolvedUserProfileMetadataById,
   toUserProfile,
   type UserProfile,
-  type UserProfileRow,
   userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
@@ -52,7 +55,10 @@ import {
   classifyTailscaleLogin,
   type TailscaleProfileIdentity,
 } from "./user-profiles-tailscale-login.js";
-import type { UserProfileAvatarMime } from "./user-profiles.types.js";
+import {
+  MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
+  type UserProfileAvatarMime,
+} from "./user-profiles.types.js";
 
 export { formatUserProfileAvatarEtag, getProfileAvatar } from "./user-profiles-internal.js";
 export {
@@ -74,38 +80,9 @@ type UserProfileAvatarError =
 
 export { UserProfileNotFoundError };
 
-const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
-
-function normalizeEmail(email: string): string {
-  const normalized = email.trim().toLowerCase();
-  if (!normalized) {
-    throw new TypeError("email must not be empty");
-  }
-  return normalized;
-}
-
 function normalizeInitialDisplayName(name: string | null | undefined): string | null {
   const normalized = name?.trim();
   return normalized ? truncateUtf16Safe(normalized, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH) : null;
-}
-
-function insertUserProfile(
-  db: DatabaseSync,
-  displayName: string | null,
-  now: number,
-): UserProfileRow {
-  const row: UserProfileRow = {
-    id: generateSecureUuid(),
-    display_name: displayName,
-    avatar: null,
-    avatar_mime: null,
-    avatar_sha256: null,
-    merged_into: null,
-    created_at: now,
-    updated_at: now,
-  };
-  executeSqliteQuerySync(db, userProfilesDb(db).insertInto("user_profiles").values(row));
-  return row;
 }
 
 function selectUserProfileListItemById(db: DatabaseSync, profileId: string): UserProfileListItem {
@@ -231,31 +208,8 @@ function ensureProfileForEmailWithInitialName(
     return found;
   }
   const now = Date.now();
-  const displayName =
-    initialDisplayName ??
-    truncateUtf16Safe(
-      normalizedEmail.split("@", 1)[0] || normalizedEmail,
-      MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
-    );
   return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const existing = selectExistingProfile(db);
-      if (existing) {
-        return existing;
-      }
-      const kysely = userProfilesDb(db);
-      const row = insertUserProfile(db, displayName, now);
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("user_profile_emails").values({
-          email: normalizedEmail,
-          profile_id: row.id,
-          created_at: now,
-        }),
-      );
-      publishUserProfilesChange(db, row.id);
-      return toUserProfile(row);
-    },
+    ({ db }) => ensureProfileForEmailInDatabase(db, normalizedEmail, initialDisplayName, now),
     options,
     { operationLabel: "user-profiles.ensure" },
   );

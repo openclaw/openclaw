@@ -190,9 +190,10 @@ shutdown deadline. A shorter supervisor timeout also caps requested restart wait
 The drained work, ordering, and interruption behavior stay the same.
 
 Service-child cleanup uses the remaining Gateway shutdown budget, leaving time
-for final exit bookkeeping. A forced restart handed to a supervisor skips active-work
-drain but retains the 10-second cleanup reserve; it does not start a fresh
-85-second wait. A restart without a supervisor handoff uses the existing shutdown
+for final exit bookkeeping. A forced restart drains admitted work within the same
+budget. When the restart scheduler has already exhausted its deferral budget,
+cleanup retains the 10-second reserve without starting a second drain.
+A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
 launch their own replacement. Cgroup membership alone does not provide a supervisor
@@ -433,6 +434,13 @@ older code after a newer release has migrated configuration or databases. See
 Copying one does not grant permission to restart a service.
 
 ## How interrupted work is detected
+
+Startup reconciles older subagent session rows that still say `running` but have
+no live run, task, admission, or recovery owner. It records a diagnostic transcript
+receipt and marks the row `interrupted` in one transaction. The end timestamp records when
+startup observed the interruption, rather than an inferred execution finish time;
+the original activity timestamps remain intact. A failed receipt write becomes a
+warning and leaves the row eligible for a later repair.
 
 Three complementary mechanisms mark sessions whose turn did not finish:
 

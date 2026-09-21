@@ -8,10 +8,18 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { SessionManager } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 
 function buildAssistantMessage(text: string) {
   return {
@@ -152,8 +160,8 @@ describe("SessionManager user idempotency", () => {
       now: 2,
       parentId: "existing-assistant",
     });
-    const modelChangeId = sessionManager.appendModelChange("openai", "gpt-5.5");
-    const thinkingId = sessionManager.appendThinkingLevelChange("off");
+    const modelChangeId = await sessionManager.appendModelChange("openai", "gpt-5.5");
+    const thinkingId = await sessionManager.appendThinkingLevelChange("off");
     const metadataId = sessionManager.appendCustomEntry("model-snapshot", {
       modelApi: "openai-responses",
       modelId: "gpt-5.5",
@@ -222,8 +230,8 @@ describe("SessionManager user idempotency", () => {
         maxBytes: 100_000,
         maxEvents: 100,
       });
-      sessionManager.appendModelChange("openai", "gpt-5.5");
-      sessionManager.appendThinkingLevelChange("off");
+      await sessionManager.appendModelChange("openai", "gpt-5.5");
+      await sessionManager.appendThinkingLevelChange("off");
       const metadataId = sessionManager.appendCustomEntry("model-snapshot", {
         modelApi: "openai-responses",
         modelId: "gpt-5.5",

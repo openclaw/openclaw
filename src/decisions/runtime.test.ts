@@ -415,7 +415,8 @@ describe("numerical contract", () => {
 describe("fault settlement and generation health", () => {
   it.each([
     { timeoutMs: 10, deadlineMs: 10 },
-    { timeoutMs: 20_000, deadlineMs: 10_000 },
+    { timeoutMs: 20_000, deadlineMs: 20_000 },
+    { timeoutMs: 60_000, deadlineMs: 30_000 },
   ])(
     "joins a deadline-aborted callback after $deadlineMs ms for a $timeoutMs ms request",
     async ({ timeoutMs, deadlineMs }) => {

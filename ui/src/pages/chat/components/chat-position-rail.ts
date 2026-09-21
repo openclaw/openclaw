@@ -245,7 +245,8 @@ class ChatPositionRailDirective extends AsyncDirective {
               message.visible = entry.isIntersecting && entry.intersectionRatio > 0;
             }
           }
-          this.syncVisibleMarks();
+          // Publish current position, retained markers, and Tab entry in one layout commit.
+          this.scheduleLayout();
         },
         { root, threshold: [0, Number.EPSILON, 1] },
       );
@@ -407,6 +408,7 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.markerElements.get(this.activeId ?? "")?.setAttribute("aria-current", "false");
       this.activeId = activeId;
       this.markerElements.get(activeId ?? "")?.setAttribute("aria-current", "true");
+      this.syncTabStop();
       if (!this.followingResize) {
         this.followActive = true;
       }

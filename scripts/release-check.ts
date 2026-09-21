@@ -348,18 +348,6 @@ function execPnpm(
   return runReleaseCheckCommand(invocation, options);
 }
 
-function inspectPackedTarball(tarballPath: string): NpmPackResult[] {
-  const raw = execNpm(
-    ["pack", tarballPath, "--dry-run", "--json", "--ignore-scripts", "--offline"],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 1024 * 1024 * 100,
-    },
-  );
-  return expectDefined(parseNpmPackJsonOutput(raw), "npm pack tarball contents receipt");
-}
-
 function runPack(packDestination: string, cwd?: string): NpmPackResult[] {
   const raw = execPnpm(["pack", "--json", "--pack-destination", packDestination], {
     cwd,
@@ -1362,10 +1350,23 @@ async function main() {
     const tarballPath = values.tarball
       ? resolve(values.tarball)
       : await packRootPackage(temporaryDir);
-    const results = inspectPackedTarball(tarballPath);
     const packedDir = join(temporaryDir, "unpacked");
     mkdirSync(packedDir);
-    await extract({ cwd: packedDir, file: tarballPath, strict: true, preservePaths: false });
+    const files: { path: string }[] = [];
+    let unpackedSize = 0;
+    await extract({
+      cwd: packedDir,
+      file: tarballPath,
+      strict: true,
+      preservePaths: false,
+      // npm derives this receipt from tar entries too. Reuse extraction so
+      // prepared-artifact inspection cannot stall in an extra npm process.
+      onReadEntry(entry) {
+        files.push({ path: entry.path.replace(/^package\//u, "") });
+        unpackedSize += entry.size;
+      },
+    });
+    const results: NpmPackResult[] = [{ filename: basename(tarballPath), files, unpackedSize }];
     const packedRoot = join(packedDir, "package");
     const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
     const packedPackage = JSON.parse(readFileSync(join(packedRoot, "package.json"), "utf8"));

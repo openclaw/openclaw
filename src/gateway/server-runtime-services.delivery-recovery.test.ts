@@ -169,7 +169,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
   await vi.dynamicImportSettled();
   await Promise.all(admittedWork.mock.results.map((result) => result.value));
   expect(attempts).toHaveLength(2);
-  expect(findDeliveryIntentOwner(queueId, undefined, contextA)).toMatchObject({
+  expect(await findDeliveryIntentOwner(queueId, undefined, contextA)).toMatchObject({
     status: "completed",
   });
   expect(attempts[1]).toEqual({ text: firstAttempt.text, stateDir: rootB });
@@ -181,7 +181,7 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
     completionRetention: "permanent",
     recoveryState: "completed_permanent",
   });
-  expect(findDeliveryIntentOwner(queueId, rootB)).toBeNull();
+  expect(await findDeliveryIntentOwner(queueId, rootB)).toBeNull();
   await vi.advanceTimersByTimeAsync(5_000);
   await vi.dynamicImportSettled();
   await Promise.all(admittedWork.mock.results.map((result) => result.value));

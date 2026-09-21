@@ -10,6 +10,7 @@ const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
 type WorkingPhraseElement = HTMLElement & {
   startMs: number | null;
   seed: string;
+  phrases: readonly string[] | undefined;
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
 };
@@ -48,6 +49,46 @@ describe("openclaw-working-phrase", () => {
 
   it("stays silent before the quiet threshold", async () => {
     expect(await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS - 5_000)).toBe("");
+  });
+
+  it.each([3, 4, 6, 8, 10, 12, 24])(
+    "walks all %i authored phrases without translation and restores the default vocabulary",
+    async (length) => {
+      const defaultPhrase = await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS);
+      const phrases = Array.from({ length }, (_, index) => `Phrase ${index + 1}`);
+      element.phrases = phrases;
+      const displayed = new Set<string>();
+      for (let bucket = 0; bucket < phrases.length; bucket++) {
+        displayed.add(
+          await textAt(
+            element,
+            WORKING_PHRASE_SHOW_AFTER_MS + bucket * WORKING_PHRASE_ROTATE_EVERY_MS,
+          ),
+        );
+      }
+      expect(displayed).toEqual(new Set(phrases.map((phrase) => `· ${phrase}…`)));
+      element.phrases = undefined;
+      expect(await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS)).toBe(defaultPhrase);
+    },
+  );
+
+  it("renders nothing for an empty authored list", async () => {
+    element.phrases = [];
+    expect(
+      await textAt(element, WORKING_PHRASE_SHOW_AFTER_MS + WORKING_PHRASE_ROTATE_EVERY_MS),
+    ).toBe("");
+  });
+
+  it("keeps a single authored phrase across rotations", async () => {
+    element.phrases = ["Building"];
+    for (const bucket of [0, 1, 100_000]) {
+      expect(
+        await textAt(
+          element,
+          WORKING_PHRASE_SHOW_AFTER_MS + bucket * WORKING_PHRASE_ROTATE_EVERY_MS,
+        ),
+      ).toBe("· Building…");
+    }
   });
 
   it("is stable within a rotation and changes across rotations", async () => {

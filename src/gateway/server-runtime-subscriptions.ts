@@ -34,7 +34,11 @@ import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
-import { markChatAbortTerminalPersistenceError } from "./chat-abort-lifecycle-internal.js";
+import {
+  bindChatAbortTerminalDispatch,
+  markChatAbortTerminalPersistenceError,
+  type ChatAbortTerminalDispatch,
+} from "./chat-abort-lifecycle-internal.js";
 import {
   type ChatAbortControllerEntry,
   removeChatAbortControllerEntry,
@@ -69,7 +73,7 @@ function dispatchEventHandler<TEvent>(params: {
   log: SubsystemLogger;
   failureMessage: string;
   context: Record<string, unknown>;
-  onFailure?: () => void;
+  onFailure?: (error: unknown) => void;
 }) {
   return runWithRetainedGatewayRootWork(() =>
     params
@@ -78,7 +82,7 @@ function dispatchEventHandler<TEvent>(params: {
       .then(() => undefined)
       .catch((error: unknown) => {
         params.log.warn(params.failureMessage, { ...params.context, error });
-        params.onFailure?.();
+        params.onFailure?.(error);
       }),
   );
 }
@@ -465,6 +469,7 @@ export function startGatewayEventSubscriptions(params: {
     }
     let failedDispatchCleanup: (() => void) | undefined;
     let terminalPreparation: Promise<void> | undefined;
+    let terminalEntries: ChatAbortControllerEntry[] | undefined;
     sessionObserver.handleEvent(evt);
     sessionActivitySummaries.handleEvent(evt);
     if (auditEnabled) {
@@ -495,6 +500,7 @@ export function startGatewayEventSubscriptions(params: {
         ) {
           entry.projectSessionTerminalPending = true;
           entry.projectSessionTerminalObservedAt = observedAt;
+          (terminalEntries ??= []).push(entry);
         }
       }
       const trackedEntry = candidateRunIds
@@ -608,6 +614,9 @@ export function startGatewayEventSubscriptions(params: {
       }
     }
     const dispatchPreparation = terminalPreparation;
+    const terminalDispatch: Pick<ChatAbortTerminalDispatch, "failure"> | undefined = terminalEntries
+      ? {}
+      : undefined;
     const dispatch = dispatchEventHandler<AgentEventRuntimePayload>({
       loadHandler: dispatchPreparation
         ? async () => {
@@ -619,8 +628,14 @@ export function startGatewayEventSubscriptions(params: {
       log: params.log,
       failureMessage: "Agent event dispatch failed",
       context: { runId: evt.runId, stream: evt.stream },
-      onFailure: () => failedDispatchCleanup?.(),
+      onFailure: (error) => {
+        if (terminalDispatch) {
+          terminalDispatch.failure = { error };
+        }
+        failedDispatchCleanup?.();
+      },
     });
+    bindChatAbortTerminalDispatch(terminalEntries, dispatch, terminalDispatch);
     agentEventDispatches.add(dispatch);
     void dispatch.then(() => agentEventDispatches.delete(dispatch));
   });

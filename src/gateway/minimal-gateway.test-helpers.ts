@@ -181,6 +181,7 @@ export async function startMinimalRealGateway(
     connectBootstrap: async (mismatched = false) => {
       const helpers = await import("./test-helpers.js");
       const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+      helpers.trackConnectChallengeNonce(ws);
       clients.push(ws);
       const bootstrapToken = await bootstrap.issueDeviceBootstrapToken({
         baseDir: state.stateDir,

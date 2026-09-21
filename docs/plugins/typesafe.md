@@ -226,7 +226,7 @@ largest value is an explicit consumer policy. Probabilities and confidence are
 not demonstrated accuracy guarantees or permission to act.
 
 The host owns concurrency, circuit health, deadlines, cancellation, and provider
-lifecycle. Native decisions have a ten-second maximum; shorter consumer or
+lifecycle. Native decisions have a 30-second maximum; shorter consumer or
 plugin timeouts still apply. The adapter shares transport and response validation
 with the tool below. Requests use the fixed TypeSafe HTTPS endpoint unless
 `baseUrl` selects a local server. Both paths reject
@@ -244,8 +244,9 @@ For this tool only, `plugins.entries.typesafe.config.model` supplies the default
 model, initially `jev-latest` for hosted inference or `kev-latest` for local
 inference. It does not override the native
 `decisionModel` role or select a provider. Pin a model version for reproducible
-tool evaluations. `timeoutMs` limits tool requests and caps native requests at
+tool evaluations. `timeoutMs` defaults to 30,000 ms, limits tool requests, and caps native requests at
 the shorter of this setting and the host's remaining deadline.
+Explicitly configured timeout values remain unchanged.
 
 Tool availability and the decision model role are separate: an explicitly
 enabled tool does not select a background model, and selecting a decision model

@@ -4,14 +4,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { hasErrnoCode } from "../infra/errno.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -43,6 +42,7 @@ import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
+import { withOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
 import { ensureAgentDatabaseLeaseSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
@@ -584,49 +584,60 @@ function isAgentDatabaseLeaseStale(row: {
   );
 }
 
-/** Doctor holds both lifecycle coordinators before checking writers, without schema repair. */
-export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
+/** Read-only diagnostic observation; an empty result never grants maintenance authority. */
+export function readActiveOpenClawAgentDatabaseLeasesReadOnly(
   options: OpenClawStateDatabaseOptions = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
-): void {
+): ReturnType<typeof readAgentDatabaseLeases> {
   const pathname = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env));
   try {
     fs.statSync(pathname);
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
-      return;
+      return [];
     }
     throw error;
   }
-  // Admission must also work after restoring a quarantined database. Runtime
-  // readers reject that receipt before Doctor can verify and clear it.
+  // Doctor must inspect a restored database before clearing its quarantine receipt.
   const cached = openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(pathname)
     ? openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(pathname)
     : undefined;
-  const db = cached?.db ?? openNodeSqliteDatabase(pathname, { readOnly: true });
-  let closeSchemaReadAdmission: (() => void) | undefined;
-  try {
-    closeSchemaReadAdmission = openStateSchemaReadAdmission?.(db);
+  const readActiveLeases = (db: DatabaseSync) =>
     runWithSqliteBusyTimeout(db, 250, () => {
       if (!tableExists(db, "agent_database_leases")) {
-        return;
+        return [];
       }
-      const owner = readAgentDatabaseLeases(db).find((row) => !isAgentDatabaseLeaseStale(row));
-      if (owner) {
-        throw new OpenClawAgentDatabaseLeaseActiveError(
-          `Agent ${owner.agent_id} database is still open in process ${owner.owner_pid}; stop that process before Doctor repair.`,
-        );
-      }
+      return readAgentDatabaseLeases(db).filter((row) => !isAgentDatabaseLeaseStale(row));
     });
+  if (!cached) {
+    return withOpenClawStateReadOnlyLocation(
+      ({ db }) => readActiveLeases(db),
+      pathname,
+      prepareSqliteReadOnlyLocationSync(pathname),
+      openStateSchemaReadAdmission,
+    );
+  }
+  const closeSchemaReadAdmission = openStateSchemaReadAdmission?.(cached.db);
+  try {
+    return readActiveLeases(cached.db);
   } finally {
-    try {
-      closeSchemaReadAdmission?.();
-    } finally {
-      if (!cached) {
-        clearNodeSqliteKyselyCacheForDatabase(db);
-        db.close();
-      }
-    }
+    closeSchemaReadAdmission?.();
+  }
+}
+
+/** Doctor holds both lifecycle coordinators before checking writers, without schema repair. */
+export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
+  options: OpenClawStateDatabaseOptions = {},
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
+): void {
+  const [owner] = readActiveOpenClawAgentDatabaseLeasesReadOnly(
+    options,
+    openStateSchemaReadAdmission,
+  );
+  if (owner) {
+    throw new OpenClawAgentDatabaseLeaseActiveError(
+      `Agent ${owner.agent_id} database is still open in process ${owner.owner_pid}; stop that process before Doctor repair.`,
+    );
   }
 }
 

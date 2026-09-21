@@ -38,6 +38,38 @@ export async function writeOwnedChunks(
   });
 }
 
+export async function writeBundledBrowser(packageRoot: string) {
+  const manifestPath = path.join(packageRoot, "package.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  manifest.dependencies["@fixture/browser"] = version;
+  manifest.bundleDependencies = ["@fixture/browser"];
+  await write(packageRoot, "package.json", manifest);
+  const browserRoot = path.join(packageRoot, "node_modules/@fixture/browser");
+  await write(browserRoot, "package.json", {
+    name: "@fixture/browser",
+    version,
+    type: "module",
+    main: "./build/src/index.js",
+    bin: { browser: "./build/src/bin/browser.js" },
+    files: ["build/src", "LICENSE", "skills", "!*.js.map"],
+  });
+  await write(
+    browserRoot,
+    "build/src/index.js",
+    'import { readFileSync } from "node:fs"; export const notice = readFileSync(new URL("./third_party/THIRD_PARTY_NOTICES", import.meta.url), "utf8");',
+  );
+  await write(
+    browserRoot,
+    "build/src/bin/browser.js",
+    'import { notice } from "../index.js"; console.log(notice);',
+  );
+  await write(browserRoot, "build/src/third_party/THIRD_PARTY_NOTICES", "bundled-notice");
+  await write(browserRoot, "build/src/OPENCLAW_PATCH_NOTICE.md", "patched-runtime");
+  await write(browserRoot, "skills/browser/SKILL.md", "browser-skill");
+  await write(browserRoot, "LICENSE", "fixture-license");
+  return browserRoot;
+}
+
 export function useNodeBootstrapArtifactFixtures() {
   const providers: ReturnType<typeof createNodeBootstrapArtifactProvider>[] = [];
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -51,7 +83,9 @@ export function useNodeBootstrapArtifactFixtures() {
     providers.push(provider);
     return provider;
   };
-  async function fixture(mode: "source" | "package" | "external-plugin" = "source") {
+  async function fixture(
+    mode: "source" | "package" | "external-plugin" | "linked-package" = "source",
+  ) {
     const root = tempDirs.make("node-artifact-test-");
     const packageRoot = path.join(root, "gateway");
     const pluginPackage = {
@@ -135,7 +169,9 @@ export function useNodeBootstrapArtifactFixtures() {
     const aiRoot =
       mode === "source"
         ? path.join(root, "ai-source")
-        : path.join(packageRoot, "node_modules/@fixture/ai");
+        : mode === "linked-package"
+          ? path.join(root, "node_modules/linked-project/ai-source")
+          : path.join(packageRoot, "node_modules/@fixture/ai");
     await write(aiRoot, "package.json", {
       name: "@fixture/ai",
       version,
@@ -143,7 +179,9 @@ export function useNodeBootstrapArtifactFixtures() {
       exports: "./dist/index.js",
     });
     await write(aiRoot, "dist/index.js", 'export const name = "local-ai";');
-    if (mode === "source") {
+    if (mode === "source" || mode === "linked-package") {
+      await write(aiRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
+      await write(aiRoot, "src/private.ts", "source-only");
       await fs.mkdir(path.join(packageRoot, "node_modules/@fixture"), { recursive: true });
       await fs.symlink(aiRoot, path.join(packageRoot, "node_modules/@fixture/ai"), "junction");
     }

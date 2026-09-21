@@ -12,7 +12,6 @@ import {
 } from "../delivery-queue-sqlite-claim.js";
 import {
   captureDeliveryQueueStateContext,
-  getDeliveryQueueEntryOwners,
   type DeliveryQueueStateContext,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
@@ -34,7 +33,6 @@ import { collectEntrySpoolPaths } from "./delivery-queue-media-spool.js";
 import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
-  OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
   OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
 } from "./delivery-queue-media-staging.js";
@@ -74,36 +72,31 @@ export type {
 const queuedDeliveryPayloads = (entry: QueuedDelivery) =>
   acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload);
 
-const OUTBOUND_DELIVERY_NAMESPACE_DESCRIPTORS = [
-  { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, namespace: "prepared", retired: false },
-  { queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME, namespace: "preparing", retired: true },
-  { queueName: OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME, namespace: "migration", retired: true },
-  {
-    queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-    namespace: "legacy-preparing",
-    retired: true,
-  },
-  { queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, namespace: "legacy", retired: true },
-] as const;
-
-export function findDeliveryIntentOwner(
+export async function findDeliveryIntentOwner(
   id: string,
   stateDir?: string,
   context?: DeliveryQueueStateContext,
 ) {
-  const owners = getDeliveryQueueEntryOwners(
-    OUTBOUND_DELIVERY_NAMESPACE_DESCRIPTORS.map(({ queueName }) => queueName),
-    id,
-    stateDir,
-    context,
-  );
-  for (const descriptor of OUTBOUND_DELIVERY_NAMESPACE_DESCRIPTORS) {
-    const owner = owners.get(descriptor.queueName);
-    if (owner) {
-      return { ...descriptor, ...owner };
-    }
+  const [owner] = await findDeliveryIntentOwners([id], stateDir, context);
+  return owner ?? null;
+}
+
+/** Resolve one ordered batch without reopening the store for each intent. */
+export async function findDeliveryIntentOwners(
+  ids: readonly string[],
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+) {
+  if (ids.length === 0) {
+    return [];
   }
-  return null;
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const owners = await executeDeliveryQueueOperation(captured, stateDir, {
+    type: "deliveryQueue.findIntentOwners",
+    input: { ids: [...ids] },
+  });
+  captured.workerContext.admission.assertCurrent();
+  return owners;
 }
 
 function preparedBatchFromLowLevelInput(params: QueuedDeliveryPayload): PreparedOutboundBatch {

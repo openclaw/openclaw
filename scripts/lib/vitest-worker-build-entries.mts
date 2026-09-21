@@ -73,7 +73,6 @@ export const legacyFinalizerBuildSources = [
   "src/infra/update-migrated-finalize.worker.ts",
   "src/infra/runtime-process-entrypoints.ts",
   "src/cli/update-cli/update-command-service-plan.ts",
-  "src/cli/update-cli/update-command-repair-service.ts",
   "src/infra/tmp-openclaw-dir.ts",
   "src/cli/update-cli/update-command-convergence.ts",
   "src/cli/update-cli/update-command-restart-context.ts",
@@ -81,7 +80,6 @@ export const legacyFinalizerBuildSources = [
   "src/cli/update-cli/update-command-verification.ts",
   "src/cli/update-cli/shared.ts",
   "src/cli/update-cli/update-command-service-command.ts",
-  "src/cli/daemon-cli/install-load.ts",
 ];
 
 // Test-only roots share the invocation generation without changing package entries.

@@ -1,9 +1,11 @@
 // Real config IO; update packages, provider authentication, and host actions are stubbed.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAccountListHelpers } from "../../channels/plugins/account-helpers.js";
+import * as legacyBindingRepair from "../../commands/doctor/shared/legacy-config-binding-repair.runtime.js";
 import { replaceConfigFile } from "../../config/config.js";
 import {
   createConfigIO,
@@ -13,6 +15,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV } from "../../infra/update-post-core-context.js";
 import { createPluginManifestRecordFixture } from "../../plugins/plugin-metadata.test-support.js";
+import * as pluginModuleLoader from "../../plugins/plugin-module-loader-cache.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -99,8 +102,19 @@ import { updateFinalizeCommand } from "./update-command-finalize.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
+const bindingRepairRuntimePath = fileURLToPath(
+  new URL("../../commands/doctor/shared/legacy-config-binding-repair.runtime.ts", import.meta.url),
+);
+
 let previousRegistry: ReturnType<typeof getActivePluginRegistry>;
 beforeEach(() => {
+  const loadModule = pluginModuleLoader.getCachedPluginModuleLoader;
+  // Keep the real repair in the same graph as this fixture's channel registry.
+  vi.spyOn(pluginModuleLoader, "getCachedPluginModuleLoader").mockImplementation((options) =>
+    options.modulePath === bindingRepairRuntimePath
+      ? () => legacyBindingRepair
+      : loadModule(options),
+  );
   previousRegistry = getActivePluginRegistry();
   setActivePluginRegistry(
     createTestRegistry([

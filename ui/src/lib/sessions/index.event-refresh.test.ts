@@ -132,8 +132,6 @@ describe("event-driven session list refresh", () => {
         },
       } as const satisfies GatewayEventFrame;
       emitEvent(event);
-      // Chat consumes the same event after the capability-level subscriber.
-      sessions.reconcileChanged(event.payload);
 
       expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([visibleKey]);
     } finally {

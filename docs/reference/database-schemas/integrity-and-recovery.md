@@ -36,6 +36,10 @@ after they finish.
 Native execution workers can also borrow retained host proof after the host handle
 closes or is evicted. The receiving opener rechecks the physical file identity and
 shared revocation cell; a closed handle alone does not discard valid proof.
+When native execution establishes the first runtime proof, it returns that proof
+through its existing admission so later cleanup workers can reuse it without a
+host SQLite open. The host accepts it only for the admitted physical file and
+unchanged validation state; revocation during the open rejects the handoff.
 
 Cached opens, including later opens after startup, queue checks in the existing
 Gateway verifier. Background success is logged; only the full-check lease owner
@@ -112,12 +116,21 @@ unchanged. Explicit provenance inspection and inherited artifact-preserving scop
 still use private snapshots. Neither optimization changes schemas, stored records,
 retention, or update migrations.
 
-Unavoidable raw copies first sample the main database and WAL for a short stable
-interval. A hard admission deadline then allows copying to proceed under sustained
-write load instead of waiting indefinitely. Source-change retries use bounded
-cancellable backoff without restarting that quiescence deadline. Snapshot debug
-telemetry contains only bounded operational metadata: operation and owner labels,
-main and WAL sizes, copied bytes, attempt, wait and duration, and outcome.
+Live snapshots use SQLite's online-backup owner and a read transaction to pin
+committed pages while writers continue. Native readers may update existing SHM
+read marks, so artifact-preserving planning and Doctor scopes use raw copies
+instead. A WAL copy captures main first, then a bounded WAL prefix, and verifies
+both within the same pinned WAL generation. Appended frames are allowed; resets,
+replacements, and changes to captured bytes require another attempt. SQLite
+interprets committed frames in the private copy. Source SHM stays untouched.
+Only raw copies reuse a scoped IPC child; native backups remain one-shot to avoid
+Node 26 completion stalls with persistent IPC. Incomplete WAL families, rollback
+crash residue, and owner-excluded sources also retain private copying and recovery.
+Existing WAL and rollback-journal files can coexist without write activity;
+inspection copies and verifies both before SQLite recovers the private family.
+It does not discard committed WAL pages, repair the source, or change plan identity.
+Snapshot debug telemetry reports operation and owner,
+main and WAL sizes, copied bytes, attempt, duration, and outcome.
 
 Synchronous CLI snapshots also pause between source-change retries, so a brief
 write burst does not exhaust all ten attempts immediately. These retries only
@@ -229,7 +242,7 @@ A 2 GiB database gets 2,860 seconds, and workers finish as soon as their work co
 
 Update schema inspection and candidate snapshots use this same allowance as an inactivity watchdog. Larger caller budgets remain available, and observed private-copy progress renews the deadline. See [How updates run](/cli/update/how-updates-run).
 
-The synchronous byte-neutral snapshot strategy is for small or quiescent databases. Inspections of a live agent database, including memory-core readiness, use the asynchronous online-backup worker.
+Live snapshots use the online-backup worker. Artifact-preserving scopes and synchronous snapshot copies keep source bytes unchanged, including WAL coordination state.
 
 Full startup readiness checks agent ownership, integrity, foreign keys, and schema
 in one fresh read-only transaction in a disposable child. Complete WAL families

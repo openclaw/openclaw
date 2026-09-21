@@ -115,7 +115,7 @@ export function createUpdateRunNotifier(
       }
       const custody =
         currentTarget.kind === "route"
-          ? findDeliveryIntentOwner(deliveryIntentId, undefined, context)
+          ? await findDeliveryIntentOwner(deliveryIntentId, undefined, context)
           : null;
       const owned = delivered || custody?.status === "pending" || custody?.status === "completed";
       if (owned && kind !== "finished") {

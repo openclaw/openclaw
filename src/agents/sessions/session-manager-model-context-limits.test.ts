@@ -346,8 +346,8 @@ it.each([
 
 it("keeps small context unchanged and leaves compacted navigation out of the detached view", async () => {
   await withHistory("context-small-and-compacted", async ({ scope, source, verifyRead }) => {
-    source.appendThinkingLevelChange("high");
-    source.appendModelChange("openai", "gpt-4.1");
+    await source.appendThinkingLevelChange("high");
+    await source.appendModelChange("openai", "gpt-4.1");
     for (let index = 0; index < 24; index++) {
       source.appendMessage(makeUserMessage(`old message ${index}`, index));
     }
@@ -369,8 +369,8 @@ it("keeps small context unchanged and leaves compacted navigation out of the det
 
 it("preserves model and thinking metadata when the selecting assistant is omitted", async () => {
   await withHistory("context-state-metadata", async ({ scope, source, verifyRead }) => {
-    source.appendThinkingLevelChange("high");
-    source.appendModelChange("openai", "gpt-4o");
+    await source.appendThinkingLevelChange("high");
+    await source.appendModelChange("openai", "gpt-4o");
     source.appendMessage(
       makeAgentAssistantMessage({ model: "gpt-4.1", content: [{ type: "text", text: "earlier" }] }),
     );

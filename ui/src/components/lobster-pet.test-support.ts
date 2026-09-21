@@ -1,3 +1,5 @@
+import { vi } from "vitest";
+import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { resolveLobsterPetMode } from "./lobster-pet-contract.ts";
@@ -15,6 +17,8 @@ export type LobsterPetElement = HTMLElement & {
   soundsEnabled: boolean;
   updateComplete: Promise<boolean>;
   visitsEnabled: boolean;
+  residentEnabled: boolean;
+  critters: readonly ThemeCritterId[];
 };
 
 export function createPet(seed: number, mode: LobsterPetMode = "idle"): LobsterPetElement {
@@ -42,4 +46,31 @@ export function createPet(seed: number, mode: LobsterPetMode = "idle"): LobsterP
   wrapper.querySelector(".agent-chat__input")!.prepend(element);
   document.body.append(wrapper);
   return element;
+}
+
+export function spritePresent(element: LobsterPetElement): boolean {
+  return element.querySelector(".lobster-pet") !== null;
+}
+
+export async function advanceUntil(
+  element: LobsterPetElement,
+  predicate: () => boolean,
+  maxMs: number,
+  stepMs = 1000,
+): Promise<boolean> {
+  let elapsed = 0;
+  while (elapsed < maxMs) {
+    await vi.advanceTimersByTimeAsync(stepMs);
+    elapsed += stepMs;
+    await element.updateComplete;
+    if (predicate()) {
+      return true;
+    }
+  }
+  return predicate();
+}
+
+// Cover the maximum first-arrival delay, including the shy familiarity tier.
+export async function arrive(element: LobsterPetElement): Promise<void> {
+  await advanceUntil(element, () => spritePresent(element), 12_000);
 }

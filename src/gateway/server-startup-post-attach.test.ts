@@ -45,6 +45,7 @@ import {
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import "./server-startup-outcomes.test-support.js";
+import { registerGatewayStartupReadinessTests } from "./server-startup-readiness.test-support.js";
 
 type PluginHookGatewayStartEvent = Parameters<PluginHookHandlerMap["gateway_start"]>[0];
 
@@ -669,6 +670,11 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.activateSubagentRegistry).toHaveBeenCalledWith(expect.any(Function));
     expect(startupOrder).toEqual(["unlock", "ready", "registry"]);
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
+  });
+
+  registerGatewayStartupReadinessTests({
+    start: startGatewayPostAttachRuntime,
+    createParams: createPostAttachParams,
   });
 
   it("fences startup recovery as soon as its gateway close prelude begins", async () => {
@@ -3242,25 +3248,6 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startChannels).toHaveBeenCalledTimes(1);
   });
 
-  it("emits a sidecar readiness summary in startup trace details", async () => {
-    const trace = createStartupTraceRecorder();
-
-    await startGatewayPostAttachRuntime({
-      ...createPostAttachParams({
-        startupTrace: trace.startupTrace,
-      }),
-    });
-
-    expect(trace.marks).toContain("sidecars.ready");
-    expect(trace.details).toContainEqual({
-      name: "sidecars.ready",
-      metrics: [
-        ["loadedPluginCount", 2],
-        ["postReadySidecarCount", 4],
-      ],
-    });
-  });
-
   it("runs Gmail watcher after sidecars are ready", async () => {
     let resolveWatcher: (() => void) | undefined;
     let watcherSignal: AbortSignal | undefined;
@@ -4679,6 +4666,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     minimalTestGateway: false,
     cfgAtStart: { hooks: { internal: { enabled: false } } } as never,
     getConfig: () => ({ hooks: { internal: { enabled: false } } }) as never,
+    getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
     bindHost: "127.0.0.1",
     bindHosts: ["127.0.0.1"],
     port: 18789,

@@ -445,6 +445,24 @@ If final-directory durability confirmation fails after publication, the command 
 
 Large workspaces are usually the main driver of archive size. Use `--no-include-workspace` for a smaller/faster backup, or `--only-config` for the smallest archive.
 
+Archive creation holds a SQLite lifetime transaction for its temporary
+`openclaw-backup-*` scratch directory. The next backup run removes abandoned
+scratch only after acquiring exclusive custody; a running backup keeps its
+scratch even when it is old. Cleanup failures preserve the published archive
+and appear as warnings with the scratch path in both text and JSON output.
+Scratch observed by the scan that disappears before cleanup is recorded as
+already reclaimed, without a warning or a claim that this pass removed it.
+
+`openclaw doctor` reports scratch in the active temporary directory and recorded
+archive destination directories. `openclaw doctor --fix` removes recognized
+scratch whose lifetime transaction has ended. Unknown contents, symbolic links,
+and legacy directories without a lifetime token are preserved with guidance for
+inspection. Older releases do not create these tokens, so stop older backup
+processes before manually removing their reported scratch directories.
+Published archives and package rollback backups are outside this cleanup.
+Retired scratch is renamed to `openclaw-backup-retired-*` before deletion so a
+later pass can finish partial cleanup even after the lifetime token is gone.
+
 ## Related
 
 - [CLI reference](/cli)

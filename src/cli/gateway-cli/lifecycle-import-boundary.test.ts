@@ -113,7 +113,7 @@ describe("gateway lifecycle hub import boundaries", () => {
             markGatewayRestartHandled: vi.fn(),
             abortPendingChannelReloads: vi.fn(),
             markGatewayDraining: vi.fn(),
-            resolveGatewayRestartDeferralTimeoutMs: () => 300_000,
+            resolveGatewayRestartDrainTimeoutMs: () => 300_000,
             createGatewayActiveWorkSnapshot: () => idle,
             waitForGatewayActiveWork: vi.fn(async () => ({ drained: true, snapshot: idle })),
             stopGatewayManagedProviderLocalServices: vi.fn(async () => {}),

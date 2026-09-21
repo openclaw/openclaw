@@ -10,6 +10,7 @@ import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 import { listProjectedSessions } from "./session-utils-list.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -18,7 +19,13 @@ it("keeps archived rows cold at hydration and across broad refreshes", async () 
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     const live = 3;
     const archived = 8;
+    const placements = createWorkerSessionPlacementStore();
     for (let index = 0; index < live + archived; index++) {
+      placements.startDispatch({
+        agentId: "main",
+        sessionKey: `agent:main:row-${index}`,
+        sessionId: `row-${index}`,
+      });
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: `agent:main:row-${index}` },
         {
@@ -29,7 +36,12 @@ it("keeps archived rows cold at hydration and across broad refreshes", async () 
       );
     }
     const release = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const placementReads = vi.spyOn(placements, "readProjection");
+    const projection = await createSessionRowProjection({
+      cfg,
+      modelCatalog: [],
+      placementFactsReader: placements,
+    });
     try {
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(live);
@@ -45,6 +57,21 @@ it("keeps archived rows cold at hydration and across broad refreshes", async () 
         expect(reads.mock.calls.some(([row]) => row.entry?.archivedAt !== undefined)).toBe(false);
         reads.mockClear();
       }
+      expect(new Set(placementReads.mock.calls.flatMap(([ids]) => ids))).toEqual(
+        new Set(["row-0", "row-1", "row-2"]),
+      );
+      placementReads.mockClear();
+      const page = await listProjectedSessions({ projection, opts: { archived: true, limit: 2 } });
+      expect(page.sessions).toHaveLength(2);
+      for (const row of page.sessions) {
+        expect(row.placement).toMatchObject({ state: "requested" });
+      }
+      expect(new Set(placementReads.mock.calls.flatMap(([ids]) => ids))).toEqual(
+        new Set(page.sessions.map((row) => row.sessionId)),
+      );
+      placementReads.mockClear();
+      await listProjectedSessions({ projection, opts: { archived: true, limit: 2 } });
+      expect(placementReads).not.toHaveBeenCalled();
     } finally {
       projection.dispose();
       release();

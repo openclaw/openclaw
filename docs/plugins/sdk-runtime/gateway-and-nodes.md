@@ -12,6 +12,39 @@ Reach the Gateway and paired nodes from plugin code, and the events a long-lived
 
 ## Gateway and node namespaces
 
+### Person access lifetimes
+
+`api.registerGatewayAccessPolicy({ authorize })` adds a plugin-owned access
+requirement to authenticated person admission. The callback receives the current
+configuration and the canonical profile's ID, email aliases, and assigned role.
+The Gateway resolves `requiredByRole` from the person's effective role and this
+plugin's ID; role-bound policies use that fact instead of inferring a binding
+from the default role's name.
+Return `undefined` when the policy does not govern that person. Otherwise return
+`{ assertCurrent, signal }`; reject admission when the required access is absent.
+
+A named Gateway role can set `accessPolicyPlugin` to your plugin ID. That role
+requires a current authority from your registered policy, including when the
+plugin cannot load or its manifest is unavailable. Returning `undefined` does
+not satisfy an explicit role binding. Roles without the binding retain their
+existing policy behavior, and the Gateway owner remains independent.
+
+The assertion must check the original access source immediately before an action.
+Abort its signal when that source expires or is revoked, including plugin service
+shutdown. An ended source must stay ended if a later grant is created. A renewal
+may extend an uninterrupted source. Keep the source in its existing lifecycle
+owner and initialize it before accepting person access.
+
+Return a native `AbortSignal`. Registration preserves native cancellation and
+cleanup while keeping the assertion and callable abort-reason values bound to
+the plugin instance. Plugin retirement also ends captured access.
+
+The Gateway binds the returned authority to the original person and carries it
+through WebSocket and HTTP requests. Ordinary transport disconnect is distinct
+from revocation. A policy must preserve independent staff access; it must not
+infer the requesting person's authority from a session's creator, display name,
+or sandbox state. Shared-secret system authority remains outside person policies.
+
 <AccordionGroup>
   <Accordion title="api.runtime.gateway">
     Call another Gateway method in process while preserving the current plugin's trusted runtime

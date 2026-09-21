@@ -22,6 +22,10 @@ export function hasPendingTaskRegistryEvents(taskId?: string): boolean {
   return taskRegistryProcessState.listener?.events.pending(taskId) ?? false;
 }
 
+export function listPendingTaskRegistryEventTaskIds(): readonly string[] {
+  return taskRegistryProcessState.listener?.events.pendingTaskIds() ?? [];
+}
+
 export function captureTaskRegistryReadFence(
   admission: OpenClawStateDatabaseReadAdmission,
 ): Promise<void> {

@@ -19,6 +19,7 @@ import {
   loadApnsRegistrations,
   registerApnsRegistration,
 } from "./push-apns.js";
+import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 
 const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";
@@ -335,6 +336,47 @@ describe("push APNs registration store", () => {
     ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
     await expect(loadApnsRegistration(nodeId, baseDir)).resolves.toEqual(replacement);
   });
+
+  it.each(["transaction", "commit"] as const)(
+    "keeps the prior APNs owner when the connection changes before worker %s admission",
+    async (stage) => {
+      const baseDir = await makeTempDir();
+      const previous = await registerDirectApnsRegistration({ nodeId: "ios-lease", baseDir });
+      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+      let connectionCurrent = true;
+      let reachedStage = false;
+      const admission = vi
+        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit) =>
+          createAdmission((request, grant) => {
+            if (request.stage === stage) {
+              reachedStage = true;
+              connectionCurrent = false;
+            }
+            admit(request, grant);
+          }),
+        );
+      try {
+        await expect(
+          registerApnsRegistration({
+            nodeId: "ios-lease",
+            token: "DCBA4321DCBA4321DCBA4321DCBA4321",
+            topic: "ai.openclaw.ios",
+            baseDir,
+            assertCurrent: () => {
+              if (!connectionCurrent) {
+                throw new ApnsRegistrationPairingChangedError();
+              }
+            },
+          }),
+        ).rejects.toBeInstanceOf(ApnsRegistrationPairingChangedError);
+        expect(reachedStage).toBe(true);
+        await expect(loadApnsRegistration("ios-lease", baseDir)).resolves.toEqual(previous);
+      } finally {
+        admission.mockRestore();
+      }
+    },
+  );
 
   it("rejects invalid direct and relay inputs", async () => {
     const baseDir = await makeTempDir();

@@ -21,13 +21,16 @@ import {
   getAgentRunContextOwnerStatus as ownerStatus,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  PROGRESS_CARD_REFRESH_SOURCE_TOOL,
+  progressCardRefreshRunProjection,
+} from "../sessions/input-provenance.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   emitSessionTranscriptUpdate,
@@ -44,15 +47,14 @@ import {
   registerChatAbortController,
   removeChatAbortControllerEntry,
 } from "./chat-abort.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
 import { registerTaskEventSubscriptionTests } from "./server-runtime-subscriptions.task-events.test-support.js";
 import { registerTaskSubscriptionOwnershipTests } from "./server-runtime-subscriptions.task-ownership.test-support.js";
-import { lifecycleState, readLifecycleState } from "./server-runtime-subscriptions.test-support.js";
+import {
+  createSubscriptionTestFixture,
+  lifecycleState,
+  readLifecycleState,
+} from "./server-runtime-subscriptions.test-support.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 function waitForFast<T>(
@@ -62,19 +64,7 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-const warn = vi.fn();
-const mockLog: SubsystemLogger = {
-  subsystem: "gateway-test",
-  isEnabled: () => true,
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn,
-  error: vi.fn(),
-  fatal: vi.fn(),
-  raw: vi.fn(),
-  child: () => mockLog,
-};
+const { log: mockLog, warn, createParams } = createSubscriptionTestFixture();
 
 const auditTestState = vi.hoisted(() => ({
   enabled: true,
@@ -194,30 +184,8 @@ vi.mock("./server-session-events.js", async (importOriginal) => {
 });
 
 const { startGatewayEventSubscriptions } = await import("./server-runtime-subscriptions.js");
-type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
 
 type LifecycleTransition = { state: string; lifecycle?: ReturnType<typeof readLifecycleState> };
-
-function createParams(): SubscriptionParams {
-  const chatRunState = createChatRunState();
-  return {
-    signal: new AbortController().signal,
-    log: mockLog,
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    nodeHasSessionSubscribers: () => false,
-    nodeSendToSession: vi.fn(),
-    agentRunSeq: new Map(),
-    chatRunState,
-    toolEventRecipients: chatRunState.toolEventRecipients,
-    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-    chatAbortControllers: new Map(),
-    restartRecoveryCandidates: new Map(),
-    terminalSessions: { closeTaskSessions: vi.fn() },
-    refreshConnectedUserProfiles: vi.fn(),
-  };
-}
 
 describe("startGatewayEventSubscriptions", () => {
   let unsubs: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
@@ -650,11 +618,28 @@ describe("startGatewayEventSubscriptions", () => {
       const entry = register();
       const terminal = createDeferred();
       const successor = createDeferred();
+      const firstDispatchEntered = createDeferred();
+      const firstDispatch = createDeferred();
+      const successorDispatchEntered = createDeferred();
       const failure = new Error("captured terminal write failed");
+      const successorDispatchFailure = new Error("successor terminal dispatch failed");
       agentEventHandlerMocks.persistLifecycle
         .mockReturnValueOnce(terminal.promise)
         .mockReturnValueOnce(successor.promise);
-      agentEventHandlerMocks.create.mockReturnValue(Object.assign(vi.fn(), { dispose: vi.fn() }));
+      agentEventHandlerMocks.create.mockReturnValue(
+        Object.assign(
+          async (event: AgentEventPayload) => {
+            if (event.data.endedAt === 2_000) {
+              firstDispatchEntered.resolve();
+              await firstDispatch.promise;
+            } else {
+              successorDispatchEntered.resolve();
+              throw successorDispatchFailure;
+            }
+          },
+          { dispose: vi.fn() },
+        ),
+      );
       unsubs = startGatewayEventSubscriptions(params);
       const emitTerminal = (endedAt: number) =>
         emitAgentEvent({
@@ -666,6 +651,10 @@ describe("startGatewayEventSubscriptions", () => {
         });
       emitTerminal(2_000);
       expect(entry.projectSessionTerminalPersistence).toBe(terminal.promise);
+      const firstDrain = waitForChatAbortTerminalPersistence(entry).then(
+        () => ({ ok: true }),
+        (error: unknown) => ({ ok: false, error }),
+      );
       const recovery = {
         runId,
         sessionKey,
@@ -694,12 +683,18 @@ describe("startGatewayEventSubscriptions", () => {
       }
       const currentState = readLifecycleState(current);
       try {
+        await firstDispatchEntered.promise;
+        if (change !== "removed") {
+          await successorDispatchEntered.promise;
+        }
         if (persisted) {
           terminal.resolve();
         } else {
           terminal.reject(failure);
         }
         await terminal.promise.catch(() => {});
+        firstDispatch.resolve();
+        expect(await firstDrain).toEqual(persisted ? { ok: true } : { ok: false, error: failure });
         if (change === "newer write") {
           expect(readLifecycleState(entry)).toEqual(currentState);
         } else {
@@ -726,10 +721,19 @@ describe("startGatewayEventSubscriptions", () => {
           expect(readLifecycleState(current)).toEqual(currentState);
           expect(params.restartRecoveryCandidates.get(runId)?.observedAt).toBe(3_000);
         }
+        if (change === "newer write") {
+          successor.resolve();
+          await successor.promise;
+          // Finishing the earlier receipt must not erase its accepted successor.
+          await expect(waitForChatAbortTerminalPersistence(entry)).rejects.toBe(
+            successorDispatchFailure,
+          );
+        }
       } finally {
+        firstDispatch.resolve();
         terminal.resolve();
         successor.resolve();
-        await Promise.allSettled([terminal.promise, successor.promise]);
+        await Promise.allSettled([firstDrain, terminal.promise, successor.promise]);
       }
     },
   );
@@ -752,7 +756,14 @@ describe("startGatewayEventSubscriptions", () => {
         throw new Error("expected registered chat abort controller");
       }
       const registered = readLifecycleState(registration.entry);
-      agentEventHandlerMocks.create.mockReturnValue(Object.assign(vi.fn(), { dispose: vi.fn() }));
+      agentEventHandlerMocks.create.mockReturnValue(
+        Object.assign(
+          () => {
+            throw new Error("different generation dispatch failed");
+          },
+          { dispose: vi.fn() },
+        ),
+      );
       unsubs = startGatewayEventSubscriptions(params);
 
       emitAgentEvent({
@@ -763,73 +774,163 @@ describe("startGatewayEventSubscriptions", () => {
       });
 
       expect(readLifecycleState(registration.entry)).toEqual(registered);
-      await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
+      await unsubs.agentUnsub();
+      expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce();
+      await expect(
+        waitForChatAbortTerminalPersistence(registration.entry),
+      ).resolves.toBeUndefined();
     },
   );
 
-  it("bridges abort cleanup until terminal persistence is attached and settled", async () => {
-    const runId = "run-abort-persistence-bridge";
-    const sessionKey = "agent:main:main";
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const params = createParams();
-    const registration = registerChatAbortController({
-      chatAbortControllers: params.chatAbortControllers,
-      runId,
-      sessionId: "session-abort-persistence-bridge",
-      sessionKey,
-      timeoutMs: 60_000,
-      lifecycleGeneration,
-    });
-    if (!registration.entry) {
-      throw new Error("expected registered chat abort controller");
-    }
-    const entry = registration.entry;
-    agentEventHandlerMocks.create.mockReturnValue(Object.assign(vi.fn(), { dispose: vi.fn() }));
-    unsubs = startGatewayEventSubscriptions(params);
-    emitAgentEvent({
-      runId,
-      lifecycleGeneration,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
-    const terminalPersistence = createDeferred();
-    agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
-
-    expect(
-      abortChatRunById(
-        {
-          chatAbortControllers: params.chatAbortControllers,
-          chatRunState: params.chatRunState,
-          removeChatRun: vi.fn(() => undefined),
-          agentRunSeq: params.agentRunSeq,
-          broadcast: vi.fn(),
-          nodeSendToSession: vi.fn(),
+  it.each([
+    { result: "visible persistence", hidden: false, dispatchFails: false, persistenceFails: false },
+    { result: "hidden no-write", hidden: true, dispatchFails: false, persistenceFails: false },
+    {
+      result: "hidden dispatch failure",
+      hidden: true,
+      dispatchFails: true,
+      persistenceFails: false,
+    },
+    {
+      result: "dispatch failure with an accepted write",
+      hidden: false,
+      dispatchFails: true,
+      persistenceFails: false,
+    },
+    {
+      result: "dispatch and persistence failures",
+      hidden: false,
+      dispatchFails: true,
+      persistenceFails: true,
+    },
+  ])(
+    "joins accepted terminal dispatch before settling $result",
+    async ({ hidden, dispatchFails, persistenceFails }) => {
+      const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
+      const runId = "run-abort-persistence-bridge";
+      const sessionKey = "agent:main:main";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const params = createParams();
+      const registration = registerChatAbortController({
+        chatAbortControllers: params.chatAbortControllers,
+        runId,
+        sessionId: "session-abort-persistence-bridge",
+        sessionKey,
+        timeoutMs: 60_000,
+        lifecycleGeneration,
+        ...(hidden ? { controlUiVisible: false, projectSessionActive: false } : {}),
+      });
+      if (!registration.entry) {
+        throw new Error("expected registered chat abort controller");
+      }
+      const entry = registration.entry;
+      claimAgentRunContext(runId, {
+        lifecycleGeneration,
+        sessionId: entry.sessionId,
+        sessionKey,
+        ...(hidden
+          ? progressCardRefreshRunProjection({
+              kind: "internal_system",
+              sourceTool: PROGRESS_CARD_REFRESH_SOURCE_TOOL,
+            })
+          : {}),
+      });
+      const dispatchEntered = createDeferred();
+      const releaseDispatch = createDeferred();
+      const dispatchFinished = createDeferred();
+      const terminalPersistence = createDeferred();
+      const dispatchFailure = new Error("accepted terminal dispatch failed");
+      const persistenceFailure = new Error("accepted terminal write failed");
+      agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
+      agentEventHandlerMocks.create.mockImplementation((options: AgentEventHandlerOptions) => {
+        const handler = actual.createAgentEventHandler(options);
+        return Object.assign(
+          async (event: AgentEventPayload) => {
+            dispatchEntered.resolve();
+            try {
+              await releaseDispatch.promise;
+              if (dispatchFails) {
+                throw dispatchFailure;
+              }
+              handler(event);
+            } finally {
+              dispatchFinished.resolve();
+            }
+          },
+          { dispose: () => handler.dispose() },
+        );
+      });
+      unsubs = startGatewayEventSubscriptions(params);
+      expect(
+        abortChatRunById(
+          {
+            ...params,
+            removeChatRun: (sessionId, clientRunId, key) =>
+              params.chatRunState.registry.remove(sessionId, clientRunId, key),
+          },
+          { runId, sessionKey, stopReason: "user" },
+        ),
+      ).toEqual({ aborted: true });
+      let settled = false;
+      const waiter = waitForChatAbortTerminalPersistence(entry).then(
+        () => {
+          settled = true;
+          return { ok: true as const };
         },
-        { runId, sessionKey, stopReason: "user" },
-      ),
-    ).toEqual({ aborted: true });
-    expect(params.chatAbortControllers.get(runId)).toBe(entry);
-    expect(readLifecycleState(entry)).toMatchObject({
-      projectSessionActive: false,
-      projectSessionTerminalPending: true,
-      projectSessionTerminalObservedAt: expect.any(Number),
-      registrationCleanupRequested: true,
-    });
-
-    await Promise.resolve();
-    expect(params.chatAbortControllers.get(runId)).toBe(entry);
-    expect(readLifecycleState(entry)).toMatchObject({
-      projectSessionActive: false,
-      projectSessionTerminalPending: true,
-      projectSessionTerminalPersistence: terminalPersistence.promise,
-      projectSessionTerminalPersisted: false,
-      registrationCleanupRequested: true,
-    });
-
-    terminalPersistence.resolve();
-    await waitForFast(() => expect(params.chatAbortControllers.has(runId)).toBe(false));
-  });
+        (error: unknown) => {
+          settled = true;
+          return { ok: false as const, error };
+        },
+      );
+      try {
+        await dispatchEntered.promise;
+        expect(settled).toBe(false);
+        expect(params.chatAbortControllers.get(runId)).toBe(entry);
+        expect(entry.projectSessionTerminalPending).toBe(true);
+        expect(entry.projectSessionTerminalPersistence).toBe(
+          hidden ? undefined : terminalPersistence.promise,
+        );
+        releaseDispatch.resolve();
+        await dispatchFinished.promise;
+        if (!hidden) {
+          expect(settled).toBe(false);
+          if (persistenceFails) {
+            terminalPersistence.reject(persistenceFailure);
+          } else {
+            terminalPersistence.resolve();
+          }
+        }
+        const outcome = await waiter;
+        const failure = persistenceFails
+          ? persistenceFailure
+          : dispatchFails
+            ? dispatchFailure
+            : undefined;
+        expect(outcome).toEqual(failure ? { ok: false, error: failure } : { ok: true });
+        if (hidden) {
+          expect(agentEventHandlerMocks.persistLifecycle).not.toHaveBeenCalled();
+          expect(params.broadcast).not.toHaveBeenCalled();
+          expect(params.broadcastToConnIds).not.toHaveBeenCalled();
+          expect(params.nodeSendToSession).not.toHaveBeenCalled();
+        }
+        if (dispatchFails) {
+          expect(warn).toHaveBeenCalledWith(
+            "Agent event dispatch failed",
+            expect.objectContaining({ error: dispatchFailure }),
+          );
+        } else {
+          expect(entry.projectSessionTerminalPending).toBe(false);
+          expect(params.chatAbortControllers.has(runId)).toBe(false);
+          expect(warn).not.toHaveBeenCalled();
+        }
+      } finally {
+        releaseDispatch.resolve();
+        terminalPersistence.resolve();
+        await waiter;
+        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+      }
+    },
+  );
 
   it("logs transcript handler failures", async () => {
     unsubs = startGatewayEventSubscriptions(createParams());

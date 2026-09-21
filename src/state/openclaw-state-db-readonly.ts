@@ -405,9 +405,10 @@ export function executeExistingOpenClawStateRead(
   command: OpenClawStateReadCommand,
   readOptions: OpenClawStateReadOptions = {},
 ): Promise<OpenClawStateReadReply | undefined> {
-  return mapOpenClawStateReadError(readOptions.mapError, (receipt) =>
-    executeRetainedOpenClawStateRead(options, command, receipt),
-  );
+  return mapOpenClawStateReadError(readOptions.mapError, (receipt) => {
+    const read = () => executeRetainedOpenClawStateRead(options, command, receipt);
+    return readOptions.current ? stateSnapshotReads.exit(read) : read();
+  });
 }
 
 function executeRetainedOpenClawStateRead(

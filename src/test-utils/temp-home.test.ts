@@ -7,6 +7,12 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { resolveEffectiveHomeDir } from "../infra/home-dir.js";
 import { withTempHomeCore } from "../plugin-sdk/test-helpers/temp-home.js";
+import {
+  captureOpenClawStateDatabaseReadAdmission,
+  closeOpenClawStateDatabaseByPathAsync,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, captureFullEnv, withEnvAsync } from "./env.js";
 import { createTempHomeEnv } from "./temp-home.js";
 
@@ -21,6 +27,46 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("createTempHomeEnv", () => {
+  it("restores the environment and retains home after resource drainage fails", async () => {
+    const envKeys = [
+      "HOME",
+      "USERPROFILE",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "OPENCLAW_HOME",
+      "OPENCLAW_STATE_DIR",
+    ];
+    const environment = captureEnv(envKeys);
+    const previous = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    const temporary = await createTempHomeEnv("openclaw-temp-home-drain-");
+    const stateDir = path.join(temporary.home, ".openclaw");
+    const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
+    const admission = captureOpenClawStateDatabaseReadAdmission(databasePath);
+    const failure = new Error("fixture resource still owns its state");
+    let rejectClose = true;
+    const unregister = registerOpenClawStateDatabaseAsyncResource({
+      close: async (identity) => {
+        if (identity?.key === admission.identity.key && rejectClose) {
+          throw failure;
+        }
+      },
+    });
+    const marker = path.join(temporary.home, "owned.txt");
+    try {
+      await fs.writeFile(marker, "retained fixture");
+      await expect(temporary.restore()).rejects.toBe(failure);
+      expect(Object.fromEntries(envKeys.map((key) => [key, process.env[key]]))).toEqual(previous);
+      expect(await fs.readFile(marker, "utf8")).toBe("retained fixture");
+    } finally {
+      // Release the deliberately retained owner before disposing its fixture.
+      rejectClose = false;
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      unregister();
+      environment.restore();
+      await fs.rm(temporary.home, { recursive: true, force: true });
+    }
+  });
+
   it.each(["directory", "environment"])(
     "rolls back failed %s acquisition without removing a sibling home",
     async (stage) => {

@@ -5,6 +5,10 @@ import {
   prepareSqliteAuditRecord,
 } from "../infra/sqlite-audit-record.kernel.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  withSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
@@ -234,19 +238,41 @@ it.each(["kv", "task"] as const)(
       ),
     ).toEqual({ ok: true, value: undefined });
     expect(existsSync(databasePath)).toBe(false);
-    expect(
-      runWithSqliteWorkerStateContext(context, () =>
-        kv.execute({
-          type: "pluginState.register",
-          input: {
-            ...key,
-            valueJson: JSON.stringify({ value: 42 }),
-            maxEntries: 4,
-            overflowPolicy: "reject-new",
-          },
-        }),
-      ),
-    ).toEqual({ ok: true, value: undefined });
+    const stages: string[] = [];
+    const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+      stages.push(request.stage);
+      context.admission.assertCurrent();
+      grant();
+    });
+    const nativePost = admission.port.postMessage.bind(admission.port);
+    // Both native backends share this thread; service the real grant before its synchronous wait.
+    const dispatch = vi
+      .spyOn(admission.port, "postMessage")
+      .mockImplementation((message, transferList) => {
+        nativePost(message, transferList);
+        admission.service();
+      });
+    try {
+      expect(
+        runWithSqliteWorkerStateContext(context, () =>
+          withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+            kv.execute({
+              type: "pluginState.register",
+              input: {
+                ...key,
+                valueJson: JSON.stringify({ value: 42 }),
+                maxEntries: 4,
+                overflowPolicy: "reject-new",
+              },
+            }),
+          ),
+        ),
+      ).toEqual({ ok: true, value: undefined });
+      expect(stages).toEqual(["transaction", "commit"]);
+    } finally {
+      dispatch.mockRestore();
+      admission.finish();
+    }
     const task = runWithSqliteWorkerStateContext(context, () =>
       createSqliteWorkerBackend(undefined, { databasePath }),
     );

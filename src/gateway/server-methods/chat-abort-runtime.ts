@@ -42,16 +42,16 @@ import {
   type ChatAbortRequester,
 } from "./chat-abort-authorization.js";
 import {
-  normalizeOptionalChatText as normalizeOptionalText,
-  normalizeUnknownChatText as normalizeUnknownText,
-} from "./chat-text-normalization.js";
-import {
   captureAbortedPartial,
-  persistAbortedPartials,
   type AbortedPartialSnapshot,
   type ChatAbortOrigin,
   type ChatAbortSessionSnapshot,
-} from "./chat-transcript-persistence.js";
+} from "./chat-aborted-partial.js";
+import {
+  normalizeOptionalChatText as normalizeOptionalText,
+  normalizeUnknownChatText as normalizeUnknownText,
+} from "./chat-text-normalization.js";
+import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext } from "./types.js";
 

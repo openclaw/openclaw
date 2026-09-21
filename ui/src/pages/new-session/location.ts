@@ -4,6 +4,8 @@ export type NewSessionRouteData = {
   /** The agent the URL asked for, which only a navigation can change. */
   requestedAgentId: string;
   catalogId: string;
+  /** An explicit model for this unsent draft, separate from saved preferences. */
+  requestedModel?: string;
   group?: string;
   groupStatus?: "resolved" | "missing" | "unavailable";
   groupCwd?: string;

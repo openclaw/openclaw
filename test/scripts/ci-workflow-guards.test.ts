@@ -26,6 +26,7 @@ import { minimatch } from "minimatch";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import * as qaEvidence from "../../extensions/qa-lab/test-api.js";
+import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import {
   detectChangedScope,
   detectNodeFastScope,
@@ -1007,6 +1008,8 @@ function runCiManifestFixture(options: {
         OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: String(
           options.nodeFastPluginContracts ?? false,
         ),
+        GITHUB_REF: "refs/heads/main",
+        OPENCLAW_CI_HOSTED_HEALTHY: "",
         OPENCLAW_CI_AUTHOR_ASSOCIATION: "CONTRIBUTOR",
         OPENCLAW_CI_HEAD_REPOSITORY: options.repository ?? "openclaw/openclaw",
         OPENCLAW_CI_RUNNER_BACKEND: options.runnerBackend ?? options.runnerProfile ?? "",
@@ -3159,7 +3162,7 @@ NODE
     expect(changedScopeStep.run).toContain(
       'node scripts/ci-changed-scope.mjs --base "$BASE" --head "$HEAD_SHA"',
     );
-    expect(workflow.jobs.preflight.permissions).toEqual({ contents: "read" });
+    expect(workflow.jobs.preflight.permissions).toEqual({ contents: "read", actions: "read" });
     expect(workflow.jobs.preflight.outputs.run_ios_screenshots).toBe(
       "${{ steps.changed_scope.outputs.run_ios_screenshots }}",
     );
@@ -4743,6 +4746,244 @@ NODE
       }
     });
 
+    it("runs the hosted health step from the current checkout without a sparse harness helper", () => {
+      const step = readCiWorkflow().jobs.preflight.steps.find(
+        (candidate: WorkflowStep) => candidate.id === "hosted_health",
+      );
+      const root = tempDirs.make("openclaw-hosted-health-step-");
+      const helper = "scripts/lib/ci-hybrid-hosted-health.mts";
+      mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
+      copyFileSync(helper, path.join(root, helper));
+      const output = path.join(root, "output");
+      const summary = path.join(root, "summary");
+      const result = runWorkflowShellScript(step.run, {
+        cwd: root,
+        env: {
+          GITHUB_OUTPUT: output,
+          GITHUB_STEP_SUMMARY: summary,
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          GITHUB_RUN_ID: "1",
+          // Missing credentials exercise the real fail-closed entry point without network.
+          GH_TOKEN: "",
+        },
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe("healthy=false\n");
+      expect(readFileSync(summary, "utf8")).toContain("hosted-health-unavailable");
+      for (const eventName of ["workflow_dispatch", "push", "pull_request"] as const) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerBackend: "hybrid",
+            ref: "refs/heads/main",
+            steps: {
+              changed_scope: {
+                outputs: {
+                  run_node: "true",
+                  run_node_fast_only: "false",
+                  run_windows: "true",
+                },
+              },
+            },
+          }),
+        ).toBe(eventName !== "workflow_dispatch");
+      }
+    });
+
+    it.each([
+      { eventName: "push" as const, ref: "refs/heads/main", windows: false, admitted: true },
+      { eventName: "push" as const, ref: "refs/heads/feature", windows: false, admitted: false },
+      {
+        eventName: "pull_request" as const,
+        ref: "refs/pull/1/merge",
+        windows: false,
+        admitted: false,
+      },
+      {
+        eventName: "pull_request" as const,
+        ref: "refs/pull/1/merge",
+        windows: true,
+        admitted: true,
+      },
+    ])(
+      "requires a measured workload with slack ($eventName, Windows=$windows, $ref)",
+      ({ eventName, ref, windows, admitted }) => {
+        const manifest = manifestWithHostedNodeRows(0, {
+          eventName,
+          changedPaths: ["src/infra/example.ts"],
+          nodeTestShards: [
+            {
+              checkName: "native-tail",
+              shardName: "native-tail",
+              configs: [],
+              requiresDist: false,
+              runner: "blacksmith-16vcpu-ubuntu-2404",
+              planConcurrency: 1,
+              predictedSeconds: 500,
+            },
+          ],
+          scopeEnv: {
+            GITHUB_REF: ref,
+            OPENCLAW_CI_RUN_WINDOWS: String(windows),
+            OPENCLAW_CI_HOSTED_HEALTHY: "true",
+          },
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        expect(manifest.outputs.run_check).toBe("true");
+        expect(manifest.outputs.run_checks_windows).toBe(String(windows));
+        expect(manifest.outputs.hybrid_hosted_checks).toBe(String(admitted));
+        expect(manifest.outputs.hybrid_hosted_main_checks).toBe(
+          String(admitted && eventName === "push"),
+        );
+        const checkRunner = readCiWorkflow().jobs["check-shard"]["runs-on"];
+        for (const task of ["lint", "test-types"]) {
+          expect(
+            evaluateWorkflowExpression(checkRunner, {
+              eventName,
+              ref,
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              runnerBackend: "hybrid",
+              preflightOutputs: manifest.outputs,
+              matrix: { task, runner: "blacksmith-16vcpu-ubuntu-2404" },
+            }),
+          ).toBe(
+            admitted && eventName === "push" ? "ubuntu-24.04" : "blacksmith-16vcpu-ubuntu-2404",
+          );
+        }
+        expect(
+          evaluateWorkflowExpression(readCiWorkflow().jobs["build-artifacts"]["runs-on"], {
+            eventName,
+            ref,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerBackend: "hybrid",
+            preflightOutputs: manifest.outputs,
+          }),
+        ).toBe(admitted && eventName === "push" ? "ubuntu-24.04" : "blacksmith-16vcpu-ubuntu-2404");
+        const step = readCiWorkflow().jobs.preflight.steps.find(
+          (candidate: WorkflowStep) => candidate.id === "hosted_health",
+        );
+        expect(
+          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+            eventName,
+            ref,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            runnerBackend: "hybrid",
+            steps: {
+              changed_scope: {
+                outputs: {
+                  run_node: "true",
+                  run_node_fast_only: "false",
+                  run_windows: String(windows),
+                },
+              },
+            },
+          }),
+        ).toBe(admitted);
+      },
+    );
+
+    it.each([
+      { seconds: 499, concurrency: 1, changedPath: "src/infra/example.ts" },
+      { seconds: 500, concurrency: 2, changedPath: "src/infra/example.ts" },
+      { seconds: 500, concurrency: 1, changedPath: "src/focused.ts" },
+    ])(
+      "retains PR check capacity without a serial compact latency floor (%#)",
+      ({ seconds, concurrency, changedPath }) => {
+        const nativeTail = {
+          checkName: "native-tail",
+          shardName: "native-tail",
+          configs: [],
+          requiresDist: false,
+          runner: "blacksmith-16vcpu-ubuntu-2404",
+          planConcurrency: concurrency,
+          predictedSeconds: seconds,
+        };
+        const manifest = manifestWithHostedNodeRows(0, {
+          eventName: "pull_request",
+          changedPaths: [changedPath],
+          nodeTestShards: [nativeTail],
+          changedPlannerSource:
+            changedPath === "src/focused.ts"
+              ? `export const createChangedNodeTestShards = () => [${JSON.stringify(nativeTail)}];
+               export const createChangedExtensionFallbackShards = () => [];`
+              : undefined,
+          scopeEnv: {
+            OPENCLAW_CI_RUN_WINDOWS: "true",
+            OPENCLAW_CI_HOSTED_HEALTHY: "true",
+          },
+        });
+        expect(manifest.status, manifest.output).toBe(0);
+        expect(manifest.outputs.hybrid_hosted_checks).toBe("false");
+      },
+    );
+
+    it("admits measured checks only with healthy assignment and space inside the existing budget", () => {
+      const preflight = readCiWorkflow().jobs.preflight;
+      const manifestStep = preflight.steps.find((step: WorkflowStep) => step.id === "manifest");
+      expect(manifestStep.env.OPENCLAW_CI_HOSTED_HEALTHY).toBe(
+        "${{ steps.hosted_health.outputs.healthy }}",
+      );
+      expect(preflight.outputs.hybrid_hosted_checks).toBe(
+        "${{ steps.manifest.outputs.hybrid_hosted_checks }}",
+      );
+      expect(preflight.outputs.hybrid_hosted_main_checks).toBe(
+        "${{ steps.manifest.outputs.hybrid_hosted_main_checks }}",
+      );
+      const baseline = manifestWithHostedNodeRows(0);
+      const originalBase = Number(baseline.outputs.hybrid_hosted_base_rows);
+      for (const healthy of ["true", "false", ""]) {
+        for (const baseRows of [32, 33, 34, 35, 36, 40, 41, 45, 46]) {
+          const manifest = manifestWithHostedNodeRows(baseRows - originalBase, {
+            scopeEnv: { OPENCLAW_CI_HOSTED_HEALTHY: healthy },
+          });
+          expect(manifest.status, manifest.output).toBe(0);
+          const admitted = healthy === "true" && baseRows <= 35;
+          const mainAdmitted = admitted && baseRows <= 32;
+          expect(manifest.outputs.hybrid_hosted_checks).toBe(String(admitted));
+          expect(manifest.outputs.hybrid_hosted_main_checks).toBe(String(mainAdmitted));
+          const hosted = emittedHostedRows(manifest.outputs);
+          const withoutChecks = emittedHostedRows({
+            ...manifest.outputs,
+            hybrid_hosted_checks: "false",
+            hybrid_hosted_main_checks: "false",
+          });
+          expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);
+          expect(hosted.length - withoutChecks.length).toBe(
+            (admitted ? 5 : 0) + (mainAdmitted ? 3 : 0),
+          );
+          expect(hosted.filter((name) => name === "build-artifacts")).toHaveLength(
+            mainAdmitted ? 1 : 0,
+          );
+          expect(
+            hosted.filter((name) => name === "check-test-types-hosted-core-shard"),
+          ).toHaveLength(admitted ? 2 : 0);
+          for (const name of ["check-shard", "check-additional-shard"]) {
+            expect(
+              hosted.filter((row) => row === name).length -
+                withoutChecks.filter((row) => row === name).length,
+            ).toBe(admitted ? (name === "check-shard" ? 1 + (mainAdmitted ? 2 : 0) : 2) : 0);
+          }
+          // The old UI/security decision remains independent of the new check admission.
+          expect(manifest.outputs.hybrid_hosted_offload).toBe(String(baseRows <= 40));
+          for (const name of [
+            "checks-node-core-test-nondist-shard",
+            "qa-smoke-ci-profile",
+            "checks-ui-e2e-real-gateway",
+            "android",
+          ]) {
+            expect(hosted.filter((row) => row === name)).toEqual(
+              withoutChecks.filter((row) => row === name),
+            );
+          }
+        }
+      }
+    });
+
     it.each([
       {
         label: "same-repo PR",
@@ -4803,9 +5044,14 @@ NODE
     ])(
       "leaves $label routing outside optional offload admission",
       ({ label: _label, ...options }) => {
-        const manifest = manifestWithHostedNodeRows(0, options);
+        const manifest = manifestWithHostedNodeRows(0, {
+          ...options,
+          scopeEnv: { OPENCLAW_CI_HOSTED_HEALTHY: "true", ...options.scopeEnv },
+        });
         expect(manifest.status, manifest.output).toBe(0);
         expect(manifest.outputs.hybrid_hosted_offload).toBe("false");
+        expect(manifest.outputs.hybrid_hosted_checks).toBe("false");
+        expect(manifest.outputs.hybrid_hosted_main_checks).toBe("false");
       },
     );
 
@@ -8825,167 +9071,6 @@ server.listen(0, "127.0.0.1", () => {
     });
   });
 
-  it("fingerprints dependency install inputs without ordinary script churn", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-dependency-fingerprint-"));
-    try {
-      const helper = path.resolve(".github/actions/setup-node-env/dependency-fingerprint.mjs");
-      const writeManifest = (manifest: Record<string, unknown>) => {
-        writeFileSync(path.join(root, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-      };
-      const fingerprint = (frozenLockfile = true) =>
-        execFileSync(
-          process.execPath,
-          [helper, "--workspace", root, "--frozen-lockfile", frozenLockfile ? "true" : "false"],
-          { encoding: "utf8" },
-        ).trim();
-
-      execFileSync("git", ["init", "-q"], { cwd: root });
-      writeManifest({
-        name: "fixture",
-        openclaw: { schemaVersions: { agent: 17, state: 6 } },
-        scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-          test: "vitest run",
-        },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-      execFileSync("git", ["add", "package.json", "pnpm-lock.yaml"], { cwd: root });
-
-      const baseline = fingerprint();
-      expect(baseline).toMatch(/^v2-[a-f0-9]{64}$/);
-
-      // Presence is part of the record type, so a real file cannot collide
-      // with the representation of an absent optional install input.
-      writeFileSync(path.join(root, ".pnpmfile.cjs"), "<missing>");
-      expect(fingerprint()).not.toBe(baseline);
-      rmSync(path.join(root, ".pnpmfile.cjs"));
-      expect(fingerprint()).toBe(baseline);
-
-      writeFileSync(path.join(root, ".pnpmfile.mjs"), "export const hooks = {};\n");
-      const mjsHookFingerprint = fingerprint();
-      expect(mjsHookFingerprint).not.toBe(baseline);
-      writeFileSync(
-        path.join(root, ".pnpmfile.mjs"),
-        "export const hooks = { readPackage: (pkg) => pkg };\n",
-      );
-      expect(fingerprint()).not.toBe(mjsHookFingerprint);
-      rmSync(path.join(root, ".pnpmfile.mjs"));
-      expect(fingerprint()).toBe(baseline);
-
-      for (const relativePath of [
-        "node-version.mjs",
-        ".github/actions/setup-node-env/install-dependencies.sh",
-        "scripts/check-install-dependency-ownership.mjs",
-        "scripts/prepare-git-hooks.mjs",
-        "scripts/lib/package-lifecycle-marker.mjs",
-      ]) {
-        const inputPath = path.join(root, relativePath);
-        mkdirSync(path.dirname(inputPath), { recursive: true });
-        writeFileSync(inputPath, "fixture\n");
-        expect(fingerprint(), relativePath).not.toBe(baseline);
-        rmSync(inputPath);
-        expect(fingerprint(), relativePath).toBe(baseline);
-      }
-
-      // Formatting, key order, and scripts that pnpm install never executes
-      // should keep the existing dependency snapshot warm.
-      writeManifest({
-        devDependencies: { vitest: "1.0.0" },
-        scripts: {
-          test: "vitest run --reporter=dot",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-        },
-        name: "fixture",
-      });
-      expect(fingerprint()).toBe(baseline);
-
-      // Repository-owned package metadata does not affect pnpm's install tree
-      // or any audited install hook, so schema churn must stay warm.
-      writeManifest({
-        name: "fixture",
-        openclaw: { schemaVersions: { agent: 17, state: 7 } },
-        scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-          test: "vitest run",
-        },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      expect(fingerprint()).toBe(baseline);
-
-      writeManifest({
-        name: "fixture",
-        scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-          test: "vitest run",
-        },
-        devDependencies: { vitest: "2.0.0" },
-      });
-      expect(fingerprint()).not.toBe(baseline);
-
-      writeManifest({
-        name: "fixture",
-        scripts: { postinstall: "node install-v2.mjs", test: "vitest run" },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      expect(() => fingerprint()).toThrow(/unaudited install lifecycle scripts in package\.json/);
-
-      mkdirSync(path.join(root, "packages", "worker"), { recursive: true });
-      writeManifest({
-        name: "fixture",
-        scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-        },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      const workerManifest = path.join(root, "packages", "worker", "package.json");
-      writeFileSync(
-        workerManifest,
-        `${JSON.stringify({ name: "worker", scripts: { prepare: "node build.mjs" } })}\n`,
-      );
-      execFileSync("git", ["add", "packages/worker/package.json"], { cwd: root });
-      expect(() => fingerprint()).toThrow(
-        /unaudited install lifecycle scripts in packages\/worker\/package\.json/,
-      );
-      writeFileSync(
-        workerManifest,
-        `${JSON.stringify({ name: "worker", scripts: { build: "node build.mjs" } })}\n`,
-      );
-
-      writeManifest({
-        name: "fixture",
-        scripts: {
-          "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
-          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
-          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
-          prepare: "node scripts/prepare-git-hooks.mjs",
-          test: "vitest run",
-        },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      writeFileSync(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: '9.1'\n");
-      expect(fingerprint()).not.toBe(baseline);
-      expect(fingerprint(false)).not.toBe(baseline);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it("hashes transform inputs once per enabled setup and never for skipped caches", () => {
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
     const transformSteps = (action.runs.steps as WorkflowStep[]).filter((step) =>
@@ -11354,7 +11439,7 @@ server.listen(0, "127.0.0.1", () => {
         ref: "${{ github.workflow_sha }}",
         path: ".ci-harness",
         "sparse-checkout":
-          "/.github/actions/\n/scripts/lib/release-context.mjs\n/scripts/lib/release-version.mjs\n",
+          "/.github/actions/\n/scripts/lib/pnpm-lockfile-documents.mjs\n/scripts/lib/release-context.mjs\n/scripts/lib/release-version.mjs\n",
         "sparse-checkout-cone-mode": false,
         "persist-credentials": false,
       },
@@ -11556,6 +11641,62 @@ server.listen(0, "127.0.0.1", () => {
         "persist-credentials": false,
       });
     }
+  });
+
+  it("selects a supported Node before lightweight checks, release approval, and image wrappers", () => {
+    const cases: [file: string, jobId: string, consumerName: string, setupCondition?: string][] = [
+      ["workflow-sanity.yml", "actionlint", "Disallow tracked merge conflict markers"],
+      ["android-release.yml", "publish_signed_android_apk", "Validate release approval and target"],
+      ["docker-channel-promote.yml", "resolve", "Resolve release channel policy"],
+      ["linux-app-release.yml", "validate_release", "Verify trusted release tooling identity"],
+      [
+        "openclaw-live-and-e2e-checks-reusable.yml",
+        "prepare_live_test_image",
+        "Pack live-test image artifact",
+      ],
+      [
+        "openclaw-live-and-e2e-checks-reusable.yml",
+        "validate_live_models_docker",
+        "Verify and load live-test image artifact",
+      ],
+      [
+        "openclaw-live-and-e2e-checks-reusable.yml",
+        "validate_live_models_docker_targeted",
+        "Verify and load live-test image artifact",
+      ],
+      ["openclaw-release-publish.yml", "publish", "Record postpublish outcome", "${{ always() }}"],
+    ];
+    for (const [file, jobId, consumerName, setupCondition] of cases) {
+      const workflow = parse(readFileSync(`.github/workflows/${file}`, "utf8"));
+      const job = workflow.jobs[jobId];
+      const steps: WorkflowStep[] = job.steps;
+      const consumerIndex = steps.findIndex((step) => step.name === consumerName);
+      const context = `${file}:${jobId}`;
+      expect(consumerIndex, context).toBeGreaterThanOrEqual(0);
+      const setup = expectDefined(
+        steps.slice(0, consumerIndex).find((step) => step.uses?.startsWith("actions/setup-node@")),
+        `${context} must select Node before ${consumerName}`,
+      );
+      const version = setup.with?.["node-version"];
+      const resolved =
+        version === "${{ env.NODE_VERSION }}"
+          ? (job.env?.NODE_VERSION ?? workflow.env?.NODE_VERSION)
+          : version;
+      expect(isSupportedOpenClawNodeVersion(resolved), context).toBe(true);
+      expect(setup.if, context).toBe(setupCondition);
+      expect(setup.with?.["package-manager-cache"], context).toBe(false);
+    }
+    const ci = readCiWorkflow();
+    const manifestRuntime = expectDefined(
+      ci.jobs.preflight.steps.find(
+        (step: WorkflowStep) => step.name === "Setup manifest TypeScript runtime",
+      ),
+      "CI manifest runtime",
+    );
+    expect(manifestRuntime.with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
+    expect(isSupportedOpenClawNodeVersion(ci.env.NODE_VERSION), "CI manifest runtime pin").toBe(
+      true,
+    );
   });
 
   it("pins workflow sanity's typed Git policy after Python setup", () => {
@@ -18126,7 +18267,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(qaValidateJob.outputs.workflow_sha).toBe("${{ steps.workflow.outputs.workflow_sha }}");
     expect(qaValidateJob.outputs).not.toHaveProperty("workflow_repository");
-    const workflowIdentityStep = qaValidateJob.steps[0];
+    expect(qaValidateJob.steps[0]).toEqual({
+      name: "Setup supported Node runtime",
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: { "node-version": "24.19.0", "package-manager-cache": false },
+    });
+    const workflowIdentityStep = qaValidateJob.steps[1];
     expect(workflowIdentityStep).toMatchObject({
       name: "Resolve job workflow identity",
       id: "workflow",

@@ -427,7 +427,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       });
       return;
     }
-    if (event.key === "Enter") {
+    if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
       event.preventDefault();
       this.moveFileSearch(event.shiftKey ? -1 : 1);
     }

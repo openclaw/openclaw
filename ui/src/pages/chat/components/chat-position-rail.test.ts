@@ -2,7 +2,7 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { renderChatPositionRail } from "./chat-position-rail.ts";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
@@ -27,9 +27,134 @@ function message(id: string, role: string, content: unknown, seq: number, runId?
   };
 }
 
+function stubRailVisibility() {
+  let publishVisibility: (element: Element) => void = () => {};
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class implements IntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "0px";
+      readonly scrollMargin = "0px";
+      readonly thresholds = [0];
+      constructor(callback: IntersectionObserverCallback) {
+        publishVisibility = (element) => {
+          const rect = element.getBoundingClientRect();
+          callback(
+            [
+              {
+                target: element,
+                boundingClientRect: rect,
+                intersectionRect: rect,
+                rootBounds: rect,
+                intersectionRatio: 1,
+                isIntersecting: true,
+                time: 0,
+              },
+            ],
+            this,
+          );
+        };
+      }
+      takeRecords = () => [];
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+    },
+  );
+  return (element: Element) => publishVisibility(element);
+}
+
 describe("conversation position rail", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it.each(["mounted", "off-window", "focused"] as const)(
+    "publishes current position and keyboard entry together for a %s observer target",
+    (scenario) => {
+      const flushFrame = stubAnimationFrames();
+      const publishVisibility = stubRailVisibility();
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const activeMessage = vi.fn(() => "message-79");
+      const markers = Array.from({ length: 80 }, (_, index) => ({
+        id: `message-${index}`,
+        anchorId: `message-${index}`,
+        role: "user" as const,
+        message: message(`message-${index}`, "user", `Checkpoint ${index}`, index + 1),
+      }));
+      render(
+        transcript.renderSession("rail-publication", "agent:main:rail-publication", (session) => {
+          vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
+          return html`<div class="chat-thread" tabindex="0">
+            <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
+            ${renderChatPositionRail({
+              positions: {
+                markers,
+                markerIdsByMessageId: new Map(markers.map(({ id }) => [id, id])),
+              },
+              transcript: session,
+              requestUpdate: () => {},
+            })}
+          </div>`;
+        }),
+        container,
+      );
+      const root = container.querySelector<HTMLElement>(".chat-thread")!;
+      const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
+      Object.defineProperty(marks, "clientHeight", { configurable: true, value: 240 });
+      const marker = (id: string) =>
+        marks.querySelector<HTMLButtonElement>(`[data-position-marker-id="${id}"]`);
+      const current = () => marks.querySelector<HTMLButtonElement>('[aria-current="true"]');
+      const tabStops = () => [...marks.querySelectorAll<HTMLButtonElement>('[tabindex="0"]')];
+      try {
+        flushFrame();
+        publishVisibility(root.querySelector(".chat-bubble")!);
+        flushFrame();
+        root.focus();
+        expect(current()).toBe(marker("message-79"));
+        expect(tabStops()).toEqual([current()]);
+
+        if (scenario === "focused") {
+          marks.scrollTop = 40 * 12;
+          marks.dispatchEvent(new Event("scroll"));
+          flushFrame();
+          document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+          marker("message-40")!.focus();
+          expect(marker("message-40")!.matches(":focus-visible")).toBe(true);
+        }
+        const focused = document.activeElement;
+        const offset = marks.scrollTop;
+        const nextId = scenario === "mounted" ? "message-76" : "message-0";
+        expect(marker(nextId) !== null).toBe(scenario === "mounted");
+        activeMessage.mockReturnValue(nextId);
+        publishVisibility(root.querySelector(".chat-bubble")!);
+
+        // Observer delivery must not expose a new aria-current with the old Tab entry.
+        // Assert before advancing any frame, rather than waiting out that mismatch.
+        expect(current()).not.toBeNull();
+        expect(tabStops()).toEqual([scenario === "focused" ? focused : current()]);
+        expect(document.activeElement).toBe(focused);
+        flushFrame();
+        expect(current()?.dataset.positionMarkerId).toBe(nextId);
+        expect(tabStops()).toEqual([scenario === "focused" ? focused : current()]);
+        expect(document.activeElement).toBe(focused);
+        expect(marks.querySelectorAll(".chat-position-rail__marker").length).toBeLessThan(50);
+        if (scenario === "focused") {
+          expect(marks.scrollTop).toBe(offset);
+          // Leaving exploration restores the retained, off-window reader entry immediately.
+          root.focus();
+          expect(tabStops()).toEqual([current()]);
+        }
+        tabStops()[0]!.focus();
+        expect(document.activeElement).toBe(current());
+        root.focus();
+        expect(tabStops()).toEqual([current()]);
+      } finally {
+        render(nothing, container);
+        transcript.hostDisconnected();
+      }
+    },
+  );
 
   const railUpdateScenarios = [
     "boot",
@@ -46,39 +171,7 @@ describe("conversation position rail", () => {
   it.each(railUpdateScenarios)(
     "keeps the reader's rail position through %s updates",
     async (scenario) => {
-      let publishVisibility: (element: Element) => void = () => {};
-      vi.stubGlobal(
-        "IntersectionObserver",
-        class implements IntersectionObserver {
-          readonly root = null;
-          readonly rootMargin = "0px";
-          readonly scrollMargin = "0px";
-          readonly thresholds = [0];
-          constructor(callback: IntersectionObserverCallback) {
-            publishVisibility = (element) => {
-              const rect = element.getBoundingClientRect();
-              callback(
-                [
-                  {
-                    target: element,
-                    boundingClientRect: rect,
-                    intersectionRect: rect,
-                    rootBounds: rect,
-                    intersectionRatio: 1,
-                    isIntersecting: true,
-                    time: 0,
-                  },
-                ],
-                this,
-              );
-            };
-          }
-          takeRecords = () => [];
-          observe = vi.fn();
-          unobserve = vi.fn();
-          disconnect = vi.fn();
-        },
-      );
+      const publishVisibility = stubRailVisibility();
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       const settlesAtEnd = scenario === "end";
@@ -104,7 +197,7 @@ describe("conversation position rail", () => {
           "agent:main:rail-scroll-policy",
           (session) => {
             vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
-            return html`<div class="chat-thread">
+            return html`<div class="chat-thread" tabindex="0">
               <div class="chat-bubble" data-entry-id="message-79">Latest message</div>
               ${renderChatPositionRail({ positions, transcript: session, requestUpdate: () => {} })}
             </div>`;
@@ -217,24 +310,31 @@ describe("conversation position rail", () => {
           await flush();
           expect(marks.scrollTop).toBeLessThan(677);
         } else if (scenario === "focus") {
-          marks.scrollTop = 40 * 12 - 100;
+          marks.scrollTop = 60 * 12 - 100;
           await flush();
+          root.focus();
           document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-          marker(40).focus();
-          expect(marker(40).matches(":focus-visible")).toBe(true);
+          marker(60).focus();
+          expect(marker(60).matches(":focus-visible")).toBe(true);
           await flush();
-          expect(Number.parseFloat(marker(40).style.top)).toBeGreaterThanOrEqual(marks.scrollTop);
-          expect(Number.parseFloat(marker(40).style.top) + 12).toBeLessThanOrEqual(
+          expect(Number.parseFloat(marker(60).style.top)).toBeGreaterThanOrEqual(marks.scrollTop);
+          expect(Number.parseFloat(marker(60).style.top) + 12).toBeLessThanOrEqual(
             marks.scrollTop + marks.clientHeight,
           );
           const focusedOffset = marks.scrollTop;
           activeMessage.mockReturnValue("message-77");
+          publishVisibility(root.querySelector(".chat-bubble")!);
+          expect([...marks.querySelectorAll('[tabindex="0"]')]).toEqual([marker(60)]);
           await flush();
-          expect(document.activeElement).toBe(marker(40));
+          expect(document.activeElement).toBe(marker(60));
           expect(marks.scrollTop).toBe(focusedOffset);
-          marker(40).blur();
+          marker(60).blur();
           activeMessage.mockReturnValue("message-79");
+          publishVisibility(root.querySelector(".chat-bubble")!);
+          // Observer updates publish reader position and Tab entry in the same layout frame.
           await flush();
+          expect(marker(79).getAttribute("aria-current")).toBe("true");
+          expect([...marks.querySelectorAll('[tabindex="0"]')]).toEqual([marker(79)]);
           expect(marks.scrollTop).toBe(677);
         } else if (scenario === "focus-resize") {
           document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));

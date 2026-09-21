@@ -3766,15 +3766,15 @@ describe("main-session-restart-recovery", () => {
     try {
       await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
       dispatchSettlement.resolve(); // The second store waits for the first recovery slot.
-      await waitForFast(() => expect(callGateway).toHaveBeenCalledTimes(2));
+      await mockRecoveryRuntime.expectAdmission(
+        2,
+        { storePath, sessionKey: "agent:main:main" },
+        { storePath: lateStorePath, sessionKey: "agent:late:main" },
+      );
       await recovery.stop();
 
-      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
-        abortedLastRun: false,
-      });
-      expect(
-        loadSessionEntry({ sessionKey: "agent:late:main", storePath: lateStorePath }),
-      ).toMatchObject({ abortedLastRun: false });
+      expect(readStore(storePath)["agent:main:main"]?.abortedLastRun).toBe(false);
+      expect(readStore(lateStorePath)["agent:late:main"]?.abortedLastRun).toBe(false);
       expect(discoverySpy.mock.calls.filter(([observedCfg]) => observedCfg === cfg)).toHaveLength(
         2,
       );
@@ -3910,7 +3910,7 @@ describe("main-session-restart-recovery", () => {
     ]);
 
     releaseStartup.resolve();
-    await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+    await mockRecoveryRuntime.expectAdmission(1, { storePath, sessionKey: "agent:main:main" });
     await recovery.stop();
 
     const store = readStore(storePath);
@@ -3947,7 +3947,7 @@ describe("main-session-restart-recovery", () => {
     } as OpenClawConfig;
     releaseStartup.resolve();
 
-    await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+    await mockRecoveryRuntime.expectAdmission(1, { storePath, sessionKey: "agent:work:main" });
     await recovery.stop();
     expect(loadSessionEntry({ sessionKey: "agent:work:main", storePath })).toMatchObject({
       abortedLastRun: false,
@@ -4300,65 +4300,6 @@ describe("main-session-restart-recovery", () => {
       discoverySpy.mockRestore();
       vi.useRealTimers();
     }
-  });
-
-  it("admits each scheduled recovery attempt as independent root work", async () => {
-    const sessionsDir = await makeSessionsDir();
-    await writeMainSession({
-      sessionsDir,
-      pendingFinalDelivery: makePendingFinalDelivery(),
-    });
-
-    const suspensionRef: {
-      current: ReturnType<typeof tryBeginGatewaySuspendAdmission>;
-    } = { current: null };
-    vi.mocked(callGateway)
-      .mockImplementationOnce(async () => {
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
-        suspensionRef.current = tryBeginGatewaySuspendAdmission(() => {});
-        expect(suspensionRef.current?.commit()).toBe(true);
-        throw new Error("retry after suspension");
-      })
-      .mockImplementationOnce(async () => {
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
-        return { runId: "run-resumed", status: "timeout" };
-      })
-      .mockImplementationOnce(async () => {
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
-        return { runId: "run-resumed" };
-      });
-
-    scheduleRestartAbortedMainSessionRecovery({
-      getConfig: () => ({}),
-      delayMs: 1,
-      maxRetries: 2,
-      stateDir: tmpDir,
-    });
-
-    await waitForFast(() => {
-      expect(callGateway).toHaveBeenCalledTimes(2);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    });
-    expect(suspensionRef.current?.release()).toBe(true);
-
-    await waitForFast(() => {
-      expect(callGateway).toHaveBeenCalledTimes(3);
-      const entry = loadSessionEntry({
-        storePath: path.join(sessionsDir, "sessions.json"),
-        sessionKey: "agent:main:main",
-      });
-      expect(entry?.abortedLastRun).toBe(false);
-    });
-    const runIds = vi
-      .mocked(callGateway)
-      .mock.calls.map(([request]) =>
-        request.method === "agent"
-          ? (request.params as { idempotencyKey?: unknown }).idempotencyKey
-          : undefined,
-      )
-      .filter((runId) => runId !== undefined);
-    expect(new Set(runIds).size).toBe(1);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("retries only the requested abandoned durable claim", async () => {

@@ -4,7 +4,8 @@ import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
 import { takeInstantThreadRestore } from "./instant-thread-restore.ts";
-import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
+import type { NewSessionRouteData } from "./location.ts";
+import { newSessionModelLocationFromSearch } from "./model-location.ts";
 
 export async function load(
   context: ApplicationContext,
@@ -15,7 +16,7 @@ export async function load(
   if (restored) {
     return restored;
   }
-  const requestedLocation = newSessionLocationFromSearch(search);
+  const requestedLocation = newSessionModelLocationFromSearch(search);
   const requestedAgentId = requestedLocation.agentId.trim();
   let groupCwd = "";
   let groupWorktree = false;
@@ -45,7 +46,7 @@ export async function load(
       groupWorktree,
       groupCatalogGeneration,
       groupDefaultsStatus,
-      model: "",
+      model: requestedLocation.requestedModel ?? "",
       catalogLabel: "",
       startTerminal: false,
     };

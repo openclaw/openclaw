@@ -158,12 +158,20 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
           }
         }}
       >
-        <img
-          class="sidebar-workspace-header__mark"
-          src=${controlUiPublicAssetPath("favicon.svg", host.basePath)}
-          alt=""
-          aria-hidden="true"
-        />
+        ${
+          host.sessionDataContext?.theme.branding.mascot === "none"
+            ? html`<span
+                class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
+                aria-hidden="true"
+                >${icons.mark}</span
+              >`
+            : html`<img
+                class="sidebar-workspace-header__mark"
+                src=${controlUiPublicAssetPath("favicon.svg", host.basePath)}
+                alt=""
+                aria-hidden="true"
+              />`
+        }
         <span class="sidebar-agent-card__text">
           <span class="sidebar-agent-card__name">
             ${renderHoverMarquee(name, "sidebar-agent-card__name-text", { loop: true, delay: 300, speed: 35 })}

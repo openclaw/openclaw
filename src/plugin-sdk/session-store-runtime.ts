@@ -58,11 +58,13 @@ export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 
 export {
   deliveryContextFromSession,
-  normalizeSessionDeliveryState,
-  projectSessionDeliveryFields,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
+} from "../utils/delivery-context.read.js";
+export {
+  normalizeSessionDeliveryState,
+  projectSessionDeliveryFields,
 } from "../utils/delivery-context.shared.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;

@@ -11,7 +11,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { callGateway } from "../../gateway/call.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
-import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
 import {
   getSessionWorkAdmissionOwnerRelease,
   interruptSessionWorkAdmissions,
@@ -25,6 +30,7 @@ import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.te
 import {
   recoverRestartAbortedMainSessions as recoverRestartAbortedMainSessionsBase,
   retryRestartAbortedMainSessionRecovery,
+  scheduleRestartAbortedMainSessionRecovery,
 } from "./main-session-restart-recovery.js";
 
 vi.mock("../../gateway/call.js", () => ({
@@ -56,6 +62,7 @@ describe("startup recovery admission", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(callGateway).mockReset().mockResolvedValue({ runId: "run-resumed" });
     dispatchSettlement = createDeferred();
     resetAgentEventsForTest();
     resetGatewayWorkAdmission();
@@ -67,7 +74,9 @@ describe("startup recovery admission", () => {
     await cleanupSessionStateForTest({ stateDir: tmpDir });
   });
 
-  async function makeMainSessionFixture() {
+  async function makeMainSessionFixture(
+    pendingFinalDelivery?: InternalSessionEntry["pendingFinalDelivery"],
+  ) {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:main";
@@ -80,6 +89,7 @@ describe("startup recovery admission", () => {
         updatedAt: Date.now() - 10_000,
         status: "running",
         abortedLastRun: true,
+        pendingFinalDelivery,
       },
     );
     return { sessionsDir, storePath, sessionKey };
@@ -215,4 +225,89 @@ describe("startup recovery admission", () => {
       }
     },
   );
+
+  it("admits each scheduled recovery attempt as independent root work", async () => {
+    const { storePath, sessionKey } = await makeMainSessionFixture({
+      kind: "replayable",
+      text: "interrupted response",
+      createdAt: Date.now(),
+      intentId: "intent-prepared-default",
+      deliveries: [{ id: "delivery-prepared-default", state: "prepared" }],
+    });
+
+    const suspensionRef: {
+      current: ReturnType<typeof tryBeginGatewaySuspendAdmission>;
+    } = { current: null };
+    vi.mocked(callGateway)
+      .mockImplementationOnce(async () => {
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        suspensionRef.current = tryBeginGatewaySuspendAdmission(() => {});
+        expect(suspensionRef.current?.commit()).toBe(true);
+        throw new Error("retry after suspension");
+      })
+      .mockImplementationOnce(async () => {
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        return { runId: "run-resumed", status: "timeout" };
+      })
+      .mockImplementationOnce(async () => {
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        return { runId: "run-resumed" };
+      });
+
+    const firstAttempt = createDeferred();
+    const secondAttempt = createDeferred();
+    const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+    let attempt = 0;
+    const admissionSpy = vi
+      .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+      .mockImplementation(
+        async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
+          const settled = attempt++ === 0 ? firstAttempt : secondAttempt;
+          try {
+            return await admit(run, origin, signal);
+          } finally {
+            settled.resolve();
+          }
+        },
+      );
+    vi.useFakeTimers();
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      getConfig: () => ({}),
+      delayMs: 0,
+      maxRetries: 2,
+      stateDir: tmpDir,
+      gatewayRuntime,
+    });
+
+    try {
+      await firstAttempt.promise;
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(suspensionRef.current?.release()).toBe(true);
+
+      await secondAttempt.promise;
+      expect(callGateway).toHaveBeenCalledTimes(3);
+      const entry = loadSessionEntry({ storePath, sessionKey });
+      expect(entry?.abortedLastRun).toBe(false);
+      const runIds = vi
+        .mocked(callGateway)
+        .mock.calls.map(([request]) =>
+          request.method === "agent"
+            ? (request.params as { idempotencyKey?: unknown }).idempotencyKey
+            : undefined,
+        )
+        .filter((runId) => runId !== undefined);
+      expect(new Set(runIds).size).toBe(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      suspensionRef.current?.release();
+      await recovery.stop();
+      admissionSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });

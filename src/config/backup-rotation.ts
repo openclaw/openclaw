@@ -4,8 +4,8 @@ import path from "node:path";
 import { isRootFileMissingFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { tempFile } from "../infra/fs-safe-advanced.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
-import { createConfigWriteAuthorityGuard } from "./io.write-safety.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 
 export const CONFIG_BACKUP_COUNT = 5;
 

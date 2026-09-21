@@ -5,6 +5,8 @@ import { assert, describe, expect, it } from "vitest";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 describe("cli json stdout contract", () => {
+  // skills-cli suites own individual validation and fallback branches. Keep
+  // representative built-process proofs for routing, Gateway, and debug output.
   it.each([
     {
       name: "search with a leaf JSON flag",
@@ -12,48 +14,8 @@ describe("cli json stdout contract", () => {
       message: "ClawHub /api/v1/search failed (400): offline fixture",
     },
     {
-      name: "search with a parent JSON flag",
-      args: ["skills", "--json", "search", "fixture"],
-      message: "ClawHub /api/v1/search failed (400): offline fixture",
-    },
-    {
-      name: "list with a leaf JSON flag",
-      args: ["skills", "list", "--agent", "", "--json"],
-      message: "--agent must not be blank",
-    },
-    {
       name: "list with a parent JSON flag",
       args: ["skills", "--json", "list", "--agent", ""],
-      message: "--agent must not be blank",
-    },
-    {
-      name: "info with a leaf JSON flag",
-      args: ["skills", "info", "fixture", "--agent", "", "--json"],
-      message: "--agent must not be blank",
-    },
-    {
-      name: "info with a parent JSON flag",
-      args: ["skills", "--json", "info", "fixture", "--agent", ""],
-      message: "--agent must not be blank",
-    },
-    {
-      name: "check with a leaf JSON flag",
-      args: ["skills", "check", "--agent", "", "--json"],
-      message: "--agent must not be blank",
-    },
-    {
-      name: "check with a parent JSON flag",
-      args: ["skills", "--json", "check", "--agent", ""],
-      message: "--agent must not be blank",
-    },
-    {
-      name: "the default report after its agent flag",
-      args: ["skills", "--agent", "", "--json"],
-      message: "--agent must not be blank",
-    },
-    {
-      name: "the default report before its agent flag",
-      args: ["skills", "--json", "--agent", ""],
       message: "--agent must not be blank",
     },
     {
@@ -62,34 +24,15 @@ describe("cli json stdout contract", () => {
       message: "gateway remote mode misconfigured: gateway.remote.url missing",
       remoteMissing: true,
     },
-    ...[
-      { name: "the default report", args: ["skills", "--json"] },
-      { name: "list", args: ["skills", "list", "--json"] },
-      { name: "info", args: ["skills", "info", "fixture", "--json"] },
-      { name: "check", args: ["skills", "check", "--json"] },
-      { name: "curator status", args: ["skills", "curator", "status", "--json"] },
-      { name: "curator pin", args: ["skills", "curator", "pin", "fixture", "--json"] },
-      { name: "curator unpin", args: ["skills", "curator", "unpin", "fixture", "--json"] },
-      { name: "curator restore", args: ["skills", "curator", "restore", "fixture", "--json"] },
-      {
-        name: "workshop apply",
-        args: ["skills", "workshop", "apply", "fixture-proposal", "--json"],
-      },
-    ].map(({ name, args }) => ({
-      name: `${name} after an explicit environment Gateway fails`,
-      args,
+    {
+      name: "curator status after an explicit environment Gateway fails",
+      args: ["skills", "curator", "status", "--json"],
       message: "AUTOQA_SELECTED_GATEWAY_FAILURE",
       explicitGateway: true,
-    })),
+    },
     {
       name: "retired curator mutation",
       args: ["skills", "curator", "pin", "missing-skill", "--json"],
-      message:
-        "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.",
-    },
-    {
-      name: "retired curator mutation with parent JSON",
-      args: ["skills", "curator", "--json", "pin", "missing-skill"],
       message:
         "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.",
     },
@@ -101,11 +44,6 @@ describe("cli json stdout contract", () => {
     {
       name: "workshop mutation",
       args: ["skills", "workshop", "reject", "missing-proposal", "--json"],
-      message: "Skill proposal not found: missing-proposal",
-    },
-    {
-      name: "workshop inspection",
-      args: ["skills", "workshop", "inspect", "missing-proposal", "--json"],
       message: "Skill proposal not found: missing-proposal",
     },
   ])("returns one canonical JSON document when skills $name fails", async (testCase) => {

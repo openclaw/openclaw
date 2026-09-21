@@ -176,7 +176,11 @@ describe("native Talk action ownership through public plugin registration", () =
       { type: "text", text: "Both labels are preserved." },
     ]);
     const providerStream = createAssistantMessageEventStream();
-    streamMocks.streamSimple.mockImplementation(() => providerStream);
+    const providerStarted = createDeferredCore();
+    streamMocks.streamSimple.mockImplementation(() => {
+      providerStarted.resolve();
+      return providerStream;
+    });
     await withNativePlugin(async (fixture) => {
       const scope = {
         agentId: AGENT_ID,
@@ -232,6 +236,9 @@ describe("native Talk action ownership through public plugin registration", () =
             await modelRun;
             await recorder?.waitForRuntimePersistence();
             return { payloads: [{ text: "Both labels are preserved." }], meta: { durationMs: 0 } };
+          }).catch((error: unknown) => {
+            providerStarted.reject(error);
+            throw error;
           }),
       );
       try {
@@ -239,7 +246,8 @@ describe("native Talk action ownership through public plugin registration", () =
         socket.serverEvent(nativeTranscript(spoken));
         await flushNativeTranscript(result);
         socket.serverEvent(nativeDelegation("custody-request", delegated));
-        await vi.waitFor(() => expect(streamMocks.streamSimple).toHaveBeenCalledOnce());
+        await providerStarted.promise;
+        expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
         const run = upstream.runEmbeddedAgent.mock.calls[0]![0];
         expect(run.prompt).toContain(delegated);
         const modelMessages = streamMocks.streamSimple.mock.calls[0]![1].messages;

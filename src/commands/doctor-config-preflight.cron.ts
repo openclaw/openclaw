@@ -1,4 +1,31 @@
+import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MigrationMessages } from "../infra/state-migrations.types.js";
+
+/** Preserve a retired partition selector even when other config cannot drive core migrations. */
+export async function migrateRetainedStore(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  measure: ConfigSnapshotReadMeasure;
+  report: (result: MigrationMessages) => void;
+}): Promise<void> {
+  const cfg = retainStoreConfig(params.config);
+  if (!cfg) {
+    return;
+  }
+  const { repairLegacyCronStoreWithoutPrompt } = await params.measure(
+    "cron-repair-import",
+    () => import("./doctor/cron/legacy-repair.js"),
+  );
+  params.report(
+    await params.measure("cron-repair", () =>
+      repairLegacyCronStoreWithoutPrompt({ cfg, migrateCodexModelRefs: false }),
+    ),
+  );
+  const { migrateLegacyConfigMachineState } =
+    await import("../infra/state-migrations.config-machine-state.js");
+  params.report(migrateLegacyConfigMachineState({ config: params.config, env: params.env }));
+}
 
 /** Restores retired cron migration inputs that canonical config migration intentionally strips. */
 export function withLegacyConfig(

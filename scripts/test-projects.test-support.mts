@@ -1379,8 +1379,18 @@ function resolveExplicitTestPrefixTargets(targetArg: string, cwd: string) {
   return targets.length > 0 ? targets.toSorted((left, right) => left.localeCompare(right)) : null;
 }
 
+function isNormalizedLiteralPath(value: string) {
+  return /^[\w.-]+(?:\/[\w.-]+)*$/u.test(value) && !/(?:^|\/)\.{1,2}(?:\/|$)/u.test(value);
+}
+
 function includePatternMatchesAnyFile(pattern: string, files: string[]) {
-  return files.some((file) => file === pattern || path.matchesGlob(file, pattern));
+  const literalPattern = isNormalizedLiteralPath(pattern);
+  return files.some(
+    (file) =>
+      file === pattern ||
+      // Keep Node's separator, dot-segment, and platform handling for other paths.
+      ((!literalPattern || !isNormalizedLiteralPath(file)) && path.matchesGlob(file, pattern)),
+  );
 }
 
 function resolveExplicitSourceTestTargets(
@@ -2352,7 +2362,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     ".github/actions/setup-node-env/action.yml",
     ["setup-node-env-bun", packageAcceptance, workflowGuards],
   ],
-  [".github/actions/setup-node-env/dependency-fingerprint.mjs", [workflowGuards]],
+  [
+    ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+    [workflowGuards, "setup-node-env-dependency-fingerprint"],
+  ],
   [".github/actions/setup-node-env/seed-bun-from-image.mjs", ["setup-node-env-bun"]],
   [".github/actions/setup-pnpm-store-cache/action.yml", [packageAcceptance, workflowGuards]],
   [".github/actions/setup-pnpm-store-cache/ensure-node.sh", ["setup-pnpm-store-cache-ensure-node"]],
@@ -3478,7 +3491,7 @@ function resolvePackageFixtureTargets(changedPath: string, cwd: string) {
 }
 
 function resolveAppcastTargets(changedPath: string) {
-  return changedPath === "appcast.xml" ? APPCAST_TEST_TARGETS : null;
+  return /^appcast(?:-(?:arm64|x86_64))?\.xml$/u.test(changedPath) ? APPCAST_TEST_TARGETS : null;
 }
 
 function resolveKovaSchemaTestTargets(changedPath: string) {

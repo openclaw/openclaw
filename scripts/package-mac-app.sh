@@ -457,7 +457,20 @@ if [[ "$SIGNING_VARIANT" == "elevation-host" ]]; then
   echo "🖥  Omitting embedded CUA driver from elevation-host package"
 else
   echo "🖥  Staging embedded CUA driver"
-  "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
+  CUA_DRIVER="$APP_ROOT/Contents/Resources/cua-driver"
+  "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"
+  if [[ "${#BUILD_ARCHS[@]}" -eq 1 ]]; then
+    CUA_ARCH="${BUILD_ARCHS[0]}"
+    CUA_DRIVER_THIN="${CUA_DRIVER}.thin"
+    echo "🖥  Thinning embedded CUA driver [$CUA_ARCH]"
+    lipo "$CUA_DRIVER" -thin "$CUA_ARCH" -output "$CUA_DRIVER_THIN"
+    chmod 0755 "$CUA_DRIVER_THIN"
+    mv "$CUA_DRIVER_THIN" "$CUA_DRIVER"
+    [[ "$(lipo -archs "$CUA_DRIVER")" == "$CUA_ARCH" ]] || {
+      echo "ERROR: CUA driver architecture did not match requested build: $CUA_ARCH" >&2
+      exit 1
+    }
+  fi
 fi
 
 echo "📦 Staging browser sign-in helper"

@@ -4,7 +4,12 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
-import { getPluginCache, type PluginCache } from "./plugin-cache.js";
+import {
+  getPluginCache,
+  releasePluginCacheInstance,
+  retainPluginCacheInstance,
+  type PluginCache,
+} from "./plugin-cache.js";
 import {
   getPluginInstance,
   getPluginInstanceOwner,
@@ -88,7 +93,7 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
     for (const record of registry.plugins) {
       const instance = getPluginInstance(record);
       if (instance) {
-        cache.instances.add(instance);
+        retainPluginCacheInstance(instance, cache);
       }
     }
   });
@@ -103,7 +108,7 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
       }
       // Publication transfers exact instances to their runtime owner, including adopted records.
       if (isPluginRecordActive(owner.registry, owner.record)) {
-        cache.instances.delete(instance);
+        releasePluginCacheInstance(instance, cache);
       } else if (registryEpochs.get(owner.registry)?.epoch === undefined) {
         instance.quiesce();
         registries.add(owner.registry);

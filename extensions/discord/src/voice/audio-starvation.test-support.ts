@@ -1,4 +1,5 @@
 import { isMainThread, parentPort, workerData, type MessagePort } from "node:worker_threads";
+import { createRealtimeVoiceAudioPortSender } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { DISCORD_CONTINUOUS_CLOCK_BYTES } from "./audio-worker-protocol.js";
 import { DiscordContinuousOutput } from "./continuous-output.runtime.js";
 import { DiscordRealtimePlayer } from "./realtime-player.runtime.js";
@@ -26,6 +27,10 @@ export function startDiscordPacingReceiver(
       // the SDK's own 20 ms resource consumption, not a substitute test timer.
       if (packet && !packet.equals(Buffer.from([0xf8, 0xff, 0xfe]))) {
         times.push(performance.now());
+        // Queuing playback can precede asynchronous encoder construction.
+        if (times.length === 1) {
+          started();
+        }
       }
       return packet;
     };
@@ -39,9 +44,6 @@ export function startDiscordPacingReceiver(
     player: room,
     logContext: "synthetic-starvation-proof",
     post: (event) => {
-      if (event.type === "continuous-start") {
-        started();
-      }
       if (event.type === "continuous-error") {
         throw new Error(event.error.message);
       }
@@ -70,16 +72,9 @@ if (!isMainThread && parentPort && workerData?.runtime === "discord-audio-starva
       control.close();
     });
   } else {
-    const closed = new Int32Array(data.state);
-    let inFlight = false;
+    const sender = createRealtimeVoiceAudioPortSender(data);
     let sample = 0;
-    data.port.on("message", () => {
-      inFlight = false;
-    });
     const timer = setInterval(() => {
-      if (inFlight || Atomics.load(closed, 0) !== 0) {
-        return;
-      }
       const audio = Buffer.alloc(960);
       for (let i = 0; i < 480; i += 1) {
         audio.writeInt16LE(
@@ -87,12 +82,11 @@ if (!isMainThread && parentPort && workerData?.runtime === "discord-audio-starva
           i * 2,
         );
       }
-      inFlight = true;
-      data.port.postMessage({ type: "audio", audio }, []);
+      sender.sendAudio(audio);
     }, 20);
     control.on("message", () => {
       clearInterval(timer);
-      data.port.close();
+      sender.close();
       control.close();
     });
   }

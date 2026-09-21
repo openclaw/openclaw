@@ -281,7 +281,10 @@ Choose **Icon & color** from a session menu and select a color swatch to add a n
   is not a separate stop or delete action.
 
 Both shortcuts work from the chat composer, ignore key repeat and text
-composition, and leave open modal dialogs in control. New Session preserves the
+composition, and leave open modal dialogs in control. The keyboard-shortcuts help
+dialog is the exception for New Session: the shortcut closes help before opening
+and focusing the draft. Press **⌘/** or **Ctrl+/** again to close help without
+navigating. Archive remains blocked while help is open. New Session preserves the
 existing conversation's draft through normal navigation. Archive does not clear
 that draft or navigate to another conversation.
 

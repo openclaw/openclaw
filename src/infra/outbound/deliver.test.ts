@@ -102,11 +102,11 @@ const queueMocks = vi.hoisted(() => ({
   })),
   loadPendingDelivery: vi.fn(async () => null),
   findDeliveryIntentOwner: vi.fn<
-    () => {
+    () => Promise<{
       namespace: "prepared" | "preparing" | "migration" | "legacy-preparing" | "legacy";
       status: "pending" | "failed" | "completed";
-    } | null
-  >(() => null),
+    } | null>
+  >(async () => null),
   ackDelivery: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   failDelivery: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
   failDeliveryAfterPlatformSend: vi.fn<(...args: unknown[]) => Promise<void>>(async () => {}),
@@ -542,7 +542,7 @@ describe("deliverOutboundPayloads", () => {
       created: true,
     }));
     queueMocks.loadPendingDelivery.mockResolvedValue(null);
-    queueMocks.findDeliveryIntentOwner.mockReturnValue(null);
+    queueMocks.findDeliveryIntentOwner.mockResolvedValue(null);
     queueMocks.claimReusableDeliveryPlatformSendAttempt.mockResolvedValue("mock-producer-claim");
     queueMocks.renewDeliveryPlatformSendLease.mockImplementation(async () => Date.now() + 30_000);
     queueMocks.withStableDeliveryPreparation.mockReset();
@@ -556,7 +556,7 @@ describe("deliverOutboundPayloads", () => {
           markPublished: () => void;
         }) => Promise<unknown>;
       }) => {
-        if (queueMocks.findDeliveryIntentOwner()) {
+        if (await queueMocks.findDeliveryIntentOwner()) {
           return { status: "existing" };
         }
         const entry = {
@@ -1058,7 +1058,7 @@ describe("deliverOutboundPayloads", () => {
 
   it("does not cross platform I/O when a stable queue intent already exists", async () => {
     hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
-    queueMocks.findDeliveryIntentOwner.mockReturnValue({
+    queueMocks.findDeliveryIntentOwner.mockResolvedValue({
       namespace: "prepared",
       status: "completed",
     });
@@ -1082,7 +1082,7 @@ describe("deliverOutboundPayloads", () => {
   it("never falls back to fresh modifiers after another preparation owner wins", async () => {
     queueMocks.withStableDeliveryPreparation.mockResolvedValueOnce({ status: "existing" });
     queueMocks.loadPendingDelivery.mockResolvedValueOnce(null);
-    queueMocks.findDeliveryIntentOwner.mockReturnValueOnce(null);
+    queueMocks.findDeliveryIntentOwner.mockResolvedValueOnce(null);
     hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
     const sendMatrix = vi.fn();
 

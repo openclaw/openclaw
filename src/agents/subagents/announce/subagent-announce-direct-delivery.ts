@@ -12,7 +12,7 @@ import {
 } from "../../../sessions/input-provenance.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
-import { sessionDeliveryChannel } from "../../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../../utils/delivery-context.read.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayMessageChannel,

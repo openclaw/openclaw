@@ -19,6 +19,7 @@ import {
 } from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
 import {
+  createTaskRegistryReadPreparation,
   getTaskById,
   listTaskRecordPage,
   prepareTaskRegistryRead,
@@ -205,6 +206,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     const prepareFilter = (tasks: readonly Readonly<TaskRecord>[]) =>
       prepareTaskSessionReadFilter({ cfg: context.getRuntimeConfig(), client }, tasks);
     const pageParams = {
+      prepareRead: createTaskRegistryReadPreparation(),
       offset: cursor?.offset ?? 0,
       limit,
       expectedRevision: cursor?.taskRevision,

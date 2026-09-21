@@ -51,6 +51,7 @@ import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "./chat-history-events.ts";
 import { getAcceptedChatHistorySession, getChatHistoryLoadState } from "./chat-history-state.ts";
+import { sameChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
 import type {
   ChatPaneConnectionScope,
@@ -406,7 +407,25 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @litState() protected headerPlacementMovingKey: string | null = null;
   @litState() protected headerPlacementReclaimingKey: string | null = null;
   @litState() protected headerPlacementRestartingKey: string | null = null;
-  @litState() protected presencePayload: PresencePayload | undefined;
+  private presencePayloadValue: PresencePayload | undefined;
+  protected get presencePayload(): PresencePayload | undefined {
+    return this.presencePayloadValue;
+  }
+  protected set presencePayload(value: PresencePayload | undefined) {
+    const previous = this.presencePayloadValue;
+    // Control side effects and later renders must still read the newest raw facts.
+    this.presencePayloadValue = value;
+    const snapshot = this.context?.gateway.snapshot;
+    if (
+      !sameChatPanePresence(previous, value, {
+        sessionKey: this.state?.sessionKey ?? this.sessionKey,
+        selfUser: snapshot?.selfUser,
+        selfInstanceId: snapshot?.client?.instanceId,
+      })
+    ) {
+      this.requestUpdate("presencePayload", previous);
+    }
+  }
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
   protected readonly sessionSharingHydrationTargets = new Map<string, string>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();

@@ -42,11 +42,16 @@ async function stopTaskOwnedProcess(pid: number): Promise<void> {
   await expect.poll(() => isPidAlive(pid), { timeout: 2_000 }).toBe(false);
 }
 
-function runOneShot(client: CodexAppServerClient, abortSignal?: AbortSignal) {
+function runOneShot(
+  client: CodexAppServerClient,
+  abortSignal?: AbortSignal,
+  onExecutionPhase?: ReturnType<typeof createParams>["onExecutionPhase"],
+) {
   vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(client);
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
   params.oneShotCliRun = true;
   params.cleanupBundleMcpOnRunEnd = true;
+  params.onExecutionPhase = onExecutionPhase;
   if (abortSignal) {
     params.abortSignal = abortSignal;
   }
@@ -67,6 +72,9 @@ describe("Codex one-shot cleanup receipts", () => {
   it.each(["completed", "cancelled"] as const)(
     "preserves a %s one-shot outcome while native terminal cleanup remains uncertain",
     async (completion) => {
+      // Cold startup must not consume the unrelated attempt deadline in this cleanup fixture.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const turnAccepted = createDeferred<void>();
       let terminalTerminated = false;
       const results: Record<string, unknown> = {
         initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
@@ -100,12 +108,18 @@ describe("Codex one-shot cleanup receipts", () => {
       });
       const warning = vi.spyOn(embeddedAgentLog, "warn");
       const abort = new AbortController();
-      const run = runOneShot(harness.client, abort.signal);
+      const run = runOneShot(harness.client, abort.signal, ({ phase }) => {
+        if (phase === "turn_accepted") {
+          turnAccepted.resolve();
+        }
+      });
       try {
-        await waitForHarnessRequest(harness, "turn/start");
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await Promise.race([
+          turnAccepted.promise,
+          run.then(() => {
+            throw new Error("One-shot fixture attempt ended before turn acceptance");
+          }),
+        ]);
         if (completion === "cancelled") {
           abort.abort("cancelled");
           expect(readAttemptTerminal(await run)).toMatchObject({ aborted: true, timedOut: false });

@@ -1,3 +1,7 @@
+import {
+  BUILTIN_THEMES,
+  resolveThemeBranding,
+} from "../../../packages/gateway-protocol/src/theme.ts";
 import type {
   ApplicationGateway,
   ApplicationTheme,
@@ -23,6 +27,13 @@ import {
   syncTypefaceStylesheets,
 } from "./typography.ts";
 
+function themeBranding(settings: UiPreferences, catalogTheme?: CatalogTheme) {
+  return (
+    catalogTheme?.branding ??
+    resolveThemeBranding(BUILTIN_THEMES.find((theme) => theme.id === settings.theme))
+  );
+}
+
 function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogTheme): void {
   if (typeof document === "undefined") {
     return;
@@ -35,6 +46,13 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   root.dataset.themeId = effectiveTheme;
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedTheme.endsWith("light") ? "light" : "dark";
+  const branding = themeBranding(settings, catalogTheme);
+  root.dataset.themeMascot = branding.mascot;
+  if (branding.avatarHat) {
+    root.dataset.themeAvatarHat = branding.avatarHat;
+  } else {
+    delete root.dataset.themeAvatarHat;
+  }
   // Plugin semantic styles select on [data-theme-resolved]; keep it in lockstep
   // with data-theme-mode before their lazy stylesheet loads.
   root.dataset.themeResolved = root.dataset.themeMode;
@@ -75,7 +93,37 @@ export function createApplicationTheme(
       if (generation !== presentationGeneration) {
         return;
       }
+      const previousMascot =
+        typeof document === "undefined" ? undefined : document.documentElement.dataset.themeMascot;
+      const previousHat =
+        typeof document === "undefined"
+          ? undefined
+          : document.documentElement.dataset.themeAvatarHat;
       applyThemePresentation(settings, catalog?.theme(settings.theme));
+      if (
+        typeof document !== "undefined" &&
+        (previousMascot !== document.documentElement.dataset.themeMascot ||
+          previousHat !== document.documentElement.dataset.themeAvatarHat)
+      ) {
+        for (const listener of listeners) {
+          listener();
+        }
+      }
+      if (
+        typeof document !== "undefined" &&
+        (previousMascot === "none" || document.documentElement.dataset.themeMascot === "none")
+      ) {
+        void import("./control-ui-environment-presentation.runtime.ts").then(
+          ({ invalidateControlUiFaviconPalette, syncControlUiFavicon }) => {
+            // Before the shell connects, the theme still owns palette readiness.
+            // Read the latest presentation when this lazy runtime becomes available.
+            if (!disposed) {
+              invalidateControlUiFaviconPalette();
+              syncControlUiFavicon();
+            }
+          },
+        );
+      }
     });
     // Live preferences cannot wait for a palette download. Presentation keeps
     // its own generation fence; subscribers consume the new snapshot now.
@@ -184,6 +232,9 @@ export function createApplicationTheme(
   void loadCatalog();
 
   return {
+    get branding() {
+      return themeBranding(settings, catalog?.theme(settings.theme));
+    },
     get catalog() {
       if (!catalogRequested) {
         catalogRequested = true;

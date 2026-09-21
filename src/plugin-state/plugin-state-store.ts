@@ -107,11 +107,34 @@ function createKeyedStoreForPluginId<T>(
   const prepared = prepareKeyedStoreOptions(pluginId, options);
   const assertRetainedActive = options.retention === "retained" ? assertActive : undefined;
   const store = createSyncKeyedStore<T>(prepared, assertRetainedActive);
+  return {
+    ...createAsyncKeyedStore<T>(prepared, assertRetainedActive, assertActive),
+    withCurrent: ({ assertCurrent }) => {
+      if (typeof assertCurrent !== "function") {
+        throw invalidInput("Plugin state action authority requires assertCurrent.");
+      }
+      const assertBoundCurrent = () => {
+        assertActive?.();
+        assertCurrent();
+      };
+      assertBoundCurrent();
+      return createAsyncKeyedStore<T>(prepared, assertBoundCurrent);
+    },
+    update: async (...args) => store.update(...args),
+    deleteIf: async (...args) => store.deleteIf(...args),
+  };
+}
+
+function createAsyncKeyedStore<T>(
+  prepared: PreparedKeyedStoreOptions,
+  assertActive?: () => void,
+  assertRangeActive = assertActive,
+): PluginStateKeyedStore<T, 2> {
   const scope = {
-    pluginId,
+    pluginId: prepared.pluginId,
     namespace: prepared.namespace,
     env: prepared.env,
-    assertActive: assertRetainedActive,
+    assertActive,
   };
 
   return {
@@ -203,8 +226,6 @@ function createKeyedStoreForPluginId<T>(
         ...entry,
       });
     },
-    update: async (...args) => store.update(...args),
-    deleteIf: async (...args) => store.deleteIf(...args),
     deleteIfEqual: async (key, expected) => {
       const normalizedKey = validateKey(key, "delete");
       if (expected !== null && !["string", "number", "boolean"].includes(typeof expected)) {
@@ -257,7 +278,7 @@ function createKeyedStoreForPluginId<T>(
         keyEndExclusive: range.keyEndExclusive,
         limit: range.limit,
         order: range.order,
-        assertActive,
+        assertActive: assertRangeActive,
       };
       validatePluginStateKeyRange(params);
       // SAFETY: The range remains bound to this store's namespace and JSON value type.

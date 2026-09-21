@@ -16,9 +16,11 @@ import {
 import { tmpdir } from "node:os";
 import { basename, delimiter, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { hasUnjoinedWork, runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   createFixtureDiagnostics,
   type FixtureDiagnostics,
@@ -73,6 +75,8 @@ async function withFixture(scenario: (context: ReturnType<typeof createFixture>)
 }
 
 function createFixture(diagnostics?: FixtureDiagnostics) {
+  const nodeExecutable = resolveTestNodeExecPath();
+  const nodeArgs = resolveVitestNodeArgs();
   // openclaw-temp-dir: allow retain input ownership when a child cannot be joined
   const root = mkdtempSync(join(tmpdir(), "openclaw-crabbox-recovery-"));
   const source = join(root, "source"),
@@ -82,6 +86,7 @@ function createFixture(diagnostics?: FixtureDiagnostics) {
   const cli = join(bin, "crabbox"),
     plan = join(root, "inventory.json"),
     calls = join(root, "native-calls.jsonl"),
+    nodePolicy = join(root, "node-policy.jsonl"),
     state = join(root, "state");
   for (const path of [source, staging, bin, home, join(state, "crabbox", "claims")]) {
     mkdirSync(path, { recursive: true });
@@ -131,11 +136,13 @@ function createFixture(diagnostics?: FixtureDiagnostics) {
   ) => writeFileSync(plan, JSON.stringify({ claims, gate }));
   inventory();
   writeFileSync(calls, "");
+  writeFileSync(nodePolicy, "");
   writeFileSync(
     cli,
-    `#!${process.execPath}
+    `#!/usr/bin/env -S ${JSON.stringify(nodeExecutable)} ${nodeArgs.join(" ")}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(nodePolicy)}, JSON.stringify({entry:'claims-cli', nodeArgs:process.execArgv.filter(flag=>${JSON.stringify(nodeArgs)}.includes(flag))}) + '\\n');
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n');
 if (JSON.stringify(args) !== JSON.stringify(['claims','list','--json'])) process.exit(91);
 const plan = JSON.parse(fs.readFileSync(${JSON.stringify(plan)}, 'utf8'));
@@ -219,8 +226,9 @@ if (plan.gate) {
   };
   const program = (body: string, prelude = "", timeoutMs = 30_000, role = "program") =>
     command(
-      process.execPath,
+      nodeExecutable,
       [
+        ...nodeArgs,
         "--import",
         resolve(repository, "scripts/tsx.mjs"),
         "--input-type=module",
@@ -248,27 +256,33 @@ ${body}`,
     options: { paths?: string[]; before?: string; prelude?: string; localGitSeed?: boolean } = {},
   ) => {
     const names = options.paths ?? ["source.txt"];
-    const selection = `const fs=require('node:fs');const paths=${JSON.stringify(names)}.filter(path=>fs.lstatSync(path,{throwIfNoEntry:false}));process.stdout.write(JSON.stringify({candidate:{files:paths.length},topFiles:paths.map(path=>({path})),localGitSeed:${options.localGitSeed ? "{source:'local'}" : "undefined"}}));`;
+    const selection = `const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(nodePolicy)},JSON.stringify({entry:'source-selection',nodeArgs:process.execArgv.filter(flag=>${JSON.stringify(nodeArgs)}.includes(flag))})+'\\n');const paths=${JSON.stringify(names)}.filter(path=>fs.lstatSync(path,{throwIfNoEntry:false}));process.stdout.write(JSON.stringify({candidate:{files:paths.length},topFiles:paths.map(path=>({path})),localGitSeed:${options.localGitSeed ? "{source:'local'}" : "undefined"}}));`;
     const result = await program(
       `
 ${options.before ?? ""}
-const cap = prepareCrabboxSourceCapsule({repoRoot:ctx.repository,syncRoot:ctx.staging,base:'HEAD',syncPlan:{command:process.execPath,args:['-e',${JSON.stringify(selection)}]}});
+const cap = prepareCrabboxSourceCapsule({repoRoot:ctx.repository,syncRoot:ctx.staging,base:'HEAD',syncPlan:{command:process.execPath,args:${JSON.stringify([...nodeArgs, "-e", selection])}}});
 let artifacts;
 ${after}
 const receipt = JSON.parse(fs.readFileSync(join(cap.staging.root,'staging.json'),'utf8'));
-fs.writeSync(1,JSON.stringify({root:cap.staging.root,source:cap.directory,receipt,destination:artifacts?.kind==='copied'?artifacts.destination.path:undefined}));
+fs.writeSync(1,JSON.stringify({nodeArgs:process.execArgv.slice(0,process.execArgv.indexOf('-e')),root:cap.staging.root,source:cap.directory,receipt,destination:artifacts?.kind==='copied'?artifacts.destination.path:undefined}));
 process.kill(process.pid,'SIGKILL');`,
       options.prelude,
       options.before ? 120_000 : 30_000,
       "prepare",
     );
     expect(result.signal, result.stderr).toBe("SIGKILL");
-    return JSON.parse(result.stdout) as Stage;
+    const { nodeArgs: producerNodeArgs, ...stage } = JSON.parse(result.stdout) as Stage & {
+      nodeArgs: string[];
+    };
+    expect(producerNodeArgs, "fixture producer inherits the Node shutdown policy").toContain(
+      "--no-concurrent-sparkplug",
+    );
+    return stage;
   };
   const wrapper = (args: string[], override: NodeJS.ProcessEnv = {}) =>
     command(
-      process.execPath,
-      [resolve(repository, "scripts/crabbox-wrapper.mjs"), "staging", ...args],
+      nodeExecutable,
+      [...nodeArgs, resolve(repository, "scripts/crabbox-wrapper.mjs"), "staging", ...args],
       override,
       undefined,
       "wrapper",
@@ -300,6 +314,11 @@ process.kill(process.pid,'SIGKILL');`,
     env,
     cli,
     calls,
+    nodePolicies: () =>
+      readFileSync(nodePolicy, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { entry: string; nodeArgs: string[] }),
     command,
     program,
     prepare,
@@ -369,6 +388,13 @@ describe.skipIf(process.platform === "win32")(
           const recovered = await f.recover(stage);
           expect(recovered.status, recovered.stderr + recovered.stdout).toBe(0);
           expect(recovered.report).toMatchObject({ id: stage.receipt.id, recovered: true });
+          const policies = f.nodePolicies();
+          expect(new Set(policies.map(({ entry }) => entry))).toEqual(
+            new Set(["source-selection", "claims-cli"]),
+          );
+          for (const policy of policies) {
+            expect(policy.nodeArgs, policy.entry).toEqual(resolveVitestNodeArgs());
+          }
           expect(readdirSync(f.staging)).toEqual([]);
           expect(readFileSync(join(f.source, "source.txt"), "utf8")).toBe("retained source\n");
           expect(f.git("rev-parse", "HEAD")).toBe(before);
@@ -383,6 +409,27 @@ describe.skipIf(process.platform === "win32")(
         withFixture(async (f) => {
           const config = join(f.root, "home", ".gitconfig");
           const callback = join(f.root, "callback.sh");
+          const localRecoveryGuard = join(f.root, "local-recovery-guard.mjs");
+          writeFileSync(
+            localRecoveryGuard,
+            String.raw`import { registerHooks } from "node:module";
+registerHooks({ load(url, context, nextLoad) {
+  const path = new URL(url).pathname;
+  if (/\/plugin-sdk\/process-runtime\.(?:ts|js)$/.test(path)) {
+    throw new Error("Protected local recovery loaded the command runtime");
+  }
+  return nextLoad(url, context);
+} });
+`,
+          );
+          const localRecoveryEnv = {
+            NODE_OPTIONS: [
+              process.env.NODE_OPTIONS,
+              `--import=${pathToFileURL(localRecoveryGuard).href}`,
+            ]
+              .filter(Boolean)
+              .join(" "),
+          };
           writeFileSync(callback, "#!/bin/sh\nprintf 'fixture-token\\000'\n", { mode: 0o700 });
           let first: Stage | undefined;
           for (const [section, key] of [
@@ -413,7 +460,10 @@ describe.skipIf(process.platform === "win32")(
               users: "settled",
               hold: "writers",
             });
-            expect((await f.recover(stage)).report).toMatchObject({
+            const recovery = await f.wrapper(["recover", stage.receipt.id], localRecoveryEnv);
+            expect(recovery.status, recovery.stderr).toBe(1);
+            expect(recovery.stdout, recovery.stderr).not.toBe("");
+            expect(JSON.parse(recovery.stdout)).toMatchObject({
               recovered: false,
               reason: expect.stringContaining("settlement is unverified"),
             });

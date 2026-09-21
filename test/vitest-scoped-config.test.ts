@@ -675,6 +675,9 @@ describe("scoped vitest configs", () => {
     expect(coreTestConfig.exclude).toContain("reply*.test.ts");
     expect(requireTestConfig(defaultAutoReplyTopLevelConfig).include).toEqual(["reply*.test.ts"]);
     expect(requireTestConfig(defaultAutoReplyReplyConfig).include).toEqual(["reply/**/*.test.ts"]);
+    expect(requireTestConfig(defaultAutoReplyReplyConfig).fileParallelism).toBe(
+      sharedVitestConfig.test.fileParallelism,
+    );
   });
 
   it.each([1, 2, 8])("keeps agents lanes on the shared %i-worker schedule", (maxWorkers) => {

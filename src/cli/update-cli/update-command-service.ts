@@ -11,7 +11,7 @@ import { readGatewayServiceState, resolveGatewayService } from "../../daemon/ser
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { CLI_NAME } from "../cli-name.js";
@@ -26,7 +26,7 @@ import { runRestartScript } from "./restart-helper.js";
 import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordServiceReconciliationWarning,
   recordServiceReconciliationWarnings,
@@ -43,10 +43,6 @@ import type {
   OriginalManagedServiceRuntime,
 } from "./update-command-service-context-types.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
-import {
-  UpdateServiceLoadBoundaryError,
-  type UpdateServiceLoadBoundary,
-} from "./update-command-service-load.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
@@ -180,7 +176,6 @@ export async function tryInstallShellCompletion(opts: {
 
 export async function maybeRestartService(params: {
   originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
-  serviceLoadBoundary?: UpdateServiceLoadBoundary;
   shouldRestart: boolean;
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
@@ -388,14 +383,6 @@ export async function maybeRestartService(params: {
 
   if (activation.shouldRestart) {
     if (
-      activation.serviceLoadBoundary &&
-      (!activation.refreshServiceEnv || activation.serviceInstallEnv === null || preserveDefinition)
-    ) {
-      throw new UpdateServiceLoadBoundaryError(
-        "Deferred load requires an admitted writable service refresh.",
-      );
-    }
-    if (
       (requiresInstallRootRefresh || activation.serviceRuntimeRefreshRequired) &&
       (!activation.refreshServiceEnv || activation.serviceInstallEnv === null)
     ) {
@@ -464,21 +451,13 @@ export async function maybeRestartService(params: {
             throw err;
           }
           assertCurrent();
-          if (
-            err instanceof UpdateCommandRecoveryPendingError ||
-            err instanceof UpdateServiceLoadBoundaryError
-          ) {
+          if (err instanceof UpdateCommandRecoveryPendingError) {
             throw err;
           }
           const warning =
             `Failed to reconcile gateway service with ${activation.result.root ?? "the updated install"}: ${String(err)}. ` +
             `Run \`${formatCliCommand("openclaw gateway install --force", activation.serviceEnv)}\`, then \`${formatCliCommand("openclaw gateway restart", activation.serviceEnv)}\`.`;
           recordServiceReconciliationWarning(activation.result, activation.serviceEnv, warning);
-          if (activation.serviceLoadBoundary) {
-            throw new UpdateServiceLoadBoundaryError("Service staging or sealing failed.", {
-              cause: err,
-            });
-          }
           if (activation.serviceRuntimeRefreshRequired) {
             params.onVerificationFailure?.("service-runtime-refresh-failed");
             throw err;
@@ -649,10 +628,7 @@ export async function maybeRestartService(params: {
         throw err;
       }
       assertCurrent();
-      if (
-        err instanceof UpdateServiceLoadBoundaryError ||
-        err instanceof UpdateCommandRecoveryPendingError
-      ) {
+      if (err instanceof UpdateCommandRecoveryPendingError) {
         throw err;
       }
       if (err instanceof GatewayRestartHealthError && !updatedInstallRestartNeedsServiceRootProof) {

@@ -239,30 +239,33 @@ const renderEnvDict = (env: Record<string, string | undefined> | undefined): str
   return `\n    <key>EnvironmentVariables</key>\n    <dict>${items}\n    </dict>`;
 };
 
+export async function normalizeLaunchdPlistXml(
+  contents: Uint8Array,
+  timeoutMs = 5_000,
+): Promise<string> {
+  const { stdout } = await runExec("/usr/bin/plutil", ["-convert", "xml1", "-o", "-", "--", "-"], {
+    input: contents,
+    timeoutMs: Math.max(1, Math.min(timeoutMs, 5_000)),
+    maxBuffer: 1024 * 1024,
+    logOutput: false,
+  });
+  return stdout;
+}
+
 export async function decodeLaunchdPlistMetadata(
   contents: Uint8Array,
   timeoutMs?: number,
 ): Promise<Record<string, unknown> | undefined> {
   const deadline = performance.now() + Math.min(timeoutMs ?? 5_000, 5_000);
-  let decoded = "";
-  for (const format of ["xml1", "json"]) {
-    // Validate captured bytes before normalizing native-only scalar types. Numeric
-    // placeholders remain invalid command fields; native XML escapes literal tag text.
-    ({ stdout: decoded } = await runExec(
-      "/usr/bin/plutil",
-      ["-convert", format, "-o", "-", "--", "-"],
-      {
-        input:
-          format === "xml1"
-            ? contents
-            : decoded.replace(/<(data|date)>[\s\S]*?<\/\1>/g, "<integer>0</integer>"),
-        timeoutMs: Math.max(1, deadline - performance.now()),
-        maxBuffer: 1024 * 1024,
-        logOutput: false,
-      },
-    ));
-  }
-  return asOptionalRecord(JSON.parse(decoded));
+  const xml = await normalizeLaunchdPlistXml(contents, deadline - performance.now());
+  // Native XML escapes literal tag text; placeholders remain invalid command fields.
+  const { stdout } = await runExec("/usr/bin/plutil", ["-convert", "json", "-o", "-", "--", "-"], {
+    input: xml.replace(/<(data|date)>[\s\S]*?<\/\1>/g, "<integer>0</integer>"),
+    timeoutMs: Math.max(1, deadline - performance.now()),
+    maxBuffer: 1024 * 1024,
+    logOutput: false,
+  });
+  return asOptionalRecord(JSON.parse(stdout));
 }
 
 export async function readLaunchAgentProgramArgumentsFromFile(

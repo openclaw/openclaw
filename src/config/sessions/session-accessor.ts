@@ -322,3 +322,4 @@ export {
   readLatestSessionTranscriptReport,
 } from "./session-accessor.sqlite-transcript-reports.js";
 export { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
+export { readSessionEntriesFromStoreInWorker } from "./session-entry-read-runtime.js";

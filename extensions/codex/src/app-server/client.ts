@@ -17,6 +17,7 @@ import {
   appendBoundedTail,
   buildCodexAppServerExitError,
   logCodexAppServerParseFailure,
+  observeCodexAppServerStderr,
 } from "./client-diagnostics.js";
 import { buildCodexAppServerInitializeParams } from "./client-initialize.js";
 import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
@@ -273,24 +274,17 @@ export class CodexAppServerClient {
       (error) => this.closeWithError(toStringifiedError(error)),
     );
     child.stdout.on("error", (error) => this.closeWithError(toStringifiedError(error)));
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
+    observeCodexAppServerStderr(child.stderr, (chunk) => {
       const text = this.redactPrivateStderr(chunk);
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
-      const trimmed = text.trim();
-      if (trimmed) {
-        embeddedAgentLog.debug(`codex app-server stderr: ${trimmed}`);
-      }
-    });
-    // Codex reserves stderr for diagnostics; losing that stream must not tear
-    // down an otherwise healthy JSON-RPC connection on stdout.
-    child.stderr.on("error", (error) => {
-      embeddedAgentLog.warn("codex app-server stderr stream failed", { error });
+      return text;
     });
     child.once("error", (error) => this.closeWithError(toStringifiedError(error)));
     child.once("exit", (code, signal) => {
       this.transportExited = true;
-      this.closeWithError(buildCodexAppServerExitError(code, signal, this.stderrTail));
+      this.closeWithError(
+        child.startupFailure?.error ?? buildCodexAppServerExitError(code, signal, this.stderrTail),
+      );
     });
     // Guard against unhandled EPIPE / write-after-close errors on the stdin
     // stream. When the child process terminates abruptly the pipe can break
@@ -327,10 +321,13 @@ export class CodexAppServerClient {
     } catch (error) {
       assertCurrent?.();
       if (client?.transportExited && hasCodexAppServerNaturalExit(client.child)) {
-        throw buildCodexAppServerExitError(
-          client.child.exitCode,
-          client.child.signalCode,
-          client.stderrTail,
+        throw (
+          client.child.startupFailure?.error ??
+          buildCodexAppServerExitError(
+            client.child.exitCode,
+            client.child.signalCode,
+            client.stderrTail,
+          )
         );
       }
       // Cleanup must not turn a live-child registration refusal into
@@ -357,6 +354,7 @@ export class CodexAppServerClient {
     // The handshake identifies the exact app-server process we will keep using,
     // which matters when callers override the binary or app-server args.
     const response = await this.request("initialize", buildCodexAppServerInitializeParams());
+    this.child.startupFailure?.complete();
     this.serverVersion = assertSupportedCodexAppServerVersion(response);
     this.runtimeIdentity = buildCodexAppServerRuntimeIdentity(response, this.serverVersion);
     this.notify("initialized");

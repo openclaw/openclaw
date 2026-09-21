@@ -4,11 +4,10 @@ import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, drainStoreWriterQueuesForTest } from "../../test/helpers/promise.js";
 import {
   runQueuedStoreWrite,
   clearStoreWriterQueuesForTest,
-  drainStoreWriterQueuesForTest,
   type StoreWriterQueue,
   type StoreWriterTiming,
 } from "./store-writer-queue.js";

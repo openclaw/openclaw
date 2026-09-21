@@ -28,8 +28,10 @@ import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginHookHandlerMap } from "../../plugins/types.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryOwnersInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import {
   defaultConversationDeliveryDeps,
   type ConversationDeliveryDeps,
@@ -45,7 +47,6 @@ import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js"
 import { drainPendingDeliveriesCore } from "./delivery-queue-recovery.js";
 import {
   enqueueDeliveryOnce,
-  findDeliveryIntentOwner,
   loadPendingDelivery,
   loadUnfinishedDelivery,
 } from "./delivery-queue-storage.js";
@@ -196,7 +197,11 @@ describe("conversation completion through the real delivery queue", () => {
       });
       const registry = installSender(sendText);
       const readState = () => {
-        const owner = findDeliveryIntentOwner(queueId, stateDir);
+        const owner = getDeliveryQueueEntryOwnersInDatabase(
+          openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+          [OUTBOUND_DELIVERY_QUEUE_NAME],
+          queueId,
+        ).get(OUTBOUND_DELIVERY_QUEUE_NAME);
         return {
           queueStatus: owner?.status,
           settlementPending: owner?.settlementPending === true,

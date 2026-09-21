@@ -21,7 +21,6 @@ import {
   retryVoiceTranscriptPersistence,
 } from "./transcript-owner.ts";
 import {
-  createRealtimeTalkTransport,
   normalizeLaunchTransport,
   resolveRealtimeTalkTransport,
   type RealtimeTalkLaunchTransport,
@@ -124,7 +123,10 @@ export class RealtimeTalkSession {
       const lifecycleGeneration = this.lifecycleGeneration;
       this.closed = false;
       this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
-      const providerVideoCapable = await this.resolveVideoCapability();
+      const [{ createRealtimeTalkTransport }, providerVideoCapable] = await Promise.all([
+        import("./transport.runtime.ts"),
+        this.resolveVideoCapability(),
+      ]);
       if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
         return;
       }

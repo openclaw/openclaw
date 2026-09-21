@@ -4,14 +4,14 @@ import type {
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
-import type { SessionTitleFields } from "../../gateway/session-transcript-title-reader.js";
-import type { SessionPreviewItem } from "../../gateway/session-utils.types.js";
+import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
 import type {
   SessionCostUsageCacheRead,
   SessionCostUsageCacheReadResult,
 } from "../../infra/session-cost-usage-cache-read.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type {
   SessionBranchSummaryReadRequest,
   SessionBranchSummaryReadResult,
@@ -40,6 +40,8 @@ import type { SessionMember } from "./session-sharing-store.kernel.js";
 import type {
   SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
+  SessionStoreTargetReadRequest,
+  SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
 import type {
   SessionTranscriptSearchParams,
@@ -144,6 +146,25 @@ export type SessionEntryListWorkerResult = {
   entries: SessionEntrySummary[];
 };
 
+export type SessionExactEntriesWorkerInput = {
+  kind: "session-exact-entries";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  sessionKeys: readonly string[];
+  lifecycleSessionKey?: string;
+};
+
+export type SessionExactEntriesWorkerResult = {
+  kind: "session-exact-entries";
+  entries: SessionEntrySummary[];
+  lifecycleTimestamps: SessionLifecycleTimestamps;
+};
+
+export type SessionStoreTargetWorkerInput = {
+  kind: "session-store-target";
+  request: SessionStoreTargetReadRequest;
+};
+
 export type SessionTargetInventoryWorkerInput = {
   kind: "session-target-inventory";
   request: SessionStoreTargetInventoryRequest;
@@ -176,6 +197,8 @@ export type SessionTranscriptWorkerValues = {
   "session-row-presence": boolean;
   "session-members": SessionMember[];
   "session-entry-list": SessionEntryListWorkerResult;
+  "session-exact-entries": SessionExactEntriesWorkerResult;
+  "session-store-target": SessionStoreTargetReadResult;
   "session-target-inventory": SessionStoreTargetInventoryResult;
   "session-identity-evidence": SessionIdentityEvidenceWorkerResult;
   "usage-cache": SessionCostUsageCacheReadResult;
@@ -200,3 +223,37 @@ export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWor
         | { kind: "fence"; message: string }
         | { kind: "syntax"; message: string };
     };
+
+export type SessionHistoryWorkerDatabase = {
+  searchTranscripts: (
+    params: SessionTranscriptSearchWorkerInput["params"],
+  ) => Promise<SessionTranscriptSearchWorkerResult["result"]>;
+  generation: number;
+  assertCurrent: () => void;
+  run: (
+    prepare: () => Omit<SessionTranscriptHistoryWorkerInput, "database">,
+    inputBytes: number,
+  ) => Promise<SessionHistoryWorkerResult>;
+  readPreview: (
+    input: Omit<SessionPreviewWorkerInput, "kind" | "database">,
+  ) => Promise<SessionPreviewWorkerResult["items"]>;
+  readTitleFields: (
+    input: Omit<SessionTitleFieldsWorkerInput, "kind" | "database">,
+  ) => Promise<SessionTitleFieldsWorkerResult["fields"]>;
+  readEntryPresence: (scope: SessionRowPresenceWorkerInput["scope"]) => Promise<boolean>;
+  readIdentityEvidence: (
+    input: Omit<SessionIdentityEvidenceWorkerInput, "kind" | "database">,
+  ) => Promise<SessionIdentityEvidenceResult[]>;
+  readExactEntries: (
+    input: Omit<SessionExactEntriesWorkerInput, "kind" | "database">,
+  ) => Promise<SessionExactEntriesWorkerResult>;
+  readEntries: (
+    scope: SessionEntryListWorkerInput["scope"],
+  ) => Promise<SessionEntryListWorkerResult["entries"]>;
+  readMembers: (
+    input: Omit<SessionMembersWorkerInput, "kind" | "database">,
+  ) => Promise<SessionMember[]>;
+  readUsageCache: (
+    input: Omit<SessionUsageCacheWorkerInput, "kind" | "database">,
+  ) => Promise<SessionCostUsageCacheReadResult>;
+};

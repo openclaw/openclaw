@@ -236,7 +236,7 @@ export function renderSidebarFile(
       ${
         controls?.searchOpen
           ? html`
-              <div class="file-view__search">
+              <div class="file-view__search" @keydown=${controls.onSearchKeydown}>
                 <input
                   type="search"
                   aria-label=${t("chat.detailPanel.searchInFile")}
@@ -244,7 +244,6 @@ export function renderSidebarFile(
                   .value=${controls.query}
                   @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
                     controls.onSearchInput(event.currentTarget.value)}
-                  @keydown=${controls.onSearchKeydown}
                 />
                 <span class="file-view__search-counter"
                   >${matchNumber}/${controls.matches.length}</span

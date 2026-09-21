@@ -13,8 +13,10 @@ async function expectGitRootResolution(params: {
 }): Promise<void> {
   await withTestDir({ prefix: `openclaw-${params.label}-` }, async (temp) => {
     const { startPath, expectedRoot, expectedHead } = await params.setup(temp);
-    expect(findGitRoot(startPath)).toBe(expectedRoot);
-    expect(resolveGitHeadPath(startPath)).toBe(expectedHead);
+    // Include the fixture root, but never inspect host-owned ancestors above it.
+    const maxDepth = path.relative(temp, startPath).split(path.sep).filter(Boolean).length + 1;
+    expect(findGitRoot(startPath, { maxDepth })).toBe(expectedRoot);
+    expect(resolveGitHeadPath(startPath, { maxDepth })).toBe(expectedHead);
   });
 }
 

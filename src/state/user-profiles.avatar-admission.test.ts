@@ -75,10 +75,10 @@ vi.mock("./user-profile-list.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./user-profile-list.js")>();
   return {
     ...actual,
-    retainUserProfileAvatarPublication: (
-      ...args: Parameters<typeof actual.retainUserProfileAvatarPublication>
+    retainUserProfilePublication: (
+      ...args: Parameters<typeof actual.retainUserProfilePublication>
     ) => {
-      const publication = actual.retainUserProfileAvatarPublication(...args);
+      const publication = actual.retainUserProfilePublication(...args);
       try {
         boundary.duringGrant?.();
       } catch (error) {

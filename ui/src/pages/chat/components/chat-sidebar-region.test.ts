@@ -43,6 +43,7 @@ async function createRegion(
   const shell = document.createElement("div");
   shell.className = "sidebar-region";
   const region = document.createElement("openclaw-chat-sidebar-region") as Region;
+  region.panelIdPrefix = `sidebar-region-fixture-${regions.length}`;
   region.layout = layout;
   region.panelTemplates = {
     detail: html`<div data-panel="detail">Detail panel</div>`,

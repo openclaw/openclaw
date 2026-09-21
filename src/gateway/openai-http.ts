@@ -81,6 +81,7 @@ import {
 import {
   applyToolChoice,
   isToolChoiceConstraintSatisfied,
+  resolveChatToolChoice,
   resolveUnsatisfiedToolChoiceMessage,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
@@ -208,35 +209,6 @@ function extractClientToolsFromChatRequest(tools: unknown): ClientToolDefinition
     });
   }
   return clientTools;
-}
-
-function resolveChatToolChoice(toolChoice: unknown): ToolChoiceConstraint | "none" | undefined {
-  if (toolChoice == null || toolChoice === "auto") {
-    return undefined;
-  }
-  if (toolChoice === "none") {
-    return "none";
-  }
-  if (toolChoice === "required") {
-    return { type: "required" };
-  }
-  if (typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
-    throw new Error("tool_choice must be a string or object");
-  }
-  const choiceType = (toolChoice as { type?: unknown }).type;
-  if (choiceType === "function") {
-    const targetName = normalizeOptionalString(
-      (toolChoice as { function?: { name?: unknown } }).function?.name,
-    );
-    if (!targetName) {
-      throw new Error("tool_choice.function.name is required");
-    }
-    return { type: "function", name: targetName };
-  }
-  if (typeof choiceType !== "string") {
-    throw new Error("unsupported tool_choice type");
-  }
-  throw new Error(`tool_choice ${choiceType} is not supported`);
 }
 
 type ChatCompletionStreamIdentity = { runId: string; model: string; created: number };
@@ -942,6 +914,8 @@ export async function handleOpenAiHttpRequest(
       runId,
       messageChannel,
       senderIsOwner,
+      requestAuth: handled.requestAuth,
+      operatorScopes: handled.operatorScopes,
       abortSignal: abortController.signal,
       streamParams,
       resolveGatewayContext: opts.resolveGatewayContext,
