@@ -12,12 +12,6 @@ export type DynamicsSpawnRequirements = {
   artifactRefs: DynamicsRequirement;
 };
 
-export type DynamicsContract = {
-  version: 1;
-  boundary: InformationBoundary;
-  requirements: DynamicsSpawnRequirements;
-};
-
 export type HandoffManifest = {
   version: 1;
   sourceReplicaId: string;
