@@ -163,8 +163,11 @@ plugin instance and reruns registration with the new settings.
 
 The catalog is the registration API, not a promise that every runtime emits
 every hook. For example, `before_agent_run` is implemented by the embedded and
-CLI runners; do not rely on it as a Codex or Copilot input gate. Native tool,
-transcript, and compaction boundaries also differ. See
+CLI runners, and by Codex at its post-setup model-submission boundary (after
+native thread setup, before diagnostics, `llm_input`, and `turn/start`); do
+not rely on it as a Copilot input gate, and do not treat the Codex boundary as
+covering native thread/session establishment. Native tool, transcript, and
+compaction boundaries also differ. See
 [Codex hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) and
 [Agent harness plugins](/plugins/sdk-agent-harness).
 

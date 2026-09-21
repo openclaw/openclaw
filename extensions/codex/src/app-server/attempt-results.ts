@@ -8,7 +8,11 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexSystemPromptReport } from "./attempt-context.js";
 import type { CodexAttemptTimeout } from "./attempt-deadlines.js";
-import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import {
+  attemptTerminal,
+  type AttemptFailureSource,
+  type EmbeddedRunAttemptResult,
+} from "./attempt-terminal.js";
 
 /** Joins terminal assistant text blocks into the final attempt answer. */
 export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
@@ -65,11 +69,12 @@ export function buildCodexTurnStartFailureResult(params: {
   promptError?: unknown;
   messagesSnapshot: AgentMessage[];
   systemPromptReport: CodexSystemPromptReport;
+  promptErrorSource?: AttemptFailureSource;
 }): EmbeddedRunAttemptResult {
   return {
     terminal: attemptTerminal.normalize({
       promptError: params.promptError ?? params.message,
-      promptErrorSource: "prompt",
+      promptErrorSource: params.promptErrorSource ?? "prompt",
     }),
     sessionIdUsed: params.params.sessionId,
     messagesSnapshot: params.messagesSnapshot,

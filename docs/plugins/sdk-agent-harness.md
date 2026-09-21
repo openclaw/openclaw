@@ -71,6 +71,7 @@ eight child pages below. The anchors from the single-page version still resolve 
 - <a id="tool-result-middleware"></a>[Tool-result middleware](/plugins/sdk-agent-harness/attempt-runtime#tool-result-middleware)
 - <a id="terminal-outcome-classification"></a>[Terminal outcome classification](/plugins/sdk-agent-harness/attempt-runtime#terminal-outcome-classification)
 - <a id="live-output-token-usage"></a>[Live output-token usage](/plugins/sdk-agent-harness/attempt-runtime#live-output-token-usage)
+- <a id="admission-gate-before-native-starts"></a>[Admission gate before native starts](/plugins/sdk-agent-harness/attempt-runtime#admission-gate-before-native-starts)
 - <a id="agent-end-side-effects"></a>[Agent-end side effects](/plugins/sdk-agent-harness/attempt-runtime#agent-end-side-effects)
 
 ### User input and execution authority

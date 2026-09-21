@@ -8,11 +8,13 @@ import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveBlockMessage } from "../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
+  PluginHookBeforeAgentRunEvent,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
@@ -80,6 +82,88 @@ export function runAgentHarnessLlmInputHook(params: {
     .catch((error: unknown) => {
       log.warn(`llm_input hook failed: ${String(error)}`);
     });
+}
+
+/** Normalized before_agent_run admission decision for one harness attempt. */
+export type AgentHarnessBeforeAgentRunOutcome =
+  | { outcome: "pass" }
+  | { outcome: "block"; blockedBy: string; message: string };
+
+const BEFORE_AGENT_RUN_INCOMPATIBLE_BLOCK = {
+  outcome: "block" as const,
+  reason: "before_agent_run hook runner is incompatible",
+};
+const BEFORE_AGENT_RUN_FAILED_BLOCK = {
+  outcome: "block" as const,
+  reason: "before_agent_run hook failed",
+};
+
+/**
+ * Runs the fail-closed before_agent_run admission gate for one plugin-owned
+ * harness attempt (e.g. a native Codex turn). Callers must invoke this exactly
+ * once per attempt, before any diagnostics, llm_input, or model/native start,
+ * and must not start a model when the result is undetermined. Hook errors,
+ * timeouts, and malformed decisions all resolve to `block` so the caller fails
+ * closed instead of guessing.
+ *
+ * Compatibility: `hasHooks("before_agent_run")` and `runBeforeAgentRun` are
+ * reported independently so this helper can support hook-runner shapes older
+ * than the one that introduced this gate. When no `before_agent_run` hook is
+ * registered at all, this resolves `pass` without calling the runner. But when
+ * a hook *is* registered and the runner cannot execute it (an older or
+ * partial runner that advertises the hook without a callable
+ * `runBeforeAgentRun`), this fails closed rather than silently admitting an
+ * attempt a registered policy never got to see. Only the "nothing is
+ * registered" case is treated as compatible pass-through; "registered but
+ * unrunnable" is always a block. Any drift in the runner's shape (a new
+ * OpenClaw core/plugin dependency set, not just a harness-side package) must
+ * go through the project's compatibility review before it ships, since this
+ * helper cannot distinguish an intentionally-absent gate from a broken one.
+ */
+export async function runAgentHarnessBeforeAgentRun(params: {
+  event: PluginHookBeforeAgentRunEvent;
+  ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
+}): Promise<AgentHarnessBeforeAgentRunOutcome> {
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("before_agent_run")) {
+    return { outcome: "pass" };
+  }
+  if (typeof hookRunner.runBeforeAgentRun !== "function") {
+    // A before_agent_run policy is registered, but this runner cannot execute
+    // it. Do not fall back to pass-through: that would let a real registered
+    // gate silently never run.
+    log.warn("before_agent_run hooks are registered but the hook runner cannot execute them");
+    const blockedBy = "before_agent_run";
+    return {
+      outcome: "block",
+      blockedBy,
+      message: resolveBlockMessage(BEFORE_AGENT_RUN_INCOMPATIBLE_BLOCK, { blockedBy }),
+    };
+  }
+  try {
+    const result = await hookRunner.runBeforeAgentRun(
+      params.event,
+      buildAgentHookContext(params.ctx),
+    );
+    const decision = result?.decision;
+    if (decision?.outcome !== "block") {
+      return { outcome: "pass" };
+    }
+    const blockedBy = result?.pluginId ?? "unknown";
+    return { outcome: "block", blockedBy, message: resolveBlockMessage(decision, { blockedBy }) };
+  } catch {
+    // Hook exceptions may carry plugin-local or user-provided detail (prompt
+    // fragments, policy internals). Log only a fixed, safe message; never the
+    // exception text itself.
+    log.warn("before_agent_run hook failed; blocking request");
+    const blockedBy = "before_agent_run";
+    return {
+      outcome: "block",
+      blockedBy,
+      message: resolveBlockMessage(BEFORE_AGENT_RUN_FAILED_BLOCK, { blockedBy }),
+    };
+  }
 }
 
 /** Dispatches best-effort LLM output hooks for a harness attempt. */

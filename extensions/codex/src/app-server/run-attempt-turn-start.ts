@@ -1,6 +1,7 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
+  runAgentHarnessBeforeAgentRun,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -57,13 +58,102 @@ export async function startCodexAttemptTurn(
   const { state, turnIdRef } = turnRuntime;
   const { waitForActiveNativeTurnCompletion } = notifications;
   const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent } = requestRuntime;
+
+  // Admission runs exactly once per attempt, before diagnostics, llm_input, or
+  // any native turn/start call. The compact-turn and fresh-thread recoveries
+  // below retry startCodexTurn() within this same function call; they reuse
+  // this one decision and never re-enter the gate.
+  const llmInputEvent = buildLlmInputEvent();
+  // Only pay for the history snapshot (and its deep clone) when a policy is
+  // actually registered to see it; runAgentHarnessBeforeAgentRun resolves
+  // "pass" without inspecting the event otherwise, but its argument is built
+  // eagerly by this caller regardless.
+  const hasBeforeAgentRunHook = hookRunner?.hasHooks("before_agent_run") ?? false;
+  const admission = await runAgentHarnessBeforeAgentRun({
+    event: {
+      prompt: llmInputEvent.prompt,
+      // An isolated snapshot of the loaded session history, not the
+      // llm_input event's historyMessages field: Codex's llm_input payload
+      // intentionally omits history that native app-server already holds
+      // (see run-attempt.hooks.test.ts), while a before_agent_run policy
+      // needs the actual loaded history to make history-dependent decisions.
+      // Deep-clone each message so a hook cannot mutate the attempt's shared
+      // state through nested content objects, matching the canonical
+      // embedded-runner isolation (runEmbeddedAttemptBeforeAgentRun).
+      messages: hasBeforeAgentRunHook
+        ? historyState.messages.map((message) => structuredClone(message))
+        : [],
+      systemPrompt: llmInputEvent.systemPrompt,
+      accountId: params.agentAccountId ?? undefined,
+      // The canonical per-conversation identity: derived from the session key
+      // and channel/thread metadata, not just the messaging channel/provider
+      // pair (which two distinct conversations on the same provider share).
+      channelId: hookContext.channelId,
+      senderId: params.senderId ?? undefined,
+      senderIsOwner: params.senderIsOwner ?? undefined,
+    },
+    ctx: hookContext,
+    hookRunner,
+  });
+  // A cancellation that races with the admission call must win outright: do
+  // not act on a pass or a block decision computed for an attempt the caller
+  // already abandoned, and never start a native turn for it.
+  runAbortController.signal.throwIfAborted();
+  if (admission.outcome === "block") {
+    void emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.lifecycle",
+      data: { phase: "turn_start_blocked", error: admission.message },
+    });
+    // Replace the rejected prompt with a redacted placeholder before it ever
+    // reaches the transcript owner, the agent_end hook, or the returned
+    // snapshot. The original prompt text must not escape a blocked attempt.
+    const blockedAt = Date.now();
+    const redactedUserMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: admission.message }],
+      timestamp: blockedAt,
+      idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
+      __openclaw: {
+        beforeAgentRunBlocked: { blockedBy: admission.blockedBy, blockedAt },
+      },
+    };
+    try {
+      await runtimeParams.userTurnTranscriptRecorder?.persistBlocked(redactedUserMessage);
+    } catch (persistError) {
+      embeddedAgentLog.warn(
+        "codex app-server before_agent_run block: failed to persist redacted user message",
+        { error: formatErrorMessage(persistError) },
+      );
+    }
+    const messagesSnapshot = [...historyState.messages, redactedUserMessage];
+    await runCodexAgentEndHook(params, {
+      event: {
+        messages: messagesSnapshot,
+        success: false,
+        error: admission.message,
+        durationMs: Date.now() - attemptStartedAt,
+      },
+      ctx: hookContext,
+      hookRunner,
+    });
+    return {
+      result: buildCodexTurnStartFailureResult({
+        params,
+        message: admission.message,
+        messagesSnapshot,
+        systemPromptReport,
+        promptErrorSource: "hook:before_agent_run",
+      }),
+    };
+  }
+
   let started: CodexStartedTurn | undefined;
   // From this point, failure may include an accepted native write. Never return
   // the warm claim idle merely because active-turn setup did not complete.
   resourceState.turnStartAttempted = true;
   try {
     codexModelCallDiagnostics.emitStarted();
-    runAgentHarnessLlmInputHook({ event: buildLlmInputEvent(), ctx: hookContext, hookRunner });
+    runAgentHarnessLlmInputHook({ event: llmInputEvent, ctx: hookContext, hookRunner });
     started = await startCodexTurn();
   } catch (error) {
     let turnStartError = error;

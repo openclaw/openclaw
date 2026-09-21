@@ -592,10 +592,12 @@ export {
   awaitAgentHarnessAgentEndHook,
   getAgentHarnessHookRunner,
   runAgentHarnessBeforeAgentFinalizeHook,
+  runAgentHarnessBeforeAgentRun,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "../agents/harness/lifecycle-hook-helpers.js";
+export type { AgentHarnessBeforeAgentRunOutcome } from "../agents/harness/lifecycle-hook-helpers.js";
 export {
   buildNativeHookRelayCommand,
   hasNativeHookRelayInvocation,
