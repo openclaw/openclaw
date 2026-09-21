@@ -405,7 +405,7 @@ final class ProfileChatPreferencesTests: XCTestCase {
         try await AppKitTestSupport.waitForAccessibilityElement(in: window, description: "Thread menu") { elements in
             elements.first {
                 let role = $0.accessibilityRole?()
-                let names: [String?] = [$0.accessibilityLabel?(), $0.accessibilityTitle?()]
+                let names: [String?] = [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)]
                 return (role == .button || role == .popUpButton || role == .menuButton) &&
                     (names.contains("Thread") || names.contains("More"))
             }

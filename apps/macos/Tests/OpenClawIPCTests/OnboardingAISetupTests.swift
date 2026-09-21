@@ -867,7 +867,7 @@ private func pressOnboardingEntryButton(_ title: String, in root: NSView) async 
     var visited = Set<ObjectIdentifier>()
     func visit(_ element: AnyObject) {
         guard visited.insert(ObjectIdentifier(element)).inserted else { return }
-        let text = [element.accessibilityLabel?(), element.accessibilityTitle?()]
+        let text = [element.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: element)]
             .compactMap(\.self)
         if element.accessibilityRole?() == .button,
            element.isAccessibilityEnabled?() == true,
@@ -919,7 +919,7 @@ private func inspectAISetupAccessibility(_ root: NSView) async throws
         let value: Any? = element.accessibilityValue?()
         let text = [
             element.accessibilityLabel?(),
-            element.accessibilityTitle?(),
+            AppKitTestSupport.accessibilityTitle(of: element),
             value as? String,
         ].compactMap(\.self)
         labels.append(contentsOf: text)
