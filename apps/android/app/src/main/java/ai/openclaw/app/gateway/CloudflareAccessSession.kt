@@ -2,6 +2,7 @@ package ai.openclaw.app.gateway
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl
 import java.net.URI
 import java.util.Locale
 
@@ -29,7 +30,11 @@ internal data class CloudflareAccessOrigin private constructor(
       ) {
         throw CloudflareAccessException(CloudflareAccessException.Kind.InvalidGateway)
       }
-      return CloudflareAccessOrigin(URI("https", null, host, if (parsed.port == 443) -1 else parsed.port, null, null, null))
+      // OkHttp canonicalizes literal IPv6 hosts before transport; every grant and pin lookup must use that identity.
+      val canonicalHost =
+        runCatching { HttpUrl.Builder().scheme("https").host(host).build().host }.getOrNull()
+          ?: throw CloudflareAccessException(CloudflareAccessException.Kind.InvalidGateway)
+      return CloudflareAccessOrigin(URI("https", null, canonicalHost, if (parsed.port == 443) -1 else parsed.port, null, null, null))
     }
   }
 }

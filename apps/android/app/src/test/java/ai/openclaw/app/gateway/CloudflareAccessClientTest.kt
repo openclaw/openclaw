@@ -46,6 +46,74 @@ class CloudflareAccessClientTest {
     assertEquals(CloudflareAccessOrigin.from("wss://gateway.example.test:443/a"), CloudflareAccessOrigin.from("https://gateway.example.test"))
   }
 
+  @Test fun ipv6OriginsUseTheTransportAuthorityWithoutRelaxingValidation() {
+    for ((hosts, canonical) in listOf(
+      listOf("0:0:0:0:0:0:0:1", "::1") to "[::1]",
+      listOf("2001:0DB8:0:0:0:0:0:00AB", "2001:db8::ab", "2001:DB8::AB") to "[2001:db8::ab]",
+      listOf("0:0:0:0:0:ffff:c000:201", "::ffff:192.0.2.1") to "192.0.2.1",
+    )) {
+      val expected = CloudflareAccessOrigin.from("https://$canonical")
+      for (host in hosts) {
+        for (url in listOf("https://[$host]", "https://[$host]:443/gateway/socket", "wss://[$host]:443/gateway/socket")) {
+          val actual = CloudflareAccessOrigin.from(url)
+          assertEquals(expected, actual)
+          assertEquals(expected.hashCode(), actual.hashCode())
+          assertEquals("https://$canonical", actual.uri.toString())
+          assertTrue(actual.contains(Request.Builder().url(url).build().url.toString()))
+          assertTrue(actual.contains("$url?query=allowed"))
+        }
+      }
+    }
+    for (url in listOf("https://gateway.example.test", "https://127.0.0.1", "https://gateway.example.test:8443", "https://192.0.2.1:8443")) {
+      assertEquals(url, CloudflareAccessOrigin.from(url).uri.toString())
+    }
+    val origin = CloudflareAccessOrigin.from("https://[::1]:8443")
+    for (url in listOf("https://[::2]:8443", "https://[::1]", "http://[::1]:8443", "https://user@[::1]:8443", "https://[::1]:8443/#fragment")) {
+      assertFalse(origin.contains(url))
+    }
+    for (url in listOf("http://[::1]", "https://user@[::1]", "https://[::1]/?query", "https://[::1]/#fragment", "https://[::1]:0", "https://[::1]:65536", "https://[::1", "https:///gateway")) {
+      assertEquals(CloudflareAccessException.Kind.InvalidGateway, assertThrows(CloudflareAccessException::class.java) { CloudflareAccessOrigin.from(url) }.kind)
+    }
+  }
+
+  @Test fun ipv6SessionAndChallengeRoundTripsShareTheCanonicalAuthority() {
+    val expanded = "https://[0:0:0:0:0:0:0:1]:8443"
+    val origin = CloudflareAccessOrigin.from(expanded)
+    val descriptor = application.copy(origin = origin)
+    val token = CloudflareAccessTestTokens.token(CloudflareAccessTestTokens.claims(expires = 2000.0))
+    val session = CloudflareAccessSession(descriptor, "test-subject", 2000.0, token)
+    val encoded = session.encode()
+    val restored = CloudflareAccessSession.decode(encoded)
+    restored.validate(1000.0)
+    assertEquals(descriptor, restored.application)
+    assertEquals(encoded, restored.encode())
+    // Old unreleased serialized IPv6 spellings decode to the same canonical owner.
+    assertEquals(encoded, CloudflareAccessSession.decode(encoded.replace("https://[::1]:8443", expanded)).encode())
+    for (url in listOf("$expanded/gateway/socket", "https://[::1]:8443/media?range=1", "wss://[::1]:8443/gateway/socket")) {
+      val request = Request.Builder().url(url).build()
+      assertEquals(token, restored.authorizationHeader(request.url.toString(), 1000.0))
+      for (metadataOrigin in listOf(expanded, "https://[::1]:8443")) {
+        assertTrue(
+          CloudflareAccessClient.isChallenge(
+            reply(request, 302, mapOf("WWW-Authenticate" to "Cloudflare-Access resource_metadata=\"$metadataOrigin/.well-known/cloudflare-access-protected-resource/gateway/socket\"")),
+            origin,
+          ),
+        )
+      }
+      assertTrue(CloudflareAccessClient.isChallenge(reply(request, 302, mapOf("Location" to "/cdn-cgi/access/login")), origin))
+    }
+    for (url in listOf("https://[::2]:8443", "https://[::1]:8444", "http://[::1]:8443", "https://user@[::1]:8443", "https://[::1]:8443/#fragment")) {
+      assertNull(restored.authorizationHeader(url, 1000.0))
+    }
+    val request = Request.Builder().url("https://[::1]:8443").build()
+    assertFalse(
+      CloudflareAccessClient.isChallenge(
+        reply(request, 302, mapOf("WWW-Authenticate" to "Cloudflare-Access resource_metadata=\"https://[::2]:8443/.well-known/cloudflare-access-protected-resource/\"")),
+        origin,
+      ),
+    )
+  }
+
   @Test fun warpOrExistingIngressHeadersDoNotLaunchBrowserDiscovery() =
     runBlocking {
       var requests = 0
