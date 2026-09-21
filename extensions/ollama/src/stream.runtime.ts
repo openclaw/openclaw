@@ -337,6 +337,7 @@ function buildUsageWithNoCost(params: {
   cacheWrite?: number;
   cacheTelemetry?: Usage["cacheTelemetry"];
   totalTokens?: number;
+  contextUsage?: Usage["contextUsage"];
 }): Usage {
   const input = params.input ?? 0;
   const output = params.output ?? 0;
@@ -355,6 +356,7 @@ function buildUsageWithNoCost(params: {
     cacheTelemetry,
     totalTokens: params.totalTokens ?? input + output,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    ...(params.contextUsage ? { contextUsage: params.contextUsage } : {}),
   };
 }
 
@@ -492,19 +494,9 @@ function estimateOllamaCompletionTokens(
   return estimateTokensFromChars(chars);
 }
 
-function resolveUsageCount(
-  value: number | undefined,
-  fallback: OllamaUsageFallback["input"],
-): number {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-    return value;
-  }
-  // Provider counters, including zero, avoid scanning and serializing history for estimates.
+function resolveUsageFallback(fallback: OllamaUsageFallback["input"]): number {
   const estimate = typeof fallback === "function" ? fallback() : fallback;
-  if (typeof estimate === "number" && Number.isFinite(estimate) && estimate > 0) {
-    return estimate;
-  }
-  return 0;
+  return resolveOptionalUsageCount(estimate) ?? 0;
 }
 
 function resolveOptionalUsageCount(value: number | undefined): number | undefined {
@@ -875,12 +867,20 @@ export function buildAssistantMessage(
     }
   }
 
-  const promptTokens = resolveUsageCount(response.prompt_eval_count, usageFallback?.input);
-  const outputTokens = resolveUsageCount(response.eval_count, usageFallback?.output);
+  const reportedPromptTokens = resolveOptionalUsageCount(response.prompt_eval_count);
+  const reportedOutputTokens = resolveOptionalUsageCount(response.eval_count);
+  // Provider counters, including zero, avoid scanning and serializing history for estimates.
+  const promptTokens = reportedPromptTokens ?? resolveUsageFallback(usageFallback?.input);
+  const outputTokens = reportedOutputTokens ?? resolveUsageFallback(usageFallback?.output);
   const reportedCacheRead = resolveOptionalUsageCount(response.prompt_eval_cached_count);
   // Ollama includes cached tokens in prompt_eval_count; OpenClaw records input as uncached.
   const cacheRead =
     reportedCacheRead === undefined ? undefined : Math.min(reportedCacheRead, promptTokens);
+  // Estimated fallbacks are not provider measurements and cannot anchor context.
+  const contextUsage: Usage["contextUsage"] =
+    reportedPromptTokens !== undefined && reportedOutputTokens !== undefined
+      ? { state: "available", promptTokens, totalTokens: promptTokens + outputTokens }
+      : undefined;
 
   return buildStreamAssistantMessage({
     model: modelInfo,
@@ -889,6 +889,7 @@ export function buildAssistantMessage(
     usage: buildUsageWithNoCost({
       input: promptTokens - (cacheRead ?? 0),
       output: outputTokens,
+      contextUsage,
       ...(cacheRead === undefined
         ? {}
         : {
