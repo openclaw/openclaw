@@ -217,7 +217,13 @@ describe("memory runtime handles", () => {
 
     await expect(
       getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
-    ).resolves.toEqual({ manager: null, error: "no index", capabilityRegistered: true });
+    ).resolves.toEqual({
+      manager: null,
+      error: "no index",
+      capabilityRegistered: true,
+      searchRuntimeRegistered: true,
+      ownerLoadFailed: false,
+    });
 
     expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledWith({
       activate: false,
@@ -279,6 +285,8 @@ describe("memory runtime handles", () => {
         manager: null,
         error: capability === "missing" ? "memory plugin unavailable" : "no index",
         capabilityRegistered: capability !== "missing",
+        searchRuntimeRegistered: capability !== "missing",
+        ownerLoadFailed: false,
       });
       await retirePluginCache(cache);
       expect(first.instance.lifecycle.signal.aborted).toBe(true);
@@ -286,7 +294,13 @@ describe("memory runtime handles", () => {
       for (let query = 0; query < 2; query += 1) {
         await expect(
           getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
-        ).resolves.toEqual({ manager: null, error: "no index", capabilityRegistered: true });
+        ).resolves.toEqual({
+          manager: null,
+          error: "no index",
+          capabilityRegistered: true,
+          searchRuntimeRegistered: true,
+          ownerLoadFailed: false,
+        });
       }
       expect(replacement.runtime.getMemorySearchManager).toHaveBeenCalledTimes(2);
       expect(replacement.instance.lifecycle.signal.aborted).toBe(false);
@@ -441,8 +455,70 @@ describe("memory runtime handles", () => {
       manager: null,
       error: "memory plugin unavailable",
       capabilityRegistered: false,
+      searchRuntimeRegistered: false,
+      ownerLoadFailed: false,
     });
     expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
+  });
+
+  it("treats a capability without a search runtime as registered", async () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "memory-core",
+      source: "/plugins/memory-core/index.js",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    const instance = new PluginInstance(record.id, { record, registry });
+    instances.push(instance);
+    registry.plugins.push(record);
+    // MemoryPluginCapability.runtime is optional. A public-artifact provider is a complete
+    // registration whose consumers keep working, so the host must not report it as unregistered.
+    registry.memoryCapabilities.push({
+      pluginId: record.id,
+      capability: instance.wrap({
+        publicArtifacts: { listArtifacts: vi.fn(async () => []) },
+      }),
+    });
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+    await expect(
+      getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
+    ).resolves.toEqual({
+      manager: null,
+      error: "memory plugin unavailable",
+      capabilityRegistered: true,
+      searchRuntimeRegistered: false,
+      ownerLoadFailed: false,
+    });
+  });
+
+  it("reports a slot owner whose load failed rather than calling it unregistered", async () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "memory-core",
+      source: "/plugins/memory-core/index.js",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    // The loader records the failure on the record and rolls back the plugin's contributions
+    // instead of throwing, so the registry keeps the record but carries no memory capability.
+    record.status = "error";
+    record.error = "import failed: boom";
+    registry.plugins.push(record);
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+    await expect(
+      getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
+    ).resolves.toEqual({
+      manager: null,
+      error: "import failed: boom",
+      capabilityRegistered: false,
+      searchRuntimeRegistered: false,
+      ownerLoadFailed: true,
+    });
   });
 
   it("prefers an already-registered runtime", () => {

@@ -1262,6 +1262,9 @@ const enSettings = {
         selfManaged: "{engine} owns the memory slot",
         selfManagedDescription:
           "{engine} has not registered a host memory capability, so host integrations that require one (search, prompt section, dream planning, wiki artifact listing, deterministic recall, private-transcript recall) are inactive. A plugin that handles memory through its own agent hooks still works; this page reports only host-side memory.",
+        noSearchRuntime: "{engine} does not provide memory search",
+        noSearchRuntimeDescription:
+          "{engine} registered a host memory capability but no search runtime, so host memory search is unavailable. Anything else that capability registered, such as the prompt section or wiki artifact listing, is unaffected and still running.",
         activeDescription: "{engine} · {mode}",
         loadingDescription: "Checking this agent's memory engine and dream cycle.",
         offDescription: "Choose a memory engine in Settings to wake it up.",

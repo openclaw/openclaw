@@ -554,6 +554,8 @@ describe("MemorySettingsPage tab routing", () => {
       agentId: "main",
       eligible: true,
       capabilityRegistered: true,
+      searchRuntimeRegistered: true,
+      ownerLoadFailed: false,
       provider: "local",
       embedding: { ok: false, checked: false },
     };
@@ -595,6 +597,8 @@ describe("MemorySettingsPage tab routing", () => {
         agentId: "main",
         eligible: true,
         capabilityRegistered: true,
+        searchRuntimeRegistered: true,
+        ownerLoadFailed: false,
         provider: "local",
         embedding: { ok: false, checked: true, error: "embedding probe failed" },
       });
@@ -760,6 +764,8 @@ describe("MemorySettingsPage tab routing", () => {
         agentId,
         eligible: true,
         capabilityRegistered: true,
+        searchRuntimeRegistered: true,
+        ownerLoadFailed: false,
         provider: "none",
         embedding: { ok: false, checked: false },
       }),
@@ -804,6 +810,8 @@ describe("MemorySettingsPage tab routing", () => {
         agentId,
         eligible: true,
         capabilityRegistered: true,
+        searchRuntimeRegistered: true,
+        ownerLoadFailed: false,
         provider: "none",
         embedding: { ok: false, checked: false },
       }),
@@ -921,6 +929,8 @@ describe("MemorySettingsPage tab routing", () => {
         agentId: "main",
         eligible: true,
         capabilityRegistered: true,
+        searchRuntimeRegistered: true,
+        ownerLoadFailed: false,
         provider: "local",
         embedding: { ok: false, checked: true, error: "current embedding status" },
       });
@@ -929,6 +939,8 @@ describe("MemorySettingsPage tab routing", () => {
         agentId: "main",
         eligible: true,
         capabilityRegistered: true,
+        searchRuntimeRegistered: true,
+        ownerLoadFailed: false,
         provider: "local",
         embedding: { ok: false, checked: true, error: "obsolete embedding status" },
       });
@@ -944,6 +956,8 @@ describe("MemorySettingsPage tab routing", () => {
         provider: "none",
         eligible: true,
         capabilityRegistered: true,
+        searchRuntimeRegistered: true,
+        ownerLoadFailed: false,
         embedding: { ok: false, checked: false },
       });
       second.resolve({
@@ -951,6 +965,8 @@ describe("MemorySettingsPage tab routing", () => {
         provider: "none",
         eligible: true,
         capabilityRegistered: true,
+        searchRuntimeRegistered: true,
+        ownerLoadFailed: false,
         embedding: { ok: false, checked: false },
       });
       element.remove();

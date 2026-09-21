@@ -36,6 +36,8 @@ function fixturePayload(): DoctorMemoryStatusPayload {
     agentId: "main",
     eligible: true,
     capabilityRegistered: true,
+    searchRuntimeRegistered: true,
+    ownerLoadFailed: false,
     provider: "local",
     embedding: { ok: true, checked: true },
     embeddingRuntime: {
@@ -302,7 +304,12 @@ describe("renderMemoryOverview", () => {
   it("renders the self-managed hero, not 'not configured', when the slot owner registers no capability", () => {
     const container = renderOverview({
       kind: "ready",
-      payload: { ...fixturePayload(), eligible: true, capabilityRegistered: false },
+      payload: {
+        ...fixturePayload(),
+        eligible: true,
+        capabilityRegistered: false,
+        searchRuntimeRegistered: false,
+      },
     });
 
     // This is the filed #153016 case: the plugin owns the slot and is enabled, it just never
@@ -322,7 +329,12 @@ describe("renderMemoryOverview", () => {
     const container = renderOverview(
       {
         kind: "ready",
-        payload: { ...fixturePayload(), eligible: true, capabilityRegistered: false },
+        payload: {
+          ...fixturePayload(),
+          eligible: true,
+          capabilityRegistered: false,
+          searchRuntimeRegistered: false,
+        },
       },
       { kind: "auto", engineId: "hindsight-openclaw" },
     );
@@ -340,6 +352,7 @@ describe("renderMemoryOverview", () => {
         ...fixturePayload(),
         eligible: true,
         capabilityRegistered: false,
+        searchRuntimeRegistered: false,
         dreaming: undefined,
         embedding: { ok: false, error: "memory plugin unavailable" },
       },
@@ -364,6 +377,52 @@ describe("renderMemoryOverview", () => {
 
     expect(container.textContent).toContain("Memory is not configured");
     expect(container.textContent).not.toContain("memory plugin unavailable");
+    expect(container.textContent).not.toContain("Engine health");
+    expect(container.querySelector(".oc-status-error")).toBeNull();
+  });
+
+  it("keeps the failure hero when the slot owner's own load failed", () => {
+    const container = renderOverview({
+      kind: "ready",
+      payload: {
+        ...fixturePayload(),
+        eligible: true,
+        capabilityRegistered: false,
+        searchRuntimeRegistered: false,
+        ownerLoadFailed: true,
+        embedding: { ok: false, error: "import failed: boom" },
+      },
+    });
+
+    // A crashed owner reaches this predicate with the same eligible/capabilityRegistered pair as
+    // the filed case, so without ownerLoadFailed the neutral hero would swallow a real failure.
+    expect(container.textContent).toContain("Memory needs attention");
+    expect(container.textContent).toContain("import failed: boom");
+    expect(container.textContent).not.toContain("owns the memory slot");
+    expect(container.textContent).not.toContain("has not registered a host memory capability");
+  });
+
+  it("does not claim every integration is inactive when only the search runtime is absent", () => {
+    const container = renderOverview({
+      kind: "ready",
+      payload: {
+        ...fixturePayload(),
+        eligible: true,
+        capabilityRegistered: true,
+        searchRuntimeRegistered: false,
+        dreaming: undefined,
+        embedding: { ok: false, error: "memory plugin unavailable" },
+      },
+    });
+
+    // capability.runtime is optional, so this plugin IS registered. Reusing the self-managed copy
+    // here would tell the operator the prompt section and artifact listing are inactive when the
+    // capability that registered them is running.
+    expect(container.textContent).toContain("does not provide memory search");
+    expect(container.textContent).not.toContain("has not registered a host memory capability");
+    expect(container.textContent).not.toContain("owns the memory slot");
+    expect(container.textContent).not.toContain("Memory is not configured");
+    expect(container.textContent).not.toContain("Memory needs attention");
     expect(container.textContent).not.toContain("Engine health");
     expect(container.querySelector(".oc-status-error")).toBeNull();
   });

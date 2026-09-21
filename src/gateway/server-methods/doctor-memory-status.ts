@@ -99,7 +99,12 @@ export type DoctorMemoryStatusPayload = {
   agentId: string;
   eligible: boolean;
   eligibilityReason?: string;
+  /** A plugin registered a host memory capability. Independent of search support. */
   capabilityRegistered: boolean;
+  /** That capability declares a search runtime. `capability.runtime` is optional. */
+  searchRuntimeRegistered: boolean;
+  /** The selected slot owner's own load failed; the loader records this instead of throwing. */
+  ownerLoadFailed: boolean;
   provider?: string;
   embedding: {
     ok: boolean;
@@ -595,11 +600,12 @@ export function createDoctorMemoryStatusHandler(
       return;
     }
     const { cfg, agentId, requestedAgentId } = resolved;
-    const { manager, error, capabilityRegistered } = await getActiveMemorySearchManagerCore({
-      cfg,
-      agentId,
-      purpose: "status",
-    });
+    const { manager, error, capabilityRegistered, searchRuntimeRegistered, ownerLoadFailed } =
+      await getActiveMemorySearchManagerCore({
+        cfg,
+        agentId,
+        purpose: "status",
+      });
     if (!manager) {
       const eligibility = getMemoryEligibility(cfg);
       const payload: DoctorMemoryStatusPayload = {
@@ -609,6 +615,10 @@ export function createDoctorMemoryStatusHandler(
         // A resolved owner whose manager construction failed is a live health
         // failure, not "unconfigured" - see getActiveMemorySearchManagerCore.
         capabilityRegistered: capabilityRegistered ?? false,
+        searchRuntimeRegistered: searchRuntimeRegistered ?? false,
+        // A crashed owner must keep the health-failure presentation rather than fall
+        // through to the neutral slot-owner hero, which would hide the failure.
+        ownerLoadFailed: ownerLoadFailed ?? false,
         embedding: {
           ok: false,
           error: error ?? "memory search unavailable",
@@ -677,6 +687,8 @@ export function createDoctorMemoryStatusHandler(
         agentId,
         eligible: true,
         capabilityRegistered: true,
+        searchRuntimeRegistered: true,
+        ownerLoadFailed: false,
         provider: status.provider,
         embedding,
         embeddingRuntime: (() => {
@@ -710,6 +722,8 @@ export function createDoctorMemoryStatusHandler(
         agentId,
         eligible: true,
         capabilityRegistered: true,
+        searchRuntimeRegistered: true,
+        ownerLoadFailed: false,
         embedding: {
           ok: false,
           error: `gateway memory probe failed: ${formatError(err)}`,

@@ -57,20 +57,43 @@ function isUnconfigured(payload: DoctorMemoryStatusPayload): boolean {
   return !payload.eligible;
 }
 
-// A plugin DOES own the slot and is enabled, it just never registered a host memory capability.
+// The owner is configured but its own load failed. The loader records that on the plugin record
+// and rolls back its contributions instead of throwing, so this payload is otherwise identical to
+// a clean owner that registered nothing. It is a real failure and must keep the failure hero and
+// the engine-health card; letting it fall through to the neutral states below would hide it.
+function hasFailedOwnerLoad(payload: DoctorMemoryStatusPayload): boolean {
+  return payload.eligible && payload.ownerLoadFailed;
+}
+
+// A plugin DOES own the slot, loaded cleanly, and never registered a host memory capability.
 // `plugins.slots.memory` names an owner; it does not promise a host capability. Plugins that
 // implement recall and retain through registerAgentHooks() land here, and their memory is
 // running - only the host-side integrations are absent. Reporting this as "not configured" or
 // as a health failure are both false statements about a working system.
 function isSelfManaged(payload: DoctorMemoryStatusPayload): boolean {
-  return payload.eligible && !payload.capabilityRegistered;
+  return payload.eligible && !hasFailedOwnerLoad(payload) && !payload.capabilityRegistered;
 }
 
-// Neither state has a manager to probe, so both always carry embedding.ok: false. Both must win
-// over the embedding-error branch, and both must suppress the engine-health card, or the page
-// renders a health failure underneath a non-failure verdict for the same payload.
+// A plugin owns the slot and DID register a host memory capability; that capability simply
+// declares no search runtime. `MemoryPluginCapability.runtime` is optional, so a prompt builder
+// or public-artifact provider is a complete registration whose consumers keep working. Only host
+// memory search is absent, so this must not reuse the self-managed copy, which enumerates every
+// host integration as inactive.
+function hasNoSearchRuntime(payload: DoctorMemoryStatusPayload): boolean {
+  return (
+    payload.eligible &&
+    !hasFailedOwnerLoad(payload) &&
+    payload.capabilityRegistered &&
+    !payload.searchRuntimeRegistered
+  );
+}
+
+// None of these states has a manager to probe, so all of them always carry embedding.ok: false.
+// All must win over the embedding-error branch, and all must suppress the engine-health card, or
+// the page renders a health failure underneath a non-failure verdict for the same payload.
+// A failed owner load is deliberately excluded: that one IS a failure and keeps both.
 function hasNoHostCapability(payload: DoctorMemoryStatusPayload): boolean {
-  return isUnconfigured(payload) || isSelfManaged(payload);
+  return isUnconfigured(payload) || isSelfManaged(payload) || hasNoSearchRuntime(payload);
 }
 
 function searchMode(payload: DoctorMemoryStatusPayload): string {
@@ -87,9 +110,13 @@ function renderHero(props: MemoryOverviewProps) {
   // probe, so both always present with embedding.ok: false).
   const unconfigured = readyPayload !== null && isUnconfigured(readyPayload);
   const selfManaged = readyPayload !== null && isSelfManaged(readyPayload);
+  const noSearchRuntime = readyPayload !== null && hasNoSearchRuntime(readyPayload);
+  // A failed owner load is not subtracted here, so it reaches the error branch and keeps the
+  // health-failure presentation the base page gave it.
   const error =
     !unconfigured &&
     !selfManaged &&
+    !noSearchRuntime &&
     (props.status.kind === "error" || (readyPayload !== null && hasEmbeddingError(readyPayload)));
   const look = createLobsterPetLook(lobsterPetSeed(props.agentId ?? "memory"));
   const engineName = engineId ?? t("common.unknown");
@@ -101,9 +128,11 @@ function renderHero(props: MemoryOverviewProps) {
         ? t("memoryPage.overview.hero.unconfigured")
         : selfManaged
           ? t("memoryPage.overview.hero.selfManaged", { engine: engineName })
-          : error
-            ? t("memoryPage.overview.hero.needsAttention")
-            : t("memoryPage.overview.hero.awake");
+          : noSearchRuntime
+            ? t("memoryPage.overview.hero.noSearchRuntime", { engine: engineName })
+            : error
+              ? t("memoryPage.overview.hero.needsAttention")
+              : t("memoryPage.overview.hero.awake");
   const description = off
     ? t(
         props.engineDisabled
@@ -117,19 +146,22 @@ function renderHero(props: MemoryOverviewProps) {
           ? t("memoryPage.overview.hero.unconfiguredDescription")
           : selfManaged
             ? t("memoryPage.overview.hero.selfManagedDescription", { engine: engineName })
-            : hasEmbeddingError(readyPayload)
-              ? (readyPayload.embedding.error ?? t("memoryPage.overview.health.unavailable"))
-              : t("memoryPage.overview.hero.activeDescription", {
-                  engine: engineName,
-                  mode: searchMode(readyPayload),
-                })
+            : noSearchRuntime
+              ? t("memoryPage.overview.hero.noSearchRuntimeDescription", { engine: engineName })
+              : hasEmbeddingError(readyPayload)
+                ? (readyPayload.embedding.error ?? t("memoryPage.overview.health.unavailable"))
+                : t("memoryPage.overview.hero.activeDescription", {
+                    engine: engineName,
+                    mode: searchMode(readyPayload),
+                  })
         : t("memoryPage.overview.hero.loadingDescription");
-  // Self-managed memory is running, so it is neither grumpy (a failure) nor sleeping (inert).
+  // Self-managed memory and a registered capability without search are both running, so neither
+  // is grumpy (a failure) nor sleeping (inert).
   const pose = off
     ? { sleeping: true }
     : error
       ? { grumpy: true, standalone: true }
-      : selfManaged
+      : selfManaged || noSearchRuntime
         ? { standalone: true }
         : readyPayload && !unconfigured
           ? { reading: true, standalone: true }

@@ -250,6 +250,8 @@ describe("doctor.memory.status", () => {
       manager: null,
       error: "memory plugin unavailable",
       capabilityRegistered: false,
+      searchRuntimeRegistered: false,
+      ownerLoadFailed: false,
     });
     const respond = vi.fn();
 
@@ -259,6 +261,8 @@ describe("doctor.memory.status", () => {
     expectRecordFields(payload, {
       eligible: true,
       capabilityRegistered: false,
+      searchRuntimeRegistered: false,
+      ownerLoadFailed: false,
     });
     expectRecordFields(payload.embedding, { ok: false });
   });
@@ -277,6 +281,8 @@ describe("doctor.memory.status", () => {
       manager: null,
       error: "EACCES: permission denied, open '/x/index.db'",
       capabilityRegistered: true,
+      searchRuntimeRegistered: true,
+      ownerLoadFailed: false,
     });
     const respond = vi.fn();
 
@@ -286,6 +292,8 @@ describe("doctor.memory.status", () => {
     expectRecordFields(payload, {
       eligible: true,
       capabilityRegistered: true,
+      searchRuntimeRegistered: true,
+      ownerLoadFailed: false,
     });
     expectRecordFields(payload.embedding, {
       ok: false,

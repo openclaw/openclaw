@@ -106,8 +106,22 @@ function resolveMemoryRuntimeWorkspaceDir(
   return resolveUserPath(dir);
 }
 
-function resolveMemoryRuntimeFromRegistry(registry: PluginRegistry) {
-  return resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.capability.runtime;
+/**
+ * The loader records an import or registration failure on the plugin's record and rolls back its
+ * contributions instead of throwing, so a slot owner that failed to load is otherwise
+ * indistinguishable from one that loaded cleanly and registered nothing.
+ */
+function resolveOwnerLoadError(
+  registry: PluginRegistry,
+  onlyPluginIds: readonly string[],
+): string | undefined {
+  for (const pluginId of onlyPluginIds) {
+    const record = registry.plugins.find((candidate) => candidate.id === pluginId);
+    if (record?.status === "error") {
+      return record.error ?? `plugin ${pluginId} failed to load`;
+    }
+  }
+  return undefined;
 }
 
 function listCurrentMemoryRuntimes(): MemoryRuntime[] {
@@ -122,17 +136,42 @@ function listCurrentMemoryRuntimes(): MemoryRuntime[] {
   return [...runtimes];
 }
 
-function ensureMemoryRuntime(params?: {
+/**
+ * Why the memory slot resolved the way it did, not just what it produced.
+ *
+ * `capabilityRegistered` answers "did a plugin register a host memory capability", which is a
+ * different question from "can this host search memory". `MemoryPluginCapability.runtime` is
+ * optional: a plugin may register only a prompt builder or a public-artifact provider and those
+ * consumers keep working, so search support is reported separately rather than collapsed into
+ * registration.
+ */
+type MemorySlotResolution = {
+  owner?: MemoryRuntimeOwner;
+  capabilityRegistered: boolean;
+  searchRuntimeRegistered: boolean;
+  /** Set only when the selected owner's own load failed, carrying the loader's recorded message. */
+  ownerLoadError?: string;
+};
+
+const UNRESOLVED_MEMORY_SLOT: MemorySlotResolution = {
+  capabilityRegistered: false,
+  searchRuntimeRegistered: false,
+};
+
+function resolveMemorySlot(params?: {
   cfg: OpenClawConfig;
   agentId: string;
-}): MemoryRuntimeOwner | undefined {
+}): MemorySlotResolution {
   const current = getMemoryRuntime();
   if (current || !params) {
-    return current ? { runtime: current } : undefined;
+    // A live in-process runtime only exists because a capability registered one.
+    return current
+      ? { owner: { runtime: current }, capabilityRegistered: true, searchRuntimeRegistered: true }
+      : UNRESOLVED_MEMORY_SLOT;
   }
   const onlyPluginIds = resolveMemoryRuntimePluginIds(params.cfg);
   if (onlyPluginIds.length === 0) {
-    return undefined;
+    return UNRESOLVED_MEMORY_SLOT;
   }
   const workspaceDir = resolveMemoryRuntimeWorkspaceDir(params.cfg, params.agentId);
   const registry = loadPluginRegistryHandle({
@@ -141,10 +180,19 @@ function ensureMemoryRuntime(params?: {
     workspaceDir,
     activate: false,
   });
-  const runtime = resolveMemoryRuntimeFromRegistry(registry);
+  const registration = resolveMemoryCapabilityRegistration(registry.memoryCapabilities);
+  const runtime = registration?.capability.runtime;
+  const ownerLoadError = resolveOwnerLoadError(registry, onlyPluginIds);
+  const facts: MemorySlotResolution = {
+    capabilityRegistered: registration !== undefined,
+    searchRuntimeRegistered: runtime !== undefined,
+  };
+  if (ownerLoadError !== undefined) {
+    facts.ownerLoadError = ownerLoadError;
+  }
   const previousSlot = standaloneMemoryRegistrySlot;
   if (previousSlot?.runtime === runtime) {
-    return runtime ? { runtime, standalone: true } : undefined;
+    return runtime ? { ...facts, owner: { runtime, standalone: true } } : facts;
   }
   const retiredRuntimes = new Set(previousSlot?.retiredRuntimes);
   if (previousSlot?.runtime) {
@@ -165,17 +213,34 @@ function ensureMemoryRuntime(params?: {
       enrolledStandaloneMemoryRuntimes.add(runtime);
     }
   }
-  return runtime ? { runtime, standalone: true } : undefined;
+  return runtime ? { ...facts, owner: { runtime, standalone: true } } : facts;
+}
+
+function ensureMemoryRuntime(params?: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): MemoryRuntimeOwner | undefined {
+  return resolveMemorySlot(params).owner;
 }
 
 /**
  * Returns the active plugin-backed memory search manager for an agent.
  *
- * `capabilityRegistered` reflects whether a memory runtime owner was resolved at
- * all, independent of whether that owner's `getMemorySearchManager` call then
- * failed. Callers must use it (not `!!manager`) to distinguish "no memory
- * capability is registered" from "the registered capability's manager failed to
- * construct" - see src/plugins/AGENTS.md "Availability And Selection".
+ * Three separate facts travel with the result, because collapsing any two of them makes the host
+ * assert something it cannot observe:
+ *
+ * - `capabilityRegistered`: a plugin registered a host memory capability. Derived from the
+ *   capability registration itself, NOT from `capability.runtime`, which is optional. A plugin
+ *   registering only a prompt builder or a public-artifact provider is registered.
+ * - `searchRuntimeRegistered`: that capability declares a search runtime. Only this field speaks
+ *   to whether host-side memory search can work.
+ * - `ownerLoadFailed`: the selected slot owner's own load failed. The loader records that on the
+ *   plugin record rather than throwing, so without this field a crashed plugin is
+ *   indistinguishable from one that deliberately registered nothing.
+ *
+ * Callers must use these (not `!!manager`) to distinguish "no memory capability is registered"
+ * from "the registered capability's manager failed to construct" - see src/plugins/AGENTS.md
+ * "Availability And Selection".
  */
 export async function getActiveMemorySearchManagerCore(params: {
   cfg: OpenClawConfig;
@@ -183,18 +248,26 @@ export async function getActiveMemorySearchManagerCore(params: {
   purpose?: "default" | "status" | "cli";
   inspectSources?: boolean;
 }) {
-  const owner = ensureMemoryRuntime(params);
-  if (!owner) {
-    return { manager: null, error: "memory plugin unavailable", capabilityRegistered: false };
+  const resolution = resolveMemorySlot(params);
+  if (!resolution.owner) {
+    return {
+      manager: null,
+      error: resolution.ownerLoadError ?? "memory plugin unavailable",
+      capabilityRegistered: resolution.capabilityRegistered,
+      searchRuntimeRegistered: resolution.searchRuntimeRegistered,
+      ownerLoadFailed: resolution.ownerLoadError !== undefined,
+    };
   }
-  if (owner.standalone) {
+  if (resolution.owner.standalone) {
     setStandaloneMemoryManagerActive(true);
   }
-  const result = await owner.runtime.getMemorySearchManager(params);
+  const result = await resolution.owner.runtime.getMemorySearchManager(params);
   return {
     ...result,
     manager: result.manager ? normalizeRegisteredMemoryManager(result.manager) : null,
     capabilityRegistered: true,
+    searchRuntimeRegistered: true,
+    ownerLoadFailed: false,
   };
 }
 

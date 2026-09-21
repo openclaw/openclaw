@@ -43,6 +43,21 @@ engine unchanged, and tries that engine again on the next logical turn.
   slot owner holding the slot with host integrations inactive, not as a health
   failure and not as an unconfigured slot. Register the capability to
   participate in host-side memory.
+- `capabilityRegistered` answers whether a capability was registered at all. It
+  is not a statement about search. `MemoryPluginCapability.runtime` is optional,
+  so a plugin that registers only a prompt builder or a
+  `publicArtifacts` provider is fully registered and those consumers keep
+  working. `doctor.memory.status` reports that shape as
+  `capabilityRegistered: true` with `searchRuntimeRegistered: false`, and the
+  Memory page says host memory search is unavailable without claiming the other
+  integrations are inactive.
+- A slot owner whose import or registration throws is reported separately again.
+  The loader records the failure on the plugin record and rolls back that
+  plugin's contributions rather than throwing, which otherwise makes a crashed
+  owner look identical to one that deliberately registered nothing.
+  `doctor.memory.status` sets `ownerLoadFailed: true` and carries the recorded
+  error, and the Memory page keeps the health-failure presentation instead of
+  the neutral slot-owner state.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
   for host-managed exports. Companion plugins that enumerate those declared
   artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained
