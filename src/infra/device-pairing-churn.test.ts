@@ -2,6 +2,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
 import {
   getPairedDevice,
@@ -53,6 +54,7 @@ describe("device pairing requestId churn", () => {
   });
 
   afterAll(async () => {
+    await closeStateDatabaseForTest();
     await suiteRootTracker.cleanup();
   });
 

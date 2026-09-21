@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import * as userProfiles from "../state/user-profiles.js";
 import {
   ensureGatewayOwnerProfile,
@@ -19,6 +18,7 @@ import {
   setUserProfileRole,
   syncGitHubIdentity,
 } from "../state/user-profiles.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { authorizeGatewayHttpRequestOrReply } from "./http-auth-utils.js";
@@ -85,11 +85,11 @@ describe("personal avatar HTTP authentication", () => {
     avatarPath = "/api/users/gateway-owner/avatar?v=synthetic-png";
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     setAvatarGatewayOrigin(null);
     rateLimiter?.dispose();
     rateLimiter = undefined;
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });

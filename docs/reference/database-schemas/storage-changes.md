@@ -1513,8 +1513,28 @@ Doctor's local device-token inventory executes in the shared-state worker. The
 detector awaits its result and preserves role ordering, malformed-row omission,
 and best-effort diagnostic behavior. Lint keeps this read in its private active
 state view and joins worker cleanup before retiring that snapshot; source-path
-legacy-file checks retain their separate environment. Device identity, pairing
-reads, and client token operations retain their existing owners.
+legacy-file checks retain their separate environment. Device identity creation
+retains its existing owner.
+
+Device pairing lists and lookups execute in the shared-state read-only workers.
+The pairing snapshot cache checks SQLite `data_version` there, including commits
+from a separate CLI connection. Workers project lists and node identity bindings;
+the Gateway installs bindings against the pairing revision without reopening
+SQLite. Historical inspection snapshots never publish live node authority.
+
+Pairing, approval, role-token, bootstrap, and node-surface mutations execute in
+the shared-state writer. Each synchronous transaction reads the authoritative
+rows and obtains current host policy or connection admission before mutation and
+again before commit. Commit receipts publish the revision and changed node
+bindings before callers continue; uncertain outcomes are not replayed. Node
+prompt preparation refreshes the published facts, and Web Push retains pairing
+and subscription admission through network start, releasing both before provider
+completion. APNs registration checks pairing in its worker transaction and
+revalidates the exact live node connection through the same broker admission.
+
+The cutover changes no schema, persisted record representation, config, retention,
+or update behavior. Doctor/import transactions keep their synchronous maintenance
+owner; regular CLI pairing uses the same worker operations as the Gateway.
 
 An adapter must make these contracts explicit and verify them against a real
 database:

@@ -65,6 +65,7 @@ import {
   persistInboundImagesForTranscript as defaultPersistInboundImagesForTranscript,
 } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments as defaultNormalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
+import { registerNodeApnsEvent } from "./server-node-events-apns.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   loadSessionEntry as defaultLoadSessionEntry,
@@ -580,23 +581,21 @@ export const handleNodeEvent = async (
     presenceAllowed?: boolean;
     isConnectionCurrent?: () => boolean | Promise<boolean>;
     resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
+    assertApnsRegistrationCurrent?: () => void;
   },
   dependencies: ServerNodeEventDependencies = resolveDefaultServerNodeEventDependencies(),
 ): Promise<NodeEventHandleResult | undefined> => {
   const {
-    ApnsRegistrationPairingChangedError,
     enqueueSystemEvent,
     formatForLog,
     getRuntimeConfig,
     INLINE_IMAGE_DURABLE_OMISSION_MARKER,
-    loadOrCreateProcessDeviceIdentity,
     loadSessionEntry,
     normalizeChannelId,
     normalizeMainKey,
     normalizeRpcAttachmentsToChatAttachments,
     parseMessageWithAttachments,
     persistInboundImagesForTranscript,
-    registerApnsRegistration,
     requestHeartbeat,
     resolveChatAttachmentMaxBytes,
     resolveGatewayModelSupportsImages,
@@ -1167,59 +1166,8 @@ export const handleNodeEvent = async (
       if (!obj) {
         return undefined;
       }
-      const transport = normalizeLowercaseStringOrEmpty(obj.transport) || "direct";
-      const topic = typeof obj.topic === "string" ? obj.topic : "";
-      const environment = obj.environment;
-      try {
-        const expectedPairingGeneration = await opts?.resolveApnsRegistrationGeneration?.();
-        if (!expectedPairingGeneration) {
-          ctx.logGateway.warn(
-            `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
-          );
-          return pairingChangedResult(evt.event);
-        }
-        if (transport === "relay") {
-          const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
-          const currentGatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
-          if (!gatewayDeviceId || gatewayDeviceId !== currentGatewayDeviceId) {
-            ctx.logGateway.warn(
-              `push relay register rejected node=${nodeId}: gateway identity mismatch`,
-            );
-            return undefined;
-          }
-          await registerApnsRegistration({
-            nodeId,
-            transport: "relay",
-            relayHandle: typeof obj.relayHandle === "string" ? obj.relayHandle : "",
-            sendGrant: typeof obj.sendGrant === "string" ? obj.sendGrant : "",
-            installationId: typeof obj.installationId === "string" ? obj.installationId : "",
-            topic,
-            environment,
-            distribution: obj.distribution,
-            relayOrigin: obj.relayOrigin,
-            tokenDebugSuffix: obj.tokenDebugSuffix,
-            expectedPairingGeneration,
-          });
-        } else {
-          await registerApnsRegistration({
-            nodeId,
-            transport: "direct",
-            token: typeof obj.token === "string" ? obj.token : "",
-            topic,
-            environment,
-            expectedPairingGeneration,
-          });
-        }
-      } catch (err) {
-        if (err instanceof ApnsRegistrationPairingChangedError) {
-          ctx.logGateway.warn(
-            `push apns register rejected node=${nodeId}: stale or invalidated pairing session`,
-          );
-          return pairingChangedResult(evt.event);
-        }
-        ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
-      }
-      return undefined;
+      const result = await registerNodeApnsEvent(ctx, nodeId, obj, opts, dependencies);
+      return result === "pairing-changed" ? pairingChangedResult(evt.event) : undefined;
     }
     case NODE_HOST_STATS_EVENT: {
       const obj = parsePayloadObject(evt.payloadJSON);

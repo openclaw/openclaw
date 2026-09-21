@@ -1,42 +1,29 @@
 // Shared snapshot, lock, and normalization owner for device pairing domain modules.
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { loadDevicePairingStoreStateReadOnly } from "./device-pairing-store-readonly.js";
 import {
   loadDevicePairingStoreState,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
-import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
+import { pruneExpiredPending } from "./pairing-files.js";
 
 const DEVICE_PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
-const withLock = createAsyncLock();
 
-function pruneExpiredDevicePairingRequests(state: DevicePairingStoreState): void {
-  pruneExpiredPending(state.pendingById, Date.now(), DEVICE_PAIRING_PENDING_TTL_MS);
+function pruneExpiredDevicePairingRequests(state: DevicePairingStoreState, nowMs: number): void {
+  pruneExpiredPending(state.pendingById, nowMs, DEVICE_PAIRING_PENDING_TTL_MS);
   // Node capability requests are durable operator decisions. Their lifecycle
   // owner resolves them on approval, rejection, replacement, reconnect cleanup,
   // or node-role removal.
 }
 
-/** Run one pairing mutation under the process-wide device pairing lock. */
-export async function withDevicePairingLock<T>(operate: () => Promise<T>): Promise<T> {
-  return await withLock(operate);
-}
-
-/** Load one mutable pairing snapshot with expired pending state removed. */
-export async function loadDevicePairingState(baseDir?: string): Promise<DevicePairingStoreState> {
-  const state = loadDevicePairingStoreState(baseDir);
-  pruneExpiredDevicePairingRequests(state);
-  return state;
-}
-
-/** Load one read-only pairing snapshot with expired pending state removed. */
-export async function loadDevicePairingStateReadOnly(
+/** Read authoritative rows inside the worker transaction or an admitted migration. */
+export function loadDevicePairingStateForMutation(
+  nowMs: number,
   baseDir?: string,
-): Promise<DevicePairingStoreState> {
-  const state = loadDevicePairingStoreStateReadOnly(baseDir);
-  pruneExpiredDevicePairingRequests(state);
+): DevicePairingStoreState {
+  const state = loadDevicePairingStoreState(baseDir);
+  pruneExpiredDevicePairingRequests(state, nowMs);
   return state;
 }
 

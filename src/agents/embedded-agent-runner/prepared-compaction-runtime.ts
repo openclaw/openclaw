@@ -8,6 +8,7 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import {
   formatActiveNodeContextLabel,
   getCurrentActiveNodeContext,
+  prepareActiveNodeContext,
 } from "../../infra/active-node-context.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
@@ -452,6 +453,7 @@ export async function buildPreparedCompactionRuntime(
         })
       : undefined;
 
+    await prepareActiveNodeContext();
     const runtimeInfo = {
       agentId: sessionAgentId,
       agentName: params.config ? resolveRuntimeAgentName(params.config, sessionAgentId) : undefined,

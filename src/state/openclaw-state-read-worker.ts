@@ -109,6 +109,9 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
       })),
     };
   }
+  if (command.type === "devicePairing.bootstrapContext") {
+    return { ...command, input: { ...command.input } };
+  }
   if (command.type === "pluginBlob.lookup") {
     const { pluginId, namespace, key } = command.input;
     return { type: command.type, input: { pluginId, namespace, key } };
@@ -175,6 +178,24 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
         (proposal.runningAtMs === undefined ? 0 : 8),
       bytes + Buffer.byteLength(command.storeKey, "utf8"),
     );
+  }
+  if (command.type === "devicePairing.bootstrapContext") {
+    return (
+      bytes +
+      Buffer.byteLength(command.input.token) +
+      Buffer.byteLength(command.input.deviceId) +
+      Buffer.byteLength(command.input.publicKey) +
+      8
+    );
+  }
+  if (command.type === "devicePairing.lookup") {
+    return bytes + Buffer.byteLength(command.deviceId);
+  }
+  if (command.type === "devicePairing.pending") {
+    return bytes + Buffer.byteLength(command.requestId) + 8;
+  }
+  if (command.type === "devicePairing.list") {
+    return bytes + 8 + Buffer.byteLength(command.publishedRevision ?? "");
   }
   if (command.type === "pluginBlob.lookup" || command.type === "pluginBlob.entries") {
     return (
