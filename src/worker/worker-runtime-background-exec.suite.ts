@@ -9,6 +9,7 @@ import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protoc
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
+import { NodeWorkerJournalWorker } from "../node-host/node-worker-journal-worker.js";
 import type { NodeWorkerLaunchReceipt } from "../node-host/node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -178,7 +179,9 @@ export function registerWorkerBackgroundExecLifecycleTests({
             const turn =
               crashed !== "node-host"
                 ? await supervisor.status(input.launchId)
-                : new NodeWorkerTurnStore({ env: supervisorOptions.env }).get(input.launchId);
+                : await new NodeWorkerTurnStore(
+                    new NodeWorkerJournalWorker({ env: supervisorOptions.env }),
+                  ).get(input.launchId);
             expect(turn?.state).toBe("completed");
           },
           { timeout: WORKER_INFERENCE_START_TIMEOUT_MS },

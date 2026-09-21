@@ -162,12 +162,20 @@ export type PluginRuntimeChannel = {
   /** @deprecated Compatibility for shipped plugins; use `channel.inbound`. */
   turn: PluginRuntimeChannel["inbound"];
   threadBindings: {
+    setIdleTimeoutBySessionKeyAsync: (
+      params: Parameters<PluginRuntimeChannel["threadBindings"]["setIdleTimeoutBySessionKey"]>[0],
+    ) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
+    setMaxAgeBySessionKeyAsync: (
+      params: Parameters<PluginRuntimeChannel["threadBindings"]["setMaxAgeBySessionKey"]>[0],
+    ) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
+    /** @deprecated Use setIdleTimeoutBySessionKeyAsync. Retained through the next Plugin SDK major. */
     setIdleTimeoutBySessionKey: (params: {
       channelId: string;
       targetSessionKey: string;
       accountId?: string;
       idleTimeoutMs: number;
     }) => RuntimeThreadBindingLifecycleRecord[];
+    /** @deprecated Use setMaxAgeBySessionKeyAsync. Retained through the next Plugin SDK major. */
     setMaxAgeBySessionKey: (params: {
       channelId: string;
       targetSessionKey: string;

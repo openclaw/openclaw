@@ -116,6 +116,7 @@ async function createTaskRun(
   }
   const scope = {
     taskId: input.taskId,
+    flowId: input.params.parentFlowId?.trim(),
     runId: input.params.runId?.trim(),
     childSessionKey: input.params.childSessionKey?.trim(),
   };

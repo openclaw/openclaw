@@ -29,7 +29,8 @@ import { NativePackageRollbackError } from "../../infra/update-native-package-st
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -589,6 +590,9 @@ export async function rollbackFailedUpdate(params: {
       ...(verifiedAtMs === undefined ? {} : { verifiedAtMs }),
     };
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     const detail = formatErrorMessage(error);
     try {
       assertCurrent();

@@ -1,5 +1,50 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it } from "vitest";
+import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("packs the complete source runtime without native binaries or test fixtures", async () => {
+  const packageDir = fileURLToPath(new URL("..", import.meta.url));
+  const invocation = resolveNpmRunner({
+    npmArgs: ["pack", "--dry-run", "--json", "--ignore-scripts"],
+  });
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: packageDir,
+    encoding: "utf8",
+    env: invocation.env,
+    shell: invocation.shell,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  const [packed] = JSON.parse(result.stdout) as Array<{ files: Array<{ path: string }> }>;
+  const files = packed!.files.map((file) => file.path);
+  expect(
+    files.filter((file) => /(?:\.test\.ts$|\.dylib$|^native\/|^helper\/)/u.test(file)),
+  ).toEqual([]);
+  const staged = tempDirs.make("openclaw-facetime-source-package-");
+  for (const file of files) {
+    const target = join(staged, file);
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(join(packageDir, file), target);
+  }
+  await build({
+    entryPoints: [join(staged, "index.ts"), join(staged, "runtime-api.ts")],
+    bundle: true,
+    packages: "external",
+    platform: "node",
+    format: "esm",
+    outdir: join(staged, "compiled"),
+    write: false,
+    logLevel: "silent",
+  });
+});
 
 describe("FaceTime plugin manifest", () => {
   it("declares an installed-native Apple Silicon plugin at the current host contract", () => {
@@ -23,9 +68,7 @@ describe("FaceTime plugin manifest", () => {
     });
     expect(packageManifest.os).toEqual(["darwin"]);
     expect(packageManifest.cpu).toEqual(["arm64"]);
-    expect(packageManifest.files).toEqual(
-      expect.arrayContaining(["index.ts", "runtime-api.ts", "src/runtime.ts"]),
-    );
+    expect(packageManifest.files).toEqual(expect.arrayContaining(["index.ts", "runtime-api.ts"]));
     expect(packageManifest.files).not.toContain("runtime-entry.ts");
     expect(packageManifest.files.some((file: string) => file.startsWith("helper/"))).toBe(false);
     expect(packageManifest.files.some((file: string) => file.startsWith("native/"))).toBe(false);

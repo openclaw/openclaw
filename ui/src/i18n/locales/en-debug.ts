@@ -7,7 +7,6 @@ const enDebug = {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle:
       "Refresh to update status and health snapshots. Heartbeat data updates live.",
-    refreshingSnapshots: "Refreshing Gateway diagnostics.",
     offlineSnapshots: "Connect to the Gateway to refresh diagnostics.",
     status: "Status",
     health: "Health",

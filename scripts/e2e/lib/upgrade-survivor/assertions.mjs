@@ -6,7 +6,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { UPGRADE_SURVIVOR_ASSERTION_SCENARIOS } from "../../../lib/upgrade-survivor-policy.mjs";
-import { validatePrepublishPluginRegistryArtifact } from "../../../prepublish-plugin-registry-artifact.mjs";
+import {
+  inspectNpmPackageTarball,
+  validatePrepublishPluginRegistryArtifact,
+} from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { readPostCoreSnapshot } from "./diagnostics.mjs";
 import {
@@ -1343,6 +1346,7 @@ function assertNpmPluginInstall([
   pendingUpdateFile,
   observationRoot,
   baselineVersion,
+  publishedCompanionTarball,
 ]) {
   assert(
     pluginId && packageName && expectedVersion,
@@ -1385,14 +1389,20 @@ function assertNpmPluginInstall([
     requiredPackages: [packageName],
   });
   const artifact = manifest.packages.find((entry) => entry.name === packageName);
-  const archive = fs.readFileSync(path.join(artifactDir, artifact.tarball));
+  let expectedTarball = path.join(artifactDir, artifact.tarball);
+  if (publishedCompanionTarball) {
+    const published = inspectNpmPackageTarball(publishedCompanionTarball).packageJson;
+    assert(
+      published.name === packageName && published.version === expectedVersion,
+      "published companion identity must match the unchanged candidate version",
+    );
+    expectedTarball = publishedCompanionTarball;
+  }
+  const archive = fs.readFileSync(expectedTarball);
   const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
   assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
   if (getScenario() === "msteams-polls" && pluginId === "msteams") {
-    assertMSTeamsPluginFiles(
-      resolveHomePath(record.installPath),
-      path.join(artifactDir, artifact.tarball),
-    );
+    assertMSTeamsPluginFiles(resolveHomePath(record.installPath), expectedTarball);
   }
 }
 

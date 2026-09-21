@@ -1,181 +1,40 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginStateKeyedStore } from "../api.js";
-import { VisitorPolicyClient } from "./cloudflare.js";
-import type { VisitorAccessConfig } from "./config.js";
 import { VisitorAccessError } from "./errors.js";
-import { VisitorAccessService, type VisitorGrant } from "./visitors.js";
-
-const NOW = Date.parse("2026-08-28T12:00:00.000Z");
-const DAY_MS = 86_400_000;
-const config: VisitorAccessConfig = {
-  accountId: "test-account",
-  appId: "test-app",
-  apiToken: "test-token",
-  policyName: "Visitors (openclaw-managed)",
-  defaultTtlDays: 14,
-  maxVisitors: 50,
-};
-const policiesPath = "/client/v4/accounts/test-account/access/apps/test-app/policies";
-
-function requestUrl(input: Parameters<typeof fetch>[0]): URL {
-  return new URL(input instanceof Request ? input.url : input);
-}
-
-type PolicyFixture = {
-  id: string;
-  name: string;
-  decision: string;
-  include: { email: { email: string } }[];
-};
-
-function visitorGrant(email: string, overrides: Partial<VisitorGrant> = {}): VisitorGrant {
-  return { email, createdAt: NOW - DAY_MS, expiresAt: NOW + DAY_MS, ...overrides };
-}
-
-function visitorFixture(
-  options: {
-    config?: Partial<VisitorAccessConfig>;
-    grants?: VisitorGrant[];
-    emails?: string[];
-    githubEmail?: string | null;
-  } = {},
-) {
-  const resolved = { ...config, ...options.config };
-  const grants = new Map(options.grants?.map((grant) => [grant.email, grant]));
-  const store: PluginStateKeyedStore<VisitorGrant> = {
-    async register(key, grant) {
-      grants.set(key, structuredClone(grant));
-    },
-    async registerIfAbsent(key, grant) {
-      if (grants.has(key)) {
-        return false;
-      }
-      grants.set(key, structuredClone(grant));
-      return true;
-    },
-    async lookup(key) {
-      return structuredClone(grants.get(key));
-    },
-    async consume(key) {
-      const grant = grants.get(key);
-      grants.delete(key);
-      return structuredClone(grant);
-    },
-    async delete(key) {
-      return grants.delete(key);
-    },
-    async entries() {
-      return [...grants].map(([key, value]) => ({
-        key,
-        value: structuredClone(value),
-        createdAt: value.createdAt,
-      }));
-    },
-    async clear() {
-      grants.clear();
-    },
-  };
-  const cloudflare: {
-    policy: PolicyFixture | undefined;
-    failWrites: boolean;
-    loseWriteResponse: boolean;
-    beforeWrite: () => Promise<void>;
-  } = {
-    policy: options.emails?.length
-      ? {
-          id: "visitors",
-          name: resolved.policyName,
-          decision: "allow",
-          include: options.emails.map((email) => ({ email: { email } })),
-        }
-      : undefined,
-    failWrites: false,
-    loseWriteResponse: false,
-    beforeWrite: async () => {},
-  };
-  const response = (result: unknown) => Response.json({ success: true, result });
-  const fetcher = vi.fn<typeof fetch>(async (input, init) => {
-    const url = requestUrl(input);
-    const method = init?.method ?? "GET";
-    if (url.origin === "https://api.github.com") {
-      if (!/^\/users\/[a-z0-9-]+$/.test(url.pathname) || method !== "GET") {
-        throw new Error("Unexpected GitHub request");
-      }
-      return Response.json({ email: options.githubEmail ?? null });
-    }
-    if (url.origin !== "https://api.cloudflare.com" || !url.pathname.startsWith(policiesPath)) {
-      throw new Error("Unexpected Cloudflare endpoint");
-    }
-    if (method === "GET") {
-      if (url.pathname === policiesPath) {
-        return response(cloudflare.policy ? [cloudflare.policy] : []);
-      }
-      if (url.pathname === `${policiesPath}/visitors` && cloudflare.policy) {
-        return response(cloudflare.policy);
-      }
-      throw new Error("Unknown policy read");
-    }
-    await cloudflare.beforeWrite();
-    if (cloudflare.failWrites) {
-      return new Response("Unavailable", { status: 503 });
-    }
-    if (method === "DELETE" && url.pathname === `${policiesPath}/visitors`) {
-      cloudflare.policy = undefined;
-    } else if (
-      (method === "POST" && url.pathname === policiesPath) ||
-      (method === "PUT" && url.pathname === `${policiesPath}/visitors`)
-    ) {
-      if (typeof init?.body !== "string") {
-        throw new Error("Expected a JSON policy");
-      }
-      const body = JSON.parse(init.body) as Omit<PolicyFixture, "id">;
-      cloudflare.policy = { ...body, id: "visitors" };
-    } else {
-      throw new Error("Unexpected policy mutation");
-    }
-    if (cloudflare.loseWriteResponse) {
-      throw new Error("Connection lost after Cloudflare committed the policy");
-    }
-    return response(cloudflare.policy ?? { id: "visitors" });
-  });
-  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-  const service = new VisitorAccessService(
-    resolved,
-    store,
-    new VisitorPolicyClient(resolved, fetcher),
-    logger,
-    fetcher,
-  );
-  return {
-    cloudflare,
-    fetcher,
-    grants,
-    logger,
-    service,
-    emails: () => cloudflare.policy?.include.map((rule) => rule.email.email) ?? [],
-    mutations: () =>
-      fetcher.mock.calls.filter(([, init]) => init?.method !== "GET" && init?.method),
-  };
-}
+import {
+  DAY_MS,
+  NOW,
+  closeVisitorFixtures,
+  guestRole,
+  requestUrl,
+  staffRole,
+  visitorFixture,
+  visitorGrant,
+  type GatewayRoles,
+} from "./visitors.test-support.js";
 
 describe("VisitorAccessService", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(NOW);
   });
 
   afterEach(() => {
+    closeVisitorFixtures();
     vi.useRealTimers();
   });
 
   it("resolves public GitHub email, records a default-expiring grant, and explains login", async () => {
     const fixture = visitorFixture({ githubEmail: "Visitor@Example.com" });
 
-    const result = await fixture.service.invite({ github: "Visitor" }, "session:maintainer");
+    const result = await fixture.service.invite(
+      { github: "Visitor" },
+      { ...fixture.authority, invitedVia: "session:maintainer" },
+    );
 
     expect(fixture.emails()).toEqual(["visitor@example.com"]);
     expect(fixture.grants.get("visitor@example.com")).toEqual({
+      grantId: expect.any(String),
       email: "visitor@example.com",
       githubLogin: "visitor",
       invitedVia: "session:maintainer",
@@ -187,15 +46,22 @@ describe("VisitorAccessService", () => {
     expect(result).toContain("visitor@example.com");
     expect(result).toContain("2026-09-11T12:00:00.000Z");
     expect(result).toContain("https://team.openclaw.ai");
-    expect(result).toContain("GitHub account");
+    expect(result).toContain("Team's existing login");
+    expect(result).toContain("restricted guest");
+    expect(result).toContain("first sign-in pending");
+    expect(fixture.gatewayRequest).toHaveBeenCalledWith(
+      "users.list",
+      {},
+      { scopes: ["operator.read"] },
+    );
   });
 
   it("asks for an explicit account email when GitHub has no public email, without granting access", async () => {
     const fixture = visitorFixture({ githubEmail: null });
 
-    await expect(fixture.service.invite({ github: "private-visitor" })).rejects.toThrow(
-      /Ask the visitor.*email.*GitHub account.*email explicitly/,
-    );
+    await expect(
+      fixture.service.invite({ github: "private-visitor" }, fixture.authority),
+    ).rejects.toThrow(/Ask the visitor.*Team sign-in email.*email explicitly/);
 
     expect(fixture.emails()).toEqual([]);
     expect(fixture.grants.size).toBe(0);
@@ -205,11 +71,14 @@ describe("VisitorAccessService", () => {
   it("uses an explicit normalized email without consulting GitHub", async () => {
     const fixture = visitorFixture();
 
-    await fixture.service.invite({
-      github: "Private-Visitor",
-      email: " Visitor@Example.com ",
-      days: 3,
-    });
+    await fixture.service.invite(
+      {
+        github: "Private-Visitor",
+        email: " Visitor@Example.com ",
+        days: 3,
+      },
+      fixture.authority,
+    );
 
     expect(fixture.grants.get("visitor@example.com")).toMatchObject({
       githubLogin: "private-visitor",
@@ -223,6 +92,238 @@ describe("VisitorAccessService", () => {
     ).toBe(true);
   });
 
+  it.each<{ reason: string; roles?: GatewayRoles }>([
+    { reason: "roles are disabled" },
+    { reason: "no default is configured", roles: { definitions: { guest: guestRole } } },
+    {
+      reason: "the default role is unknown",
+      roles: { default: "missing", definitions: { guest: guestRole } },
+    },
+    ...[
+      {
+        reason: "the Visitor Access policy is not required",
+        role: { ...guestRole, accessPolicyPlugin: undefined },
+      },
+      {
+        reason: "a different access policy is required",
+        role: { ...guestRole, accessPolicyPlugin: "unrelated-policy" },
+      },
+      { reason: "sandboxing is inherited", role: { ...guestRole, sandbox: "inherit" as const } },
+      {
+        reason: "other sessions are writable",
+        role: { ...guestRole, sessions: { others: "write" as const } },
+      },
+      { reason: "no agent is permitted", role: { ...guestRole, agents: [] } },
+      {
+        reason: "shared operator actions are allowed",
+        role: { ...guestRole, scopes: [...guestRole.scopes, "operator.admin" as const] },
+      },
+      { reason: "own-session work is unavailable", role: { ...guestRole, scopes: [] } },
+    ].map(({ reason, role }) => ({
+      reason,
+      roles: { default: "guest", definitions: { guest: role } },
+    })),
+  ])("refuses new invitations when $reason", async ({ roles }) => {
+    const fixture = visitorFixture({ gatewayConfig: roles ? { gateway: { roles } } : {} });
+
+    await expect(
+      fixture.service.invite({ email: "visitor@example.com" }, fixture.authority),
+    ).rejects.toThrow(/requires gateway\.roles\.default/);
+
+    expect(fixture.grants.size).toBe(0);
+    expect(fixture.mutations()).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "the explicitly assigned default role",
+      assignedRole: "guest",
+      otherRole: staffRole,
+      access: 'restricted guest (assigned role "guest")',
+    },
+    {
+      name: "a staff role",
+      assignedRole: "staff",
+      otherRole: staffRole,
+      access: 'existing role "staff" retained; this invitation does not restrict it',
+    },
+    {
+      name: "an independent role with guest-shaped permissions",
+      assignedRole: "staff",
+      otherRole: { ...guestRole, accessPolicyPlugin: undefined },
+      access: 'existing role "staff" retained; this invitation does not restrict it',
+    },
+    {
+      name: "the default after an assigned role was removed",
+      assignedRole: "retired",
+      otherRole: staffRole,
+      access: 'restricted guest (default role "guest"; unavailable assignment "retired")',
+    },
+    {
+      name: "the shared Gateway owner with a historical email alias",
+      profileId: "gateway-owner",
+      assignedRole: undefined,
+      otherRole: staffRole,
+      access: "shared owner authority retained; this invitation does not restrict it",
+    },
+  ])(
+    "reports $name through a linked email without trusting the supplied GitHub label",
+    async ({ profileId = "linked-person", assignedRole, otherRole, access }) => {
+      const fixture = visitorFixture({
+        profiles: [
+          {
+            id: profileId,
+            emails: ["primary@example.com", "alias@example.com"],
+            role: assignedRole,
+          },
+        ],
+        gatewayConfig: {
+          gateway: {
+            roles: { default: "guest", definitions: { guest: guestRole, staff: otherRole } },
+          },
+        },
+      });
+
+      const result = await fixture.service.invite(
+        { email: "Alias@Example.com", github: "unrelated-login", days: 1 },
+        fixture.authority,
+      );
+
+      expect(result).toContain(access);
+      expect(result).toContain("Visitor grant expires: 2026-08-29T12:00:00.000Z");
+      expect(fixture.emails()).toEqual(["alias@example.com"]);
+      vi.setSystemTime(NOW + DAY_MS);
+      const list = await fixture.service.list(fixture.authority.assertCurrent);
+      expect(list).toContain(
+        "grant expires 2026-08-29T12:00:00.000Z | EXPIRED; provider cleanup pending",
+      );
+      expect(list).toContain(access);
+      expect(fixture.gatewayRequest.mock.calls.every(([method]) => method === "users.list")).toBe(
+        true,
+      );
+    },
+  );
+
+  it("does not admit or record a visitor when the Gateway access lookup fails", async () => {
+    const fixture = visitorFixture();
+    fixture.gatewayRequest.mockRejectedValueOnce(new Error("Profile directory unavailable"));
+
+    await expect(
+      fixture.service.invite({ email: "visitor@example.com" }, fixture.authority),
+    ).rejects.toThrow("Profile directory unavailable");
+
+    expect(fixture.grants.size).toBe(0);
+    expect(fixture.mutations()).toEqual([]);
+  });
+
+  it.each(["invite", "revoke"] as const)(
+    "refuses %s on a legacy store before reading grants or calling a provider",
+    async (operation) => {
+      const grant = visitorGrant("visitor@example.com", { githubLogin: "visitor" });
+      const fixture = visitorFixture({ grants: [grant], emails: [grant.email] });
+      delete fixture.store.withCurrent;
+      const lookup = vi.spyOn(fixture.store, "lookup");
+      const entries = vi.spyOn(fixture.store, "entries");
+
+      await expect(
+        operation === "invite"
+          ? fixture.service.invite({ github: "visitor" }, fixture.authority)
+          : fixture.service.revoke({ github: "visitor" }, fixture.authority.assertCurrent),
+      ).rejects.toThrow(/Update OpenClaw before managing visitors/);
+
+      expect(lookup).not.toHaveBeenCalled();
+      expect(entries).not.toHaveBeenCalled();
+      expect(fixture.fetcher).not.toHaveBeenCalled();
+      expect(fixture.gatewayRequest).not.toHaveBeenCalled();
+      expect(fixture.grants.get(grant.email)).toEqual(grant);
+      expect(fixture.emails()).toEqual([grant.email]);
+    },
+  );
+
+  it("checks live authority after recording cleanup before granting provider access", async () => {
+    const fixture = visitorFixture();
+    const recorded = createDeferred<void>();
+    const release = createDeferred<void>();
+    let current = true;
+    fixture.authority.assertCurrent.mockImplementation(() => {
+      if (!current) {
+        throw new Error("Invitation authority is no longer current");
+      }
+    });
+    const register = fixture.store.register.bind(fixture.store);
+    vi.spyOn(fixture.store, "register").mockImplementationOnce(async (key, grant) => {
+      await register(key, grant);
+      recorded.resolve();
+      await release.promise;
+    });
+    const invitation = fixture.service.invite({ email: "visitor@example.com" }, fixture.authority);
+    const denied = expect(invitation).rejects.toThrow(/no longer current/);
+    await recorded.promise;
+    current = false;
+    release.resolve();
+
+    await denied;
+
+    expect(fixture.emails()).toEqual([]);
+    expect(fixture.mutations()).toEqual([]);
+    expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBe(NOW);
+  });
+
+  it.each(["invite", "renew", "revoke"] as const)(
+    "settles a successful %s when authority closes after its final effect",
+    async (operation) => {
+      const previous = visitorGrant("visitor@example.com");
+      const fixture = visitorFixture(
+        operation === "invite" ? {} : { grants: [previous], emails: [previous.email] },
+      );
+      let current = true;
+      fixture.authority.assertCurrent.mockImplementation(() => {
+        if (!current) {
+          throw new Error("Visitor authority is no longer current");
+        }
+      });
+      if (operation !== "revoke") {
+        const register = fixture.store.register.bind(fixture.store);
+        vi.spyOn(fixture.store, "register").mockImplementation(async (key, grant) => {
+          await register(key, grant);
+          if (grant.expiresAt !== null && grant.expiresAt > NOW) {
+            current = false;
+          }
+        });
+      } else {
+        const remove = fixture.store.delete.bind(fixture.store);
+        vi.spyOn(fixture.store, "delete").mockImplementationOnce(async (key) => {
+          const removed = await remove(key);
+          current = false;
+          return removed;
+        });
+      }
+
+      const result =
+        operation === "revoke"
+          ? fixture.service.revoke({ email: previous.email }, fixture.authority.assertCurrent)
+          : fixture.service.invite({ email: previous.email, days: 2 }, fixture.authority);
+      await expect(result).resolves.toContain(
+        operation === "invite" ? "Invited" : operation === "renew" ? "Renewed" : "Revoked",
+      );
+
+      expect(current).toBe(false);
+      if (operation === "revoke") {
+        expect(fixture.grants.size).toBe(0);
+        expect(fixture.emails()).toEqual([]);
+      } else {
+        expect(fixture.grants.get(previous.email)).toMatchObject({
+          createdAt: operation === "invite" ? NOW : previous.createdAt,
+          expiresAt: NOW + 2 * DAY_MS,
+        });
+        expect(fixture.emails()).toEqual([previous.email]);
+      }
+      if (operation === "renew") {
+        expect(fixture.mutations()).toEqual([]);
+      }
+    },
+  );
+
   it.each([
     {},
     { email: "not-an-email" },
@@ -231,7 +332,9 @@ describe("VisitorAccessService", () => {
     { email: "visitor@example.com", days: 0 },
   ])("rejects invalid identity or duration before writing any grant: %j", async (input) => {
     const fixture = visitorFixture();
-    await expect(fixture.service.invite(input)).rejects.toBeInstanceOf(VisitorAccessError);
+    await expect(fixture.service.invite(input, fixture.authority)).rejects.toBeInstanceOf(
+      VisitorAccessError,
+    );
     expect(fixture.fetcher).not.toHaveBeenCalled();
     expect(fixture.grants.size).toBe(0);
   });
@@ -240,17 +343,23 @@ describe("VisitorAccessService", () => {
     "requires explicit forever when the default duration is %s",
     async (defaultTtlDays) => {
       const fixture = visitorFixture({ config: { defaultTtlDays } });
-      await expect(fixture.service.invite({ email: "visitor@example.com" })).rejects.toThrow(
-        /forever/,
-      );
+      await expect(
+        fixture.service.invite({ email: "visitor@example.com" }, fixture.authority),
+      ).rejects.toThrow(/forever/);
       expect(fixture.grants.size).toBe(0);
       expect(fixture.mutations()).toEqual([]);
 
-      const result = await fixture.service.invite({ email: "visitor@example.com", forever: true });
+      const result = await fixture.service.invite(
+        { email: "visitor@example.com", forever: true },
+        fixture.authority,
+      );
       expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBeNull();
       expect(result).toContain("never");
       await expect(
-        fixture.service.invite({ email: "visitor@example.com", forever: true, days: 1 }),
+        fixture.service.invite(
+          { email: "visitor@example.com", forever: true, days: 1 },
+          fixture.authority,
+        ),
       ).rejects.toThrow(/days.*forever/);
     },
   );
@@ -262,12 +371,17 @@ describe("VisitorAccessService", () => {
       grants: [previous],
       emails: [previous.email, "manual@example.com"],
     });
-    await expect(fixture.service.invite({ email: "third@example.com" })).rejects.toThrow(/limit/);
+    await expect(
+      fixture.service.invite({ email: "third@example.com" }, fixture.authority),
+    ).rejects.toThrow(/limit/);
     expect(fixture.emails()).toEqual([previous.email, "manual@example.com"]);
     expect(fixture.grants.size).toBe(1);
 
     vi.setSystemTime(NOW + DAY_MS);
-    await fixture.service.invite({ email: "VISITOR@example.com", days: 4 });
+    const renewed = await fixture.service.invite(
+      { email: "VISITOR@example.com", days: 4 },
+      fixture.authority,
+    );
     expect(fixture.grants.get(previous.email)).toMatchObject({
       createdAt: previous.createdAt,
       githubLogin: "visitor",
@@ -275,6 +389,22 @@ describe("VisitorAccessService", () => {
     });
     expect(fixture.emails()).toEqual([previous.email, "manual@example.com"]);
     expect(fixture.grants.size).toBe(1);
+    expect(renewed).toContain("Renewed");
+    expect(renewed).toContain("restricted guest");
+
+    fixture.gatewayRequest.mockResolvedValueOnce({
+      profiles: [{ id: "promoted-person", emails: [previous.email], role: "staff" }],
+    });
+    const promoted = await fixture.service.invite(
+      { email: previous.email, days: 7 },
+      fixture.authority,
+    );
+    expect(promoted).toContain('existing role "staff" retained');
+    expect(fixture.grants.get(previous.email)).toMatchObject({
+      createdAt: previous.createdAt,
+      expiresAt: NOW + 8 * DAY_MS,
+    });
+    expect(fixture.mutations()).toEqual([]);
   });
 
   it("revokes by recorded GitHub login even after that account hides its public email", async () => {
@@ -286,7 +416,10 @@ describe("VisitorAccessService", () => {
       emails: [...grants.map((grant) => grant.email), "manual@example.com"],
     });
 
-    const result = await fixture.service.revoke({ github: "Visitor" });
+    const result = await fixture.service.revoke(
+      { github: "Visitor" },
+      fixture.authority.assertCurrent,
+    );
 
     expect(fixture.emails()).toEqual(["manual@example.com"]);
     expect(fixture.grants.size).toBe(0);
@@ -300,16 +433,16 @@ describe("VisitorAccessService", () => {
 
   it("explicitly revokes unmanaged emails and makes a repeated revoke a clean no-op", async () => {
     const fixture = visitorFixture({ emails: ["manual@example.com"] });
-    await expect(fixture.service.revoke({ email: "manual@example.com" })).resolves.toContain(
-      "Revoked",
-    );
+    await expect(
+      fixture.service.revoke({ email: "manual@example.com" }, fixture.authority.assertCurrent),
+    ).resolves.toContain("Revoked");
     expect(fixture.emails()).toEqual([]);
     expect(fixture.grants.size).toBe(0);
     const writes = fixture.mutations().length;
 
-    await expect(fixture.service.revoke({ email: "manual@example.com" })).resolves.toMatch(
-      /nothing to revoke/,
-    );
+    await expect(
+      fixture.service.revoke({ email: "manual@example.com" }, fixture.authority.assertCurrent),
+    ).resolves.toMatch(/nothing to revoke/);
     expect(fixture.mutations()).toHaveLength(writes);
   });
 
@@ -317,7 +450,9 @@ describe("VisitorAccessService", () => {
     const grant = visitorGrant("visitor@example.com");
     const fixture = visitorFixture({ grants: [grant], emails: [grant.email] });
 
-    await expect(fixture.service.revoke({})).rejects.toBeInstanceOf(VisitorAccessError);
+    await expect(
+      fixture.service.revoke({}, fixture.authority.assertCurrent),
+    ).rejects.toBeInstanceOf(VisitorAccessError);
 
     expect(fixture.emails()).toEqual([grant.email]);
     expect(fixture.grants.get(grant.email)).toEqual(grant);
@@ -347,7 +482,7 @@ describe("VisitorAccessService", () => {
     const missing = visitorGrant("missing@example.com", { githubLogin: "visitor" });
     const fixture = visitorFixture({ grants: [missing], emails: ["manual@example.com"] });
 
-    const result = await fixture.service.list();
+    const result = await fixture.service.list(fixture.authority.assertCurrent);
     await fixture.service.sweep();
 
     expect(result).toContain("1 unmanaged, 1 missing from policy");
@@ -369,7 +504,7 @@ describe("VisitorAccessService", () => {
       emails: ["a@example.com", "b@example.com", "c@example.com"],
     });
 
-    const result = await fixture.service.list();
+    const result = await fixture.service.list(fixture.authority.assertCurrent);
 
     expect(result).toContain("3 unmanaged");
     expect(result.match(/UNMANAGED/g)).toHaveLength(2);
@@ -391,7 +526,7 @@ describe("VisitorAccessService", () => {
 
       await expect(
         operation === "revoke"
-          ? fixture.service.revoke({ email: grant.email })
+          ? fixture.service.revoke({ email: grant.email }, fixture.authority.assertCurrent)
           : fixture.service.sweep(),
       ).rejects.toBeInstanceOf(VisitorAccessError);
 
@@ -404,22 +539,49 @@ describe("VisitorAccessService", () => {
     },
   );
 
-  it("keeps an expiry cleanup record when Cloudflare grants access but its response is lost", async () => {
-    const fixture = visitorFixture();
-    fixture.cloudflare.loseWriteResponse = true;
+  it.each(["rejected", "committed but response lost"] as const)(
+    "retains inactive cleanup across restart after its provider write is %s",
+    async (outcome) => {
+      const fixture = visitorFixture();
+      const committed = outcome === "committed but response lost";
+      fixture.cloudflare.failWrites = !committed;
+      fixture.cloudflare.loseWriteResponse = committed;
 
-    await expect(
-      fixture.service.invite({ email: "visitor@example.com", days: 1 }),
-    ).rejects.toBeInstanceOf(VisitorAccessError);
+      await expect(
+        fixture.service.invite({ email: "visitor@example.com", days: 1 }, fixture.authority),
+      ).rejects.toBeInstanceOf(VisitorAccessError);
 
-    expect(fixture.emails()).toEqual(["visitor@example.com"]);
-    expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBe(NOW + DAY_MS);
-    fixture.cloudflare.loseWriteResponse = false;
-    vi.setSystemTime(NOW + DAY_MS);
-    await fixture.service.sweep();
-    expect(fixture.grants.size).toBe(0);
-    expect(fixture.emails()).toEqual([]);
-  });
+      expect(fixture.emails()).toEqual(committed ? ["visitor@example.com"] : []);
+      expect(fixture.grants.get("visitor@example.com")?.expiresAt).toBe(NOW);
+      const list = await fixture.service.list(fixture.authority.assertCurrent);
+      expect(list).toContain(committed ? "0 missing from policy" : "1 missing from policy");
+      expect(list).toContain(
+        committed ? "EXPIRED; provider cleanup pending" : "MISSING FROM POLICY",
+      );
+      fixture.service.close();
+      const restarted = visitorFixture({
+        grants: [...fixture.grants.values()],
+        emails: fixture.emails(),
+      });
+      await restarted.service.initialize();
+      expect(() => restarted.service.authorize(["visitor@example.com"])).toThrow(
+        /active visitor invitation/,
+      );
+      await expect(
+        restarted.service.invite({ email: "visitor@example.com", days: 1 }, restarted.authority),
+      ).resolves.toContain("Renewed");
+      expect(restarted.emails()).toEqual(["visitor@example.com"]);
+      expect(restarted.grants.get("visitor@example.com")?.createdAt).toBe(NOW);
+      expect(() =>
+        restarted.service.authorize(["visitor@example.com"]).assertCurrent(),
+      ).not.toThrow();
+      expect(restarted.mutations()).toHaveLength(committed ? 0 : 1);
+      vi.setSystemTime(NOW + DAY_MS);
+      await restarted.service.sweep();
+      expect(restarted.grants.size).toBe(0);
+      expect(restarted.emails()).toEqual([]);
+    },
+  );
 
   it("serializes concurrent invites so a delayed policy write cannot lose another visitor", async () => {
     const fixture = visitorFixture();
@@ -429,9 +591,9 @@ describe("VisitorAccessService", () => {
       writing.resolve();
       await release.promise;
     };
-    const first = fixture.service.invite({ email: "first@example.com" });
+    const first = fixture.service.invite({ email: "first@example.com" }, fixture.authority);
     await writing.promise;
-    const second = fixture.service.invite({ email: "second@example.com" });
+    const second = fixture.service.invite({ email: "second@example.com" }, fixture.authority);
     release.resolve();
 
     await Promise.all([first, second]);

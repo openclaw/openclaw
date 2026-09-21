@@ -264,12 +264,13 @@ it.each(["pending", "denied"])(
     const directory = { client, ownerKey: "A", params: { sessionKey: "agent:main:chat" } };
     const other = { ...directory, ownerKey: "B" };
     const render = vi.fn();
+    const input = { value: "@Al", selectionStart: 3, selectionEnd: 3 };
     menu.syncDirectory(directory);
-    menu.update("@Al", 3, render, true);
+    menu.update(input, render, "trigger");
     await vi.advanceTimersByTimeAsync(150);
     menu.syncDirectory(other);
     menu.syncDirectory(directory);
-    menu.update("@Al", 3, render, true);
+    menu.update(input, render, "trigger");
     await vi.advanceTimersByTimeAsync(150);
     if (replacement === "denied") {
       current.reject(new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }));
@@ -280,7 +281,7 @@ it.each(["pending", "denied"])(
     original.resolve(people);
     await vi.advanceTimersByTimeAsync(0);
     menu.close();
-    menu.update("@Al", 3, render, true);
+    menu.update(input, render, "trigger");
     expect(menu.activeLabel()).toBe("");
     await vi.advanceTimersByTimeAsync(150);
     expect(request).toHaveBeenCalledTimes(replacement === "pending" ? 2 : 3);

@@ -12,6 +12,11 @@ import type {
 } from "./schema-modules.js";
 import { WorkerComputerParamsSchema } from "./schema/worker-computer.js";
 import type { ValidationError } from "./validation-errors.js";
+export { validateApprovalPresentation } from "./approval-result-validators.js";
+export {
+  validateDecisionReceiptV1,
+  validateExecutionIdentityContextV1,
+} from "./audit-run-validators.js";
 export {
   validateSessionsDispatchParams,
   validateSessionsMoveParams,
@@ -104,8 +109,6 @@ export const validateAuditActivityListParams = compile<AuditActivityListParams>(
 export const validateAuditRunInspectParams = compile<AuditRunInspectParams>(
   S.AuditRunInspectParamsSchema,
 );
-export const validateExecutionIdentityContextV1 = compile(S.ExecutionIdentityContextV1Schema);
-export const validateDecisionReceiptV1 = compile(S.DecisionReceiptV1Schema);
 export const validateAuditListParams = compile(S.AuditListParamsSchema);
 export const validateUsersListParams = compile(S.UsersListParamsSchema);
 export const validateUsersMentionableParams = compile(S.UsersMentionableParamsSchema);
@@ -337,13 +340,6 @@ export const validateSessionsGroupsUpdateResult = compile(S.SessionsGroupsUpdate
 export const validateSessionsGroupsDeleteParams = compile(S.SessionsGroupsDeleteParamsSchema);
 export const validateSessionsGroupsMutationResult = compile(S.SessionsGroupsMutationResultSchema);
 export const validateSessionsCompactParams = compile(S.SessionsCompactParamsSchema);
-export const validateSessionsCompactionListParams = compile(S.SessionsCompactionListParamsSchema);
-export const validateSessionsCompactionBranchParams = compile(
-  S.SessionsCompactionBranchParamsSchema,
-);
-export const validateSessionsCompactionRestoreParams = compile(
-  S.SessionsCompactionRestoreParamsSchema,
-);
 export const validateSessionsBranchesListParams = compile(S.SessionsBranchesListParamsSchema);
 export const validateSessionsBranchesSwitchParams = compile(S.SessionsBranchesSwitchParamsSchema);
 export const validateSessionsRewindParams = compile(S.SessionsRewindParamsSchema);
@@ -510,7 +506,6 @@ export const validateDeviceTokenRotateParams = compile(S.DeviceTokenRotateParams
 export const validateDeviceTokenRevokeParams = compile(S.DeviceTokenRevokeParamsSchema);
 export const validateScopeUpgradeRequest = compile(S.ScopeUpgradeRequestSchema);
 export const validateScopeUpgradeWait = compile(S.ScopeUpgradeWaitSchema);
-export const validateApprovalPresentation = compile(S.ApprovalPresentationSchema);
 export const validateApprovalGetParams = compile(S.ApprovalGetParamsSchema);
 export const validateApprovalHistoryParams = compile(S.ApprovalHistoryParamsSchema);
 export const validateApprovalResolveParams = compile(S.ApprovalResolveParamsSchema);

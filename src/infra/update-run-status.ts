@@ -21,7 +21,9 @@ export function readUpdateRunStatus() {
   }
   try {
     const activeRun = findActiveUpdateRun();
-    const lastRun = listUpdateRuns({ limit: 1 })[0];
+    // A preview is retained in history, but it cannot resolve or hide the last
+    // real update outcome shown to operators.
+    const lastRun = listUpdateRuns({ limit: 1, excludeReason: "dry-run" })[0];
     const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
     const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
     const expired = listUpdateRuns({ limit: 1, reason: LEGACY_UPDATE_RUN_EXPIRED_REASON })[0];

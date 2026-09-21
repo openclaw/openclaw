@@ -6,10 +6,18 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import type { Profiler } from "node:inspector";
 import { createServer as createRawServer, type Socket } from "node:net";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-concurrency.ts";
 import { summarizeMockInferenceRequest } from "../../scripts/e2e/lib/mock-inference-facts.ts";
+import {
+  createLiveGatewayEvidence,
+  LIVE_GATEWAY_MODEL,
+  LIVE_GATEWAY_MODEL_ID,
+  redactLiveBenchmarkText,
+} from "../../scripts/lib/gateway-bench-live.ts";
 import { readGatewayMemory } from "../../scripts/lib/gateway-bench-probes.ts";
 import {
   controlGatewayProfile,
@@ -86,6 +94,155 @@ function createBenchmarkRun(overrides: Partial<BenchmarkRun> = {}): BenchmarkRun
 }
 
 describe("gateway concurrency benchmark script", () => {
+  it("keeps mock as the default and admits bounded live profiling without mock controls", () => {
+    expect(testing.parseOptions([]).provider).toBe("mock");
+    const liveArgs = ["--provider", "openai", "--runs", "1", "--warmup", "0", "--concurrency", "1"];
+    expect(
+      testing.parseOptions([...liveArgs, "--load-cpu-prof-dir", "/tmp/profiles"]).provider,
+    ).toBe("openai");
+    expect(() => testing.parseOptions(["--provider", "other"])).toThrow("--provider");
+    for (const extra of [
+      ["--tool-events"],
+      ["--agent-warmup-turns", "1"],
+      ["--stream-chunk-delay-ms", "1"],
+      ["--heap-prof-dir", "/tmp/heap"],
+    ]) {
+      expect(() => testing.parseOptions([...liveArgs, ...extra])).toThrow("OpenAI requires");
+    }
+  });
+
+  it("scrubs an echoed live key at the child-output error and JSON boundaries", () => {
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-live-key-for-test");
+    try {
+      const error = testing.formatRunFailure(
+        new Error("synthetic-live-key-for-test"),
+        {
+          readOutput: () => "provider echoed synthetic-live-key-for-test",
+          readStderrTail: () => "synthetic-live-key-for-test",
+        },
+        { readOutput: () => "" },
+      );
+      expect(redactLiveBenchmarkText(error)).not.toContain("synthetic-live-key-for-test");
+      expect(redactLiveBenchmarkText(JSON.stringify({ error }))).toContain("[REDACTED]");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  function liveTerminal(runId: string) {
+    return {
+      runId,
+      status: "ok",
+      terminalReply: { disposition: "visible", text: "LIVE_GATEWAY_OK_1" },
+      terminalReceipt: {
+        runId,
+        sessionId: "live-session",
+        turnId: "live-turn",
+        requested: { provider: "openai", model: LIVE_GATEWAY_MODEL_ID },
+        effective: {
+          provider: "openai",
+          model: LIVE_GATEWAY_MODEL_ID,
+          responseModel: LIVE_GATEWAY_MODEL_ID,
+        },
+        terminalDisposition: "visible",
+        successfulToolNames: [],
+        rerouted: false,
+      },
+    };
+  }
+
+  it.each(["wrong model", "wrong response", "missing receipt"])(
+    "rejects live %s through the shared turn entry point",
+    async (failure) => {
+      const live = createLiveGatewayEvidence(["main"], 1);
+      const accounting = { launched: 0, terminalOk: 0, verified: 0 };
+      const rpc = async <T>(method: string, params: unknown): Promise<T> => {
+        const request = params as { idempotencyKey: string; runId: string };
+        if (method === "agent") {
+          return { status: "accepted", runId: request.idempotencyKey } as T;
+        }
+        const terminal = liveTerminal(request.runId);
+        if (failure === "wrong model") {
+          terminal.terminalReceipt.effective.responseModel = "other-model";
+        }
+        if (failure === "wrong response") {
+          terminal.terminalReply.text = "different reply";
+        }
+        return (
+          failure === "missing receipt" ? { ...terminal, terminalReceipt: undefined } : terminal
+        ) as T;
+      };
+      await expect(
+        testing.runTurn(rpc, 0, performance.now() + 1000, false, { live, accounting }),
+      ).rejects.toThrow("Live terminal");
+      expect(accounting).toEqual({ launched: 1, terminalOk: 1, verified: 0 });
+      expect(live.snapshot().turns[0]?.terminalVerified).toBe(false);
+      expect(JSON.stringify(live.snapshot())).not.toContain("different reply");
+    },
+  );
+
+  it("requires streamed, terminal, history, and persisted live evidence", async () => {
+    await withTempDir("gateway-live-evidence-", async (root) => {
+      const live = createLiveGatewayEvidence(["main"], 1);
+      const accounting = { launched: 0, terminalOk: 0, verified: 0 };
+      const message = { role: "assistant", content: [{ type: "text", text: "LIVE_GATEWAY_OK_1" }] };
+      const rpc = async <T>(method: string, params: unknown): Promise<T> => {
+        const request = params as { idempotencyKey: string; runId: string };
+        if (method === "agent") {
+          live.onEvent({
+            event: "agent",
+            payload: {
+              runId: request.idempotencyKey,
+              stream: "assistant",
+              data: { delta: "LIVE_GATEWAY_OK_1" },
+            },
+          });
+          live.onEvent({
+            event: "chat",
+            payload: { runId: request.idempotencyKey, state: "final", message },
+          });
+          return { status: "accepted", runId: request.idempotencyKey } as T;
+        }
+        if (method === "agent.wait") {
+          return liveTerminal(request.runId) as T;
+        }
+        if (method === "chat.history") {
+          return { sessionId: "live-session", messages: [message] } as T;
+        }
+        throw new Error(`Unexpected RPC ${method}`);
+      };
+      await testing.runTurn(rpc, 0, performance.now() + 1000, false, { live, accounting });
+      await live.captureHistories(rpc);
+      const agentDir = path.join(root, "state", "agents", "main", "agent");
+      await mkdir(agentDir, { recursive: true });
+      const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+      try {
+        database.exec(
+          "CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT)",
+        );
+        expect(live.finish(root).passed).toBe(false);
+        database
+          .prepare("INSERT INTO transcript_events VALUES (?, ?, ?)")
+          .run("live-session", 1, JSON.stringify({ message }));
+      } finally {
+        database.close();
+      }
+      const proof = live.finish(root);
+      expect(proof.passed).toBe(true);
+      expect(proof.turns[0]).toMatchObject({
+        historyMatches: 1,
+        persistedMatches: 1,
+        streamMatches: true,
+        finalMatches: true,
+      });
+      live.onEvent({
+        event: "chat",
+        payload: { runId: proof.turns[0]?.runId, state: "final", message },
+      });
+      expect(live.finish(root).passed).toBe(false);
+    });
+  });
+
   it("partitions acknowledged ingress without attributing later selection events to the same phase", () => {
     const snapshots = [0, 2, 5, 7, 15, 19].map((responses, index) =>
       testing.parseMockRequests(
@@ -1640,6 +1797,7 @@ describe("gateway concurrency benchmark script", () => {
     ["missing-taskset", "ENOENT"],
     ["non-executable-taskset", "EACCES"],
     ["gateway-exit", "gateway did not become ready"],
+    ["live-gateway-exit", "gateway did not become ready"],
   ])("cleans up the real sample after %s startup failure", async (fault, expectedError) => {
     await withTempDir("gateway-startup-failure-", async (dir) => {
       const runtime = `${dir}/runtime`;
@@ -1647,11 +1805,19 @@ describe("gateway concurrency benchmark script", () => {
       const entry = `${dir}/entry.mjs`;
       const recordPath = `${dir}/mock.json`;
       const preload = `${dir}/capture-spawn.mjs`;
+      const liveFailure = fault === "live-gateway-exit";
+      const output = `${dir}/result.json`;
+      const configProofPath = `${dir}/emitted-config.json`;
       await mkdir(`${dir}/gateway/protocol`, { recursive: true });
       await mkdir(runtime);
       await mkdir(bin);
       await writeFile(`${dir}/gateway/protocol/index.js`, "exports.PROTOCOL_VERSION = 3;\n");
-      await writeFile(entry, "process.exit(23);\n");
+      await writeFile(
+        entry,
+        `import { readFileSync, writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(configProofPath)}, readFileSync(process.env.OPENCLAW_CONFIG_PATH));
+${liveFailure ? "console.error(process.env.OPENAI_API_KEY);" : ""}process.exit(23);\n`,
+      );
       if (fault === "non-executable-taskset") {
         await writeFile(`${bin}/taskset`, "not executable\n", { mode: 0o600 });
       }
@@ -1701,16 +1867,63 @@ syncBuiltinESMExports();\n`,
             "1",
             "--warmup",
             "0",
+            ...(liveFailure ? ["--provider", "openai", "--output", output] : []),
             ...(fault.includes("taskset") ? ["--gateway-cpus", "0"] : []),
           ],
           {
             cwd: process.cwd(),
-            env: { ...process.env, PATH: bin, TMPDIR: runtime, TMP: runtime, TEMP: runtime },
+            env: {
+              ...process.env,
+              PATH: bin,
+              TMPDIR: runtime,
+              TMP: runtime,
+              TEMP: runtime,
+              ...(liveFailure ? { OPENAI_API_KEY: "synthetic-live-startup-secret" } : {}),
+            },
             encoding: "utf8",
             timeout: 10_000,
           },
         );
-        mockPid = (JSON.parse(await readFile(recordPath, "utf8")) as { pid: number | null }).pid;
+        if (liveFailure) {
+          await expect(readFile(recordPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+          const failure = await readFile(`${output}.failure.json`, "utf8");
+          expect(JSON.parse(failure)).toMatchObject({
+            mode: "live-openai-agent",
+            status: "failed",
+            liveProof: { requestedTurns: 1, turns: [] },
+          });
+          expect(failure).not.toContain("synthetic-live-startup-secret");
+          expect(result.stderr).not.toContain("synthetic-live-startup-secret");
+        } else {
+          mockPid = (JSON.parse(await readFile(recordPath, "utf8")) as { pid: number | null }).pid;
+        }
+        if (fault === "gateway-exit" || liveFailure) {
+          const config = JSON.parse(await readFile(configProofPath, "utf8"));
+          expect(config.plugins.entries["memory-core"]).toEqual({
+            config: { dreaming: { enabled: false } },
+          });
+          expect(config.agents.defaults.maxConcurrent).toBe(1);
+          expect(config.agents.defaults.heartbeat).toEqual({ every: "0m" });
+          if (liveFailure) {
+            expect(config.agents.list.map((agent: { id: string }) => agent.id)).toEqual(["main"]);
+            expect(config.models.providers.openai.apiKey).toEqual({
+              source: "env",
+              provider: "default",
+              id: "OPENAI_API_KEY",
+            });
+            expect(config.models.providers.openai.baseUrl).toBe("https://api.openai.com/v1");
+            expect(config.agents.defaults.model.primary).toBe(LIVE_GATEWAY_MODEL);
+            expect(config.agents.defaults.utilityModel).toBe(LIVE_GATEWAY_MODEL);
+            expect(config.agents.defaults.thinkingDefault).toBe("off");
+            expect(config.agents.defaults.models[LIVE_GATEWAY_MODEL].params.maxTokens).toBe(128);
+            expect(config.tools).toEqual({ deny: ["*"] });
+          } else {
+            expect(config.models.providers.openai.baseUrl).toMatch(
+              /^http:\/\/127\.0\.0\.1:\d+\/v1$/u,
+            );
+            expect(config.agents.defaults.model.primary).toBe("openai/gpt-5.6-luna");
+          }
+        }
         expect(result.error).toBeUndefined();
         expect(result.status).toBe(1);
         expect(result.stderr).toContain(expectedError);

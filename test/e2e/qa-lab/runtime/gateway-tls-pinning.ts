@@ -433,9 +433,10 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
         });
       }
     };
-    if ((await probeHealth())?.statusCode !== 200) {
-      throw new Error("Initial local TLS health probe failed");
-    }
+    await waitForRenewalFact(
+      async () => ((await probeHealth())?.statusCode === 200 ? true : undefined),
+      "the initial accepted local TLS health listener",
+    );
     const initialTarget = await missedRenewalProbe.resolveWebSocketTarget(port);
     if (initialTarget?.tlsFingerprint !== preparedTls.fingerprintSha256) {
       throw new Error("A WebSocket-first probe did not verify the initial listener pin");

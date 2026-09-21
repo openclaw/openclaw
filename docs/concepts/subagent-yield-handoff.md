@@ -136,6 +136,12 @@ details follow the shared compositor and redaction policy; private prompts,
 reasoning, and raw child results are not progress content. An admitted requester
 continuation can update the retained checklist.
 
+After the requester confirms delivery of its final answer and its current child
+batch is terminal, core waits for pending edits and deletes the adopted message
+on channels with guarded deletion support. Silent private consumption, failed or
+uncertain final delivery, and another delegation wave do not trigger this cleanup.
+The final answer remains separate; a cleanup failure never retries that answer.
+
 Progress does not start a requester turn or credit completion delivery.
 Cancellation, reset, replacement, silence, and Gateway shutdown invalidate stale
 publication authority. Each edit rechecks current ownership after asynchronous

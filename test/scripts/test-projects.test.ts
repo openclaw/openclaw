@@ -6,7 +6,10 @@ import path from "node:path";
 import { assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import { readTestSelectorSourceFacts } from "../../scripts/lib/test-selector-source-facts.mts";
-import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import {
+  resolveVitestPretestBuildMode,
+  resolveVitestRuntimeConfigScopes,
+} from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveDefaultVitestNoOutputTimeoutMs } from "../../scripts/lib/vitest-process-env.mts";
 import { resolveVitestRuntimeCliSelections } from "../../scripts/lib/vitest-runtime-selection.mts";
 import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
@@ -44,9 +47,9 @@ import {
 } from "../vitest/vitest.startup-corpus-paths.mjs";
 
 const normalizeRepoPath = toRepoPath;
-const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
+const CODEX_TEST_PROCESS_FILE_LIMIT = 24;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
-const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 1;
+const TELEGRAM_TEST_PROCESS_FILE_LIMIT = 10;
 
 describe("Windows CI partitions", () => {
   it("keeps explicit coverage disjoint without repeating small project setup", () => {
@@ -132,6 +135,11 @@ describe("test runtime prerequisites", () => {
     ["native setup registry SDK", ["src/plugins/setup-registry.migrations.test.ts"], "runtime"],
     ["native source checkout SDK", ["src/plugins/source-checkout-runtime.test.ts"], "runtime"],
     ["native provider contract SDK", ["extensions/deepinfra/provider.contract.test.ts"], "runtime"],
+    [
+      "native workspace Memory and Skills workers",
+      ["extensions/file-transfer/src/workspace-service.test.ts"],
+      "runtime",
+    ],
     ["native catalog auth SDK", ["test/openai-model-discovery-auth-order.test.ts"], "runtime"],
     ["models.list native catalog", ["test/plugins/codex-model-catalog.gateway.test.ts"], "runtime"],
     ["native package setup SDK", ["test/plugin-npm-runtime-build.test.ts"], "runtime"],
@@ -303,7 +311,8 @@ describe("test runtime prerequisites", () => {
     ["unit", ["src/entry.memory-json.test.ts"], "runtime"],
     ["unit-src", ["src/entry.memory-json.test.ts"], "runtime"],
     ["extensions", ["deepinfra/**"], "runtime"],
-    ["extensions", ["deepinfra/**", "google-meet/**"], undefined],
+    ["extensions", ["deepinfra/**", "google-meet/**"], "runtime"],
+    ["extensions", ["deepinfra/**", "google-meet/**", "file-transfer/**"], undefined],
     ["tooling", ["test/**"], undefined],
     ["plugins", ["plugin-module-generation.sdk.test.ts"], undefined],
     ["runtime-config", ["config/config-startup-corpus.test.ts"], "runtime"],
@@ -321,28 +330,16 @@ describe("test runtime prerequisites", () => {
     ],
     ["agents-core", ["simple-completion-runtime.plugin-scope.test.ts"], "runtime"],
     ["agents", ["simple-completion-runtime.plugin-scope.test.ts"], "runtime"],
-    [
-      "agents-core",
-      [
-        "agent-command-local.test.ts",
-        "simple-completion-runtime.plugin-scope.test.ts",
-        "prepared-model-catalog-worker.custody.integration.test.ts",
-        "prepared-model-catalog-worker.integration.test.ts",
-        "runtime-plugins.context-engine.integration.test.ts",
-      ],
-      undefined,
-    ],
-    [
-      "agents",
-      [
-        "agent-command-local.test.ts",
-        "simple-completion-runtime.plugin-scope.test.ts",
-        "prepared-model-catalog-worker.custody.integration.test.ts",
-        "prepared-model-catalog-worker.integration.test.ts",
-        "runtime-plugins.context-engine.integration.test.ts",
-      ],
-      undefined,
-    ],
+    ...(["agents-core", "agents"] as const).map(
+      (project) =>
+        [
+          project,
+          resolveVitestRuntimeConfigScopes(`test/vitest/vitest.${project}.config.ts`).map(
+            ({ file, dir }) => path.posix.relative(dir, file),
+          ),
+          undefined,
+        ] as const,
+    ),
     ["gateway-core", ["gateway-*.test.ts"], undefined],
     ["gateway-server", ["server-sidecar-retention.test.ts"], "runtime"],
     ["gateway-server", ["server.config-patch.test.ts"], "runtime"],
@@ -788,12 +785,17 @@ describe("scripts/test-projects changed-target routing", () => {
     "scripts/pr-lib/merge.sh",
     "scripts/pr-lib/merge-outcome.sh",
     "scripts/pr-lib/merge-legacy-refusal.mjs",
+    "scripts/pr-lib/merge-pre-dispatch-refusal.mjs",
   ])("routes native merge changes through the outcome owner for %s", (scriptPath) => {
     expectChangedTargets(
       [scriptPath],
       [
         "test/scripts/pr-merge.test.ts",
         "test/scripts/pr-merge-outcome.test.ts",
+        ...(scriptPath !== "scripts/pr"
+          ? ["test/scripts/pr-merge-pre-dispatch-refusal.test.ts"]
+          : []),
+        "test/scripts/pr-merge-qualified-refusal.test.ts",
         ...(scriptPath === "scripts/pr"
           ? ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"]
           : []),
@@ -1992,6 +1994,60 @@ describe("scripts/test-projects changed-target routing", () => {
     },
   );
 
+  it.each([
+    { name: "Git inventory", withRepo: withTinyGitRepo },
+    { name: "filesystem inventory", withRepo: withTinyFileTree },
+  ])("routes test helper and file-URL fixture consumers completely ($name)", ({ withRepo }) => {
+    const fixture = "test/scripts/fixtures/worker.mjs";
+    const helper = "test/scripts/runtime.test-support.ts";
+    const direct = "test/scripts/direct.consumer.test.ts";
+    const indirect = "test/scripts/indirect.consumer.test.ts";
+    const opaque = "test/scripts/opaque/index.mjs";
+    const explicitHelper = "test/scripts/source/input.test-support.ts";
+    const explicitConsumer = "test/scripts/outer/consumer.test.ts";
+    withRepo(
+      {
+        [fixture]: "export {};\n",
+        [helper]:
+          'export const worker = new URL("./fixtures/worker.mjs?generation=1#child", import.meta.url);\n',
+        "test/scripts/bridge.test-support.ts": 'export * from "./runtime.test-support.js";\n',
+        [direct]: 'import "./runtime.test-support.js";\n',
+        [indirect]: 'import "./bridge.test-support.js";\n',
+        "test/scripts/after-test.consumer.test.ts": 'import "./direct.consumer.test.js";\n',
+        "test/scripts/unrelated.consumer.test.ts": "export {};\n",
+        "test/scripts/live.consumer.live.test.ts": 'import "./runtime.test-support.js";\n',
+        [opaque]: "export {};\n",
+        "test/scripts/literal.opaque.consumer.test.ts": `const fixture = "${opaque}";\n`,
+        "test/scripts/relative.opaque.consumer.test.ts": 'import "./opaque/index.mjs";\n',
+        [explicitHelper]: "export const value = 1;\n",
+        "test/scripts/bridge/index.ts": 'export * from "../source/input.test-support.js";\n',
+        [explicitConsumer]: 'import "../bridge/index.js";\n',
+      },
+      (cwd) => {
+        const options = { cwd, broad: true, forceFullImportGraph: true };
+        for (const changed of [fixture, helper]) {
+          expect(resolveChangedTestTargetPlan([changed], options)).toEqual({
+            mode: "targets",
+            targets: [direct, indirect],
+          });
+        }
+        // A literal reference alone cannot prove an opaque helper's complete frontier.
+        expect(resolveChangedTestTargetPlan([opaque, direct], options)).toEqual({
+          mode: "targets",
+          targets: [opaque, direct],
+        });
+        expect(buildVitestRunPlans([explicitHelper], cwd)).toEqual([
+          {
+            config: "test/vitest/vitest.tooling.config.ts",
+            forwardedArgs: [],
+            includePatterns: [explicitConsumer],
+            watchMode: false,
+          },
+        ]);
+      },
+    );
+  });
+
   it.each([false, true])(
     "retains an unowned changed tooling test alongside its consumers (mixed input: %s)",
     (mixedInput) => {
@@ -2201,14 +2257,16 @@ describe("scripts/test-projects changed-target routing", () => {
     },
   );
 
-  it("routes the schema-upgrade counter consumer exactly once to its broker owner", () => {
-    const testFile = "src/state/openclaw-state-db.test.ts";
-    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
-      config: "test/vitest/vitest.infra.config.ts",
-      includePatterns: [testFile],
-    });
-    expect(databaseWorkerCoreTestFiles.filter((file) => file === testFile)).toEqual([testFile]);
-  });
+  it.each(["src/state/openclaw-state-db.test.ts", "src/worker/worker.runtime.test.ts"])(
+    "routes native shared-state consumer %s exactly once to its broker owner",
+    (testFile) => {
+      expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
+        config: "test/vitest/vitest.infra.config.ts",
+        includePatterns: [testFile],
+      });
+      expect(databaseWorkerCoreTestFiles.filter((file) => file === testFile)).toEqual([testFile]);
+    },
+  );
 
   it.each(databaseWorkerCoreTestFiles)(
     "routes host-owned database consumer %s to the infra fork shard",
@@ -2248,6 +2306,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     ["src/agents/**/*.test.ts", "test/vitest/vitest.agents.config.ts"],
     ["test/plugins", "test/vitest/vitest.tooling.config.ts"],
+    ["test/scripts", "test/vitest/vitest.tooling.config.ts"],
     ["src/plugin-state", "test/vitest/vitest.unit.config.ts"],
   ])("preserves watch selection across database ownership for %s", (target, owner) => {
     expect(buildVitestRunPlans(["--watch", target])).toEqual([
@@ -2463,19 +2522,13 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  const embeddedRunWorkerFiles = [
-    "src/agents/embedded-agent-runner/run/model-setup.ownership.test.ts",
-    "src/agents/embedded-agent-runner/run/model-setup.selected-model.test.ts",
-    "src/agents/embedded-agent-runner/run/runtime-preparation.thinking.test.ts",
-    "src/agents/embedded-agent-runner/run/run-attempt-dispatch.owner.test.ts",
-    "src/agents/embedded-agent-runner/run/failover-retry-controller.inline-auth.worker.test.ts",
-  ];
-
   it.each([
     {
       directory: "src/agents/embedded-agent-runner/run",
       config: "test/vitest/vitest.agents-embedded-agent-run.config.ts",
-      workerFiles: embeddedRunWorkerFiles,
+      workerFiles: databaseWorkerCoreTestFiles.filter((file) =>
+        file.startsWith("src/agents/embedded-agent-runner/run/"),
+      ),
     },
     {
       directory: "src/agents/runtime-plan",
@@ -2534,7 +2587,9 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.infra.config.ts",
         forwardedArgs: ["--sequence.shuffle", "--sequence.seed", "3"],
-        includePatterns: embeddedRunWorkerFiles,
+        includePatterns: databaseWorkerCoreTestFiles.filter((file) =>
+          file.startsWith(`${directory}/`),
+        ),
         watchMode: false,
       },
       {
@@ -3062,14 +3117,6 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(() => buildVitestRunPlans(["--watch", "src/cli"])).toThrow(
       "watch mode with mixed test suites is not supported",
     );
-  });
-
-  it("keeps broad shell helper watch targets in one tooling shard", () => {
-    expectSingleVitestRunPlan(buildVitestRunPlans(["--watch", "test/scripts"], process.cwd()), {
-      config: "test/vitest/vitest.tooling.config.ts",
-      includePatterns: ["test/scripts/**/*.test.ts"],
-      watchMode: true,
-    });
   });
 
   it("preserves post-separator Vitest args without parsing them as targets", () => {
@@ -3696,6 +3743,12 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(selected.toSorted()).toEqual(listExtensionTestFilesForRoots([root]).toSorted());
     expect(new Set(selected).size).toBe(selected.length);
     for (const plan of plans) {
+      if (
+        name === "telegram" &&
+        plan.config === "test/vitest/vitest.extension-database-workers.config.ts"
+      ) {
+        expect(plan.includePatterns).toHaveLength(1);
+      }
       for (const file of plan.includePatterns ?? []) {
         expect(plan.config).toBe(
           databaseWorkerExtensionTestFiles.includes(file)
@@ -4643,7 +4696,7 @@ describe("test selector native source facts", () => {
   it("reads complete files without installed packages, inherited hooks, or reparsing cached imports", () => {
     withTinyFileTree(
       {
-        "large.mts": `${"// padding\n".repeat(220_000)}export type {\n Value\n } from "./barrel.js";\nimport(\n "./dynamic.mjs"\n);\nconst fixture = "scripts/tool.mts";`,
+        "large.mts": `${"// padding\n".repeat(220_000)}export type {\n Value\n } from "./barrel.js";\nimport(\n "./dynamic.mjs"\n);\nconst fixture = "scripts/tool.mts";\nnew URL(\n "./native-fixture.mjs?generation=1#child", import.meta.url,\n);\nnew URL("./other-base.mjs", "file:///elsewhere/");`,
       },
       (cwd) => {
         const files = [
@@ -4651,7 +4704,7 @@ describe("test selector native source facts", () => {
           { file: "deleted.ts", parseImports: true },
         ];
         const expectedFacts = {
-          imports: ["./barrel.js", "./dynamic.mjs"],
+          imports: ["./barrel.js", "./dynamic.mjs", "./native-fixture.mjs"],
           matches: ["scripts/tool.mts", "scripts/tool"],
           references: ["scripts/tool.mts"],
         };
@@ -5046,6 +5099,14 @@ describe("scripts/test-projects full-suite sharding", () => {
         const toolingPlans = targetedPlans("test/vitest/vitest.tooling.config.ts");
         expect(toolingPlans.length).toBeGreaterThan(1);
         expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 2)).toBe(true);
+        const toolingTargets = toolingPlans.flatMap((plan) => plan.forwardedArgs);
+        expect(toolingTargets.filter((file) => file.startsWith("test/fixtures/"))).toEqual([]);
+        expect(plans.flatMap((plan) => plan.forwardedArgs)).toEqual(
+          expect.arrayContaining([
+            "test/scripts/oxlint-boundary-guards.test.ts",
+            "test/scripts/ts-topology.test.ts",
+          ]),
+        );
         for (const plan of plans.filter((entry) => entry.forwardedArgs.length > 0)) {
           expect(plan.timingTargets).toEqual(plan.forwardedArgs);
           expect(plan.includePatterns).toBeNull();

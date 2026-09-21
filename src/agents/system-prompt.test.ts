@@ -1685,17 +1685,6 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("adds USER guidance when a user-model file is present", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      contextFiles: [{ path: "USER.md", content: "- Prefer concise answers." }],
-    });
-
-    expect(prompt).toContain(
-      "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
-    );
-  });
-
   it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

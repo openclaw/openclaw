@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
@@ -2390,24 +2389,14 @@ describe("installPluginFromClawHub", () => {
       "_meta.json": '{"slug":"demo","version":"2026.3.22"}',
       "openclaw.plugin.json": '{"id":"demo"}',
     });
-    const oversizedMetaEntry = {
-      name: "_meta.json",
-      dir: false,
-      _data: { uncompressedSize: 256 * 1024 * 1024 + 1 },
-      nodeStream: vi.fn(),
-    } as unknown as JSZip.JSZipObject;
-    const listedFileEntry = {
-      name: "openclaw.plugin.json",
-      dir: false,
-      _data: { uncompressedSize: 13 },
-      nodeStream: () => Readable.from([Buffer.from('{"id":"demo"}')]),
-    } as unknown as JSZip.JSZipObject;
-    const loadAsyncSpy = vi.spyOn(JSZip, "loadAsync").mockResolvedValueOnce({
-      files: {
-        "_meta.json": oversizedMetaEntry,
-        "openclaw.plugin.json": listedFileEntry,
-      },
-    } as unknown as JSZip);
+    const archiveBytes = await fs.readFile(archivePath);
+    const centralDirectoryOffset = archiveBytes.readUInt32LE(archiveBytes.length - 6);
+    // The first entry is _meta.json. Keep both size declarations consistent so
+    // real ZIP admission reaches the per-file guard without allocating 256 MiB.
+    const oversizedBytes = 256 * 1024 * 1024 + 1;
+    archiveBytes.writeUInt32LE(oversizedBytes, 22);
+    archiveBytes.writeUInt32LE(oversizedBytes, centralDirectoryOffset + 24);
+    await fs.writeFile(archivePath, archiveBytes);
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
       version: {
         version: "2026.3.22",
@@ -2436,7 +2425,6 @@ describe("installPluginFromClawHub", () => {
       spec: "clawhub:demo",
     });
 
-    loadAsyncSpy.mockRestore();
     expectInstallFailureFields(
       result,
       CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,

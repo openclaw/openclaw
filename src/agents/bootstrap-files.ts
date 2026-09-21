@@ -23,6 +23,7 @@ import {
 } from "./embedded-agent-helpers.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
+import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
@@ -305,6 +306,7 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
 
 /** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
 type BootstrapFileResolutionParams = {
+  bootstrapUserProfileId?: string;
   workspaceDir: string;
   config?: OpenClawConfig;
   sessionKey?: string;
@@ -348,12 +350,23 @@ async function resolveBootstrapFiles(
     params.workspaceDir,
     params.readOnlyState,
   );
-  const rawFiles = params.sessionKey
+  const sharedFiles = params.sessionKey
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  // Personal context is refreshed independently; never write it into the shared session snapshot.
+  const personalFile = await loadPersonalUserBootstrapFile(
+    params.workspaceDir,
+    params.bootstrapUserProfileId,
+    params.warn,
+  );
+  const userIndex = sharedFiles.findIndex((file) => file.name === DEFAULT_USER_FILENAME);
+  const rawFiles = [...sharedFiles];
+  if (personalFile) {
+    rawFiles.splice(userIndex < 0 ? rawFiles.length : userIndex + 1, 0, personalFile);
+  }
   const ineligibleAutomaticMemoryFiles = await resolveIneligibleAutomaticMemoryFiles({
     files: rawFiles,
     workspaceDir: params.workspaceDir,
@@ -416,6 +429,7 @@ async function resolveBootstrapFiles(
 
 /** Resolves both raw bootstrap metadata and bounded context files for a run. */
 export async function resolveBootstrapContextForRun(params: {
+  bootstrapUserProfileId?: string;
   workspaceDir: string;
   config?: OpenClawConfig;
   sessionKey?: string;

@@ -15,7 +15,7 @@ import {
 import { parseOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 /** Inspect the same published --check contract consumed by candidate canary. */
 export async function inspectUpdateDoctorChildSupport(

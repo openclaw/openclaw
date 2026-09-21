@@ -96,7 +96,10 @@ function appendQueueItem(params: {
   if (runFollowup) {
     rememberFollowupDrainCallback(params.key, runFollowup);
   }
-  const signal = params.run.abortSignal;
+  const signal = resolveFollowupAbortSignal({
+    abortSignal: params.run.abortSignal,
+    operatorAuthority: params.run.operatorAuthority,
+  });
   const lifecycle = params.run.turnAdoptionLifecycle;
   if (signal && lifecycle && runFollowup) {
     const onAbort = () => {

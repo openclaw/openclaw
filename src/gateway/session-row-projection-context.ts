@@ -20,7 +20,6 @@ export function createSessionRowProjectionContext() {
   let profileRevision = 0;
   let subagentRevision = 0;
   let parentRevision = 0;
-  let placementRevision = 0;
   let modelFactsDirty = false;
   const identityProjection = createSessionIdentityProjection();
   let current: SessionListRowContext = {
@@ -72,7 +71,6 @@ export function createSessionRowProjectionContext() {
       return current;
     },
     subagentInputs,
-    placementRevision: () => placementRevision,
     get materializedRevisions() {
       return { profileRevision, subagentRevision };
     },
@@ -93,7 +91,6 @@ export function createSessionRowProjectionContext() {
           return true;
         case "worker-environments":
         case "worker-placements":
-          placementRevision++;
           return true;
         case "agent-runs":
         case "sessions":

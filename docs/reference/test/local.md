@@ -72,6 +72,19 @@ reconcile dependencies before the remote wrapper starts.
 Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged
 runtime floor. Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
+To compare the same Vitest selection on Node and Bun, use the existing wrapper:
+
+```sh
+OPENCLAW_VITEST_RUNTIME=node pnpm test <path-or-filter>
+OPENCLAW_VITEST_RUNTIME=bun pnpm test <path-or-filter>
+```
+
+Install the exact Bun fork build pinned by `.github/actions/setup-test-bun/action.yml`
+for comparable results. This selects the
+actual Vitest process and workers while retaining Node for orchestration and
+compiler preparation. It does not use Bun's native test runner. `bun run` alone
+does not select Bun for tests. Node remains the local default.
+
 Test processes and their CLI fixtures keep Sparkplug baseline compilation enabled
 but run it synchronously. This avoids a Node 24 shutdown deadlock where a
 background compiler waits for main-thread garbage collection while `process.exit`

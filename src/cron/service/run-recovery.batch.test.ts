@@ -1,8 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
+import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStore from "../store.js";
 import { loadCronStore } from "../store.js";
@@ -66,17 +66,17 @@ async function seedInterruptedBatch() {
   return { storePath, jobs, state, onEvent, runner, history };
 }
 
-it("publishes every interrupted job when restart crosses a later proposal in the batch", async () => {
+it("defers every repair when restart crosses the batch observation", async () => {
   const { storePath, jobs, state, onEvent, runner, history } = await seedInterruptedBatch();
   const entered = createDeferred();
   const release = createDeferred();
-  let proposals = 0;
-  const execute = stateWorker.executeOpenClawStateWorker;
+  let observations = 0;
+  const execute = stateRead.executeExistingOpenClawStateRead;
   const delayed = vi
-    .spyOn(stateWorker, "executeOpenClawStateWorker")
+    .spyOn(stateRead, "executeExistingOpenClawStateRead")
     .mockImplementation(async (context, command) => {
       const result = await execute(context, command);
-      if (command.type === "cron.proposeRunRecovery" && ++proposals === 2) {
+      if (command.type === "cron.observeRunRecovery" && ++observations === 1) {
         entered.resolve();
         await release.promise;
       }
@@ -97,6 +97,12 @@ it("publishes every interrupted job when restart crosses a later proposal in the
         .filter((event) => event.action === "finished")
         .map((event) => event.jobId),
     };
+    expect(beforeStop).toEqual({
+      firstRunningAtMs: jobs[0]!.state.runningAtMs,
+      firstReceiptActive: true,
+      firstHistory: [],
+      finishedEvents: [],
+    });
     stop(state);
     restarted = start(state);
     release.resolve();

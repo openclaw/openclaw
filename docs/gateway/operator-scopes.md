@@ -59,9 +59,10 @@ interactive message. Session access and execution-lifetime checks still apply.
 ## Named operator roles
 
 Team Gateways can bind authenticated durable profiles to named operator roles.
-Each role combines four closed policies: access to other people's sessions,
+Each role controls access to other people's sessions,
 agents available for session creation and agent runs, a maximum set of operator
-scopes, and whether newly created sessions require sandboxing.
+scopes, and whether newly created sessions require sandboxing. It can also require
+an access policy supplied by a plugin.
 
 ```json5
 {
@@ -94,6 +95,25 @@ ceiling. `gateway.roles.default` is required whenever roles are configured,
 must name an existing definition, and applies to profiles without a valid
 assigned role. Omitting `gateway.roles` entirely leaves solo and shared-secret
 deployments unchanged.
+
+Set a role's optional `accessPolicyPlugin` to the exact plugin ID when that plugin
+must confirm the person's current access. For example, the Visitor Access plugin
+requires `accessPolicyPlugin: "visitor-access"` on its restricted default role.
+The requirement belongs to Gateway configuration and remains enforced when the
+plugin or its manifest is missing, disabled, broken, or still starting. A loaded
+plugin must return current authority for the person; another plugin's policy
+cannot satisfy the requirement. Configuration validation permits an unavailable
+plugin reference so the Gateway can still start for repair. Independent staff
+roles without this binding and the Gateway owner retain their existing access.
+Restore the required plugin to admit the bound role. Removing or changing the
+binding applies through the same live role-policy update described below.
+
+With live configuration reload enabled, edits to `gateway.roles` and
+`gateway.auth.identityScopes` apply without restarting the Gateway. Existing
+Gateway clients reconnect to receive the current scope ceiling. Pending
+handshakes and mutations recheck the policy before acquiring authority;
+already-admitted runs retain their normal completion and cancellation lifecycle,
+including cancellation when their original access-policy grant expires or is revoked.
 
 When roles are configured, identity-authenticated operator connections do not
 receive reusable device or bootstrap tokens: those tokens are not bound to a
@@ -168,10 +188,16 @@ The ceiling uses the normal scope implications: `operator.admin` permits every
 operator scope, and `operator.write` permits `operator.read` and `operator.talk`.
 It only filters existing grants. It cannot add scopes the connection did not
 already receive.
+The ceiling intersects capabilities, including those implied by a broader grant.
+A write grant narrowed to a read-only role retains `operator.read`; an admin-only
+grant narrowed to a write role retains `operator.write`. The role cannot grant
+capabilities that the original credential did not allow, and an empty grant or
+role remains empty.
+
 This includes plugin HTTP requests and WebSocket upgrades: without a scope
 header, ordinary Gateway-authenticated plugin routes start with only
-`operator.write`, then apply the role ceiling. Read-only and empty roles
-therefore receive no runtime scopes on that default path.
+`operator.write`, then apply the role ceiling. A read-only role therefore retains
+`operator.read` on that path, while an empty role receives no runtime scopes.
 Control UI plugin grants carry the authenticated profile inside a signed
 cookie. Plugin HTTP requests reapply the profile's current role ceiling and
 reject grants without a matching durable identity when roles are enabled.

@@ -68,24 +68,9 @@ export function getDeliveryQueueEntryStatus(
   id: string,
   stateDir?: string,
 ): DeliveryQueueStoredStatus | undefined {
-  return getDeliveryQueueEntryOwners([queueName], id, stateDir).get(queueName)?.status;
-}
-
-/** Read one exact ID across physical namespaces from a single ownership snapshot. */
-export function getDeliveryQueueEntryOwners(
-  queueNames: readonly string[],
-  id: string,
-  stateDir?: string,
-  context?: DeliveryQueueStateContext,
-): Map<string, { status: DeliveryQueueStoredStatus; settlementPending?: true }> {
-  if (queueNames.length === 0) {
-    return new Map();
-  }
-  return getDeliveryQueueEntryOwnersInDatabase(
-    openStateDatabase(stateDir, context),
-    queueNames,
-    id,
-  );
+  return getDeliveryQueueEntryOwnersInDatabase(openStateDatabase(stateDir), [queueName], id).get(
+    queueName,
+  )?.status;
 }
 
 /** Load all pending entries for a queue namespace in database order. */

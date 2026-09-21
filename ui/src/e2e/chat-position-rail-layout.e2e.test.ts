@@ -543,9 +543,11 @@ suite.define(() => {
         const marks = page.locator(".chat-position-rail__marks");
         const first = marks.locator(".chat-position-rail__marker").first();
         await first.waitFor();
-        await transcript.evaluate((element) => {
-          element.scrollTop = 0;
-        });
+        // Settle initial end-follow before real reader input takes over the viewport.
+        await waitForChatScrollIdle(page);
+        await expectPositionRailAtEnd(page);
+        await transcript.hover();
+        await page.mouse.wheel(0, -30000);
         await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
         await waitForChatScrollIdle(page);
         const top = (await track.boundingBox())!.y;

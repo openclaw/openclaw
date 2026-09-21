@@ -75,6 +75,31 @@ is enabled, that `plugins.allow` includes it when an allowlist is
 configured, and that any custom `appServer.command`, `url`, `authToken`, or
 headers are valid.
 
+**The resident catalog reports a spawn failure:** a missing executable
+(`ENOENT`), missing execute permission (`EACCES`), or incompatible CPU
+(`EBADARCH`, sometimes shown as macOS errno `-86`) stops that catalog's
+automatic retries and records one advisory. Repair the installation, then
+restart the Gateway to retry. Unrelated configuration reloads do not retry the
+failed executable. Disabling the
+plugin through config reload retires its catalog refresh loop.
+
+Managed passive catalogs use the plugin's installed Codex package and do not fall back
+to macOS desktop app bundles. OpenClaw runs
+its launcher with the Gateway's interpreter so Codex selects the platform
+package matching that interpreter's architecture without a `node` PATH lookup.
+At debug or trace log level, `Codex app-server spawn` records the executable,
+launcher, and resolved native binary paths without arguments or credentials.
+Use `file <path>` on macOS to inspect the failing executable's architecture.
+Check the managed native binary with
+`openclaw doctor --lint --only codex/managed-app-server --json`, including when
+Codex is enabled only for its session catalog.
+
+Directories named `openclaw-model-catalog-*` contain OpenClaw plugin source
+captures, not native Codex sessions. Current captures are bounded by worker
+generations and retired with their workers. Doctor reports older captures
+outside managed custody with an offline cleanup command; it does not delete
+those legacy directories automatically.
+
 **The Codex app-server uses too much memory:** distinguish the two processes
 first. OpenClaw runs the local Codex app-server as a separate Rust child.
 `NODE_OPTIONS=--max-old-space-size=...` changes only the Gateway's Node.js V8

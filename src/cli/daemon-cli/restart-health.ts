@@ -18,7 +18,9 @@ import {
   STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../../infra/startup-migration-checkpoint.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
+import type { OpenClawStateSchemaReadAdmission } from "../../state/openclaw-state-db-contract.js";
 import { sleep } from "../../utils.js";
 import {
   confirmGatewayReachable,
@@ -27,6 +29,7 @@ import {
   type GatewayReachability,
   type GatewayRestartProbeContext,
 } from "./restart-health-probe.js";
+import { finalizeGatewayRestartSnapshot } from "./restart-health-snapshot.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -55,53 +58,13 @@ const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
 const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
 
-// Both callers pass a fresh snapshot that has not escaped inspection.
-function finalizeGatewayRestartSnapshot(
-  snapshot: GatewayRestartSnapshot,
-  expectedVersion: string | undefined,
-  expectedBuildId: string | undefined,
-  requirePluginHealth: boolean,
-): GatewayRestartSnapshot {
-  if (expectedVersion) {
-    snapshot.expectedVersion = expectedVersion;
-    if (snapshot.gatewayVersion !== expectedVersion) {
-      snapshot.healthy = false;
-      if (snapshot.gatewayVersion != null) {
-        snapshot.versionMismatch = {
-          expected: expectedVersion,
-          actual: snapshot.gatewayVersion,
-        };
-      }
-    }
-  }
-  // Runtime identity remains required even with a separately configured UI root.
-  if (expectedBuildId) {
-    snapshot.expectedBuildId = expectedBuildId;
-    if (snapshot.gatewayBuildId !== expectedBuildId) {
-      snapshot.healthy = false;
-      if (snapshot.gatewayBuildId !== undefined) {
-        snapshot.buildIdMismatch = {
-          expected: expectedBuildId,
-          actual: snapshot.gatewayBuildId ?? null,
-        };
-      }
-    }
-  }
-  if (
-    (requirePluginHealth && snapshot.activatedPluginErrors?.length) ||
-    snapshot.channelProbeErrors?.length
-  ) {
-    snapshot.healthy = false;
-  }
-  return snapshot;
-}
-
 export async function inspectGatewayRestart(params: {
   service: Pick<GatewayService, "readCommand" | "readRuntime">;
   port: number;
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
   requirePluginHealth?: boolean;
   probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
@@ -120,7 +83,13 @@ export async function inspectGatewayRestart(params: {
     params.probeHosts ??
     (await resolveGatewayServiceProbeHosts({
       env,
-      command: (await params.service.readCommand?.(env).catch(() => null)) ?? null,
+      command:
+        (await params.service.readCommand?.(env).catch((error: unknown) => {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          return null;
+        })) ?? null,
     }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   const expectedBuildId = normalizeOptionalString(params.expectedBuildId);
@@ -162,6 +131,9 @@ export async function inspectGatewayRestart(params: {
         ? await params.service.readRuntime(env)
         : await params.service.readRuntime(env, { timeoutMs: remainingTimeoutMs() });
   } catch (err) {
+    if (hasCommandProcessCleanupError(err)) {
+      throw err;
+    }
     runtime = { status: "unknown", detail: String(err) };
   }
 
@@ -172,6 +144,9 @@ export async function inspectGatewayRestart(params: {
       probeHosts,
     });
   } catch (err) {
+    if (hasCommandProcessCleanupError(err)) {
+      throw err;
+    }
     portUsage = {
       port: params.port,
       status: "unknown",
@@ -256,7 +231,15 @@ export async function inspectGatewayRestart(params: {
   }
   // Read after probes: an owner can acquire the coordinator while health is unavailable.
   const owner =
-    portUsage.status === "busy" ? readGatewayOwnerLease({ env, port: params.port }) : undefined;
+    portUsage.status === "busy"
+      ? readGatewayOwnerLease({
+          env,
+          port: params.port,
+          ...(params.openStateSchemaReadAdmission
+            ? { openStateSchemaReadAdmission: params.openStateSchemaReadAdmission }
+            : {}),
+        })
+      : undefined;
   // A recorded owner is never stale by PID inference; other listeners are foreign.
   // 2026.9.3 Gateways have no row and retain the installed-runtime ownership path.
   const staleGatewayPids = owner
@@ -424,7 +407,12 @@ export async function waitForGatewayHealthyRestart(
     params.probeHosts ??
     (await resolveGatewayServiceProbeHosts({
       env: params.env,
-      command: await service.readCommand(params.env ?? process.env).catch(() => null),
+      command: await service.readCommand(params.env ?? process.env).catch((error: unknown) => {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
+        return null;
+      }),
     }));
   let snapshot = await inspectGatewayRestart({
     service,

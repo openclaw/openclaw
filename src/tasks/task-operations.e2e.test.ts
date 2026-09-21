@@ -77,8 +77,8 @@ function requireTask(taskId: string) {
   return task;
 }
 
-function resetTaskOperationsRuntime(): void {
-  stopTaskRegistryMaintenance();
+async function resetTaskOperationsRuntime(): Promise<void> {
+  await stopTaskRegistryMaintenance();
   resetTaskRegistryMaintenanceRuntimeForTests();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetTaskRegistryControlRuntimeForTests();
@@ -91,9 +91,9 @@ function resetTaskOperationsRuntime(): void {
 }
 
 describe("task operations product boundary", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await resetTaskOperationsRuntime();
     vi.useRealTimers();
-    resetTaskOperationsRuntime();
   });
 
   it("runs persisted task operations through CLI, chat, notification, audit, and maintenance", async () => {
@@ -109,7 +109,7 @@ describe("task operations product boundary", () => {
         },
       },
       async () => {
-        resetTaskOperationsRuntime();
+        await resetTaskOperationsRuntime();
         const clearHeartbeat = setHeartbeatWakeHandler(async () => ({
           status: "ran",
           durationMs: 0,
@@ -294,7 +294,7 @@ describe("task operations product boundary", () => {
           expect(retainedShow.logs.join("\n")).toContain("status: running");
         } finally {
           clearHeartbeat();
-          resetTaskOperationsRuntime();
+          await resetTaskOperationsRuntime();
         }
       },
     );

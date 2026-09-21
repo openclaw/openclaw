@@ -47,6 +47,7 @@ import {
   type exitVitestBySignal,
 } from "./lib/vitest-process.mts";
 import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
+import { resolveVitestTestCommand } from "./lib/vitest-test-runtime.mts";
 import {
   createVitestUnhandledErrorDetector,
   stripVitestAnsi,
@@ -813,13 +814,14 @@ export function spawnWatchedVitestProcess({
   }
   let timeoutCompletion: Promise<boolean> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
-  if (workerRun && directNodeArgs) {
-    // Preserve Node flags while giving the same owned child its private generation.
-    const cliIndex = directNodeArgs.findIndex((arg) => path.basename(arg) === "vitest.mjs");
+  const testCommand = directNodeArgs ? resolveVitestTestCommand(directNodeArgs, env) : undefined;
+  if (workerRun && testCommand) {
+    // Give either runtime the same owned compiled-subprocess generation.
+    const cliIndex = testCommand.args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
     if (cliIndex < 0) {
       throw new Error("Compiled subprocess owner requires a native Vitest CLI spec");
     }
-    directNodeArgs.splice(
+    testCommand.args.splice(
       cliIndex,
       0,
       path.join(resolveRepoRoot(import.meta.url), "scripts/lib/vitest-worker-bootstrap.mts"),
@@ -842,8 +844,8 @@ export function spawnWatchedVitestProcess({
       }
     : spawnParams;
   const { child, completion: childCompletion } = spawnOwnedVitestProcess({
-    ...(directNodeArgs
-      ? { command: process.execPath, args: directNodeArgs, options: childSpawnParams }
+    ...(testCommand
+      ? { ...testCommand, options: childSpawnParams }
       : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams })),
     homeMode,
   });

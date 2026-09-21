@@ -21,6 +21,7 @@ import {
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
 } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestTestCommand } from "../../scripts/lib/vitest-test-runtime.mts";
 import {
   createVitestUnhandledErrorDetector,
   writeVitestUnhandledErrorSummary,
@@ -85,6 +86,47 @@ describe("scripts/run-vitest", () => {
       ]),
     ).toEqual(["--no-maglev", "node_modules/vitest/vitest.mjs"]);
     expect(resolveDirectNodeVitestArgs(["exec", "vitest", "run"])).toBeNull();
+  });
+
+  it.each([undefined, "node", "bun"])(
+    "selects the %s test runtime without changing the compiled bootstrap or test operands",
+    (runtime) => {
+      const operands = [
+        "scripts/lib/vitest-worker-bootstrap.mts",
+        "/compiled/generation",
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--testNamePattern",
+        "--no-maglev",
+      ];
+      const flags = ["--no-maglev", "--no-concurrent-sparkplug"];
+      expect(
+        resolveVitestTestCommand([...flags, ...operands], {
+          OPENCLAW_VITEST_RUNTIME: runtime,
+        }),
+      ).toEqual({
+        command: runtime === "bun" ? "bun" : process.execPath,
+        args: runtime === "bun" ? operands : [...flags, ...operands],
+      });
+    },
+  );
+
+  it("rejects an unsupported test runtime before launching a child", () => {
+    expect(() =>
+      spawnWatchedVitestProcess({
+        pnpmArgs: ["exec", "node", "node_modules/vitest/vitest.mjs", "run"],
+        spawnParams: {},
+        env: { OPENCLAW_VITEST_RUNTIME: "deno" },
+      }),
+    ).toThrow("Invalid OPENCLAW_VITEST_RUNTIME: deno; expected node or bun");
+  });
+
+  it("keeps native preparation tools on Node when tests select Bun", () => {
+    const args = ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"];
+    expect(resolveVitestTestCommand(args, { OPENCLAW_VITEST_RUNTIME: "bun" })).toEqual({
+      command: process.execPath,
+      args,
+    });
   });
 
   it("reports an actionable error when Vitest cannot be resolved", () => {

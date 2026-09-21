@@ -67,6 +67,7 @@ const runtime = vi.hoisted(() => ({
   adoptTaskProgressMessage: vi.fn<typeof ProgressRuntime.adoptTaskProgressMessage>(),
   readTaskProgressSnapshot: vi.fn<typeof ProgressRuntime.readTaskProgressSnapshot>(),
   publishTaskProgressMessage: vi.fn<typeof ProgressRuntime.publishTaskProgressMessage>(),
+  deleteTaskProgressMessage: vi.fn<typeof ProgressRuntime.deleteTaskProgressMessage>(),
   startTaskProgressTyping: vi.fn(() => false),
 }));
 vi.mock("./task-registry-progress-runtime.js", () => runtime);
@@ -268,6 +269,11 @@ beforeEach(async () => {
     card.snapshot = structuredClone(params.snapshot);
     card.text = params.content;
     return "sent";
+  });
+  runtime.deleteTaskProgressMessage.mockReset().mockImplementation(async (params) => {
+    params.signal.throwIfAborted();
+    params.assertCurrent();
+    return receipts.delete(params.operationId) ? "sent" : "unknown";
   });
   // Await real module readiness, not timer ticks, before exercising the lazy coordinator.
   await Promise.all([
@@ -799,6 +805,7 @@ describe("adopted requester progress", () => {
             progressText: "The verified results are ready.",
           },
         });
+        return { delivered: true, path: "direct" };
       },
     );
     const final = publications.at(-1)!;
@@ -824,6 +831,7 @@ describe("adopted requester progress", () => {
         const next = child("Next", { turn: "resumed-requester" });
         expect(settle([next])).toBe(true);
         tool(next.entry, 2);
+        return { delivered: true, path: "direct", requesterVisibleFinalDelivered: true };
       },
     );
     first.entry.requesterSettleWake = undefined;
@@ -1000,33 +1008,7 @@ describe("adopted requester progress", () => {
     adopt,
     runtime,
     publications,
-  });
-
-  it("rechecks authority at publication and preserves newer activity arriving during transport", async () => {
-    const first = child("First");
-    await adopt([first]);
-    const publish = runtime.publishTaskProgressMessage.getMockImplementation()!;
-    runtime.publishTaskProgressMessage.mockImplementationOnce(async (params) => {
-      first.entry.killIntent = { requestedAt: Date.now(), reason: "cancelled at handoff" };
-      return publish(params);
-    });
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(publications).toEqual([]);
-    const second = child("Second", { turn: "second-turn" });
-    await adopt([second]);
-    runtime.publishTaskProgressMessage.mockImplementationOnce(async (params) => {
-      tool(second.entry, 2);
-      return publish(params);
-    });
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(publications).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(publications).toHaveLength(2);
-    expect(publications[1]!.content).toContain("public-notes-2.txt");
-    expect(publications[1]!.content).toContain("Check release gates");
-    expect(publications.every((display) => display.messageId === "existing-parent-card")).toBe(
-      true,
-    );
-    expect(publications.map((display) => display.origin)).toEqual([origin, origin]);
+    receipts,
+    tool,
   });
 });

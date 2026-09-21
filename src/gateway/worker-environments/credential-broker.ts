@@ -18,13 +18,13 @@ import {
 import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { WorkerSessionAlreadyAttachedError } from "./session-attachment.js";
 import type { WorkerEnvironmentState } from "./state.js";
-import {
-  type PreparedEnvironmentPlacementBinding,
-  type WorkerEnvironmentRecord,
-  type WorkerEnvironmentStore,
-  type WorkerEnvironmentTransitionPatch,
-  WorkerSessionAlreadyAttachedError,
+import type {
+  PreparedEnvironmentPlacementBinding,
+  WorkerEnvironmentRecord,
+  WorkerEnvironmentStore,
+  WorkerEnvironmentTransitionPatch,
 } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 

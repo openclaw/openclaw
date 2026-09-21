@@ -77,6 +77,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./models-auth-order.js").then((module) => module.modelsAuthOrderHandlers),
   models: () => import("./models.js").then((module) => module.modelsHandlers),
   "models-probe": () => import("./models-probe.js").then((module) => module.modelsProbeHandlers),
+  "web-search": () => import("./web-search.js").then((module) => module.webSearchHandlers),
   "native-hook-relay": () =>
     import("./native-hook-relay.js").then((module) => module.nativeHookRelayHandlers),
   "nodes-pending": () =>
@@ -104,14 +105,6 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-abort.js").then((module) => module.sessionAbortHandlers),
   "sessions-compact": () =>
     import("./sessions-compact.js").then((module) => module.sessionCompactHandlers),
-  "sessions-compaction-checkpoints": () =>
-    import("./sessions-compaction-checkpoints.js").then(
-      (module) => module.sessionCheckpointHandlers,
-    ),
-  "sessions-compaction-queries": () =>
-    import("./sessions-compaction-queries.js").then(
-      (module) => module.sessionCheckpointQueryHandlers,
-    ),
   "sessions-create": () =>
     import("./sessions-create.js").then((module) => module.sessionCreateHandlers),
   "sessions-title": () =>

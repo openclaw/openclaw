@@ -9,7 +9,10 @@ import { withSessionManagerWrite } from "../../agents/sessions/session-manager-w
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
-import { buildActiveNodeContextText } from "../../infra/active-node-context.js";
+import {
+  buildActiveNodeContextText,
+  prepareActiveNodeContext,
+} from "../../infra/active-node-context.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   registerAgentRunDelegatedAuthorityClosedHandler,
@@ -337,6 +340,8 @@ export async function executeWorkerTurn(
       throw new Error("Worker tunnel does not support worker turns");
     }
     // Presence belongs to the Gateway; workers cannot read its process-local node registry.
+    await prepareActiveNodeContext();
+    params.assertRunCurrent?.();
     const systemPrompt = [turn.extraSystemPrompt, buildActiveNodeContextText()]
       .filter(Boolean)
       .join("\n\n");

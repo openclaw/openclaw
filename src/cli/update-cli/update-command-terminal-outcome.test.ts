@@ -26,7 +26,7 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { VERSION } from "../../version.js";
@@ -34,6 +34,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   finishSuccessfulPackageSwitch,
+  mockVerifiedGatewayRun,
   validConfigSnapshot,
 } from "./update-command-post-update.test-support.js";
 import {
@@ -43,6 +44,12 @@ import {
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
+
+vi.mock("../../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/gateway-lock.js")>()),
+  readActiveGatewayLockPort: async () => 19101,
+}));
 
 // Keep the finalizer, swap/completion, executor, SQLite lease, ledger, and both
 // report consumers real. Unrelated plugin/native work has already succeeded.
@@ -71,6 +78,7 @@ let temporary: string;
 let jsonOutput: unknown[];
 let humanOutput: string[];
 beforeEach(async () => {
+  vi.mocked(verifyUpdatedGateway).mockReset();
   base = await fs.realpath(dirs.make("update-terminal-outcome-"));
   temporary = path.join(base, "private-tmp");
   await fs.mkdir(temporary, { mode: 0o700 });
@@ -380,6 +388,9 @@ async function scenario(
         );
       }
       try {
+        if (preparedRecovery) {
+          mockVerifiedGatewayRun(run);
+        }
         await finishSuccessfulPackageSwitch(
           { packageRoot: swap.packageRoot, run, json },
           {

@@ -21,7 +21,7 @@ import type {
   UpdateRunResult,
   UpdateStepProgress,
   UpdateStepResult,
-} from "../../infra/update-runner.js";
+} from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
@@ -246,7 +246,7 @@ export async function printResult(
   if (result.runId) {
     activeUpdateProgress.get(result.runId)?.(run);
   }
-  const report = renderUpdateRunReport(run ?? updateRunReportInputFromResult(result), {
+  const report = renderUpdateRunReport(updateRunReportInputFromResult(result, run), {
     ...reportHints,
     mode: result.mode === "unknown" ? run?.target.kind : result.mode,
   });

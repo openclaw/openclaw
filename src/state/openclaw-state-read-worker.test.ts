@@ -178,7 +178,7 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
   const release = vi.fn();
   const result = withOpenClawStateSettlementRead(context, async (read) => {
     read.bind(
-      { type: "userProfiles.avatar.reconcile", profileId: profile.id },
+      { type: "userProfiles.reconcile", profileId: profile.id },
       Promise.resolve({ kind: "completed" }),
       publish,
       release,
@@ -189,7 +189,7 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
   const recovery = queueTask();
   recovery.result.resolve({
     ok: true,
-    type: "userProfiles.avatar.reconcile",
+    type: "userProfiles.reconcile",
     sourceAdmitted: true,
     profile: descriptor,
   });
@@ -203,7 +203,7 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
     mutationSettled.resolve();
     expect(await result).toBe(delivery);
     expect((await recovery.captured).command).toEqual({
-      type: "userProfiles.avatar.reconcile",
+      type: "userProfiles.reconcile",
       profileId: profile.id,
     });
     expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor);
@@ -236,7 +236,7 @@ it.each([false, true])(
     ])[0]![1];
     await closeOpenClawStateDatabaseAsync();
     const context = captureOpenClawStateWorkerContext(options);
-    const command = { type: "userProfiles.avatar.reconcile", profileId: profile.id } as const;
+    const command = { type: "userProfiles.reconcile", profileId: profile.id } as const;
     const reply: OpenClawStateReadReply = {
       ok: true,
       type: command.type,
@@ -369,7 +369,9 @@ it("reads externally created state after an absent read without allocating a wor
   task.result.resolve(emptyReply);
   expect(await executeExistingOpenClawStateRead(options, command)).toEqual(emptyReply);
   expect(mock.selectSqlite).toHaveBeenCalledOnce();
-  expect(task.close).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(task.close).toHaveBeenCalledExactlyOnceWith(
+    process.versions.bun ? { retire: true } : undefined,
+  );
   expect(mock.closePool).not.toHaveBeenCalled();
 });
 
@@ -550,7 +552,9 @@ it("releases one completed read without closing the shared pool or aborting anot
   const siblingOptions = await sibling.submitted;
   first.result.resolve(emptyReply);
   expect(await firstRead).toEqual(emptyReply);
-  expect(first.close).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(first.close).toHaveBeenCalledExactlyOnceWith(
+    process.versions.bun ? { retire: true } : undefined,
+  );
   expect(sibling.close).not.toHaveBeenCalled();
   expect(siblingOptions.signal?.aborted).toBe(false);
   expect(mock.closePool).not.toHaveBeenCalled();
@@ -558,7 +562,9 @@ it("releases one completed read without closing the shared pool or aborting anot
 
   sibling.result.resolve(emptyReply);
   expect(await siblingRead).toEqual(emptyReply);
-  expect(sibling.close).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(sibling.close).toHaveBeenCalledExactlyOnceWith(
+    process.versions.bun ? { retire: true } : undefined,
+  );
   await closeOpenClawStateDatabaseAsync();
   expect(mock.closePool).toHaveBeenCalledOnce();
 });
@@ -593,7 +599,7 @@ it("closes only the operation matching a state path while its sibling finishes n
 
 it.each([
   "fleet.get",
-  "userProfiles.avatar.reconcile",
+  "userProfiles.reconcile",
   "onboardingRecommendations.read",
   "workspace.snapshot",
   "pluginBlob.lookup",
@@ -611,7 +617,7 @@ it.each([
         ? { type, runId: selector }
         : type === "fleet.get"
           ? { type, tenantId: selector }
-          : type === "userProfiles.avatar.reconcile"
+          : type === "userProfiles.reconcile"
             ? { type, profileId: selector }
             : type === "onboardingRecommendations.read"
               ? { type, configKey: selector }
@@ -634,7 +640,7 @@ it.each([
       command.runId = "different run after admission";
     } else if (command.type === "fleet.get") {
       command.tenantId = "different tenant after admission";
-    } else if (command.type === "userProfiles.avatar.reconcile") {
+    } else if (command.type === "userProfiles.reconcile") {
       command.profileId = "different profile after admission";
     } else if (command.type === "onboardingRecommendations.read") {
       command.configKey = "different key after admission";
@@ -658,7 +664,7 @@ it.each([
         ? { ok: true, type, sourceAdmitted: true, run: undefined }
         : type === "fleet.get"
           ? { ok: true, type, sourceAdmitted: true, cell: undefined }
-          : type === "userProfiles.avatar.reconcile"
+          : type === "userProfiles.reconcile"
             ? { ok: true, type, sourceAdmitted: true, profile: undefined }
             : type === "onboardingRecommendations.read"
               ? { ok: true, type, sourceAdmitted: true, record: null }
@@ -736,6 +742,36 @@ it("captures update history filters and charges retained selectors before dispat
     await Promise.allSettled([result]);
   }
 });
+
+it.each(["skills.library.descriptions", "skills.library.manifests"] as const)(
+  "retains library pins and their byte charge while dispatch waits (%s)",
+  async (type) => {
+    const { options } = source();
+    const input = [{ skillId: "技能🦞".repeat(512), revision: "版本🦞".repeat(512) }];
+    const expected = structuredClone(input);
+    const dispatch = createDeferredCore();
+    const task = queueTask(dispatch.promise);
+    const result = executeExistingOpenClawStateRead(options, { type, input });
+    const returned: OpenClawStateReadReply = { ok: true, type, sourceAdmitted: true, value: [] };
+    try {
+      const submitted = await task.submitted;
+      input[0]!.skillId = "changed";
+      input[0]!.revision = "changed";
+      input.push({ skillId: "extra", revision: "extra" });
+      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
+        Buffer.byteLength(expected[0]!.skillId) + Buffer.byteLength(expected[0]!.revision),
+      );
+      dispatch.resolve();
+      expect((await task.captured).command).toEqual({ type, input: expected });
+      task.result.resolve(returned);
+      expect(await result).toEqual(returned);
+    } finally {
+      dispatch.resolve();
+      task.result.resolve(returned);
+      await Promise.allSettled([result]);
+    }
+  },
+);
 
 it.each([
   {
@@ -825,6 +861,61 @@ it.each([
     }
   },
 );
+
+it("captures cron recovery markers and charges their retained bytes before dispatch", async () => {
+  const { pathname, options } = source();
+  const context = captureOpenClawStateWorkerContext(options);
+  const location = { context, location: pathname, checkFreshAdmission: false };
+  const authority = { signal: new AbortController().signal, assertCurrent: () => {} };
+  const command = {
+    type: "cron.observeRunRecovery" as const,
+    storeKey: "租户🦞",
+    proposals: [
+      { jobId: "任务雪", queuedAtMs: 1, runningAtMs: 2 },
+      { jobId: "运行🌊", runningAtMs: 3 },
+    ],
+  };
+  const expected = structuredClone(command);
+  const transport = createOpenClawStateReadTransport(command);
+  const baseline = createOpenClawStateReadTransport({ type: "fleet.list" });
+  command.storeKey = "changed partition";
+  command.proposals[0]!.jobId = "changed before preparation";
+  command.proposals[0]!.queuedAtMs = 9;
+  const dispatch = createDeferredCore();
+  const baselineTask = queueTask(dispatch.promise);
+  const task = queueTask(dispatch.promise);
+  const baselineRead = baseline.read(location, authority);
+  const read = transport.read(location, authority);
+  try {
+    const [baseOptions, submittedOptions] = await Promise.all([
+      baselineTask.submitted,
+      task.submitted,
+    ]);
+    const expectedBytes =
+      Buffer.byteLength(expected.type) -
+      Buffer.byteLength("fleet.list") +
+      Buffer.byteLength(expected.storeKey) +
+      expected.proposals.reduce((total, entry) => total + Buffer.byteLength(entry.jobId), 24);
+    expect(submittedOptions.inputBytes).toBe(Number(baseOptions.inputBytes) + expectedBytes);
+    command.proposals.splice(0);
+    dispatch.resolve();
+    expect((await task.captured).command).toEqual(expected);
+    baselineTask.result.resolve(emptyReply);
+    task.result.resolve({
+      ok: true,
+      type: expected.type,
+      sourceAdmitted: true,
+      observation: { kind: "observed", proposals: [] },
+    });
+    await Promise.all([baselineRead, read]);
+  } finally {
+    dispatch.resolve();
+    baselineTask.result.resolve(emptyReply);
+    task.result.resolve(emptyReply);
+    await Promise.allSettled([baselineRead, read]);
+    await Promise.all([baseline.close(), transport.close()]);
+  }
+});
 
 it("captures and charges independent snapshot and schema paths before queued dispatch", async () => {
   const { root, options } = source();

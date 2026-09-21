@@ -7,11 +7,10 @@ import {
   finishSuccessfulPackageSwitch,
   managedServiceState,
 } from "./update-command-post-update.test-support.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import * as rollbackModule from "./update-command-rollback.js";
 import * as nativeCommand from "./update-command-service-command.js";
 import type { OriginalManagedServiceRuntime } from "./update-command-service-context-types.js";
-import * as serviceLoad from "./update-command-service-load.js";
 
 export function registerBoundaryFinalizationControls({
   makeTempDir,
@@ -23,8 +22,8 @@ export function registerBoundaryFinalizationControls({
     restartService: Mock<typeof import("./update-command-service.js").maybeRestartService>;
   };
 }) {
-  it.each(["no-child", "unsettled-child"] as const)(
-    "retained boundary finalization distinguishes native effects: %s",
+  it.each(["missing-entrypoint", "unsettled-child"] as const)(
+    "retained service finalization distinguishes native effects: %s",
     async (scenario) => {
       const home = makeTempDir("retained-boundary-no-effect-");
       const identity = createManagedServiceIdentityFixture(home);
@@ -34,7 +33,6 @@ export function registerBoundaryFinalizationControls({
           path.join(home, "package.json"),
           JSON.stringify({ name: "openclaw", type: "module" }),
         );
-        await fs.writeFile(path.join(home, "dist", "index.js"), "export {};\n");
         const launcherFingerprint: PackageLauncherFingerprint = {
           type: "file",
           mode: "33188",
@@ -63,8 +61,6 @@ export function registerBoundaryFinalizationControls({
           nodeIdentity: "fixture-node",
         };
         mocks.readServiceState.mockResolvedValue(managedServiceState(process.env));
-        const boundary = { assertCurrent: vi.fn(), seal: vi.fn() };
-        const install = vi.spyOn(serviceLoad, "runGatewayInstallWithLoadBoundary");
         const actual = await vi.importActual<typeof import("./update-command-service.js")>(
           "./update-command-service.js",
         );
@@ -82,9 +78,9 @@ export function registerBoundaryFinalizationControls({
             ...params,
             shouldRestart: true,
             refreshServiceEnv: true,
+            serviceRuntimeRefreshRequired: true,
             serviceInstallEnv: {},
             originalManagedServiceRuntime: original,
-            serviceLoadBoundary: boundary,
             serviceUpdateVerdict: undefined,
             result: { ...params.result, root: home },
           }),
@@ -98,7 +94,7 @@ export function registerBoundaryFinalizationControls({
         const finishing = finishSuccessfulPackageSwitch(undefined, {
           originalManagedServiceRuntime: original,
         });
-        if (scenario === "no-child") {
+        if (scenario === "missing-entrypoint") {
           await expect(finishing).rejects.toMatchObject({
             name: "UpdateCommandFailure",
             result: { status: "error" },
@@ -111,15 +107,12 @@ export function registerBoundaryFinalizationControls({
           });
           expect(rollback).not.toHaveBeenCalled();
         }
-        expect(install).not.toHaveBeenCalled();
-        expect(boundary.seal).not.toHaveBeenCalled();
         expect(command).toHaveBeenCalledOnce();
-        await expect(command.mock.results[0]?.value).rejects.toMatchObject({
-          name:
-            scenario === "no-child"
-              ? "UpdateServiceLoadPreMutationError"
-              : "UpdateCommandRecoveryPendingError",
-        });
+        await expect(command.mock.results[0]?.value).rejects.toMatchObject(
+          scenario === "missing-entrypoint"
+            ? { message: `updated install entrypoint not found under ${home}` }
+            : { name: "UpdateCommandRecoveryPendingError" },
+        );
       } finally {
         identity.restore();
       }

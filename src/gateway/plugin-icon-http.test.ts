@@ -2,7 +2,7 @@
 // package loading, SVG normalization, caching, and failure fallback behavior.
 import { execFileSync } from "node:child_process";
 import fs, { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -10,7 +10,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
+import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
 
 const mocks = vi.hoisted(() => ({
@@ -109,6 +111,7 @@ const INVALID_ICON_ROUTES = [
 
 let port = 0;
 let server: ReturnType<typeof createServer>;
+let authorityCurrent = true;
 const testConfig = {};
 let configForRequest = () => testConfig;
 
@@ -117,12 +120,14 @@ beforeAll(async () => {
     void handlePluginIconHttpRequest(req, res, {
       auth: { mode: "token", token: "test-token", allowTailscale: false },
       config: configForRequest(),
-    }).then((handled) => {
-      if (!handled) {
-        res.statusCode = 404;
-        res.end("unhandled");
-      }
-    });
+    })
+      .then((handled) => {
+        if (!handled) {
+          res.statusCode = 404;
+          res.end("unhandled");
+        }
+      })
+      .catch(() => finishFailedGatewayHttpResponse(res));
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -151,11 +156,15 @@ beforeEach(() => {
     rootPath: iconFixtureDir,
   });
   configForRequest = () => testConfig;
+  authorityCurrent = true;
   mocks.authorize.mockReset();
-  mocks.authorize.mockResolvedValue({
-    authMethod: "token",
-    operatorScopes: ["operator.admin", "operator.read"],
-  });
+  mocks.authorize.mockImplementation(({ res }: { res: ServerResponse }) =>
+    bindHttpResponseAuthority(
+      { authMethod: "token", operatorScopes: ["operator.admin", "operator.read"] },
+      res,
+      () => authorityCurrent,
+    ),
+  );
   mocks.resolveIconSource.mockResolvedValue({
     kind: "file",
     path: localIconPath,
@@ -187,6 +196,31 @@ function request(
 }
 
 describe("Control UI plugin and catalog icon routes", () => {
+  it.each(ALL_ICON_ROUTES)(
+    "rejects revoked authority while a $label icon is being normalized",
+    async ({ pathname }) => {
+      const encoding = createDeferredCore();
+      const release = createDeferredCore();
+      mocks.encodeImage.mockImplementationOnce(async () => {
+        encoding.resolve();
+        await release.promise;
+        return { data: NORMALIZED_PNG_BYTES };
+      });
+
+      const pending = request(pathname);
+      await encoding.promise;
+      authorityCurrent = false;
+      release.resolve();
+
+      const response = await pending;
+      expect(response.status).toBe(401);
+      expect(response.headers.get("etag")).toBeNull();
+      expect(await response.json()).toEqual({
+        error: { message: "Unauthorized", type: "unauthorized" },
+      });
+    },
+  );
+
   it("keeps link favicon fetching off when explicitly disabled", async () => {
     configForRequest = () => ({
       gateway: { controlUi: { automaticallyFetchFavicons: false } },

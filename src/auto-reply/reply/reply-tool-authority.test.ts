@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
+import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
 import type { ReplyBackendQueueMessageOptions } from "./reply-run-registry.js";
@@ -45,6 +47,7 @@ function toolAuthorityOverlay(
     traceAuthorized: run.run.traceAuthorized === true,
     approvalReviewerDeviceId: run.run.approvalReviewerDeviceId,
     clientCaps: run.run.clientCaps,
+    bootstrapUserProfileId: run.run.bootstrapUserProfileId,
     gatewayUiCommandTarget: run.run.gatewayUiCommandTarget,
     toolBindings: run.run.toolBindings,
   };
@@ -74,6 +77,50 @@ describe("reply tool authority", () => {
         resolveFollowupRunToolAuthorityFingerprint(second),
       );
     },
+  );
+
+  it.each(["bob", undefined])(
+    "queues a different personal bootstrap scope instead of steering: %s",
+    async (incoming) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const alice = ensureProfileForEmail("alice@example.test");
+        const bob = ensureProfileForEmail("bob@example.test");
+        const alias = ensureProfileForEmail("alias@example.test");
+        linkEmail("alias@example.test", alice.id);
+        const run = createQueueTestRun({ prompt: "Alice turn" });
+        run.disableTools = true;
+        run.run.bootstrapUserProfileId = alias.id;
+        const operation = createTestReplyOperation({ sessionId: "personal-steering" });
+        operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+        operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-primary" });
+        const queueMessage = vi.fn(async () => {});
+        operation.attachBackend({
+          kind: "embedded",
+          cancel: vi.fn(),
+          isStreaming: () => true,
+          queueMessage,
+        });
+        operation.setPhase("running");
+        await expect(
+          queueCurrentReplyRunMessage("personal-steering", "new turn", {
+            isInboundUserMessage: true,
+            toolAuthorityOverlay: {
+              ...toolAuthorityOverlay(run),
+              bootstrapUserProfileId: incoming ? bob.id : undefined,
+            },
+          }),
+        ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+        expect(queueMessage).not.toHaveBeenCalled();
+        await expect(
+          queueCurrentReplyRunMessage("personal-steering", "same person", {
+            isInboundUserMessage: true,
+            toolAuthorityOverlay: {
+              ...toolAuthorityOverlay(run),
+              bootstrapUserProfileId: alice.id,
+            },
+          }),
+        ).resolves.toMatchObject({ status: "accepted" });
+      }),
   );
 
   it("distinguishes session permission and tool settings in steering authority", () => {

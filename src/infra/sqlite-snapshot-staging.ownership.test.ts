@@ -152,7 +152,8 @@ it("reconciles a released fresh token without waiting for idle reclamation", () 
     expect(() =>
       openOpenClawStateReadConnection(source, location, undefined, owned.directory),
     ).toThrow("parent retired");
-    expect(fs.readFileSync(location)).toEqual(fs.readFileSync(source));
+    // Reconciliation owns payload cleanup after the staging worker has exited.
+    expect(fs.existsSync(location)).toBe(false);
   } finally {
     owned.release();
     removeTempDirectory(owned.directory);

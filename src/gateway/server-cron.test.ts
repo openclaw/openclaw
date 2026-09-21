@@ -500,7 +500,7 @@ describe("buildGatewayCronService", () => {
     enqueueSystemEventMock.mockClear();
     systemEventReceiptRemoveMock.mockClear();
     requestHeartbeatMock.mockClear();
-    requestHeartbeatAndWaitMock.mockClear();
+    requestHeartbeatAndWaitMock.mockReset();
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     sendCronAnnouncePayloadStrictMock.mockClear();

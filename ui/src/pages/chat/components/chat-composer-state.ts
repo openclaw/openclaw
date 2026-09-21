@@ -26,6 +26,7 @@ function createChatComposerState(): ChatComposerState {
     goalComposer: null,
     activeQuestionKey: null,
     gatewayQuestionIds: new Set(),
+    asyncQuestionIds: new Set(),
     questionCollapsed: false,
     questionTakeoverActive: false,
     restoreComposerFocus: false,

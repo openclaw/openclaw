@@ -38,7 +38,7 @@ export async function runLegacyPluginSourceCapturesHealth(
 ): Promise<void> {
   const { noteLegacyPluginSourceCaptures } =
     await import("../commands/doctor-plugin-source-captures.js");
-  await noteLegacyPluginSourceCaptures(ctx.env ?? process.env);
+  await noteLegacyPluginSourceCaptures(ctx.env ?? process.env, ctx.prompter.shouldRepair);
 }
 
 export async function runReleaseConfiguredPluginInstallsHealth(
@@ -120,6 +120,8 @@ export async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Pro
     stateDirExistedAtStart: ctx.stateDirExistedAtStart,
   });
   await noteBackupDoctorHint(ctx.env ?? process.env);
+  const { noteBackupScratchHealth } = await import("../commands/doctor-backup-scratch.js");
+  await noteBackupScratchHealth(ctx.env ?? process.env, ctx.prompter.shouldRepair);
 }
 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {

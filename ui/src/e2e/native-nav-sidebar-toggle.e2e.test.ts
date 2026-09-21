@@ -82,7 +82,9 @@ let context: BrowserContext | undefined;
 
 suite.define(() => {
   afterEach(async () => {
-    await context?.close();
+    if (context) {
+      await suite.closeBrowserContext(context);
+    }
     context = undefined;
   });
 
@@ -99,7 +101,7 @@ suite.define(() => {
     webChrome?: boolean;
     width?: number;
   }) {
-    context = await suite.browser.newContext({
+    context = await suite.newBrowserContext({
       colorScheme: options.colorScheme,
       hasTouch: options.hasTouch,
       locale: "en-US",
@@ -708,9 +710,10 @@ suite.define(() => {
     const page = await openPage({ nativeNav: false });
 
     await page.keyboard.press("ControlOrMeta+K");
-    const palette = page.locator(".cmd-palette");
-    const paletteDialog = page.locator("openclaw-modal-dialog.palette");
-    await page.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
+    // The loading dialog is replaced during handoff; measure the full palette.
+    const palette = page.locator("openclaw-command-palette .cmd-palette");
+    const paletteDialog = page.locator("openclaw-command-palette openclaw-modal-dialog.palette");
+    await palette.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
     const paletteAnimationName = await palette.evaluate(
       (element) => getComputedStyle(element).animationName,
     );

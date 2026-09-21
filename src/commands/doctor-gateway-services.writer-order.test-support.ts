@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
@@ -26,6 +27,10 @@ export async function prepareWriterContext(configPath: string): Promise<DoctorHe
     stateDirExistedAtStart: true,
     configResult: {
       cfg,
+      confirmedConfigSource: {
+        path: snapshot.path,
+        hash: snapshot.hash ?? hashConfigRaw(snapshot.raw),
+      },
       sourceConfigForWrite: snapshot.sourceConfig,
       sourceConfigValid: true,
       sourceLastTouchedVersion: snapshot.sourceConfig.meta?.lastTouchedVersion,

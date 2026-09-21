@@ -499,6 +499,23 @@ class ChatOutboxGatewayOwner {
       this.readLive(storedChatOutboxScopeKey(scope), item.id, item)?.submissionIsCurrent,
     );
   }
+  /** Inbox reads delivery state, not the reload-safe aliases stored during live work. */
+  needsReview(scope: Scope, item: ChatQueueItem): boolean {
+    const key = storedChatOutboxScopeKey(scope);
+    if (this.readLive(key, item.id, item)) {
+      return false;
+    }
+    for (const state of this.hosts.values()) {
+      if (
+        state.byScope
+          .get(key)
+          ?.queue.some((local) => local.id === item.id && local.sendState === "waiting-model")
+      ) {
+        return false;
+      }
+    }
+    return !item.pendingRunId && (item.sendState === "failed" || item.sendState === "unconfirmed");
+  }
   beginSubmission(
     host: Host,
     id: string,
@@ -602,4 +619,27 @@ export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
   owners.set(key, owner);
   owner.adoptSubscriptions(host);
   return owner;
+}
+
+/** Read-only view of the existing tab/Gateway outbox; it does not claim a personal owner. */
+export function listChatOutboxAttention(host: Composer) {
+  if (!observeOutboxRecoveryOwner(host)) {
+    return [];
+  }
+  const owner = owners.get(outboxOwnerKey(host));
+  return listStoredChatOutboxes(host).flatMap((outbox) =>
+    outbox.queue
+      .filter((item) =>
+        owner
+          ? owner.needsReview(outbox, item)
+          : !item.pendingRunId && (item.sendState === "failed" || item.sendState === "unconfirmed"),
+      )
+      .map((item) => ({
+        id: item.id,
+        sessionKey: outbox.sessionKey,
+        agentId: outbox.agentId,
+        unconfirmed: item.sendState === "unconfirmed",
+        command: Boolean(item.localCommandName),
+      })),
+  );
 }

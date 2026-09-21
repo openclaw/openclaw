@@ -4,6 +4,7 @@ import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -44,6 +45,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
+import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
@@ -52,8 +54,25 @@ import {
   resetSubagentRegistryForTests,
   testing as registryTesting,
 } from "../registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
+
+export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) {
+  const completed = createDeferred();
+  const inspect = () => {
+    if (typeof entry.cleanupCompletedAt === "number") {
+      completed.resolve();
+    }
+  };
+  const unsubscribe = onSubagentRegistryPersisted(inspect);
+  try {
+    inspect();
+    await completed.promise;
+  } finally {
+    unsubscribe();
+  }
+}
 
 export function installSpawnThreadBindingFixture(
   onBound?: (binding: SessionBindingRecord) => Promise<void>,

@@ -20,7 +20,7 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { isCodeModeExecTool } from "../code-mode-control-tools.js";
@@ -206,7 +206,7 @@ describe("AgentSession runtime and transcript projections", () => {
         const cached = manager.buildSessionContext();
         session.dispose();
         const databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path!;
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         const reopened = SessionManager.open(scope, dir);
         expect(reopened.buildSessionContext()).toEqual(cached);
         const { session: nextSession } = await createTestSession({
@@ -467,7 +467,7 @@ describe("AgentSession runtime and transcript projections", () => {
         const cached = manager.buildSessionContext();
         session.dispose();
         expect(
-          closeOpenClawAgentDatabaseByPath(
+          await closeOpenClawAgentDatabaseByPathAsync(
             resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
           ),
         ).toBe(true);
@@ -586,7 +586,7 @@ describe("AgentSession runtime and transcript projections", () => {
       const cached = manager.buildSessionContext();
       session.dispose();
       expect(
-        closeOpenClawAgentDatabaseByPath(
+        await closeOpenClawAgentDatabaseByPathAsync(
           resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
         ),
       ).toBe(true);
@@ -703,7 +703,7 @@ describe("AgentSession runtime and transcript projections", () => {
         first.map((result) => result.messageId),
       );
       expect(
-        closeOpenClawAgentDatabaseByPath(
+        await closeOpenClawAgentDatabaseByPathAsync(
           resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
         ),
       ).toBe(true);

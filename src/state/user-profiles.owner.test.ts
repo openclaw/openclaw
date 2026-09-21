@@ -1,6 +1,7 @@
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as stateDatabase from "./openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -22,6 +23,7 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   });
@@ -232,7 +234,10 @@ describe("gateway owner profiles", () => {
     expect(readUserProfileVersion()).toBe(version + 1);
     expect(owner.id).toBe("gateway-owner");
     expect(owner.displayName).toBe("Ada Lovelace");
+    const transaction = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
     expect(ensureGatewayOwnerProfile("Host Renamed", options)).toEqual(owner);
+    expect(transaction).not.toHaveBeenCalled();
+    transaction.mockRestore();
     expect(readUserProfileVersion()).toBe(version + 1);
     setDisplayName(owner.id, "User Chosen", options);
     closeOpenClawStateDatabaseForTest();

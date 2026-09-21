@@ -637,77 +637,76 @@ setInterval(() => {}, 1_000);
 async function forEachUpgradeSurvivorSystemctlShim(
   callback: (fixture: {
     pid: number;
-    run: (command: "is-active" | "stop", procStat?: string) => number | null;
+    pidPath: string;
+    run: (procStat?: string) => number | null;
+    readLog: () => string[];
     scriptPath: string;
   }) => void | Promise<void>,
-  targetPid?: number,
 ): Promise<void> {
   for (const scriptPath of [UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH]) {
     const workDir = tempDirs.make("openclaw-systemctl-shim-");
     const binDir = join(workDir, "bin");
     const pidPath = join(workDir, "gateway.pid");
     const childPidPath = join(workDir, "child.pid");
-    const child =
-      targetPid === undefined
-        ? spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
-            env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
-            stdio: "ignore",
-          })
-        : undefined;
-    if (child) {
+    const child = spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
+      env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
+      stdio: "ignore",
+    });
+    try {
       for (let attempt = 0; attempt < 100 && !existsSync(childPidPath); attempt += 1) {
         await delay(10);
       }
-    }
-    const pid = targetPid ?? Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
-    writeFileSync(pidPath, `${pid}\n`);
-    const fixtureEnv = {
-      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
-      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidPath,
-    };
-    const shimPath = installUpgradeSurvivorSystemctlShim(
-      workDir,
-      { HOME: workDir, ...fixtureEnv },
-      scriptPath,
-    );
-    writeExecutables(binDir, {
-      awk: `#!/usr/bin/env bash
-[ "$FAKE_PROC_STAT_MODE" != "unreadable" ] || exit 1
-set -- $FAKE_PROC_STAT
-printf '%s\\n' "\${3:-}"
-`,
-      cat: `#!/usr/bin/env bash
+      const pid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+      writeFileSync(pidPath, `${pid}\n`);
+      const fixtureEnv = {
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
+        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidPath,
+      };
+      const shimPath = installUpgradeSurvivorSystemctlShim(
+        workDir,
+        { HOME: workDir, ...fixtureEnv },
+        scriptPath,
+      );
+      writeExecutables(binDir, {
+        cat: `#!/usr/bin/env bash
 case "\${1:-}" in
   /proc/*/stat)
+    printf 'proc-stat-read\\n' >>"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG"
     [ "$FAKE_PROC_STAT_MODE" != "unreadable" ] || exit 1
     printf '%s\\n' "$FAKE_PROC_STAT"
     ;;
   *) exec /bin/cat "$@" ;;
 esac
 `,
-      sleep: "#!/usr/bin/env bash\nexit 97\n",
-    });
-    const run = (command: "is-active" | "stop", procStat?: string) =>
-      spawnSync("bash", [shimPath, "--user", command, "openclaw-gateway.service"], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          FAKE_PROC_STAT: procStat ?? "",
-          FAKE_PROC_STAT_MODE: procStat === undefined ? "unreadable" : "readable",
-          ...fixtureEnv,
-          PATH: `${binDir}:${process.env.PATH ?? ""}`,
-        },
-      }).status;
+        sleep: `#!/usr/bin/env bash
+printf 'wait\\n' >>"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG"
+exit 97
+`,
+      });
+      const run = (procStat?: string) => {
+        writeFileSync(fixtureEnv.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG, "");
+        return spawnSync("bash", [shimPath, "--user", "stop", "openclaw-gateway.service"], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            FAKE_PROC_STAT: procStat ?? "",
+            FAKE_PROC_STAT_MODE: procStat === undefined ? "unreadable" : "readable",
+            ...fixtureEnv,
+            PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          },
+        }).status;
+      };
+      const readLog = () =>
+        readFileSync(fixtureEnv.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG, "utf8")
+          .trim()
+          .split("\n");
 
-    try {
-      await callback({ pid, run, scriptPath });
+      await callback({ pid, pidPath, run, readLog, scriptPath });
     } finally {
-      if (child) {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
-        }
-        await waitForProcessExit(child).catch(() => undefined);
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
       }
+      await waitForProcessExit(child).catch(() => undefined);
     }
   }
 }
@@ -4231,21 +4230,30 @@ printf '%s\n' "$status" >"$TMPDIR/status"
   it.skipIf(process.platform === "win32")(
     "stops promptly when the systemctl target is a zombie with spaces and parentheses in comm",
     async () => {
-      await forEachUpgradeSurvivorSystemctlShim(({ pid, run, scriptPath }) => {
+      await forEachUpgradeSurvivorSystemctlShim(({ pid, run, readLog, scriptPath }) => {
         const procTail = Array.from({ length: 49 }, (_, field) => field + 1).join(" ");
-        expect(run("stop", `${pid} (gateway (old) worker) Z ${procTail}`), scriptPath).toBe(0);
+        expect(run(`${pid} (gateway (old) worker) Z ${procTail}`), scriptPath).toBe(0);
+        expect(readLog()).toEqual(["--user stop openclaw-gateway.service", "proc-stat-read"]);
       });
     },
   );
 
   it.skipIf(process.platform === "win32")(
-    "keeps a killable systemctl target active when proc stat is unreadable or malformed",
+    "waits for a killable systemctl target when proc stat is unreadable or malformed",
     async () => {
-      await forEachUpgradeSurvivorSystemctlShim(({ pid, run, scriptPath }) => {
+      await forEachUpgradeSurvivorSystemctlShim(({ pid, pidPath, run, readLog, scriptPath }) => {
         for (const procStat of [undefined, `${pid} (gateway) Z`]) {
-          expect(run("is-active", procStat), `${scriptPath}: ${procStat ?? "unreadable"}`).toBe(0);
+          // Reaching the wait sentinel proves the shell did not mistake missing stat data for exit.
+          expect(run(procStat), `${scriptPath}: ${procStat ?? "unreadable"}`).toBe(97);
+          expect(readLog()).toEqual([
+            "--user stop openclaw-gateway.service",
+            "proc-stat-read",
+            "wait",
+          ]);
+          expect(isProcessRunning(pid)).toBe(true);
+          expect(readFileSync(pidPath, "utf8")).toBe(`${pid}\n`);
         }
-      }, process.pid);
+      });
     },
   );
 

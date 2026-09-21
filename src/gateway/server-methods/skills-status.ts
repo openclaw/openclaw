@@ -9,6 +9,7 @@ import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.j
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { prepareWorkspaceSkillStatus } from "../../skills/discovery/status.js";
 import { ensureSkillsWatcher } from "../../skills/runtime/refresh.js";
+import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { authorizeSessionSharingTarget, resolveSessionSharingTarget } from "../session-sharing.js";
 import {
@@ -18,11 +19,12 @@ import {
 import type { GatewayRequestHandler } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-export function buildRemoteAwareWorkspaceSkillStatus(
+export async function buildRemoteAwareWorkspaceSkillStatus(
   resolved: ResolvedSkillsWorkspace,
   selections?: SkillLibrarySelection[],
   skillCardKey?: string,
 ) {
+  await prepareRemoteSkillConnections();
   // Remote skill availability depends on the agent's executable-node surface,
   // not only the workspace contents, so status reports include live eligibility.
   const nodeSkills = resolveNodeExecEligibility({

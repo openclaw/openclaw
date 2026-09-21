@@ -28,6 +28,7 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import { createSqliteWalReclamationResult } from "./sqlite-wal-reclamation.js";
 import {
   resolveAgentDatabaseMigrationTargets,
   type AgentDatabaseMigrationTarget,
@@ -73,7 +74,11 @@ function createMigrationDatabaseHandle(
     agentId,
     db: database,
     path: pathname,
-    walMaintenance: { checkpoint: () => false, close: () => false },
+    walMaintenance: {
+      checkpoint: () => false,
+      close: () => false,
+      reclaimFreePages: createSqliteWalReclamationResult,
+    },
   };
 }
 

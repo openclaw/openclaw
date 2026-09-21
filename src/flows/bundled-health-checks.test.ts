@@ -531,12 +531,22 @@ describe("registerBundledHealthChecks", () => {
   it.each([
     ["bundled", "implicit"],
     ["bundled", "explicit"],
+    ["bundled", "passive"],
     ["global", "implicit"],
     ["global", "explicit"],
+    ["global", "passive"],
   ] as const)(
     "registers and runs health from the selected %s Codex public artifact with %s routing",
     async (origin, routing) => {
-      const cfg = routing === "implicit" ? implicitCodexConfig : codexConfig;
+      const cfg =
+        routing === "implicit"
+          ? implicitCodexConfig
+          : routing === "passive"
+            ? {
+                agents: { defaults: { model: { primary: "anthropic/claude-opus-4-7" } } },
+                plugins: { entries: { codex: { enabled: true } } },
+              }
+            : codexConfig;
       mkdirSync(join(workspaceDir, "dist"));
       writeFileSync(
         join(workspaceDir, "dist", "api.js"),

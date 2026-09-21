@@ -218,6 +218,7 @@ export async function executeFollowupTurn(params: {
     isHeartbeat,
     // Queue callbacks are refreshed per session, but authority belongs to the
     // queued turn. Never let a later callback widen or narrow an older item.
+    operatorAuthority: turn.queued.operatorAuthority,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
     commentaryPayloadsEnabled,

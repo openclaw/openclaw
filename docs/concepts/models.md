@@ -107,9 +107,12 @@ in the background; each completed agent becomes available, and the degraded
 status clears when the full publication finishes. An unfinished agent cannot
 serve model requests until its runtime and authentication facts are ready.
 
-After sign-in, starter models are available immediately. The provider shows
-“checking models…” while the Gateway discovers account models, then updates the
-open picker when discovery completes. Gateway startup and credential changes
+After sign-in, starter models are available immediately. While the Gateway
+discovers account models, a small spinner in the picker’s search field indicates
+a background refresh. Hover, focus, or tap it to see which providers are refreshing;
+existing models stay usable, and the open picker updates when discovery completes.
+An empty picker shows “Loading models…” until its first models arrive.
+Gateway startup and credential changes
 also refresh the affected catalog. Use **Refresh** in Models or
 `openclaw models list --refresh` to request another refresh, including newly
 released models. **Retry** requests discovery again after a failure.

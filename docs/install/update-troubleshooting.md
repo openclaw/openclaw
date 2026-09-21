@@ -92,6 +92,28 @@ The controls require a connected Gateway, support for the corresponding typed
 Gateway method, and administrator scope. When those conditions are not met, use
 the CLI fallback on the Gateway host.
 
+## Doctor cannot enter maintenance during finalization
+
+`finalize:doctor` can report `Doctor could not enter maintenance` when a Gateway
+still owns the selected state directory. A starting Gateway and a healthy serving
+Gateway retain that ownership for their entire process lifetime; waiting for
+readiness does not release the lock.
+
+Finalizers with this recovery wait for startup through the existing readiness
+observer. If the same holder is verified serving the installed version and build,
+the update finishes with a warning and leaves the Gateway running. Update history
+names the holder and records the skipped Doctor pass. Config and plugin maintenance
+remain pending. At the next maintenance window, stop that Gateway through its
+service or deployment owner, run `openclaw update repair`, then start it through
+the same owner. Check `openclaw update status --json` and
+`openclaw gateway status --deep` for the recorded warning and current health.
+
+Do not delete lock files to force entry. A dead process releases the physical lock,
+and lease owners reclaim provably dead identities. Unknown ownership, an unreadable
+database, incompatible schemas, active database writers, or unconfirmed subprocess
+cleanup still require their named recovery action; a maintenance warning does not
+authorize concurrent repair or discard recovery backups.
+
 ## Node and global install permissions
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
@@ -237,6 +259,20 @@ declared ClawHub source for the new core release cohort. The released 2026.9.4
 catalog omitted that source for Codex; the correction is on main in
 [#148518](https://github.com/openclaw/openclaw/pull/148518).
 
+### Missing temporary plugin captures
+
+An `ENOENT` path containing `openclaw-plugin-build-` can identify a missing
+runtime source capture even when the installed plugin files still exist.
+Reloading or replacing that plugin reports the unavailable recovery snapshot
+as a warning and loads the installed replacement after normal cleanup.
+Run `openclaw plugins reload <id>`, or reinstall the plugin if its installed
+payload also needs repair. If replacement fails, the missing previous code
+cannot be restored; healthy plugins retain their available recovery snapshots.
+
+Older releases can reject enable, uninstall, and reinstall while trying to copy
+that same missing capture. Restart the Gateway through its service owner before
+retrying, or upgrade the host. See [plugin source lifetime](/plugins/architecture#runtime-instance-and-source-lifetime).
+
 ## Reason codes
 
 - `dirty`, `no-upstream`: repair the source checkout before retrying.
@@ -295,6 +331,14 @@ changed` when the updater's umask differs from the installed launcher's
   not writable by the invoking user; fix ownership and permissions, then retry.
   Re-run the [installer](/install/installer) if the package install is
   incomplete.
+- `runtime-verification-failed` near 300 seconds at `candidate gateway canary`
+  when updating from 2026.9.4: the installed updater shares that deadline across
+  the snapshot and candidate checks, even with a larger `--timeout`. The elapsed
+  failure duration is not Gateway startup time alone. Use the same
+  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+  then run `openclaw doctor --fix` and restart the Gateway. See
+  [#144858](https://github.com/openclaw/openclaw/issues/144858) and
+  [#154381](https://github.com/openclaw/openclaw/issues/154381).
 - `doctor-failed`: run `openclaw doctor` on the Gateway host, resolve its
   findings, then retry. See [Doctor](/cli/doctor) for the check list and
   `--fix` behavior.

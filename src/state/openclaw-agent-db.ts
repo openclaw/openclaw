@@ -28,6 +28,7 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { registerSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import {
   configureSqliteConnectionPragmas,
@@ -56,8 +57,7 @@ import {
   readOpenClawAgentDatabaseIdentity,
 } from "./openclaw-agent-db-identity.js";
 import {
-  assertAgentDatabaseMaintenanceAccess,
-  registerAgentDatabaseMaintenanceAccess,
+  hasAgentDatabaseMaintenanceAuthority,
   assertOpenClawAgentDatabaseLease,
   claimOpenClawAgentDatabaseLease,
   recordOpenClawAgentDatabaseIntegrityVerified,
@@ -427,7 +427,11 @@ function* openOpenClawAgentDatabaseSteps(
     ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
     const database = { agentId, db, path: pathname, walMaintenance };
     openedDatabase = database;
-    registerAgentDatabaseMaintenanceAccess(db);
+    if (hasAgentDatabaseMaintenanceAuthority()) {
+      throw new Error(
+        "Agent database maintenance is in progress; retry after openclaw doctor --fix completes.",
+      );
+    }
     const cleanup = registerAgentDeletionDatabaseCleanup(database, databaseOptions);
     if (cleanup) {
       const release = retainAgentDatabase(db);
@@ -526,6 +530,7 @@ function* openOpenClawAgentDatabaseSteps(
           path: pathname,
           walMaintenance: openedWalMaintenance ?? {
             checkpoint: () => false,
+            reclaimFreePages: createSqliteWalReclamationResult,
             close: () => false,
           },
         } satisfies OpenClawAgentDatabase);
@@ -646,7 +651,6 @@ function findOpenClawAgentDatabaseIfOpen(
     );
   }
   assertAgentDeletionDatabaseCleanupAccess(database, options);
-  assertAgentDatabaseMaintenanceAccess(database.db);
   observeOpenClawDatabaseMaintenanceResource(database.db);
   return database;
 }

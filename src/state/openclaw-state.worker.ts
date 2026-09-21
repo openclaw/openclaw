@@ -69,13 +69,16 @@ function createSharedStateWorkerBackend(
       if (
         commandType === "plugins.metadata.read" ||
         commandType === "database.inspectIdle" ||
-        commandType === "stateLease.acquire" ||
-        runtime
+        commandType === "stateLease.acquire"
       ) {
         return undefined;
       }
+      if (runtime) {
+        return runtime.prepareSharedStateCommand(commandType);
+      }
       return loadRuntime().then((loaded) => {
         runtime = loaded;
+        return runtime.prepareSharedStateCommand(commandType);
       });
     },
     execute(command) {

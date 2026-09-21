@@ -126,6 +126,7 @@ function startReconcileWorkerTask(input: SessionTranscriptReconcileWorkerInput) 
         };
   const pool = (runtime.pool ??= new WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>({
     workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile),
+    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
     maxWorkers: MAX_WORKERS,
     // Fleet work queues small locators; the pool's byte budget bounds admission.
     maxPendingTasks: Number.MAX_SAFE_INTEGER,

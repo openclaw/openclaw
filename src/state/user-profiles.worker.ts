@@ -8,6 +8,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { ensureProfileForEmailInDatabase } from "./user-profile-email.kernel.js";
 import { listUserProfileGitHubLogins } from "./user-profile-github-identity.js";
 import { listUserProfilesSync } from "./user-profile-list.js";
 import {
@@ -122,12 +123,47 @@ function executeUserProfileAvatarCommand(
 }
 
 export type UserProfileWorkerOperations = UserProfileReadWorkerOperations &
-  UserProfileAvatarWorkerOperations;
+  UserProfileAvatarWorkerOperations & {
+    "userProfiles.email.ensure": {
+      input: { email: string };
+      output: { profileId: string; committed?: ProfileDisplayRow };
+    };
+  };
 
 export function executeUserProfileCommand(
   command: SqliteWorkerCommand<UserProfileWorkerOperations>,
   options: OpenClawStateDatabaseOptions,
 ): UserProfileWorkerOperations[keyof UserProfileWorkerOperations]["output"] {
+  if (command.type === "userProfiles.email.ensure") {
+    ensureUserProfilesSchema(options);
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        let created = false;
+        const profile = ensureProfileForEmailInDatabase(
+          db,
+          command.input.email,
+          null,
+          Date.now(),
+          (profileId) => {
+            requestSqliteWorkerOperationAdmission({
+              stage: "transaction",
+              facts: { kind: "profile-create", profileId },
+            });
+            created = true;
+          },
+        );
+        const committed = created
+          ? selectProfileDisplayEntries(db, [profile.id])[0]![1]
+          : undefined;
+        if (created) {
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        }
+        return { profileId: profile.id, committed };
+      },
+      options,
+      { operationLabel: "user-profiles.ensure" },
+    );
+  }
   if (command.type === "userProfiles.list" || command.type === "userProfiles.directory") {
     return executeUserProfileReadCommand(command, options);
   }

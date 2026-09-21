@@ -9,7 +9,6 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
-  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -36,6 +35,12 @@ import {
   readSessionColdTranscript,
   type SessionColdArchive,
 } from "./session-cold-storage-state.js";
+import {
+  createSessionTranscriptFtsInserter,
+  deleteSessionTranscriptFtsRows,
+  deleteLegacySessionTranscriptFtsRows,
+  hasCompleteSessionTranscriptFtsRows,
+} from "./session-transcript-fts.js";
 
 // FTS5 has no type affinity: deployed writers persist timestamps as numbers or text.
 type ColdArchiveDatabase = Omit<DB, "session_transcript_fts"> & {
@@ -459,8 +464,8 @@ export function mutateSessionColdTranscriptInWorker(
         return result;
       }
       if (plan.kind === "cold-batch") {
+        const legacyIds: string[] = [];
         const protectedIds = readSessionColdStorageProtection(database, plan.beforeMs);
-        const archivedIds: string[] = [];
         for (const prepared of plan.prepared) {
           const { sessionId, snapshot } = prepared.plan;
           const fresh = readSessionStateDeleteSnapshot(database.db, sessionId);
@@ -482,21 +487,19 @@ export function mutateSessionColdTranscriptInWorker(
             database.db,
             db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
           );
-          archivedIds.push(sessionId);
+          if (hasCompleteSessionTranscriptFtsRows(database.db, sessionId)) {
+            deleteSessionTranscriptFtsRows(database.db, sessionId, { mappingComplete: true });
+          } else {
+            legacyIds.push(sessionId);
+          }
           executeSqliteQuerySync(
             database.db,
             db.deleteFrom("session_transcript_index_state").where("session_id", "=", sessionId),
           );
           result.archivedTranscripts++;
         }
-        if (archivedIds.length > 0) {
-          // FTS5 session_id is unindexed; scan once for the committed batch, not once per transcript.
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .deleteFrom("session_transcript_fts")
-              .where("session_id", "in", sqliteStringSet(archivedIds)),
-          );
+        if (legacyIds.length > 0) {
+          deleteLegacySessionTranscriptFtsRows(database.db, legacyIds);
         }
         for (const { archive } of plan.externalizations) {
           const current = readSessionColdTranscript(database.db, archive.session_id);
@@ -532,6 +535,7 @@ export function mutateSessionColdTranscriptInWorker(
           throw new Error("Cold transcript changed during restoration");
         }
         const session_id = plan.sessionId;
+        const insertFts = createSessionTranscriptFtsInserter(database.db, session_id);
         for (const record of records) {
           switch (record.kind) {
             case "header":
@@ -561,14 +565,11 @@ export function mutateSessionColdTranscriptInWorker(
                 database.db,
                 db
                   .insertInto("session_transcript_index_state")
-                  .values({ session_id, ...record.row }),
+                  .values({ session_id, ...record.row, fts_row_count: 0 }),
               );
               break;
             case "fts":
-              executeSqliteQuerySync(
-                database.db,
-                db.insertInto("session_transcript_fts").values({ session_id, ...record.row }),
-              );
+              insertFts(record.row);
               break;
           }
         }

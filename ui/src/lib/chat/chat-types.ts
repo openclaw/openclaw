@@ -189,7 +189,6 @@ export type ChatItem =
       icon?: keyof typeof toolIcons;
       metric?: string;
       description?: string;
-      action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
   | {

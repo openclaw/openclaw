@@ -36,6 +36,7 @@ describe("tsgo core test shards", () => {
         throw new Error(`Could not parse ${config}`);
       }
       expect(parsed.errors, config).toEqual([]);
+      expect(parsed.projectReferences ?? [], config).toEqual([]);
       return parsed.fileNames
         .filter((file) => /\.test\.tsx?$/u.test(file))
         .map((file) => path.relative(process.cwd(), file).replaceAll(path.sep, "/"));
@@ -70,9 +71,10 @@ describe("tsgo core test shards", () => {
       ["src/cli/program/register.agent.test.ts", "commands"],
       ["src/tui/tui-plugin-approvals.test.ts", "commands"],
       ["src/wizard/setup.test.ts", "commands"],
-      ["src/cli/cron-cli.test.ts", "services"],
-      ["src/cli/cron-output.process.test.ts", "services"],
-      ["src/cli/cron-cli/register.cron-edit.test.ts", "services"],
+      ["src/cli/cron-cli.test.ts", "services-cron"],
+      ["src/cli/cron-output.process.test.ts", "services-cron"],
+      ["src/cli/cron-cli/register.cron-edit.test.ts", "services-cron"],
+      ["src/cron/service/run-recovery.observation.test.ts", "services-cron"],
       ["src/cli/program/command-registry.test.ts", "commands"],
       ["src/cli/update-cli.test.ts", "cli-update"],
       ["src/cli/update-cli/update-command-config-fence.test.ts", "cli-update"],
@@ -107,6 +109,19 @@ describe("tsgo core test shards", () => {
     expect(selectTsgoCoreTestStripe("0/2")).toBeUndefined();
     expect(selectTsgoCoreTestStripe("3/2")).toBeUndefined();
     expect(selectTsgoCoreTestStripe("src")).toBeUndefined();
+    expect(selectTsgoCoreTestStripe("2-1/5")).toBeUndefined();
+    expect(selectTsgoCoreTestStripe("1-6/5")).toBeUndefined();
+    const paired = ["1-2/5", "3-4/5", "5/5"].flatMap(
+      (stripe) => selectTsgoCoreTestStripe(stripe) ?? [],
+    );
+    expect(paired.map((shard) => shard.name).toSorted()).toEqual(
+      TSGO_CORE_TEST_SHARDS.map((shard) => shard.name).toSorted(),
+    );
+    expect(selectTsgoCoreTestStripe("1-2/5")).toEqual(
+      TSGO_CORE_TEST_SHARDS.filter((shard) =>
+        ["1/5", "2/5"].some((stripe) => selectTsgoCoreTestStripe(stripe)?.includes(shard)),
+      ),
+    );
   });
 
   it("accepts an exact once-only partition within the root budget", () => {
@@ -397,9 +412,10 @@ process.exit(result.status??1);
         expect(calls.filter((args) => args.includes("--listFilesOnly"))).toHaveLength(
           TSGO_CORE_GRAPHS.length,
         );
+        // Discovery and diagnostic checks both use project mode.
         const builds = calls
-          .filter((args) => args.includes("-b"))
-          .map((args) => args[args.indexOf("-b") + 1]);
+          .filter((args) => !args.includes("--listFilesOnly") && !args.includes("--showConfig"))
+          .map((args) => args[args.indexOf("-p") + 1]);
         return { result, builds };
       };
       const initial = await check();

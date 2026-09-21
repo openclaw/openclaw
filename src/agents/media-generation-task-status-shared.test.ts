@@ -1,22 +1,54 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { CapturedRuntimeConfigRead } from "../config/runtime-config-capture-state.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   buildActiveMediaGenerationTaskPromptContext,
   createMediaGenerationTaskStatusOwner,
   MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
+  recordRecentMediaGenerationTaskStartForSession,
 } from "./media-generation-task-status-shared.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
+import { buildMediaTaskRuntimeContext } from "./media-generation-task-status.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => ({
   listFreshTasksForOwnerKey: vi.fn(),
 }));
 
 const configMocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(),
+  readConfig: Object.assign(vi.fn<() => Promise<CapturedRuntimeConfigRead>>(), {
+    assertCurrent: vi.fn(),
+  }),
+  captureRuntimeConfigAsyncReader: vi.fn(),
+}));
+
+const ownerMocks = vi.hoisted(() => ({
+  assertCurrent: vi.fn(),
+  context: {
+    admission: {
+      databasePath: "/synthetic/media/state.sqlite",
+      identity: { key: "media-test", canonicalPath: "/synthetic/media/state.sqlite" },
+      assertCurrent: vi.fn(),
+    },
+    environment: { OPENCLAW_STATE_DIR: "/synthetic/media" },
+    coordinatorRuntime: { directory: "/synthetic/coordinator", keepAlive: false },
+  } satisfies OpenClawStateWorkerContext,
 }));
 
 vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
-vi.mock("../config/config.js", () => configMocks);
+vi.mock("../config/io.runtime.js", () => ({
+  captureRuntimeConfigAsyncReader: configMocks.captureRuntimeConfigAsyncReader,
+}));
+vi.mock("../state/openclaw-state-worker-context.js", () => ({
+  captureOpenClawStateWorkerContext: () => ownerMocks.context,
+}));
+vi.mock("../tasks/task-registry-state.js", () => ({
+  assertTaskRegistryOwnerCurrent: ownerMocks.assertCurrent,
+}));
+vi.mock("../tasks/task-registry.store.js", () => ({
+  getTaskRegistryStore: () => ({}),
+}));
 
 const videoTaskStatusOwner = createMediaGenerationTaskStatusOwner({
   taskKind: "video_generation",
@@ -48,17 +80,25 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
   };
 }
 
-beforeEach(() => {
-  resetRecentMediaGenerationDuplicateGuardsForTests();
-  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
-  configMocks.getRuntimeConfig.mockReset().mockReturnValue({
+const capturedConfig: CapturedRuntimeConfigRead = {
+  config: {
     session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
     agents: {
       ownership: "explicit",
       defaults: { sessionStore: { agentId: "ops" } },
       entries: { ops: {}, research: {} },
     },
-  });
+  },
+  env: {},
+};
+
+beforeEach(() => {
+  resetRecentMediaGenerationDuplicateGuardsForTests();
+  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
+  configMocks.readConfig.mockReset().mockResolvedValue(capturedConfig);
+  configMocks.readConfig.assertCurrent.mockReset();
+  configMocks.captureRuntimeConfigAsyncReader.mockReset().mockReturnValue(configMocks.readConfig);
+  ownerMocks.assertCurrent.mockReset();
 });
 
 describe("media generation delivery-phase prompt guard", () => {
@@ -156,7 +196,260 @@ describe("media generation delivery-phase prompt guard", () => {
       await videoTaskStatusOwner.findActiveTaskForSession("global", { agentId: "ops" }),
     ).toEqual(task);
     expect(await videoTaskStatusOwner.listActiveTasksForSession("global", "research")).toEqual([]);
+    configMocks.readConfig.mockResolvedValue({
+      ...capturedConfig,
+      config: {
+        ...capturedConfig.config,
+        agents: { ...capturedConfig.config.agents, entries: { research: {} } },
+      },
+    });
+    expect(await videoTaskStatusOwner.listActiveTasksForSession("global", "research")).toEqual([]);
   });
+
+  it.each([
+    { ownerKey: "global", requesterAgentId: "ops" },
+    { ownerKey: "agent:ops:main", requesterAgentId: undefined },
+  ])("uses recorded requester identity without loading config for $ownerKey", async (identity) => {
+    const task = makeTask({ ...identity, agentId: "research" });
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockResolvedValue([
+      makeTask({ taskId: "unrelated", taskKind: "image_generation" }),
+      task,
+    ]);
+
+    expect(await videoTaskStatusOwner.listActiveTasksForSession(identity.ownerKey, "ops")).toEqual([
+      task,
+    ]);
+    expect(configMocks.readConfig).not.toHaveBeenCalled();
+  });
+
+  it("keeps known requesters visible when legacy config cannot be prepared", async () => {
+    const known = makeTask({ taskId: "known", ownerKey: "global", requesterAgentId: "ops" });
+    const legacy = makeTask({ taskId: "legacy", ownerKey: "global", agentId: "ops" });
+    const updated = { ...known, progressSummary: "Rendering final frames" };
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey
+      .mockResolvedValueOnce([legacy, known])
+      .mockResolvedValue([legacy, updated]);
+    configMocks.readConfig.mockRejectedValue(new Error("config unavailable"));
+
+    expect(await videoTaskStatusOwner.listActiveTasksForSession("global", "ops")).toEqual([
+      updated,
+    ]);
+  });
+
+  it("includes restored legacy media in the shared prompt only for its requester", async () => {
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockResolvedValue([
+      makeTask({ ownerKey: "global", agentId: "research" }),
+      makeTask({
+        taskId: "music-1",
+        ownerKey: "global",
+        taskKind: "music_generation",
+        sourceId: "music_generate",
+      }),
+    ]);
+    const params = {
+      capabilityToolNames: new Set(["video_generate", "music_generate"]),
+      sessionKey: "global",
+    };
+    expect(await buildMediaTaskRuntimeContext({ ...params, agentId: "ops" })).toBe(
+      '## Media Generation Tasks\n- tool=music_generate; task=music-1; status=running\n- tool=video_generate; task=task-1; status=running; provider_json="byteplus"',
+    );
+    expect(configMocks.readConfig).toHaveBeenCalledTimes(1);
+    expect(await buildMediaTaskRuntimeContext({ ...params, agentId: "research" })).toBe(
+      "## Media Generation Tasks\n- tool=music_generate; none\n- tool=video_generate; none",
+    );
+  });
+
+  it.each(["succeeded", "failed"] as const)(
+    "skips requester config for terminal-only %s status and prompt lookups",
+    async (status) => {
+      taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockResolvedValue([
+        makeTask({ ownerKey: "global", status }),
+      ]);
+
+      expect(await videoTaskStatusOwner.listActiveTasksForSession("global", "ops")).toEqual([]);
+      expect(
+        await buildMediaTaskRuntimeContext({
+          capabilityToolNames: new Set(["video_generate"]),
+          sessionKey: "global",
+          agentId: "ops",
+        }),
+      ).toBe("## Media Generation Tasks\n- tool=video_generate; none");
+      expect(configMocks.readConfig).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["succeeded", "failed"] as const)(
+    "resolves a persisted legacy %s task before applying a cached duplicate guard",
+    async (status) => {
+      const task = makeTask({ ownerKey: "global", status });
+      recordRecentMediaGenerationTaskStartForSession({
+        sessionKey: "global",
+        agentId: "ops",
+        taskKind: "video_generation",
+        sourcePrefix: "video_generate",
+        taskId: task.taskId,
+        runId: task.runId,
+        taskLabel: task.task,
+        requestKey: "same-request",
+        progressSummary: "Generating video",
+      });
+      taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockResolvedValue([task]);
+
+      const duplicate = await videoTaskStatusOwner.findDuplicateGuardTaskForSession("global", {
+        agentId: "ops",
+        requestKey: "same-request",
+      });
+      expect(duplicate).toEqual(status === "succeeded" ? task : undefined);
+    },
+  );
+
+  it.each(
+    (["active", "duplicate", "prompt"] as const).flatMap((lookup) =>
+      (["completed", "deleted"] as const).flatMap((change) =>
+        (["resolves", "rejects"] as const).map((completion) => ({ lookup, change, completion })),
+      ),
+    ),
+  )(
+    "refreshes $lookup selection after a task is $change while config $completion",
+    async ({ lookup, change, completion }) => {
+      const started = createDeferred();
+      const config = createDeferred<CapturedRuntimeConfigRead>();
+      configMocks.readConfig.mockImplementation(() => {
+        started.resolve();
+        return config.promise;
+      });
+      const legacy = makeTask({ taskId: "legacy", ownerKey: "global" });
+      const known = makeTask({ taskId: "known", ownerKey: "global", requesterAgentId: "ops" });
+      let records = [legacy, known];
+      taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation(async () => records);
+      const pending =
+        lookup === "active"
+          ? videoTaskStatusOwner.listActiveTasksForSession("global", "ops")
+          : lookup === "prompt"
+            ? buildMediaTaskRuntimeContext({
+                capabilityToolNames: new Set(["video_generate"]),
+                sessionKey: "global",
+                agentId: "ops",
+              })
+            : videoTaskStatusOwner.findDuplicateGuardTaskForSession("global", { agentId: "ops" });
+      await started.promise;
+      records =
+        change === "deleted"
+          ? []
+          : records.map((task) => Object.assign({}, task, { status: "succeeded" as const }));
+      if (completion === "resolves") {
+        config.resolve(capturedConfig);
+      } else {
+        config.reject(new Error("config unavailable"));
+      }
+
+      expect(await pending).toEqual(
+        lookup === "active"
+          ? []
+          : lookup === "prompt"
+            ? "## Media Generation Tasks\n- tool=video_generate; none"
+            : undefined,
+      );
+    },
+  );
+
+  it.each(["resolves", "rejects"])(
+    "propagates retired task ownership when pending config %s",
+    async (completion) => {
+      const started = createDeferred();
+      const config = createDeferred<CapturedRuntimeConfigRead>();
+      configMocks.readConfig.mockImplementation(() => {
+        started.resolve();
+        return config.promise;
+      });
+      taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockResolvedValue([
+        makeTask({ ownerKey: "global" }),
+      ]);
+      const pending = videoTaskStatusOwner.findDuplicateGuardTaskForSession("global", {
+        agentId: "ops",
+      });
+      await started.promise;
+      const retired = new Error("task owner retired");
+      ownerMocks.assertCurrent.mockImplementation(() => {
+        throw retired;
+      });
+      const rejected = expect(pending).rejects.toBe(retired);
+      if (completion === "resolves") {
+        config.resolve(capturedConfig);
+      } else {
+        config.reject(new Error("config unavailable"));
+      }
+      await rejected;
+    },
+  );
+
+  it("keeps a recent start added while requester config is being prepared", async () => {
+    const started = createDeferred();
+    const config = createDeferred<CapturedRuntimeConfigRead>();
+    configMocks.readConfig.mockImplementation(() => {
+      started.resolve();
+      return config.promise;
+    });
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockResolvedValue([
+      makeTask({ ownerKey: "global", task: "different prompt" }),
+    ]);
+    const pending = videoTaskStatusOwner.findDuplicateGuardTaskForSession("global", {
+      agentId: "ops",
+      prompt: "new request",
+      requestKey: "new-request-key",
+    });
+    await started.promise;
+    recordRecentMediaGenerationTaskStartForSession({
+      sessionKey: "global",
+      agentId: "ops",
+      taskKind: "video_generation",
+      sourcePrefix: "video_generate",
+      taskId: "recent-start",
+      taskLabel: "new request",
+      requestKey: "new-request-key",
+      progressSummary: "Generating video",
+    });
+    config.resolve(capturedConfig);
+
+    expect(await pending).toMatchObject({ taskId: "recent-start", status: "running" });
+  });
+
+  it.each(["active", "duplicate", "prompt"] as const)(
+    "rejects %s selection after ownership retires between preparation and continuation",
+    async (lookup) => {
+      let settled = false;
+      let queued = false;
+      let retired = false;
+      const retirement = new Error("task owner retired after preparation");
+      taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation(async () => {
+        settled = true;
+        return [makeTask({ ownerKey: "global", requesterAgentId: "ops" })];
+      });
+      ownerMocks.assertCurrent.mockImplementation(() => {
+        if (retired) {
+          throw retirement;
+        }
+        if (settled && !queued) {
+          queued = true;
+          queueMicrotask(() => {
+            retired = true;
+          });
+        }
+      });
+      const pending =
+        lookup === "active"
+          ? videoTaskStatusOwner.listActiveTasksForSession("global", "ops")
+          : lookup === "prompt"
+            ? buildMediaTaskRuntimeContext({
+                capabilityToolNames: new Set(["video_generate"]),
+                sessionKey: "global",
+                agentId: "ops",
+              })
+            : videoTaskStatusOwner.findDuplicateGuardTaskForSession("global", { agentId: "ops" });
+
+      await expect(pending).rejects.toBe(retirement);
+    },
+  );
 
   it("blocks the same prompt while allowing a distinct prompt", async () => {
     const task = makeTask({

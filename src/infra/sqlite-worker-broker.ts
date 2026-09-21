@@ -422,6 +422,7 @@ export class SqliteWorkerBroker {
     assertCurrent?.();
     const worker = runOutsideCaller(() =>
       createCpuTrackedWorker(url, {
+        resourceLimits: { maxOldGenerationSizeMb: 512 },
         env: resolveNodeCompileCacheEnv(),
         execArgv: url.pathname.endsWith(".ts") ? ["--import", import.meta.resolve("tsx/esm")] : [],
       }),

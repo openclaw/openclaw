@@ -164,7 +164,11 @@ suite.define(() => {
           );
           await input.fill("appearance");
           await palette.getByRole("option", { name: /^Appearance audit/ }).waitFor();
-          await palette.getByRole("status").filter({ hasText: "Models unavailable" }).waitFor();
+          await palette
+            .locator(".cmd-palette__search")
+            .getByRole("status")
+            .filter({ hasText: "Models unavailable" })
+            .waitFor();
           const search = palette.locator(".cmd-palette__search");
           const original = (await palette.locator(".cmd-palette").boundingBox())!;
           const inputTop = (await input.boundingBox())!.y;
@@ -231,7 +235,7 @@ suite.define(() => {
           expect(await palette.getByRole("group", { name: "Filter search results" }).count()).toBe(
             0,
           );
-          expect(await palette.getByRole("status").count()).toBe(0);
+          expect(await palette.locator(".cmd-palette__search").getByRole("status").count()).toBe(0);
           expect(await palette.getByRole("option").count()).toBe(0);
           expect(await input.getAttribute("aria-controls")).toBeNull();
           expect(await input.getAttribute("aria-activedescendant")).toBeNull();
@@ -419,8 +423,8 @@ suite.define(() => {
           const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
           await composer.fill(foregroundDraft);
           const url = page.url();
-          await module.request;
           await page.keyboard.press("ControlOrMeta+K");
+          await module.request;
           const input = page.locator(".cmd-palette__input");
           await input.fill("Start exactly this cold task");
           await input.press("ControlOrMeta+Enter");

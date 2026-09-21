@@ -15,10 +15,11 @@ Ordinary manual CI dispatches run the same job graph as normal CI but force ever
 
 PR baseline ratchets derive their comparison state from the checked-out synthetic merge tree and verify its head parent against the event head. The max-lines entry chains the environment-variable budget with the same fork-point ref before the assertion-safety check, so production source growth cannot first surface on `main`. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; ratchet baselines are compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated. Release-gate merge-tree lint uses the same five core stripes as hosted PR CI plus one extension stripe, so no single hosted runner owns the full type-aware lint workload.
 
-Canonical manual CI also retains QA Smoke's full profile and Control UI performance
+Ordinary canonical manual CI also retains QA Smoke's full profile and Control UI performance
 without owner-path filtering. It selects `published-upgrade-survivor` when the
 target declares `docker-seed-e2e-contract-v1`, preserving the exact
-`legacy-operator-state` plus `auto-auth` proof used by affected PR/main runs.
+`legacy-operator-state` plus `auto-auth` proof used by affected main runs.
+Pull requests and exact-head `release_gate` fallbacks omit Docker seed and QA Smoke.
 Full Release Validation reaches these lanes through its normal CI child without
 setting `release_gate`; frozen targets retain their existing capability checks.
 
@@ -32,13 +33,19 @@ gh workflow run full-release-validation.yml --ref main \
   -f expected_sha="$VALIDATION_SHA"
 ```
 
-Gateway extended-stable runs npm preflight, Full Release Validation, and plugin
-npm release from `extended-stable/YYYY.M.33`; core publish consumes those three
-run IDs plus the validation attempt. `release-ci/*` evidence is invalid because
-publish binds every run to the canonical branch and release SHA. The tag
-publishes Gateway images and only the `extended-stable*` aliases; the path skips
-the regular orchestrator and its ClawHub, native-app, GitHub Release, website,
-and private dist-tag surfaces. See [Monthly Gateway extended-stable
+Gateway extended-stable shared publication requires complete exact-target Full
+Release Validation from the trusted main-pinned `release-ci/*` harness targeting
+the frozen `extended-stable/YYYY.M.33` tip. Direct canonical-branch and `main`
+producers do not satisfy the protected publisher. Current
+manifests also supply qualified npm preflight artifacts. The shared
+`OpenClaw Release Publish` parent dispatches from a protected lightweight
+`release-publish/<sha12>-<epoch>` tag at the frozen trusted-main Tooling SHA and
+uses `npm_dist_tag=extended-stable` to publish official npm plugins and core, attach evidence, publish Docker, and
+finalize a non-Latest GitHub Release. Only `extended-stable*` container aliases
+advance; ClawHub, native-app, website, regular npm `latest`, and private
+dist-tag surfaces are excluded. Core-resume recovery verifies existing registry
+bytes before resuming evidence and finalization; Docker-only recovery leaves
+GitHub finalization untouched. See [Monthly Gateway extended-stable
 publication](/reference/RELEASING#monthly-gateway-extended-stable-publication)
 for commands and recovery.
 

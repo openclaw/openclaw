@@ -25,7 +25,9 @@ export function isFailedUpdateStep(
 export function isUpdateGatewayReadinessPending(result: UpdateRunResult): boolean {
   const step = result.steps.findLast(
     (entry) =>
-      entry.name === "gateway verification" || entry.name === "rollback gateway verification",
+      entry.name === "gateway verification" ||
+      entry.name === "rollback gateway verification" ||
+      entry.name === "gateway recovery verification",
   );
   return step?.termination === "timeout" && step.advisory?.kind === "recoverable-maintenance";
 }

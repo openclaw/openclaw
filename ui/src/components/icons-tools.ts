@@ -1,5 +1,6 @@
 // Control UI tool icon set, split from icons.ts to keep both under the max-lines cap.
 import { html, svg, type SVGTemplateResult, type TemplateResult } from "lit";
+import { neutralMark } from "./neutral-mark.ts";
 
 // Shared Lucide icon shell. Inline presentation attributes keep icons visible
 // inside shadow roots that global stylesheet icon rules cannot reach; CSS
@@ -22,6 +23,7 @@ export function strokeIcon(body: SVGTemplateResult): TemplateResult {
 }
 
 export const toolIcons = {
+  mark: neutralMark,
   shieldCheck: strokeIcon(
     svg`<path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3zM9 12l2 2 4-4" />`,
   ),

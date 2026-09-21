@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { channel } from "node:diagnostics_channel";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -214,6 +215,30 @@ it("carries both failure messages through the existing worker response", async (
     error: expect.stringContaining(primary.message),
   });
   expect(reply).toMatchObject({ error: expect.stringContaining(cleanup.message) });
+});
+
+it("retires idle history workers under critical pressure after active scopes release custody", async () => {
+  const pressure = channel("openclaw.memory.critical");
+  const request = input();
+  const retirement = createDeferredCore();
+  const unregistered = createDeferredCore();
+  observed.run.mockResolvedValue({ ok: true, value: false });
+  observed.rotate.mockReturnValue(retirement.promise);
+  observed.unregister.mockImplementation(unregistered.resolve);
+  await withSessionHistoryWorkerDatabase(request.database, async (owner) => {
+    expect(await owner.readEntryPresence(request.scope)).toBe(false);
+    pressure.publish(undefined);
+    expect(observed.rotate).not.toHaveBeenCalled();
+  });
+
+  pressure.publish(undefined);
+  expect(observed.rotate).toHaveBeenCalledTimes(1);
+  expect(observed.unregister).not.toHaveBeenCalled();
+  pressure.publish(undefined);
+  expect(observed.rotate).toHaveBeenCalledTimes(1);
+  retirement.resolve();
+  await unregistered.promise;
+  expect(observed.unregister).toHaveBeenCalledTimes(1);
 });
 
 it.each([false, true])(

@@ -32,11 +32,7 @@ export function readGatewayOwnerProfileRows(db: DatabaseSync) {
   return { owner, identified };
 }
 
-/** Queue roster invalidation only for actual changes, after the owning transaction commits. */
-export function ensureGatewayOwnerProfileRow(
-  db: DatabaseSync,
-  displayName: string | null,
-): UserProfileRow {
+export function readGatewayOwnerProfileForEnsure(db: DatabaseSync) {
   const { owner, identified } = readGatewayOwnerProfileRows(db);
   if (
     owner?.merged_into ||
@@ -45,9 +41,17 @@ export function ensureGatewayOwnerProfileRow(
   ) {
     throw new UserProfileOwnerError("repair-required");
   }
+  return { existing: owner ?? identified, identified };
+}
+
+/** Queue roster invalidation only for actual changes, after the owning transaction commits. */
+export function ensureGatewayOwnerProfileRow(
+  db: DatabaseSync,
+  displayName: string | null,
+): UserProfileRow {
+  const { existing, identified } = readGatewayOwnerProfileForEnsure(db);
   const kysely = userProfilesDb(db);
   const now = Date.now();
-  const existing = owner ?? identified;
   const row: UserProfileRow = existing
     ? {
         ...existing,

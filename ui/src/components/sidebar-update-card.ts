@@ -273,7 +273,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
                   this.onDismiss?.();
                 }}
               >
-                ${t("common.dismiss")}
+                ${icons.x}
               </button>`
             : nothing
         }

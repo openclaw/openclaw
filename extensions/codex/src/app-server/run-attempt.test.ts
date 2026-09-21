@@ -3358,7 +3358,7 @@ describe("runCodexAppServerAttempt", () => {
         sessionManager.branchWithSummary(null, summary);
       }
       // A metadata entry gives compaction a real retained boundary even for a summary-only cut.
-      const firstKeptEntryId = sessionManager.appendThinkingLevelChange("off");
+      const firstKeptEntryId = await sessionManager.appendThinkingLevelChange("off");
       if (tail === "user-assistant") {
         sessionManager.appendMessage(userMessage("canonical SQLite startup question", Date.now()));
       }

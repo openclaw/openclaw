@@ -24,17 +24,14 @@ import {
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import {
   type RestartSentinelPayload,
   writeRestartSentinel,
   formatDoctorNonInteractiveHint,
 } from "../../infra/restart-sentinel.js";
-import {
-  normalizeGatewayRestartDelayMs,
-  resolveGatewayRestartDeferralTimeoutMs,
-  scheduleGatewayRestart,
-} from "../../infra/restart.js";
+import { normalizeGatewayRestartDelayMs, scheduleGatewayRestart } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import {

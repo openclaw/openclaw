@@ -453,6 +453,73 @@ describe("control UI session PR subscriptions", () => {
     },
   );
 
+  it("coalesces forced refresh bursts per session and acknowledges each requester once", async () => {
+    vi.useFakeTimers();
+    const load = vi.fn(async () => READY);
+    const broadcastToConnIds = vi.fn();
+    active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+    await active.replace("first", ["shared", "independent"]);
+    await active.replace("second", ["shared"]);
+    await active.replace("first", ["shared", "independent"], new Set(["shared"]));
+    load.mockClear();
+    broadcastToConnIds.mockClear();
+
+    const queued = [
+      active.replace("first", ["shared", "independent"], new Set(["shared"])),
+      active.replace("second", ["shared"], new Set(["shared"])),
+      active.replace("first", ["shared", "independent"], new Set(["shared"])),
+    ];
+    await active.replace("first", ["shared", "independent"], new Set(["independent"]));
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(load).toHaveBeenCalledExactlyOnceWith(
+      { sessionKey: "independent", refresh: true },
+      expect.any(AbortSignal),
+    );
+    broadcastToConnIds.mockClear();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all(queued);
+
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(load).toHaveBeenLastCalledWith(
+      { sessionKey: "shared", refresh: true },
+      expect.any(AbortSignal),
+    );
+    expect(broadcastToConnIds.mock.calls).toEqual(
+      ["first", "second"].map((connId) => [
+        CHANGED_EVENT,
+        { sessions: { shared: { ...READY, status: "ready" } } },
+        new Set([connId]),
+      ]),
+    );
+  });
+
+  it.each(["stop", "disconnect", "empty replace"])(
+    "cancels a coalesced refresh on %s and settles its callers without waiting",
+    async (cleanup) => {
+      vi.useFakeTimers();
+      const load = vi.fn(async () => READY);
+      const broadcastToConnIds = vi.fn();
+      active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+      await active.replace("requester", ["session"], new Set(["session"]));
+      const refresh = active.replace("requester", ["session"], new Set(["session"]));
+      broadcastToConnIds.mockClear();
+      const operations = [refresh];
+      if (cleanup === "stop") {
+        operations.push(active.stop());
+      } else if (cleanup === "disconnect") {
+        active.unsubscribe("requester");
+      } else {
+        operations.push(active.replace("requester", []));
+      }
+      await Promise.all(operations);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    },
+  );
+
   it("serializes forced refreshes behind older normal polls", async () => {
     vi.useFakeTimers();
     let resolveNormal!: (value: ControlUiSessionPullRequests) => void;

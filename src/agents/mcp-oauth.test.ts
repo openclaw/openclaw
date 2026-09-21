@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -10,7 +11,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { getFreePort } from "../test-utils/ports.js";
 import { operatorMcpOAuthIdentity, type McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { createMcpOAuthClientProvider } from "./mcp-oauth-provider.js";
 import {
@@ -90,8 +90,7 @@ async function readOAuthBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-async function startAuthorizationServer(port: number) {
-  const issuer = `http://127.0.0.1:${port}`;
+async function startAuthorizationServer() {
   const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
     const url = new URL(request.url ?? "/", issuer);
     if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
@@ -142,8 +141,11 @@ async function startAuthorizationServer(port: number) {
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", resolve);
+    server.listen(0, "127.0.0.1", resolve);
   });
+  const address = server.address();
+  assert(address && typeof address !== "string");
+  const issuer = `http://127.0.0.1:${address.port}`;
   return {
     issuer,
     close: () =>
@@ -891,7 +893,7 @@ describe("MCP OAuth provider", () => {
           typeof import("@modelcontextprotocol/sdk/client/auth.js")
         >("@modelcontextprotocol/sdk/client/auth.js");
         authMock.mockImplementation(realAuth);
-        const fixture = await startAuthorizationServer(await getFreePort());
+        const fixture = await startAuthorizationServer();
         const rawServer = {
           url: `${fixture.issuer}/mcp`,
           transport: "streamable-http" as const,

@@ -156,7 +156,9 @@ describe("CommandPalette pending searches", () => {
       await enterQuery(palette, "zzfixtureunique");
       const results = palette.querySelector('[role="listbox"]')!;
       expect(results.getAttribute("aria-busy")).toBe("true");
-      expect(palette.querySelector('[role="status"]')?.textContent).toContain("Searching sessions");
+      expect(palette.querySelector('.cmd-palette__search [role="status"]')?.textContent).toContain(
+        "Searching sessions",
+      );
       expect(palette.textContent).not.toContain("No results");
       await vi.advanceTimersByTimeAsync(49);
       expect(list).not.toHaveBeenCalled();

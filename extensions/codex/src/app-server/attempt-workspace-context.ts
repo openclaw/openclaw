@@ -125,6 +125,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       config: params.params.config,
       sessionKey: params.sessionKey,
       sessionId: params.params.sessionId,
+      bootstrapUserProfileId: params.params.bootstrapUserProfileId,
       chatType: params.params.chatType,
       agentId: params.params.agentId ?? params.sessionAgentId,
       warn: (message) => embeddedAgentLog.warn(message),
@@ -322,7 +323,12 @@ function renderCodexWorkspaceCollaborationDeveloperInstructions(
     files,
     header: "## OpenClaw Agent Soul",
     preamble:
-      "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
+      "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly." +
+      (files.some((file) =>
+        /(?:^|\/)users\/[^/]+\/user\.md$/.test(normalizeCodexContextFilePath(file.path)),
+      )
+        ? " The personal users/<profile-id>/USER.md applies only to the current requester and overrides conflicting shared USER.md preferences, not higher-priority rules."
+        : ""),
     wrapperTag: "AGENT_SOUL",
   });
 }
@@ -577,7 +583,8 @@ function compareCodexContextFiles(left: EmbeddedContextFile, right: EmbeddedCont
   if (leftBase !== rightBase) {
     return leftBase.localeCompare(rightBase);
   }
-  return leftPath.localeCompare(rightPath);
+  // Keep USER overlays in loader order: shared defaults precede the current person.
+  return leftBase === "user.md" ? 0 : leftPath.localeCompare(rightPath);
 }
 
 function compareCodexBootstrapFiles(left: CodexBootstrapFile, right: CodexBootstrapFile): number {

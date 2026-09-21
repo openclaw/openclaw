@@ -1820,6 +1820,17 @@ html[dir="rtl"] .chat-attachment-loading > span {
   white-space: nowrap;
 }
 
+.chat-attachment-file__open {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.15;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
 .chat-attachment-text-action {
   display: inline-flex;
   width: fit-content;
@@ -1844,16 +1855,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-attachment-text-action:hover {
   color: var(--text);
-}
-
-.chat-attachment-text-action svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .agent-chat__file-input,
@@ -2230,6 +2231,25 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 14px;
   color: var(--muted);
   flex: 0 0 auto;
+}
+
+.chat-controls__model-refresh {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+
+.chat-controls__model-refresh-details {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
 }
 
 .chat-controls__model-search {

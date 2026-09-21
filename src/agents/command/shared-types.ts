@@ -59,6 +59,8 @@ export type ClientToolDefinition = {
 };
 
 export type AgentRunClientContext = {
+  /** Trusted ingress profile for personal bootstrap; never supplied by message text or session ownership. */
+  bootstrapUserProfileId?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
   gatewayUiCommandTarget?: import("../../gateway/ui-command-target.types.js").GatewayUiCommandTarget;

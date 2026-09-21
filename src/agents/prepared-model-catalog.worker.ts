@@ -8,7 +8,7 @@ import {
   restoreConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
 import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -525,6 +525,19 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
   );
 }
 
+// Keep custody outside the request scope: an inline closure also retains `previous`,
+// chaining every superseded generation through the worker's one current entry.
+function retainWorkerGeneration(prepared: WorkerGeneration): () => Promise<void> {
+  const releaseBase = ownPreparedPluginGeneration(prepared.pluginGeneration).retain();
+  return async () => {
+    try {
+      await prepared.discovery?.release();
+    } finally {
+      await releaseBase();
+    }
+  };
+}
+
 if (parentPort) {
   const data = workerData as PreparedModelCatalogWorkerData;
   // Serial worker tasks share one successful generation, including across fleet changes.
@@ -552,14 +565,7 @@ if (parentPort) {
             }
             const prepared = (attempted = await prepareWorkerGeneration(value));
             if (prepared.reconstructedFingerprint === value.generationFingerprint) {
-              const releaseBase = ownPreparedPluginGeneration(prepared.pluginGeneration).retain();
-              release = async () => {
-                try {
-                  await prepared.discovery?.release();
-                } finally {
-                  await releaseBase();
-                }
-              };
+              release = retainWorkerGeneration(prepared);
             }
             return prepared;
           });

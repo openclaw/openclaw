@@ -126,6 +126,24 @@ binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
 
+For independently retained native work, call the optional
+`retainSourceAuthority()` while the host capability is active. When an operator
+source exists, the returned `assertCurrent`, optional `signal`, and idempotent
+`release` retain that original source independently of foreground completion.
+The method returns `undefined` for a run without an operator source. It supplies
+neither new tool permission nor a replacement foreground capability. Bind it to
+the exact resources admitted through the existing native policy path, recheck it
+before further effects, and stop those resources when its signal aborts. Keep
+termination and settlement custody separate from action permission, and release
+the source after the owned resources settle. Report failed cleanup while retaining
+custody of unsettled resources. Do not reconstruct ownership from session
+attribution or reused process IDs.
+
+The host signals Gateway lifecycle retirement. Proactive source revocation also
+requires the originating authority's signal; Visitor Access provides it for
+grant expiry and revocation. Assertion-only source constraints are checked before
+effects and do not provide an asynchronous revocation notification.
+
 For native-history recovery, optional `prepareContextMedia({ message, maxChars })`
 reconstructs saved user attachments under that same host authority and current
 media policy. Include its returned text and images in the native context budget;

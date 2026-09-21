@@ -10,14 +10,16 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
 import { captureCoordinatorDatabase } from "./sqlite-coordinator.test-support.js";
 import {
@@ -421,9 +423,9 @@ describe("SQLite worker store", () => {
     }
   });
 
-  it.each(["memory", "absolute memory", "memory URI", "incognito", "empty"] as const)(
+  it.for(["memory", "absolute memory", "memory URI", "incognito", "empty"] as const)(
     "rejects a %s locator before creating a file or dispatching a worker request",
-    async (kind) => {
+    async (kind, { signal }) => {
       const directory = tempDirs.make("openclaw-sqlite-worker-locator-");
       const incognito = resolveIncognitoOpenClawAgentSqlitePath({
         agentId: "fixture",
@@ -438,35 +440,42 @@ describe("SQLite worker store", () => {
         empty: "",
       };
       const contents = (await readdir(directory, { recursive: true })).toSorted();
-      const originalCwd = process.cwd();
-      const originalTsconfigPath = process.env.TSX_TSCONFIG_PATH;
-      const requests = vi.spyOn(Worker.prototype, "postMessage");
-      try {
-        // An unfixed broker may resolve a memory locator into a real file; contain it in this test.
-        process.env.TSX_TSCONFIG_PATH = path.join(originalCwd, "tsconfig.json");
-        process.chdir(directory);
-        const [result] = await Promise.allSettled([open(locators[kind])]);
-        if (result.status === "fulfilled") {
-          await result.value.close();
-          stores.delete(result.value);
-        }
-        expect(result).toMatchObject({
-          status: "rejected",
-          reason: expect.objectContaining({
-            message: expect.stringMatching(/file-backed|memory|incognito/i),
-          }),
-        });
-        expect(requests).not.toHaveBeenCalled();
-        expect((await readdir(directory, { recursive: true })).toSorted()).toEqual(contents);
-      } finally {
-        process.chdir(originalCwd);
-        if (originalTsconfigPath === undefined) {
-          delete process.env.TSX_TSCONFIG_PATH;
-        } else {
-          process.env.TSX_TSCONFIG_PATH = originalTsconfigPath;
-        }
-        requests.mockRestore();
-      }
+      // A regressed broker can create a file from a memory locator; its child owns that cwd.
+      const result = await runNodeScript(
+        createNodeEvalArgs(
+          `import assert from "node:assert/strict";
+           import { Worker } from "node:worker_threads";
+           import { openSqliteWorkerStore } from ${JSON.stringify(new URL("./sqlite-worker-store.ts", import.meta.url).href)};
+           const originalPostMessage = Worker.prototype.postMessage;
+           let requests = 0;
+           Worker.prototype.postMessage = function (...args) {
+             requests += 1;
+             return Reflect.apply(originalPostMessage, this, args);
+           };
+           try {
+             const [result] = await Promise.allSettled([openSqliteWorkerStore({
+               moduleUrl: new URL(${JSON.stringify(new URL("./sqlite-worker-store.test-support.ts", import.meta.url).href)}),
+               databasePath: ${JSON.stringify(locators[kind])},
+             })]);
+             if (result.status === "fulfilled") await result.value.close();
+             assert.equal(result.status, "rejected");
+             assert.match(result.reason.message, /file-backed|memory|incognito/i);
+             assert.equal(requests, 0);
+           } finally {
+             Worker.prototype.postMessage = originalPostMessage;
+           }`,
+          { imports: [import.meta.resolve("tsx/esm")] },
+        ),
+        {
+          ...process.env,
+          TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+        },
+        undefined,
+        { cwd: directory, signal, requireProcessTreeExit: process.platform !== "win32" },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect((await readdir(directory, { recursive: true })).toSorted()).toEqual(contents);
     },
   );
 

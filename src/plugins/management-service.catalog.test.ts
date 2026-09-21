@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { joinClawHubPluginCatalog } from "./catalog-discovery.js";
 import {
   emptyMetadataSnapshot,
@@ -57,6 +60,8 @@ function mockHostedOfficialCatalog(entries: unknown[]) {
     metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
   });
 }
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("managed plugin catalog", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -463,20 +468,32 @@ describe("managed plugin catalog", () => {
   });
 
   it("keeps installed plugins uncategorized when ClawHub enrichment is unavailable", async () => {
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        enabled: true,
-        id: "community-tool",
-        name: "Community Tool",
-        origin: "global",
-        packageVersion: "1.0.0",
-        installRecord: {
-          source: "clawhub",
-          clawhubPackage: "community/tool",
-          version: "1.0.0",
-        },
-      }),
+    const packageRoot = tempDirs.make("managed-plugin-installed-");
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "@openclaw/community-tool", version: "1.0.0" }),
     );
+    const metadata = metadataSnapshot({
+      enabled: true,
+      id: "community-tool",
+      name: "Community Tool",
+      origin: "global",
+      packageVersion: "1.0.0",
+      installRecord: {
+        source: "clawhub",
+        clawhubPackage: "community/tool",
+        version: "1.0.0",
+        installPath: packageRoot,
+      },
+    });
+    expectDefined(metadata.index.plugins[0], "installed plugin").rootDir = packageRoot;
+    const manifest = expectDefined(metadata.byPluginId.get("community-tool"), "plugin manifest");
+    manifest.rootDir = packageRoot;
+    manifest.source = path.join(packageRoot, "index.ts");
+    manifest.manifestPath = path.join(packageRoot, "openclaw.plugin.json");
+    fs.writeFileSync(manifest.source, "export {};\n");
+    fs.writeFileSync(manifest.manifestPath, JSON.stringify({ id: manifest.id }));
+    mocks.metadata.mockReturnValue(metadata);
     mocks.pluginVersionCategories.mockRejectedValue(new Error("ClawHub offline"));
 
     const catalog = await listManagedPlugins({

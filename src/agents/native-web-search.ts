@@ -1,5 +1,6 @@
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveCodexNativeSearchActivation } from "./codex-native-web-search-core.js";
 import {
   resolveWebSearchToolPolicy,
@@ -17,6 +18,7 @@ export function resolveNativeWebSearchRoute(
     modelApi?: string;
     modelBaseUrl?: string;
     agentDir?: string;
+    authStore?: AuthProfileStore;
     pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   },
 ): NativeWebSearchRoute {

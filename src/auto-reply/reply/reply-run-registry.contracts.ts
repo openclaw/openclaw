@@ -1,3 +1,4 @@
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
@@ -71,6 +72,7 @@ export type ReplyToolAuthorityRoute = Readonly<{
 
 /** Per-message authority facts projected against an active run's frozen owner state. */
 export type ReplyToolAuthorityOverlay = Readonly<{
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   permissionMode?: SessionEntry["permissionMode"];
   toolOverrides?: SessionEntry["toolOverrides"];
   originatingChannel?: OriginatingChannelType;
@@ -97,6 +99,7 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   traceAuthorized: boolean;
   approvalReviewerDeviceId?: string;
   clientCaps?: string[];
+  bootstrapUserProfileId?: string;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   toolBindings?: Readonly<Record<string, unknown>>;
 }>;

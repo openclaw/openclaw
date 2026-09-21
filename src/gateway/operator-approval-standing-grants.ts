@@ -20,6 +20,7 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.types.js";
 
 const STANDING_GRANT_TABLE = "operator_approval_standing_grants";
 
@@ -51,14 +52,6 @@ type StandingGrantDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "operator_approval_standing_grants" | "operator_approvals" | "cron_jobs"
 >;
-
-/** Cron identity plus exact operation binding recorded at approval creation. */
-export type CronStandingGrantMintSpec = {
-  agentId: string;
-  cronJobId: string;
-  jobConfigRevision: string;
-  operationBinding: string;
-};
 
 type CronStandingGrantRecord = CronStandingGrantMintSpec & {
   grantId: string;

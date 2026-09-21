@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sql, type ColumnType, type Generated, type InferResult } from "kysely";
+import { sql, type Generated, type InferResult } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -10,6 +10,11 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  createSessionTranscriptFtsInserter,
+  deleteSessionTranscriptFtsRows,
+  hasCompleteSessionTranscriptFtsRows,
+} from "./session-transcript-fts.js";
 import {
   extractTranscriptIndexEntry,
   hasTranscriptMessage,
@@ -34,13 +39,6 @@ type TranscriptProjectionDatabase = Pick<
 > & {
   session_transcript_active_events: OpenClawAgentKyselyDatabase["session_transcript_active_events"] & {
     rowid: Generated<number>;
-  };
-  session_transcript_fts: Omit<
-    OpenClawAgentKyselyDatabase["session_transcript_fts"],
-    "timestamp"
-  > & {
-    rowid: Generated<number>;
-    timestamp: ColumnType<string | null, number | string | null, number | string | null>;
   };
 };
 
@@ -388,15 +386,15 @@ function projectionTailFitsCatchUpBounds(
   );
 }
 
-function projectionClaimIsOwned(db: DatabaseSync, sessionId: string, claimId: number): boolean {
+function readOwnedProjectionClaim(db: DatabaseSync, sessionId: string, claimId: number) {
   const row = executeSqliteQueryTakeFirstSync(
     db,
     getProjectionKysely(db)
       .selectFrom("session_transcript_index_state")
-      .select(["needs_rebuild", "updated_at"])
+      .select(["needs_rebuild", "updated_at", "fts_row_count"])
       .where("session_id", "=", sessionId),
   );
-  return row?.needs_rebuild !== 0 && row?.updated_at === claimId;
+  return row?.needs_rebuild !== 0 && row?.updated_at === claimId ? row : undefined;
 }
 
 /** Claims a prepared snapshot. Later chunks publish only while this claim remains current. */
@@ -418,13 +416,15 @@ export function claimPreparedSessionTranscriptProjectionInTransaction(
     db,
     kysely
       .selectFrom("session_transcript_index_state")
-      .select(["indexed_seq", "needs_rebuild"])
+      .select(["indexed_seq", "needs_rebuild", "fts_row_count"])
       .where("session_id", "=", plan.sessionId),
   );
+  const mappingComplete = hasCompleteSessionTranscriptFtsRows(db, plan.sessionId);
   if (
     current?.needs_rebuild === 0 &&
     current.indexed_seq === sourceSnapshot.latestSeq &&
-    !hasUnclassifiedSessionTranscriptEvents(db, plan.sessionId)
+    !hasUnclassifiedSessionTranscriptEvents(db, plan.sessionId) &&
+    mappingComplete
   ) {
     return false;
   }
@@ -438,11 +438,13 @@ export function claimPreparedSessionTranscriptProjectionInTransaction(
         indexed_seq: -1,
         leaf_event_id: null,
         needs_rebuild: 1,
+        fts_row_count: null,
         session_id: plan.sessionId,
         updated_at: claimId,
       })
       .onConflict((conflict) =>
         conflict.column("session_id").doUpdateSet({
+          fts_row_count: mappingComplete ? (current?.fts_row_count ?? null) : null,
           active_event_count: 0,
           active_message_count: 0,
           indexed_seq: -1,
@@ -460,7 +462,8 @@ export function deletePreparedSessionTranscriptProjectionChunkInTransaction(
   db: DatabaseSync,
   params: { claimId: number; maxRowsPerTable: number; sessionId: string },
 ): ProjectionDeleteChunkResult {
-  if (!projectionClaimIsOwned(db, params.sessionId, params.claimId)) {
+  const claim = readOwnedProjectionClaim(db, params.sessionId, params.claimId);
+  if (!claim) {
     return { hasMore: false, owned: false };
   }
   // Hidden rowid batching is the narrow SQLite primitive that keeps each
@@ -482,22 +485,11 @@ export function deletePreparedSessionTranscriptProjectionChunkInTransaction(
         ),
     ).numAffectedRows ?? 0n,
   );
-  const fts = Number(
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .deleteFrom("session_transcript_fts")
-        .where(
-          "rowid",
-          "in",
-          kysely
-            .selectFrom("session_transcript_fts")
-            .select("rowid")
-            .where("session_id", "=", params.sessionId)
-            .limit(params.maxRowsPerTable),
-        ),
-    ).numAffectedRows ?? 0n,
-  );
+  const fts = deleteSessionTranscriptFtsRows(db, params.sessionId, {
+    limit: params.maxRowsPerTable,
+    // The claim validated the mapping once; every bounded mutation maintains its count.
+    mappingComplete: claim.fts_row_count !== null,
+  });
   return {
     hasMore: active === params.maxRowsPerTable || fts === params.maxRowsPerTable,
     owned: true,
@@ -514,7 +506,7 @@ export function appendPreparedSessionTranscriptProjectionChunkInTransaction(
     sessionId: string;
   },
 ): boolean {
-  if (!projectionClaimIsOwned(db, params.sessionId, params.claimId)) {
+  if (!readOwnedProjectionClaim(db, params.sessionId, params.claimId)) {
     return false;
   }
   insertPreparedSessionTranscriptProjectionRows(db, params);
@@ -545,18 +537,15 @@ function insertPreparedSessionTranscriptProjectionRows(
     );
   }
   if (params.ftsRows && params.ftsRows.length > 0) {
-    executeSqliteQuerySync(
-      db,
-      kysely.insertInto("session_transcript_fts").values(
-        params.ftsRows.map((row) => ({
-          message_id: row.messageId,
-          role: row.role,
-          session_id: params.sessionId,
-          text: row.text,
-          timestamp: row.timestamp,
-        })),
-      ),
-    );
+    const insert = createSessionTranscriptFtsInserter(db, params.sessionId);
+    for (const row of params.ftsRows) {
+      insert({
+        message_id: row.messageId,
+        role: row.role,
+        text: row.text,
+        timestamp: row.timestamp,
+      });
+    }
   }
 }
 
@@ -632,7 +621,7 @@ export function finalizePreparedSessionTranscriptProjectionInTransaction(
   plan: PreparedSessionTranscriptProjectionMetadata,
   claimId: number,
 ): boolean {
-  if (!projectionClaimIsOwned(db, plan.sessionId, claimId)) {
+  if (!readOwnedProjectionClaim(db, plan.sessionId, claimId)) {
     return false;
   }
   const baseActiveRows = executeSqliteQueryTakeFirstSync(

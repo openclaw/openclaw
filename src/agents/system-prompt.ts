@@ -11,10 +11,7 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "@openclaw/ai/internal/shared";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,
   normalizeStringEntriesLower,
@@ -65,6 +62,11 @@ import {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "./skill-workshop-prompt.js";
+import {
+  buildProjectContextSection,
+  isBootstrapContextFile,
+  prepareContextFilesForPrompt,
+} from "./system-prompt-context-files.js";
 import type {
   ProviderSystemPromptContribution,
   ProviderSystemPromptSectionId,
@@ -87,18 +89,6 @@ import {
  */
 type OwnerIdDisplay = "raw" | "hash";
 
-const CONTEXT_FILE_ORDER = new Map<string, number>([
-  ["agents.md", 10],
-  ["soul.md", 20],
-  ["identity.md", 30],
-  ["user.md", 40],
-  ["tools.md", 50],
-  ["bootstrap.md", 60],
-  ["memory.md", 70],
-]);
-
-const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
-  /Default heartbeat prompt:\r?\n`(?:Read HEARTBEAT\.md if it exists|Follow the heartbeat monitor scratch context when provided\.)[^`\r\n]*HEARTBEAT_OK\.`/gu;
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
 
 type StablePromptPrefixCacheEntry = {
@@ -167,75 +157,6 @@ function hashStablePromptInput(value: unknown): string {
   const hash = createHash("sha256");
   hash.update(JSON.stringify(value));
   return hash.digest("hex");
-}
-
-function normalizeContextFilePath(pathValue: string): string {
-  return pathValue.trim().replace(/\\/g, "/");
-}
-
-function isBootstrapContextFile(pathValue: string): boolean {
-  return /(^|[\\/])BOOTSTRAP\.md$/iu.test(pathValue.trim());
-}
-
-function sanitizeContextFileContentForPrompt(content: string): string {
-  // Old workspace templates otherwise route Claude subscriptions to paid extra
-  // usage; heartbeat behavior remains in the actual scheduled user turn.
-  return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
-}
-
-function prepareContextFilesForPrompt(contextFiles: EmbeddedContextFile[]) {
-  return (
-    contextFiles
-      .map((file) => {
-        const path = normalizeContextFilePath(file.path);
-        const basename = normalizeLowercaseStringOrEmpty(path.slice(path.lastIndexOf("/") + 1));
-        return {
-          file,
-          path,
-          basename,
-          order: CONTEXT_FILE_ORDER.get(basename) ?? Number.MAX_SAFE_INTEGER,
-        };
-      })
-      // oxlint-disable-next-line unicorn/no-array-sort -- map creates an owned descriptor array.
-      .sort((a, b) => {
-        if (a.order !== b.order) {
-          return a.order - b.order;
-        }
-        if (a.basename !== b.basename) {
-          return a.basename.localeCompare(b.basename);
-        }
-        return a.path.localeCompare(b.path);
-      })
-  );
-}
-
-function buildProjectContextSection(files: ReturnType<typeof prepareContextFilesForPrompt>) {
-  if (files.length === 0) {
-    return [];
-  }
-  const lines = ["# Project Context", ""];
-  const hasSoulFile = files.some((file) => file.basename === "soul.md");
-  const hasMemoryFile = files.some((file) => file.basename === "memory.md");
-  const hasUserFile = files.some((file) => file.basename === "user.md");
-  lines.push("Loaded project context:");
-  if (hasSoulFile) {
-    lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
-  }
-  if (hasMemoryFile) {
-    lines.push(
-      "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
-    );
-  }
-  if (hasUserFile) {
-    lines.push(
-      "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
-    );
-  }
-  lines.push("");
-  for (const { file } of files) {
-    lines.push(`## ${file.path}`, "", sanitizeContextFileContentForPrompt(file.content), "");
-  }
-  return lines;
 }
 
 function buildExecApprovalPromptGuidance(params: {

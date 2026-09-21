@@ -15,7 +15,7 @@ function linkHovercardUrl(anchor: HTMLAnchorElement) {
   const target = resolveHoverPreviewTarget(anchor, owner);
   return target && !target.reader ? new URL(target.href) : null;
 }
-import { prefetchLinkReader } from "./link-reader-hovercard-registration.ts";
+import { prefetchLinkReader } from "./link-reader-prefetch-request.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { renderWizardStepControls } from "./wizard-step-controls.ts";

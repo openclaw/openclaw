@@ -111,7 +111,10 @@ async function evictOldestSession(
   if (oldestKey !== undefined) {
     const oldest = sessions.get(oldestKey);
     if (oldest?.pendingApproval) {
-      context.systemAgentApprovalManager?.expire(oldest.pendingApproval.id, "session-evicted");
+      await context.systemAgentApprovalManager?.expire(
+        oldest.pendingApproval.id,
+        "session-evicted",
+      );
     }
     await oldest?.engine.dispose();
     sessions.delete(oldestKey);
@@ -124,10 +127,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     respond(
       true,
       manager
-        ? listVisiblePendingApprovalRequests({
+        ? await listVisiblePendingApprovalRequests({
             manager,
             client,
-            ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+            ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
           })
         : [],
       undefined,
@@ -421,7 +424,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         appendTranscriptReset();
         sessions.delete(sessionId);
         if (existing?.pendingApproval) {
-          context.systemAgentApprovalManager?.expire(existing.pendingApproval.id, "session-reset");
+          await context.systemAgentApprovalManager?.expire(
+            existing.pendingApproval.id,
+            "session-reset",
+          );
         }
         await existing?.engine.dispose();
       }

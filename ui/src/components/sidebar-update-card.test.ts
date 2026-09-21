@@ -334,7 +334,8 @@ describe("SidebarUpdateCard", () => {
       "Update Gateway",
     );
     const dismiss = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!;
-    expect(dismiss.textContent?.trim()).toBe("Dismiss");
+    expect(dismiss.getAttribute("aria-label")).toBe("Dismiss Update available");
+    expect(dismiss.querySelector("svg")).not.toBeNull();
     dismiss.click();
     expect(element.onDismiss).toHaveBeenCalledOnce();
     expect(element.onUpdate).not.toHaveBeenCalled();

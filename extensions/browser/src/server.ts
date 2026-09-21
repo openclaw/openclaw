@@ -39,7 +39,7 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
 
   const cfg = getRuntimeConfig();
   const browserCfg = loadBrowserConfigForRuntimeRefresh();
-  if (!resolveBrowserPluginEnableState(browserCfg).enabled) {
+  if (!resolveBrowserPluginEnableState(cfg).enabled) {
     return null;
   }
   const resolved = resolveBrowserConfig(browserCfg.browser, browserCfg);

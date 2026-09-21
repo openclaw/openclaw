@@ -395,7 +395,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: prepare admitted input attachments and bind a workspace transfer adapter.
       // +1: approved host workspace Skill resource reader.
       // +1: approved terminal-reply classifier for A2A task completion.
-      4529,
+      // +1: approved native workspace worker argv resolver for node adapters.
+      4530,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -550,7 +551,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: prepare admitted input attachments and bind a workspace transfer adapter.
       // +1: approved host workspace Skill resource reader.
       // +1: approved terminal-reply classifier for A2A task completion.
-      2672,
+      // +1: approved native workspace worker argv resolver for node adapters.
+      2673,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

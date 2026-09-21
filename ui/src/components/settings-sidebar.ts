@@ -49,7 +49,6 @@ type SettingsSidebarProps = {
   activeSearch?: string;
   activeHash?: string;
   connectionStatus: GatewayStatus | null;
-  queuedOutboxCount?: number;
   lastError: string | null;
   gatewayVersion: string;
   searchQuery: string;
@@ -183,8 +182,11 @@ function renderItem(props: SettingsSidebarProps, routeId: RouteId, label?: strin
       @pointerenter=${(event: Event) =>
         scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active)}
       @pointerleave=${(event: Event) => cancelRoutePreload(props.preloadTimers, event)}
-      @touchstart=${(event: TouchEvent) =>
-        scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true)}
+      @touchstart=${{
+        handleEvent: (event: TouchEvent) =>
+          scheduleRoutePreload(props.preloadTimers, routeId, event, props.onPreload, active, true),
+        passive: true,
+      }}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           return;
@@ -327,10 +329,9 @@ function renderEmbeddedSettingsHeader(props: SettingsSidebarProps) {
       ${props.presentation === "embed-list" ? t("nav.settings") : settingsNavigationLabelForRoute(props.activeRouteId, props.nativeDeviceSettings?.snapshot)}
     </h1>
     ${
-      props.connectionStatus !== null || (props.queuedOutboxCount ?? 0) > 0
+      props.connectionStatus !== null
         ? renderGatewayStatus({
             kind: props.connectionStatus,
-            queuedOutboxCount: props.queuedOutboxCount ?? 0,
             lastError: props.lastError,
             onRetry: props.onRetryConnect,
           })
@@ -452,10 +453,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       ${navigation}
       <footer class="settings-sidebar__footer">
         ${
-          props.connectionStatus !== null || (props.queuedOutboxCount ?? 0) > 0
+          props.connectionStatus !== null
             ? renderGatewayStatus({
                 kind: props.connectionStatus,
-                queuedOutboxCount: props.queuedOutboxCount ?? 0,
                 lastError: props.lastError,
                 onRetry: props.onRetryConnect,
               })

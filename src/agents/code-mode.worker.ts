@@ -10,7 +10,7 @@ import {
   type JSValueHandle,
   type Snapshot,
 } from "quickjs-wasi";
-import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-pool.js";
+import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-server.js";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
 import {
   boundCodeModeError,

@@ -432,6 +432,16 @@ export async function handleInlineActions(params: {
           commandName: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,
         };
+        opts?.abortSignal?.throwIfAborted();
+        if (opts?.runId) {
+          // Tool commands leave transcript persistence with ordinary reply dispatch.
+          opts.onAgentRunStart?.(opts.runId, undefined, {
+            completionSource: "reply-dispatch",
+            getResult: () => ({}),
+          });
+        }
+        // The execution owner can observe revocation while arming cancellation.
+        opts?.abortSignal?.throwIfAborted();
         const result = await tool.execute(toolCallId, toolArgs, opts?.abortSignal);
         const blockedReason = extractBlockedToolReason(result);
         if (blockedReason) {

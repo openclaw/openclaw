@@ -3,7 +3,7 @@ import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";

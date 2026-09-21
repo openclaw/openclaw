@@ -137,7 +137,6 @@ describe("qa compaction scenario catalog", () => {
     const writeTranscriptToolCallIdExpr = readSetExpression("writeTranscriptToolCallId");
     const continuationChainExpr = readSetExpression("continuationChain");
     const compactionSummaryRequestsExpr = readSetExpression("compactionSummaryRequests");
-    const overflowCheckpointsExpr = readSetExpression("overflowCheckpoints");
     const continuationAssertIndex = actionIndex((action) =>
       readFlowAssertExpression(action).includes("continuationChain.valid === true"),
     );
@@ -169,7 +168,6 @@ describe("qa compaction scenario catalog", () => {
     const compactionSnapshotAssertExpr = readAssertExpression(
       "Number.isInteger(sessionEntry?.compactionCount)",
     );
-    const overflowCheckpointAssertExpr = readAssertExpression("overflowCheckpoints.length === 1");
     const knownGap =
       "known-harness-gap compaction-retry-mutating-tool: provider-error recovery does not invoke Codex native compaction; native token-threshold compaction needs a separate scenario.";
 
@@ -226,7 +224,6 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain('"call":"qaImport","args":["./errors.js"],"saveAs":"qaErrors"');
     expect(flow).toContain("new qaErrors.QaSuiteScenarioSkipError");
     expect(flow).toContain("seedQaSessionTranscript");
-    expect(flow).toContain("sessions.compaction.branch");
     expect(flow).toContain("env.runtimeId");
     expect(scenario.execution.retryCount).toBe(0);
     expect(flow).not.toContain('"transcriptToolName":"write"');
@@ -366,8 +363,6 @@ describe("qa compaction scenario catalog", () => {
     );
     expect(compactionSnapshotAssertExpr).not.toContain("compactionCount === 1");
     expect(flow).not.toContain("sessionEntry?.compactionCount === 1");
-    expect(overflowCheckpointsExpr).toContain("checkpoint.reason === 'overflow-retry'");
-    expect(overflowCheckpointAssertExpr).toContain("overflowCheckpoints.length === 1");
     expect(flow).not.toContain("compactionSummaryRequests.length === 1");
     expect(flow).toContain(
       "writeRequest.rawByteLength < config.overflowThresholdBytes && writeRequest.rawByteLength < overflowRequest.rawByteLength",
@@ -376,9 +371,8 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain("index === 10 ? config.bulkyMarker + ' ' : ''");
     expect(flow).toContain("post-marker historical user block");
     expect(flow).not.toContain("index === 12 ? config.bulkyMarker + ' ' : ''");
-    expect(flow).toContain("{ role: 'assistant', text: config.checkpointMarker");
+    expect(flow).toContain("{ role: 'assistant', text: config.historyMarker");
     expect(flow).not.toContain("{ role: 'assistant', text: config.bulkyMarker");
-    expect(flow).toContain("branchSummary.finalText === config.checkpointMarker");
     expect(flow).toContain('"set":"requestEvidence"');
     expect(flow).toContain("durable: String(request.allInputText ?? '')");
     expect(flow).toContain("bulky: String(request.allInputText ?? '')");

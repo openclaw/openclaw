@@ -5,6 +5,10 @@ import type {
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { TaskFlowView } from "../plugins/runtime/task-domain-types.js";
 import type {
+  TaskFlowMaintenanceInput,
+  TaskFlowMaintenanceOutcome,
+} from "./task-flow-maintenance-policy.js";
+import type {
   ManagedTaskInFlowInput,
   ManagedTaskInFlowReceipt,
 } from "./task-flow-managed-run-task.kernel.js";
@@ -88,6 +92,7 @@ export type TaskRegistryWorkerOperations = TaskInitialWorkerOperations &
         | { applied: false; reason: "persist_failed"; current?: TaskFlowRecord };
     };
     "flows.current": { input: { flowId: string }; output: TaskFlowRecord | undefined };
+    "flows.maintain": { input: TaskFlowMaintenanceInput; output: TaskFlowMaintenanceOutcome };
     "tasks.get": { input: { taskId: string }; output: TaskRecord | undefined };
     "tasks.findByRunId": { input: { runId: string }; output: TaskRecord | undefined };
     "tasks.list": { input: { ownerKey: string }; output: TaskRecord[] };
@@ -137,6 +142,7 @@ export function isTaskRegistryWorkerCommand(command: {
     case "flows.createManaged":
     case "flows.updateManaged":
     case "flows.current":
+    case "flows.maintain":
     case "tasks.get":
     case "tasks.findByRunId":
     case "tasks.list":

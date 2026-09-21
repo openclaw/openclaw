@@ -14,7 +14,7 @@ import {
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   gatewayServiceCommandUsesRoot,
   resolveUpdatedGatewayRestartPort,
@@ -116,6 +116,7 @@ export type UpdateGatewayReadinessParams = {
   serviceEnv: NodeJS.ProcessEnv;
   gatewayPort: number;
   timeoutMs?: number;
+  deadlineMs?: number;
   observedStartupMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
@@ -165,7 +166,11 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   const settleDurationMs = (Math.max(1, settle.probes) - 1) * DEFAULT_RESTART_HEALTH_DELAY_MS;
   const startedAtMs = performance.now();
   const remainingMs = () =>
-    Math.max(0, timeoutMs + settleDurationMs - (performance.now() - startedAtMs));
+    Math.max(
+      0,
+      Math.min(startedAtMs + timeoutMs + settleDurationMs, params.deadlineMs ?? Infinity) -
+        performance.now(),
+    );
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
@@ -192,6 +197,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       ...probeParams,
       // The restart owner adds settling itself; reserve it once in the shared deadline.
       timeoutMs: Math.max(1, remainingMs() - settleDurationMs),
+      deadlineMs: params.deadlineMs,
       requireRunningService: params.requireRunningService,
       settle,
       supervisorKeepsAlive,

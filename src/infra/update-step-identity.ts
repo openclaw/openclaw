@@ -48,6 +48,7 @@ const stepIds = new Map<string, string>([
     "config rollback",
     "package rollback",
     "gateway verification",
+    "gateway recovery verification",
     "rollback gateway verification",
     "previous gateway verification",
     "previous generation restoration",

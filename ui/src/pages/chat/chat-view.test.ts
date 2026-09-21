@@ -21,7 +21,11 @@ import {
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
+import type {
+  SessionPatchOptions,
+  SessionPatchResult,
+  SessionPatchRoute,
+} from "../../lib/sessions/patch.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
@@ -30,6 +34,7 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -151,11 +156,7 @@ const buildChatItemsMock = vi.fn(
           key: "divider:compaction:test",
           icon: "foldVertical",
           label: "Compacted history",
-          description: "The compacted transcript is preserved as a checkpoint.",
-          action: {
-            kind: "session-checkpoints",
-            label: "Open checkpoints",
-          },
+          description: "Earlier messages were summarized to make room in the context window.",
           timestamp: 1,
         },
       ] as ReturnType<typeof chatThread.buildCachedChatItems>;
@@ -356,6 +357,36 @@ function createSessionsResultFromRows(sessions: GatewaySessionRow[]): SessionsLi
     defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
     sessions,
   };
+}
+
+function createSettingsLaneHost(
+  patch: SessionPatchRoute,
+  refresh: () => Promise<void> = async () => {},
+) {
+  const host = makeChatHost({
+    requestHandlers: {},
+    sessionKey: "main",
+    chatModelSwitchPromises: {},
+    chatThinkingLevel: "high",
+    sessionsResult: createSessionsResultFromRows([
+      {
+        key: "main",
+        agentId: "main",
+        sessionId: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "claude-fable-5",
+        modelProvider: "anthropic",
+        thinkingLevel: "high",
+        fastMode: false,
+        effectiveFastMode: false,
+      },
+    ]),
+  });
+  vi.spyOn(host.sessions, "patch").mockImplementation(patch);
+  vi.spyOn(host.sessions, "refresh").mockImplementation(refresh);
+  onTestFinished(() => host.sessions.dispose());
+  return host;
 }
 
 function createChatHeaderState(
@@ -728,7 +759,6 @@ function createBackgroundTasks(
       rows: [],
       overflowCount: 0,
       taskIds: new Set<string>(),
-      nextExpiryAt: null,
     },
     cancellingTaskIds: new Set<string>(),
     finishedCollapsed: false,
@@ -1025,25 +1055,17 @@ describe("chat run error", () => {
 });
 
 describe("chat compaction divider", () => {
-  it("renders checkpoint recovery copy and action", () => {
-    const onOpenSessionCheckpoints = vi.fn();
+  it("renders compaction copy without a checkpoint action", () => {
     const container = renderChatView({
       messages: [{ testDividerMarker: "compaction" }],
-      onOpenSessionCheckpoints,
     });
 
     expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Compacted history");
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "The compacted transcript is preserved as a checkpoint.",
+      "Earlier messages were summarized to make room in the context window.",
     );
     expect(container.querySelector(".chat-divider__icon svg")).not.toBeNull();
-    const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
-    expect(button?.textContent?.trim()).toBe("Open checkpoints");
-
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    button!.click();
-
-    expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".chat-divider__action")).toBeNull();
   });
 
   it("renders the session reset divider title", () => {
@@ -3115,7 +3137,6 @@ describe("chat voice controls", () => {
       'video[aria-label="Camera preview"]',
       "camera preview",
     ) as HTMLVideoElement;
-
     expect(onToggleRealtimeCamera).toHaveBeenCalledTimes(2);
     expect(preview.srcObject).toBe(stream);
     expect(preview.autoplay).toBe(true);
@@ -3514,7 +3535,6 @@ describe("chat composer IME composition", () => {
     });
 
     textarea.dispatchEvent(arrowEvent);
-
     expect(arrowEvent.defaultPrevented).toBe(true);
     expect(onHistoryKeydown).toHaveBeenCalledOnce();
     expect(onRequestUpdate).toHaveBeenCalledOnce();
@@ -4315,7 +4335,6 @@ describe("chat slash menu accessibility", () => {
 
     inputDraftAtEnd(container, "Please /reset");
     keydownComposer(container, "Enter");
-
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/reset");
     expect(draft).toBe("Please ");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
@@ -5519,16 +5538,14 @@ describe("chat attachment picker", () => {
     });
     document.body.append(remounted);
     await waitForFast(() => {
-      expect(remounted.querySelector(".chat-selection-annotations__chip")?.textContent).toContain(
+      expect(remounted.querySelector(".chat-attachment-file__open")?.textContent).toContain(
         "First words from a remounted p…",
       );
     });
     expect(attachments[0]?.origin).toBe("paste");
-    requireElement(
-      remounted,
-      ".chat-selection-annotations__chip",
-      "pasted text chip",
-    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireElement(remounted, ".chat-attachment-file__open", "pasted text excerpt").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
     requireElement(
       sidebar.container,
       ".chat-attachment-text-action",
@@ -7903,56 +7920,30 @@ describe("chat model controls", () => {
   });
 
   it("orders model-dependent patches after a pending model switch", async () => {
-    const modelPatch = createDeferred<unknown>();
-    const thinkingUpdate = createDeferred<unknown>();
+    const modelPatch = createDeferred<SessionPatchResult | null>();
+    const thinkingUpdate = createDeferred<SessionPatchResult | null>();
     const patches: Array<Record<string, unknown>> = [];
-    const patchResult = {
+    const patchResult: SessionPatchResult = {
       ok: true,
       path: "",
       key: "main",
       entry: { sessionId: "main" },
     };
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          if (Object.hasOwn(patch, "model")) {
-            return modelPatch.promise;
-          }
-          if (Object.hasOwn(patch, "thinkingLevel")) {
-            return thinkingUpdate.promise;
-          }
-          return patchResult;
-        },
-      ),
-      refresh: async () => {},
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-          fastMode: false,
-          effectiveFastMode: false,
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        if (Object.hasOwn(patch, "model")) {
+          return modelPatch.promise;
+        }
+        if (Object.hasOwn(patch, "thinkingLevel")) {
+          return thinkingUpdate.promise;
+        }
+        return patchResult;
+      },
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     const thinkingPatch = switchChatThinkingLevel(host, "ultra");
@@ -7981,50 +7972,25 @@ describe("chat model controls", () => {
     const reconciliationStarted = createDeferred();
     const releaseReconciliation = createDeferred();
     const patches: Array<Record<string, unknown>> = [];
-    const patchResult = {
+    const patchResult: SessionPatchResult = {
       ok: true,
       path: "",
       key: "main",
       entry: { sessionId: "main" },
     };
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          return patchResult;
-        },
-      ),
-      // The list refresh is the reconcile step switchChatModel awaits; holding
-      // it open models a slow reconciliation inside the settings lane.
-      refresh: async () => {
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        return patchResult;
+      },
+      async () => {
         reconciliationStarted.resolve();
         await releaseReconciliation.promise;
       },
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     await reconciliationStarted.promise;
@@ -8038,41 +8004,17 @@ describe("chat model controls", () => {
   });
 
   it("validates queued settings independently after a model switch fails", async () => {
-    const modelPatch = createDeferred<unknown>();
+    const modelPatch = createDeferred<SessionPatchResult | null>();
     const patches: Array<Record<string, unknown>> = [];
-    const sessions = {
-      state: { modelOverrides: {} },
-      patch: vi.fn(
-        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
-          if (options?.waitFor) {
-            await options.waitFor;
-          }
-          patches.push(patch);
-          return modelPatch.promise;
-        },
-      ),
-      refresh: async () => {},
-      patchRowLocal: vi.fn(),
-    };
-    const host = {
-      client: {},
-      connected: true,
-      sessionKey: "main",
-      chatModelCatalog: [],
-      chatModelSwitchPromises: {},
-      chatThinkingLevel: "high",
-      sessions,
-      sessionsResult: createSessionsResultFromRows([
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          model: "claude-fable-5",
-          modelProvider: "anthropic",
-          thinkingLevel: "high",
-        },
-      ]),
-    } as unknown as Parameters<typeof switchChatModel>[0];
+    const host = createSettingsLaneHost(
+      async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+        if (options?.waitFor) {
+          await options.waitFor;
+        }
+        patches.push(patch);
+        return modelPatch.promise;
+      },
+    );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     const thinkingPatch = switchChatThinkingLevel(host, "ultra");
@@ -8133,45 +8075,78 @@ describe("chat model controls", () => {
 
   it("keeps the newest speed selection when an older patch fails late", async () => {
     const pendingPatches: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
-    // Minimal host: the factory's mock gateway rebuilds session rows on every
-    // refresh, which would mask the optimistic fastMode value under test.
-    const host = {
-      client: {},
-      connected: true,
+    const operations: Promise<boolean>[] = [];
+    let canonical: GatewaySessionRow = {
+      key: "main",
+      agentId: "main",
+      sessionId: "main",
+      kind: "direct",
+      updatedAt: 1,
+      fastMode: false,
+      effectiveFastMode: false,
+    };
+    const host = makeChatHost({
       sessionKey: "main",
-      chatModelCatalog: [],
-      chatThinkingLevel: null,
-      sessionsResult: createSessionsResultFromRows([{ key: "main", kind: "direct", updatedAt: 1 }]),
-      sessions: {
-        patch: async (
-          _key: string,
-          _patch: Record<string, unknown>,
-          options?: SessionPatchOptions,
-        ) => {
-          if (options?.waitFor) {
-            await options.waitFor;
+      hello: {
+        ...sessionMutationGatewayHello(),
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      },
+      sessionsResult: createSessionsResultFromRows([canonical]),
+      requestHandlers: {
+        "sessions.list": () => createSessionsResultFromRows([canonical]),
+        "sessions.patch": (params: Record<string, unknown>) => {
+          const fastMode = params.fastMode;
+          if (typeof fastMode !== "boolean") {
+            throw new Error("Expected the speed race to send a boolean fastMode");
           }
-          return new Promise((resolve, reject) => {
+          return new Promise<SessionPatchResult>((resolve, reject) => {
             pendingPatches.push({
-              resolve: () =>
+              resolve: () => {
+                canonical = {
+                  ...canonical,
+                  fastMode,
+                  effectiveFastMode: fastMode,
+                  updatedAt: (canonical.updatedAt ?? 0) + 1,
+                };
                 resolve({
                   ok: true,
                   path: "",
                   key: "main",
-                  entry: { sessionId: "main" },
-                }),
+                  entry: { sessionId: "main", fastMode, updatedAt: canonical.updatedAt ?? 1 },
+                });
+              },
               reject,
             });
           });
         },
-        refresh: async () => {},
-        patchRowLocal: () => {},
       },
-    } as unknown as Parameters<typeof switchChatFastMode>[0];
+    });
+    const projectSessions = (state: typeof host.sessions.state) => {
+      host.sessionsResult = state.result;
+      host.sessionsResultAgentId = state.agentId;
+    };
+    projectSessions(host.sessions.state);
+    const stop = host.sessions.subscribe(projectSessions);
+    onTestFinished(async () => {
+      stop();
+      host.sessions.dispose();
+      for (const patch of pendingPatches) {
+        patch.resolve();
+      }
+      await Promise.allSettled(operations);
+    });
 
     const first = switchChatFastMode(host, "on");
+    operations.push(first);
     await waitForFast(() => expect(pendingPatches).toHaveLength(1));
     const second = switchChatFastMode(host, "off");
+    operations.push(second);
 
     pendingPatches[0]?.reject(new Error("boom"));
     await expect(first).resolves.toBe(false);
@@ -8715,7 +8690,6 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-confirm-popover")).not.toBeNull();
 
     resetThreadPresentation("pane-a");
-
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
     expect(document.querySelector(".chat-confirm-popover")).toBeNull();
     expect(onRewindMessage).not.toHaveBeenCalled();

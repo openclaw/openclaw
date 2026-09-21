@@ -14,7 +14,7 @@ function failedVerification(root: string, code: string, message: string): Update
   };
 }
 
-export function missingPackageVerificationStep(root: string): UpdateStepResult {
+function missingPackageVerificationStep(root: string): UpdateStepResult {
   return failedVerification(
     root,
     "verification-result-missing",

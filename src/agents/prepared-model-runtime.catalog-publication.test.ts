@@ -390,6 +390,7 @@ describe("catalog publication session rows", () => {
         expect(publication).toHaveBeenCalledWith({
           phase: "catalog-published",
           modelFactsChanged: true,
+          refreshStatusChanged: true,
         });
         if (kind === "oauth") {
           expect(result.sessions).toEqual(initial.sessions);
@@ -443,7 +444,7 @@ describe("catalog publication session rows", () => {
       expect(rows.dirtyRowCount).toBe(0);
       expect(readCatalog).toHaveBeenCalledTimes(catalogReads);
       expect(events.mock.calls.map(([event]) => event)).toEqual([
-        { phase: "catalog-published", modelFactsChanged: false },
+        { phase: "catalog-published", modelFactsChanged: false, refreshStatusChanged: true },
         {
           phase: "catalog-failed",
           error: expect.objectContaining({ message: "synthetic failure" }),

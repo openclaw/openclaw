@@ -143,8 +143,6 @@ function buildGatewaySessionEventFields(params: {
     startedAt: sessionRow.startedAt,
     endedAt: sessionRow.endedAt ?? null,
     runtimeMs: sessionRow.runtimeMs ?? null,
-    compactionCheckpointCount: sessionRow.compactionCheckpointCount,
-    latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
     pluginExtensions: sessionRow.pluginExtensions,
   };
 }

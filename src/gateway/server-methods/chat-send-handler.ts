@@ -487,6 +487,7 @@ async function handleChatSendWithOptions(
       return admitted.value.rejectSessionRoutingChanged();
     }
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
+      operatorAuthority: admitted.value.operatorAuthority,
       target: messageInjectionTarget,
       abortSignal: activeRunAbort.controller.signal,
       request: normalizedRequest.value,

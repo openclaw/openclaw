@@ -19,6 +19,7 @@ import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
+import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
@@ -660,10 +661,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     inventoryVersion: store.inventoryVersion,
     machineShapeVersion: providerLifecycle.machineShapeVersion,
     subscribeMachineShapeChanged: providerLifecycle.subscribeMachineShapeChanged,
-    readMachineShape: (environmentId: string) => {
-      const record = store.get(environmentId);
-      return record ? providerLifecycle.readMachineShape(record) : undefined;
-    },
+    readMachineShape: (environmentId: string, prepared?: WorkerEnvironmentPlacementFacts) =>
+      providerLifecycle.readMachineShape(prepared ?? store.get(environmentId)),
     supportsNodePortal: async (environmentId: string, ownerEpoch: number) =>
       (await options.nodePortalCarrier?.supports(environmentId, ownerEpoch)) === true,
     hasPendingNodeEnrollmentSetup: store.hasPendingNodeEnrollmentSetup.bind(store),

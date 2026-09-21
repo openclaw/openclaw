@@ -33,6 +33,13 @@ full check even when runtime proof remains in memory.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway
 after they finish.
+Native execution workers can also borrow retained host proof after the host handle
+closes or is evicted. The receiving opener rechecks the physical file identity and
+shared revocation cell; a closed handle alone does not discard valid proof.
+When native execution establishes the first runtime proof, it returns that proof
+through its existing admission so later cleanup workers can reuse it without a
+host SQLite open. The host accepts it only for the admitted physical file and
+unchanged validation state; revocation during the open rejects the handoff.
 
 Cached opens, including later opens after startup, queue checks in the existing
 Gateway verifier. Background success is logged; only the full-check lease owner
@@ -85,7 +92,7 @@ Shared-state integrity, schema, version, and ownership checks remain in place.
 
 Schema compatibility preflight can read agent schema headers without a full integrity scan. For ordinary rollback-mode agent databases and complete WAL families, a read-only child reads the schema version and optional writer build in one fresh SQLite transaction, including committed WAL changes, without copying unrelated database contents. Its source-reader lease stays held through native close; cancellation and timeout wait for child closure. Parent-side diagnostics do not open or close the live agent file, preserving the parent's SQLite locks. As with the previous online-backup reader, native SQLite may update SHM read marks or rebuild existing SHM after a quiescent family reopens; the database and WAL contents remain unchanged. The Gateway carries successful header facts from admission to its later compatibility preflight only while the database, WAL, and rollback-journal files are unchanged. Changed or uncertain files are inspected again. Full readiness and writable admission retain their existing validation and fresh authority checks.
 
-Private snapshots remain necessary inside owner-held source-exclusion or canonical-mutation scopes, for incomplete WAL families whose inspection would create source sidecars, and for rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. Shared-state preflight is unchanged. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
+Private snapshots remain necessary inside owner-held source-exclusion scopes, for incomplete WAL families whose inspection would create source sidecars, and for rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. Shared-state preflight is unchanged. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
 
 Concurrent asynchronous requests for the same physical live database share one
 snapshot operation. When the canonical runtime already owns an open SQLite
@@ -109,12 +116,21 @@ unchanged. Explicit provenance inspection and inherited artifact-preserving scop
 still use private snapshots. Neither optimization changes schemas, stored records,
 retention, or update migrations.
 
-Unavoidable raw copies first sample the main database and WAL for a short stable
-interval. A hard admission deadline then allows copying to proceed under sustained
-write load instead of waiting indefinitely. Source-change retries use bounded
-cancellable backoff without restarting that quiescence deadline. Snapshot debug
-telemetry contains only bounded operational metadata: operation and owner labels,
-main and WAL sizes, copied bytes, attempt, wait and duration, and outcome.
+Live snapshots use SQLite's online-backup owner and a read transaction to pin
+committed pages while writers continue. Native readers may update existing SHM
+read marks, so artifact-preserving planning and Doctor scopes use raw copies
+instead. A WAL copy captures main first, then a bounded WAL prefix, and verifies
+both within the same pinned WAL generation. Appended frames are allowed; resets,
+replacements, and changes to captured bytes require another attempt. SQLite
+interprets committed frames in the private copy. Source SHM stays untouched.
+Only raw copies reuse a scoped IPC child; native backups remain one-shot to avoid
+Node 26 completion stalls with persistent IPC. Incomplete WAL families, rollback
+crash residue, and owner-excluded sources also retain private copying and recovery.
+Existing WAL and rollback-journal files can coexist without write activity;
+inspection copies and verifies both before SQLite recovers the private family.
+It does not discard committed WAL pages, repair the source, or change plan identity.
+Snapshot debug telemetry reports operation and owner,
+main and WAL sizes, copied bytes, attempt, duration, and outcome.
 
 Synchronous CLI snapshots also pause between source-change retries, so a brief
 write burst does not exhaust all ten attempts immediately. These retries only
@@ -226,13 +242,13 @@ A 2 GiB database gets 2,860 seconds, and workers finish as soon as their work co
 
 Update schema inspection and candidate snapshots use this same allowance as an inactivity watchdog. Larger caller budgets remain available, and observed private-copy progress renews the deadline. See [How updates run](/cli/update/how-updates-run).
 
-The synchronous byte-neutral snapshot strategy is for small or quiescent databases. Inspections of a live agent database, including memory-core readiness, use the asynchronous online-backup worker.
+Live snapshots use the online-backup worker. Artifact-preserving scopes and synchronous snapshot copies keep source bytes unchanged, including WAL coordination state.
 
 Full startup readiness checks agent ownership, integrity, foreign keys, and schema
 in one fresh read-only transaction in a disposable child. Complete WAL families
 and rollback-mode databases without journals do not need a full private copy.
-Empty files, incomplete WAL families, rollback recovery, and source-exclusion or
-canonical-mutation scopes retain private snapshot inspection. The parent waits
+Empty files, incomplete WAL families, rollback recovery, and source-exclusion
+scopes retain private snapshot inspection. The parent waits
 for native close before accepting the result or releasing its scope. The source
 database and WAL remain unchanged; native WAL readers may update SHM read marks.
 Admission before the migration lease and the fresh check before migration writes

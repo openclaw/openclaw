@@ -274,17 +274,40 @@ describe("plugin lifecycle resource sampler", () => {
   });
 
   it.runIf(process.platform === "linux")(
-    "kills stubborn descendants after the timeout grace period",
+    "kills stubborn descendants after timeout grace despite disappearing processes",
     () => {
       const dir = tempDirs.make("openclaw-plugin-lifecycle-measure-");
       const summary = path.join(dir, "summary.tsv");
       const pidFile = path.join(dir, "descendant.pid");
+      const procRaceMarker = path.join(dir, "proc-race");
+      const preload = path.join(dir, "vanishing-proc.mjs");
+      writeFileSync(
+        preload,
+        `import fs from "node:fs";
+const readdirSync = fs.readdirSync.bind(fs);
+const vanishedPid = String(Number(fs.readFileSync("/proc/sys/kernel/pid_max", "utf8")) + 1);
+let scans = 0;
+let injected = false;
+fs.readdirSync = (target, options) => {
+  const entries = readdirSync(target, options);
+  if (target !== "/proc" || ++scans === 1 || injected) return entries;
+  if (!fs.existsSync(process.env.PID_FILE) || fs.statSync(process.env.PID_FILE).size === 0) return entries;
+  injected = true;
+  fs.writeFileSync(process.env.PROC_RACE_MARKER, vanishedPid);
+  // Node resolves unknown Dirent types with lstat, which can race process exit.
+  if (options?.withFileTypes) fs.lstatSync("/proc/" + vanishedPid);
+  return [...entries, vanishedPid];
+};
+`,
+      );
       let descendantPid: number | undefined;
 
       try {
         const result = spawnSync(
           "node",
           [
+            "--import",
+            preload,
             scriptPath,
             summary,
             "stubborn-descendant",
@@ -305,23 +328,23 @@ describe("plugin lifecycle resource sampler", () => {
               OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "3000",
               OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
               PID_FILE: pidFile,
+              PROC_RACE_MARKER: procRaceMarker,
             },
             timeout: 7000,
           },
         );
 
-        expect(
-          nonEmptyPathExists(pidFile),
-          JSON.stringify({
-            status: result.status,
-            signal: result.signal,
-            error: result.error?.message,
-            stdout: result.stdout,
-            stderr: result.stderr,
-          }),
-        ).toBe(true);
+        const resultDetails = JSON.stringify({
+          status: result.status,
+          signal: result.signal,
+          error: result.error?.message,
+          stdout: result.stdout,
+          stderr: result.stderr,
+        });
+        expect(nonEmptyPathExists(pidFile), resultDetails).toBe(true);
         descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
-        expect(result.status).toBe(124);
+        expect(result.status, resultDetails).toBe(124);
+        expect(nonEmptyPathExists(procRaceMarker)).toBe(true);
         expect(result.stdout).toContain("signal=timeout");
         expect(readFileSync(summary, "utf8")).toMatch(
           /^stubborn-descendant\t\d+\t[\d.]+\t\d+\t[\d.]+\ttimeout$/mu,

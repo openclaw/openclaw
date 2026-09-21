@@ -5,11 +5,7 @@ import { nothing } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionCompactionCheckpoint,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -172,20 +168,6 @@ describe("sessions page lifecycle", () => {
     );
   });
 
-  it("shows a connection error in the checkpoints drawer while disconnected", async () => {
-    const mutableGateway = createGateway({} as GatewayBrowserClient);
-    const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
-    mutableGateway.emit({ phase: "reconnecting", client: null });
-
-    await page.loadCheckpoint("agent:main:main");
-
-    // Without the recorded error the drawer would render "No checkpoints"
-    // beside a nonzero checkpoint badge.
-    expect(page.checkpointErrorByKey["agent:main:main"]).toBe(
-      "Connect to the Gateway to change sessions.",
-    );
-  });
-
   it.each([
     ["green", "Green"],
     [null, "No color"],
@@ -333,28 +315,6 @@ describe("sessions page lifecycle", () => {
       false,
     );
     expect(menu.querySelector<HTMLButtonElement>('[value="delete"]')?.disabled).toBe(true);
-  });
-
-  it("invalidates checkpoint work and mutation locks on same-client disconnect", async () => {
-    const checkpoints = createDeferred<SessionCompactionCheckpoint[]>();
-    const sessions = createSessions({
-      listCheckpoints: vi.fn(() => checkpoints.promise),
-    });
-    const client = {} as GatewayBrowserClient;
-    const mutableGateway = createGateway(client);
-    const page = await createPage(createContext(mutableGateway.gateway, sessions));
-    const request = page.loadCheckpoint("main");
-    page.checkpointBusyKey = "busy";
-    page.sessionMutationPending = true;
-
-    mutableGateway.emit({ phase: "reconnecting", client });
-
-    expect(page.checkpointLoadingKey).toBeNull();
-    expect(page.checkpointBusyKey).toBeNull();
-    expect(page.sessionMutationPending).toBe(false);
-    checkpoints.resolve([{ checkpointId: "stale" }] as SessionCompactionCheckpoint[]);
-    await request;
-    expect(page.checkpointItemsByKey).toEqual({});
   });
 
   it("closes an open row menu on a same-client disconnect", async () => {
@@ -728,15 +688,11 @@ describe("sessions page lifecycle", () => {
     const deleted = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
     const patched = createDeferred<unknown>();
     const forked = createDeferred<string | null>();
-    const branched = createDeferred<{ key: string }>();
-    const restored = createDeferred<unknown>();
     const groupsPut = createDeferred<Awaited<ReturnType<SessionCapability["groupsPut"]>>>();
     const sessions = createSessions({
       deleteMany: vi.fn(() => deleted.promise),
       patch: vi.fn(() => patched.promise as never),
       create: vi.fn(() => forked.promise),
-      branchCheckpoint: vi.fn(() => branched.promise as never),
-      restoreCheckpoint: vi.fn(() => restored.promise as never),
       groupsPut: vi.fn(() => groupsPut.promise),
     });
     const request = vi.fn((method: string) => {
@@ -760,8 +716,6 @@ describe("sessions page lifecycle", () => {
       page.deleteSelected(),
       page.patchSession("main", { archived: true }, undefined, "session-main"),
       page.forkSession("main"),
-      page.branchCheckpoint("main", "branch-checkpoint"),
-      page.restoreCheckpoint("main", "restore-checkpoint"),
       page.rememberCustomGroup("Stale group"),
     ];
     await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
@@ -774,8 +728,6 @@ describe("sessions page lifecycle", () => {
     });
     patched.resolve({ ok: true });
     forked.resolve("forked");
-    branched.resolve({ key: "branched" });
-    restored.reject(new Error("stale restore error"));
     groupsPut.reject(new Error("stale group error"));
     await Promise.all(requests);
 
@@ -783,7 +735,6 @@ describe("sessions page lifecycle", () => {
     expect(page.selectedKeys).toEqual(new Set(["main"]));
     expect(page.error).toBeNull();
     expect(page.sessionMutationPending).toBe(false);
-    expect(page.checkpointBusyKey).toBeNull();
     expect(mutableGateway.setSessionKey).not.toHaveBeenCalled();
     expect(context.navigate).not.toHaveBeenCalled();
   });

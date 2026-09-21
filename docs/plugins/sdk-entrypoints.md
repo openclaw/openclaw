@@ -125,7 +125,8 @@ file operations to the host. Compound writes reuse native atomic publication and
 conflict handling; maintenance decisions, locks and SQLite state stay on Gateway.
 A remote binding without maintenance support fails instead of using Gateway files.
 The file worker implements these operations and native change notifications.
-Paired-node adapter wiring is still required before a complete storage cutover.
+The paired-node file-transfer adapter connects these operations through the
+existing service-owned node channel and node file policy.
 
 Task-time Skill preparation uses remote discovery. Channel-native menus use
 Gateway-owned Skills without waiting for the Harness; remote menu support is
@@ -164,6 +165,16 @@ until aborted, and send `change` after the initial scan and later edits. Send
 without reopening the subscription. Hosts without `watchSkills` use that same
 fallback. `skills.load.watch: false` disables the subscription and this fallback.
 Gateway watches Workshop locally under the same snapshot invalidation lifecycle.
+
+The paired-node file-transfer adapter also connects Skill discovery, resource reads,
+watching and dependency installation through `workspace.skills`. Its native worker
+launcher uses `resolveWorkspaceWorkerArgv("memory" | "skills")` from
+`agent-workspace-runtime`, then appends the operation arguments. Use the same
+OpenClaw version on Gateway and node.
+
+This adapter does not implement remote Skill source install/update/remove or
+ClawHub lifecycle operations; those remain tracked in
+[Enterprise #242](https://github.com/openclaw/openclaw-enterprise/issues/242).
 
 ## Tool failure diagnostics
 

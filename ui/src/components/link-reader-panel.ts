@@ -25,9 +25,9 @@ import {
   tabLabel,
   type ReaderTab,
 } from "./link-reader-panel-view.ts";
+import { linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
 import {
   resolveLinkReaderTarget,
-  linkReaderResponseMatchesTarget,
   linkReaderTargetKey as targetKey,
   EMPTY_LINK_READERS,
   type LinkReaderTarget,

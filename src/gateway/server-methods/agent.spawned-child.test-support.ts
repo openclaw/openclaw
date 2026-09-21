@@ -1,5 +1,6 @@
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import type { SubagentRegistryDeps } from "../../agents/subagents/registry/subagent-registry-deps.js";
 import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
 import {
   getSubagentRunByChildSessionKey,
@@ -7,7 +8,12 @@ import {
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { type AgentHandlerArgs, backendGatewayClient, requireValue } from "./agent.test-harness.js";
+import {
+  type AgentHandlerArgs,
+  applyGatewaySubagentRegistryTestDeps,
+  backendGatewayClient,
+  requireValue,
+} from "./agent.test-harness.js";
 
 export const confirmedAcpMeta: NonNullable<ReturnType<typeof readAcpSessionMeta>> = {
   backend: "acpx",
@@ -31,6 +37,13 @@ export function createPluginSubagentTestLifetime(params: {
   runId: string;
   childSessionKey: string;
 }) {
+  applyGatewaySubagentRegistryTestDeps({
+    callGateway: (async () => ({
+      status: "ok",
+      startedAt: Date.now(),
+      endedAt: Date.now(),
+    })) as SubagentRegistryDeps["callGateway"],
+  });
   const work = new AsyncWorkScope();
   const cleanupCompleted = createDeferred();
   const unsubscribe = onSubagentRegistryPersisted(() => {

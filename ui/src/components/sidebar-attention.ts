@@ -292,10 +292,13 @@ class SidebarAttention extends OpenClawLightDomElement {
   }
 
   override render() {
-    if (this.context?.gateway.snapshot.phase !== "connected") {
+    if (!this.context) {
       return nothing;
     }
     const entries = this.currentInboxEntries();
+    if (this.context.gateway.snapshot.phase !== "connected" && entries.length === 0) {
+      return nothing;
+    }
     const count = sidebarInboxTabCounts(entries).all;
     const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count),

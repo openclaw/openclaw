@@ -4,6 +4,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -22,6 +23,7 @@ import {
 import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
 import { NewSessionDraftController } from "./draft-controller.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { closeSessionMenus } from "./new-session-runtime.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { PaletteSessionSettings } from "./palette-session-settings.ts";
@@ -89,6 +91,19 @@ export class PaletteSessionDraft implements ReactiveController {
   get message(): string {
     return this.draft?.submission.message ?? "";
   }
+  get mentions(): readonly HumanMention[] {
+    return this.draft?.submission.mentions ?? [];
+  }
+  get mentionDirectory() {
+    return this.draft && this.read().open && !this.messageLocked
+      ? resolveNewSessionMentionDirectory({
+          context: this.read().context,
+          agentId: this.draft.place.agentId,
+          draftOwnerKey: this.idPrefix,
+          visibility: this.draft.submission.visibility,
+        })
+      : undefined;
+  }
   get submitting(): boolean {
     return this.draft?.submission.submitting ?? false;
   }
@@ -121,15 +136,15 @@ export class PaletteSessionDraft implements ReactiveController {
     return this.draft?.submission.submitDisabledReason();
   }
 
-  setMessage(value: string) {
+  setMessage(value: string, mentions?: readonly HumanMention[]) {
     if (!this.draft || this.messageLocked) {
       return;
     }
-    if (value !== this.message) {
+    if (value !== this.message || (mentions !== undefined && mentions !== this.mentions)) {
       this.rejectedOpen = undefined;
       this.draft.submission.clearError();
     }
-    this.draft.submission.setMessage(value);
+    this.draft.submission.setMessage(value, mentions);
   }
 
   private attachmentProps(): ChatAttachmentControlsProps | undefined {

@@ -286,11 +286,6 @@
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
     },
-    "tree-sitter-bash": {
-      "owner": "core:command-explainer",
-      "class": "core-runtime",
-      "risk": ["wasm", "parser", "untrusted-shell"]
-    },
     "tslog": {
       "owner": "core:logging",
       "class": "core-runtime",

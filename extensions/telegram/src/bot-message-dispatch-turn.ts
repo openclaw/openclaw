@@ -31,6 +31,8 @@ import {
   handleItemEvent,
   handlePlanUpdate,
   handleToolStart,
+  markFinalDelivered,
+  markFinalStarted,
   pushReasoningProgress,
   pushThinkingTokenProgress,
   pushToolProgress,
@@ -190,6 +192,13 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               ? [{ begin: beginDeliveryCorrelation }]
               : undefined,
             suppressTyping: isRoomEvent,
+            onObservedReplyDelivery: async () => {
+              markFinalStarted(turn);
+              await waitForDraftEvents(turn);
+              markFinalDelivered(turn);
+              turn.deliveryState.markDelivered();
+              await cleanupDrafts(turn, turn.isSuperseded());
+            },
             onPartialReply:
               turn.answerLane.stream || turn.reasoningLane.stream
                 ? (payload) => {

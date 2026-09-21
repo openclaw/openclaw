@@ -935,7 +935,7 @@ describe("headless Code Mode", () => {
     expect(result.error).toContain("timeout exceeded");
   });
 
-  it("classifies syntax errors", async () => {
+  it("classifies syntax errors as input failures without dispatch", async () => {
     const result = expectFailed(
       await runCodeModeScriptHeadless({
         ctx: createHeadlessCodeModeHarness(),
@@ -943,7 +943,8 @@ describe("headless Code Mode", () => {
       }),
     );
 
-    expect(result.code).toBe("internal_error");
+    expect(result.code).toBe("invalid_input");
+    expect(result.error).toContain("No tools were dispatched");
   });
 
   it("clamps headless limit overrides to worker-safe bounds", () => {

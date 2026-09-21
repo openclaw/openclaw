@@ -307,8 +307,12 @@ describe("retained session source verification", () => {
           });
           expect(
             unexpected.targets.flatMap((target) => target.issues).map((issue) => issue.code),
-          ).toEqual(["plugin_migration_source_retained", "active_sqlite_transcript_jsonl"]);
-          expect(fs.readFileSync(uncaptured, "utf8")).toBe(bytes);
+          ).toEqual(["plugin_migration_source_retained"]);
+          expect(fs.existsSync(uncaptured)).toBe(false);
+          expect(unexpected.targets[0]?.archivedTranscriptFiles).toHaveLength(1);
+          expect(fs.readFileSync(unexpected.targets[0]!.archivedTranscriptFiles[0]!, "utf8")).toBe(
+            bytes,
+          );
         }
       });
     },

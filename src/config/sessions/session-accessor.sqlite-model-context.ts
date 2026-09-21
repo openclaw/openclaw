@@ -17,6 +17,7 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
+  SessionTranscriptContextVersion,
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
@@ -26,10 +27,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
-import {
-  readTranscriptContextVersionInTransaction,
-  type SessionTranscriptContextVersion,
-} from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import {
   projectModelContextEventSql,
@@ -45,8 +43,6 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-
-export type { SessionTranscriptContextVersion } from "./session-accessor.sqlite-transcript-state.js";
 
 type ContextEntry = SessionTreeEntry & { seq: number };
 export type SessionModelContextLimits = {

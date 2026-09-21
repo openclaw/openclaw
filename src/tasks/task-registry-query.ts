@@ -10,7 +10,11 @@ import type { TaskRegistryControlRuntime } from "./task-registry-control.types.j
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
 import { clearTaskFlowSyncRetries } from "./task-registry-flow-sync.js";
 import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
-import { prepareTaskRegistryRead, prepareTaskRegistryReadOwner } from "./task-registry-read.js";
+import {
+  createTaskRegistryReadPreparation,
+  prepareTaskRegistryRead,
+  prepareTaskRegistryReadOwner,
+} from "./task-registry-read.js";
 import {
   cloneTaskRecord,
   listTasksFromIndex,
@@ -161,6 +165,7 @@ const TASK_PAGE_MAX_ATTEMPTS = 3;
 const TASK_PAGE_YIELD_INTERVAL_MS = 12;
 
 export async function listTaskRecordPage(params: {
+  prepareRead?: ReturnType<typeof createTaskRegistryReadPreparation>;
   offset: number;
   limit: number;
   expectedRevision?: number;
@@ -179,7 +184,8 @@ export async function listTaskRecordPage(params: {
     "cursor_stale" | "registry_changed"
   >
 > {
-  let read = await prepareTaskRegistryRead();
+  const prepareRead = params.prepareRead ?? createTaskRegistryReadPreparation();
+  let read = await prepareRead();
   if (!read) {
     return err("registry_changed");
   }
@@ -195,7 +201,7 @@ export async function listTaskRecordPage(params: {
   for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
     if (attempt > 0) {
       const preparationStartedAt = performance.now();
-      read = await prepareTaskRegistryRead();
+      read = await prepareRead();
       if (!read) {
         return err("registry_changed");
       }

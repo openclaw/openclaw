@@ -16,10 +16,13 @@ import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createChatRunState } from "../server-chat-state.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
-import { captureAbortedPartial, persistAbortedPartials } from "./chat-transcript-persistence.js";
 import {
+  captureAbortedPartial,
+  persistAbortedPartials,
+} from "./chat-transcript-persistence.runtime.js";
+import {
+  createAbortTestRunState,
   createActiveRun,
   createChatAbortContext,
   invokeChatAbortHandler,
@@ -28,17 +31,6 @@ import {
 type TranscriptLine = {
   message?: Record<string, unknown>;
 };
-
-type TestChatRunRecord =
-  ReturnType<typeof createChatRunState>["runs"] extends Map<string, infer Record> ? Record : never;
-
-function createAbortTestRunState(entries: Array<[string, Partial<TestChatRunRecord>]>) {
-  const state = createChatRunState();
-  for (const [runId, record] of entries) {
-    Object.assign(state.getOrCreate(runId), record);
-  }
-  return state;
-}
 
 const sessionEntryState = vi.hoisted(() => ({
   transcriptPath: "",

@@ -29,7 +29,10 @@ import {
   assertServiceCronRunReceiptCurrent,
   markServiceCronJobActive,
 } from "../service/run-receipts.js";
-import { proposeCronRunRecovery, recoverCronRunProposal } from "../service/run-recovery.js";
+import {
+  observeCronRecoveryForTest,
+  recoverCronRunForTest,
+} from "../service/run-recovery.test-support.js";
 import { createCronServiceState } from "../service/state.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob, CronJobPatch, CronStoredJob, CronToolsAllowProvenance } from "../types.js";
@@ -46,12 +49,12 @@ import {
   listActiveCronRunReceiptJobIdsInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
-  type CronRunReceiptHandle,
 } from "./run-receipt-store.js";
 import {
   isCronRunTriggerStateRetiredInDatabase,
   retireCronRunTriggerStateInDatabase,
 } from "./run-receipt-trigger-state.js";
+import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-receipt-" });
 
@@ -692,18 +695,18 @@ describe("cron run receipt store", () => {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
-    const proposal = await proposeCronRunRecovery(state, job.id, undefined, startedAtMs);
-    expect(recoverCronRunProposal(state, proposal)).toMatchObject({ kind: "live" });
+    const proposal = await observeCronRecoveryForTest(state, job.id, undefined, startedAtMs);
+    expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "live" });
 
     foreign.startTimeProbe.mockImplementation((pid) =>
       pid === foreign.handle.ownerPid ? null : foreign.getStartTime(pid),
     );
     vi.setSystemTime(startedAtMs + 2 * 60 * 60_000);
-    expect(recoverCronRunProposal(state, proposal)).toMatchObject({ kind: "live" });
+    expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "live" });
     expect(() => claim(storePath, job, Date.now())).toThrow(CronRunReceiptConflictError);
     vi.setSystemTime(Date.now() + 1);
 
-    expect(recoverCronRunProposal(state, proposal)).toMatchObject({ kind: "repaired" });
+    expect(await recoverCronRunForTest(state, proposal)).toMatchObject({ kind: "repaired" });
     const recovered = (await loadCronStore(storePath)).jobs[0]!;
     expect(recovered.state).toMatchObject({ lastRunStatus: "error" });
     expect(recovered.state.runningAtMs).toBeUndefined();

@@ -9,7 +9,10 @@ const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
 const deferredHeartbeatStops = new WeakMap<TurnAdoptionLifecycle, () => void>();
 
-type FollowupLifecycleRun = Pick<FollowupRun, "steerPending" | "turnAdoptionLifecycle">;
+type FollowupLifecycleRun = Pick<
+  FollowupRun,
+  "steerPending" | "turnAdoptionLifecycle" | "operatorAuthority"
+>;
 
 export function startFollowupRunPreAdoptionHeartbeat(
   lifecycle: TurnAdoptionLifecycle | undefined,
@@ -58,10 +61,36 @@ export function startFollowupRunPreAdoptionHeartbeat(
 }
 
 export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
-  const lifecycle = run.turnAdoptionLifecycle;
+  const authority = run.operatorAuthority;
+  authority?.signal?.throwIfAborted();
+  authority?.assertCurrent();
+  // Delivery recovery has a fresh queue lifetime after its parent turn settles.
+  const lifecycle =
+    run.turnAdoptionLifecycle ??
+    (authority
+      ? (run.turnAdoptionLifecycle = { admission: "cancel-only", onAdopted: () => {} })
+      : undefined);
   if (lifecycle && !enqueuedTurnAdoptionLifecycles.has(lifecycle)) {
     if (lifecycle.onDeferred?.() === false) {
       return false;
+    }
+    let releaseAuthority: (() => void) | undefined;
+    try {
+      releaseAuthority = authority?.retain?.();
+    } catch (error) {
+      completeFollowupRunLifecycle(run);
+      throw error;
+    }
+    if (releaseAuthority) {
+      const release = releaseAuthority;
+      const onSettled = lifecycle.onSettled;
+      lifecycle.onSettled = () => {
+        try {
+          onSettled?.();
+        } finally {
+          release();
+        }
+      };
     }
     enqueuedTurnAdoptionLifecycles.add(lifecycle);
     startFollowupRunPreAdoptionHeartbeat(lifecycle);
@@ -79,6 +108,7 @@ export function retireFollowupRunCancellation(run: FollowupLifecycleRun): void {
 }
 
 export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Promise<void> {
+  run.operatorAuthority?.assertCurrent();
   const lifecycle = run.turnAdoptionLifecycle;
   if (!lifecycle || admittedTurnAdoptionLifecycles.has(lifecycle)) {
     return;
@@ -95,6 +125,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
   const admission = Promise.resolve().then(async () => {
     if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
       await lifecycle.onAdopted();
+      run.operatorAuthority?.assertCurrent();
       admittedTurnAdoptionLifecycles.add(lifecycle);
       deferredHeartbeatStops.get(lifecycle)?.();
     }

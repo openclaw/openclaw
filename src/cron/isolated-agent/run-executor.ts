@@ -196,8 +196,6 @@ function createCronPromptExecutor(
       throw new Error(policyOutcome.message);
     }
   }
-  // Cron prompts may intentionally have nothing to report; both runners must agree on silence.
-  const allowEmptyAssistantReplyAsSilent = true;
   const finalizePromptForResolvedTools = ({
     prompt,
     messageToolAvailable,
@@ -481,7 +479,8 @@ function createCronPromptExecutor(
             timeoutMs: params.timeoutMs,
             runId,
             lane: resolveCronAgentLane(params.lane),
-            allowEmptyAssistantReplyAsSilent,
+            // Scheduling permits silence; an announce route only selects where output goes.
+            terminalReplyExpectation: "optional",
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
             agentAccountId: params.resolvedDelivery.accountId,
@@ -681,10 +680,6 @@ function createCronPromptExecutor(
             : undefined,
           deferTerminalLifecycle: true,
           onAgentEvent: params.lifecycle.note,
-          // Cron owns the resolved delivery contract. A valid announce route
-          // still needs a final payload; none, webhook, and invalid routes do not.
-          terminalReplyExpectation:
-            params.deliveryRequested && params.resolvedDelivery.ok ? "required" : "optional",
           disableMessageTool: !sourceDelivery.messageTool.enabled,
           forceMessageTool: sourceDelivery.messageTool.force,
           allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,

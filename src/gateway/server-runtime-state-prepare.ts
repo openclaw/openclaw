@@ -13,6 +13,10 @@ import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { isGatewayDraining } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import {
+  canIsolateAgentDatabase,
+  listAgentDatabaseAdmissionRefusals,
+} from "../state/agent-database-admission.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
@@ -428,6 +432,12 @@ export async function prepareGatewayKernelState(params: {
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     getStateDatabaseFailure: () =>
       openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(resolveDatabasePath()),
+    getAgentDatabaseAdmissionRefusals: () => {
+      const cfg = getRuntimeConfig();
+      return listAgentDatabaseAdmissionRefusals().filter(
+        (refusal) => !canIsolateAgentDatabase(cfg, refusal.agentId),
+      );
+    },
     getPluginReloadStatus: params.getPluginReloadStatus,
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||

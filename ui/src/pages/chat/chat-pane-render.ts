@@ -426,6 +426,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       onDismissProgressCard,
       gatewayQuestionPrompts,
+      asyncQuestionStorage:
+        !catalogKey && !suggestionViewer ? this.chatState.durableComposerScope : null,
       ...createChatQuestionActions({
         state,
         questionState: this.questionPromptState,
@@ -598,13 +600,6 @@ export class ChatPane extends ChatPaneLayoutRender {
                   followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
                   submissionAction,
                 ),
-      // Checkpoint deep-link carries the archived filter so the row stays findable.
-      onOpenSessionCheckpoints: () => {
-        const status = selectedSessionArchived ? "&status=archived" : "";
-        this.context.navigate("sessions", {
-          search: `?session=${encodeURIComponent(state.sessionKey)}${status}`,
-        });
-      },
       onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onSelectRealtimeVoice: (voice) => void state.selectRealtimeTalkVoice(voice),
@@ -677,6 +672,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
       fetchLinkFavicon,
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
+      branding: this.context?.theme.branding,
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,

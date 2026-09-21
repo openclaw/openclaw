@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -238,6 +239,90 @@ afterEach(async () => {
 });
 
 describe("MeetingSessionRuntime durable transcripts", () => {
+  const policyTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.each([false, true])(
+    "suspends durable notes without leaving and resumes past disabled captions (failed finalization: %s)",
+    async (failFinalization) => {
+      const stateDir = policyTempDirs.make("openclaw-meeting-policy-");
+      const lines = [{ text: "before suspension" }];
+      const releaseBrowserTab = vi.fn(async () => true);
+      const captureTranscript = vi.fn(async () => ({
+        droppedLines: 0,
+        epoch: "same-live-page",
+        lines: [...lines],
+      }));
+      const { runtime } = createTestRuntime({
+        captureTranscript,
+        durableTranscripts: { stateDir },
+        releaseBrowserTab,
+        joinTransport: async ({ session }) => {
+          session.browser = {
+            launched: true,
+            tab: { targetId: "policy-tab", openedByPlugin: true },
+          };
+          return {};
+        },
+      });
+      const { session } = await runtime.join({
+        url: "https://meeting.example/policy",
+        agentId: "notes-agent",
+      });
+      const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      const writeSession = store.writeSession.bind(store);
+      const fault = vi
+        .spyOn(TranscriptsStore.prototype, "writeSession")
+        .mockImplementation(async (descriptor) => {
+          if (failFinalization && descriptor.stoppedAt) {
+            throw new Error("metadata unavailable");
+          }
+          return writeSession(descriptor);
+        });
+      lines.push({ text: "accepted final caption" });
+      const disabling = runtime.reconcileTranscriptPolicy(false);
+      await expect(
+        runtime.startTranscriptSource({
+          session: {
+            sessionId: "late-subscriber",
+            source: {
+              providerId: "test-meeting",
+              agentId: session.agentId,
+              meetingUrl: session.url,
+            },
+            startedAt: session.createdAt,
+          },
+          onUtterance: vi.fn(),
+        }),
+      ).resolves.toMatchObject({ ok: false });
+      if (failFinalization) {
+        await expect(disabling).rejects.toThrow("metadata unavailable");
+      } else {
+        await disabling;
+      }
+      fault.mockRestore();
+      expect(session.state).toBe("active");
+      expect(releaseBrowserTab).not.toHaveBeenCalled();
+      expect(captureTranscript).not.toHaveBeenCalledWith({ finalize: true });
+
+      lines.push({ text: "while disabled" });
+      await runtime.reconcileTranscriptPolicy(true);
+      lines.push({ text: "after resuming" });
+      await runtime.leave(session.id);
+
+      const saved = await store.readSession(session.id);
+      expect(saved?.stoppedAt).toEqual(expect.any(String));
+      expect((await store.readUtterancesForSession(saved!)).map((line) => line.text)).toEqual([
+        "before suspension",
+        "accepted final caption",
+        "after resuming",
+      ]);
+      expect(await store.readSummary(saved!)).toMatchObject({ summary: { utteranceCount: 3 } });
+      expect(releaseBrowserTab).toHaveBeenCalledOnce();
+    },
+  );
+
   it("persists joined agent-mode captions and writes summary rows on leave", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-meeting-notes-"));
     tempDirs.push(stateDir);

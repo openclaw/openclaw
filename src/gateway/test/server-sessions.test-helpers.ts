@@ -23,10 +23,7 @@ import {
   type GatewaySessionsSuiteSetup,
 } from "./server-sessions-resources.test-helpers.js";
 
-export {
-  createCheckpointFixture,
-  getSessionManagerModule,
-} from "./server-sessions-checkpoint.test-helpers.js";
+export { createCompactedSessionFixture } from "./server-sessions-compaction.test-helpers.js";
 
 export const getGatewayConfigModule = createLazyRuntimeModule(
   () => import("../../config/config.js"),
@@ -450,7 +447,6 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
         storePath: workStorePath,
       });
     }
-
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
       throw new Error("OPENCLAW_CONFIG_PATH is required");
@@ -626,6 +622,7 @@ export async function directSessionReq<TPayload = unknown>(
       "chat.history",
       "sessions.list",
       "sessions.describe",
+      "sessions.preview",
       "sessions.resolve",
       "sessions.create",
       "sessions.patch",

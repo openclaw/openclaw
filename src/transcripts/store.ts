@@ -17,10 +17,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
-import {
-  executeOpenClawStateWorker,
-  runOpenClawStateWorkerOperation,
-} from "../state/openclaw-state-worker-store.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptSourceLocator,
@@ -38,8 +35,9 @@ import {
   transcriptSessionSelector,
   writeTranscriptArtifact,
 } from "./store-artifacts.js";
+import { prepareTranscriptDateReader } from "./store-date-preparation.js";
 import { TranscriptsSummaryChangedError } from "./store-errors.js";
-import { transcriptJsonlDigest, writeTranscriptJsonlArtifact } from "./store-export-jsonl.js";
+import { writeTranscriptJsonlArtifact } from "./store-export-jsonl.js";
 import {
   assertTranscriptExportPathAvailable,
   hasAliasedCanonicalTranscriptExportPathOwner,
@@ -55,11 +53,7 @@ import {
   updateMeetingTranscriptExportManifestInDatabase,
   writeMeetingTranscriptSessionInDatabase,
 } from "./store-sqlite-write.js";
-import {
-  meetingTranscriptDb,
-  meetingTranscriptSessionQuery,
-  sessionFromRow,
-} from "./store-sqlite.js";
+import { meetingTranscriptDb, sessionFromRow } from "./store-sqlite.js";
 import type * as StoreTypes from "./store-types.js";
 import type {
   TranscriptAppendScheduler,
@@ -107,7 +101,20 @@ export class TranscriptsStore {
     const context = captureOpenClawStateWorkerContext(this.databaseOptions);
     const input = structuredClone(request);
     input.readOnly = this.databaseOptions.readOnly;
-    const result = await executeOpenClawStateWorker<Key>(context, { type, input });
+    const preparation =
+      type === "transcripts.readEntries"
+        ? prepareTranscriptDateReader(
+            context.admission.assertCurrent,
+            context.admission.databasePath,
+          )
+        : undefined;
+    const result = await runOpenClawStateWorkerOperation(
+      context,
+      (scope) => scope.execute<Key>({ type, input }),
+      preparation,
+    );
+    context.admission.assertCurrent();
+    preparation?.assertCurrent();
     if (!result.ok) {
       throw new read.TranscriptLibraryError(
         result.error.type,
@@ -133,18 +140,13 @@ export class TranscriptsStore {
     };
   }
 
-  private readExportOwnership(session: TranscriptSessionDescriptor): {
+  private async readExportOwnership(session: TranscriptSessionDescriptor): Promise<{
     manifest: Record<string, string>;
     pending: Set<string>;
-  } {
-    const database = this.database();
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      meetingTranscriptSessionQuery(database.db, session).select([
-        "export_manifest_json",
-        "export_pending_json",
-      ]),
-    );
+  }> {
+    const row = await this.readWorker("transcripts.exportOwnership", {
+      params: { session: { sessionId: session.sessionId, startedAt: session.startedAt } },
+    });
     return row
       ? {
           manifest: parseTranscriptExportManifest(row.export_manifest_json),
@@ -171,7 +173,11 @@ export class TranscriptsStore {
     }
     const hashes: Record<string, string> = {
       "metadata.json": sha256Hex(`${JSON.stringify(storedSession, null, 2)}\n`),
-      "transcript.jsonl": transcriptJsonlDigest(this.database().db, storedSession),
+      "transcript.jsonl": await this.readWorker("transcripts.exportDigest", {
+        params: {
+          session: { sessionId: storedSession.sessionId, startedAt: storedSession.startedAt },
+        },
+      }),
     };
     const summary = await this.readSummary(storedSession);
     if (summary.summary) {
@@ -212,7 +218,7 @@ export class TranscriptsStore {
       }
       throw error;
     }
-    const ownership = this.readExportOwnership(session);
+    const ownership = await this.readExportOwnership(session);
     const caseSensitive = await isCaseSensitiveDirectory(sessionDir);
     let expectedHashes: Record<string, string> | undefined;
     const repairedHashes: Record<string, string> = {};
@@ -341,7 +347,7 @@ export class TranscriptsStore {
   }
 
   async listReadEntries(options: read.TranscriptReadOptions) {
-    return read.queryTranscriptReadEntries(this.database().db, options);
+    return this.readWorker("transcripts.readEntries", { params: options });
   }
 
   async writeSession(
@@ -355,9 +361,11 @@ export class TranscriptsStore {
     if (
       !(await this.readSessionByIdentity(session)) &&
       !(await hasAliasedCanonicalTranscriptExportPathOwner({
-        session,
+        selector: transcriptSessionSelector(session),
         exportRootDir: this.exportRootDir,
-        databaseOptions: this.databaseOptions,
+        owners: await this.readWorker("transcripts.exportPathOwners", {
+          params: { exportKey: transcriptSessionExportKey(session) },
+        }),
       }))
     ) {
       await this.assertExportDestinationOwned(session);
@@ -602,9 +610,11 @@ export class TranscriptsStore {
     const exportedHashes: Record<string, string> = {};
     const removedExports = new Set<string>();
     await assertTranscriptExportPathAvailable({
-      session,
+      selector: transcriptSessionSelector(session),
       exportRootDir: this.exportRootDir,
-      databaseOptions: this.databaseOptions,
+      collisions: await this.readWorker("transcripts.exportPathCollisions", {
+        params: { exportKey: transcriptSessionExportKey(session) },
+      }),
     });
     await this.assertExportDestinationOwned(session);
     const pendingFiles = [

@@ -249,7 +249,7 @@ describe("restart sentinel notice recovery", () => {
       if (destination !== "owner") {
         for (const kind of ["ack", "activating", "verifying", "finished"]) {
           expect(
-            deliveryQueueStorage.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`),
+            await deliveryQueueStorage.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`),
           ).toBeNull();
         }
       }
@@ -536,7 +536,7 @@ describe("restart sentinel notice recovery", () => {
       await expect(pending).resolves.toBe(true);
       expect(sendText).toHaveBeenCalledOnce();
       expect(
-        deliveryQueueStorage.findDeliveryIntentOwner(queueId, undefined, context),
+        await deliveryQueueStorage.findDeliveryIntentOwner(queueId, undefined, context),
       ).toMatchObject({ status: "completed" });
       expect(await loadPendingDelivery(queueId, replacement)).toBeNull();
     },
@@ -592,7 +592,7 @@ describe("restart sentinel notice recovery", () => {
       ).resolves.toBe(false);
       expect(sendText).toHaveBeenCalledTimes(outcome === "retry recovery" ? 2 : 1);
       expect(
-        deliveryQueueStorage.findDeliveryIntentOwner(queued.id, undefined, context),
+        await deliveryQueueStorage.findDeliveryIntentOwner(queued.id, undefined, context),
       ).toMatchObject({ status: outcome === "retry recovery" ? "completed" : "failed" });
       expect(await loadPendingDelivery(queued.id, replacement)).toBeNull();
     },

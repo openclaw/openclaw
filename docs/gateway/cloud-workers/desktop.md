@@ -13,6 +13,10 @@ The agent can attach a temporary environment to the current conversation, run
 the application there, and open its view in the chat side panel. The agent's
 primary workspace and session placement stay unchanged.
 
+Attached environments install and verify the worker bundle for remote app
+commands, but skip prewarming the agent runtime because the agent stays on the
+current execution host. OpenClaw worker turns still prewarm their agent runtime.
+
 For open-and-show requests, the agent passes `presentation: "desktop"` or
 `presentation: "portal"` when creating the attachment. The side panel opens
 before allocation and shows machine startup progress. A web preview waits for

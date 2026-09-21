@@ -23,7 +23,6 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import {
   acquireStateDatabaseHandleLease,
   hasStateDatabaseSourceExclusion,
-  prepareStateDatabaseCanonicalMutation,
 } from "../infra/state-database-coordinator.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -405,9 +404,10 @@ export function executeExistingOpenClawStateRead(
   command: OpenClawStateReadCommand,
   readOptions: OpenClawStateReadOptions = {},
 ): Promise<OpenClawStateReadReply | undefined> {
-  return mapOpenClawStateReadError(readOptions.mapError, (receipt) =>
-    executeRetainedOpenClawStateRead(options, command, receipt),
-  );
+  return mapOpenClawStateReadError(readOptions.mapError, (receipt) => {
+    const read = () => executeRetainedOpenClawStateRead(options, command, receipt);
+    return readOptions.current ? stateSnapshotReads.exit(read) : read();
+  });
 }
 
 function executeRetainedOpenClawStateRead(
@@ -428,7 +428,6 @@ function executeRetainedOpenClawStateRead(
     path: pathname,
     env: snapshot?.env ?? options.env,
   });
-  const mutation = prepareStateDatabaseCanonicalMutation(pathname);
   const excluded = hasStateDatabaseSourceExclusion(pathname);
   const preserveArtifacts = requiresArtifactPreservingSnapshot(pathname);
   const controller = new AbortController();
@@ -451,7 +450,6 @@ function executeRetainedOpenClawStateRead(
         controller.signal.throwIfAborted();
         context.maintenanceScope?.assertAdmission();
         context.admission.assertCurrent();
-        mutation?.();
         if (excluded && !hasStateDatabaseSourceExclusion(pathname)) {
           throw new Error("Shared-state source read scope is closed");
         }
@@ -541,7 +539,7 @@ function executeRetainedOpenClawStateRead(
       authority.assertCurrent();
       let nativeSource: OpenClawStateDatabase | undefined;
       if (!snapshot) {
-        if (preserveArtifacts || excluded || mutation) {
+        if (preserveArtifacts || excluded) {
           const native = borrowOpenClawStateDatabaseForAsyncRead(pathname);
           borrowed = native;
           nativeSource = native?.database;
@@ -552,29 +550,28 @@ function executeRetainedOpenClawStateRead(
       if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
         return undefined;
       }
-      if (excluded || mutation) {
+      if (excluded) {
         sourcePin = acquireStateDatabaseHandleLease({ databasePath: pathname });
       }
       let location = snapshot?.location ?? pathname;
       if (nativeSource) {
-        prepared =
-          excluded || mutation
-            ? await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-                nativeSource.db,
-                authority.assertCurrent,
-              )
-            : await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-                nativeSource.db,
-                authority.assertCurrent,
-                authority.signal,
-                "async",
-              );
+        prepared = excluded
+          ? await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+              nativeSource.db,
+              authority.assertCurrent,
+            )
+          : await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+              nativeSource.db,
+              authority.assertCurrent,
+              authority.signal,
+              "async",
+            );
         location = prepared.location;
-      } else if (!snapshot && (preserveArtifacts || excluded || mutation)) {
+      } else if (!snapshot && (preserveArtifacts || excluded)) {
         await transport.validateFresh(context, authority);
         authority.assertCurrent();
         prepared = await (
-          excluded || mutation ? prepareSqliteReadOnlyLocation : prepareSqliteReadOnlyLocationAsync
+          excluded ? prepareSqliteReadOnlyLocation : prepareSqliteReadOnlyLocationAsync
         )(pathname, {
           preserveSourceArtifacts: preserveArtifacts,
           signal: authority.signal,

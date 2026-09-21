@@ -326,7 +326,7 @@ describe("check-workflows", () => {
       "blacksmith-16vcpu-windows-2025",
     );
     expect(native).not.toBe(probe);
-    expect(native.if).toBe("${{ inputs.run_windows_ci }}");
+    expect(native.if).toBe("${{ inputs.run_windows_ci && !inputs.run_private_node_provisioning }}");
     expect(native["runs-on"]).toBe("windows-2025");
     expect(probe.if).toBeUndefined();
     expect(probe["runs-on"]).toBe("${{ inputs.runner_label }}");
@@ -344,7 +344,7 @@ describe("check-workflows", () => {
     expect(probe.steps.some((step) => step.id?.startsWith("native_"))).toBe(false);
     expect(
       probe.steps.find((step) => step.name === "Keep runner alive for SSH inspection")?.if,
-    ).toBe("${{ always() && !cancelled() }}");
+    ).toBe("${{ always() && !cancelled() && !inputs.run_private_node_provisioning }}");
     expect(probe.steps.find((step) => step.name === "Enforce WSL2 requirement")?.if).toBe(
       "${{ always() && !cancelled() && inputs.require_wsl2 }}",
     );
@@ -358,7 +358,8 @@ describe("check-workflows", () => {
     });
     const preflight = native.steps[1]!;
     expect(preflight.name).toBe("Preflight native Scheduled Task session");
-    expect(preflight.if).toBe(native.if);
+    // The job excludes private proof before allocation; native steps retain the CI opt-in.
+    expect(preflight.if).toBe("${{ inputs.run_windows_ci }}");
     expect(preflight.run).toContain(
       'if (-not [Environment]::UserInteractive) {\n  throw "Native Scheduled Task proof requires an interactive Windows runner session."\n}',
     );
@@ -459,7 +460,7 @@ describe("check-workflows", () => {
       (step) => step.name === "Remove retained native Scheduled Task evidence",
     )!;
     expect(proof["timeout-minutes"]).toBe(5);
-    expect(proof.if).toBe(native.if);
+    expect(proof.if).toBe("${{ inputs.run_windows_ci }}");
     expect(proof.env).toMatchObject({
       EXPECTED_HEAD: "${{ inputs.target_ref }}",
       CI_WINDOWS_SCHTASKS_ROOT:

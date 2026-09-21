@@ -59,7 +59,7 @@ function renderRefresh(card: ProgressCard, action?: SessionProgressCardRefreshAc
       }
     }}
   >
-    ${action.state === "updated" ? icons.check : icons.refresh}
+    ${pending ? icons.loader : action.state === "updated" ? icons.check : icons.refresh}
   </button>`;
 }
 type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";

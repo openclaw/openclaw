@@ -237,6 +237,19 @@ reads to finish. OpenClaw coordinates its own lifecycle operations for each
 native thread and preserves that thread's identity across ordinary resumes.
 A closed, replaced, or retired client still cannot complete a stale handoff.
 
+Managed local connections share a bounded inference relay. It admits 16 active
+requests and queues one additional batch of up to 16 requests in arrival order.
+Idle WebSockets do not consume request capacity. A new WebSocket waits before
+opening its upstream connection; queueing and its handshake share a 10-second
+deadline. HTTP admission and queued WebSocket requests wait at most 30 seconds.
+Cancelled or superseded work leaves the queue without reaching the provider.
+
+These limits apply to requests across chats and native child agents, not to the
+number of saved conversations. Queue capacity or deadline exhaustion returns a
+retryable busy response. Sustained overload can still fail a turn after Codex
+exhausts its retries; this queue absorbs short bursts rather than increasing
+the relay's active request limit.
+
 After a completed provider failure, you can continue in the same chat with its
 existing configuration. OpenClaw retains the configured native thread, including
 for `/codex resume` of that chat's already-bound thread. Native provider policy refusals

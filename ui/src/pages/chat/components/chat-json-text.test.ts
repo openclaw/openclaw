@@ -30,6 +30,10 @@ const jsonSources = [
   },
   { name: "literal Markdown", text: '{"text":"**stars**"}' },
   { name: "ordinary formatted JSON", text: '{\n  "count": 42,\n  "ready": true\n}' },
+  {
+    name: "natural nested indentation and string whitespace",
+    text: '{\n\t"nested": {\n\t\t"id": 9007199254740993,\n\t\t"state": "before", "state": "after",\n\t\t"text": "  keep these spaces  "\n\t}\n}',
+  },
 ];
 
 const containers: HTMLElement[] = [];

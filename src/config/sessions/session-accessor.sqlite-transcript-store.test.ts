@@ -32,7 +32,7 @@ import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
 } from "./session-transcript-projection-rebuild.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
 
 const tempDirs: string[] = [];
 
@@ -242,7 +242,7 @@ describe("SQLite exact transcript rewrite", () => {
     await withRewriteFixture(({ db, snapshot, rewrite, scope }) => {
       const before = snapshot();
       const work = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
-        sql.includes("session_transcript_fts")
+        /\bsession_transcript_fts\b/i.test(sql)
           ? "fts"
           : sql.includes("octet_length")
             ? "size"
@@ -281,7 +281,7 @@ describe("SQLite exact transcript rewrite", () => {
       expect(sessionTranscriptIndexNeedsReconcile(db, scope.sessionId)).toBe(false);
       const before = prepareSessionTranscriptProjection(db, scope.sessionId)!;
       const work = trackSqliteStatementExecutions(db, ["fts"], (sql) =>
-        sql.includes("session_transcript_fts") ? "fts" : null,
+        /\bsession_transcript_fts\b/i.test(sql) ? "fts" : null,
       );
       try {
         rewrite({ ...rewriteEvents[1], message: { ...message, content: "changed" } });

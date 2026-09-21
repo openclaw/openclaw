@@ -21,7 +21,7 @@ export function createExtensionCodexAppServerAttemptLightVitestConfig(
       dir: "extensions",
       env,
       exclude: databaseWorkerExtensionTestFiles,
-      fileParallelism: false,
+      isolate: true,
       name: "extension-codex-app-server-attempt-light",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],

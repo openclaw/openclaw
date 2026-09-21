@@ -64,11 +64,11 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import {
-  readMessageIdempotencyKey,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 export { withSessionPendingInputRelocation };
 export type { SessionPendingInput, SessionPendingInputPage };

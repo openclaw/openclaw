@@ -409,6 +409,7 @@ function prepareCapabilityProviderLoad<K extends CapabilityProviderRegistryKey>(
     ? params.key
     : undefined;
   return {
+    loadOptions: params.loadOptions,
     loadedRegistry,
     resolveLoadOptions: () => ({
       ...params.loadOptions,
@@ -450,10 +451,8 @@ function prepareCapabilityProviderLoad<K extends CapabilityProviderRegistryKey>(
 }
 
 function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
-  params: Parameters<typeof prepareCapabilityProviderLoad<K>>[0],
-  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
+  load: ReturnType<typeof prepareCapabilityProviderLoad<K>>,
 ): PluginRegistry[K] {
-  const load = prepareCapabilityProviderLoad(params, onSelectedRegistry);
   const registry = load.loadedRegistry ?? resolveRuntimePluginRegistry(load.resolveLoadOptions());
   const { entries, pluginIds } = load.fallback(registry);
   if (pluginIds.length === 0) {
@@ -461,7 +460,7 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   }
   const captured = load.filterAllowedEntries(
     loadBundledCapabilityRuntimeRegistry({
-      ...params.loadOptions,
+      ...load.loadOptions,
       pluginIds,
     }),
   );
@@ -474,7 +473,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
 ): CapabilityProviderFor<K> | undefined {
   const resolution = preparePluginCapabilityProviderLookup(params, onSelectedRegistry);
   return resolution.resolve(
-    resolution.load ? loadCapabilityProviderEntries(resolution.load, onSelectedRegistry) : [],
+    resolution.load ? loadCapabilityProviderEntries(resolution.prepareLoad()) : [],
   );
 }
 
@@ -486,9 +485,30 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
     return { load: undefined, resolve: (_entries: PluginRegistry[K]) => undefined };
   }
 
+  // A targeted lookup retains only the canonical/alias winner, never competing providers.
+  const projections = new WeakMap<object, () => CapabilityProviderFor<K>>();
+  const selectRegistry: SelectedCapabilityRegistry<K> | undefined =
+    onSelectedRegistry &&
+    ((registry) => {
+      const project = onSelectedRegistry(registry);
+      return project
+        ? (provider, pluginId) => {
+            projections.set(provider, () => project(provider, pluginId));
+            return provider;
+          }
+        : undefined;
+    });
+  const selectProvider = (entries: PluginRegistry[K]) => {
+    const provider = findCapabilityProviderEntry<PluginRegistry[K][number]>(
+      entries,
+      params.providerId,
+    )?.provider;
+    return provider ? (projections.get(provider)?.() ?? provider) : undefined;
+  };
+
   const activeRegistry =
     getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
-  const project = onSelectedRegistry?.(activeRegistry);
+  const project = selectRegistry?.(activeRegistry);
   const activeProviders = projectCapabilityProviderEntries(
     filterPolicyAllowedCapabilityProviders({
       entries: activeRegistry?.[params.key] ?? [],
@@ -498,10 +518,7 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
     }),
     project,
   );
-  const activeProvider = findCapabilityProviderEntry<PluginRegistry[K][number]>(
-    activeProviders,
-    params.providerId,
-  )?.provider;
+  const activeProvider = selectProvider(activeProviders);
   if (activeProvider) {
     return { load: undefined, resolve: (_entries: PluginRegistry[K]) => activeProvider };
   }
@@ -544,9 +561,8 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
   };
   return {
     load,
-    prepareLoad: () => prepareCapabilityProviderLoad(load, onSelectedRegistry),
-    resolve: (entries: PluginRegistry[K]) =>
-      findCapabilityProviderEntry<PluginRegistry[K][number]>(entries, params.providerId)?.provider,
+    prepareLoad: () => prepareCapabilityProviderLoad(load, selectRegistry),
+    resolve: selectProvider,
   };
 }
 
@@ -667,7 +683,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 ): CapabilityProviderFor<K>[] {
   const resolution = preparePluginCapabilityProviderResolution(params, onSelectedRegistry);
   return resolution.resolve(
-    resolution.load ? loadCapabilityProviderEntries(resolution.load, onSelectedRegistry) : [],
+    resolution.load ? loadCapabilityProviderEntries(resolution.prepareLoad()) : [],
   );
 }
 

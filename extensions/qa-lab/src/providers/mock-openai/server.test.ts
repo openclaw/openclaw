@@ -2366,7 +2366,6 @@ describe("qa mock openai server", () => {
           input_schema: {
             type: "object",
             properties: {
-              language: { type: "string" },
               code: { type: "string" },
             },
             required: ["code"],
@@ -4104,7 +4103,6 @@ Update and merge these partial structured summaries.`,
         parameters: {
           type: "object",
           properties: {
-            language: { type: "string" },
             code: { type: "string" },
           },
           required: ["code"],
@@ -6794,7 +6792,6 @@ Update and merge these partial structured summaries.`,
         input_schema: {
           type: "object",
           properties: {
-            language: { type: "string" },
             code: { type: "string" },
           },
           required: ["code"],
@@ -6867,6 +6864,7 @@ Update and merge these partial structured summaries.`,
 
     const readAgent = readToolUse(await request());
     expect(readAgent.name).toBe("exec");
+    expect(readAgent.input).toEqual({ code: expect.any(String) });
     const readAgentCode = String(requireRecord(readAgent.input, "exec input").code);
     expect(readAgentCode).toContain("await catalog.search(targetName)");
     expect(readAgentCode).toContain("await target(targetArgs)");
@@ -7128,7 +7126,6 @@ Update and merge these partial structured summaries.`,
       parameters: {
         type: "object",
         properties: {
-          language: { type: "string" },
           code: { type: "string" },
           restartSafe: { type: "boolean" },
         },
@@ -7152,7 +7149,7 @@ Update and merge these partial structured summaries.`,
     execArgs: Record<string, unknown>,
     checkpoint: number,
   ) {
-    expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
+    expect(execArgs).toEqual({ code: expect.any(String), restartSafe: true });
     expect(execArgs.code).toContain("qa_restart_wait");
     expect(execArgs.code).toContain('catalog.search("qa_restart_wait")');
     expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);

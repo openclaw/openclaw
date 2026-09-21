@@ -55,7 +55,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { sessionDeliveryRoute } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryRoute } from "../utils/delivery-context.read.js";
 import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
 import {
   claimSessionSqliteMigrationGithubIssue,

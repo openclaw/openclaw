@@ -278,6 +278,13 @@ the candidate plugin artifact, the candidate state schema, an idempotent update,
 and Gateway health. Assertions run before a standalone Doctor can conceal an
 incomplete update migration.
 
+Published companion package versions retain identical archive bytes throughout
+the fixture. If a source candidate still uses the published companion's version,
+the registry and installation assertions preserve that published archive. A new
+companion version instead uses the prepared candidate artifact. The npm integrity
+guard remains enabled in both cases; the fixture never replaces a published
+version's bytes to make an update pass.
+
 The ownerless cron job is created before adding the second agent because newer
 baselines reject ambiguous new jobs. Approval snapshots are written back through
 the baseline CLI before comparison: JSON-era reads can assign IDs without

@@ -75,10 +75,8 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
-import {
-  deliveryContextFromSession,
-  normalizeSessionDeliveryState,
-} from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { getAgentAttemptExecutionMocks } from "./agent-command-state.test-mocks.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
@@ -122,18 +120,6 @@ vi.mock("../auto-reply/reply/session-stable-reply-mode.js", () => ({
   // Session-stable policy has owner coverage in the reply resolver suite. This
   // command suite only owns forwarding its result into CLI binding facts.
   resolveSessionStableReplyMode: vi.fn(() => "automatic"),
-}));
-
-vi.mock("../auto-reply/reply/source-reply-delivery-mode.js", () => ({
-  // Source-reply policy has focused owner coverage. Command preparation only
-  // needs to distinguish synthetic turns before forwarding stable facts.
-  isSyntheticSourceReplyTurn: (params: {
-    inputProvenance?: { kind?: string };
-    isHeartbeat?: boolean;
-  }) =>
-    params.isHeartbeat === true ||
-    params.inputProvenance?.kind === "inter_session" ||
-    params.inputProvenance?.kind === "internal_system",
 }));
 
 vi.mock("../agents/harness/selection.js", () => ({

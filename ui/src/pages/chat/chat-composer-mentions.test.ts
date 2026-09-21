@@ -304,6 +304,110 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     },
   );
 
+  it.each(["debouncing", "in flight"])(
+    "ends a bare @ search on space while %s and keeps subsequent prose as text",
+    async (phase) => {
+      const prefix = "Please review the proposal and keep the literal symbol ";
+      const suffix = " in the final explanation without notifying anyone";
+      const view = composerFixture(kind, `${prefix}${suffix}`);
+      let resolve: ((result: UsersMentionableResult) => void) | undefined;
+      view.request.mockImplementation(
+        () =>
+          new Promise<UsersMentionableResult>((done) => {
+            resolve = done;
+          }),
+      );
+      view.edit(`${prefix}@${suffix}`, {
+        start: prefix.length,
+        caret: prefix.length + 1,
+        data: "@",
+      });
+      expect(view.container.querySelector(".mention-menu")).not.toBeNull();
+      if (phase === "in flight") {
+        await vi.advanceTimersByTimeAsync(150);
+      }
+      view.edit(`${prefix}@ ${suffix}`, {
+        start: prefix.length + 1,
+        caret: prefix.length + 2,
+        data: " ",
+      });
+      expect(view.container.querySelector(".mention-menu")).toBeNull();
+      resolve?.(people);
+      const draft = `${prefix}@ as plain text${suffix}`;
+      view.edit(draft, {
+        start: prefix.length + 2,
+        caret: prefix.length + "@ as plain text".length,
+        data: "as plain text",
+      });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(view.container.querySelector(".mention-menu")).toBeNull();
+      expect(view.request).toHaveBeenCalledTimes(phase === "in flight" ? 1 : 0);
+      view.key("Enter");
+      expect(view.send).toHaveBeenCalledExactlyOnceWith({ draft, mentions: [] });
+    },
+  );
+
+  it.each(["pointerup", "keyup", "forward selection", "backward selection"])(
+    "closes the picker after %s moves beyond the active mention",
+    async (eventType) => {
+      const prefix = "Please review ";
+      const suffix = "the written instructions and leave the rest unchanged";
+      const view = composerFixture(kind, `${prefix}${suffix}`);
+      const draft = `${prefix}@${suffix}`;
+      view.edit(draft, { start: prefix.length, caret: prefix.length + 1, data: "@" });
+      const textarea = view.container.querySelector("textarea")!;
+      const selecting = eventType.endsWith("selection");
+      textarea.setSelectionRange(
+        selecting ? prefix.length + 1 : draft.length,
+        draft.length,
+        eventType === "backward selection" ? "backward" : "forward",
+      );
+      textarea.dispatchEvent(
+        eventType === "keyup" || selecting
+          ? new KeyboardEvent("keyup", { bubbles: true, key: "End", shiftKey: selecting })
+          : new Event("pointerup", { bubbles: true }),
+      );
+      await vi.advanceTimersByTimeAsync(150);
+      expect(view.container.querySelector(".mention-menu")).toBeNull();
+      expect(view.request).not.toHaveBeenCalled();
+      view.key("Enter");
+      expect(view.send).toHaveBeenCalledExactlyOnceWith({ draft, mentions: [] });
+    },
+  );
+
+  it.each(["earlier name part", "original end", "edited name part"])(
+    "selects the whole full-name target from %s",
+    async (position) => {
+      const view = composerFixture(kind);
+      const draft = "@Peter Steinberger";
+      view.request.mockResolvedValue({
+        users: [{ profileId: "profile-peter", displayName: "Peter Steinberger", online: true }],
+        truncated: false,
+      });
+      view.edit(draft);
+      await vi.advanceTimersByTimeAsync(150);
+      const textarea = view.container.querySelector("textarea")!;
+      const carets =
+        position === "original end" ? ["@Peter".length, draft.length] : ["@Peter".length];
+      for (const caret of carets) {
+        textarea.setSelectionRange(caret, caret);
+        textarea.dispatchEvent(new Event("pointerup", { bubbles: true }));
+        await vi.advanceTimersByTimeAsync(150);
+        expect(view.container.querySelector(".mention-menu")).not.toBeNull();
+      }
+      if (position === "edited name part") {
+        view.edit("@Peterx Steinberger", { start: 6, caret: 7, data: "x" });
+        await vi.advanceTimersByTimeAsync(150);
+      }
+      view.key("Enter");
+      expect(view.value()).toEqual({
+        draft: "@Peter Steinberger ",
+        mentions: [{ profileId: "profile-peter", start: 0, end: 18 }],
+      });
+      expect(view.send).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["Enter", "Tab"])("selects a typed full name with %s before sending", async (key) => {
     const view = composerFixture(kind);
     view.request.mockResolvedValue({

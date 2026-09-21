@@ -254,7 +254,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       connectionStatus,
-      queuedOutboxCount: storedOutboxes?.total ?? 0,
       lastError: gatewaySnapshot.lastError,
       outboxAttentionCountForSession: storedOutboxes?.attentionCountForSession ?? (() => 0),
       hasSessionDraft: storedOutboxes?.hasSessionDraft ?? EMPTY_SESSION_HAS_DRAFT,
@@ -297,7 +296,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           activeSearch: host.routeState.location?.search ?? "",
           activeHash: host.routeState.location?.hash ?? "",
           connectionStatus,
-          queuedOutboxCount: storedOutboxes?.total ?? 0,
           lastError: gatewaySnapshot.lastError,
           gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
           searchQuery: embedSettingsRoot ? "" : host.settingsSearchQuery,
@@ -553,11 +551,11 @@ export function renderApplicationShell(host: ShellViewHost) {
             : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
         !nativeEmbed &&
         !onboarding &&
-        ((connectionStatus && !initialConnection) || storedOutboxes?.total)
+        connectionStatus &&
+        !initialConnection
           ? html`<div class="shell-connection-status">
               ${renderGatewayStatus({
                 kind: connectionStatus,
-                queuedOutboxCount: storedOutboxes?.total,
                 lastError: gatewaySnapshot.lastError,
                 onRetry: () => context.gateway.connect(),
               })}

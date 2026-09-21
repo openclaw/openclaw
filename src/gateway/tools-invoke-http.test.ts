@@ -1,7 +1,6 @@
 // Tool invoke HTTP tests cover request auth, tool context construction, hook
 // filtering, plugin metadata, payload validation, and response shaping.
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +21,7 @@ import {
   baseOpenRequest,
   makeFakePty,
 } from "./terminal/session-manager.test-helpers.js";
+import { createToolsInvokeHttpTestServer } from "./tools-invoke-http.test-support.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
@@ -279,56 +279,23 @@ const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js")
 let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
 
 let sharedPort = 0;
-let sharedServer: ReturnType<typeof createServer> | undefined;
+const server = createToolsInvokeHttpTestServer({
+  handleToolsInvoke: handleToolsInvokeHttpRequest,
+  getPluginHandlers: () => pluginHttpHandlers,
+});
 
 beforeAll(async () => {
-  sharedServer = createServer((req, res) => {
-    void (async () => {
-      const handled = await handleToolsInvokeHttpRequest(req, res, {
-        auth: { mode: "none", allowTailscale: false },
-      });
-      if (handled) {
-        return;
-      }
-      for (const handler of pluginHttpHandlers) {
-        if (await handler(req, res)) {
-          return;
-        }
-      }
-      res.statusCode = 404;
-      res.end("not found");
-    })().catch((err: unknown) => {
-      res.statusCode = 500;
-      res.end(String(err));
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    sharedServer?.once("error", reject);
-    sharedServer?.listen(0, "127.0.0.1", () => {
-      const address = sharedServer?.address() as AddressInfo | null;
-      sharedPort = address?.port ?? 0;
-      resolve();
-    });
-  });
+  sharedPort = await server.listen();
 });
 
-afterAll(async () => {
-  const server = sharedServer;
-  if (!server) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-  sharedServer = undefined;
-});
+afterAll(() => server.close());
 
 beforeEach(() => {
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   delete process.env.OPENCLAW_GATEWAY_PASSWORD;
   pluginHttpHandlers = [];
   cfg = {};
+  server.resetContext();
   lastCreateOpenClawToolsContext = undefined;
   sessionEntries.clear();
   hookMocks.resolveToolLoopDetectionConfig.mockClear();

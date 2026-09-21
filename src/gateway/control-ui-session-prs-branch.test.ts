@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as worktreeGit from "../agents/worktrees/git.js";
+import { runGitReadOperation } from "../infra/git-read-cache.js";
 import { loadSessionPullRequestReferences } from "./control-ui-session-pr-references.js";
 import { loadControlUiSessionPullRequests } from "./control-ui-session-prs.js";
 import {
@@ -159,6 +160,123 @@ describe("session branch diff stats", () => {
   afterEach(async () => {
     await evictPullRequestCache();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it.each(["loose", "packed", "detached", "linked"])(
+    "reads %s HEAD metadata without subprocesses and preserves checkout context",
+    async (layout) => {
+      await initializeRepo();
+      await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+      await trackRemote("main");
+      await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+      let cwd = root;
+      if (layout === "linked") {
+        cwd = path.join(root, "linked");
+        await git("worktree", "add", "-b", "feature", cwd);
+      } else if (layout === "detached") {
+        await git("checkout", "--detach");
+      } else {
+        await git("checkout", "-b", "feature");
+        if (layout === "packed") {
+          await git("pack-refs", "--all", "--prune");
+        }
+      }
+      const reads = vi.spyOn(worktreeGit, "runGitBytes");
+      try {
+        await expect(
+          runGitReadOperation(
+            { type: "checkout.context", input: { root: cwd } },
+            { refresh: true },
+          ),
+        ).resolves.toEqual({
+          owner: "openclaw",
+          repo: "openclaw",
+          root: cwd,
+          branch: layout === "detached" ? null : "feature",
+          defaultBranch: "main",
+        });
+        expect(reads.mock.calls.filter(([, args]) => args[0] === "rev-parse")).toHaveLength(0);
+        await runGitReadOperation(
+          {
+            type: "pull-request.branch-facts",
+            input: { root: cwd, branch: "feature", defaultBranch: "main", mergedHeads: [] },
+          },
+          { refresh: true },
+        );
+        expect(reads.mock.calls.filter(([, args]) => args[0] === "rev-parse")).toHaveLength(0);
+      } finally {
+        reads.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    "HEAD tag",
+    "detached HEAD tag",
+    "worktree pseudoref",
+    "packed exact name",
+    "virtual worktree name",
+  ])("preserves Git discovery with an ambiguous %s", async (collision) => {
+    await initializeRepo();
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    let cwd = root;
+    if (collision === "worktree pseudoref") {
+      cwd = path.join(root, "linked");
+      await git("worktree", "add", "-b", "ORIG_HEAD", cwd);
+      await gitIn(cwd, "update-ref", "ORIG_HEAD", "HEAD");
+    } else if (collision === "packed exact name") {
+      await git("pack-refs", "--all", "--prune");
+      await git("checkout", "-b", "refs/heads/main");
+    } else if (collision === "virtual worktree name") {
+      await git("checkout", "-b", "main-worktree/HEAD");
+    } else {
+      if (collision === "detached HEAD tag") {
+        await git("checkout", "--detach");
+      }
+      await git("update-ref", "refs/tags/HEAD", "HEAD");
+    }
+    const expectedBranch = await gitIn(cwd, "rev-parse", "--abbrev-ref", "HEAD").then(
+      (result) => result.stdout.trim(),
+      () => null,
+    );
+    await expect(
+      runGitReadOperation({ type: "checkout.context", input: { root: cwd } }, { refresh: true }),
+    ).resolves.toEqual(
+      expectedBranch
+        ? {
+            owner: "openclaw",
+            repo: "openclaw",
+            root: cwd,
+            branch: expectedBranch === "HEAD" ? null : expectedBranch,
+          }
+        : null,
+    );
+  });
+
+  it("keeps Git's ambiguous branch names and admission-time discovery overrides", async () => {
+    await initializeRepo();
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    await git("checkout", "-b", "feature");
+    await git("tag", "feature");
+    const read = () =>
+      runGitReadOperation({ type: "checkout.context", input: { root } }, { refresh: true });
+    const expected = (await git("rev-parse", "--abbrev-ref", "HEAD")).stdout.trim();
+    expect((await read())?.branch).toBe(expected);
+    if (process.platform !== "win32") {
+      await git("config", "core.preferSymlinkRefs", "true");
+      await git("symbolic-ref", "HEAD", "refs/heads/feature");
+      expect((await read())?.branch).toBe(expected);
+    }
+    // Reuse the warm worker after its host environment changes.
+    const redirected = path.join(root, "redirected");
+    await fs.cp(templateRepo, redirected, { recursive: true });
+    await gitIn(redirected, "remote", "add", "origin", "https://github.com/example/redirected.git");
+    vi.stubEnv("GIT_DIR", path.join(redirected, ".git"));
+    try {
+      expect(await read()).toMatchObject({ owner: "example", repo: "redirected", branch: "main" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("discovers GitHub identity locally and skips network for default, non-GitHub, and detached checkouts", async () => {
@@ -587,18 +705,35 @@ describe("session branch diff stats", () => {
     expect(result.branch).toBeUndefined();
   });
 
-  it("suppresses the row when the local checkout trails the merged remote tip", async () => {
-    const staleHead = await initializeFeatureHead();
-    // This checkout's HEAD trails the final commit pushed and merged elsewhere.
-    await appendCommit("a.txt", "review fix\n", "review fix");
-    await trackRemote("feature");
-    const mergedHead = await resolveRevision("HEAD");
-    await git("reset", "--hard", staleHead);
+  it.each(["lowercase", "uppercase"])(
+    "suppresses the row when the local checkout trails the merged remote tip with %s ref text",
+    async (refCase) => {
+      const olderMergedHead = await initializeFeatureHead();
+      await appendCommit("a.txt", "second PR\n", "second PR");
+      const staleHead = await resolveRevision("HEAD");
+      // Four commits: default -> older merge -> local HEAD -> newer merge.
+      await appendCommit("a.txt", "review fix\n", "review fix");
+      await trackRemote("feature");
+      const mergedHead = await resolveRevision("HEAD");
+      await git("reset", "--hard", staleHead);
+      if (refCase === "uppercase") {
+        await fs.writeFile(
+          path.join(root, ".git", "refs", "heads", "feature"),
+          `${staleHead.toUpperCase()}\n`,
+        );
+      }
+      expect(await resolveRevision("HEAD")).toBe(staleHead);
 
-    const result = await loadBranchState({ pullRequests: [mergedPull(mergedHead)] });
-    // The clean, fully merged stale checkout must not replay a landed subset.
-    expect(result.branch).toBeUndefined();
-  });
+      const result = await loadBranchState({
+        pullRequests: [
+          mergedPull(olderMergedHead, { number: 1 }),
+          mergedPull(mergedHead, { number: 2 }),
+        ],
+      });
+      // The clean, fully merged stale checkout must not replay a landed subset.
+      expect(result.branch).toBeUndefined();
+    },
+  );
 
   it("restores Create PR for a branch rebased past the landing with new work", async () => {
     const mergedHead = await initializeFeatureHead({ trackMain: false });

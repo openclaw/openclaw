@@ -421,12 +421,13 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      this.fileSearchOpen = false;
-      this.fileSearchQuery = "";
-      this.fileSearchMatchIndex = 0;
+      this.toggleFileSearch();
+      this.querySelector<HTMLButtonElement>(".sidebar-file-view__search-toggle")?.focus({
+        preventScroll: true,
+      });
       return;
     }
-    if (event.key === "Enter") {
+    if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
       event.preventDefault();
       this.moveFileSearch(event.shiftKey ? -1 : 1);
     }

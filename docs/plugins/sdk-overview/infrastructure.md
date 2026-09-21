@@ -89,8 +89,16 @@ the connection; transaction callbacks must remain synchronous.
 
 ### Worker task admission
 
-`WorkerTaskPool` and `serveWorkerTasks` from
-`openclaw/plugin-sdk/process-runtime` support reusable computation workers.
+`WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` supports reusable
+computation workers for bundled and separately published official plugins.
+Inside those workers, import `serveWorkerTasks` and the
+`WorkerTaskControl` type from `openclaw/plugin-sdk/worker-task-server` to avoid
+loading the host process and pool runtime. Both paths use the same task protocol.
+
+The older serving exports in `process-runtime` remain for released official
+plugins. Bundled workers use `worker-task-server`; remove the older exports only
+after supported official plugin versions have migrated to hosts with this subpath.
+
 Each pool defaults to 128 outstanding tasks and 256 MiB of reported input bytes,
 including queued, preparing, and running tasks. Set `maxPendingTasks` and
 `maxPendingBytes` when constructing a pool to choose different positive limits.

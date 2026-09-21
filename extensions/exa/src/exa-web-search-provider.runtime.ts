@@ -367,7 +367,7 @@ async function runExaSearch(params: {
           status: res.status,
         });
       }
-      return readExaSearchResults(res);
+      return (await readExaSearchResults(res)).slice(0, params.count);
     },
   );
 }

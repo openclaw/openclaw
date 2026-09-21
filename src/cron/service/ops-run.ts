@@ -37,8 +37,9 @@ import {
   supersedeActivatedCronRun,
 } from "./run-admission.js";
 import { cronRunReceiptPersistHooks, resolveCronRunReceiptTerminalStatus } from "./run-receipts.js";
-import { recomputeUnownedCronSchedules } from "./run-recovery.js";
+import { publishCronRuntimeRows } from "./runtime-publication.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import type {
   CronRunMode,
   CronServiceState,
@@ -46,7 +47,7 @@ import type {
   DeferredCronNotifications,
 } from "./state.js";
 import { emit, isImmediateCronRunMode } from "./state.js";
-import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
+import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import {
   createCronOwnerExecutionIdentityAdmission,
   tryFinishCronTaskRunWithoutHistory,
@@ -201,7 +202,7 @@ async function finishPreparedManualRun(
     }
     let notifySetupTimeout = coreResult.isolatedAgentSetupTimeout !== undefined;
     await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      await ensureLoaded(state, { forceReload: true });
       const job = state.store?.jobs.find((entry) => entry.id === jobId);
       if (prepared.activeJobMarker?.jobRemoved === true || !job) {
         notifySetupTimeout = false;
@@ -303,12 +304,10 @@ async function finishPreparedManualRun(
           );
         }
         publishCronRuntimeRows(state);
-        const maintenance = recomputeUnownedCronSchedules(state, {
+        await recomputeUnownedCronSchedules(state, {
           recomputeExpired: true,
           ...(isImmediateCronRunMode(mode) ? { preserveExpiredPacedNextRunJobId: jobId } : {}),
         });
-        runPostPersistCronNotifications(state, maintenance.notifications);
-        applyCronRuntimeRowsToState(state, maintenance.jobs);
       } catch (error) {
         if (error instanceof CronRunReceiptRevisionError) {
           // A retired reservation cannot clear a successor's same-millisecond marker.

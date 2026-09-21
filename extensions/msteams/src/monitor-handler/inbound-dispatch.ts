@@ -97,7 +97,7 @@ export async function dispatchMSTeamsInboundTurn(params: {
   });
   let combinedBody = body;
   const isRoomish = !isDirectMessage;
-  const historyKey = isRoomish ? conversationId : undefined;
+  const historyKey = isRoomish ? facts.historyKey : undefined;
   if (isRoomish && historyKey) {
     const channelHistory = createChannelHistoryWindow({ historyMap: conversationHistories });
     combinedBody = channelHistory.buildPendingContext({

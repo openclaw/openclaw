@@ -7,8 +7,8 @@ import {
 } from "../../daemon/service-types.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { resolveInstallationTarget } from "../../infra/installation-target-context.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart-budget.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
-import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import {
@@ -29,7 +29,7 @@ import {
   transferManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { formatInstallationTargetCommand } from "../installation-target-format.js";

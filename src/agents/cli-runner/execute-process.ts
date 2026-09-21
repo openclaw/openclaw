@@ -125,9 +125,9 @@ export async function executeCliProcess(params: {
   const stderrHash = crypto.createHash("sha256");
   // Only the core lifecycle owner may publish recovery facts. Plugin records
   // carry output, never the authority or deadline used to protect its execution.
-  const reportStreamProgress = createModelCallStreamProgressReporter(
-    () => backendActivity?.observeOutput(true) ?? false,
-  );
+  const reportStreamProgress = createModelCallStreamProgressReporter({
+    recordProgress: () => backendActivity?.observeOutput(true) ?? false,
+  });
   const streamProgressTarget = {
     runId: runParams.runId,
     ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),

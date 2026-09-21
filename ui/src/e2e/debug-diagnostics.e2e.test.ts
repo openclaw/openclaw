@@ -539,9 +539,8 @@ suite.define(() => {
         await gateway.deferNext("status");
         await refresh.click();
         await gateway.waitForRequest("status", { after: statusRequestCount });
-        await expect
-          .poll(() => snapshots.textContent())
-          .toContain("Refreshing Gateway diagnostics.");
+        await expect.poll(() => refresh.textContent()).toMatch(/^\s*Refreshing…\s*$/u);
+        expect(await refresh.isDisabled()).toBe(true);
         await expect.poll(() => snapshots.textContent()).toContain("diagnostics-e2e");
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

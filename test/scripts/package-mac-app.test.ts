@@ -2437,7 +2437,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     );
   });
 
-  it("stages the pinned universal CUA driver before nested-code signing", () => {
+  it("stages the pinned CUA driver and thins single-architecture packages before signing", () => {
     const packageScript = readFileSync(scriptPath, "utf8");
     const stageScript = readFileSync("scripts/stage-cua-driver-macos.sh", "utf8");
     const codesignScript = readFileSync("scripts/codesign-mac-app.sh", "utf8");
@@ -2458,9 +2458,10 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
       "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa",
     );
-    expect(packageScript).toContain(
-      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
-    );
+    expect(packageScript).toContain('"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"');
+    expect(packageScript).toContain('if [[ "${#BUILD_ARCHS[@]}" -eq 1 ]]');
+    expect(packageScript).toContain('lipo "$CUA_DRIVER" -thin "$CUA_ARCH"');
+    expect(packageScript).toContain('[[ "$(lipo -archs "$CUA_DRIVER")" == "$CUA_ARCH" ]]');
     expect(packageScript.indexOf("Staging embedded CUA driver")).toBeLessThan(
       packageScript.indexOf('echo "🔏 Signing bundle'),
     );
@@ -2485,9 +2486,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     expect(cuaBlock).toContain("Omitting embedded CUA driver from elevation-host package");
     expect(cuaBlock).toContain("else");
     expect(cuaBlock).toContain("Staging embedded CUA driver");
-    expect(cuaBlock).toContain(
-      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
-    );
+    expect(cuaBlock).toContain('"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$CUA_DRIVER"');
   });
 
   it("does not mask required Info.plist stamp failures", () => {

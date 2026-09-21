@@ -4,6 +4,7 @@ import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -15,11 +16,11 @@ import { refreshManagedPlugins } from "../plugins/management-mutations.js";
 import { resolvePluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import {
   clearPluginMetadataLifecycleCaches,
   retainGatewayPluginMetadata,
 } from "../plugins/plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   clearActivePluginRegistry,
   createPluginRegistryOwner,
@@ -35,6 +36,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
+import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -95,13 +97,21 @@ async function verifyInstalledPackageRetention(
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
   };
-  const writePackage = (id: string) => {
-    const packageDir = writeManagedNpmPlugin({
+  fs.mkdirSync(env.OPENCLAW_BUNDLED_PLUGINS_DIR, { recursive: true });
+  const writePackage = (
+    id: string,
+    packageDir = writeManagedNpmPlugin({
       stateDir,
       packageName: id,
       pluginId: id,
       version: "1.0.0",
-    });
+    }),
+  ) => {
+    fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: id, version: "1.0.0", openclaw: { extensions: ["./dist/index.js"] } }),
+    );
     fs.writeFileSync(
       path.join(packageDir, "openclaw.plugin.json"),
       JSON.stringify({
@@ -157,13 +167,32 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   await withEnvAsync(env, async () => {
     const siblingDir = writePackage("sibling");
     const healthyDir = cleanupRetry === "mixed-recovery" ? writePackage("healthy") : undefined;
+    const secondaryWorkspace = path.join(root, "secondary-workspace");
+    const hasWorkspacePlugin = settings === "defaulted";
+    if (hasWorkspacePlugin) {
+      writePackage(
+        "workspace-probe",
+        path.join(secondaryWorkspace, ".openclaw", "extensions", "workspace-probe"),
+      );
+    }
     const initialConfig: OpenClawConfig = {
-      agents: { entries: { main: { workspace: workspaceDir } } },
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { workspace: workspaceDir },
+          secondary: { workspace: secondaryWorkspace },
+        },
+      },
       plugins: {
-        allow: healthyDir ? ["sibling", "healthy"] : ["sibling"],
+        allow: [
+          "sibling",
+          ...(healthyDir ? ["healthy"] : []),
+          ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
+        ],
         entries: {
           sibling: { enabled: true },
           ...(healthyDir ? { healthy: { enabled: true } } : {}),
+          ...(hasWorkspacePlugin ? { "workspace-probe": { enabled: true } } : {}),
         },
         load: { paths: healthyDir ? [siblingDir, healthyDir] : [siblingDir] },
         slots: { memory: "none" },
@@ -171,13 +200,26 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     };
     setRuntimeConfigSnapshot(initialConfig);
     const log = { ...createSubsystemLogger("gateway/plugins"), ...logs };
-    const initialMetadata = loadPluginMetadataSnapshot({
+    const initialMetadata = await resolveConfigWidePluginMetadataSnapshotAsync({
       config: initialConfig,
-      workspaceDir,
       env,
     });
+    expect(initialMetadata.manifestRegistry.plugins.map((plugin) => plugin.id).toSorted()).toEqual(
+      [
+        "sibling",
+        ...(healthyDir ? ["healthy"] : []),
+        ...(hasWorkspacePlugin ? ["workspace-probe"] : []),
+      ].toSorted(),
+    );
     const initial = bootstrap.prepareGatewayPluginLoad({
       pluginMetadataSnapshot: initialMetadata,
+      pluginLookUpTable: loadPluginLookUpTable({
+        config: initialConfig,
+        workspaceDir,
+        env,
+        metadataSnapshot: initialMetadata,
+        ambientEnvTriggers: "suppress",
+      }),
       cfg: initialConfig,
       workspaceDir,
       env,
@@ -218,6 +260,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       }
     });
     const runtime = {
+      requestEntryLifetime: new GatewayRequestEntryLifetime(),
       pluginMetadataSnapshot: initialMetadata,
       pluginRuntime: registryOwner,
       pluginWorkspaceDir: workspaceDir,
@@ -266,6 +309,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       assert.ok(response);
       return response[1];
     };
+    const workspacePlugin = hasWorkspacePlugin ? await probe("workspace-probe") : undefined;
     const sibling = await probe("sibling");
     expect(sibling.settings).toEqual(settings === "defaulted" ? { mode: "auto" } : {});
     const siblingRecord = initial.pluginRegistry.plugins.find((record) => record.id === "sibling");
@@ -305,6 +349,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       pluginIds = ["installed-probe"],
       reason: PluginLifecycleReason = "reload",
       assertInvokerOwned?: () => void,
+      sourceConfig = nextConfig,
     ) =>
       await reloadGatewayPlugins(
         {
@@ -332,7 +377,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         },
         {
           nextConfig,
-          sourceConfig: nextConfig,
+          sourceConfig,
           changedPaths: [],
           prepareConfigEffects: () => async () => {},
           assertInvokerOwned,
@@ -356,12 +401,30 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           (await reload(nextConfig, [...pluginIds], reason, assertInvokerOwned)).runtime,
       });
     const validated = validateConfigObjectWithPlugins(config, { env });
-    assert.ok(validated.ok);
+    assert.ok(validated.ok, JSON.stringify(validated));
     expect(validated.config.plugins?.entries?.sibling?.config).toEqual(sibling.settings);
     // Startup uses authored config; the first install applies a validated runtime snapshot.
-    const firstReceipt = await reload(validated.config, ["installed-probe"], "install");
+    assert.ok(siblingRecord);
+    const siblingInstance = getPluginInstance(siblingRecord);
+    assert.ok(siblingInstance);
+    const releaseSiblingWork = siblingInstance.retainWork();
+    let firstReceipt: Awaited<ReturnType<typeof reload>>;
+    try {
+      firstReceipt = await reload(
+        validated.config,
+        ["installed-probe"],
+        "install",
+        undefined,
+        config,
+      );
+    } finally {
+      releaseSiblingWork();
+    }
     expect(firstReceipt.runtime.pluginIds).toEqual(["installed-probe"]);
     expect(await probe("sibling")).toEqual(sibling);
+    if (workspacePlugin) {
+      expect(await probe("workspace-probe")).toEqual(workspacePlugin);
+    }
     const first = await probe("installed-probe");
     expect(first.helper).toBe("A");
     if (cleanupRetry === "mixed-recovery") {
@@ -764,6 +827,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     expect(configured.instance).not.toBe(current.instance);
     expect(configured.settings).toEqual({ label: "changed" });
     expect(await probe("sibling")).toEqual(sibling);
+    if (workspacePlugin) {
+      expect(await probe("workspace-probe")).toEqual(workspacePlugin);
+    }
   });
 }
 

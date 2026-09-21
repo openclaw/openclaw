@@ -594,7 +594,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                       <div class="chat-bubble">
                         <div class="chat-text">
                           <p>The chat shell should stay compact and readable.</p>
-                          <pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre>
+                          <div class="code-block-wrapper"><pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre></div>
                         </div>
                       </div>
                     </div>
@@ -2667,7 +2667,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [900, 500],
     [1366, 900],
     [1920, 1080],
-  ] as const)("uses compact radii and optical chat-box insets at %sx%s", async (width, height) => {
+  ] as const)("matches corners and optical chat-box insets at %sx%s", async (width, height) => {
     await withBrowserPage(openFixture(width, height), async (page) => {
       const geometry = await page.evaluate(() => {
         const styleFor = (selector: string) => {
@@ -2678,6 +2678,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           const style = getComputedStyle(node);
           return {
             borderRadius: Number.parseFloat(style.borderTopLeftRadius),
+            cornerShape: style.getPropertyValue("corner-shape"),
             paddingBottom: Number.parseFloat(style.paddingBottom),
             paddingLeft: Number.parseFloat(style.paddingLeft),
             paddingRight: Number.parseFloat(style.paddingRight),
@@ -2687,28 +2688,26 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         return {
           assistantBubble: styleFor(".chat-group.assistant .chat-bubble:first-child"),
           bubble: styleFor(".chat-group.user .chat-bubble:first-child"),
+          codeBlock: styleFor(".code-block-wrapper"),
           composer: styleFor(".agent-chat__composer-shell > .agent-chat__input"),
           footer: styleFor(".agent-chat__composer-footer"),
           textarea: styleFor(".agent-chat__composer-combobox > textarea"),
         };
       });
 
-      expect(geometry.assistantBubble).not.toBeNull();
-      expect(geometry.bubble).not.toBeNull();
-      expect(geometry.composer).not.toBeNull();
-      expect(geometry.footer).not.toBeNull();
-      expect(geometry.textarea).not.toBeNull();
+      for (const style of Object.values(geometry)) {
+        expect(style).not.toBeNull();
+      }
 
-      const mediumRadius = 10 * (await readCornerScale(page));
-      expect(geometry.bubble?.borderRadius).toBe(mediumRadius);
-      expect(
-        new Set([
-          geometry.bubble?.paddingTop,
-          geometry.bubble?.paddingRight,
-          geometry.bubble?.paddingBottom,
-          geometry.bubble?.paddingLeft,
-        ]),
-      ).toEqual(new Set([16]));
+      expect(geometry.codeBlock?.borderRadius).toBeGreaterThan(0);
+      expect(geometry.bubble).toMatchObject({
+        borderRadius: geometry.codeBlock?.borderRadius,
+        cornerShape: geometry.codeBlock?.cornerShape,
+        paddingTop: 16,
+        paddingRight: 16,
+        paddingBottom: 16,
+        paddingLeft: 16,
+      });
       // Assistant replies render flat (no bubble card): zero horizontal inset
       // keeps the text on the tool-row left edge.
       expect(geometry.assistantBubble?.paddingLeft).toBe(0);

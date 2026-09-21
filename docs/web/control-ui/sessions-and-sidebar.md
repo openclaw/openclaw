@@ -43,7 +43,7 @@ updates the sidebar without renaming an existing branch.
 
 ## New-session preferences and recents
 
-For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, and thinking choices. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
+For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
 A custom worktree **Name** applies to the submitted session. Once its start is
 accepted, New session clears that name while remembering the repository, checkout
@@ -281,7 +281,10 @@ Choose **Icon & color** from a session menu and select a color swatch to add a n
   is not a separate stop or delete action.
 
 Both shortcuts work from the chat composer, ignore key repeat and text
-composition, and leave open modal dialogs in control. New Session preserves the
+composition, and leave open modal dialogs in control. The keyboard-shortcuts help
+dialog is the exception for New Session: the shortcut closes help before opening
+and focusing the draft. Press **⌘/** or **Ctrl+/** again to close help without
+navigating. Archive remains blocked while help is open. New Session preserves the
 existing conversation's draft through normal navigation. Archive does not clear
 that draft or navigate to another conversation.
 
@@ -315,7 +318,19 @@ removing them leaves the input, **New session** action, and settings control in
 place; the palette grows downward. Images can start a session on their own or
 accompany text. There is no attachment picker in the palette.
 
-- **Enter** opens or runs the selected result. With no result, Enter does not send.
+Type **@** to search eligible people by name or verified GitHub handle, just as
+in the chat composer. Use **↑/↓** or **Home/End**, then **Enter** or **Tab** to
+select a person; **Escape** dismisses the people picker before the palette.
+The compact **Will notify** row shows selected people once each, with **+N**
+when space is tight. You can select up to ten mention references. Editing or
+deleting a selected name removes that reference; **Remove mention** clears all
+recipient selections without deleting the text. Pasted names and email addresses
+remain ordinary text. The picker replaces search results while open, and selected
+mentions keep the palette in composer mode. Mentions travel with the first message
+of the new session; they never share a session, invite people, or grant access.
+
+- **Enter** selects a person while the people picker is open; otherwise it opens
+  or runs the selected search result. With no result, Enter does not send.
 - **Shift+Enter** adds a line. The field grows downward to three lines, then scrolls
   without moving the palette or its top-right controls.
 - **Command+Enter** on macOS or **Ctrl+Enter** on Windows/Linux starts a new session
@@ -332,7 +347,7 @@ the checkbox restores your usual choices immediately and leaves the prompt
 intact. One-off choices are not remembered for the next palette session.
 
 Accepted creation closes the palette and offers **Open session** without changing
-the foreground view or its draft. A failed submission retains the prompt, images, and
+the foreground view or its draft. A failed submission retains the prompt, selected mentions, images, and
 choices with an error. These settings do not affect sessions opened from search,
 and the existing conversation composer keeps its own send and steer/queue
 shortcuts. Long prompts remain intact for session creation and are never sent as
@@ -351,6 +366,8 @@ The destination picker opens with **Search environments** focused. Its compact, 
 Hover a configurable cloud profile or focus its row to open its operating-system and machine options. Unavailable operating systems are omitted. Before selecting a profile, dashed outlines identify the defaults; choosing any option selects that profile and activates the defaults for the other setting. The selected profile shows its operating system and machine as muted text beside its name in the menu. The closed selector keeps only the profile name. Options use equal-width tiles, up to four columns, with long catalogs scrollable.
 
 The folder defaults to the agent workspace. Write-scoped connections can browse, restore recent Gateway folders, and start sessions anywhere inside a configured agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. Local placement keeps the optional **Worktree** control with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Choosing a device or cloud profile with a Gateway folder selected uses a managed worktree. With a GitHub repository selected, **Remote checkout** sends its URL and optional ref directly to the runner without creating a Gateway checkout.
+
+Leave **From** empty to fetch `origin` when creating the worktree and use its default branch. The placeholder is a suggestion, not a saved branch selection. Explicitly selected or saved branches and commits are used as entered without fetching; selecting local `main` uses that local branch, which can lag behind `origin/main`. If fetching or resolving the remote default fails, the Gateway falls back to the source checkout's `HEAD`.
 
 ### Start a native coding CLI
 

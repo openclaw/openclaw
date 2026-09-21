@@ -165,6 +165,7 @@ type MeetingRuntimeFacadeInstance<
   MeetingRuntimeOwner<Transport, Mode, Health>,
   | "join"
   | "leave"
+  | "reconcileTranscriptPolicy"
   | "speak"
   | "startTranscriptSource"
   | "status"

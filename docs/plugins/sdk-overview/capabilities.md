@@ -129,7 +129,9 @@ IDs are rejected. Registration and optional `isReady()` must be local, synchrono
 and network-free. Import types from `openclaw/plugin-sdk/decisions`.
 
 Consumers call `api.runtime.decisions.evaluate(batch, { agentId?, purpose, rubricVersion,
-timeoutMs, signal })`. State and rubric entries are finite JSON. Choices preserve
+timeoutMs, signal })`. State and rubric entries are finite JSON. Use plain objects
+and arrays; custom prototypes, serialization hooks, and getters are rejected on
+both request and response boundaries. Choices preserve
 all offered labels and probabilities; the chosen label is the provider's decision
 and need not equal the largest rounded probability. Consumers choose whether to
 use that label or an explicit distribution policy. Ordered scores are fractional
@@ -153,9 +155,10 @@ sent to the selected provider may incur its normal usage charges. Plugin disable
 wins; installing a tool or credential alone does not select a provider. Vendor adapters
 own transport and model-specific translation; no vendor is a core dependency.
 
-The [ONNX plugin](/plugins/onnx) supplies local classifiers; the bundled
-[TypeSafe AI plugin](/plugins/typesafe) supplies a Jev adapter. Both require
-explicit setup and role selection.
+The [ONNX plugin](/plugins/onnx) supplies local classifiers; the
+[TypeSafe AI plugin](/plugins/typesafe) supplies hosted Jev and local System One
+adapters, including Kev. Both plugins require
+separate installation, explicit setup, and role selection.
 
 ### Calling from a third-party plugin
 
@@ -215,7 +218,7 @@ credential-refresh lifecycle; each plugin does not create its own provider clien
 No credential is returned to the consumer. Provider setup and refresh use the
 same prepared-secret path whether the caller is built-in or third-party.
 
-The host admits at most four requests, with no queue and a ten-second maximum.
+The host admits at most four requests, with no queue and a 30-second maximum.
 Consumers can request shorter deadlines and choose their own fallback policy.
 Three unhealthy responses open a ten-second circuit; recovery admits one trial.
 Retry-After is bounded to one minute. Auth errors latch until the prepared-secret

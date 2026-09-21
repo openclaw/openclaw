@@ -619,6 +619,13 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/search/search-results.ts",
+      "text": "snippet"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/skill-workshop/view.ts",

@@ -16,7 +16,10 @@ import {
 } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { isGraphqlQuotaExhausted } from "../../scripts/pr-lib/gh-api-preflight.mjs";
+import {
+  isCoreQuotaExhausted,
+  isGraphqlQuotaExhausted,
+} from "../../scripts/pr-lib/gh-api-preflight.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   REVIEWED_HEAD,
@@ -38,19 +41,24 @@ const anchorSubstitutionNotice = (repo: string) =>
   `scripts/pr wrapper in this worktree differs from origin/main; running the canonical checkout's wrapper (matches the origin/main trust anchor): ${repo}`;
 const itPosix = process.platform === "win32" ? it.skip : it;
 
-describe("GraphQL primary quota fallback", () => {
+describe.each([
+  { resource: "graphql", classify: isGraphqlQuotaExhausted },
+  { resource: "core", classify: isCoreQuotaExhausted },
+])("$resource primary quota fallback", ({ resource, classify }) => {
   const message = "API rate limit already exceeded for user ID 123.";
   const errorBody = (type = "RATE_LIMITED", detail = message) =>
-    JSON.stringify({ errors: [{ type, message: detail }] });
-  const response = (body: string, headers = "", status = 200) =>
-    `HTTP/2.0 ${status} Response\r\nX-RateLimit-Resource: graphql\r\nX-RateLimit-Remaining: 0\r\n${headers}\r\n${body}`;
+    JSON.stringify(
+      resource === "graphql" ? { errors: [{ type, message: detail }] } : { message: detail },
+    );
+  const response = (body: string, headers = "", status = resource === "graphql" ? 200 : 403) =>
+    `HTTP/2.0 ${status} Response\r\nX-RateLimit-Resource: ${resource}\r\nX-RateLimit-Remaining: 0\r\nAccess-Control-Expose-Headers: ETag, Retry-After, X-RateLimit-Remaining\r\n${headers}\r\n${body}`;
 
-  it.each(["RATE_LIMIT", "RATE_LIMITED"])(
+  it.each(resource === "graphql" ? ["RATE_LIMIT", "RATE_LIMITED"] : ["REST primary limit"])(
     "recognizes the original %s response with and without headers",
     (type) => {
       const body = errorBody(type);
       for (const stdout of [body, response(body), Buffer.from(response(body))]) {
-        expect(isGraphqlQuotaExhausted({ status: 1, stdout })).toBe(true);
+        expect(classify({ status: 1, stdout })).toBe(true);
       }
     },
   );
@@ -58,8 +66,11 @@ describe("GraphQL primary quota fallback", () => {
     { stdout: response(JSON.stringify({ message }), "", 403) },
     { stderr: `gh: ${message}\n` },
     { stderr: Buffer.from("gh: API rate limit exceeded for fixture-user (HTTP 403)\n") },
+    { stderr: `GraphQL: ${message}\n` },
+    { stderr: Buffer.from("GraphQL: API rate limit exceeded for user ID 123.\n") },
+    { stderr: `GraphQL: ${message}, ${message}\n` },
   ])("recognizes native gh primary exhaustion: %j", (failure) => {
-    expect(isGraphqlQuotaExhausted({ status: 1, ...failure })).toBe(true);
+    expect(classify({ status: 1, ...failure })).toBe(true);
   });
   it.each([
     {
@@ -74,8 +85,11 @@ describe("GraphQL primary quota fallback", () => {
       stdout: response(errorBody()).replace("Remaining: 0", "Remaining: 50"),
     },
     {
-      name: "core exhaustion",
-      stdout: response(errorBody()).replace("Resource: graphql", "Resource: core"),
+      name: "other resource exhaustion",
+      stdout: response(errorBody()).replace(
+        `Resource: ${resource}`,
+        `Resource: ${resource === "graphql" ? "core" : "graphql"}`,
+      ),
     },
     ...[401, 407, 429, 500, 503].map((status) => ({
       name: `HTTP ${status}`,
@@ -83,12 +97,21 @@ describe("GraphQL primary quota fallback", () => {
     })),
     { name: "generic forbidden", stderr: "gh: Resource not accessible by integration (HTTP 403)" },
     { name: "plain 429", stderr: `gh: ${message} (HTTP 429)` },
+    { name: "GraphQL secondary throttle", stderr: `GraphQL: ${message}, secondary rate limit` },
+    { name: "GraphQL forbidden", stderr: "GraphQL: Resource not accessible by integration" },
+    {
+      name: "mixed rendered GraphQL errors",
+      stderr: `GraphQL: ${message}, Resource not accessible by integration`,
+    },
+    { name: "multiline GraphQL errors", stderr: `GraphQL: ${message}\nAccess denied` },
+    { name: "unrecognized CLI prefix", stderr: `proxy: ${message}` },
     {
       name: "plain proxy failure",
       stderr: 'Post "https://api.github.com/graphql": Proxy Authentication Required',
     },
     { name: "transport failure", code: "ETIMEDOUT", stderr: `gh: ${message}` },
     { name: "interrupted response", signal: "SIGTERM", stdout: errorBody() },
+    { name: "killed response", killed: true, stdout: errorBody() },
     { name: "successful final unit", status: 0, stdout: response(errorBody()) },
     { name: "malformed response", stdout: "{", stderr: `gh: ${message}` },
     { name: "malformed framed response", stdout: response("{"), stderr: `gh: ${message}` },
@@ -115,8 +138,42 @@ describe("GraphQL primary quota fallback", () => {
       stdout: JSON.stringify({ resources: { graphql: { remaining: 0 } } }),
     },
   ])("does not authorize fallback for $name", ({ name: _name, ...failure }) => {
-    expect(isGraphqlQuotaExhausted({ status: 1, ...failure })).toBe(false);
+    expect(classify({ status: 1, ...failure })).toBe(false);
   });
+
+  if (resource === "core") {
+    it("recognizes authoritative exhausted core headers without an error message", () => {
+      expect(classify({ status: 1, stdout: response("{}") })).toBe(true);
+    });
+
+    it.each([
+      { name: "successful HTTP response", stdout: response(errorBody(), "", 200) },
+      {
+        name: "search resource",
+        stdout: response(errorBody()).replace("Resource: core", "Resource: search"),
+      },
+      { name: "unknown process result", status: null, stdout: errorBody() },
+      {
+        name: "access rejection with exhausted headers",
+        stdout: response(JSON.stringify({ message: "Resource not accessible by integration" })),
+      },
+      {
+        name: "GraphQL error without headers",
+        stdout: JSON.stringify({ errors: [{ type: "RATE_LIMITED", message }] }),
+      },
+      {
+        name: "multiline primary-looking body",
+        stdout: JSON.stringify({ message: `${message}\nAccess denied` }),
+      },
+      { name: "primary-looking prefix", stderr: "gh: API rate limit exceededness" },
+      {
+        name: "unframed depleted balance",
+        stdout: JSON.stringify({ remaining: 0, resource: "core" }),
+      },
+    ])("does not infer core exhaustion from $name", ({ name: _name, ...failure }) => {
+      expect(classify({ status: 1, ...failure })).toBe(false);
+    });
+  }
 });
 
 function isolatedWrapperEnv(root: string) {
@@ -155,6 +212,30 @@ function createWrapperGit(fixtureEnv: ReturnType<typeof isolatedWrapperEnv>) {
   };
 }
 
+function baseBranchGhStub(baseRef: string) {
+  const pull = {
+    number: 123,
+    html_url: "https://github.com/fixture/repo/pull/123",
+    base: {
+      ref: baseRef,
+      repo: {
+        id: 123,
+        node_id: "fixture-repo",
+        full_name: "fixture/repo",
+        html_url: "https://github.com/fixture/repo",
+      },
+    },
+  };
+  return `#!/bin/sh
+case "$*" in
+  "browse") printf 'https://github.com/fixture/repo\\n' ;;
+  "api --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0")
+    printf '%s\\n' '${JSON.stringify(pull)}' ;;
+  *) echo "Unexpected gh call: $*" >&2; exit 99 ;;
+esac
+`;
+}
+
 function createMismatchedWrapperTemplate({
   realModules,
   dispatchBody,
@@ -178,10 +259,7 @@ function createMismatchedWrapperTemplate({
   // Deterministic gh stub: main-only subcommands fail fast on the base-branch
   // gate instead of reaching the network, proving which wrapper actually ran.
   const ghStub = join(bin, "gh");
-  writeFileSync(
-    ghStub,
-    '#!/bin/sh\nif [ "$1 $2" = "browse --no-browser" ]; then\n  printf \'https://github.com/fixture/repo\\n\'\n  exit 0\nfi\nif [ "$1" = "api" ]; then\n  printf \'{"base":{"ref":"not-main"}}\\n\'\n  exit 0\nfi\necho "Unexpected gh call: $*" >&2\nexit 99\n',
-  );
+  writeFileSync(ghStub, baseBranchGhStub("not-main"));
   chmodSync(ghStub, 0o755);
 
   const fixtureEnv = isolatedWrapperEnv(root);
@@ -462,9 +540,12 @@ describe("scripts/pr wrappers", () => {
     const merge = readScript("scripts/pr-lib/merge.sh");
     const mergeOutcome = readScript("scripts/pr-lib/merge-outcome.sh");
 
-    expect(script).toContain('base_json=$(read_pr_view_json "$pr" "baseRefName")');
+    expect(script).toContain('pr_observe "$pr" || exit 1');
+    expect(script).toContain('base_json="$PR_OBSERVATION"');
     expect(common).toContain('pr_gh pr view "$pr" --json "$fields"');
-    expect(worktree).toContain('metadata=$(GH_REPO="$repo_nwo" read_pr_view_json "$pr"');
+    expect(worktree).toContain(
+      'metadata=$(read_pr_view_json "$pr" "number,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,',
+    );
     expect(review).toContain('pr_gh_plain assign-reviewer "$pr" "$reviewer"');
     expect(push).toContain('pr_gh_plain api graphql --input "$payload_file"');
     expect(push).not.toContain("pr_gh_plain api graphql --input -");
@@ -521,6 +602,23 @@ describe("scripts/pr wrappers", () => {
       ["123", "not-an-outcome", "--confirmed-operator-recovery"],
       ["123", "a".repeat(40), "--confirmed-no-running-tools"],
       ["123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
+      ["123", "a".repeat(40), "--confirmed-operator-recovery", "--cancel-auto", "--cancel-auto"],
+      [
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        "--cancel-auto",
+        "--body-file",
+        "message.md",
+      ],
+      [
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        "--cancel-auto",
+        "--replacement-head",
+        "b".repeat(40),
+      ],
       ...[
         [],
         [""],
@@ -576,7 +674,7 @@ describe("scripts/pr wrappers", () => {
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
-      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n`,
+      `<123>\n<false>\n<>\n<>\n<${join(caller, "operator body.md")}>\n<>\n<false>\n<>\n`,
     );
   });
 
@@ -640,16 +738,17 @@ describe("scripts/pr wrappers", () => {
 
   itPosix("dispatches explicit replacement arguments through the same merge owner", () => {
     const fixture = makeMismatchedWrapperRepo();
-    writeFileSync(
-      join(fixture.bin, "gh"),
-      `#!/bin/sh\nif [ "$1 $2" = "browse --no-browser" ]; then printf 'https://github.com/fixture/repo\\n'; else printf '{"base":{"ref":"main"}}\\n'; fi\n`,
-    );
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
     writeFileSync(
       join(fixture.canonical, "scripts/pr-lib/merge.sh"),
       `merge_run() { printf '<%s>\\n' "$@"; }\n`,
     );
-    for (const replacement of [[], ["--replacement-head", "b".repeat(40)]]) {
+    for (const replacement of [[], ["--replacement-head", "b".repeat(40)], ["--cancel-auto"]]) {
       for (const body of [[], ["--body-file", "message.md"]]) {
+        const cancel = replacement[0] === "--cancel-auto";
+        if (cancel && body.length) {
+          continue;
+        }
         const result = spawnSync(
           join(fixture.canonical, "scripts/pr"),
           [
@@ -664,48 +763,50 @@ describe("scripts/pr wrappers", () => {
         );
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toBe(
-          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n`,
+          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n<${body.length ? join(fixture.canonical, "message.md") : ""}>\n<>\n<${cancel}>\n<>\n`,
         );
       }
     }
   });
 
-  itPosix("pins legacy refusal evidence and requires an explicit current recovery head", () => {
-    const fixture = makeMismatchedWrapperRepo();
-    const caller = join(fixture.canonical, "nested");
-    mkdirSync(caller);
-    writeFileSync(
-      join(fixture.bin, "gh"),
-      `#!/bin/sh\nif [ "$1 $2" = "browse --no-browser" ]; then printf 'https://github.com/fixture/repo\\n'; else printf '{"base":{"ref":"main"}}\\n'; fi\n`,
-    );
-    writeFileSync(
-      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
-      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
-    );
-    const args = [
-      "merge-recover",
-      "123",
-      "a".repeat(40),
-      "--confirmed-operator-recovery",
-      "--legacy-refusal",
-      "proof",
-    ];
-    const missing = spawnSync(join(fixture.canonical, "scripts/pr"), args, {
-      cwd: caller,
-      encoding: "utf8",
-      env: fixture.env,
-    });
-    expect(missing.status, missing.stdout + missing.stderr).toBe(2);
-    const result = spawnSync(
-      join(fixture.canonical, "scripts/pr"),
-      [...args, "--replacement-head", "b".repeat(40)],
-      { cwd: caller, encoding: "utf8", env: fixture.env },
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${join(caller, "proof")}>\n`,
-    );
-  });
+  itPosix.each(["legacy-refusal", "pre-dispatch-refusal"])(
+    "pins %s evidence relative to the original caller",
+    (flag) => {
+      const fixture = makeMismatchedWrapperRepo();
+      const caller = join(fixture.canonical, "nested");
+      mkdirSync(caller);
+      writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
+      writeFileSync(
+        join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+        `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+      );
+      const args = [
+        "merge-recover",
+        "123",
+        "a".repeat(40),
+        "--confirmed-operator-recovery",
+        `--${flag}`,
+        "proof",
+      ];
+      const missing = spawnSync(join(fixture.canonical, "scripts/pr"), args, {
+        cwd: caller,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(missing.status, missing.stdout + missing.stderr).toBe(
+        flag === "legacy-refusal" ? 2 : 0,
+      );
+      const result = spawnSync(
+        join(fixture.canonical, "scripts/pr"),
+        [...args, "--replacement-head", "b".repeat(40)],
+        { cwd: caller, encoding: "utf8", env: fixture.env },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toBe(
+        `<123>\n<false>\n<${"a".repeat(40)}>\n<${"b".repeat(40)}>\n<>\n<${flag === "legacy-refusal" ? join(caller, "proof") : ""}>\n<false>\n<${flag === "pre-dispatch-refusal" ? join(caller, "proof") : ""}>\n`,
+      );
+    },
+  );
 
   it("runs a mismatched advisory wrapper locally with an explicit developer opt-in", () => {
     const fixture = makeMismatchedWrapperRepo();
@@ -1194,7 +1295,7 @@ fi
   itPosix.each(["producer failure", "truncated archive", "reader failure"])(
     "refuses anchor extraction on %s",
     (failure) => {
-      const fixture = makeMismatchedWrapperRepo();
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
       parkCanonicalOffAnchor(fixture);
       const git = join(fixture.bin, "git");
       writeFileSync(
@@ -1744,7 +1845,7 @@ exit 99
   )(
     "refuses missing $dependency before handoff (matching=$matching) without installing",
     ({ dependency, matching }) => {
-      const fixture = makeMismatchedWrapperRepo();
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
       if (matching) {
         fixture.git(fixture.linked, ["reset", "--hard", "refs/remotes/origin/main"]);
       }
@@ -1780,7 +1881,7 @@ exit 99
   it.each(["handoff", "inventory"])(
     "keeps the refusal when the anchor lacks its %s",
     (contract) => {
-      const fixture = makeMismatchedWrapperRepo();
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
       fixture.git(fixture.canonical, ["checkout", "main"]);
       if (contract === "handoff") {
         const legacy = readScript(join(fixture.canonical, "scripts/pr")).replaceAll(
@@ -1810,7 +1911,7 @@ exit 99
 
   describe("alias wrapper trust delegation", () => {
     function makeAliasFixture() {
-      const fixture = makeMismatchedWrapperRepo({ realModules: true });
+      const fixture = makeMismatchedWrapperRepo({ realModules: true, toolingOnly: true });
       fixture.git(fixture.linked, ["checkout", "--detach", "refs/remotes/origin/main"]);
       // Keep the Node recorder at the supervisor handoff, after dependency preparation.
       linkPrWrapperDependencies(fixture.linked);
@@ -2033,19 +2134,21 @@ exit 99
     body?: unknown;
     rawBody?: string;
     headers?: Record<string, string>;
+    graphqlQuotaExhausted?: boolean;
     diagnostic?: string;
     details?: string[];
     absent?: string[];
   }[] = [
     {
-      name: "primary HTTP 403 exhaustion",
+      name: "both primary quotas exhausted",
       status: 403,
       code: 1,
       body: { message: "API rate limit exceeded for synthetic-private-detail" },
       headers: quota,
+      graphqlQuotaExhausted: true,
       diagnostic: "rate limited",
       details: [
-        "resource=core; remaining=0; limit=5000",
+        "resource=graphql; remaining=0; limit=5000",
         "reset=2030-01-01T00:00:00Z",
         "Wait until 2030-01-01T00:00:00Z (UTC), then retry manually.",
       ],
@@ -2253,6 +2356,11 @@ if (args[0] === "api" && args[1] === "rate_limit") {
   } }));
   process.exit(0);
 }
+if (args.includes("graphql") && ${Boolean(scenario.graphqlQuotaExhausted)}) {
+  process.stdout.write(${JSON.stringify(headers.replace("X-RateLimit-Resource: core", "X-RateLimit-Resource: graphql"))});
+  console.log(JSON.stringify({ errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded for synthetic-private-detail" }] }));
+  process.exit(1);
+}
 if (args.includes("--include")) process.stdout.write(${JSON.stringify(headers)});
 process.stdout.write(${JSON.stringify(body)});
 console.error("gh: synthetic-private-detail");
@@ -2297,7 +2405,9 @@ process.exit(${scenario.code});
     expect(result.stdout).not.toContain("UNEXPECTED");
     expect(result.stdout + result.stderr).not.toMatch(/synthetic-private-detail|UNEXPECTED_ROUTE/);
     if (quotaIntercepted) {
-      expect(result.stderr).toContain("GitHub API request failed (resource=core)");
+      expect(result.stderr).toContain(
+        `GitHub API request failed (resource=${scenario.graphqlQuotaExhausted ? "graphql" : "core"})`,
+      );
       expect(result.stderr).toContain(`original response: HTTP ${scenario.status}`);
       expect(result.stderr).not.toContain("Supplemental quota probe");
       for (const detail of scenario.details ?? []) {
@@ -2333,7 +2443,21 @@ process.exit(${scenario.code});
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line)),
-    ).toEqual([["api", ...(hostname ? ["--hostname", hostname] : []), "user", "--include"]]);
+    ).toEqual([
+      ["api", ...(hostname ? ["--hostname", hostname] : []), "user", "--include"],
+      ...(scenario.graphqlQuotaExhausted
+        ? [
+            [
+              "api",
+              ...(hostname ? ["--hostname", hostname] : []),
+              "graphql",
+              "--include",
+              "-f",
+              "query=query{viewer{login}}",
+            ],
+          ]
+        : []),
+    ]);
   });
 
   it.each([
@@ -2353,7 +2477,7 @@ process.exit(${scenario.code});
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.OPENCLAW_TEST_CALLS, JSON.stringify(args) + "\\n");
-if (args[0] === "browse" && args[1] === "--no-browser") {
+if (args[0] === "browse") {
   console.log("https://${host}/fixture/repo");
 } else if (args[0] === "api" && args[1] === "user") {
   if (args.includes("--include")) {
@@ -2365,6 +2489,10 @@ if (args[0] === "browse" && args[1] === "--no-browser") {
   } else {
     console.log(JSON.stringify({ login: "relay-reader" }));
   }
+} else if (args[0] === "api" && args.includes("graphql") && ${rateLimited}) {
+  process.stdout.write('HTTP/2.0 403 Forbidden\\nX-RateLimit-Resource: graphql\\nX-RateLimit-Remaining: 0\\n\\n');
+  console.log(JSON.stringify({ errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded for synthetic-private-detail" }] }));
+  process.exit(1);
 } else if (args[0] === "api" && args.includes("repos/fixture/repo/issues/42/assignees")) {
   if (args[args.indexOf("--hostname") + 1] !== "${host}" ||
       args[args.indexOf("--method") + 1] !== "POST" ||
@@ -2414,13 +2542,15 @@ if (args[0] === "browse" && args[1] === "--no-browser") {
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(ghCalls[0]).toEqual(["api", "user", "--include"]);
-      expect(ghCalls.some((args: string[]) => args.includes("graphql"))).toBe(false);
+      expect(ghCalls.filter((args: string[]) => args.includes("graphql"))).toHaveLength(
+        rateLimited ? 1 : 0,
+      );
       const assignmentCalls = ghCalls.filter((args: string[]) => args.includes("POST"));
       expect(assignmentCalls).toHaveLength(rateLimited ? 0 : assigned ? 1 : 3);
       expect(result.stdout + result.stderr).not.toContain("synthetic-private-detail");
       if (rateLimited) {
-        expect(ghCalls).toHaveLength(1);
-        expect(result.stderr).toContain("GitHub API request failed (resource=core)");
+        expect(ghCalls).toHaveLength(2);
+        expect(result.stderr).toContain("GitHub API request failed (resource=graphql)");
         expect(result.stdout).not.toContain("review claim succeeded");
       } else if (assigned) {
         expect(result.stdout).toContain("@writer-maintainer assigned to PR #42");

@@ -37,7 +37,10 @@ describe("chat transcript scroll ownership", () => {
       },
       { canFollowEnd: () => !policy.chatFollowLocked },
     );
-    Object.assign(policy, { chatCancelScroll: () => transcript.cancelScroll() });
+    Object.assign(policy, {
+      chatCancelScroll: () => transcript.cancelScroll(),
+      chatIsManualScroll: () => transcript.isManualScroll,
+    });
     const content: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
       kind: "content",
       key: `row:${index}`,
@@ -72,7 +75,7 @@ describe("chat transcript scroll ownership", () => {
     renderRows([...content, typing]);
     flushFrames();
     try {
-      transcript.scrollToEnd({ behavior: "auto" });
+      transcript.scrollToEnd({ source: "auto", behavior: "auto" });
       container.dispatchEvent(new Event("scroll"));
       lockChatScroll(policy, "remote-input");
       expect(policy.chatFollowLocked).toBe(true);

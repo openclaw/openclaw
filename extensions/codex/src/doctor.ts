@@ -3,6 +3,7 @@ import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-r
 import { resolveEffectiveAgentRuntime } from "openclaw/plugin-sdk/command-auth-native";
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
+import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
@@ -12,6 +13,7 @@ import {
   resolveManagedCodexAppServerStartOptions,
   resolveManagedCodexNativeCommand,
 } from "./app-server/managed-binary.js";
+import { describeCodexSpawnError, findCodexAppServerSpawnError } from "./app-server/spawn-error.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 
 export const CODEX_MANAGED_APP_SERVER_CHECK_ID = "codex/managed-app-server";
@@ -126,7 +128,7 @@ function createCodexManagedAppServerHealthCheck(params: {
       const versionFailureHint = isFinalization
         ? "Codex readiness will be rechecked by its plugin after restart; inspect the Codex plugin if the warning persists."
         : undefined;
-      let resolved;
+      const candidates = [];
       for (const agentId of listAgentIds(ctx.cfg)) {
         const model = resolveDefaultModelForAgent({ cfg: ctx.cfg, agentId });
         if (
@@ -139,13 +141,25 @@ function createCodexManagedAppServerHealthCheck(params: {
         ) {
           continue;
         }
-        const agentStart = resolveAgentStartOptions({
-          startOptions: start,
-          agentDir: resolveAgentDir(ctx.cfg, agentId, env),
-          env,
-        });
+        candidates.push(
+          resolveAgentStartOptions({
+            startOptions: start,
+            agentDir: resolveAgentDir(ctx.cfg, agentId, env),
+            env,
+          }),
+        );
+      }
+      if (
+        ctx.cfg.plugins?.entries?.codex?.enabled === true &&
+        readCodexPluginConfig(pluginConfig).sessionCatalog?.enabled !== false
+      ) {
+        // Passive catalogs use the package even when no agent routes turns through Codex.
+        candidates.push({ ...start, managedCommandOrder: "package-only" as const });
+      }
+      let resolved;
+      for (const candidate of candidates) {
         try {
-          resolved = await resolveStartOptions(agentStart, { pluginRoot: params.pluginRoot });
+          resolved = await resolveStartOptions(candidate, { pluginRoot: params.pluginRoot });
         } catch (error) {
           return [
             managedCodexFinding({
@@ -186,10 +200,18 @@ function createCodexManagedAppServerHealthCheck(params: {
           ? params.deps.runVersionCommand(nativeCommand)
           : runVersionCommand(nativeCommand, env));
       } catch (error) {
+        const spawnFailure = findCodexAppServerSpawnError(
+          describeCodexSpawnError(error, nativeCommand),
+        );
         return [
           managedCodexFinding({
-            message: `Managed Codex app-server version check failed: ${readErrorMessage(error)}`,
-            severity: versionFailureSeverity,
+            message:
+              spawnFailure?.message ??
+              `Managed Codex app-server version check failed: ${readErrorMessage(error)}`,
+            severity:
+              spawnFailure && resolved.managedCommandOrder === "package-only"
+                ? "warning"
+                : versionFailureSeverity,
             path: nativeCommand,
             requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within ${CODEX_VERSION_TIMEOUT_MS} ms`,
             fixHint:

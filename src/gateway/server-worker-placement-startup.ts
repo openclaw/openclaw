@@ -219,7 +219,7 @@ export function createGatewayWorkerPlacementRuntime(
     resolveWorkspace,
   });
   const publishPlacementChanges = createGatewayWorkerPlacementChangePublisher(params);
-  const rawDispatchService = coordinateWorkerPlacementDispatch(
+  const dispatchService = coordinateWorkerPlacementDispatch(
     createWorkerPlacementDispatchService({
       placements: params.placements,
       environments: params.environments,
@@ -423,23 +423,17 @@ export function createGatewayWorkerPlacementRuntime(
       isStopping: () =>
         stopped || params.environments.isStopping() || getGatewayRestartDrainSignal().aborted,
     }),
+    publishPlacementChanges,
   );
-  const dispatchService = {
-    ...rawDispatchService,
-    reconcile: (mode: Parameters<typeof rawDispatchService.reconcile>[0]) =>
-      publishPlacementChanges(() => rawDispatchService.reconcile(mode)),
-    reconcileActive: (environmentId?: string) =>
-      publishPlacementChanges(() => rawDispatchService.reconcileActive(environmentId)),
-  };
   const placementIdleSweep = createWorkerPlacementIdleSweep({
     placements: params.placements,
     environments: params.environments,
-    dispatch: rawDispatchService,
+    dispatch: dispatchService,
     getConfig: getRuntimeConfig,
     info: params.info ?? params.warn,
     warn: params.warn,
     isPlacementOperationInFlight: (sessionId) =>
-      rawDispatchService.isPlacementOperationInFlight(sessionId),
+      dispatchService.isPlacementOperationInFlight(sessionId),
     loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
   });
   const sessionRetirement = createPlacementSessionRetirement({
@@ -454,7 +448,7 @@ export function createGatewayWorkerPlacementRuntime(
     placements: params.placements,
     resolveWorkspace,
     reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
-    waitForInitialPlacement: rawDispatchService.waitForInitialPlacement,
+    waitForInitialPlacement: dispatchService.waitForInitialPlacement,
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,
       dispatch: dispatchService.dispatch,
@@ -523,12 +517,12 @@ export function createGatewayWorkerPlacementRuntime(
       }
       return trackOperation(
         placementReconcile,
-        publishPlacementChanges(async () => {
-          await sessionRetirement.reconcile();
-          await rawDispatchService.reconcileActive();
+        (async () => {
+          await publishPlacementChanges(() => sessionRetirement.reconcile());
+          await dispatchService.reconcileActive();
           await reconcilePublications();
           void nodeWorkspaceRetention.schedule();
-        }),
+        })(),
         "Worker placement reconcile sweep failed",
       );
     };
@@ -626,11 +620,10 @@ export function createGatewayWorkerPlacementRuntime(
             placements: params.placements,
             resolveWorkspace,
           }),
-        () =>
-          publishPlacementChanges(async () => {
-            await rawDispatchService.reconcile("startup");
-            await reconcilePublications();
-          }),
+        async () => {
+          await dispatchService.reconcile("startup");
+          await reconcilePublications();
+        },
       ]) {
         const current = reconcile();
         placementReconcile.current = current;

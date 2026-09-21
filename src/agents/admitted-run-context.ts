@@ -16,6 +16,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
 export type OperationalRunInstanceRef = Readonly<{
@@ -29,6 +30,60 @@ export type AdmittedRunContext = Readonly<{
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
 }>;
 
+export type AdmittedRunOperatorAuthority = Readonly<{
+  profileId: string;
+  scopes: readonly string[];
+  assertCurrent: () => void;
+  signal?: AbortSignal;
+  /** Opaque original source identity used only to compare compatible queued input. */
+  source?: object;
+  /** Retains the original source independently of a foreground run or request. */
+  retain?: () => () => void;
+}>;
+
+const operatorAuthorityIssuers = resolveGlobalSingleton(
+  Symbol.for("openclaw.admittedRunOperatorAuthorities"),
+  () => new WeakSet<object>(),
+);
+
+/** Host-only construction; public reply options cannot manufacture a source capability. */
+export function createAdmittedRunOperatorAuthority(
+  source: AdmittedRunOperatorAuthority,
+): AdmittedRunOperatorAuthority {
+  const check = source.assertCurrent;
+  const signal = source.signal;
+  let revoked = false;
+  const authority = Object.freeze({
+    profileId: source.profileId,
+    scopes: Object.freeze([...source.scopes]),
+    source: source.source ?? Object.freeze({}),
+    signal,
+    retain: source.retain,
+    assertCurrent: () => {
+      if (revoked) {
+        throw new Error("operator execution authority is no longer active");
+      }
+      try {
+        signal?.throwIfAborted();
+        check();
+      } catch (error) {
+        revoked = true;
+        throw error;
+      }
+    },
+  });
+  operatorAuthorityIssuers.add(authority);
+  return authority;
+}
+
+export function assertAdmittedRunOperatorAuthority(
+  authority: unknown,
+): asserts authority is AdmittedRunOperatorAuthority {
+  if (!authority || typeof authority !== "object" || !operatorAuthorityIssuers.has(authority)) {
+    throw new Error("operator run authority must be issued by the host");
+  }
+}
+
 export type PreparedAgentRunAdmission = Readonly<{
   operationalRunInstance: OperationalRunInstanceRef;
   /** Exact post-prepare owner; repeated fallback/retry returns the same object. */
@@ -38,6 +93,8 @@ export type PreparedAgentRunAdmission = Readonly<{
   ) => Promise<AdmittedRunContext>;
   /** Checks latched source revocation after normal close; never grants execution authority. */
   assertSourceCurrent: () => void;
+  /** Host-only source restriction available before the runtime prepares its tools. */
+  readOperatorAuthority?: () => AdmittedRunOperatorAuthority | undefined;
   /** Idempotently closes the exact delegated approval lease, if admission occurred. */
   close: () => void;
 }>;
@@ -46,21 +103,28 @@ type DelegatedAuthorityLease = {
   authority: AgentRunDelegatedAuthority;
   foregroundClosed: boolean;
   assertSourceCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 };
 
 const delegatedAuthorityLeases = new WeakMap<AdmittedRunContext, DelegatedAuthorityLease>();
-const activeNativeHookRecoveryLeases = new Map<string, DelegatedAuthorityLease>();
+const activeNativeHookRecoveryLeases = new Map<
+  string,
+  { lease: DelegatedAuthorityLease; releaseOperatorAuthority?: () => void }
+>();
 
 function bindAdmittedRunDelegatedAuthority(
   context: AdmittedRunContext,
   assertSourceCurrent?: () => void,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): void {
   const authority = claimAgentRunDelegatedAuthority(
     context.operationalRunInstance,
     assertSourceCurrent,
   );
+  const previousRecovery = activeNativeHookRecoveryLeases.get(context.operationalRunInstance.runId);
   activeNativeHookRecoveryLeases.delete(context.operationalRunInstance.runId);
-  const lease = { authority, foregroundClosed: false, assertSourceCurrent };
+  previousRecovery?.releaseOperatorAuthority?.();
+  const lease = { authority, foregroundClosed: false, assertSourceCurrent, operatorAuthority };
   delegatedAuthorityLeases.set(context, lease);
 }
 
@@ -72,6 +136,34 @@ export function getAdmittedRunDelegatedAuthority(
   return lease && !lease.foregroundClosed && validateAgentRunDelegatedAuthority(lease.authority)
     ? lease.authority
     : undefined;
+}
+
+/** Captures the operator's source lifetime from a live run, including for detached children. */
+export function readAdmittedRunOperatorAuthority(
+  context: AdmittedRunContext | undefined,
+): AdmittedRunOperatorAuthority | undefined {
+  if (!context) {
+    return undefined;
+  }
+  const operatorAuthority = delegatedAuthorityLeases.get(context)?.operatorAuthority;
+  if (!operatorAuthority) {
+    return undefined;
+  }
+  if (!getAdmittedRunDelegatedAuthority(context)) {
+    throw new Error("admitted run operator authority is no longer active");
+  }
+  return operatorAuthority;
+}
+
+/** Reads the same source ceiling used by admission without minting run authority. */
+export function readPreparedRunOperatorAuthority(
+  prepared: PreparedAgentRunAdmission | undefined,
+): AdmittedRunOperatorAuthority | undefined {
+  const authority = prepared?.readOperatorAuthority?.();
+  if (authority !== undefined) {
+    assertAdmittedRunOperatorAuthority(authority);
+  }
+  return authority;
 }
 
 /** Captures an exact admitted-run assertion for work that may cross an await boundary. */
@@ -125,13 +217,17 @@ export function retainAdmittedRunBeforeToolCallRecovery(
   ) {
     return undefined;
   }
-  activeNativeHookRecoveryLeases.set(runId, lease);
+  const recovery = {
+    lease,
+    releaseOperatorAuthority: lease.operatorAuthority?.retain?.(),
+  };
+  activeNativeHookRecoveryLeases.set(runId, recovery);
   const assertActive = () => {
     // Retaining native policy outlives the foreground claim, never its source owner.
     lease.assertSourceCurrent?.();
     if (
       getAgentRunLifecycleGeneration() !== lease.authority.lifecycleGeneration ||
-      activeNativeHookRecoveryLeases.get(runId) !== lease
+      activeNativeHookRecoveryLeases.get(runId) !== recovery
     ) {
       throw new Error("admitted run native hook recovery is no longer active");
     }
@@ -139,8 +235,9 @@ export function retainAdmittedRunBeforeToolCallRecovery(
   return Object.freeze({
     assertActive,
     release: () => {
-      if (activeNativeHookRecoveryLeases.get(runId) === lease) {
+      if (activeNativeHookRecoveryLeases.get(runId) === recovery) {
         activeNativeHookRecoveryLeases.delete(runId);
+        recovery.releaseOperatorAuthority?.();
       }
     },
   });
@@ -197,11 +294,13 @@ export function prepareSystemAgentRunAdmission(
   agentId: string,
   boundary: string,
   assertSourceCurrent?: () => void,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): PreparedAgentRunAdmission {
   return prepareAgentRunAdmission({
     cfg,
     operationalRunInstance: createOperationalRunInstanceRef(runId),
     assertSourceCurrent,
+    operatorAuthority,
     facts: {
       runId,
       agentId,
@@ -221,26 +320,34 @@ export function prepareAgentRunAdmission(params: {
   recovery?: ExecutionIdentityRecoveryAdmission;
   onAdmitted?: (context: AdmittedRunContext) => void | Promise<void>;
   assertSourceCurrent?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 }): PreparedAgentRunAdmission {
   const operationalRunInstance = params.operationalRunInstance;
+  if (operationalRunInstance.runId !== params.facts.runId) {
+    throw new Error("operational run instance disagrees with prepared admission");
+  }
   const sourceAssertion = params.assertSourceCurrent;
+  const operatorAuthority = params.operatorAuthority;
+  if (operatorAuthority !== undefined) {
+    assertAdmittedRunOperatorAuthority(operatorAuthority);
+  }
+  const assertOperatorCurrent = operatorAuthority?.assertCurrent;
+  const releaseOperatorAuthority = operatorAuthority?.retain?.();
   let sourceClosed = false;
   const assertSourceCurrent =
-    sourceAssertion &&
+    (sourceAssertion || assertOperatorCurrent) &&
     (() => {
       if (sourceClosed) {
         throw new Error("source execution authority is no longer active");
       }
       try {
-        sourceAssertion();
+        sourceAssertion?.();
+        assertOperatorCurrent?.();
       } catch (error) {
         sourceClosed = true;
         throw error;
       }
     });
-  if (operationalRunInstance.runId !== params.facts.runId) {
-    throw new Error("operational run instance disagrees with prepared admission");
-  }
   let admittedRuntimeKind: ExecutionIdentityAdmissionFacts["runtime"]["kind"] | undefined;
   let admittedRuntimeInstanceId: string | undefined;
   let admitted: Promise<AdmittedRunContext> | undefined;
@@ -249,13 +356,26 @@ export function prepareAgentRunAdmission(params: {
   return Object.freeze({
     operationalRunInstance,
     assertSourceCurrent: () => assertSourceCurrent?.(),
+    readOperatorAuthority: () => {
+      if (operatorAuthority) {
+        if (closed) {
+          throw new Error("prepared operator authority is no longer active");
+        }
+        operatorAuthority.assertCurrent();
+      }
+      return operatorAuthority;
+    },
     close: () => {
+      if (closed) {
+        return;
+      }
       closed = true;
       if (admittedContext) {
         closeAdmittedRunDelegatedAuthority(admittedContext);
       } else {
         void admitted?.then(closeAdmittedRunDelegatedAuthority).catch(() => undefined);
       }
+      releaseOperatorAuthority?.();
     },
     admit: (runtimeKind, runtimeInstanceId) => {
       if (closed) {
@@ -279,7 +399,7 @@ export function prepareAgentRunAdmission(params: {
           runtimeInstanceId: admittedRuntimeInstanceId,
           ...(params.recovery ? { recovery: params.recovery } : {}),
         });
-        bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent);
+        bindAdmittedRunDelegatedAuthority(context, assertSourceCurrent, operatorAuthority);
         admittedContext = context;
         try {
           await params.onAdmitted?.(context);

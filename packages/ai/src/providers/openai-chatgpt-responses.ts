@@ -788,27 +788,22 @@ function isJsonRecord(value: unknown): value is Record<string, unknown> {
  * {@link ResponsesStreamFailure}. Only the app-server surface carries the
  * `codexErrorInfo` discriminator, so both shapes must be read here.
  */
-const RESPONSES_CYBER_POLICY_ERROR_CODE = "cyber_policy";
-
 function readCodexProviderRefusal(
   error: unknown,
 ): { category: CodexProviderRefusalCategory } | undefined {
-  if (error instanceof ResponsesStreamFailure) {
-    return error.code === RESPONSES_CYBER_POLICY_ERROR_CODE ? { category: "cyber" } : undefined;
-  }
-  if (!(error instanceof CodexApiError)) {
+  if (!(error instanceof ResponsesStreamFailure || error instanceof CodexApiError)) {
     return undefined;
   }
-  if (error.code === RESPONSES_CYBER_POLICY_ERROR_CODE) {
-    return { category: "cyber" };
-  }
-  const payload = error.payload;
+  const payload = error instanceof CodexApiError ? error.payload : undefined;
   const nested = isJsonRecord(payload?.error) ? payload.error : undefined;
   const codexErrorInfo = payload?.codexErrorInfo ?? nested?.codexErrorInfo;
-  if (codexErrorInfo === "cyberPolicy") {
+  if (error.code === "cyber_policy" || codexErrorInfo === "cyberPolicy") {
     return { category: "cyber" };
   }
-  if (codexErrorInfo === "misalignmentPolicyViolation") {
+  if (
+    error.code === "misalignment_policy_violation" ||
+    codexErrorInfo === "misalignmentPolicyViolation"
+  ) {
     return { category: "misalignment" };
   }
   const message =

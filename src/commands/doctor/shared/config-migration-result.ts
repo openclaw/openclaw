@@ -35,7 +35,7 @@ export type DoctorConfigPreflightOptions = {
   skipPristineCoreStateMigrations?: boolean;
   /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
   skipPristineStartupStateMigrations?: boolean;
-  /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
+  /** Enable Doctor-owned migrations under explicit repair or exclusive startup maintenance. */
   doctorOnlyStateMigrations?: boolean;
 };
 

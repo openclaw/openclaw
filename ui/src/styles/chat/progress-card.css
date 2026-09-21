@@ -204,7 +204,8 @@
   color: var(--warn);
 }
 
-.session-progress-card__refresh-status[data-state="updated"] {
+/* Keep live announcements accessible; the button carries the visible feedback. */
+.session-progress-card__refresh-status:is([data-state="pending"], [data-state="updated"]) {
   position: absolute;
   width: 1px;
   height: 1px;

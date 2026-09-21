@@ -427,6 +427,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
+    bootstrapUserProfileId: params.bootstrapUserProfileId,
     gatewayUiCommandTarget: params.gatewayUiCommandTarget,
     pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
     toolBindings: params.toolBindings,

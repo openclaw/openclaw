@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
-import { promisify } from "node:util";
 import { beforeEach, expect, test, vi } from "vitest";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
@@ -13,89 +11,30 @@ import {
 import * as transcriptWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
-import { retainUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { gitHubPublicApi } from "../github-public-api.js";
 import * as projectGitHubSearch from "../project-github-search.js";
+import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import {
-  createProjectsHandlers,
-  projectsHandlers as registeredProjectsHandlers,
-} from "./projects.js";
-
-const execFileAsync = promisify(execFile);
-const listRegistryRecords = vi.fn(async () => []);
-const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => ({
-  checkoutRoot: checkoutPath,
-  repoRoot: checkoutPath,
-  originUrl: "",
-  fingerprint: checkoutPath,
-}));
-const projectsHandlers = createProjectsHandlers({
+  execFileAsync,
+  initializeRepository,
+  invokeProjectMethod,
   listRegistryRecords,
+  projectsHandlers,
   resolveRepositoryIdentity,
-} as never);
+} from "./projects.test-support.js";
 
 beforeEach(() => {
   listRegistryRecords.mockClear();
   resolveRepositoryIdentity.mockClear();
 });
-
-async function initializeRepository(
-  root: string,
-  name = "registered",
-  originUrl = "https://github.com/openclaw/openclaw.git",
-): Promise<string> {
-  const repo = path.join(root, name);
-  await fs.mkdir(repo, { recursive: true });
-  await execFileAsync("git", ["init", "-b", "main", repo]);
-  await execFileAsync("git", ["-C", repo, "config", "user.name", "OpenClaw Tests"]);
-  await execFileAsync("git", ["-C", repo, "config", "user.email", "tests@openclaw.invalid"]);
-  await execFileAsync("git", ["-C", repo, "remote", "add", "origin", originUrl]);
-  await fs.writeFile(path.join(repo, "README.md"), "registered\n");
-  await execFileAsync("git", ["-C", repo, "add", "README.md"]);
-  await execFileAsync("git", ["-C", repo, "commit", "-m", "initial"]);
-  return await fs.realpath(repo);
-}
-
-async function invokeProjectMethod(
-  method: keyof typeof projectsHandlers,
-  params: Record<string, unknown>,
-  cfg = {},
-  scopes: string[] = ["operator.write"],
-  profileId?: string,
-  handlers = projectsHandlers,
-) {
-  const capture: {
-    result: {
-      ok: boolean;
-      payload?: unknown;
-      error?: { code?: string; message?: string };
-    } | null;
-  } = { result: null };
-  await handlers[method]!({
-    req: {} as never,
-    params,
-    respond: (ok, payload, error) => {
-      capture.result = { ok, payload, error };
-    },
-    context: { getRuntimeConfig: () => cfg as OpenClawConfig } as never,
-    client: {
-      connect: { scopes },
-      ...(profileId ? { authenticatedUserProfile: { profileId } } : {}),
-    } as never,
-    isWebchatConnect: () => false,
-  });
-  return capture.result;
-}
 
 test.each([
   {
@@ -482,245 +421,6 @@ test("projects.remove returns INVALID_REQUEST for an unknown id", async () => {
   }
 });
 
-test("projects.list returns only the caller's deterministic resolved recents", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  let releaseCatalog: (() => void) | undefined;
-  try {
-    const repo = await initializeRepository(state.root);
-    const project = await registerProjectRegistry({ path: repo, name: "Registered" });
-    const sourceProfile = ensureProfileForEmail("source@example.test");
-    const targetProfile = ensureProfileForEmail("target@example.test");
-    const foreignProfile = ensureProfileForEmail("foreign@example.test");
-    const actor = { type: "human" as const, source: "profile" as const, id: sourceProfile.id };
-    const repository = getSessionRepositoryWorkspaceStore().create({
-      agentId: "main",
-      sessionKey: "agent:main:cloud",
-      url: "https://github.com/octocat/hello-world.git",
-      assertCurrent: () => {},
-    });
-    const entries: Array<{
-      key: string;
-      updatedAt: number;
-      projectId?: string;
-      spawnedCwd?: string;
-      repositoryWorkspaceId?: string;
-    }> = [
-      { key: "agent:main:a", updatedAt: 500, projectId: project.id },
-      { key: "agent:main:b", updatedAt: 500, projectId: project.id },
-      { key: "agent:main:cloud", updatedAt: 450, repositoryWorkspaceId: repository.workspaceId },
-      { key: "agent:main:c", updatedAt: 400, projectId: "stale", spawnedCwd: "/work/scratch" },
-      ...Array.from({ length: 8 }, (_, index) => ({
-        key: `agent:main:folder-${index}`,
-        updatedAt: 300 - index,
-        spawnedCwd: `/work/folder-${index}`,
-      })),
-    ];
-    for (const entry of entries) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: entry.key },
-        {
-          sessionId: `session-${entry.key.split(":").at(-1)}`,
-          updatedAt: entry.updatedAt,
-          createdActor: actor,
-          ...(entry.projectId ? { projectId: entry.projectId } : {}),
-          ...(entry.spawnedCwd ? { spawnedCwd: entry.spawnedCwd } : {}),
-          ...(entry.repositoryWorkspaceId
-            ? { repositoryWorkspaceId: entry.repositoryWorkspaceId }
-            : {}),
-        },
-      );
-    }
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:other" },
-      {
-        sessionId: "session-other",
-        updatedAt: 1_000,
-        createdActor: { type: "human", source: "profile", id: "profile-bob" },
-        spawnedCwd: "/work/private-bob",
-      },
-    );
-    const cfg = { agents: { list: [{ id: "main", default: true, workspace: "/workspace" }] } };
-    linkEmail("source@example.test", targetProfile.id);
-    releaseCatalog = retainUserProfileCatalog();
-    const readResult = await invokeProjectMethod(
-      "projects.list",
-      {},
-      cfg,
-      ["operator.read"],
-      targetProfile.id,
-    );
-    if (!readResult?.payload) {
-      throw new Error("projects.list did not return recents");
-    }
-    expect((readResult.payload as { recents?: unknown[] }).recents).toEqual([
-      { kind: "project", projectId: project.id, displayName: "Registered" },
-    ]);
-    const writeResult = await invokeProjectMethod(
-      "projects.list",
-      {},
-      cfg,
-      ["operator.write"],
-      targetProfile.id,
-    );
-    expect((writeResult?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual([
-      { kind: "project", projectId: project.id, displayName: "Registered" },
-      { kind: "repository", url: repository.url, displayName: "hello-world" },
-      { kind: "folder", folder: "/work/scratch", displayName: "scratch" },
-      ...Array.from({ length: 5 }, (_, index) => ({
-        kind: "folder",
-        folder: `/work/folder-${index}`,
-        displayName: `folder-${index}`,
-      })),
-    ]);
-    const anonymous = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"]);
-    expect(anonymous?.payload).not.toHaveProperty("recents");
-    const external = new (requireNodeSqlite().DatabaseSync)(openOpenClawStateDatabase().path);
-    try {
-      external
-        .prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
-        .run(foreignProfile.id, sourceProfile.id);
-    } finally {
-      external.close();
-    }
-    const afterAliasChange = await invokeProjectMethod(
-      "projects.list",
-      {},
-      cfg,
-      ["operator.write"],
-      targetProfile.id,
-    );
-    expect(afterAliasChange?.payload).toMatchObject({ recents: [] });
-  } finally {
-    releaseCatalog?.();
-    await state.cleanup();
-  }
-});
-
-test("projects.list preserves exact-path ranking, locale ties, and the pre-access recent limit", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
-    const repo = await initializeRepository(state.root);
-    const registered = await registerProjectRegistry({ path: repo, name: "Registered" });
-    const otherWorkspace = path.join(state.root, "other");
-    const localeWorkspaceDir = path.join(state.root, "locale");
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: {
-          main: { workspace: repo },
-          work: { workspace: repo },
-          other: { workspace: otherWorkspace },
-          "a-b": { workspace: localeWorkspaceDir },
-          a_b: { workspace: localeWorkspaceDir },
-        },
-      },
-    };
-    const localeWorkspace =
-      "workspace:a-b".localeCompare("workspace:a_b") < 0 ? "workspace:a-b" : "workspace:a_b";
-    const tieIds = ["é", "e\u0301"] as const;
-    expect(tieIds[0].localeCompare(tieIds[1])).toBe(0);
-    for (const [index, id] of tieIds.entries()) {
-      openOpenClawStateDatabase()
-        .db.prepare(
-          `INSERT INTO projects
-            (id, display_name, repo_root, source, created_at_ms, updated_at_ms)
-           VALUES (?, ?, ?, 'registered', 1, 1)`,
-        )
-        .run(id, index === 0 ? "First tie" : "Second tie", "/work/ties");
-    }
-    const projectRecent = (projectId: string, displayName: string) => ({
-      kind: "project",
-      projectId,
-      displayName,
-    });
-    const cases = [
-      { agent: "main", folder: repo, expected: [projectRecent("workspace:main", "registered")] },
-      { agent: "work", folder: repo, expected: [projectRecent("workspace:work", "registered")] },
-      { agent: "other", folder: repo, expected: [projectRecent(registered.id, "Registered")] },
-      {
-        agent: "main",
-        sessionKey: "global",
-        folder: repo,
-        expected: [projectRecent(registered.id, "Registered")],
-      },
-      {
-        agent: "main",
-        folder: otherWorkspace,
-        expected: [projectRecent("workspace:other", "other")],
-      },
-      {
-        agent: "main",
-        folder: localeWorkspaceDir,
-        expected: [projectRecent(localeWorkspace, "locale")],
-      },
-      { agent: "main", folder: "/work/ties", expected: [projectRecent(tieIds[0], "First tie")] },
-      {
-        agent: "main",
-        folder: repo,
-        projectId: registered.id,
-        expected: [projectRecent(registered.id, "Registered")],
-      },
-      {
-        agent: "main",
-        folder: `${repo}/`,
-        expected: [{ kind: "folder", folder: `${repo}/`, displayName: "registered" }],
-      },
-      {
-        agent: "main",
-        folder: repo,
-        projectId: registered.id,
-        repositoryWorkspaceId: "missing-workspace",
-        expected: [],
-      },
-    ];
-    for (const [index, entry] of cases.entries()) {
-      const profile = ensureProfileForEmail(`ranking-${index}@example.test`);
-      replaceSessionEntrySync(
-        {
-          agentId: entry.agent,
-          sessionKey:
-            ("sessionKey" in entry ? entry.sessionKey : undefined) ??
-            `agent:${entry.agent}:ranking-${index}`,
-        },
-        {
-          sessionId: `ranking-${index}`,
-          updatedAt: 100,
-          createdActor: { type: "human", source: "profile", id: profile.id },
-          spawnedCwd: entry.folder,
-          ...("projectId" in entry ? { projectId: entry.projectId } : {}),
-          ...("repositoryWorkspaceId" in entry
-            ? { repositoryWorkspaceId: entry.repositoryWorkspaceId }
-            : {}),
-        },
-      );
-      const result = await invokeProjectMethod(
-        "projects.list",
-        {},
-        cfg,
-        ["operator.write"],
-        profile.id,
-      );
-      expect(result).toMatchObject({ ok: true, payload: { recents: entry.expected } });
-    }
-
-    const limited = ensureProfileForEmail("limited-recents@example.test");
-    for (let index = 0; index < 9; index++) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: `agent:main:limited-${index}` },
-        {
-          sessionId: `limited-${index}`,
-          updatedAt: 100 - index,
-          createdActor: { type: "human", source: "profile", id: limited.id },
-          spawnedCwd: index === 8 ? repo : `/work/folder-${index}`,
-        },
-      );
-    }
-    const read = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"], limited.id);
-    expect(read).toMatchObject({ ok: true, payload: { recents: [] } });
-  } finally {
-    await state.cleanup();
-  }
-});
-
 test("projects.add returns an existing project for the same canonical remote", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   try {
@@ -940,48 +640,6 @@ test("projects.remove refuses to delete a cloned checkout used by a live direct 
       ok: false,
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("project-session") },
     });
-  } finally {
-    await state.cleanup();
-  }
-});
-
-test.each([
-  ["POSIX", "/Users/dev/projects/posix-project", "posix-project"],
-  ["POSIX with a trailing separator", "/Users/dev/projects/posix-project/", "posix-project"],
-  ["Windows", "C:\\Users\\dev\\projects\\windows-project", "windows-project"],
-  [
-    "Windows with a trailing separator",
-    "C:\\Users\\dev\\projects\\windows-project\\",
-    "windows-project",
-  ],
-  ["mixed separators", "C:\\Users/dev\\projects/mixed-project/", "mixed-project"],
-] as const)("projects.list names folder recents from %s paths", async (_, folder, displayName) => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
-  try {
-    const profile = ensureProfileForEmail("windows-recents@example.test");
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:windows" },
-      {
-        sessionId: "session-windows",
-        updatedAt: 900,
-        createdActor: { type: "human", source: "profile", id: profile.id },
-        spawnedCwd: folder,
-      },
-    );
-    const result = await invokeProjectMethod(
-      "projects.list",
-      {},
-      { agents: { list: [{ id: "main", default: true, workspace: "/workspace" }] } },
-      ["operator.write"],
-      profile.id,
-    );
-    expect((result?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual([
-      {
-        kind: "folder",
-        folder,
-        displayName,
-      },
-    ]);
   } finally {
     await state.cleanup();
   }

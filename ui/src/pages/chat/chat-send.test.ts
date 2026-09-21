@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
@@ -55,7 +54,13 @@ import { loadChatBranches } from "./chat-history-branches.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
+import {
+  findRequestPayload,
+  makeChatHost,
+  makeRequestMock,
+  requestCalls,
+  requireRecord,
+} from "./chat-host.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -253,29 +258,6 @@ function createJsonResponse(body: unknown, options: { ok?: boolean } = {}): Resp
   return response;
 }
 
-type MockCallSource<Call extends ReadonlyArray<unknown> = ReadonlyArray<unknown>> = {
-  mock: {
-    calls: ArrayLike<Call>;
-  };
-};
-
-function requestCalls<Call extends ReadonlyArray<unknown>>(
-  source: MockCallSource<Call>,
-  method: string,
-): Call[] {
-  return Array.from(source.mock.calls).filter(([calledMethod]) => calledMethod === method);
-}
-
-const requireRecord = createRequireRecord("object", "expected-label");
-
-function findRequestPayload(source: MockCallSource, method: string, label: string) {
-  const call = Array.from(source.mock.calls).find((candidate) => candidate[0] === method);
-  if (!call) {
-    throw new Error(`expected request call: ${label}`);
-  }
-  return requireRecord(call[1], label);
-}
-
 function eventPayloads(host: TestChatHost, event: string): Array<Record<string, unknown>> {
   return (host.eventLogBuffer ?? [])
     .filter((entry): entry is { event: string; payload: Record<string, unknown> } => {
@@ -303,13 +285,7 @@ function admitHostQueueItems(host: TestChatHost): void {
 }
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 0,
-    path: "",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
+  return { ...sessionListFixture(sessions, 0), path: "" };
 }
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
@@ -989,12 +965,8 @@ describe("refreshChat", () => {
         hasActiveRun: true,
         status: "running",
       });
-      const host = makeChatHost({
-        sessionKey: "agent:work:main",
-        agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
-        sessionsResult: createSessionsResult([row("agent:main:main")]),
-        sessionsResultAgentId: "main",
-        requestHandlers: {
+      const client = clientWithRequest(
+        makeRequestMock({
           "sessions.list": createSessionsResult([current]),
           "chat.history": {
             messages: [],
@@ -1007,20 +979,30 @@ describe("refreshChat", () => {
               totalTokens: 90_000,
             },
           },
-        },
+        }),
+      );
+      const { gateway, emitEvent } = createGatewayHarness(client);
+      const host = makeChatHost({
+        client,
+        sessions: createTestSessionCapability(gateway),
+        sessionKey: "agent:work:main",
+        agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
+        sessionsResult: createSessionsResult([row("agent:main:main")]),
+        sessionsResultAgentId: "main",
       });
       host.sessions.reconcile(row("agent:main:main"), undefined, { resultAgentId: "main" });
       await host.sessions.list({ agentId: "work" });
       if (generation === "deleted") {
-        host.sessions.reconcileChanged(
-          {
+        emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
             sessionKey: "global",
             agentId: "work",
             sessionId: current.sessionId,
             reason: "delete",
           },
-          { resultAgentId: "main" },
-        );
+        });
       }
       const primary = host.sessions.state.result;
       const pane = host.sessionsResult;
@@ -1120,12 +1102,14 @@ describe("refreshChat", () => {
       expectedSend: { message: "after stale error" },
     },
   ])("$name", async ({ history, overrides, message, expectedSend }) => {
+    const sendRequested = createDeferred();
     const host = makeChatHost({
       ...overrides,
       requestHandlers: {
         "chat.history": history,
         "chat.send": (params: unknown) => {
           const payload = requireRecord(params, "restored send payload");
+          sendRequested.resolve();
           return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
         },
       },
@@ -1142,9 +1126,10 @@ describe("refreshChat", () => {
     admitHostQueueItems(host);
 
     await refreshPageChat(asChatPageHost(host), { scheduleScroll: false });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await sendRequested.promise;
+    await resumeStoredChatOutboxes(host);
+    expect(host.request).toHaveBeenCalledWith("chat.send", expect.objectContaining(expectedSend));
+    expect(host.chatQueue).toEqual([]);
 
     if (expectedSend.sessionKey === "global") {
       expect(host.sessions.state.result).toBe(primaryResult);
@@ -1161,8 +1146,6 @@ describe("refreshChat", () => {
     } else {
       expect(host.sessionsResult).toBe(host.sessions.state.result);
     }
-    expect(host.request).toHaveBeenCalledWith("chat.send", expect.objectContaining(expectedSend));
-    expect(host.chatQueue).toEqual([]);
   });
 
   it("keeps a timed-out startup settled through an outbox wake until explicit history retry", async () => {

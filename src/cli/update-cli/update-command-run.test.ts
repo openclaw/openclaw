@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import * as crypto from "node:crypto";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -26,11 +27,11 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { createUpdateProgress } from "./progress.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { failUpdateCommandRun } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
   completeUpdateCommandRun,
   createUpdateRunProgress,
-  failUpdateCommandRun,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
@@ -39,6 +40,12 @@ import {
   withUpdateCommandTerminalResult,
 } from "./update-command-terminal.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
+
+vi.mock("node:crypto", async () => {
+  const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
+  return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
+});
+afterEach(() => vi.mocked(crypto.randomUUID).mockReset());
 
 const sourceImportArgs = resolveRuntimeWorkerUrl(
   updateExecutorNativeEntrypoints.commandRun,
@@ -529,6 +536,8 @@ it.each(["ok", "error"] as const)(
         message: `Finding ${index}: ${secret}`,
       }),
     );
+    // A valid UUID with a numeric tail must remain a readable diagnostic link.
+    vi.mocked(crypto.randomUUID).mockReturnValue("00000000-0000-4000-8000-123456789012");
     await publishUpdateCommandTerminalResult(
       { opts: { run } },
       {

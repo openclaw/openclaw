@@ -105,7 +105,9 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         "dev",
         ...(scenario === "human-recovery-plugin-error" ? [] : ["--yes"]),
         "--no-restart",
-        ...(blockedPhase ? [] : ["--timeout", scenario === "borrowed-phase" ? "1" : "9"]),
+        // The fixture overrides the blocked phase to 1s; recovery keeps a separate explicit budget.
+        "--timeout",
+        scenario === "borrowed-phase" ? "1" : "9",
         ...(json && scenario !== "inherited-json" ? ["--json"] : []),
       ];
       const readRun = () =>
@@ -430,9 +432,22 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         expect(report.body).toContain("Update mode: package");
         expect(report.body).toContain("Reason code: doctor-failed");
         expect(report.body).toContain("Failed phase finalize-doctor: exit 1");
-        expect(report.body).toContain(
-          "Recovery outcome: package rollback not needed: no package mutation",
-        );
+        expect(report.body).toContain("Recovery outcome: not serving (timeout)");
+        expect(run.steps.filter((step) => step.step === "gateway recovery verification")).toEqual([
+          {
+            step: "gateway recovery verification",
+            status: "failed",
+            exitCode: 1,
+            detail: "Exit code: 1",
+            failureFacts: [{ check: "settled", code: "timeout", message: expect.any(String) }],
+          },
+        ]);
+        expect({
+          port: run.verification.port,
+          readyz: run.verification.readyz,
+          settled: run.verification.settled,
+          channelsReady: run.verification.channelsReady,
+        }).toEqual({ port: address.port, readyz: false, settled: false, channelsReady: false });
       } else if (scenario === "doctor-warning") {
         const warning = "Optional probe failed; run openclaw doctor after updating.";
         expect(output).toMatchObject({

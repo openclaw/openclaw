@@ -9,6 +9,7 @@ import {
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import {
   isInstallerServiceDescription,
+  serviceDefinitionPreserved,
   serviceDefinitionUnknown,
 } from "./service-audit-preservation.js";
 import type { ServiceConfigIssue, ServiceDefinitionDrift } from "./service-audit-types.js";
@@ -82,8 +83,10 @@ export async function auditLaunchdDefinition(
     "Comment",
   ]);
   const legacyLogs = resolveGatewayLogPaths(env);
-  // Stable releases used state-directory logs and, later, discarded stderr.
-  const released: Record<string, readonly string[]> = {
+  // Stable releases used 60s/1s throttles, state-directory logs, and discarded stderr.
+  // Installation age alone does not attribute arbitrary explicit values to the installer.
+  const released: Record<string, readonly (string | number)[]> = {
+    ThrottleInterval: [60, 1],
     StandardOutPath: [legacyLogs.stdoutPath],
     StandardErrorPath: [legacyLogs.stderrPath, "/dev/null"],
   };
@@ -96,7 +99,9 @@ export async function auditLaunchdDefinition(
     if (
       value !== undefined &&
       key !== "Label" &&
-      (current === undefined || (typeof current === "string" && released[key]?.includes(current)))
+      (current === undefined ||
+        ((typeof current === "string" || typeof current === "number") &&
+          released[key]?.includes(current)))
     ) {
       findings.push({
         kind: "outdated",
@@ -106,6 +111,8 @@ export async function auditLaunchdDefinition(
         sourcePath,
         message: `LaunchAgent ${key} differs from the installer value ${String(value)}.`,
       });
+    } else if (value !== undefined && key !== "Label") {
+      findings.push(serviceDefinitionPreserved(key, sourcePath));
     } else {
       findings.push({
         kind: "unknown-edit",

@@ -45,6 +45,7 @@ export async function startTranscriptReloadFixtureSidecars(
       minimalTestGateway: false,
       cfgAtStart: config,
       getConfig: fixture.getConfig,
+      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
       bindHost: "127.0.0.1",
       bindHosts: ["127.0.0.1"],
       port: 0,
@@ -153,6 +154,19 @@ export function registerTranscriptFixture(api: OpenClawPluginApi, owner: "first"
         expect(activeSessions.get(captures[count - 1]!.session.sessionId)?.phase).toBe("active");
       });
       return captures[count - 1]!;
+    },
+  };
+}
+
+export function createTranscriptFixtures() {
+  const providers = {
+    first: [] as ReturnType<typeof registerTranscriptFixture>[],
+    sibling: [] as ReturnType<typeof registerTranscriptFixture>[],
+  };
+  return {
+    providers,
+    register: (api: OpenClawPluginApi, owner: "first" | "sibling") => {
+      providers[owner].push(registerTranscriptFixture(api, owner));
     },
   };
 }

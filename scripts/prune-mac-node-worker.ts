@@ -81,10 +81,7 @@ function collectReferencedRuntimeProcessEntrypoints(source: string): string[] {
   const targets: string[] = [];
   for (const [name, entrypoint] of Object.entries(runtimeProcessEntrypoints)) {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-    const reference = new RegExp(
-      `(?:\\.|\\?\\.)${escaped}\\b|\\[\\s*["']${escaped}["']\\s*\\]`,
-      "u",
-    );
+    const reference = new RegExp(`(?:\\.|\\?\\.)${escaped}\\b|["']${escaped}["']`, "u");
     if (reference.test(source)) {
       targets.push(`dist/${entrypoint.distWorkerPath}`);
     }
@@ -204,9 +201,9 @@ export function planMacNodeWorkerClosure(packageRoot: string): {
       throw new Error(`Mac worker closure seed is missing: ${importerPath}`);
     }
     const source = fs.readFileSync(path.join(packageRoot, importerPath), "utf8");
-    // Runtime launch descriptors are executable edges, but their target paths
-    // are data rather than module imports. Follow every descriptor referenced by
-    // a retained chunk, including descriptors reached from another worker.
+    // Descriptor properties and named launch IDs are executable edges, not
+    // module imports. Follow both in retained chunks and workers; quoted IDs
+    // also cover conditional selection and renamed resolver bindings.
     for (const runtimeTarget of collectReferencedRuntimeProcessEntrypoints(source)) {
       if (!files.has(runtimeTarget)) {
         files.add(runtimeTarget);

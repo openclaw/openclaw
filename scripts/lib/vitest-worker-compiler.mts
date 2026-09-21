@@ -205,13 +205,32 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
           },
         },
       },
+      {
+        name: "openclaw:discord-voice-package-boundary",
+        resolveId(id, importer) {
+          if (!importer || !id.startsWith(".")) {
+            return null;
+          }
+          const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
+          if (source !== path.join(root, "extensions/discord/src/voice/sdk-runtime.ts")) {
+            return null;
+          }
+          // This small native TypeScript module uses createRequire(import.meta.url)
+          // to resolve Discord's own voice dependency; shared chunks lose that owner.
+          recordInput(source);
+          return { id: pathToFileURL(source).href, external: "absolute" };
+        },
+      },
       ...commonPlugins,
     ],
   };
   const compileShared = async () => {
     await build(config);
     reportPhase("shared entries compiled");
-    for (const [name, source] of Object.entries(standaloneRuntimeProcessBuildEntries)) {
+    for (const [name, source] of Object.entries(entry)) {
+      if (!Object.hasOwn(standaloneRuntimeProcessBuildEntries, name)) {
+        continue;
+      }
       await build({
         ...config,
         entry: { [name]: source },

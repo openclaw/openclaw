@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, vi } from "vitest";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
@@ -15,6 +15,31 @@ const it = createWorkerArtifactTest();
 // Each sequence owns its cache and two generations; keep their observations ordered.
 // Full SQLite/archive/TUI/setup/KNN execution stays in worker-artifacts source/borrower tests.
 describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
+  it("keeps one lifetime identity when the fixture compiler runs twice in one process", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { runtime } = workerArtifacts.createFixtureCommands();
+      const directory = workerArtifacts.fixtureDirectory();
+      const controlled = createControlledWorkerCompiler(directory, process.env);
+      const [compiler, first, input, receipt] = controlled.args(path.join(directory, "first"));
+      const result = await runtime([
+        "--input-type=module",
+        "--eval",
+        `import {runWorkerFixtureCompiler} from ${JSON.stringify(pathToFileURL(compiler!).href)};
+        await runWorkerFixtureCompiler(${JSON.stringify(first)}, ${JSON.stringify(input)}, ${JSON.stringify(receipt)});
+        await runWorkerFixtureCompiler(${JSON.stringify(path.join(directory, "second"))}, ${JSON.stringify(input)}, ${JSON.stringify(receipt)});`,
+      ]);
+      expect(result.code, result.stderr + result.stdout).toBe(0);
+      const compilers = controlled.read();
+      expect(compilers).toHaveLength(2);
+      expect(compilers[0]!.processStartTime).toBeGreaterThan(0);
+      expect(compilers[1]).toMatchObject({
+        pid: compilers[0]!.pid,
+        processStartTime: compilers[0]!.processStartTime,
+      });
+    }));
+
   it.for((["single", "projects"] as const).map((layout) => ({ layout })))(
     "preserves filesystem transforms across fresh generations, source mode, and edits ($layout)",
     ({ layout }, { workerArtifacts }) =>
@@ -147,9 +172,14 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             ),
           ).toHaveLength(1);
           const compilers = controlled.read();
+          console.log("Controlled compiler receipts", JSON.stringify(compilers));
           expect(redirectedCompilers).toBe(1);
           expect(compilers).toHaveLength(2);
-          expect(new Set(compilers.map(({ pid }) => pid)).size).toBe(2);
+          // Windows can recycle a PID after exit; process start distinguishes its next owner.
+          expect(
+            new Set(compilers.map(({ pid, processStartTime }) => `${pid}:${processStartTime}`))
+              .size,
+          ).toBe(2);
           expect(new Set(compilers.map(({ directory }) => path.resolve(directory)))).toEqual(
             new Set(
               [...generations].map((generation) =>
@@ -158,9 +188,13 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             ),
           );
           for (const compiler of compilers) {
-            expect(compiler).toMatchObject({ inputs: 2, outputs: 2 });
+            expect(compiler).toMatchObject({
+              inputs: 2,
+              outputs: 2,
+              processStartTime: expect.any(Number),
+              isMainThread: true,
+            });
           }
-          console.log("Controlled compiler receipts", JSON.stringify(compilers));
         } finally {
           try {
             await owner.dispose();

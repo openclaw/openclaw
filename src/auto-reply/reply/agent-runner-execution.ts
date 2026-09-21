@@ -77,6 +77,7 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
+import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
@@ -551,6 +552,7 @@ async function executeAgentTurnInternal(
     agentId: params.followupRun.run.agentId,
     ingressKind: "channel",
     boundary: "auto-reply.agent-runner",
+    operatorAuthority: params.followupRun.operatorAuthority,
     evidence: params.followupRun.channelAdmissionEvidence,
     onAdmitted: (context) => {
       bindGatewayContextResolver(context, gatewayContextResolver);
@@ -564,7 +566,10 @@ async function executeAgentTurnInternal(
     sessionId: params.followupRun.run.sessionId,
     sessionKey: params.sessionKey,
     sessionFile: params.followupRun.run.sessionFile,
-    abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+    abortSignal: resolveFollowupAbortSignal({
+      abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+      operatorAuthority: params.followupRun.operatorAuthority,
+    }),
   });
   try {
     return await executeAgentTurnInternalLoop(

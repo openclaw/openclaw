@@ -8,7 +8,6 @@ import { pathToFileURL } from "node:url";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import {
   afterAll,
-  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -49,6 +48,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   createFixture,
   prepareAgentSessionStore,
+  prepareManagedSessionStore as seedManagedSessionStore,
   requireManagedOriginalPath,
   usePreparedManagedImageState,
 } from "./managed-image-attachments.test-support.js";
@@ -70,7 +70,7 @@ type PlaybackModeForSourceResolver = (
 ) => ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackModeForSource"]>;
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
-const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
+const resolveSharedSecretHttpOperatorScopesMock = vi.fn();
 const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
@@ -80,7 +80,15 @@ const resolvePlaybackModeForSourceMock = vi.fn<PlaybackModeForSourceResolver>();
 const resolvePlaybackTranscodeMock = vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({
   kind: "passthrough",
 }));
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 let storeSaveSpy: MockInstance<typeof import("../media/fetch.js").saveRemoteMedia> | undefined;
 
@@ -114,7 +122,7 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./http-utils.js", () => ({
   authorizeGatewayHttpRequestOrReply: authorizeGatewayHttpRequestOrReplyMock,
-  resolveOpenAiCompatibleHttpOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopesMock,
+  resolveSharedSecretHttpOperatorScopes: resolveSharedSecretHttpOperatorScopesMock,
   resolveOpenAiCompatibleHttpSenderIsOwner: resolveOpenAiCompatibleHttpSenderIsOwnerMock,
 }));
 
@@ -163,6 +171,7 @@ const {
   resolveManagedOutgoingMediaArtifactDownload: resolveManagedOutgoingImageArtifactDownload,
   resolveManagedImageAttachmentLimits,
 } = await import("./managed-image-attachments.js");
+const { bindHttpResponseAuthority } = await import("./http-request-authority.js");
 
 type ManagedOutgoingImageTestParams = Omit<
   Parameters<typeof createManagedOutgoingImageBlocksActual>[0],
@@ -200,8 +209,9 @@ async function replaceTestSessionEntry(
   },
   entry: { sessionId: string; updatedAt: number },
 ): Promise<void> {
-  const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
-  await replaceSessionEntry(scope, entry);
+  const { replaceSessionEntrySync } = await import("../config/sessions/session-accessor.js");
+  // Fixture seeding does not need the async entry writer's background maintenance.
+  replaceSessionEntrySync(scope, entry);
 }
 
 type RequestResult = {
@@ -258,30 +268,8 @@ function requireBlock(blocks: unknown[], index = 0): ManagedImageBlock {
 }
 
 async function prepareManagedSessionStore(stateDir: string): Promise<void> {
-  closeOpenClawAgentDatabasesForTest();
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const storePath = path.join(stateDir, "sessions.sqlite");
-  await replaceTestSessionEntry(
-    {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath,
-    },
-    { sessionId: "sess-1", updatedAt: Date.now() },
-  );
-  closeOpenClawAgentDatabasesForTest();
-  const { loadExactSessionEntryReadOnlyResult } =
-    await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
-  expect(
-    loadExactSessionEntryReadOnlyResult({
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath,
-    }),
-  ).toMatchObject({ found: true, value: { sessionKey: "agent:main:main" } });
-  getRuntimeConfigMock.mockReturnValue({ session: { store: storePath } });
+  const store = await seedManagedSessionStore(stateDir);
+  getRuntimeConfigMock.mockReturnValue({ session: { store } });
 }
 
 function useManagedImageState(prefix: string, bindState: (stateDir: string) => void): void {
@@ -293,7 +281,7 @@ function useManagedImageState(prefix: string, bindState: (stateDir: string) => v
     resetMocks: (stateDir) => {
       vi.clearAllMocks();
       authorizeGatewayHttpRequestOrReplyMock.mockReset();
-      resolveOpenAiCompatibleHttpOperatorScopesMock.mockReset();
+      resolveSharedSecretHttpOperatorScopesMock.mockReset();
       resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockReset();
       loadSessionEntryMock.mockReset();
       readSessionMessagesMock.mockReset();
@@ -322,9 +310,9 @@ async function requestManagedImage(params: {
       res.end();
       return null;
     }
-    return { ok: true, ...params.authResponse };
+    return bindHttpResponseAuthority({ ok: true, ...params.authResponse }, res, () => true);
   });
-  resolveOpenAiCompatibleHttpOperatorScopesMock.mockReturnValue(params.scopes ?? ["operator.read"]);
+  resolveSharedSecretHttpOperatorScopesMock.mockReturnValue(params.scopes ?? ["operator.read"]);
   resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockImplementation((_req, requestAuth) => {
     if (requestAuth.authMethod === "token" || requestAuth.authMethod === "password") {
       return true;
@@ -913,8 +901,10 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       contentType: "audio/x-caf",
       body: Buffer.from("caff-original"),
     });
-    authorizeGatewayHttpRequestOrReplyMock.mockResolvedValue({ ok: true, authMethod: "token" });
-    resolveOpenAiCompatibleHttpOperatorScopesMock.mockReturnValue(["operator.read"]);
+    authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) =>
+      bindHttpResponseAuthority({ ok: true, authMethod: "token" }, res, () => true),
+    );
+    resolveSharedSecretHttpOperatorScopesMock.mockReturnValue(["operator.read"]);
     resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockReturnValue(true);
     loadSessionEntryMock.mockReturnValue({
       storePath: path.join(stateDir, "gateway-sessions.json"),
@@ -2548,13 +2538,6 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     stateDir = tempDirs.make("managed-image-cleanup-");
     vi.clearAllMocks();
     await prepareManagedSessionStore(stateDir);
-  });
-
-  afterEach(async () => {
-    closeOpenClawAgentDatabasesForTest();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("cleans up dereferenced records and original files", async () => {

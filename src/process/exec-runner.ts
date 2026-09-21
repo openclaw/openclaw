@@ -532,7 +532,7 @@ async function runCommandWithOutputEncoding(
       nodeChild.stdin.end(input);
     } catch (cause) {
       inputAdmissionError = toErrorObject(cause, "Child input admission failed");
-      nodeChild.stdin?.destroy();
+      // EOF releases children blocked on input; keep it withheld until process exit.
       cancel("signal");
     }
   }

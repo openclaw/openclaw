@@ -736,10 +736,7 @@ const SOURCE_TEST_TARGETS = new Map([
   ["src/plugin-sdk/persistent-dedupe.ts", ["src/plugin-sdk/memory-host-events.test.ts"]],
   [
     "extensions/browser/src/browser/chrome-mcp-options.ts",
-    [
-      "extensions/browser/src/browser/chrome-mcp.test.ts",
-      "test/scripts/ci-chrome-mcp-prewarm.test.ts",
-    ],
+    ["extensions/browser/src/browser/chrome-mcp.test.ts"],
   ],
   [
     "scripts/prepare-apple-mermaid.mjs",
@@ -1046,10 +1043,11 @@ function listToolingFullSuiteTestTargets(cwd: string) {
       fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
     ),
   )
-    // Explicit leaf targets bypass the config's live-test exclusion and produce an empty shard.
+    // Match Vitest's fixture/live exclusions before forming explicit leaf chunks.
     .filter(
       (file) =>
         file.endsWith(".test.ts") &&
+        !file.startsWith("test/fixtures/") &&
         !file.endsWith(".live.test.ts") &&
         classifyTarget(file, cwd) === "tooling",
     )
@@ -1381,8 +1379,18 @@ function resolveExplicitTestPrefixTargets(targetArg: string, cwd: string) {
   return targets.length > 0 ? targets.toSorted((left, right) => left.localeCompare(right)) : null;
 }
 
+function isNormalizedLiteralPath(value: string) {
+  return /^[\w.-]+(?:\/[\w.-]+)*$/u.test(value) && !/(?:^|\/)\.{1,2}(?:\/|$)/u.test(value);
+}
+
 function includePatternMatchesAnyFile(pattern: string, files: string[]) {
-  return files.some((file) => file === pattern || path.matchesGlob(file, pattern));
+  const literalPattern = isNormalizedLiteralPath(pattern);
+  return files.some(
+    (file) =>
+      file === pattern ||
+      // Keep Node's separator, dot-segment, and platform handling for other paths.
+      ((!literalPattern || !isNormalizedLiteralPath(file)) && path.matchesGlob(file, pattern)),
+  );
 }
 
 function resolveExplicitSourceTestTargets(
@@ -2354,7 +2362,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     ".github/actions/setup-node-env/action.yml",
     ["setup-node-env-bun", packageAcceptance, workflowGuards],
   ],
-  [".github/actions/setup-node-env/dependency-fingerprint.mjs", [workflowGuards]],
+  [
+    ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+    [workflowGuards, "setup-node-env-dependency-fingerprint"],
+  ],
   [".github/actions/setup-node-env/seed-bun-from-image.mjs", ["setup-node-env-bun"]],
   [".github/actions/setup-pnpm-store-cache/action.yml", [packageAcceptance, workflowGuards]],
   [".github/actions/setup-pnpm-store-cache/ensure-node.sh", ["setup-pnpm-store-cache-ensure-node"]],
@@ -2528,7 +2539,16 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^(?:git-hooks\/pre-commit|scripts\/pre-commit\/(?:guard-staged-content\.mjs|filter-staged-files\.mjs|format-staged\.sh|run-node-tool\.sh)|test\/git-hooks-pre-commit\.test-support\.ts)$/u,
     ["test/git-hooks-pre-commit.test.ts", "test/git-hooks-pre-commit-boundaries.test.ts"],
   ],
-  [/^scripts\/pr$/u, ["pr-merge", "pr-merge-outcome", "pr-operation-lock", "pr-wrappers"]],
+  [
+    /^scripts\/pr$/u,
+    [
+      "pr-merge",
+      "pr-merge-outcome",
+      "pr-merge-qualified-refusal",
+      "pr-operation-lock",
+      "pr-wrappers",
+    ],
+  ],
   [
     /^scripts\/pr-lib\/crabbox-gate-contract\.mjs$/u,
     ["pr-crabbox-gate-publisher", "pr-crabbox-merge-bypass"],
@@ -2699,8 +2719,8 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/run-node\.(?:mjs|mts)$/u, [runNode]],
   [/^scripts\/ios-write-swift-filelist\.m[jt]s$/u, ["ios-run"]],
   [
-    /^scripts\/pr-lib\/(?:merge(?:-outcome)?\.sh|merge-legacy-refusal\.mjs)$/u,
-    ["pr-merge", "pr-merge-outcome"],
+    /^scripts\/pr-lib\/(?:merge(?:-outcome)?\.sh|merge-(?:legacy|pre-dispatch)-refusal\.mjs)$/u,
+    ["pr-merge", "pr-merge-outcome", "pr-merge-pre-dispatch-refusal", "pr-merge-qualified-refusal"],
   ],
   [/^scripts\/plugin-clawhub-publish\.sh$/u, ["test/plugin-clawhub-release.test.ts"]],
   [/^scripts\/openclaw-npm-postpublish-verify\.ts$/u, [npmPostpublish]],
@@ -3338,9 +3358,13 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
   const exactTargets = exactOwners ? resolveToolingTestOwnerTargets(...exactOwners) : [];
   const semanticTargets = resolveSemanticToolingTargets(implementationPath);
   const facts = getChangedPathFacts(changedPath);
+  const toolingTestSource =
+    changedPath.startsWith("test/scripts/") &&
+    TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext));
   const hasToolingOwner =
     exactTargets.length > 0 ||
     semanticTargets.length > 0 ||
+    toolingTestSource ||
     facts.surface === "rootTooling" ||
     changedPath === "Dockerfile" ||
     changedPath === ".crabbox.yaml" ||
@@ -3388,9 +3412,13 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
     TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext))
       ? resolveAffectedTestsFromTargetedImportScan(implementationPath, cwd, {
           tooling: true,
-          direct: true,
+          direct: !toolingTestSource,
         })
       : [];
+  if (toolingTestSource && importGraphResult === null) {
+    // Keep caller fallbacks; a partial literal reference cannot prove an opaque frontier.
+    return null;
+  }
   const importGraphTargets = importGraphResult ?? [];
   const referenceTargets =
     githubYaml || (semanticTargets.length === 0 && !hasDirectOwner)
@@ -3480,7 +3508,7 @@ function resolvePackageFixtureTargets(changedPath: string, cwd: string) {
 }
 
 function resolveAppcastTargets(changedPath: string) {
-  return changedPath === "appcast.xml" ? APPCAST_TEST_TARGETS : null;
+  return /^appcast(?:-(?:arm64|x86_64))?\.xml$/u.test(changedPath) ? APPCAST_TEST_TARGETS : null;
 }
 
 function resolveKovaSchemaTestTargets(changedPath: string) {

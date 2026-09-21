@@ -28,6 +28,25 @@ describe("Claude project directory watch", () => {
     await promises.rm(root, { recursive: true, force: true });
   });
 
+  it.each([1000.1, 65530.12])(
+    "arms at the deadline with a fractional clock starting at %s",
+    (start) => {
+      const driver = createClaudeCatalogWatchDriver(root);
+      const clock = vi.spyOn(performance, "now").mockReturnValue(start);
+      watch = createDirtyDirectoryWatch(path.join(root, "projects"));
+      watch.observeChildDirectories(["changed"]);
+      clock.mockReturnValue(start + 249);
+      expect(watch.takeDirty()).toBe("all");
+      expect(watch.takeDirty()).toBe("all");
+      clock.mockReturnValue(start + 250);
+      expect(watch.takeDirty()).toBe("all");
+      expect(watch.takeDirty()).toEqual(new Set());
+      driver.change("projects/changed/session.jsonl");
+      expect(watch.takeDirty()).toEqual(new Set(["changed"]));
+      expect(watch.takeDirty()).toEqual(new Set());
+    },
+  );
+
   it("reports dirty children for transcript writes and new project directories", async () => {
     await promises.mkdir(path.join(root, "existing"));
     watch = createDirtyDirectoryWatch(root);

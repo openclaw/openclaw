@@ -430,7 +430,6 @@ export function createInMemoryTaskFlowRegistryStore(
       const publication = preparePublication(result);
       publication.stage();
       publication.commit();
-      publication.publish();
       return result;
     },
     updateFlow: (params, preparePublication) => {
@@ -438,7 +437,6 @@ export function createInMemoryTaskFlowRegistryStore(
         const publication = preparePublication(result);
         publication.stage();
         publication.commit();
-        publication.publish();
         return result;
       };
       const stored = state.flows.get(params.flowId);

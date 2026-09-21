@@ -1,15 +1,11 @@
 import { consume } from "@lit/context";
-import { initialState, Task, TaskStatus } from "@lit/task";
+import { initialState, Task } from "@lit/task";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  GatewaySessionRow,
-  SessionCompactionCheckpoint,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -138,10 +134,6 @@ class SessionsPage extends OpenClawLightDomElement {
   // Route deep-link target (?session=...); unlike expandedSessionKey it also
   // narrows sessionListOptions so the linked session is guaranteed to load.
   private deepLinkSessionKey: string | null = null;
-  @state() private checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]> = {};
-  @state() private checkpointTaskKey: string | null = null;
-  @state() private checkpointBusyKey: string | null = null;
-  @state() private checkpointErrorByKey: Record<string, string> = {};
 
   // Async completions belong to one context/capability/connection/scope epoch. Bump
   // before releasing locks so stale finally blocks cannot clear newer work.
@@ -160,7 +152,7 @@ class SessionsPage extends OpenClawLightDomElement {
   private searchTimer?: ReturnType<typeof setTimeout>;
   private appliedListResult: SessionsListResult | null | undefined;
   private readonly observeAgentScope = watchAgentScope(() => {
-    // Keep same-connection list serialization and session-bound checkpoint reads.
+    // Keep same-connection list serialization.
     this.retirePageOperations();
     this.resetTranscriptSearchState(this.transcriptSearchQuery);
     if (!this.deepLinkSessionKey) {
@@ -231,32 +223,6 @@ class SessionsPage extends OpenClawLightDomElement {
     },
   });
 
-  private readonly checkpointTask = new Task(this, {
-    autoRun: false,
-    args: () => [null, ""] as const,
-    task: async ([scope, sessionKey]: readonly [SessionsPageRequestScope | null, string]) => {
-      if (!scope || !sessionKey) {
-        return initialState;
-      }
-      const checkpoints = await scope.sessions.listCheckpoints(sessionKey, {
-        agentId: this.sessionAgentId(sessionKey, scope.context),
-      });
-      return { sessionKey, checkpoints };
-    },
-    onComplete: ({ sessionKey, checkpoints }) => {
-      this.checkpointItemsByKey = { ...this.checkpointItemsByKey, [sessionKey]: checkpoints };
-    },
-    onError: (error) => {
-      const sessionKey = this.checkpointTaskKey;
-      if (sessionKey) {
-        this.checkpointErrorByKey = {
-          ...this.checkpointErrorByKey,
-          [sessionKey]: formatUiError(error),
-        };
-      }
-    },
-  });
-
   override willUpdate(changed: PropertyValues) {
     const sessions = this.context?.sessions;
     if (sessions && this.listBinding && this.listBinding.sessions !== sessions) {
@@ -288,7 +254,6 @@ class SessionsPage extends OpenClawLightDomElement {
     this.pluginActionLifetime.abort();
     this.pluginActionLifetime = new AbortController();
     this.pageEpoch += 1;
-    this.checkpointBusyKey = null;
     this.sessionMutationPending = false;
     this.closeSessionMenu();
   }
@@ -298,7 +263,6 @@ class SessionsPage extends OpenClawLightDomElement {
     this.clearSearchTimer();
     this.listRequest = undefined;
     this.resetTranscriptSearchState(this.transcriptSearchQuery);
-    this.resetCheckpointTask();
     this.loading = false;
     this.refreshing = false;
   }
@@ -312,10 +276,6 @@ class SessionsPage extends OpenClawLightDomElement {
     this.selectedKeys = new Set();
     this.expandedSessionKey = null;
     this.deepLinkSessionKey = null;
-    this.checkpointItemsByKey = {};
-    this.checkpointTaskKey = null;
-    this.checkpointBusyKey = null;
-    this.checkpointErrorByKey = {};
     this.appliedListResult = undefined;
   }
 
@@ -427,9 +387,6 @@ class SessionsPage extends OpenClawLightDomElement {
     // Only route-driven expansion narrows the list query; interactive drawer
     // opens must keep loading the full roster (see sessionListOptions).
     this.deepLinkSessionKey = data.expandedSessionKey;
-    if (data.expandedSessionKey) {
-      void this.loadCheckpoint(data.expandedSessionKey);
-    }
   }
 
   private sessionAgentId(
@@ -525,14 +482,9 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!result || result === this.appliedListResult) {
       return;
     }
-    const previous = this.result;
     this.appliedListResult = result;
     this.result = filterSessionRows(result, { archivedFilter: this.statusFilter });
     this.ensureAgentIdentities(this.result);
-    const checkpointKey = this.reconcileCheckpointCache(previous, this.result);
-    if (checkpointKey) {
-      void this.loadCheckpoint(checkpointKey);
-    }
   }
 
   private async refreshSessionList(scope = this.captureRequestScope()) {
@@ -638,37 +590,6 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     void context.agentIdentity.ensure(agentIds);
-  }
-
-  private reconcileCheckpointCache(
-    previous: SessionsListResult | null,
-    result: SessionsListResult | null,
-  ): string | null {
-    const rows = new Map((result?.sessions ?? []).map((row) => [row.key, row] as const));
-    const previousRows = new Map((previous?.sessions ?? []).map((row) => [row.key, row] as const));
-    const nextItems = { ...this.checkpointItemsByKey };
-    const nextErrors = { ...this.checkpointErrorByKey };
-    let checkpointKey: string | null = null;
-    for (const key of Object.keys(nextItems)) {
-      const row = rows.get(key);
-      const previousRow = previousRows.get(key);
-      if (
-        !row ||
-        !previousRow ||
-        previousRow.compactionCheckpointCount !== row.compactionCheckpointCount ||
-        previousRow.latestCompactionCheckpoint?.checkpointId !==
-          row.latestCompactionCheckpoint?.checkpointId
-      ) {
-        delete nextItems[key];
-        delete nextErrors[key];
-        if (this.expandedSessionKey === key) {
-          checkpointKey = key;
-        }
-      }
-    }
-    this.checkpointItemsByKey = nextItems;
-    this.checkpointErrorByKey = nextErrors;
-    return checkpointKey;
   }
 
   private updateFilters(next: {
@@ -1304,135 +1225,10 @@ class SessionsPage extends OpenClawLightDomElement {
       void this.refreshSessionList();
     }
     if (this.expandedSessionKey === sessionKey) {
-      this.resetCheckpointTask();
       this.expandedSessionKey = null;
       return;
     }
     this.expandedSessionKey = sessionKey;
-    const row = this.result?.sessions.find((session) => session.key === sessionKey);
-    const hasCheckpoints =
-      (row?.compactionCheckpointCount ?? 0) > 0 || Boolean(row?.latestCompactionCheckpoint);
-    if (!hasCheckpoints) {
-      if (!this.checkpointItemsByKey[sessionKey]) {
-        this.checkpointItemsByKey = { ...this.checkpointItemsByKey, [sessionKey]: [] };
-      }
-      return;
-    }
-    if (this.checkpointItemsByKey[sessionKey]) {
-      return;
-    }
-    await this.loadCheckpoint(sessionKey);
-  }
-
-  private async loadCheckpoint(sessionKey: string) {
-    const scope = this.captureRequestScope();
-    if (!scope) {
-      // Rows stay expandable while disconnected; without an error the drawer
-      // would claim "No checkpoints" beside a nonzero checkpoint badge.
-      this.checkpointErrorByKey = {
-        ...this.checkpointErrorByKey,
-        [sessionKey]: t("sessionsView.actionRequiresConnection"),
-      };
-      return;
-    }
-    this.checkpointTaskKey = sessionKey;
-    this.checkpointErrorByKey = { ...this.checkpointErrorByKey, [sessionKey]: "" };
-    await this.checkpointTask.run([scope, sessionKey]);
-  }
-
-  private resetCheckpointTask() {
-    this.checkpointTaskKey = null;
-    void this.checkpointTask.run([null, ""]);
-  }
-
-  private get checkpointLoadingKey(): string | null {
-    return this.checkpointTask.status === TaskStatus.PENDING ? this.checkpointTaskKey : null;
-  }
-
-  private async branchCheckpoint(sessionKey: string, checkpointId: string) {
-    const scope = this.captureRequestScope();
-    if (
-      !scope ||
-      !(await showConfirmDialog({
-        message: t("sessionsView.branchCheckpointConfirm"),
-        confirmLabel: t("common.create"),
-        signal: this.pluginActionLifetime.signal,
-      })) ||
-      !this.isRequestScopeCurrent(scope)
-    ) {
-      return;
-    }
-    if (
-      !this.requireMutationAccess(scope, {
-        method: "sessions.compaction.branch",
-        requiredScope: "operator.write",
-      })
-    ) {
-      return;
-    }
-    this.checkpointBusyKey = checkpointId;
-    try {
-      const result = await scope.sessions.branchCheckpoint(sessionKey, checkpointId, {
-        agentId: this.sessionAgentId(sessionKey, scope.context),
-      });
-      if (this.isRequestScopeCurrent(scope)) {
-        scope.context.navigate("chat", {
-          ...sessionNavigationTarget({
-            context: scope.context,
-            face: "chat",
-            sessionKey: result.key,
-            agentId: this.sessionPathAgentId(result.key, scope.context),
-          }).options,
-          hash: "",
-        });
-      }
-    } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (this.isRequestScopeCurrent(scope) && this.checkpointBusyKey === checkpointId) {
-        this.checkpointBusyKey = null;
-      }
-    }
-  }
-
-  private async restoreCheckpoint(sessionKey: string, checkpointId: string) {
-    const scope = this.captureRequestScope();
-    if (
-      !scope ||
-      !(await showConfirmDialog({
-        message: t("sessionsView.restoreCheckpointConfirm"),
-        confirmLabel: t("common.restore"),
-        danger: true,
-        signal: this.pluginActionLifetime.signal,
-      })) ||
-      !this.isRequestScopeCurrent(scope)
-    ) {
-      return;
-    }
-    if (
-      !this.requireMutationAccess(scope, {
-        method: "sessions.compaction.restore",
-        requiredScope: "operator.admin",
-      })
-    ) {
-      return;
-    }
-    this.checkpointBusyKey = checkpointId;
-    try {
-      await scope.sessions.restoreCheckpoint(sessionKey, checkpointId, {
-        agentId: this.sessionAgentId(sessionKey, scope.context),
-      });
-    } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (this.isRequestScopeCurrent(scope) && this.checkpointBusyKey === checkpointId) {
-        this.checkpointBusyKey = null;
-      }
-    }
   }
 
   private openSessionMenu(
@@ -1679,10 +1475,6 @@ class SessionsPage extends OpenClawLightDomElement {
           selectedKeys: this.selectedKeys,
           sessionMenu: this.sessionMenu,
           expandedSessionKey: this.expandedSessionKey,
-          checkpointItemsByKey: this.checkpointItemsByKey,
-          checkpointLoadingKey: this.checkpointLoadingKey,
-          checkpointBusyKey: this.checkpointBusyKey,
-          checkpointErrorByKey: this.checkpointErrorByKey,
           patchWriteDisabledReason: this.mutationDisabledReason({
             method: "sessions.patch",
             params: { key: "", label: null },
@@ -1698,14 +1490,6 @@ class SessionsPage extends OpenClawLightDomElement {
           deleteArchivedDisabledReason: this.mutationDisabledReason({
             method: "sessions.delete",
             params: { key: "", archivedOnly: true, deleteTranscript: true },
-          }),
-          checkpointBranchDisabledReason: this.mutationDisabledReason({
-            method: "sessions.compaction.branch",
-            requiredScope: "operator.write",
-          }),
-          checkpointRestoreDisabledReason: this.mutationDisabledReason({
-            method: "sessions.compaction.restore",
-            requiredScope: "operator.admin",
           }),
           deleteSelectedDisabledReason: this.selectedDeleteDisabledReason(),
           onFiltersChange: (next) => this.updateFilters(next),
@@ -1801,10 +1585,6 @@ class SessionsPage extends OpenClawLightDomElement {
           onOpenSessionMenu: (row, position, trigger) =>
             this.openSessionMenu(row, position, trigger),
           onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),
-          onBranchFromCheckpoint: (sessionKey, checkpointId) =>
-            void this.branchCheckpoint(sessionKey, checkpointId),
-          onRestoreCheckpoint: (sessionKey, checkpointId) =>
-            void this.restoreCheckpoint(sessionKey, checkpointId),
         }),
         { id: "sessions-hub-panel" },
       )}

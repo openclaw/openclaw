@@ -452,7 +452,12 @@ export function renderAssistantAttachments(
         options,
         onOpenSidebar,
         onAssistantAttachmentLoaded,
-        inlinePlayback ? "inline" : "card",
+        inlinePlayback ||
+          (item.type === "attachment" &&
+            item.attachment.kind === "audio" &&
+            item.attachment.isVoiceNote)
+          ? "inline"
+          : "card",
       ),
     )}
   </div>`;
@@ -604,7 +609,7 @@ export function renderMessageAttachment(
       .sizeBytes=${media?.sizeBytes}
       .serverDurationMs=${media?.durationMs}
       .voiceNote=${attachment.isVoiceNote === true}
-      .onExpand=${openAttachmentSidebar}
+      .onExpand=${attachment.isVoiceNote ? undefined : openAttachmentSidebar}
       .onMediaLoaded=${onAssistantAttachmentLoaded}
     ></openclaw-chat-audio-player>`;
   }

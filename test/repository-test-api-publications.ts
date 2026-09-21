@@ -47,7 +47,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/subagents/registry/subagent-registry.ts": Symbol.for(
     "openclaw.subagentRegistryTestApi",
   ),
-  "src/agents/subagents/spawn/subagent-spawn.ts": Symbol.for("openclaw.subagentSpawnTestApi"),
   "src/agents/subagents/swarm/swarm-scheduler.ts": Symbol.for("openclaw.swarmSchedulerTestApi"),
   "src/agents/tool-search.ts": Symbol.for("openclaw.toolSearchTestApi"),
   "src/agents/tools/agent-step.ts": Symbol.for("openclaw.agentStepTestApi"),

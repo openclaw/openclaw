@@ -139,7 +139,7 @@ it.each([
       }
       expect(provider.querySelector("openclaw-chat-question-panel")).toBeNull();
       expect(provider.querySelector(".chat-question-summary")?.textContent).toContain(
-        action === "submit" ? "New contributors" : "Skipped",
+        action === "submit" ? "New contributors" : "Dismissed",
       );
     });
     if (mode === "nondelegating") {

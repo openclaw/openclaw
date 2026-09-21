@@ -20,8 +20,8 @@ import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
 } from "../infra/device-pairing-approval.js";
+import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
 import { listNodePairing } from "../infra/device-pairing-node.js";
-import { withDevicePairingLock } from "../infra/device-pairing-state.js";
 import { loadDevicePairSetupCompletionRecord } from "../infra/device-pairing-store.js";
 import { revokeDeviceToken, verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
@@ -32,7 +32,7 @@ import {
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   type DeviceBootstrapProfile,
 } from "../shared/device-bootstrap-profile.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
@@ -68,7 +68,7 @@ afterEach(async () => {
   // Handlers enqueue connection history; drain that writer before closing its database.
   await withDevicePairingLock(async () => {});
   for (const databasePath of databasePaths) {
-    closeOpenClawStateDatabaseByPath(databasePath);
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
   }
   await tempDirs.cleanup();
   cleanups.length = 0;

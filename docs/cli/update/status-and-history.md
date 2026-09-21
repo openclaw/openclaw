@@ -89,6 +89,8 @@ the updated Gateway; older runs cannot recover a cause that was never recorded.
 
 An admitted `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
+Retained dry-run previews remain available through history queries but do not
+replace `lastRun`, so a preview cannot hide the last real update failure.
 If history cannot be read or classified, status still shows update availability
 and runtime findings. Human output explains that run status is unavailable;
 JSON includes `runStatusError` and omits the run fields. This does not mean
@@ -214,16 +216,22 @@ the Gateway broadcasts `update.run.changed` with `runId`, `phase`, `status`, and
 
 When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source
-database and its sidecar files.
+database and its sidecar files. The Gateway's `update.status` reads its two run
+records through the already-open database when available, avoiding full-database
+copies on each poll. Cold status reads prepare one private snapshot. When
+diagnostics are enabled, status requests lasting at least one second log phase
+durations for sentinel refresh, checkout refresh, install identity, reconciliation,
+history, and response.
 
 Native service-stop observations do not advance the update's recorded phase.
 If the Control UI cannot read fresh progress, it shows the read error alongside
 the last recorded run; use **Check status** to retry without starting another update.
 
-Phases are `requested`, `staging`, `validating`, optional `repairing`, `activating`,
-`restarting`, `verifying`, and `finished`. Status is `running`, `succeeded`,
-`failed`, `rolled-back`, or `skipped`. Repair may also follow `verifying` when
-automatic rollback cannot complete. Phase timings, repair attempts, and
+Phases are `requested`, `staging`, `validating`, `activating`, `restarting`,
+`verifying`, and `finished`. Status is `running`, `succeeded`, `failed`,
+`rolled-back`, or `skipped`. Older updater records can also contain `repairing`
+and inference-repair attempts. Current inference repair belongs to post-failure
+triage and does not rewrite the update outcome. Phase timings, repair attempts, and
 verification facts are included only when observed. Chat reports are limited to 1,500 characters;
 `update.runs.get` preserves the bounded record for detailed inspection.
 

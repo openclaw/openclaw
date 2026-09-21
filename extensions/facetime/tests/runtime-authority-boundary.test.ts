@@ -3,7 +3,7 @@ import { once } from "node:events";
 import net from "node:net";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
-  createPluginStateSyncKeyedStoreForTests,
+  createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -56,7 +56,7 @@ const storeOptions = {
   overflowPolicy: "reject-new" as const,
 };
 const openStore = () =>
-  createPluginStateSyncKeyedStoreForTests<
+  createPluginStateKeyedStoreForTests<
     Omit<PendingFaceTimeDial, "callUUIDAliases"> & { callUUIDAliases?: string[] }
   >("facetime", storeOptions);
 
@@ -222,7 +222,7 @@ describe("FaceTime production authority boundary", () => {
       logger: log,
       pluginRoot: "/isolated",
       runtime: {
-        state: { openSyncKeyedStore: openStore },
+        state: { openKeyedStore: openStore },
         system: {
           runCommandWithTimeout: vi.fn(async () => {
             throw new Error("host command is forbidden in authority proof");
@@ -281,7 +281,7 @@ describe("FaceTime production authority boundary", () => {
   it.each(["cancelled", "revoked"] as const)(
     "rejects a %s persisted dial after runtime recovery",
     async (reason) => {
-      new PendingFaceTimeDialStore(openStore()).save({
+      await new PendingFaceTimeDialStore(openStore()).save({
         version: 1,
         ownerEpoch: 1,
         dialID: "persisted-dial",
@@ -294,7 +294,7 @@ describe("FaceTime production authority boundary", () => {
       const { runtime, peer } = await start(
         reason === "revoked" ? ["replacement@example.com"] : undefined,
       );
-      const recovered = new PendingFaceTimeDialStore(openStore()).load();
+      const recovered = await new PendingFaceTimeDialStore(openStore()).load();
       expect(recovered?.ownerEpoch).toBe(2);
       // Recovery only reports recovered-call. A cancellation for this new alias
       // proves the injected event was processed, not just background recovery.
@@ -312,7 +312,7 @@ describe("FaceTime production authority boundary", () => {
           }),
         ),
       );
-      const cancelled = new PendingFaceTimeDialStore(openStore()).load();
+      const cancelled = await new PendingFaceTimeDialStore(openStore()).load();
       expect(cancelled?.delivery).toBe("cancelling");
       expect(cancelled?.callUUIDAliases).toContain("late-active-call");
       expect((await runtime.status()).calls).toEqual([]);
@@ -324,8 +324,8 @@ describe("FaceTime production authority boundary", () => {
       ).toBe(true);
       // A native ended event settles this synthetic carrier before fixture shutdown.
       peer.send(call(6, lateIdentity));
-      await vi.waitFor(() =>
-        expect(new PendingFaceTimeDialStore(openStore()).load()).toBeUndefined(),
+      await vi.waitFor(async () =>
+        expect(await new PendingFaceTimeDialStore(openStore()).load()).toBeUndefined(),
       );
     },
   );

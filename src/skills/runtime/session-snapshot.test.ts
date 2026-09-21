@@ -177,6 +177,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
   });
 
   it("rebuilds for a live caller after an abandoned preparation drains", async () => {
+    const entered = createDeferred();
     const probe = createDeferred();
     const cancelled = createDeferred();
     const drain = createDeferred();
@@ -188,6 +189,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
       return { prompt: "live snapshot", skills: [{ name: "visible" }], resolvedSkills: [] };
     });
     buildWorkspaceSkillSnapshotMock.mockImplementationOnce(async (_workspace, options) => {
+      entered.resolve();
       await probe.promise;
       try {
         options.assertCurrent?.();
@@ -206,6 +208,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
       assertCurrent: () => controller.signal.throwIfAborted(),
     });
     const firstRejected = expect(first).rejects.toBe(reason);
+    await entered.promise;
     controller.abort(reason);
     probe.resolve();
     await cancelled.promise;
