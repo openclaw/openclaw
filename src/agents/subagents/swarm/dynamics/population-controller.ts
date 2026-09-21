@@ -7,12 +7,14 @@ import type {
   PopulationSnapshot,
 } from "./population-types.js";
 
-function mean(values: readonly number[]): number | null {
-  return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
+function mean(values: readonly (number | null)[]): number | null {
+  const known = values.filter((value): value is number => value !== null);
+  return known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0) / known.length;
 }
 
-function maximum(values: readonly number[]): number | null {
-  return values.length === 0 ? null : values.reduce((largest, value) => Math.max(largest, value), 0);
+function maximum(values: readonly (number | null)[]): number | null {
+  const known = values.filter((value): value is number => value !== null);
+  return known.length === 0 ? null : Math.max(...known);
 }
 
 export function buildPopulationSnapshot(params: {
