@@ -285,6 +285,182 @@ describe("task-flow-registry maintenance", () => {
     });
   });
 
+  it("reconciles a flow gated on a child task that no longer exists", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const blockedAt = Date.now() - 60 * 60_000;
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Wait on a child task that vanished",
+        status: "running",
+        createdAt: blockedAt,
+        updatedAt: blockedAt,
+      });
+      const blocked = setFlowWaiting({
+        flowId: flow.flowId,
+        expectedRevision: flow.revision,
+        blockedTaskId: "task-vanished",
+        blockedSummary: "Waiting for child task",
+        updatedAt: blockedAt,
+      });
+      expect(blocked.applied).toBe(true);
+      expect(getInspectableTaskFlowAuditSummary().byCode.blocked_task_missing).toBe(1);
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({ reconciled: 1, pruned: 0 });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 1, pruned: 0 });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: "lost",
+        blockedTaskId: undefined,
+        blockedSummary: undefined,
+      });
+      expect(getTaskFlowById(flow.flowId)?.endedAt).toBeTypeOf("number");
+      expect(getInspectableTaskFlowAuditSummary().byCode.blocked_task_missing).toBe(0);
+    });
+  });
+
+  it("keeps flows blocked on an existing child task or inside the dangling grace window", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const staleAt = Date.now() - 60 * 60_000;
+      const linkedFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:linked",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Wait on a live child task",
+        status: "running",
+        createdAt: staleAt,
+        updatedAt: staleAt,
+      });
+      const child = createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:linked",
+        scopeKind: "session",
+        parentFlowId: linkedFlow.flowId,
+        childSessionKey: "agent:main:linked:child",
+        runId: "run-live-child",
+        task: "Inspect repo",
+        startedAt: staleAt,
+        lastEventAt: staleAt,
+      });
+      expect(
+        setFlowWaiting({
+          flowId: linkedFlow.flowId,
+          expectedRevision: linkedFlow.revision,
+          blockedTaskId: child.taskId,
+          updatedAt: staleAt,
+        }).applied,
+      ).toBe(true);
+
+      const freshFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:fresh",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Wait on a child task registered moments ago",
+        status: "running",
+        createdAt: staleAt,
+        updatedAt: staleAt,
+      });
+      expect(
+        setFlowWaiting({
+          flowId: freshFlow.flowId,
+          expectedRevision: freshFlow.revision,
+          blockedTaskId: "task-pending-registration",
+          updatedAt: Date.now(),
+        }).applied,
+      ).toBe(true);
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 0 });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 0 });
+      expect(getTaskFlowById(linkedFlow.flowId)).toMatchObject({
+        status: "blocked",
+        blockedTaskId: child.taskId,
+      });
+      expect(getTaskFlowById(freshFlow.flowId)).toMatchObject({
+        status: "blocked",
+        blockedTaskId: "task-pending-registration",
+      });
+    });
+  });
+
+  it("preserves dangling-blocker flows while a sibling child is still unsettled", async () => {
+    await withTaskFlowMaintenanceStateDir(async () => {
+      const staleAt = Date.now() - 60 * 60_000;
+      const activeFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:active-sibling",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Missing blocker with a running sibling",
+        status: "running",
+        createdAt: staleAt,
+        updatedAt: staleAt,
+      });
+      createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:active-sibling",
+        scopeKind: "session",
+        parentFlowId: activeFlow.flowId,
+        childSessionKey: "agent:main:active-sibling:child",
+        runId: "run-dangling-active-sibling",
+        task: "Still running",
+        startedAt: staleAt,
+        lastEventAt: staleAt,
+      });
+      expect(
+        setFlowWaiting({
+          flowId: activeFlow.flowId,
+          expectedRevision: activeFlow.revision,
+          blockedTaskId: "task-vanished",
+          blockedSummary: "Waiting for child task",
+          updatedAt: staleAt,
+        }).applied,
+      ).toBe(true);
+
+      const provisionalFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:provisional-sibling",
+        controllerId: "tests/task-flow-maintenance",
+        goal: "Missing blocker with a provisional kill sibling",
+        status: "running",
+        createdAt: staleAt,
+        updatedAt: staleAt,
+      });
+      const provisionalChild = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:provisional-sibling",
+        scopeKind: "session",
+        parentFlowId: provisionalFlow.flowId,
+        childSessionKey: "agent:main:provisional-sibling:child",
+        runId: "run-dangling-provisional-sibling",
+        task: "Kill racing",
+        startedAt: staleAt,
+        lastEventAt: staleAt,
+      });
+      finalizeTaskRecordByRunId({
+        runId: provisionalChild.runId!,
+        runtime: "subagent",
+        sessionKey: provisionalChild.childSessionKey,
+        status: "cancelled",
+        endedAt: staleAt + 1,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      expect(
+        setFlowWaiting({
+          flowId: provisionalFlow.flowId,
+          expectedRevision: provisionalFlow.revision,
+          blockedTaskId: "task-vanished",
+          blockedSummary: "Waiting for child task",
+          updatedAt: staleAt,
+        }).applied,
+      ).toBe(true);
+
+      expect(previewTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 0 });
+      expect(await runTaskFlowRegistryMaintenance()).toEqual({ reconciled: 0, pruned: 0 });
+      expect(getTaskFlowById(activeFlow.flowId)).toMatchObject({
+        status: "blocked",
+        blockedTaskId: "task-vanished",
+      });
+      expect(getTaskFlowById(provisionalFlow.flowId)).toMatchObject({
+        status: "blocked",
+        blockedTaskId: "task-vanished",
+      });
+    });
+  });
+
   it("does not finalize cancel-requested flows while a child task is still active", async () => {
     await withTaskFlowMaintenanceStateDir(async () => {
       const flow = createManagedTaskFlow({
