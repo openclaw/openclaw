@@ -23,6 +23,7 @@ enum AppKitTestSupport {
     }
 
     static func startApplication() async throws {
+        FileHandle.standardError.write(Data("[appkit-test] preparing application\n".utf8))
         let application = self.application
         guard !application.isRunning else { return }
         await withCheckedContinuation { continuation in
@@ -30,7 +31,9 @@ enum AppKitTestSupport {
             // Otherwise macOS 27 can stop Swift's outer loop and exit before test completion.
             RunLoop.main.perform(inModes: [.common]) {
                 MainActor.assumeIsolated {
+                    FileHandle.standardError.write(Data("[appkit-test] entering application loop\n".utf8))
                     let started = Timer(timeInterval: 0, repeats: false) { _ in
+                        FileHandle.standardError.write(Data("[appkit-test] startup timer fired\n".utf8))
                         continuation.resume()
                     }
                     RunLoop.main.add(started, forMode: .common)
@@ -38,7 +41,28 @@ enum AppKitTestSupport {
                 }
             }
         }
+        FileHandle.standardError.write(Data("[appkit-test] application startup resumed\n".utf8))
         try #require(application.isRunning)
+    }
+
+    static func sampleStalledProcess() -> DispatchWorkItem {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let diagnostic = DispatchWorkItem {
+            FileHandle.standardError.write(Data("[appkit-test] sampling stalled rendered test\n".utf8))
+            let sample = Process()
+            sample.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
+            sample.arguments = [String(pid), "1", "1"]
+            sample.standardOutput = FileHandle.standardError
+            sample.standardError = FileHandle.standardError
+            do {
+                try sample.run()
+                sample.waitUntilExit()
+            } catch {
+                FileHandle.standardError.write(Data("[appkit-test] sample failed: \(error)\n".utf8))
+            }
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 60, execute: diagnostic)
+        return diagnostic
     }
 
     static func accessibilityElements(in root: AnyObject) async throws -> [AnyObject] {

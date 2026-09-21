@@ -41,10 +41,19 @@ function fixture(
   const bin = path.join(root, "bin");
   const home = path.join(root, "ambient-home");
   const runnerTemp = path.join(root, "runner-temp");
+  const workspace = path.join(root, "workspace");
   const log = path.join(root, "calls.jsonl");
-  for (const dir of [bin, home, runnerTemp]) {
+  for (const dir of [bin, home, runnerTemp, workspace]) {
     fs.mkdirSync(dir);
   }
+  const toolchain = path.join(root, ".ci-harness/scripts/lib");
+  fs.mkdirSync(toolchain, { recursive: true });
+  fs.copyFileSync(
+    path.join(repo, "scripts/lib/swift-toolchain.sh"),
+    path.join(toolchain, "swift-toolchain.sh"),
+  );
+  fs.symlinkSync(path.join(root, ".ci-harness"), path.join(workspace, ".ci-harness"));
+  fs.symlinkSync(path.join(repo, "scripts"), path.join(workspace, "scripts"));
   const cache = path.join(home, "Library/Caches/org.swift.swiftpm");
   fs.mkdirSync(cache, { recursive: true });
   fs.writeFileSync(path.join(cache, "fixture-cache"), "reusable build cache");
@@ -199,6 +208,7 @@ if (tool === 'swift' && args[0] === 'test') {
   };
   return {
     root,
+    workspace,
     env,
     log,
     capturePath: (profileMode: "default" | "named") => {
@@ -218,7 +228,7 @@ if (tool === 'swift' && args[0] === 'test') {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line)),
-    run: (script: string, cwd = repo, overrides = {}) =>
+    run: (script: string, cwd = workspace, overrides = {}) =>
       spawnSync(
         "/bin/bash",
         [
@@ -388,6 +398,15 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       }
       expect(roots.size).toBe(tests.length);
       expect(f.capturePath("default")).toBe(captures[defaultCode === 0 ? 1 : 0]);
+      const logDirectory = path.join(f.env.RUNNER_TEMP, "openclaw-native-test-logs");
+      const logs = fs.readdirSync(logDirectory).toSorted();
+      expect(logs).toHaveLength(tests.length);
+      for (const name of logs) {
+        expect(name).toMatch(/^(?:default(?:-rendered)?|named)-[a-f0-9-]+\.log$/);
+        expect(fs.readFileSync(path.join(logDirectory, name), "utf8")).toContain(
+          "[macos-native] Synthetic menu capture artifacts:",
+        );
+      }
       expect(fs.existsSync(f.env.HOME)).toBe(true);
       expect(
         fs.readFileSync(
@@ -401,7 +420,7 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
 
   it("preserves the two original partitions for historical targets with a launcher", () => {
     const f = fixture();
-    const result = f.run(swiftStep, repo, { HISTORICAL_TARGET: "true" });
+    const result = f.run(swiftStep, f.workspace, { HISTORICAL_TARGET: "true" });
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     const calls = f.calls().filter((call) => call.tool === "swift");

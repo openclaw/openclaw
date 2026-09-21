@@ -136,6 +136,15 @@ Those are separate from the supported runtime and test-job versions. GitHub
 JavaScript actions also have their own runtime, independent of the `node` on
 the job's `PATH`.
 
+### iOS simulator evidence
+
+iOS and Watch simulator test commands write complete `xcodebuild` output directly
+to files. Forwarding simulator logs into a congested Actions pipe can stall timed
+test operations before their mocked transport runs. After each command exits,
+CI prints at most 8 KiB of its log and preserves its exit status. The lifecycle
+evidence artifact retains the full logs alongside `.xcresult` bundles on success
+and failure; test timeouts, assertions, and diagnostic collection stay unchanged.
+
 ### macOS Swift phases
 
 `macos-swift (tests)` builds and runs the app's complete default- and named-profile
@@ -154,6 +163,11 @@ coverage instrumentation and completion checks; a failure stops later partitions
 Rendered Quick Chat uses an AppKit-owned run loop for native menu tracking.
 Historical targets with a launcher retain their original default- and named-profile
 partitions, including XCTest's rendered-flow ordering.
+
+Each launcher invocation retains a full log in the `macos-native-test-logs`
+artifact. CI forwards only a bounded tail after the invocation exits, keeping
+Actions log backpressure outside the tests while preserving process and output
+closure checks before resource cleanup.
 
 Both phases use Xcode 27 on GitHub-hosted `xcode-27`, the preview macOS 27
 image, with at most two concurrent jobs. Full manual

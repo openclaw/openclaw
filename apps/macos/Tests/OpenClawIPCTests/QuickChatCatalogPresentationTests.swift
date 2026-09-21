@@ -9,6 +9,8 @@ import Testing
 @MainActor
 struct QuickChatCatalogPresentationTests {
     @Test func `rendered Quick Chat preserves catalog disclosure and shortcut behavior in order`() async throws {
+        let diagnostic = AppKitTestSupport.sampleStalledProcess()
+        defer { diagnostic.cancel() }
         try await TestIsolation.withIsolatedState {
             try await AppKitTestSupport.startApplication()
             let application = AppKitTestSupport.application

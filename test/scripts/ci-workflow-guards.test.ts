@@ -12349,6 +12349,8 @@ exit 1
       const outputPath = path.join(root, "github-output");
       mkdirSync(binDir, { recursive: true });
       symlinkSync(path.resolve("scripts"), path.join(root, "scripts"), "dir");
+      mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
+      symlinkSync(path.resolve("scripts/lib"), path.join(root, ".ci-harness/scripts/lib"), "dir");
       writeFileSync(
         path.join(binDir, "swift"),
         `#!/usr/bin/env bash
@@ -12397,6 +12399,7 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
           GITHUB_OUTPUT: outputPath,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
           SWIFT_TEST_EXECUTION: "serial",
+          HISTORICAL_TARGET: "false",
         },
       });
       const calls = readFileSync(callsPath, "utf8").trim().split("\n");
@@ -12406,7 +12409,7 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
         ...(buildExitCode === 0
           ? [
               expect.stringMatching(
-                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests\|QuickChatCatalogPresentationTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
               ),
             ]
           : []),

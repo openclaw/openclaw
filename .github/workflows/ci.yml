@@ -5292,6 +5292,9 @@ jobs:
         if: matrix.phase == 'tests'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
+          native_test_log_dir="$RUNNER_TEMP/openclaw-native-test-logs"
+          native_test_log_id="$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
           # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
           # Remove once runner toolchains pass with swiftlang/swift-package-manager#10394.
           # Keep the release build above on the default backend.
@@ -5310,22 +5313,31 @@ jobs:
             echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
             if [[ "$HISTORICAL_TARGET" == "true" ]]; then
-              node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
+              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
             else
-              node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
+              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
               # Rendered Quick Chat keeps its former XCTest process isolation from executor-changing tests.
-              node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "QuickChatCatalogPresentationTests"
+              run_apple_command_logged "$native_test_log_dir/default-rendered-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "QuickChatCatalogPresentationTests"
             fi
-            node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
+            run_apple_command_logged "$native_test_log_dir/named-$native_test_log_id.log" node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets predate the resource-owner script and its tests.
             # Their original suite still runs only on this disposable macOS worker.
             swift_test_args+=(--no-parallel)
-            swift test "${swift_test_args[@]}"
+            run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" swift test "${swift_test_args[@]}"
           else
             echo "Current CI targets must provide scripts/test-macos-native.mts." >&2
             exit 1
           fi
+
+      - name: Upload macOS native test logs
+        if: ${{ always() && matrix.phase == 'tests' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-native-test-logs
+          path: ${{ runner.temp }}/openclaw-native-test-logs/*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload default-profile chat menu captures
         if: ${{ always() && steps.swift-test.outputs.menu-default-artifact-path != '' }}
@@ -5567,6 +5579,7 @@ jobs:
         if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(
             xcrun simctl list devices available --json | node --input-type=module -e '
               const chunks = [];
@@ -5580,7 +5593,7 @@ jobs:
             '
           )"
           mkdir -p apps/ios/build/LifecycleTestResults
-          xcodebuild \
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.log xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
             -configuration Debug \
@@ -5600,6 +5613,7 @@ jobs:
         if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(
             xcrun simctl list devices available --json | node --input-type=module -e '
               const chunks = [];
@@ -5617,7 +5631,7 @@ jobs:
           )"
           result_bundle="apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult"
           mkdir -p "apps/ios/build/LifecycleTestResults"
-          xcodebuild \
+          run_apple_command_logged "${result_bundle%.xcresult}.log" xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
             -configuration Debug \
@@ -5638,7 +5652,7 @@ jobs:
             -only-testing:OpenClawTests/RootTabsSourceGuardTests \
             -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
             test
-          xcodebuild \
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.log xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClawUITests \
             -configuration Debug \
@@ -5652,6 +5666,7 @@ jobs:
         if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(
             xcrun simctl list devices available --json | node --input-type=module -e '
               const chunks = [];
@@ -5683,7 +5698,8 @@ jobs:
             -only-testing:OpenClawWatchTests/WatchRealtimeMediaTests
             -only-testing:OpenClawWatchTests/WatchGatewayConfigurationTests
           )
-          xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchBuild.log xcodebuild \
+            "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing
           app_path="$(
             xcodebuild "${xcodebuild_args[@]}" -showBuildSettings -json |
               node --input-type=module -e '
@@ -5703,7 +5719,8 @@ jobs:
           xcrun simctl boot "$simulator_id" 2>/dev/null || true
           xcrun simctl bootstatus "$simulator_id" -b
           xcrun simctl install "$simulator_id" "$app_path"
-          xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" \
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.log xcodebuild \
+            "${xcodebuild_args[@]}" "${test_args[@]}" \
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
             test-without-building
 
@@ -5712,7 +5729,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-lifecycle-tests-${{ needs.preflight.outputs.checkout_revision }}
-          path: apps/ios/build/LifecycleTestResults/*.xcresult
+          path: |
+            apps/ios/build/LifecycleTestResults/*.xcresult
+            apps/ios/build/LifecycleTestResults/*.log
           if-no-files-found: warn
           retention-days: 14
 
