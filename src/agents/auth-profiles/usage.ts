@@ -7,10 +7,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
-  positiveSecondsToSafeMilliseconds,
-  resolveExpiresAtMsFromEpochSeconds,
 } from "@openclaw/normalization-core/number-coercion";
-import { z } from "zod";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { sqlitePrimaryResultCode } from "../../infra/sqlite-error-diagnostics.js";
@@ -29,7 +26,6 @@ import {
 import { applyScopedAuthReadThrough, resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import type {
   AuthProfileBlockedSource,
-  AuthProfileCooldownClassification,
   AuthProfileCredential,
   AuthProfileFailureReason,
   AuthProfileStore,
@@ -45,6 +41,12 @@ import {
   resolveInlineProviderApiKeyUsageId,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
+import {
+  classifyWhamUsage,
+  WHAM_PROBE_FAILURE_COOLDOWN_MS,
+  type WhamCooldownProbeResult,
+  whamUsageSchema,
+} from "./usage-wham.js";
 
 const authProfileUsageLog = createSubsystemLogger("agent/embedded");
 export {
@@ -132,51 +134,11 @@ const FAILURE_REASON_SET = new Set<AuthProfileFailureReason>(FAILURE_REASON_PRIO
 
 const WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const WHAM_TIMEOUT_MS = 3_000;
-const WHAM_BURST_COOLDOWN_MS = 15_000;
-const WHAM_PROBE_FAILURE_COOLDOWN_MS = 30_000;
 const WHAM_HTTP_ERROR_COOLDOWN_MS = 5 * 60 * 1000;
 const WHAM_TOKEN_EXPIRED_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 const WHAM_DEAD_ACCOUNT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const WHAM_HALF_OPEN_REPROBE_INTERVAL_MS = 5 * 60 * 1000;
 const whamReprobesInFlight = new Map<string, Promise<void>>();
-
-const whamUsageWindowSchema = z.object({
-  used_percent: z.number().optional(),
-  reset_at: z.number().optional(),
-  reset_after_seconds: z.number().optional(),
-});
-type WhamUsageWindow = z.infer<typeof whamUsageWindowSchema>;
-const whamRateLimitSchema = z.object({
-  limit_reached: z.boolean().optional(),
-  primary_window: whamUsageWindowSchema.nullish(),
-  secondary_window: whamUsageWindowSchema.nullish(),
-});
-const whamUsageSchema = z.object({
-  rate_limit: whamRateLimitSchema,
-  additional_rate_limits: z
-    .array(z.object({ rate_limit: whamRateLimitSchema.nullish() }))
-    .nullish(),
-  spend_control: z.object({ reached: z.boolean() }).nullish(),
-  rate_limit_reached_type: z
-    .object({
-      type: z.enum([
-        "rate_limit_reached",
-        "workspace_owner_credits_depleted",
-        "workspace_member_credits_depleted",
-        "workspace_owner_usage_limit_reached",
-        "workspace_member_usage_limit_reached",
-        "unknown",
-      ]),
-    })
-    .nullish(),
-});
-
-type WhamCooldownProbeResult = {
-  available?: true;
-  cooldownMs: number;
-  cooldownClassification?: AuthProfileCooldownClassification;
-  blockedUntil?: number;
-};
 
 function shouldProbeWhamForFailure(
   profile: AuthProfileCredential | undefined,
@@ -213,23 +175,6 @@ function isSameWhamCredential(
 function resolveActiveWindowUntil(value: unknown, now: number): number {
   const timestampMs = asDateTimestampMs(value);
   return timestampMs !== undefined && timestampMs > now ? timestampMs : 0;
-}
-
-function resolveWhamResetMs(window: WhamUsageWindow, now: number): number | null {
-  if (window.reset_after_seconds !== undefined && window.reset_after_seconds > 0) {
-    return positiveSecondsToSafeMilliseconds(window.reset_after_seconds) ?? null;
-  }
-  if (window.reset_at !== undefined && window.reset_at > 0) {
-    const resetAtMs = resolveExpiresAtMsFromEpochSeconds(window.reset_at);
-    return resetAtMs === undefined ? null : Math.max(0, resetAtMs - now);
-  }
-  return null;
-}
-
-function isWhamWindowExhausted(
-  window: WhamUsageWindow | null | undefined,
-): window is WhamUsageWindow {
-  return window?.used_percent !== undefined && window.used_percent >= 100;
 }
 
 function applyWhamCooldownResult(params: {
@@ -353,48 +298,9 @@ async function probeWhamForCooldown(
     const parsed = whamUsageSchema.safeParse(
       await readProviderJsonResponse<unknown>(res, "WHAM usage probe"),
     );
-    const failedProbe = { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS };
-    if (!parsed.success || parsed.data.spend_control?.reached) {
-      return failedProbe;
-    }
-    const limits = [
-      parsed.data.rate_limit,
-      ...(parsed.data.additional_rate_limits ?? []).flatMap((entry) =>
-        entry.rate_limit ? [entry.rate_limit] : [],
-      ),
-    ];
-    const now = Date.now();
-    let resetMs = 0;
-    for (const limit of limits) {
-      const windows = [limit.primary_window, limit.secondary_window].filter(isWhamWindowExhausted);
-      if (limit.limit_reached === false && windows.length === 0) {
-        continue;
-      }
-      // Older personal usage responses identify the reached limit without a percentage.
-      if (windows.length === 0 && limit.primary_window && !limit.secondary_window) {
-        windows.push(limit.primary_window);
-      }
-      if (windows.length === 0) {
-        return failedProbe;
-      }
-      for (const window of windows) {
-        const remainingMs = resolveWhamResetMs(window, now);
-        if (remainingMs === null || remainingMs <= 0) {
-          return failedProbe;
-        }
-        resetMs = Math.max(resetMs, remainingMs);
-      }
-    }
-    const reachedType = parsed.data.rate_limit_reached_type?.type;
-    if (resetMs === 0 && reachedType && reachedType !== "unknown") {
-      return failedProbe;
-    }
-    return resetMs > 0
-      ? {
-          cooldownMs: WHAM_BURST_COOLDOWN_MS,
-          blockedUntil: resolveUsageWindowUntil(now, resetMs),
-        }
-      : { available: true, cooldownMs: WHAM_BURST_COOLDOWN_MS };
+    return parsed.success
+      ? classifyWhamUsage(parsed.data, Date.now())
+      : { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS };
   } catch {
     return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS };
   }
