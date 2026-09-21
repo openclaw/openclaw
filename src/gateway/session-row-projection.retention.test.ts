@@ -47,7 +47,10 @@ it("collects superseded resident rows and their materializations after metadata 
       for (let revision = 1; revision <= 4; revision++) {
         refreshEntries(revision);
         await projection.ensureMaterialized();
-        const result = await listProjectedSessions({ projection, opts: { limit: keys.length } });
+        const result = await listProjectedSessions({
+          projection,
+          opts: { limit: keys.length, includePeople: true },
+        });
         expect(result.sessions.map((row) => row.label)).toEqual(
           keys.map(() => `Revision ${revision}`),
         );

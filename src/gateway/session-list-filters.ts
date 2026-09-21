@@ -205,6 +205,7 @@ export function* filterSessionEntries(
   const identityProjection = getRowContext().identityProjection;
   const projectOwner = identityProjection?.owner ?? projectSessionOwner;
   const projectParticipants = identityProjection?.participants ?? projectSessionParticipants;
+  const projectPeople = identityProjection?.people ?? projectSessionPeople;
   const profileRelation = opts.profileRelation
     ? {
         ...opts.profileRelation,
@@ -232,7 +233,7 @@ export function* filterSessionEntries(
   if (allowedProfileIds) {
     for (const [, entry] of visibleEntries) {
       const owner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
-      for (const person of projectSessionPeople(entry, identities, owner)) {
+      for (const person of projectPeople(entry, identities, owner)) {
         allowedProfileIds.add(person.identity.id);
       }
       if (shouldYield?.()) {
@@ -336,7 +337,7 @@ export function* filterSessionEntries(
       continue;
     }
     if (opts.includePeople || opts.involvingProfileId) {
-      const associated = projectSessionPeople(entry, identities, effectiveOwner);
+      const associated = projectPeople(entry, identities, effectiveOwner);
       peopleSessionCount += 1;
       peopleIncomplete ||=
         (entry.participantCount ?? entry.participants?.length ?? 0) >= MAX_SESSION_PARTICIPANTS ||
