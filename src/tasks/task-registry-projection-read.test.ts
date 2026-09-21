@@ -25,6 +25,117 @@ import { createTaskFixture, prepareTaskFixtureRead } from "./task-registry.test-
 
 afterEach(resetReadState);
 
+it.each(["unchanged", "status and order", "delivery", "read failure"] as const)(
+  "retains a prepared task page only while worker publication is unchanged: %s",
+  async (change) => {
+    await withReadState(async () => {
+      const task = createTaskFixture("cli", {
+        runId: "page-publication-first",
+        task: "First task",
+        startedAt: 100,
+        lastEventAt: 100,
+        notifyPolicy: "silent",
+      });
+      const second = createTaskFixture("cli", {
+        runId: "page-publication-second",
+        task: "Second task",
+        startedAt: 200,
+        lastEventAt: 200,
+        notifyPolicy: "silent",
+      });
+      const store = await prepareTaskFixtureRead(task);
+      const context = captureOpenClawStateWorkerContext();
+      const page = await taskRuntime.listTaskRecordPage({ offset: 0, limit: 1 });
+      expect(page.ok).toBe(true);
+      if (!page.ok) {
+        throw new Error("Expected the initial task page");
+      }
+      expect(page.value.tasks.map((record) => record.taskId)).toEqual([second.taskId]);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const reading = createDeferred();
+      const releaseRead = createDeferred();
+      const publicationError = vi.fn();
+      const failure = new Error("Synthetic page publication readback failure");
+      const changesOrder = change === "status and order" || change === "read failure";
+      const next = changesOrder
+        ? { ...task, status: "succeeded" as const, endedAt: 300, lastEventAt: 300 }
+        : task;
+      const mutation = runTaskRegistryWorkerMutation(
+        {
+          scope: { taskId: task.taskId },
+          admission: context.admission,
+          readIdentity: "preserved",
+          publicationRecords: () => new Map([[task.taskId, next]]),
+          onPublicationError: publicationError,
+        },
+        async () => {
+          entered.resolve();
+          await release.promise;
+          store.upsertTaskWithDeliveryState({
+            task: next,
+            ...(change === "delivery"
+              ? { deliveryState: { taskId: task.taskId, lastNotifiedEventAt: 300 } }
+              : {}),
+          });
+        },
+        async () => {
+          reading.resolve();
+          await releaseRead.promise;
+          if (change === "read failure") {
+            throw failure;
+          }
+          return store.loadMutationSnapshotAsync(context, { taskId: task.taskId });
+        },
+      );
+      const settled = Promise.allSettled([mutation]);
+      try {
+        await withTestTimeout(entered.promise, 5_000, "Preserved mutation reached admission");
+        expect(page.value.isCurrent()).toBe(true);
+        release.resolve();
+        await withTestTimeout(reading.promise, 5_000, "Preserved mutation reached readback");
+        expect(page.value.isCurrent()).toBe(true);
+        releaseRead.resolve();
+        await mutation;
+        expect(publicationError).toHaveBeenCalledTimes(change === "read failure" ? 1 : 0);
+        if (change === "read failure") {
+          expect(publicationError).toHaveBeenCalledWith(failure);
+        }
+        expect(page.value.isCurrent()).toBe(change === "unchanged");
+        const continuation = await taskRuntime.listTaskRecordPage({
+          offset: 1,
+          limit: 1,
+          expectedRevision: page.value.revision,
+        });
+        if (change === "unchanged") {
+          expect(continuation).toMatchObject({
+            ok: true,
+            value: { tasks: [{ taskId: task.taskId }] },
+          });
+        } else {
+          expect(continuation).toEqual({ ok: false, error: "cursor_stale" });
+        }
+        const fresh = await taskRuntime.listTaskRecordPage({ offset: 0, limit: 2 });
+        expect(fresh).toMatchObject({
+          ok: true,
+          value: {
+            tasks: changesOrder
+              ? [{ taskId: task.taskId, status: "succeeded" }, { taskId: second.taskId }]
+              : [{ taskId: second.taskId }, { taskId: task.taskId, status: "running" }],
+          },
+        });
+        if (change === "delivery") {
+          expect(taskDeliveryStates.get(task.taskId)?.lastNotifiedEventAt).toBe(300);
+        }
+      } finally {
+        release.resolve();
+        releaseRead.resolve();
+        await settled;
+      }
+    });
+  },
+);
+
 it.each(["current", "read failure", "retired store"] as const)(
   "prepares registered task reads from one overlapping scope snapshot: %s",
   async (outcome) => {

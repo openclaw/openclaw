@@ -706,6 +706,11 @@ Inside an enclosing native transaction, consumption defers delivery until commit
 rechecks event ownership and the committed receipt. Rollback drops queued delivery;
 later row replacement, including ABA replacement, suppresses stale delivery.
 
+Prepared task pages keep their revision when a ready projection republishes
+unchanged task and delivery values. Identity-preserving admission still invalidates
+worker snapshots; actual row changes, cold restore, and failed publication readback
+invalidate held pages. Committed write witnesses remain independent of value equality.
+
 Task page request preparation also captures identity-changing mutations already
 admitted for its database and store before its first wait. It joins their persistence
 and publication settlement once; later mutations do not extend that wait. Failed

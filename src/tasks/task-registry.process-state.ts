@@ -341,6 +341,28 @@ export function addTaskIndexes(task: TaskRecord): void {
   addRelatedSessionKeyIndex(task.taskId, task);
 }
 
+/** Update a published row without disturbing unchanged index insertion order. */
+export function updateTaskIndexes(current: TaskRecord, next: TaskRecord): void {
+  const taskId = next.taskId;
+  updateRunIdIndex(current, next);
+  if (current.ownerKey !== next.ownerKey) {
+    deleteOwnerKeyIndex(taskId, current);
+    addOwnerKeyIndex(taskId, next);
+  }
+  if (current.parentFlowId !== next.parentFlowId) {
+    deleteParentFlowIdIndex(taskId, current);
+    addParentFlowIdIndex(taskId, next);
+  }
+  if (
+    current.ownerKey !== next.ownerKey ||
+    current.requesterSessionKey !== next.requesterSessionKey ||
+    current.childSessionKey !== next.childSessionKey
+  ) {
+    deleteRelatedSessionKeyIndex(taskId, current);
+    addRelatedSessionKeyIndex(taskId, next);
+  }
+}
+
 export function taskIdsInScope(scope?: TaskRegistryMutationScope): Iterable<string> {
   if (!scope) {
     return indexState.tasks.keys();
