@@ -43,7 +43,7 @@ describe("runEmbeddedAttempt abort races", () => {
     Date.now = () => originalDateNow() + wallClockOffsetMs;
     const publishedDeadlines: Array<{ kind: string; deadlineAtMs?: number }> = [];
     const broker = new EmbeddedPluginApprovalBroker();
-    const approvalRequested = createDeferred<void>();
+    const approvalRequested = createDeferred();
     const approvalEvents: string[] = [];
     const unsubscribe = broker.subscribe((event) => {
       approvalEvents.push(event.event);
