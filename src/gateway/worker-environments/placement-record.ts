@@ -19,6 +19,12 @@ export type WorkerSessionPlacementIdentity = {
   sessionKey: string;
 };
 
+export type WorkerSessionPlacementChangeSnapshot = WorkerSessionPlacementIdentity & {
+  state: WorkerSessionPlacementState;
+  generation: number;
+  updatedAtMs: number;
+};
+
 export type WorkerPlacementExecutionMode = "worker-turn" | "remote-exec";
 export type WorkerSessionPlacementDispatchIdentity = WorkerSessionPlacementIdentity & {
   executionMode?: WorkerPlacementExecutionMode;

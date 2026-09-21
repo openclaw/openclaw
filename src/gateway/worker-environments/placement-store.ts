@@ -690,6 +690,18 @@ export function createWorkerSessionPlacementStore(
         query(db).selectFrom("worker_session_placements").selectAll().orderBy("session_id"),
       ).rows.map((row) => withWorkspaceResultConflict(fromRow(row))!);
     },
+
+    async readChangeSnapshot() {
+      const reply = await executeExistingOpenClawStateRead(
+        { path },
+        { type: "workerPlacements.changeSnapshot" },
+        { current: true },
+      );
+      if (!reply || !reply.ok || reply.type !== "workerPlacements.changeSnapshot") {
+        throw new Error("Worker placement change snapshot is unavailable");
+      }
+      return reply.placements;
+    },
   };
   attachWorkerTurnExecutionIdentityStore(store, path);
   return store;

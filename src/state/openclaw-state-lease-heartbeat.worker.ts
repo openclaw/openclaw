@@ -16,6 +16,7 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import {
   leaseHeartbeatState as state,
+  leaseHeartbeatStartupPhase as startupPhase,
   LEASE_HEARTBEAT_START_TIMEOUT_MS,
   type LeaseHeartbeatRenewalFailure,
   type LeaseHeartbeatWorkerData,
@@ -28,6 +29,7 @@ import {
 // SAFETY: The lease owner alone starts this private entry with its typed structured-clone payload.
 const params = workerData as LeaseHeartbeatWorkerData;
 const shared = new BigInt64Array(params.shared);
+Atomics.store(shared, state.startupPhase, startupPhase["body-entry"]);
 function withLifecycleCoordinator<T>(label: string, operation: () => T): T {
   // This private worker participates in an actual parent-owned coordinator,
   // retained before construction and released only after native worker exit.
@@ -61,6 +63,7 @@ function openHeartbeatDatabase() {
   throw new Error("state lease heartbeat startup deadline expired or owner stopped");
 }
 const db = openHeartbeatDatabase();
+Atomics.store(shared, state.startupPhase, startupPhase["open-complete"]);
 let processOwner = params.processOwner;
 let heartbeat: ReturnType<typeof setTimeout> | undefined;
 let attempt = 0;
@@ -145,7 +148,9 @@ const renew = () => {
   heartbeat = setTimeout(renew, Math.max(1, Math.min(params.heartbeatMs, expiresAt - Date.now())));
 };
 
+Atomics.store(shared, state.startupPhase, startupPhase["initial-renew-start"]);
 renew();
+Atomics.store(shared, state.startupPhase, startupPhase["initial-renew-returned"]);
 if (Atomics.compareExchange(shared, state.status, state.starting, state.ready) === state.starting) {
   parentPort?.on("message", () => {
     if (Atomics.load(shared, state.status) !== state.ready) {

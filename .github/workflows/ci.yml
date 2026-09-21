@@ -1792,10 +1792,8 @@ jobs:
               const groups = shard.groups?.map(projectNodeTestGroup);
               return {
                 check_name: shard.checkName,
-                runtime: "node",
                 test_runtime_policy: testRuntimeMode,
                 requires_bun: !shard.requiresDist && Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
-                task: "test-shard",
                 shard_name: shard.shardName,
                 groups_gzip_base64:
                   groups && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined,
