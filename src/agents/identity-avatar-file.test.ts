@@ -1,7 +1,7 @@
 // Internal avatar-file tests cover pinned reads, limits, and workspace boundaries.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
@@ -54,10 +54,17 @@ describe("local agent avatar files", () => {
       throw new Error("expected a pinned avatar descriptor");
     }
 
-    expect(readOpenedLocalAgentAvatarDataUrl(opened.file)).toBe(
-      `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
-    );
-    expect(() => fs.fstatSync(opened.file.fd)).toThrow();
+    const close = vi.spyOn(fs, "closeSync");
+    try {
+      expect(readOpenedLocalAgentAvatarDataUrl(opened.file)).toBe(
+        `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`,
+      );
+      // A released descriptor number can already identify another resource.
+      expect(close.mock.calls).toEqual([[opened.file.fd]]);
+      expect(close.mock.results).toEqual([{ type: "return", value: undefined }]);
+    } finally {
+      close.mockRestore();
+    }
   });
 
   it("rejects symlink escapes and hardlinks", () => {
