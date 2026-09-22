@@ -86,8 +86,12 @@ function canonicalizeParsedSessionStoreKey(
   raw: string,
   parsed: ParsedAgentSessionKey,
   storeAgentId?: string,
+  preserveQualifiedAddress = false,
 ): string {
   const resolved = resolveParsedSessionStoreKey(cfg, raw, parsed, { storeAgentId });
+  if (preserveQualifiedAddress && resolved.agentId === normalizeAgentId(parsed.agentId)) {
+    return resolved.sessionKey;
+  }
   return canonicalizeMainSessionAlias({
     cfg,
     agentId: resolved.agentId,
@@ -180,6 +184,7 @@ export function resolveStoredSessionKeyForAgentStore(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
+  preserveQualifiedAddress?: boolean;
 }): string {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
   if (!raw) {
@@ -191,7 +196,13 @@ export function resolveStoredSessionKeyForAgentStore(params: {
   }
   const parsed = parseAgentSessionKey(raw);
   if (parsed) {
-    return canonicalizeParsedSessionStoreKey(params.cfg, raw, parsed, params.agentId);
+    return canonicalizeParsedSessionStoreKey(
+      params.cfg,
+      raw,
+      parsed,
+      params.agentId,
+      params.preserveQualifiedAddress,
+    );
   }
   const persistedOwner = resolvePersistedSessionStoreOwnerForKey(params.cfg, raw);
   if (
