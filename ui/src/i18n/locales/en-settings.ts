@@ -1256,6 +1256,9 @@ const enSettings = {
         waking: "Waking memory…",
         hibernating: "Memory is hibernating",
         needsAttention: "Memory needs attention",
+        noSearchRuntime: "Host memory search is unavailable",
+        noSearchRuntimeDescription:
+          "{engine} does not provide a host memory search runtime. Other memory integrations may run independently.",
         activeDescription: "{engine} · {mode}",
         loadingDescription: "Checking this agent's memory engine and dream cycle.",
         offDescription: "Choose a memory engine in Settings to wake it up.",
