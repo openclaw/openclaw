@@ -238,6 +238,22 @@ function resolveDirectAnnounceTransientRetryDelaysMs() {
   return isFastTestRuntimeEnv() ? ([8, 16, 32] as const) : ([5_000, 10_000, 20_000] as const);
 }
 
+// When several subagents finish within the same short window (e.g. a cron
+// isolated-session orchestrator's parallel batch, see issue #118408), each one
+// hits the same writer-claim-rebound conflict and retries this fixed
+// [5s, 10s, 20s] schedule. Without jitter they resync and collide again at the
+// same instants, and can burn through all attempts together instead of
+// naturally spreading out. Fast test runtime stays jitter-free for
+// deterministic assertions.
+const ANNOUNCE_RETRY_JITTER_RATIO = 0.3;
+
+function applyAnnounceRetryJitter(delayMs: number): number {
+  if (isFastTestRuntimeEnv()) {
+    return delayMs;
+  }
+  return Math.round(delayMs + delayMs * ANNOUNCE_RETRY_JITTER_RATIO * Math.random());
+}
+
 export async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
@@ -266,7 +282,7 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
       defaultRuntime.log(
         `[warn] Subagent announce ${params.operation} transient failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDeliveryError(err)}`,
       );
-      await waitForAnnounceRetryDelay(delayMs, params.signal);
+      await waitForAnnounceRetryDelay(applyAnnounceRetryJitter(delayMs), params.signal);
     }
   }
   if (params.signal?.aborted) {
