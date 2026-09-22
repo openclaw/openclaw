@@ -78,8 +78,7 @@
   overscroll-behavior: auto;
 }
 
-:root[data-theme-mode="light"]
-  :is(.session-progress-card--composer, .chat-queue, .agent-chat__goal--active) {
+:root[data-theme-mode="light"] :is(.chat-queue, .agent-chat__goal--active) {
   border-color: transparent;
   box-shadow: inset 0 0 0 1px var(--chat-composer-light-outline);
 }

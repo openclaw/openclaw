@@ -92,7 +92,7 @@ suite.define(() => {
     },
   );
 
-  it.each(["light", "dark"] as const)("fades only unread overflow in %s mode", async (mode) => {
+  it.each(["light", "dark"] as const)("keeps one border and unread fade in %s", async (mode) => {
     const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 900 } });
     try {
       await context.addInitScript(
@@ -101,6 +101,17 @@ suite.define(() => {
       );
       const page = await context.newPage();
       const { gateway, card } = await openProgress(page);
+      const frame = await page.locator(".session-progress-card--composer").evaluate((element) => {
+        const style = getComputedStyle(element);
+        return {
+          width: style.borderTopWidth,
+          color: style.borderTopColor,
+          shadow: style.boxShadow,
+        };
+      });
+      expect(frame.width).toBe("1px");
+      expect(frame.color).not.toBe("rgba(0, 0, 0, 0)");
+      expect(frame.shadow).toBe("none");
       const body = page.locator(".session-progress-card--composer .session-progress-card__body");
       const mask = () => body.evaluate((el) => getComputedStyle(el).maskImage);
       const height = () => body.evaluate((el) => el.clientHeight);
