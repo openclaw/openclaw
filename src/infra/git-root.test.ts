@@ -211,6 +211,34 @@ describe("git-root", () => {
     });
   });
 
+  it("never truncates a Unicode branch name when the byte window is full", async () => {
+    await withTestDir({ prefix: "openclaw-git-root-head-unicode-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const gitDir = path.join(repoRoot, ".git");
+      await fs.mkdir(gitDir, { recursive: true });
+
+      // `é` is 2 UTF-8 bytes but 1 UTF-16 code unit, so a decoded-string length
+      // check would undercount the window and falsely report end of file. The
+      // full ref crosses the 1024-byte window and must still resolve completely.
+      const fullRef = `refs/heads/é/${"segment/".repeat(126)}abcdefghtail`;
+      const fullLine = `ref: ${fullRef}`;
+      expect(Buffer.byteLength(fullLine, "utf-8")).toBeGreaterThan(1024);
+
+      // A sibling whose ref is exactly the first 1024 decoded characters of the
+      // window: a string-length-based EOF check would resolve it (wrong branch).
+      const truncated = fullLine.slice(0, 1024).replace(/^ref:\s*/, "");
+      expect(truncated).not.toBe(fullRef);
+      const siblingPath = path.join(gitDir, "refs", "heads", ...truncated.split("/").slice(2));
+      await fs.mkdir(path.dirname(siblingPath), { recursive: true });
+      await fs.writeFile(siblingPath, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", "utf-8");
+      await fs.writeFile(path.join(gitDir, "HEAD"), `${fullLine}\n`, "utf-8");
+
+      const read = readGitHead(repoRoot, { maxDepth: 1 });
+      expect(read?.ref).toBe(fullRef);
+      expect(read?.ref).not.toBe(truncated);
+    });
+  });
+
   it("keeps a normal HEAD value intact under the bound", async () => {
     await withTestDir({ prefix: "openclaw-git-root-head-normal-" }, async (temp) => {
       const repoRoot = path.join(temp, "repo");

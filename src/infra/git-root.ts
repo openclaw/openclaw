@@ -77,13 +77,25 @@ const HEAD_METADATA_LIMIT = 1024;
  */
 const HEAD_METADATA_MAX_BYTES = 1024 * 1024;
 
-/** Read at most `limit` bytes from Git or build metadata. */
+/** Read at most `limit` bytes from Git or build metadata, decoding the actual byte window. */
 export function readGitMetadataPrefix(filePath: string, limit = 256): string {
+  return readGitMetadataBytes(filePath, limit).text;
+}
+
+/**
+ * Read at most `limit` bytes and return both the decoded text and the number of
+ * bytes actually read, so callers can detect EOF without confusing UTF-8 byte
+ * counts with decoded string lengths.
+ */
+export function readGitMetadataBytes(
+  filePath: string,
+  limit: number,
+): { text: string; bytesRead: number } {
   const fd = fs.openSync(filePath, "r");
   try {
     const buf = Buffer.alloc(limit);
     const bytesRead = readFileWindowFullySync(fd, buf, 0);
-    return buf.subarray(0, bytesRead).toString("utf-8");
+    return { text: buf.subarray(0, bytesRead).toString("utf-8"), bytesRead };
   } finally {
     fs.closeSync(fd);
   }
@@ -92,14 +104,15 @@ export function readGitMetadataPrefix(filePath: string, limit = 256): string {
 /** Complete first line of a bounded Git metadata window, or null when truncated. */
 function firstLineWithinWindow(filePath: string, initialLimit: number): string | null {
   for (let limit = initialLimit; ; limit *= 2) {
-    const raw = readGitMetadataPrefix(filePath, limit);
-    const newline = raw.indexOf("\n");
+    const { text, bytesRead } = readGitMetadataBytes(filePath, limit);
+    const newline = text.indexOf("\n");
     if (newline >= 0) {
-      return raw.slice(0, newline).trim();
+      return text.slice(0, newline).trim();
     }
-    // A short window proves end of file, so this really is one unterminated line.
-    if (raw.length < limit) {
-      return raw.trim();
+    // A short byte read proves end of file (measured in bytes, before decoding),
+    // so this really is one unterminated line.
+    if (bytesRead < limit) {
+      return text.trim();
     }
     // The window is exactly full with no newline: the line likely continues. Past
     // the ceiling we cannot tell a complete line from a truncated one, so refuse
