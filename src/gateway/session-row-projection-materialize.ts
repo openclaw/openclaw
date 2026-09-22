@@ -18,7 +18,6 @@ import {
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
-import type { PreparedSessionRowDatabaseFacts } from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -48,7 +47,7 @@ export function createSessionRowMaterializer(owner: {
     row: records.Row,
     agentIds: Set<string>,
     read: typeof readResidentSessionRow,
-    facts?: PreparedSessionRowDatabaseFacts,
+    facts?: records.PreparedSessionRowDatabaseFacts,
   ) => boolean;
   forgetBackfill: (id: string) => void;
   retainArchived: (row: records.MaterializedRow) => void;
@@ -110,7 +109,7 @@ export function createSessionRowMaterializer(owner: {
     },
     accept(
       ids: readonly string[],
-      facts: ReadonlyMap<string, PreparedSessionRowDatabaseFacts>,
+      facts: ReadonlyMap<string, records.PreparedSessionRowDatabaseFacts>,
       materializeArchived = false,
     ) {
       if (!owner.isActive()) {
@@ -157,7 +156,7 @@ export function readResidentSessionRow(
     placementFactsReader?: Parameters<typeof readSessionRowFacts>[0]["placementFactsReader"];
     links: SessionChildLink[];
     readSourceEntry: (key: string) => records.Row["storedEntry"];
-    databaseFacts?: PreparedSessionRowDatabaseFacts;
+    databaseFacts?: records.PreparedSessionRowDatabaseFacts;
   },
   activitySummaryEnabledByAgent?: Map<string, boolean>,
 ) {

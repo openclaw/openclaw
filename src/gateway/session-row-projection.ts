@@ -43,7 +43,6 @@ import {
   findSessionRowById,
   readResidentSessionRow,
 } from "./session-row-projection-materialize.js";
-import type { PreparedSessionRowDatabaseFacts } from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowRefresh } from "./session-row-projection-refresh.js";
 import { createSessionRowProjectionTranscriptUpdates } from "./session-row-projection-transcript.js";
@@ -393,7 +392,7 @@ export async function createSessionRowProjection(params: {
     row: records.Row,
     configuredAgentIds = new Set(listAgentIds(cfg)),
     readRow = readResidentSessionRow,
-    databaseFacts?: PreparedSessionRowDatabaseFacts,
+    databaseFacts?: records.PreparedSessionRowDatabaseFacts,
   ) {
     if (!row.entry) {
       return false;

@@ -8,23 +8,20 @@ import {
   captureSessionStoreReadCandidate,
 } from "../config/sessions/session-store-read-candidates.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
-import {
-  MAX_SESSION_ROW_FACTS_KEYS,
-  type SessionRowDatabaseFacts,
-} from "../config/sessions/session-transcript-worker.types.js";
-import type { SessionAcpMeta } from "../config/sessions/types.js";
+import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
-import { identity, isCurrentGeneration, type Row } from "./session-row-projection-record.js";
+import {
+  identity,
+  isCurrentGeneration,
+  type PreparedSessionRowDatabaseFacts,
+  type Row,
+} from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
-
-export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
-  acpMeta: SessionAcpMeta | null;
-};
 
 /** Retain each selected store until its prepared facts have entered the resident row owner. */
 export async function withSessionRowDatabaseFacts(

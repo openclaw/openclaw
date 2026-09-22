@@ -1,8 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionAcpMeta,
+} from "../config/sessions/types.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -11,10 +15,13 @@ import {
 } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
-import type { PreparedSessionRowDatabaseFacts } from "./session-row-projection-read.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
+
+export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
+  acpMeta: SessionAcpMeta | null;
+};
 
 export type SessionRowStore = {
   target: SessionStoreTarget;
