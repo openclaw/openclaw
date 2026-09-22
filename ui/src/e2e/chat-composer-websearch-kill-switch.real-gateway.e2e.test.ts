@@ -9,8 +9,6 @@ import {
 } from "../../../scripts/lib/local-build-metadata-paths.mts";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.ts";
 import type { SessionToolOverrides } from "../../../src/config/sessions/session-tool-overrides.ts";
-import type { GatewayClient } from "../../../src/gateway/client.ts";
-import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -45,15 +43,25 @@ type Request = {
 };
 
 async function rpc<T>(
-  client: GatewayClient,
+  owner: OpenClawTestInstance,
   method: string,
   params: object,
   evidence: object[],
   stage: string,
 ): Promise<T> {
-  const result = await client.request<T>(method, params);
-  evidence.push({ kind: "session-readback", stage, method, params, result });
-  return result;
+  const result = await owner.cli([
+    "--no-color",
+    "gateway",
+    "call",
+    method,
+    "--params",
+    JSON.stringify(params),
+    "--json",
+  ]);
+  evidence.push({ kind: "session-readback", stage, method, params, ...result });
+  expect(result.code, `${method}: ${result.stderr}`).toBe(0);
+  expect(result.signal).toBeNull();
+  return JSON.parse(result.stdout);
 }
 
 function observeRequests(page: Page) {
@@ -188,7 +196,6 @@ async function verifyServedBundle(page: Page, baseUrl: string) {
 
 for (const globallyEnabled of [false, true]) {
   let instance: OpenClawTestInstance;
-  let client: GatewayClient;
   const suite = createControlUiE2eSuite({
     name: `Web search global ${globallyEnabled} with matching built Gateway and UI`,
     startServerBeforeBrowser: true,
@@ -214,11 +221,6 @@ for (const globallyEnabled of [false, true]) {
         },
       });
       instance = owner;
-      const close = () =>
-        runQaGatewayFixture(
-          () => client?.stopAndWait(),
-          () => owner.cleanup(),
-        );
       try {
         expect((await owner.entrypoint())[0]).toMatch(/^dist\/index\.m?js$/u);
         for (const scenario of scenarios) {
@@ -239,31 +241,14 @@ for (const globallyEnabled of [false, true]) {
           expect(entry?.toolOverrides).toEqual(scenario.overrides);
         }
         await owner.startGateway();
-        client = await acquireGatewayTestClient(
-          {
-            url: owner.url,
-            token: owner.gatewayToken,
-            env: owner.env,
-            deviceIdentity: null,
-            deviceAuthScope: owner.url,
-            sharedStateMode: "read-only",
-            requestTimeoutMs: 10_000,
-            clientName: "cli",
-            mode: "cli",
-            role: "operator",
-            scopes: ["operator.read"],
-          },
-          {
-            timeoutMs: 10_000,
-            timeoutMessage: "Web search readback client did not connect",
-            closeMessage: "Web search readback client closed before readiness",
-          },
-        );
-        return { baseUrl: `http://127.0.0.1:${owner.port}/`, close };
+        return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
       } catch (error) {
-        return await runQaGatewayFixture(async (): Promise<never> => {
-          throw error;
-        }, close);
+        return await runQaGatewayFixture(
+          async (): Promise<never> => {
+            throw error;
+          },
+          () => owner.cleanup(),
+        );
       }
     },
   });
@@ -328,7 +313,7 @@ for (const globallyEnabled of [false, true]) {
         for (const scenario of scenarios) {
           const key = `agent:main:websearch-${scenario.name}`;
           const before = await rpc<{ session: { toolOverrides?: SessionToolOverrides } }>(
-            client,
+            instance,
             "sessions.describe",
             { key, agentId: "main" },
             evidence,
@@ -384,7 +369,7 @@ for (const globallyEnabled of [false, true]) {
                   await expect.poll(() => traffic.succeeded(patch)).toBe(true);
                 }
                 const after = await rpc<{ session: { toolOverrides?: SessionToolOverrides } }>(
-                  client,
+                  instance,
                   "sessions.describe",
                   { key, agentId: "main" },
                   evidence,
@@ -421,7 +406,7 @@ for (const globallyEnabled of [false, true]) {
                 await expect.poll(() => checked(webSearch)).toBe(!initiallyEnabled);
                 await expect.poll(() => webSearch.isDisabled()).toBe(false);
                 const toggled = await rpc<{ session: { toolOverrides?: SessionToolOverrides } }>(
-                  client,
+                  instance,
                   "sessions.describe",
                   { key, agentId: "main" },
                   evidence,
@@ -439,7 +424,7 @@ for (const globallyEnabled of [false, true]) {
                 });
                 await expect.poll(() => checked(webSearch)).toBe(initiallyEnabled);
                 const restored = await rpc<{ session: { toolOverrides?: SessionToolOverrides } }>(
-                  client,
+                  instance,
                   "sessions.describe",
                   { key, agentId: "main" },
                   evidence,
@@ -489,7 +474,6 @@ for (const globallyEnabled of [false, true]) {
             await waitForControlUiGatewayReady(chat);
             const chatMenu = await openMenu(chat);
             await expect.poll(() => checked(chatMenu.webSearch)).toBe(true);
-            await client.stopAndWait();
             await instance.stopGateway();
             await Promise.all([
               waitForControlUiGatewayReconnecting(page),

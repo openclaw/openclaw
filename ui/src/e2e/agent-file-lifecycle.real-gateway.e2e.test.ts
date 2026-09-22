@@ -3,19 +3,16 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { GatewayClient } from "../../../src/gateway/client.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
-import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
@@ -37,28 +34,39 @@ const suite = createControlUiE2eSuite({
 });
 
 let catalogInstance: OpenClawTestInstance;
-let catalogClient: GatewayClient;
 let inventoryModel = "inventory-before";
 const inventoryRequests: string[] = [];
-const refreshInventoryParams = { agentId: "main", view: "all", refresh: true };
+const refreshInventoryArgs = [
+  "gateway",
+  "call",
+  "models.list",
+  "--json",
+  "--params",
+  JSON.stringify({ agentId: "main", view: "all", refresh: true }),
+];
 async function refreshInventory() {
-  let catalog = await catalogClient.request<ModelCatalogResult>(
-    "models.list",
-    refreshInventoryParams,
-  );
+  let result = await catalogInstance.cli(refreshInventoryArgs);
+  expect(result.code, result.stderr).toBe(0);
+  let catalog: ModelCatalogResult = JSON.parse(result.stdout);
   // Refresh can return the previous inventory while discovery continues.
   await expect
     .poll(async () => {
       if (catalog.pendingProviders?.length) {
-        catalog = await catalogClient.request<ModelCatalogResult>("models.list", {
-          agentId: "main",
-          view: "all",
-        });
+        result = await catalogInstance.cli([
+          "gateway",
+          "call",
+          "models.list",
+          "--json",
+          "--params",
+          JSON.stringify({ agentId: "main", view: "all" }),
+        ]);
+        expect(result.code, result.stderr).toBe(0);
+        catalog = JSON.parse(result.stdout);
       }
       return catalog.pendingProviders ?? [];
     })
     .toEqual([]);
-  return catalog;
+  return result;
 }
 const catalogModels = (id: string) => [
   { id: "anchor", name: "Anchor" },
@@ -112,39 +120,15 @@ const catalogSuite = createControlUiE2eSuite({
       },
     });
     const close = async () => {
-      await runQaGatewayFixture(
-        () => catalogClient?.stopAndWait(),
-        () =>
-          Promise.all([
-            catalogInstance.cleanup(),
-            new Promise<void>((resolve, reject) => {
-              inventory.close((error) => (error ? reject(error) : resolve()));
-            }),
-          ]),
-      );
+      await Promise.all([
+        catalogInstance.cleanup(),
+        new Promise<void>((resolve, reject) => {
+          inventory.close((error) => (error ? reject(error) : resolve()));
+        }),
+      ]);
     };
     try {
       await catalogInstance.startGateway();
-      catalogClient = await acquireGatewayTestClient(
-        {
-          url: catalogInstance.url,
-          token: catalogInstance.gatewayToken,
-          env: catalogInstance.env,
-          deviceIdentity: null,
-          deviceAuthScope: catalogInstance.url,
-          sharedStateMode: "read-only",
-          requestTimeoutMs: 10_000,
-          clientName: "cli",
-          mode: "cli",
-          role: "operator",
-          scopes: ["operator.read"],
-        },
-        {
-          timeoutMs: 10_000,
-          timeoutMessage: "Agent catalog readback client did not connect",
-          closeMessage: "Agent catalog readback client closed before readiness",
-        },
-      );
       return {
         baseUrl: `http://127.0.0.1:${catalogInstance.port}/`,
         close,
@@ -195,9 +179,8 @@ catalogSuite.define(() => {
     };
     try {
       const initialInventory = await refreshInventory();
-      expect(initialInventory.models).toContainEqual(
-        expect.objectContaining({ provider: "ollama", id: "inventory-before" }),
-      );
+      expect(initialInventory.code, initialInventory.stderr).toBe(0);
+      expect(initialInventory.stdout).toContain("inventory-before");
       await catalogSuite.withPage(
         {
           locale: "en-US",
@@ -308,14 +291,9 @@ catalogSuite.define(() => {
 
           inventoryModel = "inventory-after";
           const refreshed = await refreshInventory();
-          commands.push({
-            method: "models.list",
-            params: refreshInventoryParams,
-            publishedInventory: refreshed,
-          });
-          expect(refreshed.models).toContainEqual(
-            expect.objectContaining({ provider: "ollama", id: "inventory-after" }),
-          );
+          commands.push({ args: refreshInventoryArgs, publishedInventory: refreshed });
+          expect(refreshed.code, refreshed.stderr).toBe(0);
+          expect(refreshed.stdout).toContain("inventory-after");
           await expect
             .poll(() =>
               picker.locator('[role="option"][data-value="ollama/inventory-after"]').count(),
