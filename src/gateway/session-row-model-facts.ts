@@ -21,6 +21,7 @@ export function readSessionRowModelFacts(params: {
   key: string;
   agentId: string;
   entry?: SessionEntry;
+  preparedAcpMeta?: SessionEntry["acp"] | null;
   source: GatewaySessionModelSource;
   rowContext: SessionListRowContext;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
@@ -58,6 +59,7 @@ export function readSessionRowModelFacts(params: {
     model: model ?? DEFAULT_MODEL,
     sessionKey: resolveStoredSessionKeyForAgentStore({ cfg, agentId, sessionKey: key }),
     entry: params.entry,
+    preparedAcpMeta: params.preparedAcpMeta,
     modelCatalog: rowModelCatalog ?? (lightweight ? [] : undefined),
     modelCatalogRouteVariants: preparedCatalog?.routeVariants,
     metadataSnapshot,

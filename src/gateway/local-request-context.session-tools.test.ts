@@ -24,6 +24,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -85,9 +86,16 @@ function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
         },
       );
     }
-    await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
-      run(cfg),
-    );
+    const resources = new LegacyPluginSdkResourceHost();
+    try {
+      await resources.run(() =>
+        withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
+          run(cfg),
+        ),
+      );
+    } finally {
+      await resources.close();
+    }
   }));
 }
 

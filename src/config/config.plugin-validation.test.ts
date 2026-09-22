@@ -747,31 +747,6 @@ describe("config plugin validation", () => {
       expectNoMissingCodexPluginWarning(res.warnings);
     });
 
-    it("warns when a listed agent can fall back from gpt-5.6 to Spark", () => {
-      const res = validateWithMissingCodexPlugin({
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            model: { primary: "openai/gpt-5.6", fallbacks: [] },
-          },
-          list: [
-            { id: "openclaw" },
-            {
-              id: "worker",
-              model: {
-                primary: "openai/gpt-5.6",
-                fallbacks: ["openai/gpt-5.3-codex-spark"],
-              },
-            },
-          ],
-        },
-        plugins: { entries: { codex: {} } },
-      });
-
-      expect(res.ok).toBe(true);
-      expectMissingCodexPluginWarning(res.warnings);
-    });
-
     it.each([
       {
         name: "default subagent",

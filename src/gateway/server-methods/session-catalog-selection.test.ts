@@ -16,8 +16,8 @@ import {
 } from "./sessions-read-cache.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  disposeSessionReadContexts();
+afterEach(async () => {
+  await disposeSessionReadContexts();
   resetConfigRuntimeState();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();

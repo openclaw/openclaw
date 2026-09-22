@@ -48,6 +48,7 @@ it("refreshes placement facts invalidated after the read settles but before cons
       consumed.push(value);
       return value;
     },
+    () => undefined,
   );
   const settled = Promise.allSettled([reading]);
   try {
@@ -107,12 +108,14 @@ it("settles queued placement preparation on disposal without dispatching it", as
     const first = owner.withPrepared(
       () => ["first"],
       () => consume("first"),
+      () => undefined,
     );
     active.push(Promise.allSettled([first]));
     await withTestTimeout(firstEntered.promise, 2_000, "First placement read did not enter");
     const second = owner.withPrepared(
       () => ["second"],
       () => consume("second"),
+      () => undefined,
     );
     active.push(Promise.allSettled([second]));
     await withTestTimeout(secondEntered.promise, 2_000, "Second placement read did not enter");
@@ -125,6 +128,7 @@ it("settles queued placement preparation on disposal without dispatching it", as
           return [id];
         },
         () => consume(id),
+        () => undefined,
       ),
     );
     const queuedOutcome = Promise.allSettled(queued);
@@ -191,6 +195,7 @@ it("keeps resident preparation ahead of later exact demand in the accepted FIFO"
     const result = owner.withPrepared(
       () => [id],
       () => owner.getProjectionFacts(id)?.workspaceResultReconciling,
+      () => undefined,
     );
     accepted.push(Promise.allSettled([result]));
     return result;

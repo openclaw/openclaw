@@ -41,6 +41,7 @@ let cpuProbeFailure: Error | undefined;
 const threadCpuProbe = vi.fn<(previous?: NodeJS.CpuUsage) => NodeJS.CpuUsage>();
 const threadCpuFields = ["prepareThreadCpuMs", "rowThreadCpuMs", "responseThreadCpuMs"];
 let records: Array<{ trace: DiagnosticTraceContext | undefined; fields: Record<string, unknown> }>;
+let preparationCpuByTrace: Map<string | undefined, number>;
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
   previousDiagnostics = areDiagnosticsEnabledForProcess();
@@ -56,6 +57,7 @@ beforeEach(() => {
   });
   vi.spyOn(process, "threadCpuUsage").mockImplementation(threadCpuProbe);
   records = [];
+  preparationCpuByTrace = new Map();
   vi.spyOn(sessionLog, "isEnabled").mockReturnValue(true);
   vi.spyOn(sessionLog, "warn").mockImplementation((message, fields) => {
     if (message === "slow session list") {
@@ -74,6 +76,12 @@ function expectNoCpuFields(record: unknown) {
   }
 }
 
+function expectedPreparationCpu(trace?: DiagnosticTraceContext) {
+  const charged = preparationCpuByTrace.get(trace?.traceId);
+  expect(charged).toBeGreaterThan(0);
+  return charged;
+}
+
 function controlProjectionClock(afterRow?: () => void) {
   vi.spyOn(performance, "now").mockImplementation(() => clock);
   const prepare = sessionPresentation.prepareProjectedSessionPresentation;
@@ -84,6 +92,9 @@ function controlProjectionClock(afterRow?: () => void) {
       } finally {
         cpu.user += 1_250;
         cpu.system += 250;
+        // Readiness can repeat selection; each trace must account for all of its injected work.
+        const trace = getActiveDiagnosticTraceContext()?.traceId;
+        preparationCpuByTrace.set(trace, (preparationCpuByTrace.get(trace) ?? 0) + 1.5);
       }
     },
   );
@@ -165,7 +176,7 @@ test.each(["channel-only", "slow-warning"])("attributes %s operations", async (m
           handlerElapsedMs: 20 + waitMs,
           prepareSyncMs: 0,
           rowSyncMs: 20,
-          prepareThreadCpuMs: 1.5,
+          prepareThreadCpuMs: expectedPreparationCpu(index === 0 ? trace : undefined),
           rowThreadCpuMs: 1.375,
           responseThreadCpuMs: index === 0 ? 0 : 1.125,
           yieldWaitMs: waitMs,
@@ -371,7 +382,12 @@ test("attributes concurrent presentation and readiness waits to each request tra
     const projection = getSessionRowProjection(context)!;
     const ensure = projection.ensureMaterialized.bind(projection);
     const release = createDeferredCore();
+    const waiting = createDeferredCore();
+    let waitingCount = 0;
     const readiness = vi.spyOn(projection, "ensureMaterialized").mockImplementation(async () => {
+      if (++waitingCount === 2) {
+        waiting.resolve();
+      }
       await release.promise;
       await ensure();
       queueMicrotask(() => {
@@ -383,41 +399,50 @@ test("attributes concurrent presentation and readiness waits to each request tra
     const pending = traces.map((trace) =>
       runWithDiagnosticTraceContext(trace, () => listSessions({ client, context, request })),
     );
-    await vi.waitFor(() => expect(readiness).toHaveBeenCalledTimes(2));
-    clock += 1_500;
-    cpu.user += 900_000;
-    cpu.system += 100_000;
-    release.resolve();
-    const results = await Promise.all(pending);
-    expect(results[0]?.sessions).toEqual(results[1]?.sessions);
-    expect(presentation).toHaveBeenCalledTimes(2);
-    expect(records).toHaveLength(2);
-    for (const trace of traces) {
-      const record = records.find((value) => value.trace?.traceId === trace.traceId);
-      expect(record).toMatchObject({
-        trace,
-        fields: {
-          pid: process.pid,
-          threadId,
-          isMainThread,
-          rowSyncMs: 20,
-          prepareSyncMs: 0,
-          prepareThreadCpuMs: 1.5,
-          rowThreadCpuMs: 1.375,
-          responseThreadCpuMs: 0,
-          yieldCount: 1,
-          selectedRowCount: 1,
-          materializedRowCount: 0,
-          reusedRowCount: 1,
-        },
-      });
-      expect(record?.fields.yieldWaitMs).toBeGreaterThanOrEqual(1_500);
-      expect(record?.fields.phaseDurationsMs).toHaveProperty(
-        "materialize",
-        record?.fields.yieldWaitMs,
-      );
-      expect(record?.fields.phaseDurationsMs).not.toHaveProperty("modelCatalog");
-      expect(record?.fields).not.toHaveProperty("workTraceId");
+    for (const pendingRequest of pending) {
+      void pendingRequest.catch(waiting.reject);
+    }
+    try {
+      await waiting.promise;
+      expect(readiness).toHaveBeenCalledTimes(2);
+      clock += 1_500;
+      cpu.user += 900_000;
+      cpu.system += 100_000;
+      release.resolve();
+      const results = await Promise.all(pending);
+      expect(results[0]?.sessions).toEqual(results[1]?.sessions);
+      expect(presentation).toHaveBeenCalledTimes(2);
+      expect(records).toHaveLength(2);
+      for (const trace of traces) {
+        const record = records.find((value) => value.trace?.traceId === trace.traceId);
+        expect(record).toMatchObject({
+          trace,
+          fields: {
+            pid: process.pid,
+            threadId,
+            isMainThread,
+            rowSyncMs: 20,
+            prepareSyncMs: 0,
+            prepareThreadCpuMs: expectedPreparationCpu(trace),
+            rowThreadCpuMs: 1.375,
+            responseThreadCpuMs: 0,
+            yieldCount: 1,
+            selectedRowCount: 1,
+            materializedRowCount: 0,
+            reusedRowCount: 1,
+          },
+        });
+        expect(record?.fields.yieldWaitMs).toBeGreaterThanOrEqual(1_500);
+        expect(record?.fields.phaseDurationsMs).toHaveProperty(
+          "materialize",
+          record?.fields.yieldWaitMs,
+        );
+        expect(record?.fields.phaseDurationsMs).not.toHaveProperty("modelCatalog");
+        expect(record?.fields).not.toHaveProperty("workTraceId");
+      }
+    } finally {
+      release.resolve();
+      await Promise.allSettled(pending);
     }
   });
 });
@@ -467,7 +492,7 @@ test("reports fresh visibility after a readiness yield without charging the wait
       reusedRowCount: 1,
       prepareSyncMs: 0,
       rowSyncMs: 20,
-      prepareThreadCpuMs: 1.5,
+      prepareThreadCpuMs: expectedPreparationCpu(),
       rowThreadCpuMs: 1.375,
       yieldWaitMs: 2_000,
       yieldCount: 1,

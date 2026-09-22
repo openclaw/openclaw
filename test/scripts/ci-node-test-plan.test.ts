@@ -5598,13 +5598,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       controlPlaneShards.map((shard) => ({
         checkName: `checks-node-${shard.shardName}`,
         configs: ["test/vitest/vitest.gateway-server.config.ts"],
-        ...(shard.shardName === "agentic-control-plane-runtime-config"
-          ? { pretestBuildMode: "runtime" }
-          : {}),
         ...(shard.shardName === "agentic-control-plane-startup-health-runtime"
           ? { env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000" } }
           : {}),
-        ...(shard.includePatterns?.includes("src/gateway/server-sidecar-retention.test.ts")
+        ...(shard.includePatterns?.includes("src/gateway/server.config-patch.test.ts") ||
+        shard.includePatterns?.includes("src/gateway/server-sidecar-retention.test.ts") ||
+        shard.includePatterns?.includes("src/gateway/server.acp-native-model.product.test.ts")
           ? { pretestBuildMode: "runtime" }
           : {}),
         includePatterns: shard.includePatterns,

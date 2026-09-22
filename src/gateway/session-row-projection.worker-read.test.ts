@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
@@ -457,6 +458,61 @@ it.each([
         }
       }
     } finally {
+      releaseForeground();
+    }
+  });
+});
+
+it("refreshes prepared ACP metadata on publication and fences replacement lifecycles", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:acp:worker-row";
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const target = { agentId: "main", sessionKey: key };
+    replaceSessionEntrySync(target, {
+      sessionId: "worker-row",
+      lifecycleRevision: "first",
+      updatedAt: 1,
+    });
+    const releaseForeground = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg });
+    try {
+      await projection.ensureMaterialized();
+      expect(projection.snapshot({ agentId: "main", key }).row?.runtimeSelectionLocked).toBe(false);
+      for (const backend of ["acpx", "replacement-acp-backend"]) {
+        // Released free-runtime aliases are case-insensitive and read-only compatible.
+        writeAcpSessionMetaForMigration({
+          sessionKey: key.toUpperCase(),
+          lifecycleRevision: "first",
+          meta: {
+            backend,
+            agent: "main",
+            runtimeSessionName: "worker-row",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 1,
+          },
+        });
+        const reads = observeSqliteReadSql(StatementSync.prototype);
+        try {
+          await projection.ensureMaterialized();
+          expect(projection.snapshot({ agentId: "main", key }).row).toMatchObject({
+            runtimeSelectionLocked: true,
+            agentRuntime: { id: backend, source: "session-key" },
+          });
+          expect(reads.queries.filter((sql) => sql.includes("acp_sessions"))).toEqual([]);
+        } finally {
+          reads.restore();
+        }
+      }
+      replaceSessionEntrySync(target, {
+        sessionId: "worker-row",
+        lifecycleRevision: "replacement",
+        updatedAt: 2,
+      });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot({ agentId: "main", key }).row?.runtimeSelectionLocked).toBe(false);
+    } finally {
+      projection.dispose();
       releaseForeground();
     }
   });

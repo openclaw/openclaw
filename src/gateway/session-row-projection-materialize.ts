@@ -7,7 +7,6 @@ import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sq
 import { resolveSessionKeyBySessionId } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { projectSqliteSessionParticipants } from "../config/sessions/session-accessor.sqlite-participant-projection.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -19,6 +18,7 @@ import {
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
+import type { PreparedSessionRowDatabaseFacts } from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -48,9 +48,10 @@ export function createSessionRowMaterializer(owner: {
     row: records.Row,
     agentIds: Set<string>,
     read: typeof readResidentSessionRow,
-    facts?: SessionRowDatabaseFacts,
+    facts?: PreparedSessionRowDatabaseFacts,
   ) => boolean;
   forgetBackfill: (id: string) => void;
+  retainArchived: (row: records.MaterializedRow) => void;
 }) {
   function refresh(ids: readonly string[], accepted = false) {
     if (!owner.isActive()) {
@@ -73,7 +74,7 @@ export function createSessionRowMaterializer(owner: {
         }
         const row =
           current && (accepted ? current : owner.acquireEntry(current, owner.readEntry(current)));
-        if (row && isColdArchivedSessionRow(row)) {
+        if (row && isColdArchivedSessionRow(row) && !accepted) {
           owner.dirty.delete(id);
           owner.forgetBackfill(id);
           continue;
@@ -85,6 +86,11 @@ export function createSessionRowMaterializer(owner: {
         ) {
           row.pendingDatabaseFacts = undefined;
           owner.dirty.delete(id);
+          // A bulk slice may finish an exact read's accepted archive row. Keep its
+          // residency under the archive owner's pins and bounded cache either way.
+          if (accepted && records.ready(row) && row.entry.archivedAt !== undefined) {
+            owner.retainArchived(row);
+          }
         }
         if (owner.revision() !== revision) {
           break;
@@ -94,7 +100,7 @@ export function createSessionRowMaterializer(owner: {
   }
   return {
     refresh,
-    refreshPending(ids: readonly string[]) {
+    refreshPending(this: void, ids: readonly string[]) {
       const pending = ids.filter((id) => owner.rows.get(id)?.pendingDatabaseFacts);
       if (pending.length === 0) {
         return false;
@@ -102,7 +108,11 @@ export function createSessionRowMaterializer(owner: {
       refresh(pending, true);
       return true;
     },
-    accept(ids: readonly string[], facts: ReadonlyMap<string, SessionRowDatabaseFacts>) {
+    accept(
+      ids: readonly string[],
+      facts: ReadonlyMap<string, PreparedSessionRowDatabaseFacts>,
+      materializeArchived = false,
+    ) {
       if (!owner.isActive()) {
         return;
       }
@@ -121,7 +131,7 @@ export function createSessionRowMaterializer(owner: {
           if (owner.revision() !== revision) {
             break;
           }
-          if (row && isColdArchivedSessionRow(row)) {
+          if (row && isColdArchivedSessionRow(row) && !materializeArchived) {
             owner.dirty.delete(id);
             owner.forgetBackfill(id);
           } else if (row) {
@@ -147,7 +157,7 @@ export function readResidentSessionRow(
     placementFactsReader?: Parameters<typeof readSessionRowFacts>[0]["placementFactsReader"];
     links: SessionChildLink[];
     readSourceEntry: (key: string) => records.Row["storedEntry"];
-    databaseFacts?: SessionRowDatabaseFacts;
+    databaseFacts?: PreparedSessionRowDatabaseFacts;
   },
   activitySummaryEnabledByAgent?: Map<string, boolean>,
 ) {
@@ -165,6 +175,7 @@ export function readResidentSessionRow(
   const { inputs, presentation } = readSessionRowInputs({
     ...row,
     cfg,
+    preparedAcpMeta: params.databaseFacts?.acpMeta,
     configuredAgentIds: params.configuredAgentIds,
     store: source?.store ?? {},
     storePath: row.storeTarget.storePath,
