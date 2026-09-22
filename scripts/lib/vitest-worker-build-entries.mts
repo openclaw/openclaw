@@ -2,9 +2,16 @@ import { codexCatalogPageWorkerEntrypoint } from "../../extensions/codex/catalog
 import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
 import { memoryPublicationFaultEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts";
+import { vectorKnnParentEntrypoint } from "../../extensions/memory-core/src/memory/manager-search-knn-runtime.test-support.ts";
+import { busServerShutdownEntrypoint } from "../../extensions/qa-lab/src/bus-server-runtime.test-support.ts";
 import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts";
 import { teamReportsSqliteBackendEntrypoint } from "../../extensions/team-reports/src/sqlite-backend-entrypoint.test-support.ts";
 import { workboardSqliteBackendEntrypoint } from "../../extensions/workboard/src/sqlite-backend-entrypoint.test-support.ts";
+import { agentCoreRetentionEntrypoints } from "../../packages/agent-core/src/retention-runtime.test-support.ts";
+import { cleanForGeminiEntrypoint } from "../../packages/ai/src/providers/clean-for-gemini-runtime.test-support.ts";
+import { eventStreamRetentionEntrypoint } from "../../packages/llm-core/src/retention-runtime.test-support.ts";
+import { eventHubRetentionEntrypoint } from "../../packages/sdk/src/retention-runtime.test-support.ts";
+import { tableStackEntrypoint } from "../../packages/terminal-core/src/table-runtime.test-support.ts";
 import { authProfileScopeCwdEntrypoint } from "../../src/agents/auth-profiles/store-scope-cwd-runtime.test-support.ts";
 import { processPollLivenessEntrypoint } from "../../src/agents/bash-tools.process-liveness-runtime.test-support.ts";
 import {
@@ -12,8 +19,10 @@ import {
   codeModeRetentionEntrypoint,
 } from "../../src/agents/code-mode-retention-entrypoint.test-support.ts";
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
+import { agentProcessTestEntrypoints } from "../../src/agents/process-runtime.test-support.ts";
 import { bashOutputSpillEntrypoints } from "../../src/agents/sessions/bash-output-spill-entrypoints.test-support.ts";
 import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
+import { clawProjectBuildEntrypoint } from "../../src/claws/project-runtime.test-support.ts";
 import {
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
@@ -23,24 +32,44 @@ import {
 } from "../../src/cli/cli-entrypoint.test-support.ts";
 import { updateExecutorNativeEntrypoints } from "../../src/cli/update-cli/update-command-executor-native-runtime.test-support.ts";
 import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config-runtime.test-support.ts";
+import { sessionNativeProcessEntrypoints } from "../../src/config/sessions/native-process-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
+import { serviceProcessEnvEntrypoints } from "../../src/daemon/service-process-env-runtime.test-support.ts";
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
+import { workspaceProcessTestEntrypoints } from "../../src/gateway/worker-environments/workspace-process-runtime.test-support.ts";
+import { nativeBoundaryTestEntrypoints } from "../../src/infra/native-boundary-runtime.test-support.ts";
+import { nativeProcessTestEntrypoints } from "../../src/infra/native-process-runtime.test-support.ts";
+import { externalProxyTestEntrypoints } from "../../src/infra/net/proxy/external-proxy-runtime.test-support.ts";
+import { deliveryQueueProcessEntrypoints } from "../../src/infra/outbound/delivery-queue-process-runtime.test-support.ts";
+import { sqliteMaintenanceEntrypoints } from "../../src/infra/sqlite-maintenance-runtime.test-support.ts";
 import { sqliteReadOnlyCompileCacheParentEntrypoint } from "../../src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts";
 import { sqliteSnapshotStagingEntrypoints } from "../../src/infra/sqlite-snapshot-staging-runtime.test-support.ts";
+import { sqliteWorkerStoreCompileCacheParentEntrypoint } from "../../src/infra/sqlite-worker-store.compile-cache-runtime.test-support.ts";
+import { storageProcessTestEntrypoints } from "../../src/infra/storage-process-runtime.test-support.ts";
 import {
   triageTestRuntimeEntrypoints,
   triageMaintenanceRuntimeEntrypoints,
 } from "../../src/infra/triage-runtime.test-support.ts";
+import { workerTaskPoolEntrypoints } from "../../src/infra/worker-task-pool-runtime.test-support.ts";
+import { diagnosticProfileEntrypoints } from "../../src/logging/diagnostic-profile-runtime.test-support.ts";
+import { mediaNativeProcessEntrypoints } from "../../src/media/native-process-runtime.test-support.ts";
 import { nodeHostConfigRuntimeEntrypoint } from "../../src/node-host/config-runtime.test-support.ts";
 import {
   mcpProviderCatalogEntrypoint,
   mcpPluginToolsServeEntrypoint,
   publishedSdkBridgeEntrypoints,
 } from "../../src/plugins/loader-sdk-bridge-artifacts.test-support.ts";
+import { pluginProcessRuntimeEntrypoints } from "../../src/plugins/process-runtime.test-support.ts";
+import { pluginRetentionEntrypoints } from "../../src/plugins/retention-runtime.test-support.ts";
 import { pluginRuntimeRetentionEntrypoint } from "../../src/plugins/runtime-retention-entrypoint.test-support.ts";
+import { processProbeEntrypoints } from "../../src/process/process-probes-runtime.test-support.ts";
+import { execOutputRetentionEntrypoint } from "../../src/process/retention-runtime.test-support.ts";
+import { proxyCaptureNativeProcessEntrypoints } from "../../src/proxy-capture/native-process-runtime.test-support.ts";
+import { workerBundleArchiveEntrypoint } from "../../src/shared/worker-bundle-archive-runtime.test-support.ts";
 import { persistenceRuntimeEntrypoint } from "../../src/skills/library/persistence-runtime.test-support.ts";
 import { gitBackupCommandRuntimeEntrypoint } from "../../src/snapshot/git-backup-command-runtime.test-support.ts";
+import { stateNativeProcessEntrypoints } from "../../src/state/native-process-runtime.test-support.ts";
 import { agentDatabaseModuleIdentityEntrypoints } from "../../src/state/openclaw-agent-db-module-identity-runtime.test-support.ts";
 import { agentWorkerStoreFixtureEntrypoint } from "../../src/state/openclaw-agent-worker-store.runtime.test-support.ts";
 import { databaseVerifyHostRuntimeEntrypoint } from "../../src/state/openclaw-database-verify-runtime.test-support.ts";
@@ -50,10 +79,15 @@ import {
   stateLeaseRetentionRuntimeEntrypoint,
 } from "../../src/state/openclaw-state-lease-runtime.test-support.ts";
 import { groqSetupSdkEntrypoints } from "../../src/system-agent/setup-inference-groq-sdk.test-support.ts";
+import { tempDirEntrypoint } from "../../src/test-helpers/temp-dir-runtime.test-support.ts";
 import { transcriptLibraryTimezoneEntrypoint } from "../../src/transcripts/library-timezone-runtime.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
+import { clackPrompterProcessEntrypoint } from "../../src/wizard/clack-prompter-process-runtime.test-support.ts";
 import { workerBackgroundExecEntrypoints } from "../../src/worker/worker-runtime-background-exec-entrypoints.test-support.ts";
+import { qaOtelSmokeEntrypoint } from "../../test/e2e/qa-lab/runtime/qa-otel-smoke-entrypoint.test-support.ts";
 import { channelIngressGatewayRestartEntrypoint } from "../../test/fixtures/channel-ingress-gateway-restart-entrypoint.ts";
+import { toolingNativeRuntimeEntrypoints } from "../../test/scripts/tooling-native-runtime.test-support.ts";
+import { toolingProbeRuntimeEntrypoints } from "../../test/scripts/tooling-probe-runtime.test-support.mts";
 import { benchSessionHistoryEntrypoint } from "../bench-session-history-runtime.test-support.ts";
 import { runtimeProcessBuildEntrypoints } from "./runtime-process-build-entries.mts";
 import { createRuntimeProcessBuildEntries } from "./runtime-process-core-build-entries.mts";
@@ -61,6 +95,72 @@ import { nativeSchtasksIntegrationEnabled } from "./vitest-worker-declarations.m
 
 // These fixture hooks require physical module boundaries and complete namespaces.
 export const preservedModuleBuildSources = [
+  "packages/gateway-client/src/websocket-data.ts",
+  "scripts/e2e/parallels/npm-update-smoke.ts",
+  "scripts/e2e/parallels/host-command.ts",
+  "scripts/e2e/parallels/macos-smoke.ts",
+  "scripts/e2e/parallels/update-job-timeout.ts",
+  "scripts/anthropic-prompt-probe.ts",
+  "scripts/release-verify-beta.ts",
+  "scripts/release-verify-publish.ts",
+  "scripts/write-cli-startup-metadata.ts",
+  "scripts/run-with-env.mts",
+  "scripts/plugin-sdk-api-diff.mts",
+  "scripts/test-projects.mts",
+  "scripts/lib/vitest-build-prerequisites.mts",
+  "scripts/check-memory-fd-repro.mts",
+  "scripts/sparkle-build.ts",
+  "scripts/crabbox-source-capsule.mts",
+  "scripts/crabbox-staging.mts",
+  "scripts/crabbox-staging-claims.mts",
+  "scripts/crabbox-staging-artifacts.mts",
+  "scripts/check-deadcode-exports.mts",
+  "scripts/check-deadcode-unused-files.mts",
+  "scripts/check-release-metadata-only.mts",
+  "scripts/check-gateway-watch-regression.mts",
+  "scripts/check-built-plugin-control-plane-modules.mts",
+  "scripts/runtime-postbuild.mts",
+  "scripts/run-node.mts",
+  "scripts/docker-e2e.mts",
+  "scripts/docker-e2e-timings.mts",
+  "scripts/openclaw-prepack.ts",
+  "scripts/openclaw-npm-postpublish-verify.ts",
+  "scripts/bench-cli-startup.ts",
+  "src/entry.respawn.ts",
+  "test/helpers/process-wait.ts",
+  "src/gateway/server.ts",
+  "src/gateway/server-start.ts",
+  "src/process/exec.ts",
+  "src/process/spawn-broker/context.ts",
+  "src/logging/subsystem.ts",
+  "extensions/matrix/src/matrix/config-update.ts",
+  "extensions/matrix/src/matrix/account-config.ts",
+  "src/secrets/plugin-setup-plan.ts",
+  "src/secrets/resolve.ts",
+  "src/commands/sessions-cleanup.large-labels.test-support.ts",
+  "src/commands/sessions-cleanup.ts",
+  "src/commands/session-store-targets.ts",
+  "src/config/sessions.ts",
+  "src/gateway/call.ts",
+  "src/config/sessions/session-sqlite-target.ts",
+  "src/commands/sessions-display-model.ts",
+  "scripts/build-all.mts",
+  "scripts/ci-refit-test-timings.mts",
+  "scripts/test-group-report.mts",
+  "src/agents/mcp-ui-resource.ts",
+  "src/agents/agent-bundle-mcp-runtime.ts",
+  "src/agents/agent-bundle-mcp-manager.ts",
+  "src/agents/agent-bundle-mcp-manager-api.ts",
+  "src/agents/mcp-auth-profile.integration.test-support.ts",
+  "src/agents/mcp-auth-profile.ts",
+  "src/agents/mcp-auth-profile.runtime.ts",
+  "src/agents/auth-profiles/oauth.ts",
+  "src/agents/auth-profiles/store.ts",
+  "src/worker/worker.runtime.ts",
+  "src/worker/launch-descriptor.ts",
+  "packages/gateway-protocol/src/schema/worker-admission.ts",
+  "src/worker/embedded-agent.runtime.ts",
+  "src/worker/inference-stream.runtime.ts",
   "src/cli/mcp-cli.ts",
   "src/agents/agent-bundle-mcp-materialize.ts",
   "src/plugins/tool-metadata.ts",
@@ -101,6 +201,9 @@ export const preservedModuleBuildSources = [
   "src/cli/update-cli/update-command-service-command.ts",
 ];
 
+// Source-relative script readers retain their exact input bytes in the prepared layout.
+export const preservedModuleBuildAssets = [".github/workflows/plugin-npm-release.yml"];
+
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
   "legacy-config-binding-repair.runtime":
@@ -108,12 +211,47 @@ export const vitestWorkerBuildEntries = {
   ...createRuntimeProcessBuildEntries([
     ...runtimeProcessBuildEntrypoints,
     benchSessionHistoryEntrypoint,
+    ...Object.values(diagnosticProfileEntrypoints),
+    ...Object.values(sqliteMaintenanceEntrypoints),
+    ...Object.values(processProbeEntrypoints),
+    busServerShutdownEntrypoint,
+    vectorKnnParentEntrypoint,
+    qaOtelSmokeEntrypoint,
+    ...Object.values(nativeBoundaryTestEntrypoints),
+    ...Object.values(sessionNativeProcessEntrypoints),
+    ...Object.values(mediaNativeProcessEntrypoints),
+    ...Object.values(proxyCaptureNativeProcessEntrypoints),
+    ...Object.values(serviceProcessEnvEntrypoints),
+    workerBundleArchiveEntrypoint,
+    clawProjectBuildEntrypoint,
+    tempDirEntrypoint,
+    ...Object.values(deliveryQueueProcessEntrypoints),
+    ...Object.values(externalProxyTestEntrypoints),
+    ...Object.values(workspaceProcessTestEntrypoints),
+    clackPrompterProcessEntrypoint,
+    ...Object.values(toolingNativeRuntimeEntrypoints),
+    toolingProbeRuntimeEntrypoints.buildArtifactCache,
+    toolingProbeRuntimeEntrypoints.buildIdentity,
     ...Object.values(discordAudioTestEntrypoints),
     codexCatalogPageWorkerEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
     sqliteReadOnlyCompileCacheParentEntrypoint,
     ...Object.values(sqliteSnapshotStagingEntrypoints),
+    sqliteWorkerStoreCompileCacheParentEntrypoint,
+    ...Object.values(nativeProcessTestEntrypoints),
+    ...Object.values(storageProcessTestEntrypoints),
+    ...Object.values(workerTaskPoolEntrypoints),
+    ...Object.values(stateNativeProcessEntrypoints),
+    ...Object.values(agentProcessTestEntrypoints),
+    ...Object.values(pluginProcessRuntimeEntrypoints),
+    ...Object.values(pluginRetentionEntrypoints),
+    execOutputRetentionEntrypoint,
+    eventHubRetentionEntrypoint,
+    eventStreamRetentionEntrypoint,
+    ...Object.values(agentCoreRetentionEntrypoints),
+    cleanForGeminiEntrypoint,
+    tableStackEntrypoint,
     ...Object.values(triageTestRuntimeEntrypoints),
     ...Object.values(triageMaintenanceRuntimeEntrypoints),
     authProfileScopeCwdEntrypoint,

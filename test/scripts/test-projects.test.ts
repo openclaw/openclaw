@@ -14,6 +14,7 @@ import {
 import { resolveDefaultVitestNoOutputTimeoutMs } from "../../scripts/lib/vitest-process-env.mts";
 import { resolveVitestRuntimeCliSelections } from "../../scripts/lib/vitest-runtime-selection.mts";
 import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
   applyDefaultVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
@@ -37,6 +38,10 @@ import {
   withRetryNoOutputTimeout,
   writeVitestIncludeFile,
 } from "../../scripts/test-projects.test-support.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
@@ -3206,10 +3211,15 @@ describe("scripts/test-projects changed-target routing", () => {
       withTinyFileTree({}, (tempDir) => {
         const result = spawnSync(
           process.execPath,
-          ["--import", "tsx", "scripts/test-projects.mts", helpFlag],
+          [
+            ...resolveRuntimeWorkerArgv(
+              resolveRuntimeWorkerUrl(scriptModuleEntrypoints.testProjects),
+            ),
+            helpFlag,
+          ],
           {
             encoding: "utf8",
-            // Own the child's tsx cache so unrelated host transforms cannot delay help.
+            // Keep the native help probe inside its invocation-owned temporary directory.
             env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
             timeout: 5_000,
           },

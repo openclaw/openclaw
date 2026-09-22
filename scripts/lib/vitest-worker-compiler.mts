@@ -18,6 +18,7 @@ import {
   type VitestWorkerManifest,
 } from "./vitest-worker-artifacts.mts";
 import {
+  preservedModuleBuildAssets,
   preservedModuleBuildSources,
   vitestWorkerBuildEntries,
 } from "./vitest-worker-build-entries.mts";
@@ -272,7 +273,9 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             if (!importer || !id.startsWith(".")) {
               return null;
             }
-            const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
+            const source = path
+              .resolve(path.dirname(importer), id)
+              .replace(/\.([cm]?)js$/u, ".$1ts");
             if (!fixtureBoundaries.has(source)) {
               return null;
             }
@@ -282,7 +285,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
                 path.join(
                   outDir,
                   legacyOutputPrefix,
-                  path.relative(root, source).replace(/\.ts$/u, ".js"),
+                  path.relative(root, source).replace(/\.[cm]?ts$/u, ".js"),
                 ),
               ).href,
               external: "absolute",
@@ -307,17 +310,23 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     await compilePreservedModules();
   }
   for (const source of preservedModuleBuildSources) {
-    fs.accessSync(path.join(outDir, legacyOutputPrefix, source.replace(/\.ts$/u, ".js")));
+    fs.accessSync(path.join(outDir, legacyOutputPrefix, source.replace(/\.[cm]?ts$/u, ".js")));
   }
   for (const name of Object.keys(entry)) {
     fs.accessSync(path.join(directory, "dist", `${name}.js`));
   }
-  for (const asset of vitestWorkerRuntimeAssets) {
+  for (const [asset, relativeDestination] of [
+    ...vitestWorkerRuntimeAssets.map((sourceAsset) => [sourceAsset, sourceAsset] as const),
+    ...preservedModuleBuildAssets.map(
+      (sourceAsset) => [sourceAsset, path.join("dist", legacyOutputPrefix, sourceAsset)] as const,
+    ),
+  ]) {
     const source = path.join(root, asset);
-    const destination = path.join(directory, asset);
+    const destination = path.join(directory, relativeDestination);
     const contents = fs.readFileSync(source);
     const hash = hashVitestWorkerArtifact(contents);
     inputs[source] ??= hash;
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.writeFileSync(destination, contents, { flag: "wx" });
     // Output paths stay relative to dist, including package-root runtime assets.
     outputs[path.relative(outDir, destination).replaceAll("\\", "/")] = hash;

@@ -5,13 +5,14 @@ import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { getTrackedWorkerCpuSources } from "./worker-cpu.js";
+import { workerTaskPoolEntrypoints } from "./worker-task-pool-runtime.test-support.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
@@ -823,18 +824,9 @@ describe("worker task pool", () => {
   });
 
   it("lets a headless process exit while warm workers are idle", async () => {
-    const moduleUrl = new URL("./worker-task-pool.ts", import.meta.url);
     const { stdout } = await promisify(execFile)(
       process.execPath,
-      [
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "-e",
-        `import { WorkerTaskPool } from ${JSON.stringify(moduleUrl.href)};
-       const pool = new WorkerTaskPool({ workerUrl: new URL(${JSON.stringify(workerUrl.href)}) });
-       console.log((await pool.run({ label: "finished" }, { timeoutMs: 10000 })).label);`,
-      ],
+      resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(workerTaskPoolEntrypoints.headless)),
       { timeout: 15_000 },
     );
     expect(stdout.trim()).toBe("finished");
@@ -843,18 +835,18 @@ describe("worker task pool", () => {
   it.each([
     {
       name: "releases parent inputs while their worker copies are still executing",
-      entrypoint: new URL("./worker-task-pool.retention.test-support.ts", import.meta.url),
+      entrypoint: workerTaskPoolEntrypoints.inputRetention,
     },
     {
       name: "releases delivered replies while their worker remains warm",
-      entrypoint: new URL("./worker-task-pool.reply-retention.test-support.ts", import.meta.url),
+      entrypoint: workerTaskPoolEntrypoints.replyRetention,
     },
   ])(
     "$name",
     async ({ entrypoint }) => {
       await promisify(execFile)(
         process.execPath,
-        ["--expose-gc", "--import", "tsx", fileURLToPath(entrypoint)],
+        ["--expose-gc", ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(entrypoint))],
         { timeout: 20_000 },
       );
     },
