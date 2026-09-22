@@ -39,6 +39,7 @@ import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPollCard } from "./polls.js";
 import {
   deleteMSTeamsActivityWithReference,
+  resolveReferenceScopedTeamsGetById,
   sendMSTeamsActivityWithReference,
   updateMSTeamsActivityWithReference,
 } from "./sdk-proactive.js";
@@ -287,7 +288,13 @@ export async function sendMessageMSTeams(
         channelId: conversationType === "channel" ? conversationId : undefined,
         tokenProvider,
         getTeamDetails: ctx.app.api?.teams?.getById
-          ? (teamId) => ctx.app.api.teams.getById(teamId)
+          ? async (teamId) => {
+              const getById = await resolveReferenceScopedTeamsGetById(ctx.app, ctx.ref.serviceUrl);
+              if (!getById) {
+                throw new Error("Teams team lookup unavailable");
+              }
+              return await getById(teamId);
+            }
           : undefined,
       });
       log.debug?.("uploading to SharePoint for native file card", {

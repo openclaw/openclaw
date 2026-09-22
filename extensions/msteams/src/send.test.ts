@@ -7,6 +7,11 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import { teamsQuotedTableReply } from "./format.test-fixtures.js";
 import { deleteMessageMSTeams, editAdaptiveCardMSTeams, sendMessageMSTeams } from "./send.js";
 
+const regionalClientState = vi.hoisted(() => ({
+  created: [] as string[],
+  getById: vi.fn(async () => ({ aadGroupId: "regional-group" })),
+}));
+
 const mockState = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
   resolveMSTeamsSendContext: vi.fn(),
@@ -122,11 +127,33 @@ vi.mock("./sdk.js", () => ({
   createMSTeamsTokenProvider: mockState.createMSTeamsTokenProvider,
 }));
 
-vi.mock("./sdk-proactive.js", () => ({
-  sendMSTeamsActivityWithReference: mockState.sendMSTeamsActivityWithReference,
-  updateMSTeamsActivityWithReference: mockState.updateMSTeamsActivityWithReference,
-  deleteMSTeamsActivityWithReference: mockState.deleteMSTeamsActivityWithReference,
+vi.mock("@microsoft/teams.api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@microsoft/teams.api")>()),
+  Client: vi.fn(function MockClient(this: unknown, serviceUrl: string) {
+    regionalClientState.created.push(serviceUrl);
+    return {
+      serviceUrl,
+      teams: { getById: regionalClientState.getById },
+      conversations: {
+        activities: () => ({
+          create: async () => ({ id: "regional-activity" }),
+          update: async () => ({ id: "updated" }),
+          delete: async () => {},
+        }),
+      },
+    };
+  }),
 }));
+
+vi.mock("./sdk-proactive.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./sdk-proactive.js")>();
+  return {
+    ...actual,
+    sendMSTeamsActivityWithReference: mockState.sendMSTeamsActivityWithReference,
+    updateMSTeamsActivityWithReference: mockState.updateMSTeamsActivityWithReference,
+    deleteMSTeamsActivityWithReference: mockState.deleteMSTeamsActivityWithReference,
+  };
+});
 
 function createMockApp(overrides?: {
   send?: ReturnType<typeof vi.fn>;
@@ -141,6 +168,7 @@ function createMockApp(overrides?: {
   return {
     send: sendFn,
     api: {
+      serviceUrl: undefined as string | undefined,
       teams: { getById },
       conversations: {
         activities: () => ({
@@ -648,6 +676,95 @@ describe("sendMessageMSTeams", () => {
     expect(resolveArgs.channelId).toBe("19:channel@thread.tacv2");
     expect(getById).toHaveBeenCalledWith("team-1");
     expect(firstObjectArg(mockState.uploadAndShareSharePoint).siteId).toBe("resolved-site");
+  });
+
+  it("looks up the team on the stored regional endpoint when it differs from the app", async () => {
+    const appGetById = vi.fn(async () => ({ aadGroupId: "app-group" }));
+    regionalClientState.created.length = 0;
+    regionalClientState.getById.mockClear();
+    mockState.resolveUploadSiteId.mockImplementation(async (params) => {
+      const teamId = params.teamId;
+      if (!teamId) {
+        throw new Error("missing teamId");
+      }
+      await params.getTeamDetails?.(teamId);
+      return "resolved-site";
+    });
+    const app = {
+      ...createMockApp({ getById: appGetById }),
+      client: { request: vi.fn() },
+    };
+    app.api.serviceUrl = "https://smba.trafficmanager.net/amer";
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      ...createSharePointSendContext({
+        conversationId: "19:channel@thread.tacv2",
+        siteId: "unused",
+      }),
+      app,
+      conversationType: "channel",
+      sharePointSiteId: undefined,
+      ref: {
+        teamId: "team-1",
+        serviceUrl: "https://smba.trafficmanager.net/emea/",
+      },
+    });
+    mockSharePointPdfUpload({
+      bufferSize: 50,
+      fileName: "report.pdf",
+      itemId: "item-regional",
+      uniqueId: "{GUID-REGIONAL}",
+    });
+
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:channel@thread.tacv2",
+      text: "report",
+      mediaUrl: "https://example.com/report.pdf",
+    });
+
+    expect(regionalClientState.created).toEqual(["https://smba.trafficmanager.net/emea"]);
+    expect(regionalClientState.getById).toHaveBeenCalledWith("team-1");
+    expect(appGetById).not.toHaveBeenCalled();
+  });
+
+  it("keeps the app team lookup when the stored service URL matches", async () => {
+    const appGetById = vi.fn(async () => ({ aadGroupId: "app-group" }));
+    regionalClientState.created.length = 0;
+    mockState.resolveUploadSiteId.mockImplementation(async (params) => {
+      await params.getTeamDetails?.(params.teamId);
+      return "resolved-site";
+    });
+    const app = createMockApp({ getById: appGetById });
+    app.api.serviceUrl = "https://smba.trafficmanager.net/amer";
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      ...createSharePointSendContext({
+        conversationId: "19:channel@thread.tacv2",
+        siteId: "unused",
+      }),
+      app,
+      conversationType: "channel",
+      sharePointSiteId: undefined,
+      ref: {
+        teamId: "team-1",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      },
+    });
+    mockSharePointPdfUpload({
+      bufferSize: 50,
+      fileName: "report.pdf",
+      itemId: "item-same",
+      uniqueId: "{GUID-SAME}",
+    });
+
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:channel@thread.tacv2",
+      text: "report",
+      mediaUrl: "https://example.com/report.pdf",
+    });
+
+    expect(regionalClientState.created).toEqual([]);
+    expect(appGetById).toHaveBeenCalledWith("team-1");
   });
 });
 

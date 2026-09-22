@@ -10,10 +10,33 @@ import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { teamsMarkdownDeliveryCases } from "./format.test-fixtures.js";
+const regionalClientState = vi.hoisted(() => ({
+  created: [] as string[],
+  getById: vi.fn(async () => ({ aadGroupId: "regional-group" })),
+}));
+
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
   resolveUploadSiteId: vi.fn(),
+}));
+
+vi.mock("@microsoft/teams.api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@microsoft/teams.api")>()),
+  Client: vi.fn(function MockClient(this: unknown, serviceUrl: string) {
+    regionalClientState.created.push(serviceUrl);
+    return {
+      serviceUrl,
+      teams: { getById: regionalClientState.getById },
+      conversations: {
+        activities: () => ({
+          create: async () => ({ id: "regional-activity" }),
+          update: async () => ({ id: "updated" }),
+          delete: async () => {},
+        }),
+      },
+    };
+  }),
 }));
 
 vi.mock("./graph-upload.js", async (importOriginal) => {
@@ -550,6 +573,64 @@ describe("msteams messenger", () => {
         expect(graphUploadMockState.uploadAndShareSharePoint.mock.calls[0]?.[0]).toMatchObject({
           siteId: "resolved-site",
         });
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("looks up the team on the stored regional endpoint when it differs from the app", async () => {
+      const tmpDir = await mkdtemp(
+        path.join(resolvePreferredOpenClawTmpDir(), "msteams-regional-"),
+      );
+      const localFile = path.join(tmpDir, "report.txt");
+      await writeFile(localFile, "report");
+      const appGetById = vi.fn(async () => ({ aadGroupId: "app-group" }));
+      regionalClientState.created.length = 0;
+      regionalClientState.getById.mockClear();
+      graphUploadMockState.resolveUploadSiteId.mockImplementation(async (params) => {
+        await params.getTeamDetails?.(params.teamId);
+        return "resolved-site";
+      });
+      graphUploadMockState.uploadAndShareSharePoint.mockResolvedValue({
+        itemId: "item-regional",
+        webUrl: "https://sharepoint.example.com/item-regional",
+        shareUrl: "https://sharepoint.example.com/share/item-regional",
+        name: "report.txt",
+      });
+      graphUploadMockState.getDriveItemProperties.mockResolvedValue({
+        eTag: '"{ITEM-REGIONAL},1"',
+        webDavUrl: "https://sharepoint.example.com/item-regional",
+        name: "report.txt",
+      });
+
+      try {
+        await sendMSTeamsMessages({
+          replyStyle: "top-level",
+          app: createMockApp({ getById: appGetById }),
+          appId: "app123",
+          conversationRef: {
+            ...baseRef,
+            serviceUrl: "https://smba.trafficmanager.net/emea/",
+            teamId: "team-1",
+            conversation: {
+              id: "19:channel@thread.tacv2",
+              conversationType: "channel",
+            },
+          },
+          messages: [{ text: "report", mediaUrl: localFile }],
+          tokenProvider: {
+            getAccessToken: async () => "token",
+          },
+        });
+
+        expect(regionalClientState.created).toContain("https://smba.trafficmanager.net/emea");
+        expect(
+          regionalClientState.created.every(
+            (serviceUrl) => serviceUrl === "https://smba.trafficmanager.net/emea",
+          ),
+        ).toBe(true);
+        expect(regionalClientState.getById).toHaveBeenCalledWith("team-1");
+        expect(appGetById).not.toHaveBeenCalled();
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
