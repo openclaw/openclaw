@@ -108,14 +108,16 @@ describe("Control UI release-only inventories", () => {
   const sidebar = "ui/src/components/app-sidebar.stress.browser.test.ts";
   const embed = "ui/src/e2e/native-embed-settings.e2e.test.ts";
   const entry = "ui/src/e2e/chat-session-entry.e2e.test.ts";
-  const releaseOnlyRealGateway = [
+  const automationManagement =
+    "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
+  const releaseOnlyRealGateway = new Set([
     "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
-    "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
+    automationManagement,
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
     "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
     "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-  ];
+  ]);
 
   it("omits only the named exhaustive matrices from ordinary UI owners", () => {
     const groups = createUiTestShardGroups({ includeReleaseOnlyTests: false });
@@ -124,7 +126,7 @@ describe("Control UI release-only inventories", () => {
     expect(groups.e2e[0]?.includePatterns).not.toContain(entry);
     expect(
       uiE2eRealGatewayTestFiles.filter((file) => groups.e2e[0]?.includePatterns?.includes(file)),
-    ).toEqual(uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.includes(file)));
+    ).toEqual(uiE2eRealGatewayTestFiles.filter((file) => !releaseOnlyRealGateway.has(file)));
     expect(groups.ui[0]?.includePatterns).toContain(
       "ui/src/components/app-sidebar-row-identity.browser.test.ts",
     );
@@ -139,17 +141,12 @@ describe("Control UI release-only inventories", () => {
   it("retains directly edited matrices without widening from their source owner", () => {
     const groups = createUiTestShardGroups({
       includeReleaseOnlyTests: false,
-      changedPaths: [
-        entry,
-        releaseOnlyRealGateway[1],
-        "ui/src/components/app-sidebar.ts",
-        "ui/src/e2e",
-      ],
+      changedPaths: [entry, automationManagement, "ui/src/components/app-sidebar.ts", "ui/src/e2e"],
     });
     expect(groups.e2e[0]?.includePatterns).toContain(entry);
     expect(
-      groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.includes(file)),
-    ).toEqual([releaseOnlyRealGateway[1]]);
+      groups.e2e[0]?.includePatterns?.filter((file) => releaseOnlyRealGateway.has(file)),
+    ).toEqual([automationManagement]);
     expect(groups.e2e[0]?.includePatterns).not.toContain(embed);
     expect(groups.ui[0]?.includePatterns).not.toContain(sidebar);
   });
