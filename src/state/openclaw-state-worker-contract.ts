@@ -56,6 +56,7 @@ import type {
   ProjectRegistryInsert,
   ProjectRegistryRecord,
 } from "../projects/project-registry.kernel.js";
+import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
 import type {
   SessionStateEventInput,
   SessionStateNotice,
@@ -179,6 +180,7 @@ export type OpenClawStateWorkerOperations = McpOAuthReadOperations &
       output: AgentProvenance[];
     };
     "agentProvenance.list": { input: undefined; output: AgentProvenance[] };
+    "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
     "promotions.markNotified": { input: { slugs: string[]; now: number }; output: true };
     "promotions.recordClaim": { input: PreparedPromotionClaim; output: void };
     "sessionState.recordGoalChange": {

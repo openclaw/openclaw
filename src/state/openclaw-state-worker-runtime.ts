@@ -95,6 +95,7 @@ import {
   resolveProjectRegistryInDatabase,
   resolveRecordedProjectRootInDatabase,
 } from "../projects/project-registry.kernel.js";
+import { purgeExpiredSecretStoreEntriesInDatabase } from "../secrets/store/secret-store-expiry.kernel.js";
 import {
   pruneSessionStateEventsInDatabase,
   recordSessionStateEventInDatabase,
@@ -233,6 +234,16 @@ export function executeSharedStateCommand(
       }
     };
     return command.input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
+  }
+  if (command.type === "secrets.purge") {
+    return purgeExpiredSecretStoreEntriesInDatabase({
+      cutoffs: command.input,
+      database: {
+        database: open(),
+        path: context.databasePath,
+        env: getSqliteWorkerStateContext().environment,
+      },
+    });
   }
   if (command.type === "promotions.markNotified" || command.type === "promotions.recordClaim") {
     return executePromotionCommand(
