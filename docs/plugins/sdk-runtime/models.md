@@ -40,6 +40,14 @@ compatible preparations share the existing generation's resources. A result from
 a closed host cannot start another completion; prepare again under the current
 host.
 
+## Low-level completions
+
+The `complete` and `completeSimple` helpers from `openclaw/plugin-sdk/llm` accept
+an optional fourth `assertCurrent` callback. It runs after transport setup and
+immediately before provider dispatch. A thrown error or an aborted
+`options.signal` prevents dispatch; the callback stays outside provider options.
+Existing three-argument calls remain supported.
+
 ## Model namespaces
 
 <AccordionGroup>

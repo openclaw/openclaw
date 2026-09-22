@@ -1560,9 +1560,7 @@ export async function prepareSlackMessage(params: {
       avatar: conversationAvatar,
     },
     route: {
-      agentId: route.agentId,
-      dmScope: route.dmScope,
-      accountId: route.accountId,
+      ...route,
       routeSessionKey: route.sessionKey,
       dispatchSessionKey: sessionKey,
       parentSessionKey: threadKeys.parentSessionKey,

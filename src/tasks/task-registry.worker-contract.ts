@@ -25,11 +25,7 @@ import type {
   TaskMirroredFlowSyncOutcome,
 } from "./task-registry-restore.worker.js";
 import type { TaskRegistryStatusSnapshot } from "./task-registry.store.status.js";
-import type {
-  TaskRegistryMutationScope,
-  TaskRegistryStoreSnapshot,
-  TaskLiveFlowSyncOutcome,
-} from "./task-registry.store.types.js";
+import type { TaskLiveFlowSyncOutcome } from "./task-registry.store.types.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
 
 type TaskLookupRecords = {
@@ -74,10 +70,6 @@ export type TaskRegistryWorkerOperations = TaskInitialWorkerOperations &
       output: TaskRegistryStatusSnapshot | undefined;
     };
     "flows.runTask": { input: ManagedTaskInFlowInput; output: ManagedTaskInFlowReceipt };
-    "tasks.mutationSnapshot": {
-      input: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[] | undefined;
-      output: TaskRegistryStoreSnapshot;
-    };
     "flows.createManaged": {
       input: { flow: TaskFlowRecord };
       output: TaskFlowRecord;
@@ -122,6 +114,7 @@ export function isTaskRegistryWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<TaskRegistryWorkerOperations> {
   switch (command.type) {
+    case "tasks.updateNotificationDelivery":
     case "tasks.acknowledgeStateChange":
     case "tasks.bindExecution":
     case "flows.bindExecution":
@@ -139,7 +132,6 @@ export function isTaskRegistryWorkerCommand(command: {
     case "flows.syncLiveMirroredTask":
     case "tasks.statusSummary":
     case "flows.runTask":
-    case "tasks.mutationSnapshot":
     case "flows.createManaged":
     case "flows.updateManaged":
     case "flows.current":

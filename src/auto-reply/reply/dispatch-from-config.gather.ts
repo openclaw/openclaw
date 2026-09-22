@@ -270,7 +270,7 @@ export async function gatherDispatchRequest(
   };
 
   const boundAcpDispatchSessionKey = state.allowInboundHandlers
-    ? resolveBoundAcpDispatchSessionKey({ ctx, cfg })
+    ? await resolveBoundAcpDispatchSessionKey({ ctx, cfg })
     : undefined;
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;

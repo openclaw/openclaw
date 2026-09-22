@@ -166,15 +166,13 @@ const bindingServiceMocks = vi.hoisted(() => ({
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
 }));
 
-vi.mock("./dispatch-acp-manager.runtime.js", () => ({
+vi.mock("../../infra/outbound/session-binding-service.js", () => ({
+  getSessionBindingService: () => bindingServiceMocks,
+}));
+vi.mock("./dispatch-acp-manager.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => managerMocks,
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    sessionMetaMocks.readAcpSessionEntry(params),
-  getSessionBindingService: () => ({
-    listBySession: (targetSessionKey: string) =>
-      bindingServiceMocks.listBySession(targetSessionKey),
-    unbind: (input: unknown) => bindingServiceMocks.unbind(input),
-  }),
+  readAcpSessionEntry: sessionMetaMocks.readAcpSessionEntry,
 }));
 
 vi.mock("../../agents/command/attempt-execution.runtime.js", () => ({
