@@ -238,7 +238,7 @@ async function prepareUpdateFinalization(
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
   });
-  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
   const preFinalizeConfig =
     (await readPostCorePreUpdateSourceConfig({
       sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
@@ -274,7 +274,7 @@ async function prepareUpdateFinalization(
   const channel = requestedChannel ?? storedChannel ?? effectiveChannel ?? DEFAULT_PACKAGE_CHANNEL;
   if (requestedChannel) {
     configSnapshot = await withPluginLifecycleLease(phase, async () => {
-      const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+      const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
       return await persistRequestedUpdateChannel({
         configSnapshot: snapshot,
         requestedChannel,
@@ -521,7 +521,9 @@ async function updateFinalizeCommandInternal(
     const failures = "error" in outcome ? [outcome.error] : [];
     for (const restore of [
       async () =>
-        restoreMaintenance((await readConfigFileSnapshot({ skipPluginValidation: true })).config),
+        restoreMaintenance(
+          (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
+        ),
       () => owned.release(),
     ]) {
       if (failures.some(hasCommandProcessCleanupError)) {

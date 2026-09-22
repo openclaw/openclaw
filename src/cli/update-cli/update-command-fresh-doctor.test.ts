@@ -152,7 +152,12 @@ describe("post-plugin update readiness", () => {
     },
   );
 
-  it.each(["active-mutation", "unreadable-state", "incomplete-migration"] as const)(
+  it.each([
+    "active-mutation",
+    "unreadable-state",
+    "incomplete-migration",
+    "gateway-state-unverified",
+  ] as const)(
     "preserves serialized unsafe maintenance refusal %s without diagnostic facts",
     async (reason) => {
       const refusal = { kind: "data-at-risk" as const, reason };

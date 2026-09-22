@@ -104,7 +104,6 @@ export async function beginDoctorMaintenance(params: {
   let retainStoppedInstallation = false;
   let resources: OpenClawDatabaseMaintenanceScope | undefined;
   let inspectingActivation = false;
-  let parentMustStopGateway = false;
   let staleReplacement: DoctorStaleGateway | undefined;
   let assertUpdateAdmissionCurrent: (() => void) | undefined;
   let authorityRefused = false;
@@ -402,7 +401,7 @@ export async function beginDoctorMaintenance(params: {
         }
         const { readConfigFileSnapshot } = await import("../config/config.js");
         await finish(
-          (await readConfigFileSnapshot({ skipPluginValidation: true })).config,
+          (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
           assertStopCustody,
           undefined,
           assertStopCustody ?? assertUpdateAdmissionCurrent,
@@ -423,7 +422,7 @@ export async function beginDoctorMaintenance(params: {
       throw error;
     }
     const refusal = new DoctorMaintenanceRefusalError(
-      `Doctor could not enter maintenance. ${String(error)}${parentMustStopGateway || hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
+      `Doctor could not enter maintenance. ${String(error)}${hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
       classifyDoctorMaintenanceRefusal(error),
       {
         cause: error,
@@ -484,8 +483,10 @@ export async function beginDoctorMaintenance(params: {
           inspection.serviceUpdateVerdict?.kind === "owned" &&
           inspection.offline !== true
         ) {
-          parentMustStopGateway = true;
-          throw new Error(await formatUpdateDoctorServiceStopRefusal(inspection.serviceEnv ?? env));
+          throw new DoctorMaintenanceRefusalError(
+            await formatUpdateDoctorServiceStopRefusal(inspection.serviceEnv ?? env),
+            { kind: "data-at-risk", reason: "gateway-state-unverified" },
+          );
         }
         try {
           await acquireMaintenanceResources();

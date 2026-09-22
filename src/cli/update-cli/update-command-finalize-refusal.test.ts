@@ -7,6 +7,7 @@ import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
 } from "../../infra/deferred-plugin-migrations.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import * as updateCheck from "../../infra/update-check.js";
 import {
   createUpdateRun,
@@ -28,6 +29,7 @@ const native = vi.hoisted(() => ({
   stopped: false,
   failStop: false,
   contend: true,
+  elapsedMs: 0,
   root: "",
 }));
 vi.mock("../../config/paths.js", async (original) => ({
@@ -75,6 +77,8 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
           throw new GatewayServiceStopUnsafeError("An admitted migration write is incomplete.");
         }
         native.stopped = true;
+        // A verified stop can consume the shutdown allowance before ownership clears.
+        native.elapsedMs += GATEWAY_SERVICE_STOP_TIMEOUT_MS;
         native.events.push("stop-verified");
       }
       const before = {
@@ -175,6 +179,8 @@ beforeEach(async () => {
   native.stopped = false;
   native.failStop = false;
   native.contend = true;
+  native.elapsedMs = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => native.elapsedMs);
   recordDeferredPluginMigrations({ pending: [pending] });
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(native.root);
   vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
@@ -201,9 +207,11 @@ it.each([undefined, false])(
       "running-holder",
       "stop-verified",
       "non-serving-holder",
+      "non-serving-holder",
       "restart",
       "restart-verified",
     ]);
+    expect(native.elapsedMs).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         status: "warning",

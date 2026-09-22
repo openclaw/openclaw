@@ -402,7 +402,7 @@ restores any service it stopped and exits successfully with a recorded warning.
 This includes lock contention from unknown or non-serving processes. Doctor and
 plugin convergence remain pending; resolve the named refusal and run
 `openclaw update repair` again. Deferred finalization does not acknowledge earlier
-interrupted updates or mark pending migrations complete. Active migration writes,
+interrupted updates or mark pending migrations complete. A live or unverified Gateway, active migration writes,
 unreadable state, incomplete migrations, and unsettled cleanup still fail rather
 than releasing their recovery obligations.
 

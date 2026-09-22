@@ -246,7 +246,7 @@ failure report keeps it in a separate **Warnings** section.
 A throwing plugin config-repair hook leaves that plugin's input unchanged and
 names the plugin in its warning. Repair the plugin, then run
 `openclaw doctor --fix` or `openclaw update repair`.
-Explicit state-migration or config-write refusals remain blocking. So does a
+A live or unverified Gateway and explicit state-migration or config-write refusals remain blocking. So does a
 Doctor child whose shutdown could not be confirmed: it may still write state.
 Preserve the backup and resolve that specific refusal before retrying.
 

@@ -437,7 +437,9 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
     const failures = "error" in outcome ? [outcome.error] : [];
     for (const restore of [
       async () =>
-        owned.finish((await readConfigFileSnapshot({ skipPluginValidation: true })).config),
+        owned.finish(
+          (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
+        ),
       () => owned.release(),
     ]) {
       if (failures.some(hasCommandProcessCleanupError)) {

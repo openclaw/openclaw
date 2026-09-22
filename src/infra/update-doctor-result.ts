@@ -49,7 +49,12 @@ const DoctorMaintenanceRefusalSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("data-at-risk"),
-    reason: z.enum(["active-mutation", "unreadable-state", "incomplete-migration"]),
+    reason: z.enum([
+      "active-mutation",
+      "unreadable-state",
+      "incomplete-migration",
+      "gateway-state-unverified",
+    ]),
   }),
 ]);
 export type DoctorMaintenanceRefusal = z.infer<typeof DoctorMaintenanceRefusalSchema>;
