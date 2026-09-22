@@ -68,6 +68,9 @@ function resolveGitHeadPath(startDir: string, opts: { maxDepth?: number } = {}):
   });
 }
 
+/** Bounds a Git metadata read; matches the limit used for build metadata probes. */
+const HEAD_METADATA_LIMIT = 1024;
+
 /** Read at most `limit` bytes from Git or build metadata. */
 export function readGitMetadataPrefix(filePath: string, limit = 256): string {
   const fd = fs.openSync(filePath, "r");
@@ -80,6 +83,12 @@ export function readGitMetadataPrefix(filePath: string, limit = 256): string {
   }
 }
 
+/** The first newline-terminated line of a bounded Git metadata window. */
+function firstLine(raw: string): string {
+  const newline = raw.indexOf("\n");
+  return (newline >= 0 ? raw.slice(0, newline) : raw).trim();
+}
+
 export function readGitHead(
   startDir: string,
   opts: { maxDepth?: number } = {},
@@ -88,7 +97,10 @@ export function readGitHead(
   if (!headPath) {
     return undefined;
   }
-  const head = fs.readFileSync(headPath, "utf-8").trim();
+  // HEAD is one short line, but branch names are not length-capped by git: this
+  // window matches the metadata limit used elsewhere and still bounds the read so
+  // an oversized file is never slurped whole.
+  const head = firstLine(readGitMetadataPrefix(headPath, HEAD_METADATA_LIMIT));
   if (!head.startsWith("ref:")) {
     return { headPath, ref: null, value: head || null };
   }

@@ -117,4 +117,53 @@ describe("git-root", () => {
       expect(readGitHead(nested, { maxDepth: 2 })).toBeUndefined();
     });
   });
+
+  it("bounds the HEAD read instead of slurping an oversized file", async () => {
+    await withTestDir({ prefix: "openclaw-git-root-head-bound-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const gitDir = path.join(repoRoot, ".git");
+      await fs.mkdir(gitDir, { recursive: true });
+
+      // HEAD is one `ref:` line, but a corrupted or hostile file can be any size:
+      // the reader must not load the whole thing.
+      const headPath = path.join(gitDir, "HEAD");
+      const oversized = 2 * 1024 * 1024;
+      await fs.writeFile(headPath, `ref: refs/heads/trunk\n${"x".repeat(oversized)}\n`, "utf-8");
+
+      const read = readGitHead(repoRoot, { maxDepth: 1 });
+      // Trailing bytes beyond the first line never leak into the parsed ref.
+      expect(read?.ref).toBe("refs/heads/trunk");
+      expect(read?.headPath).toBe(headPath);
+      // The file really is far larger than the window that was read.
+      expect((await fs.stat(headPath)).size).toBeGreaterThan(oversized);
+    });
+  });
+
+  it("keeps a long branch name within the bounded HEAD window", async () => {
+    await withTestDir({ prefix: "openclaw-git-root-head-long-ref-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const gitDir = path.join(repoRoot, ".git");
+      await fs.mkdir(gitDir, { recursive: true });
+      // Git does not length-cap branch names; a segmented name stays resolvable.
+      const longRef = `refs/heads/${"segment/".repeat(40)}main`;
+      await fs.writeFile(path.join(gitDir, "HEAD"), `ref: ${longRef}\n`, "utf-8");
+
+      const read = readGitHead(repoRoot, { maxDepth: 1 });
+      expect(read?.ref).toBe(longRef);
+    });
+  });
+
+  it("keeps a normal HEAD value intact under the bound", async () => {
+    await withTestDir({ prefix: "openclaw-git-root-head-normal-" }, async (temp) => {
+      const repoRoot = path.join(temp, "repo");
+      const gitDir = path.join(repoRoot, ".git");
+      await fs.mkdir(gitDir, { recursive: true });
+      const sha = "a".repeat(40);
+      await fs.writeFile(path.join(gitDir, "HEAD"), `${sha}\n`, "utf-8");
+
+      const read = readGitHead(repoRoot, { maxDepth: 1 });
+      expect(read?.ref).toBeNull();
+      expect(read?.value).toBe(sha);
+    });
+  });
 });
