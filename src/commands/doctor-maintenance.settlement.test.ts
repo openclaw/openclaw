@@ -106,6 +106,7 @@ vi.mock("../infra/update-run-activity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-activity.js")>()),
   inspectUpdateRepairDriverAdmission: boundary.admission,
 }));
+vi.mock("../utils/sleep.js", () => ({ sleep: boundary.sleep }));
 vi.mock("node:timers/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:timers/promises")>()),
   setTimeout: boundary.sleep,
@@ -842,9 +843,19 @@ it("restores a service after state ownership fails without retaining a partial m
   expect(boundary.sleep).not.toHaveBeenCalled();
 });
 
-it.each(["drain", "acquired", "native-revoked"] as const)(
+it.each(["drain", "acquired", "native-revoked", "install-drift"] as const)(
   "refuses changed repair admission and compensates under original service custody (%s)",
   async (phase) => {
+    if (phase === "install-drift") {
+      stopped.serviceUpdateVerdict = {
+        kind: "owned",
+        root,
+        fingerprint: "fixture",
+        refreshDefinition: true,
+        requiresInstallRootRefresh: true,
+      };
+      boundary.revalidate.mockResolvedValue(stopped.serviceUpdateVerdict);
+    }
     let ticks = 0;
     let gatewayHeld = false;
     let stateHeld = false;
@@ -912,9 +923,68 @@ it.each(["drain", "acquired", "native-revoked"] as const)(
       /repair admission conflict|native operation custody retired/,
     );
     expect(checkedUnderBoth).toBe(true);
-    expect(boundary.restart).toHaveBeenCalledTimes(phase === "native-revoked" ? 0 : 1);
+    expect(boundary.restart).toHaveBeenCalledTimes(
+      phase === "native-revoked" || phase === "install-drift" ? 0 : 1,
+    );
+    expect(boundary.repair).not.toHaveBeenCalled();
     expect(boundary.complete).toHaveBeenCalled();
     expect(boundary.close).not.toHaveBeenCalled();
     expect(gatewayHeld || stateHeld).toBe(false);
+  },
+);
+
+it.each([false, true])(
+  "restores within the shared stop budget when ownerless cleanup persists (stopFailed=%s)",
+  async (stopFailed) => {
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    let elapsed = 0;
+    let parked = false;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    boundary.owner.mockImplementation(() =>
+      parked ? undefined : { state: "live", mode: "supervised" },
+    );
+    boundary.gatewayAcquire.mockImplementation(() => {
+      throw new StateDatabaseCoordinatorContentionError("gateway-lifecycle");
+    });
+    boundary.sleep.mockImplementation(async (ms: number) => {
+      expect(parked).toBe(true);
+      expect(boundary.restart).not.toHaveBeenCalled();
+      elapsed += ms;
+    });
+    const stop = boundary.stop.getMockImplementation()!;
+    const stopError = new Error("service stop failed after parking");
+    boundary.stop.mockImplementation(async (params) => {
+      const result = await stop(params);
+      if (params.phase !== "inspect") {
+        parked = true;
+        elapsed = GATEWAY_SERVICE_STOP_TIMEOUT_MS - 1_250;
+        if (stopFailed) {
+          throw stopError;
+        }
+      }
+      return result;
+    });
+    const refusal = await beginDoctorMaintenance({
+      root,
+      options: { repair: true, nonInteractive: true },
+      runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+      assertCurrent: () => {},
+    }).catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(Error);
+    if (stopFailed) {
+      expect(collectNestedErrorCandidates(refusal)).toContain(stopError);
+    } else {
+      expect(String(refusal)).toContain("gateway-lifecycle");
+    }
+    expect(elapsed).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+    expect(boundary.stateAcquire).not.toHaveBeenCalled();
+    expect(boundary.lease).not.toHaveBeenCalled();
+    expect(boundary.close).not.toHaveBeenCalled();
+    expect(boundary.restart).toHaveBeenCalledOnce();
+    expect(boundary.health).toHaveBeenCalledOnce();
+    expect(boundary.log).toHaveBeenCalledWith(
+      expect.stringMatching(/Warning:.*gateway-lifecycle.*Restoring its service/),
+    );
   },
 );

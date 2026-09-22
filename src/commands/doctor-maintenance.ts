@@ -125,7 +125,11 @@ export async function beginDoctorMaintenance(params: {
       return;
     }
     params.assertCurrent?.();
-    const owner = await acquireDoctorGatewayMaintenanceCoordinator(databasePath, env, params);
+    const owner = await acquireDoctorGatewayMaintenanceCoordinator(databasePath, env, {
+      ...params,
+      // The inner foreground/ownerless wait cannot renew a stopped service's budget.
+      deadlineMs: stopDeadline,
+    });
     let stateOwner;
     try {
       params.assertCurrent?.();
@@ -255,6 +259,7 @@ export async function beginDoctorMaintenance(params: {
         settle,
         assertCustody,
         assertRestoreAdmission,
+        assertInstallationAdmission: assertUpdateAdmissionCurrent,
       });
       cfg = restoredConfig;
       if (!state) {

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
@@ -189,6 +190,9 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
     });
     return { loaded: true };
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     // A failed restore is not recoverable by launchd: the label is gone, so
     // KeepAlive has nothing to respawn. Report it instead of dropping it.
     return { loaded: false, detail: error instanceof Error ? error.message : String(error) };
@@ -214,6 +218,9 @@ async function rethrowLaunchAgentActivationFailure(
   params: Parameters<typeof ensureLaunchAgentLoadedAfterFailure>[0],
   error: unknown,
 ): Promise<never> {
+  if (hasCommandProcessCleanupError(error)) {
+    throw error;
+  }
   const restored = await ensureLaunchAgentLoadedAfterFailure(params);
   const failure = error instanceof Error ? error.message : String(error);
   throw new Error(

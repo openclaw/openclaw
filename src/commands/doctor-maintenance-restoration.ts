@@ -24,6 +24,7 @@ export async function restoreDoctorGatewayService(params: {
   settle: <T>(operation: () => Promise<T>) => Promise<T>;
   assertCustody?: () => void;
   assertRestoreAdmission?: () => void;
+  assertInstallationAdmission?: () => void;
 }) {
   const {
     before,
@@ -127,10 +128,17 @@ export async function restoreDoctorGatewayService(params: {
     }
     if (installation?.kind === "owned" && installation.requiresInstallRootRefresh) {
       if (!inspectionFailure) {
+        // Reversing our stop cannot authorize an installation rewrite during another update.
+        const assertInstallationCurrent = () => {
+          assertMaintenanceCurrent();
+          params.assertInstallationAdmission?.();
+        };
+        assertInstallationCurrent();
         const [{ maybeRepairGatewayServiceConfig }, { createDoctorPrompter }] = await Promise.all([
           import("./doctor-gateway-services.js"),
           import("./doctor-prompter.js"),
         ]);
+        assertInstallationCurrent();
         cfg = await settle(() =>
           maybeRepairGatewayServiceConfig(
             cfg,
@@ -139,7 +147,7 @@ export async function restoreDoctorGatewayService(params: {
             createDoctorPrompter({ runtime: params.runtime, options: params.options }),
             {
               async writeConfig(nextConfig) {
-                assertMaintenanceCurrent();
+                assertInstallationCurrent();
                 // Failed maintenance entry has no inspected Doctor writer context.
                 // Do not fall back to an independent config replacement on recovery.
                 if (!writeConfig) {
@@ -148,20 +156,20 @@ export async function restoreDoctorGatewayService(params: {
                   );
                 }
                 const committed = await writeConfig(nextConfig);
-                assertMaintenanceCurrent();
+                assertInstallationCurrent();
                 return committed;
               },
               serviceMaintenance: {
                 managerUid: before.serviceManagerUid,
-                assertCurrent: assertMaintenanceCurrent,
+                assertCurrent: assertInstallationCurrent,
                 assertReadCurrent: assertInspectionCurrent,
               },
             },
           ),
         );
-        assertMaintenanceCurrent();
+        assertInstallationCurrent();
         const repairedState = await readCurrent();
-        assertMaintenanceCurrent();
+        assertInstallationCurrent();
         assertDoctorServiceSelection(env, repairedState.env);
         const repaired = await settle(() =>
           revalidateManagedGatewayServiceAfterUpdate({
@@ -170,7 +178,7 @@ export async function restoreDoctorGatewayService(params: {
             preManagedServiceStop: before,
           }),
         );
-        assertMaintenanceCurrent();
+        assertInstallationCurrent();
         if (repaired.kind === "owned" && !repaired.requiresInstallRootRefresh) {
           return repairedState;
         }
