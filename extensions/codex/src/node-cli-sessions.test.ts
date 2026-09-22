@@ -10,7 +10,6 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { readJsonlHead, readJsonlTail } from "./jsonl-lines.js";
-import { SESSION_FILE_MAX_SUMMARY_READ_BYTES } from "./node-cli-session-files.js";
 import {
   createCodexCliSessionNodeHostCommands,
   createCodexCliSessionNodeInvokePolicies,
@@ -784,8 +783,9 @@ describe("codex cli node sessions", () => {
 
   it("counts each record once when the escalated head window meets the tail window", async () => {
     const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5261";
-    const records = [sessionMeta(sessionId, "/tmp/codex-overlap", 900 * 1_024)];
-    let bytes = records[0].length + 1;
+    const meta = sessionMeta(sessionId, "/tmp/codex-overlap", 900 * 1_024);
+    const records = [meta];
+    let bytes = meta.length + 1;
     const padTo = (target: number) => {
       while (bytes < target) {
         const record = filler(Math.min(256 * 1_024, target - bytes));
@@ -874,7 +874,7 @@ describe("codex cli node sessions", () => {
       ].join("\n"),
     );
 
-    const command = createCodexCliSessionNodeHostCommands().find(
+    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
       (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
     );
     const raw = await command?.handle(JSON.stringify({ limit: 5 }));
@@ -894,7 +894,7 @@ describe("codex cli node sessions", () => {
   it("scans only the most recent rollouts past the requested limit", async () => {
     const opened = await writeRolloutFixtures(40);
 
-    const command = createCodexCliSessionNodeHostCommands().find(
+    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
       (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
     );
     const reads = spyOnRolloutReads();
@@ -913,7 +913,7 @@ describe("codex cli node sessions", () => {
     const rollouts = await writeRolloutFixtures(210);
     const oldest = rollouts.at(-1);
 
-    const command = createCodexCliSessionNodeHostCommands().find(
+    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
       (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
     );
     const raw = await command?.handle(JSON.stringify({ limit: 50, filter: oldest?.sessionId }));
@@ -934,6 +934,52 @@ describe("codex cli node sessions", () => {
     // rollout. A scan that stops earlier has to report itself truncated instead of answering "none".
     expect(parsed.sessions?.map((entry) => entry.sessionId)).toEqual([oldest?.sessionId]);
     expect(parsed).toMatchObject({ scannedFileCount: 210, sessionFileCount: 210 });
+    expect(parsed).not.toHaveProperty("searchTruncated");
+  });
+
+  it("reaches a cwd match past the filtered candidate ceiling only when the complete search is asked for", async () => {
+    // FILTERED_SESSION_FILE_SCAN_CAP is 2,000, so the 2,001st rollout is the first one the
+    // bounded scan can never open — nothing in its filename matches a directory filter, and a
+    // rerun revisits the same 2,000 candidates.
+    const rollouts = await writeRolloutFixtures(2_001, {
+      cwdFor: (index) => (index === 2_000 ? "/tmp/codex-archive" : "/tmp/codex-many"),
+    });
+    const oldest = rollouts.at(-1);
+
+    const bounded = await runSessionsList({ limit: 50, filter: "/tmp/codex-archive" });
+    const complete = await runSessionsList({
+      limit: 50,
+      filter: "/tmp/codex-archive",
+      searchAll: true,
+    });
+
+    // The bounded answer is empty, and says so as a cut search rather than as "no such session".
+    expect(bounded.sessions).toEqual([]);
+    expect(bounded).toMatchObject({
+      scannedFileCount: 2_000,
+      sessionFileCount: 2_001,
+      searchTruncated: true,
+    });
+    // The complete search opens every rollout and returns the match the ceiling was hiding, so
+    // the bound costs reachability only for the request that asked for it.
+    expect(complete.sessions?.map((entry) => entry.sessionId)).toEqual([oldest?.sessionId]);
+    expect(complete).toMatchObject({ scannedFileCount: 2_001, sessionFileCount: 2_001 });
+    expect(complete).not.toHaveProperty("searchTruncated");
+  }, 60_000);
+
+  it("keeps scanning past a full page when the complete search is asked for", async () => {
+    await writeRolloutFixtures(60);
+
+    const parsed = await runSessionsList({
+      limit: 5,
+      filter: "/tmp/codex-many",
+      searchAll: true,
+    });
+
+    // The match early-out is the other reason a bounded scan stops short. A complete search has to
+    // clear it too, or the 35 rollouts behind a full page stay unread and the answer stays cut.
+    expect(parsed.sessions).toHaveLength(5);
+    expect(parsed).toMatchObject({ scannedFileCount: 60, sessionFileCount: 60 });
     expect(parsed).not.toHaveProperty("searchTruncated");
   });
 
@@ -991,10 +1037,11 @@ describe("codex cli node sessions", () => {
     // 512 KiB + a 1 MiB re-read each, so 256 MiB runs out after 171 of the 175 rollouts.
     // Charging `min(size, head + tail)` instead would have called all 175 a complete search.
     expect(parsed.scannedFileCount).toBe(171);
-    // The stated bound: the budget plus at most one file's maximum summary read.
-    expect(reads.bytes()).toBeLessThanOrEqual(
-      256 * 1024 * 1024 + SESSION_FILE_MAX_SUMMARY_READ_BYTES,
-    );
+    // The stated bound: the 256 MiB budget plus at most one file's maximum summary read — the
+    // 512 KiB initial head window, the 4 MiB escalation re-read, and the 256 KiB tail window, as
+    // documented on FILTERED_SESSION_SCAN_BUDGET_BYTES.
+    const maxSummaryReadBytes = 512 * 1024 + 4 * 1024 * 1024 + 256 * 1024;
+    expect(reads.bytes()).toBeLessThanOrEqual(256 * 1024 * 1024 + maxSummaryReadBytes);
   });
 
   it("keeps an unfiltered listing free of the truncation marker", async () => {
@@ -1070,6 +1117,41 @@ describe("codex cli node sessions", () => {
     // Every file was opened, so a file-count comparison alone calls this a complete search. It is
     // not: the one record that matches was never read, and answering "none" without qualification
     // asserts the session does not exist.
+    expect(parsed.sessions).toEqual([]);
+    expect(parsed).toMatchObject({
+      scannedFileCount: 1,
+      sessionFileCount: 1,
+      searchTruncated: true,
+      unreadSpanCount: 1,
+    });
+  });
+
+  it("reports a search as cut when a history-backed row hid its rollout's unread span", async () => {
+    const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5271";
+    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
+    await fs.mkdir(sessionDir, { recursive: true });
+    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
+    // `session_meta` wider than the 4 MiB escalation, so neither the history-backed `cwd` lookup
+    // nor the summary read recovers a directory for this session.
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        timestamp: "2026-05-14T00:10:23.000Z",
+        type: "session_meta",
+        payload: { id: sessionId, cwd: "/tmp/codex-hidden", instructions: "x".repeat(5_000_000) },
+      })}\n`,
+    );
+    // The history row supplies an exact message count and no partial marker. Reading the marker
+    // from whichever source supplied the count used to clear the rollout's own unread span here.
+    await fs.writeFile(
+      path.join(tempDir, "history.jsonl"),
+      `${JSON.stringify({ session_id: sessionId, ts: 1778678322, text: "history ask" })}\n`,
+    );
+
+    const parsed = await runSessionsList({ limit: 50, filter: "/tmp/codex-hidden" });
+
+    // The only rollout under this codex-home went partly unread and its `cwd` was never recovered,
+    // so an unqualified empty answer would assert that no session sits in that directory.
     expect(parsed.sessions).toEqual([]);
     expect(parsed).toMatchObject({
       scannedFileCount: 1,
@@ -1360,7 +1442,7 @@ describe("codex cli node sessions", () => {
     searchTruncated?: boolean;
     unreadSpanCount?: number;
   }> {
-    const command = createCodexCliSessionNodeHostCommands().find(
+    const command = createCodexCliSessionNodeHostCommands(resolveCatalogSource).find(
       (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
     );
     return JSON.parse((await command?.handle(JSON.stringify(params))) ?? "{}") as {

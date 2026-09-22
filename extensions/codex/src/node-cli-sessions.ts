@@ -136,6 +136,13 @@ export async function listCodexCliSessionsOnNode(params: {
   requestedNode?: string;
   filter?: string;
   limit?: number;
+  /**
+   * Opt out of the bounded scan and open every rollout under the codex-home. This is what a user
+   * reruns with after the bounded search reported it stopped short, so a directory or preview match
+   * older than the candidate ceiling stays reachable instead of being permanently dropped. It
+   * applies to a filtered request only; an unfiltered listing is a newest-first page, not a search.
+   */
+  searchAll?: boolean;
 }): Promise<{ node: CodexCliSessionNodeInfo; result: CodexCliSessionsListResult }> {
   const node = await resolveCodexCliNode({
     runtime: params.runtime,
@@ -148,6 +155,7 @@ export async function listCodexCliSessionsOnNode(params: {
     params: {
       limit: params.limit,
       filter: params.filter,
+      ...(params.searchAll ? { searchAll: true } : {}),
     },
     timeoutMs: 15_000,
     scopes: ["operator.write"],
@@ -320,6 +328,12 @@ function formatSessionSearchTruncation(result: CodexCliSessionsListResult): stri
   sentences.push(
     "A session id is part of the rollout filename, so an id filter is read before the rest and reaches further back than a directory or message-text filter does.",
   );
+  // Files left unopened is the one cause a rerun can actually clear, so only offer the complete
+  // search when it would change the answer. An unread span inside an opened rollout is a window
+  // limit, not a candidate limit, and `--search-all` does not widen the windows.
+  if (scanned !== undefined && total !== undefined && scanned < total) {
+    sentences.push("Add --search-all to open every rollout on this node instead.");
+  }
   return [sentences.join(" ")];
 }
 
@@ -327,11 +341,15 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
   const params = readRecordParam(paramsJSON);
   const limit = normalizeLimit(params.limit);
   const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
+  // Absent on a node build that predates the flag, which is the safe default: the bounded scan.
+  const searchAll = params.searchAll === true;
   const codexHome = resolveCodexAppServerUserHomeDir();
   const summaries = await readHistorySessions(codexHome);
   const sessionFiles = await findSessionFiles(path.join(codexHome, "sessions"), 4);
   await hydrateSessionFiles(summaries, sessionFiles);
-  const scan = await hydrateSessionsFromSessionFiles(summaries, sessionFiles, filter, limit);
+  const scan = await hydrateSessionsFromSessionFiles(summaries, sessionFiles, filter, limit, {
+    searchAll,
+  });
   const sessions = [...summaries.values()]
     .filter((session) => matchesSessionFilter(session, filter))
     .toSorted((a, b) => compareOptionalStringsDesc(a.updatedAt, b.updatedAt))

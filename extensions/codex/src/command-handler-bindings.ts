@@ -296,13 +296,16 @@ export async function buildCodexCliSessions(
 ): Promise<string> {
   const parsed = parseCodexCliSessionsArgs(args);
   if (parsed.help || !parsed.host) {
-    return "Usage: /codex sessions --host <node> [filter] [--limit <n>]";
+    return "Usage: /codex sessions --host <node> [filter] [--limit <n>] [--search-all]";
   }
   return formatCodexCliSessions(
     await deps.listCodexCliSessionsOnNode({
       requestedNode: parsed.host,
       filter: parsed.filter,
       limit: parsed.limit,
+      // Only forwarded when asked for, so a node that predates the flag sees the same params it
+      // always did rather than an unknown key.
+      ...(parsed.searchAll ? { searchAll: true } : {}),
     }),
   );
 }

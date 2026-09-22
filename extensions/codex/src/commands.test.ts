@@ -2062,6 +2062,85 @@ describe("codex command", () => {
     expect(result.text).not.toContain("Searched");
   });
 
+  it("offers the complete search when a Codex CLI search left rollouts unopened", async () => {
+    const listCodexCliSessionsOnNode = vi.fn(async () => ({
+      node: { nodeId: "mb-m5", displayName: "mb-m5" },
+      result: {
+        codexHome: "/Users/mariano/.codex",
+        scannedFileCount: 2000,
+        sessionFileCount: 2928,
+        searchTruncated: true,
+        sessions: [],
+      },
+    }));
+
+    const result = await runCommand("sessions --host mb-m5 /repo", { listCodexCliSessionsOnNode });
+
+    // Naming the rerun is what keeps a bounded scan from reading as a permanent loss: the 928
+    // rollouts this one never opened are still reachable, and the notice has to say how.
+    expect(result.text).toContain("Searched 2000 of 2928 rollouts");
+    expect(result.text).toContain("Add --search-all to open every rollout on this node instead.");
+  });
+
+  it("omits the complete-search offer when every rollout was already opened", async () => {
+    const listCodexCliSessionsOnNode = vi.fn(async () => ({
+      node: { nodeId: "mb-m5", displayName: "mb-m5" },
+      result: {
+        codexHome: "/Users/mariano/.codex",
+        scannedFileCount: 12,
+        sessionFileCount: 12,
+        searchTruncated: true,
+        unreadSpanCount: 2,
+        sessions: [],
+      },
+    }));
+
+    const result = await runCommand("sessions --host mb-m5 /repo", { listCodexCliSessionsOnNode });
+
+    // An unread span is a window limit, not a candidate limit. `--search-all` opens more files; it
+    // does not widen the windows, so offering it here would promise an answer it cannot give.
+    expect(result.text).toContain("2 rollouts were too large to read whole");
+    expect(result.text).not.toContain("--search-all");
+  });
+
+  it("forwards the Codex CLI complete-search request to the node", async () => {
+    const listCodexCliSessionsOnNode = vi.fn(async () => ({
+      node: { nodeId: "mb-m5", displayName: "mb-m5" },
+      result: {
+        codexHome: "/Users/mariano/.codex",
+        sessions: [],
+      },
+    }));
+
+    await runCommand("sessions --host mb-m5 --search-all /repo", { listCodexCliSessionsOnNode });
+
+    expect(listCodexCliSessionsOnNode).toHaveBeenCalledWith({
+      requestedNode: "mb-m5",
+      filter: "/repo",
+      limit: undefined,
+      searchAll: true,
+    });
+  });
+
+  it("leaves the Codex CLI complete-search request off an ordinary listing", async () => {
+    const listCodexCliSessionsOnNode = vi.fn(async () => ({
+      node: { nodeId: "mb-m5", displayName: "mb-m5" },
+      result: {
+        codexHome: "/Users/mariano/.codex",
+        sessions: [],
+      },
+    }));
+
+    await runCommand("sessions --host mb-m5 /repo", { listCodexCliSessionsOnNode });
+
+    // A node that predates the flag has to keep seeing the params it always did.
+    expect(listCodexCliSessionsOnNode).toHaveBeenCalledWith({
+      requestedNode: "mb-m5",
+      filter: "/repo",
+      limit: undefined,
+    });
+  });
+
   it("normalizes signed decimal Codex CLI session limits before node dispatch", async () => {
     const listCodexCliSessionsOnNode = vi.fn(async () => ({
       node: { nodeId: "mb-m5", displayName: "mb-m5" },
@@ -2087,7 +2166,9 @@ describe("codex command", () => {
       listCodexCliSessionsOnNode,
     });
 
-    expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
+    expect(result.text).toBe(
+      "Usage: /codex sessions --host <node> [filter] [--limit <n>] [--search-all]",
+    );
     expect(listCodexCliSessionsOnNode).not.toHaveBeenCalled();
   });
 
@@ -2098,7 +2179,9 @@ describe("codex command", () => {
       listCodexCliSessionsOnNode,
     });
 
-    expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
+    expect(result.text).toBe(
+      "Usage: /codex sessions --host <node> [filter] [--limit <n>] [--search-all]",
+    );
     expect(listCodexCliSessionsOnNode).not.toHaveBeenCalled();
   });
 

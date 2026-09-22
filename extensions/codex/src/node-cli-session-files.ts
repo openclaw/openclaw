@@ -34,13 +34,6 @@ const SESSION_FILE_FULL_READ_BYTES = SESSION_FILE_HEAD_SCAN_BYTES + SESSION_FILE
 /** Rollouts scanned past `limit` to absorb mtime vs. record-`timestamp` ordering skew. */
 const SESSION_FILE_SCAN_HEADROOM = 20;
 /**
- * Most bytes one `readSessionFileSummary` can read: the initial head window, one escalation for an
- * oversized `session_meta`, and the tail window. The scan budget below is checked between files, so
- * this is exactly how far past that budget a scan can run.
- */
-export const SESSION_FILE_MAX_SUMMARY_READ_BYTES =
-  SESSION_FILE_HEAD_SCAN_BYTES + SESSION_FILE_HEAD_SCAN_MAX_BYTES + SESSION_FILE_TAIL_SCAN_BYTES;
-/**
  * A filter can match `cwd` or a message preview, which are only known after hydration, so a filtered
  * listing has to open rollouts to answer it. It walks them in candidate order and stops as soon as
  * it holds enough matches to fill the requested page, so the common "my recent session in /repo"
@@ -53,10 +46,12 @@ export const SESSION_FILE_MAX_SUMMARY_READ_BYTES =
  * that gets cut.
  *
  * The budget is charged the bytes each summary read actually reported, escalations included, and is
- * checked before opening the next rollout — so this scan reads at most
- * `FILTERED_SESSION_SCAN_BUDGET_BYTES + SESSION_FILE_MAX_SUMMARY_READ_BYTES`. It bounds *this* scan
- * only. `readHistorySessions` and `hydrateSessionFiles` run before it and read outside it, so this
- * is not a cap on what the whole list command reads.
+ * checked before opening the next rollout — so this scan reads at most this budget plus one file's
+ * maximum summary read, which is `SESSION_FILE_HEAD_SCAN_BYTES + SESSION_FILE_HEAD_SCAN_MAX_BYTES +
+ * SESSION_FILE_TAIL_SCAN_BYTES` (~4.75 MiB: the initial head window, one escalation for an oversized
+ * `session_meta`, and the tail window). It bounds *this* scan only. `readHistorySessions` and
+ * `hydrateSessionFiles` run before it and read outside it, so this is not a cap on what the whole
+ * list command reads.
  */
 const FILTERED_SESSION_SCAN_BUDGET_BYTES = 256 * 1024 * 1024;
 /** Companion ceiling to the byte budget, so a home full of tiny rollouts cannot spend it on syscalls. */
@@ -191,12 +186,14 @@ export async function hydrateSessionFiles(
  * session id stays reliable regardless, because ids appear in the filename and sort first.
  *
  * A filtered request gets every rollout as a candidate, in filename-match-then-recency order, up to
- * the file ceiling; the caller decides how far down that list it actually reads.
+ * the file ceiling; the caller decides how far down that list it actually reads. `searchAll` drops
+ * that ceiling so an explicitly complete search can reach a match the bounded one left behind.
  */
 function selectSessionFilesToScan(
   files: CodexCliSessionFile[],
   filter: string,
   limit: number,
+  searchAll: boolean,
 ): CodexCliSessionFile[] {
   const byRecency = files.toSorted((a, b) => b.mtimeMs - a.mtimeMs);
   if (!filter) {
@@ -204,7 +201,8 @@ function selectSessionFilesToScan(
   }
   const named = byRecency.filter((entry) => entry.basename.toLowerCase().includes(filter));
   const rest = byRecency.filter((entry) => !entry.basename.toLowerCase().includes(filter));
-  return [...named, ...rest].slice(0, FILTERED_SESSION_FILE_SCAN_CAP);
+  const candidates = [...named, ...rest];
+  return searchAll ? candidates : candidates.slice(0, FILTERED_SESSION_FILE_SCAN_CAP);
 }
 
 export type SessionFileScanOutcome = {
@@ -238,14 +236,22 @@ export type SessionFileScanOutcome = {
  * summarized from a head and a tail window, so a filter term in the skipped middle is invisible and
  * the row is dropped as a non-match. `unreadSpanCount` counts exactly those drops and also sets
  * `searchTruncated`, so "every file was opened" can never by itself report a search as complete.
+ *
+ * `searchAll` is the route back to a complete search when the bounded one reports it stopped short:
+ * it drops the candidate ceiling, the byte budget, and the match early-out, so every rollout under
+ * the codex-home is opened. That is the pre-bounding cost on demand rather than by default, which is
+ * the point — the default keeps the measured improvement, and no rollout becomes permanently
+ * unreachable by a directory or preview filter.
  */
 export async function hydrateSessionsFromSessionFiles(
   summaries: Map<string, CodexCliSessionSummary>,
   files: CodexCliSessionFile[],
   filter: string,
   limit: number,
+  options?: { searchAll?: boolean },
 ): Promise<SessionFileScanOutcome> {
-  const candidates = selectSessionFilesToScan(files, filter, limit);
+  const searchAll = options?.searchAll === true;
+  const candidates = selectSessionFilesToScan(files, filter, limit, searchAll);
   // The page is `limit` long; the headroom is the same allowance for mtime vs. record-`timestamp`
   // skew that `SESSION_FILE_SCAN_HEADROOM` exists for, and bounds the skew it covers, not the skew
   // that can occur.
@@ -261,6 +267,12 @@ export async function hydrateSessionsFromSessionFiles(
   let scannedFileCount = 0;
   let spentBytes = 0;
   let unreadSpanCount = 0;
+  // Metadata confidence is a property of the rollout read, not of whichever source supplied
+  // `messageCount`. Merging the two under `partialScan` let a history row — whose count is exact and
+  // whose partial flag is therefore absent — clear the marker on a rollout whose middle went unread,
+  // and the drop below then looked like a confident non-match. Keeping the read's own verdict here
+  // is what makes an unread span survive the merge.
+  const unreadSpanSessions = new Set<string>();
   // Every exit reports the same two independent reasons a filtered search can be incomplete: files
   // never opened, and opened files whose middle went unread. Routing them through one place is what
   // keeps a new early exit from quietly reintroducing an unqualified "complete" answer.
@@ -270,7 +282,7 @@ export async function hydrateSessionsFromSessionFiles(
     searchTruncated: filter ? filesLeftUnopened || unreadSpanCount > 0 : false,
   });
   for (const file of candidates) {
-    if (filter) {
+    if (filter && !searchAll) {
       if (matched.size >= enoughMatches) {
         return finish(scannedFileCount < files.length);
       }
@@ -289,6 +301,9 @@ export async function hydrateSessionsFromSessionFiles(
     if (!summary) {
       continue;
     }
+    if (summary.partialScan === true) {
+      unreadSpanSessions.add(summary.sessionId);
+    }
     const existing = summaries.get(summary.sessionId);
     // `messageCount` and its partial marker describe one scan, so take both from the same source.
     const counted = existing ?? summary;
@@ -306,9 +321,12 @@ export async function hydrateSessionsFromSessionFiles(
     if (filter) {
       if (matchesSessionFilter(merged, filter)) {
         matched.add(summary.sessionId);
-      } else if (merged.partialScan === true) {
+      } else if (unreadSpanSessions.has(summary.sessionId)) {
         // Dropped on the strength of a summary that skipped a span of this rollout. The record that
-        // matches may be in that span, so this is an unanswered question, not a "no".
+        // matches may be in that span, so this is an unanswered question, not a "no". A
+        // history-backed row reaches here with `partialScan` absent even though the rollout went
+        // partly unread, which is exactly why this check reads the scan's own set rather than the
+        // merged row.
         unreadSpanCount += 1;
       }
     }

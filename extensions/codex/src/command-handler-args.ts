@@ -28,6 +28,12 @@ type ParsedCodexCliSessionsArgs = {
   host?: string;
   filter: string;
   limit?: number;
+  /**
+   * Opt out of the bounded rollout scan so a filter reaches every rollout under the codex-home.
+   * Only a filtered request is a search; an unfiltered listing is a newest-first page and is
+   * unaffected.
+   */
+  searchAll?: boolean;
   help?: boolean;
 };
 
@@ -280,6 +286,10 @@ export function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSession
       }
       parsed.limit = parsedLimit;
       index += 1;
+      continue;
+    }
+    if (arg === "--search-all") {
+      parsed.searchAll = true;
       continue;
     }
     if (arg.startsWith("-")) {
