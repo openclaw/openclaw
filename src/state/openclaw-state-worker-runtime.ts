@@ -123,7 +123,6 @@ import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import { isOnboardingRecommendationWriteCommand } from "./onboarding-recommendations.contract.js";
 import { executeOnboardingRecommendationCommand } from "./onboarding-recommendations.kernel.js";
-import { executeAgentDatabaseCleanupCommand } from "./openclaw-agent-execution-cleanup.worker.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import {
@@ -177,13 +176,6 @@ export function executeSharedStateCommand(
   }
   if (isDevicePairingMutationCommand(command)) {
     return executeDevicePairingMutationInWorker(command, open());
-  }
-  if (command.type === "agentDatabases.releaseExitedLease") {
-    return executeAgentDatabaseCleanupCommand(
-      command,
-      open(),
-      getSqliteWorkerStateContext().environment,
-    );
   }
   if (isWorkerEnvironmentCommand(command)) {
     return executeWorkerEnvironmentCommand(command, open());
