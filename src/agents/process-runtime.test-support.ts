@@ -1,20 +1,5 @@
 // Prepare native process probes before their liveness, readiness, and retention deadlines.
 export const agentProcessTestEntrypoints = {
-  execRuntime: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "bash-tools.exec-runtime",
-    distWorkerPath: "agents/bash-tools.exec-runtime.js",
-  },
-  processRegistry: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "bash-process-registry",
-    distWorkerPath: "agents/bash-process-registry.js",
-  },
-  processTool: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "bash-tools.process",
-    distWorkerPath: "agents/bash-tools.process.js",
-  },
   blockChunker: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "embedded-agent-block-chunker",

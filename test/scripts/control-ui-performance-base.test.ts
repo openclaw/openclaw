@@ -152,6 +152,7 @@ export default {
         "scripts/check-control-ui-performance-base.mts",
         "scripts/check-control-ui-performance.mts",
         "scripts/check-control-ui-precompressed-assets.mts",
+        "ui/vite.config.ts",
       ],
       outDir: root,
       unbundle: true,

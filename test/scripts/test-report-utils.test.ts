@@ -129,11 +129,16 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
         "scripts/run-vitest-child.mts",
       ];
       for (const relative of new Set([
-        ...collectRuntimeImportClosure(repoRoot, sourceEntries, { includeDynamicImports: true }),
-        "scripts/run-vitest.mjs",
-        "scripts/tsx.mjs",
-        "scripts/lib/tsx-cli-shim.mjs",
-        "scripts/lib/vitest-worker-bootstrap.mts",
+        ...collectRuntimeImportClosure(
+          repoRoot,
+          [
+            ...sourceEntries,
+            "scripts/run-vitest.mjs",
+            "scripts/tsx.mjs",
+            "scripts/lib/vitest-worker-bootstrap.mts",
+          ],
+          { includeDynamicImports: true },
+        ),
         "package.json",
         "pnpm-workspace.yaml",
         "tsconfig.json",

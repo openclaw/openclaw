@@ -103,12 +103,12 @@ function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
 }
 
 beforeAll(async () => {
-  const { rootDir, scriptPath } = createCliFixture();
+  const { rootDir } = createCliFixture();
   const { bundles } = await build({
     config: false,
     cwd: rootDir,
     root: rootDir,
-    entry: [scriptPath],
+    entry: ["scripts/check-control-ui-performance.mts"],
     outDir: rootDir,
     unbundle: true,
     format: "esm",
