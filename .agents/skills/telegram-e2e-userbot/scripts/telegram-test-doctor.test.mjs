@@ -9,6 +9,7 @@ test("doctor revocation after getMe prevents later Bot API calls and releases", 
   let released = false;
   let proxyClosed = false;
   const methods = [];
+  let statusArgs;
   const whenLeaseUnhealthy = new Promise((resolve) => {
     revoke = () => {
       healthy = false;
@@ -54,18 +55,22 @@ test("doctor revocation after getMe prevents later Bot API calls and releases", 
     runTelegramTestDoctor({
       acquireCredential: async () => credential,
       fetchImpl,
-      runCommandImpl: async () => ({
-        status: 0,
-        stdout: JSON.stringify({
-          ok: true,
-          authorized: true,
-          testDc: true,
-          tdlibVersion: "1.8.56",
-          user: { id: 123 },
-        }),
-        stderr: "",
-        timedOut: false,
-      }),
+      runCommandImpl: async (_command, args) => {
+        statusArgs = args;
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            ok: true,
+            authorized: true,
+            testDc: true,
+            tdlibVersion: "1.8.56",
+            user: { id: 123 },
+            chatId: -1001,
+          }),
+          stderr: "",
+          timedOut: false,
+        };
+      },
       startProxy: async () => ({
         apiRoot: "http://127.0.0.1:19881",
         close: async () => {
@@ -76,6 +81,37 @@ test("doctor revocation after getMe prevents later Bot API calls and releases", 
     (error) => error === leaseError,
   );
   assert.deepEqual(methods, ["getMe"]);
+  assert.deepEqual(statusArgs.slice(-2), ["--require-chat", "-1001"]);
   assert.equal(proxyClosed, true);
+  assert.equal(released, true);
+});
+
+test("doctor rejects a cold-restored credential without its configured group", async () => {
+  let released = false;
+  const credential = {
+    driverEnv: {},
+    groupId: "-1001",
+    whenLeaseUnhealthy: new Promise(() => {}),
+    assertLeaseHealthy: () => {},
+    release: async () => {
+      released = true;
+    },
+  };
+
+  await assert.rejects(
+    runTelegramTestDoctor({
+      acquireCredential: async () => credential,
+      runCommandImpl: async () => ({
+        status: 1,
+        stdout: "",
+        stderr: "Chat -1001 is missing from the cold-restored TDLib state.",
+        timedOut: false,
+      }),
+      startProxy: async () => {
+        throw new Error("proxy must not start for an invalid credential");
+      },
+    }),
+    /Disable and republish this credential/u,
+  );
   assert.equal(released, true);
 });
