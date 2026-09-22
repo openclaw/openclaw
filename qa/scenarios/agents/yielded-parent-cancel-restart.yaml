@@ -1,0 +1,33 @@
+title: Yielded parent cancellation survives Gateway restart
+
+scenario:
+  id: yielded-parent-cancel-restart
+  surface: subagents
+  coverage:
+    primary:
+      - agent-runtime.session-restart-recovery
+      - agent-runtime.runtime-recovery
+    secondary:
+      - agent-runtime.subagent-turns-delivery
+      - agent-runtime.subagent-turns-qa-channel
+  objective: Verify an operator-stopped yielded parent remains terminal across Gateway restart and cannot be reopened by its child's late provider settlement.
+  successCriteria:
+    - A real QA Channel parent spawns one held native child and ends its turn with sessions_yield.
+    - Operator Stop cancels the yielded parent and child before acknowledging success.
+    - The same persisted Gateway state restarts without redispatching the cancelled child.
+    - Releasing the original child provider request cannot wake the parent or deliver child output.
+    - A fresh independent turn still produces exactly one visible reply after restart.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/concepts/session-tool.md
+    - docs/gateway/restart-recovery.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/gateway/server-methods/sessions-abort.ts
+    - src/agents/tools/sessions-yield-tool.ts
+    - src/agents/subagents/registry/subagent-registry-requester-yield.ts
+    - test/e2e/qa-lab/runtime/gateway-yielded-parent-cancel-restart.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-yielded-parent-cancel-restart.e2e.test.ts
+    summary: Start an isolated Gateway, QA Channel, and controlled provider; hold a child while its parent yields, stop the parent, restart persisted state, release the late child, and prove only a fresh turn can reply.
