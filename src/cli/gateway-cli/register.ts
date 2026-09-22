@@ -21,22 +21,21 @@ import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
-import {
-  addGatewayClientOptions,
-  callGatewayFromCliWithTransport,
-  resolveGatewayRpcOptions,
-  resolveGatewayRpcOptionsWithLocalPort,
-} from "../gateway-rpc.js";
+import { resolveGatewayRpcOptions, resolveGatewayRpcOptionsWithLocalPort } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
+import {
+  gatewayCallOpts,
+  callGatewayReadOnlyCli,
+  parseGatewayCallParams,
+  type GatewayRpcOpts,
+} from "./rpc.js";
 import { addGatewayRunCommand } from "./run-command.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
-
-type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
 const loadConfigModule = createLazyPromise(
   () => import("../../config/read-best-effort-config.runtime.js"),
@@ -61,35 +60,11 @@ const loadDaemonStatusGatherModule = createLazyPromise(
   () => import("../daemon-cli/status.gather.js"),
 );
 
-const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 const SETUP_INFERENCE_DETECT_RPC_TIMEOUT_MS = 40_000;
 type GatewayCliDependencies = {
   loadGatewayHealthModule?: typeof loadGatewayHealthModule;
   loadHealthStyleModule?: typeof loadHealthStyleModule;
 };
-
-function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TIMEOUT_MS): Command {
-  return addGatewayClientOptions(cmd, { timeoutMs: defaultTimeoutMs }).option(
-    "--json",
-    "Output JSON",
-    false,
-  );
-}
-
-async function callGatewayReadOnlyCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
-  return await callGatewayFromCliWithTransport(method, opts, params, {
-    defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
-    sharedStateMode: "read-only",
-  });
-}
-
-function parseGatewayCallParams(value = "{}"): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    throw new Error("--params must be valid JSON.");
-  }
-}
 
 async function runGatewayCommand(
   action: () => Promise<void>,
@@ -493,6 +468,10 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .option(
         "--expect-url <url>",
         "Fail if the resolved Gateway URL differs; preserves configured authentication",
+      )
+      .option(
+        "--traceparent <traceparent>",
+        "Optional W3C diagnostic correlation (not authorization)",
       )
       .option("--params <json>", "JSON object string for params", "{}")
       .action(async (method, opts, command) => {

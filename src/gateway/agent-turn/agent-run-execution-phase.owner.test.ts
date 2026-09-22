@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveAgentRunContext } from "../../agents/command/run-context.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  observeGatewayToolCallerOwner,
+  withGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
@@ -100,6 +106,30 @@ function createExecution(options: { aborted?: boolean; assertContextCurrent?: ()
 }
 
 describe("startAgentRunExecution Gateway ownership", () => {
+  it("records the native Gateway owner on the real post-admission callback", async () => {
+    const execution = createExecution();
+    // The observation follows resolver identity and must never invoke it.
+    execution.params.context.resolveGatewayContext = () => undefined;
+    const admission = prepareSystemAgentRunAdmission({}, "native-callback", "test", "fixture");
+    try {
+      const admitted = await admission.admit("embedded");
+      dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+        await dispatch.ingressOpts.onAdmittedRunContext(admitted);
+        const projected = { agentId: "test", sessionKey: "fixture", runId: "native-callback" };
+        const caller = createAdmittedGatewayToolCallerIdentity({
+          admittedRunContext: admitted,
+          ...projected,
+        });
+        await withGatewayToolCallerIdentity(caller, async () => {
+          expect(observeGatewayToolCallerOwner(projected)).toBe("match");
+        });
+      });
+      await startAgentRunExecution(execution.params);
+      expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
+    } finally {
+      admission.close();
+    }
+  });
   beforeEach(() => dispatchAgentRunFromGateway.mockReset());
 
   it.each<{

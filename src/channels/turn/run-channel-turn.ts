@@ -9,7 +9,6 @@ import {
 import type {
   AssembledChannelTurn,
   ChannelEventClass,
-  ChannelProviderOwnedMessageSendingDeliveryAdapter,
   ChannelTurnAdmission,
   ChannelTurnDeliveryAdapter,
   ChannelTurnLogEvent,
@@ -149,16 +148,15 @@ export async function runChannelTurn<
   TRaw,
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(
-  params: RunChannelTurnParams<
-    TRaw,
-    TDispatchResult,
-    ChannelProviderOwnedMessageSendingDeliveryAdapter
-  >,
+  params: RunChannelTurnParams<TRaw, TDispatchResult, ChannelTurnDeliveryAdapter>,
 ): Promise<ChannelTurnResult<TDispatchResult>>;
 export async function runChannelTurn<
   TRaw,
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
->(params: RunChannelTurnParams<TRaw, TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>>;
+>(
+  // Keep the default overload last for consumers deriving their plan with Parameters.
+  params: RunChannelTurnParams<TRaw, TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>>;
 export async function runChannelTurn<
   TRaw,
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],

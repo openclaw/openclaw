@@ -8,5 +8,7 @@ export type GatewayRpcOpts = {
   password?: string;
   timeout?: string;
   expectFinal?: boolean;
+  /** Explicit diagnostic request association only; never caller authority. */
+  traceparent?: string;
   json?: boolean;
 };

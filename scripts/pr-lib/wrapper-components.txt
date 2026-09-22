@@ -555,9 +555,11 @@ src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
+src/infra/diagnostic-event-delivery-policy.ts
 src/infra/diagnostic-event-listener-presence.ts
 src/infra/diagnostic-events.ts
 src/infra/diagnostic-flags.ts
+src/infra/diagnostic-gateway-admission-provenance.ts
 src/infra/diagnostic-model-request-provenance.ts
 src/infra/diagnostic-otel-listener-provenance.ts
 src/infra/diagnostic-plugin-usage-provenance.ts

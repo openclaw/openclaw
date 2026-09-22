@@ -368,6 +368,7 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     tests: [
       "src/plugins/captured-registration.test.ts",
       "src/plugins/runtime/index.test.ts",
+      "src/plugins/runtime/runtime-channel.inbound.test.ts",
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:

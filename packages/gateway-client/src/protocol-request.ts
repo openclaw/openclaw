@@ -10,6 +10,8 @@ export function isGatewayProtocolResponseError(
 }
 
 export type GatewayProtocolRequestOptions = {
+  /** Optional request-scoped diagnostic envelope field; does not affect authorization. */
+  traceparent?: string;
   timeoutMs?: number | null;
   expectFinal?: boolean;
   onSent?: (requestId: string) => void;

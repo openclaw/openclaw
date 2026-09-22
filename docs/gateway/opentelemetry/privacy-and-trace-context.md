@@ -42,6 +42,19 @@ values within the 128-character field limit silently fall back to a fresh
 request trace; longer values make the request frame invalid. `tracestate` and
 `baggage` are not accepted by the Gateway WebSocket protocol.
 
+### Explicit CLI propagation
+
+`openclaw gateway call <method> --traceparent <value>` forwards an explicitly
+supplied W3C traceparent on that request only. It does not add the field to the
+connection handshake or later calls, change method parameters, choose a target,
+or alter authentication, scopes, waits, or cancellation. Malformed explicit
+CLI input fails before connection startup without echoing the supplied value.
+No environment variable or implicit propagation is introduced.
+
+Trace context is correlation, not authorization or proof of a native owner.
+A consumer that requires a one-to-one association must reject missing, malformed,
+mismatched, reused, or ambiguous links rather than infer one from timing or PID.
+
 ## Privacy and content capture
 
 Raw model/tool content is **not** exported by default. Spans carry bounded

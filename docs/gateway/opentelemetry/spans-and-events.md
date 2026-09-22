@@ -174,6 +174,41 @@ for usage methods and request options.
   response can still arrive. Durations and queue/admission semantics are described
   in [Gateway RPC metrics](/gateway/opentelemetry#gateway-rpc).
 
+**Internal native observations**
+
+Explicit internal subscribers can select `gateway.run.owner` and
+`gateway.admission` through `onInternalDiagnosticEvent` from
+`openclaw/plugin-sdk/diagnostic-runtime`. Public `onDiagnosticEvent` listeners
+do not receive them. These are best-effort diagnostics, not audit records or
+authorization capabilities.
+
+- `gateway.run.owner` is produced in the native before-tool frame. Its
+  `gatewayOwner` is `match`, `mismatch`, or `unobserved`, and its phase is
+  `before_tool_call`. The producer selects the actual admitted object privately,
+  checks current lifecycle and caller consistency, and compares its binding
+  with the native Gateway owner captured at admission. It never resolves an
+  owner from trace IDs or invokes authority assertions. A fresh diagnostic span
+  is supplied as `gatewayOwnerObservationTrace` immediately before each actual
+  hook invocation, after earlier policies and handlers settle. Ordinary `trace`
+  is unchanged and is not a fallback when this observation is absent.
+- `gateway.admission` records the targeted `gateway.restart.request` signal
+  owner result: `emitted`, `coalesced`, or `failed`. It requires the received
+  traceparent and its authenticated child request span. It does not infer a
+  model caller from the separate CLI request or certify a restart completed.
+
+Native provenance is carried in dispatcher metadata as `coreGatewayOwner` or
+`coreGatewayAdmission`, with `internal` and `trusted` true. Payload claims and
+replayed event copies cannot supply those markers. Neither event exports run,
+session, or owner IDs, parameters, command text, or raw objects. Existing opaque
+W3C trace fields provide association only; identity and native outcomes remain
+independent observations.
+
+Delivery uses the existing bounded asynchronous diagnostic queue, not a
+synchronous persistence guarantee. Internal integrations can await
+`waitForDiagnosticEventsDrained()` before consuming a snapshot, including before
+unsubscribing during graceful shutdown. Overflow, disabled diagnostics, and
+abrupt termination can lose facts; absence is missing evidence, never success.
+
 **Queue and session**
 
 - `queue.lane.enqueue` / `queue.lane.dequeue`

@@ -83,6 +83,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
         password: opts.password,
         method,
         params,
+        ...(opts.traceparent !== undefined ? { traceparent: opts.traceparent } : {}),
         deviceIdentity: extra?.deviceIdentity,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
         scopes: extra?.scopes,

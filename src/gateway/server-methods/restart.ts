@@ -8,6 +8,7 @@ import {
   scheduleSafeGatewayRestart,
 } from "../../infra/restart-coordinator.js";
 import { requestGatewayRestartWithSignalAdmission } from "../../infra/restart.js";
+import { captureGatewayRestartAdmissionObservation } from "./restart-observation.js";
 import {
   parseTargetedGatewayRestart,
   parseTargetedGatewayRestartIntent,
@@ -34,7 +35,7 @@ function normalizeSkipDeferral(value: unknown): boolean {
 
 /** Gateway request handlers for safe restart coordination. */
 export const restartHandlers: GatewayRequestHandlers = {
-  "gateway.restart.request": async ({ respond, params }) => {
+  "gateway.restart.request": async ({ respond, params, req }) => {
     if (!isRestartRequestParams(params)) {
       respond(
         false,
@@ -103,7 +104,9 @@ export const restartHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const observeAdmission = captureGatewayRestartAdmissionObservation(req?.traceparent);
       const result = requestGatewayRestartWithSignalAdmission(reason, intent);
+      observeAdmission?.(result.status);
       if (result.status === "failed") {
         respond(
           false,

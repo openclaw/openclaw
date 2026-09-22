@@ -26,6 +26,30 @@ function spanNamed(spans: ReadableSpan[], name: string) {
   return spans.find((span) => span.name === name);
 }
 
+test("keeps native owner/admission observations out of exported telemetry", async () => {
+  await startOtelService({ traces: true });
+  const diagnosticTrace = createDiagnosticTraceContext();
+  emit({
+    type: "gateway.admission",
+    method: "gateway.restart.request",
+    outcome: "emitted",
+    trace: diagnosticTrace,
+  });
+  emit({
+    type: "gateway.run.owner",
+    phase: "before_tool_call",
+    gatewayOwner: "match",
+    trace: diagnosticTrace,
+  });
+  emit({ type: "gateway.rpc", method: "health", phase: "response", outcome: "ok", durationMs: 1 });
+  await waitForDiagnosticEventsDrained();
+  const names = sdk.exporter.getFinishedSpans().map((span) => span.name);
+  expect(names).toContain("openclaw.gateway.rpc.response");
+  expect(
+    names.some((name) => name.includes("gateway.admission") || name.includes("gateway.run.owner")),
+  ).toBe(false);
+});
+
 test.each([
   { traces: true, metricsEnabled: false },
   { traces: false, metricsEnabled: true },

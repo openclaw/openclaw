@@ -85,8 +85,10 @@ export function createDiagnosticsEventHandler(params: {
   ) => {
     try {
       switch (evt.type) {
+        case "gateway.admission":
+        case "gateway.run.owner":
         case "diagnostic.child_process.spawn":
-          // Child-launch counts currently export through Prometheus.
+          // Native observations stay private; child-launch counts export through Prometheus.
           return;
         case "diagnostic.gc":
           recordGcDuration(evt, metadata);

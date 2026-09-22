@@ -396,24 +396,23 @@ function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword =
 }
 
 describe("callGateway url resolution", () => {
-  const envSnapshot = captureEnv([
+  const isolatedEnvKeys = [
     "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
     "OPENCLAW_CONFIG_PATH",
     "OPENCLAW_GATEWAY_PORT",
     "OPENCLAW_GATEWAY_URL",
     "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_GATEWAY_PASSWORD",
     "OPENCLAW_STATE_DIR",
-  ]);
+  ];
+  const envSnapshot = captureEnv(isolatedEnvKeys);
 
   beforeEach(() => {
     resetConfigRuntimeState();
     envSnapshot.restore();
-    deleteTestEnvValue("OPENCLAW_ALLOW_INSECURE_PRIVATE_WS");
-    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
-    deleteTestEnvValue("OPENCLAW_STATE_DIR");
+    for (const key of isolatedEnvKeys) {
+      deleteTestEnvValue(key);
+    }
     resetGatewayCallMocks();
   });
 

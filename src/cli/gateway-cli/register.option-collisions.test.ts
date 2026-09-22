@@ -159,6 +159,30 @@ function expectLocalGatewayCall(method: string, port: number, params?: unknown) 
 }
 
 describe("gateway register option collisions", () => {
+  it("accepts explicit traceparent on gateway call without changing params", async () => {
+    const program = new Command().exitOverride();
+    registerGatewayCli(program);
+    const traceparent = "00-" + "1".repeat(32) + "-" + "2".repeat(16) + "-01";
+    await program.parseAsync(
+      [
+        "gateway",
+        "call",
+        "health",
+        "--traceparent",
+        traceparent,
+        "--params",
+        '{"fixture":true}',
+        "--json",
+      ],
+      { from: "user" },
+    );
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(callGatewayCli).toHaveBeenCalledWith(
+      "health",
+      expect.objectContaining({ traceparent }),
+      { fixture: true },
+    );
+  });
   const sharedProgram: Command = new Command();
 
   if (sharedProgram.commands.length === 0) {

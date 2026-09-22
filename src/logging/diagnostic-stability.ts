@@ -5,6 +5,7 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { DIAGNOSTIC_STABILITY_EVENT_INTEREST } from "./diagnostic-stability-filter.js";
 
 // Ring-buffer recorder for stability diagnostics and support-bundle snapshots.
 const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
@@ -244,6 +245,10 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
   };
 
   switch (event.type) {
+    case "gateway.admission":
+    case "gateway.run.owner":
+      // Private observations are excluded by the subscription, never support-bundle evidence.
+      break;
     case "gateway.rpc":
     case "gateway.event_loop.sample":
     case "diagnostic.gc":
@@ -849,31 +854,19 @@ export function startDiagnosticStabilityRecorder(): void {
   if (state.unsubscribe) {
     return;
   }
-  state.unsubscribe = onInternalDiagnosticEvent(
-    (event, metadata) => {
-      // Model-call instrumentation is trusted core telemetry required by recovery.
-      // Other trusted events retain their dedicated owners outside this ring.
-      if (
-        metadata.trusted &&
-        event.type !== "model.call.started" &&
-        event.type !== "model.call.completed" &&
-        event.type !== "model.call.error"
-      ) {
-        return;
-      }
-      appendRecord(sanitizeDiagnosticEvent(event));
-    },
-    {
-      exclude: [
-        "log.record",
-        "telemetry.exporter",
-        "gateway.rpc",
-        "gateway.event_loop.sample",
-        "diagnostic.gc",
-        "diagnostic.child_process.spawn",
-      ],
-    },
-  );
+  state.unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
+    // Model-call instrumentation is trusted core telemetry required by recovery.
+    // Other trusted events retain their dedicated owners outside this ring.
+    if (
+      metadata.trusted &&
+      event.type !== "model.call.started" &&
+      event.type !== "model.call.completed" &&
+      event.type !== "model.call.error"
+    ) {
+      return;
+    }
+    appendRecord(sanitizeDiagnosticEvent(event));
+  }, DIAGNOSTIC_STABILITY_EVENT_INTEREST);
 }
 
 /** Stops the process-wide diagnostic event recorder. */

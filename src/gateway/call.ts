@@ -31,6 +31,7 @@ import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
+import { parseDiagnosticTraceparent } from "../infra/diagnostic-trace-context.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
@@ -38,6 +39,10 @@ import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { resolveGatewayAuth } from "./auth-resolve.js";
+import {
+  ensureGatewaySupportsRequiredMethods,
+  ensureGatewaySupportsRequiredCapabilities,
+} from "./call-capabilities.js";
 import {
   loadStoredOperatorDeviceAuthToken,
   resolveDeviceIdentityForGatewayCall,
@@ -123,6 +128,8 @@ type CallGatewayBaseOptions = Pick<
   config?: OpenClawConfig;
   method: string;
   params?: unknown;
+  /** Explicit diagnostic carrier, independent of authentication and target selection. */
+  traceparent?: string;
   expectFinal?: boolean;
   timeoutMs?: number | null;
   signal?: AbortSignal;
@@ -646,56 +653,6 @@ function createGatewayRequestAbortError(method: string): Error {
   return createAbortError(`gateway request aborted for ${method}`);
 }
 
-function ensureGatewaySupportsRequiredMethods(params: {
-  requiredMethods: string[] | undefined;
-  methods: string[] | undefined;
-  attemptedMethod: string;
-}): void {
-  const requiredMethods = Array.isArray(params.requiredMethods)
-    ? params.requiredMethods.map((entry) => entry.trim()).filter((entry) => entry.length > 0)
-    : [];
-  if (requiredMethods.length === 0) {
-    return;
-  }
-  const supportedMethods = new Set(
-    (Array.isArray(params.methods) ? params.methods : [])
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0),
-  );
-  for (const method of requiredMethods) {
-    if (supportedMethods.has(method)) {
-      continue;
-    }
-    throw new Error(
-      [
-        `active gateway does not support required method "${method}" for "${params.attemptedMethod}".`,
-        "Update or restart the active gateway and try again.",
-      ].join(" "),
-    );
-  }
-}
-
-function ensureGatewaySupportsRequiredCapabilities(params: {
-  requiredCapabilities: string[] | undefined;
-  capabilities: string[] | undefined;
-  attemptedMethod: string;
-}): void {
-  const required = (params.requiredCapabilities ?? []).map((entry) => entry.trim()).filter(Boolean);
-  if (required.length === 0) {
-    return;
-  }
-  const supported = new Set(
-    (params.capabilities ?? []).map((entry) => entry.trim()).filter(Boolean),
-  );
-  for (const capability of required) {
-    if (!supported.has(capability)) {
-      throw new Error(
-        `active gateway does not support required capability "${capability}" for "${params.attemptedMethod}". Update or restart the active gateway and try again.`,
-      );
-    }
-  }
-}
-
 function isRequiredAgentRuntimeIdentityConnectError(err: Error): boolean {
   return err.message.includes(
     "gateway rejected required agent runtime identity auth field; refusing to retry without it",
@@ -876,6 +833,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
               timeoutMs: opts.timeoutMs,
               signal: opts.signal,
               onAccepted: opts.onAccepted,
+              ...(opts.traceparent !== undefined ? { traceparent: opts.traceparent } : {}),
             });
             ignoreClose = true;
             stop(undefined, result);
@@ -983,6 +941,9 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   scopes: OperatorScope[] | undefined,
   localCliAbort = false,
 ): Promise<T> {
+  if (opts.traceparent !== undefined && !parseDiagnosticTraceparent(opts.traceparent)) {
+    throw new Error("Invalid diagnostic traceparent.");
+  }
   const context = await resolveGatewayCallContext(opts);
   const { timeoutMs, startupTimeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
     opts.timeoutMs,
