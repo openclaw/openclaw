@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
+import { runMemoryIndexState } from "./manager-cpu-worker-runtime.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 
@@ -15,9 +17,9 @@ describe("automatic candidates during provenance repair", () => {
     closeAllMemorySearchManagers,
   });
 
-  it.each([false, true])(
-    "returns promptly while a large rebuild is pending (startup catch-up: %s)",
-    async (startupCatchup) => {
+  it.for([false, true])(
+    "returns before a pending rebuild finishes (startup catch-up: %s)",
+    async (startupCatchup, { signal }) => {
       const projectKey = "github.com/example/project";
       await fs.writeFile(
         path.join(fixture.paths.workspace, "MEMORY.md"),
@@ -46,10 +48,6 @@ describe("automatic candidates during provenance repair", () => {
       }
       const initial = await fixture.getFreshManager(cfg, "cli");
       await initial.sync({ reason: "cli", force: true });
-      // Reader startup is setup; the measured calls must contend with the held rebuild.
-      await initial.listCuratedProjectCandidates({
-        activeProjectKeys: ["github.com/example/reader-readiness"],
-      });
       const db = Reflect.get(initial, "db") as DatabaseSync;
       // Older indexes have neither classified provenance nor a chunking version.
       db.exec("DELETE FROM memory_index_chunk_provenance; DELETE FROM memory_embedding_cache");
@@ -65,23 +63,28 @@ describe("automatic candidates during provenance repair", () => {
       await initial.close();
 
       const gate = createDeferred<void>();
+      const batchEntered = createDeferred<void>();
       fixture.provider.providerRuntimeBatchGate = gate.promise;
-      const upgraded = await fixture.getFreshManager(cfg);
+      fixture.provider.providerRuntimeBatchEntered = () => batchEntered.resolve();
+      // Native test cancellation must release both rendezvous before manager teardown.
+      const abort = () => {
+        batchEntered.resolve();
+        gate.resolve();
+      };
+      signal.addEventListener("abort", abort, { once: true });
       const candidates: Promise<unknown>[] = [];
-      let repairAdmission: Promise<unknown> | undefined;
       try {
+        signal.throwIfAborted();
+        const upgraded = await fixture.getFreshManager(cfg);
         expect(upgraded.status().custom?.indexIdentity).toMatchObject({
           status: "mismatched",
           reason: "index provenance classifier changed",
         });
-        if (!startupCatchup) {
-          repairAdmission = upgraded.listCuratedProjectCandidates({
-            activeProjectKeys: ["github.com/example/repair-admission"],
-          });
+        if (startupCatchup) {
+          await batchEntered.promise;
+          signal.throwIfAborted();
+          expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1);
         }
-        await vi.waitFor(() => expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1), {
-          timeout: 10_000,
-        });
         let completed = 0;
         for (const lookup of [
           () => upgraded.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
@@ -94,32 +97,43 @@ describe("automatic candidates during provenance repair", () => {
             }),
           );
         }
-        await vi.waitFor(() => expect(completed).toBe(2));
-        expect(await Promise.all(candidates)).toEqual([[], []]);
-        await vi.waitFor(() => expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1), {
-          timeout: 10_000,
+        // Queue a read behind both lookups on the single retrieval worker. Their
+        // public promises must then settle without releasing the repair gate.
+        await runMemoryIndexState({
+          agentId: "main",
+          databasePath: expectDefined(upgraded.status().dbPath, "memory database path"),
         });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(completed).toBe(2);
+        expect(await Promise.all(candidates)).toEqual([[], []]);
+        await batchEntered.promise;
+        signal.throwIfAborted();
+        expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1);
         expect(upgraded.status().dirty).toBe(true);
+        gate.resolve();
+        await upgraded.sync({ reason: "test-repair-complete" });
+        expect(upgraded.status().dirty).toBe(false);
+        const expected = [
+          expect.objectContaining({
+            projectKey,
+            triggers: "release local",
+            provenance: expect.objectContaining({ originClass: "agent" }),
+          }),
+        ];
+        expect(
+          await upgraded.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+        ).toEqual(expected);
+        expect(await upgraded.listTriggerCandidates({ activeProjectKeys: [projectKey] })).toEqual(
+          expected,
+        );
       } finally {
+        signal.removeEventListener("abort", abort);
+        fixture.provider.providerRuntimeBatchEntered = null;
         gate.resolve();
         await Promise.allSettled(candidates);
-        await repairAdmission;
       }
-      await upgraded.sync({ reason: "test-repair-complete" });
-      expect(upgraded.status().dirty).toBe(false);
-      const expected = [
-        expect.objectContaining({
-          projectKey,
-          triggers: "release local",
-          provenance: expect.objectContaining({ originClass: "agent" }),
-        }),
-      ];
-      expect(
-        await upgraded.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
-      ).toEqual(expected);
-      expect(await upgraded.listTriggerCandidates({ activeProjectKeys: [projectKey] })).toEqual(
-        expected,
-      );
     },
   );
 

@@ -143,6 +143,24 @@ export function createSessionHistoryWorkerReaders(
         input.limits ? undefined : receiveChunk,
       );
     },
+    readCurrentTurnEntry: async (input, signal) =>
+      await runRequest(
+        () => ({ kind: "current-turn-entry", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "current-turn-entry"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of a current-turn entry",
+            );
+          }
+          return value;
+        },
+        signal,
+      ),
     readUsageCache: async (input) =>
       await runRequest(
         () => ({ kind: "usage-cache", ...input }),
@@ -229,6 +247,23 @@ export function createSessionHistoryWorkerReaders(
         },
       );
     },
+    readProgressCard: async (input) =>
+      await runRequest(
+        () => ({ kind: "session-progress-card", ...input }),
+        JSON.stringify(input).length * 2,
+        (value) => {
+          if (
+            typeof value === "boolean" ||
+            Array.isArray(value) ||
+            value.kind !== "session-progress-card"
+          ) {
+            throw new Error(
+              "Session history worker returned another result instead of a progress card",
+            );
+          }
+          return value.card;
+        },
+      ),
     readEntries: async (scope) =>
       await runRequest(
         () => ({ kind: "session-entry-list", scope }),

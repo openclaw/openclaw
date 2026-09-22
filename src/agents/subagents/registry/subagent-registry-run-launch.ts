@@ -1,5 +1,6 @@
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -128,6 +129,14 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           },
           cfg,
         );
+    const completionAuthority = entry.collect
+      ? undefined
+      : captureOperatorToolGatewayContinuationContext();
+    if (completionAuthority?.operatorAuthority) {
+      subagentRuns.bindCompletionAuthority(entry, completionAuthority);
+    } else {
+      completionAuthority?.release();
+    }
     this.options.runs.set(runId, entry);
     bindGatewayContextResolver(entry, registerParams.gatewayContextResolver);
     const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(entry);
@@ -201,6 +210,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       this.options.persistOrThrow(...registeredRunIds);
     } catch (error) {
       rollbackRegistration();
+      subagentRuns.releaseCompletionAuthority(entry);
       throw error;
     }
     if (registerParams.taskRowOwnership !== "gateway_best_effort") {
@@ -234,6 +244,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             activateRegistrationLifecycle();
             throw rollbackError;
           }
+          subagentRuns.releaseCompletionAuthority(entry);
           throw error;
         }
       }

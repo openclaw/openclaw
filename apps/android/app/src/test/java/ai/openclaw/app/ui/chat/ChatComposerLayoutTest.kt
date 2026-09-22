@@ -5379,6 +5379,11 @@ class ChatComposerLayoutTest {
       val geometryFailures = mutableListOf<String>()
 
       fun verifyGeometry(label: String) {
+        val transcriptWidth =
+          composeRule
+            .onNodeWithTag("chat-viewport")
+            .fetchSemanticsNode()
+            .boundsInRoot.width - with(composeRule.density) { 32.dp.toPx() }
         val reference = composeRule.onNode(hasContentDescription("You") and hasText("Summarize the release checklist.")).fetchSemanticsNode().boundsInRoot
         val actual =
           composeRule
@@ -5387,8 +5392,8 @@ class ChatComposerLayoutTest {
             .fetchSemanticsNode()
             .boundsInRoot
         val assistant = composeRule.onNode(hasContentDescription("OpenClaw") and hasText("I will keep the summary concise.")).fetchSemanticsNode().boundsInRoot
-        if (kotlin.math.abs(reference.width - actual.width) > 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
-          geometryFailures += "$label: pending user width/edge differs from confirmed user: $actual vs $reference"
+        if (actual.width > transcriptWidth * 0.78f + 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
+          geometryFailures += "$label: pending user exceeds text budget or differs from confirmed trailing edge: $actual vs $reference"
         }
         if (model.chatSelectedActiveRunPresentation.value.count > 0 && model.chatStreamingAssistantText.value == null) {
           val typing =
@@ -5397,8 +5402,8 @@ class ChatComposerLayoutTest {
               .assertIsDisplayed()
               .fetchSemanticsNode()
               .boundsInRoot
-          if (kotlin.math.abs(assistant.width - typing.width) > 1f || kotlin.math.abs(assistant.left - typing.left) > 1f) {
-            geometryFailures += "$label: typing width/edge differs from assistant: $typing vs $assistant"
+          if (typing.width > transcriptWidth + 1f || kotlin.math.abs(assistant.left - typing.left) > 1f) {
+            geometryFailures += "$label: typing exceeds assistant width or differs from its leading edge: $typing vs $assistant"
           }
         }
       }

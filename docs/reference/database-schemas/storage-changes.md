@@ -1351,6 +1351,13 @@ schema setup and mutation. A changed route, closed request, or revoked session c
 publish a queued write. SQLite kernels remain synchronous inside their native transactions, with existing
 revision, grant, session-existence, and transaction semantics.
 
+Progress-card GET resolves its captured session store through the existing target
+preparation owner and reads the card on the session transcript worker. Reads do
+not create missing databases or unused card tables. The same worker custody joins
+native cleanup and rejects retired owners; Gateway authorization is rechecked
+before returning a delayed card. Incognito reads retain their process-held owner.
+Progress-card writes and reset clears keep their existing transaction owners.
+
 MCP App pinning retains its existing source-interaction checks. A delayed adapter must
 revalidate that source authority at its actual write admission; checking view registration
 alone cannot replace the supported asynchronous interaction policy.

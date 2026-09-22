@@ -14,13 +14,12 @@ import type {
   QuestionWaitAnswerResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   retainGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import type { GatewayClient } from "./server-methods/client-types.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import type { QuestionSessionAccess } from "./question-session-access.types.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -35,13 +34,6 @@ export const QuestionManagerErrorCodes = {
 
 type QuestionManagerErrorCode =
   (typeof QuestionManagerErrorCodes)[keyof typeof QuestionManagerErrorCodes];
-
-/** Private admission binding; it never enters the question's wire record. */
-export type QuestionOwnRunAccess = {
-  canSelect: (client: GatewayClient | null) => boolean;
-  canAccess: (client: GatewayClient | null, cfg: OpenClawConfig) => boolean;
-  release: () => void;
-};
 
 export class QuestionManagerError extends Error {
   constructor(
@@ -60,9 +52,9 @@ type QuestionManagerRequest = {
   sessionKey?: string;
   runId?: string;
   timeoutMs: number;
-  onResolved?: (event: QuestionResolvedEvent) => void;
+  onResolved?: (event: QuestionResolvedEvent, observation: QuestionObservation) => void;
+  sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
-  ownRunAccess?: QuestionOwnRunAccess;
   requesterRun?: OperationalRunInstanceRef;
   /** Trusted handler binds the run; the manager owns expiry and terminal release. */
   registerHumanInputWait?: (isPending: () => boolean) => ((resolved: boolean) => void) | undefined;
@@ -72,16 +64,26 @@ type Waiter = () => void;
 
 type QuestionEntry = {
   record: QuestionRecord;
+  ordinary: boolean;
   resolutionId?: string;
   expiryTimer: ReturnType<typeof setTimeout>;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   waiters: Set<Waiter>;
-  onResolved?: (event: QuestionResolvedEvent) => void;
+  onResolved?: QuestionManagerRequest["onResolved"];
+  sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
-  ownRunAccess?: QuestionOwnRunAccess;
   requesterRun?: OperationalRunInstanceRef;
   admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
   releaseHumanInputWait?: (resolved: boolean) => void;
+};
+
+/** Private entry identity. Never reselect a successor by its public question id. */
+export type QuestionObservation = {
+  readonly record: QuestionRecord;
+  readonly ordinary: boolean;
+  readonly sessionAccess?: QuestionSessionAccess;
+  isCurrent: () => boolean;
+  refreshRequester: () => void;
 };
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
@@ -122,6 +124,20 @@ function resolvedEvent(record: QuestionRecord): QuestionResolvedEvent | null {
 export class QuestionManager {
   private readonly entries = new Map<string, QuestionEntry>();
   private closed = false;
+  private readonly publications = new AsyncWorkScope();
+
+  constructor(private readonly onPublicationError?: () => void) {}
+
+  async drain(): Promise<void> {
+    if (this.closed) {
+      await this.publications.drain();
+    } else {
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [this.publications],
+        () => {},
+      );
+    }
+  }
 
   request(params: QuestionManagerRequest): QuestionRecord {
     if (this.closed) {
@@ -159,12 +175,13 @@ export class QuestionManager {
     const expiryTimer = setTimeout(() => this.expire(record.id), timeoutMs);
     const entry: QuestionEntry = {
       record,
+      ordinary: !params.questions.some((question) => question.isSecret || question.secretStore),
       expiryTimer,
       cleanupTimer: null,
       waiters: new Set(),
       onResolved: params.onResolved,
+      sessionAccess: params.sessionAccess,
       isRequesterActive: params.isRequesterActive,
-      ownRunAccess: params.ownRunAccess,
       requesterRun: params.requesterRun,
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
@@ -184,21 +201,50 @@ export class QuestionManager {
     if (entry.record.status === "pending" && entry.record.expiresAtMs <= Date.now()) {
       this.expire(id);
     }
-    if (entry.record.status === "pending" && entry.isRequesterActive?.() === false) {
-      this.cancelEntry(entry, "requester-inactive");
-    }
-    return this.entries.get(id)?.record ?? null;
+    this.refreshRequester(entry);
+    return this.entries.get(id) === entry ? entry.record : null;
   }
 
-  getOwnRunAccess(id: string): QuestionOwnRunAccess | undefined {
-    return this.entries.get(id)?.ownRunAccess;
+  /** Observation only: unlike get(), this cannot expire or cancel and recursively broadcast. */
+  observe(id: string, expectedRecord?: QuestionRecord): QuestionObservation | null {
+    const entry = this.entries.get(id);
+    if (!entry || (expectedRecord && entry.record !== expectedRecord)) {
+      return null;
+    }
+    return this.observeEntry(entry);
+  }
+
+  private observeEntry(entry: QuestionEntry): QuestionObservation {
+    return {
+      get record() {
+        return entry.record;
+      },
+      ordinary: entry.ordinary,
+      sessionAccess: entry.sessionAccess,
+      isCurrent: () => this.entries.get(entry.record.id) === entry,
+      refreshRequester: () => this.refreshRequester(entry),
+    };
+  }
+
+  private refreshRequester(entry: QuestionEntry): void {
+    if (this.entries.get(entry.record.id) !== entry || entry.record.status !== "pending") {
+      return;
+    }
+    const active = entry.isRequesterActive?.();
+    // Liveness can reset/reuse the public id or settle the captured entry reentrantly.
+    // A worker-confirmed source loss must retire only this still-pending observation.
+    if (
+      active === false &&
+      this.entries.get(entry.record.id) === entry &&
+      entry.record.status === "pending"
+    ) {
+      this.cancelEntry(entry, "requester-inactive");
+    }
   }
 
   /** Called by the Gateway's existing authority-close observer. */
   cancelClosedAuthorities(closedRun?: { runId: string; instanceId?: string }): void {
     for (const [id, entry] of this.entries) {
-      // Select exact host-bound runs; legacy SDK entries retain their full sweep.
-      // The retained liveness assertion, not this correlation, decides cancellation.
       if (
         closedRun &&
         entry.requesterRun &&
@@ -230,10 +276,11 @@ export class QuestionManager {
 
   /** Re-enters only the still-pending question's original admitted root. */
   runPendingContinuation<T>(id: string, run: () => Promise<T>): Promise<T> | null {
-    this.get(id);
+    const record = this.get(id);
     const entry = this.entries.get(id);
     if (
       !entry?.admissionContinuation ||
+      entry.record !== record ||
       entry.record.status !== "pending" ||
       entry.record.expiresAtMs <= Date.now()
     ) {
@@ -320,19 +367,22 @@ export class QuestionManager {
       return;
     }
     this.closed = true;
+    this.publications.beginClose();
     this.reset();
   }
 
   /** Reusable on open owners (v2026.8.1 SDK context); never reopens a closed owner. */
   reset(): void {
-    for (const entry of this.entries.values()) {
+    const entries = [...this.entries.values()];
+    this.entries.clear();
+    for (const entry of entries) {
+      entry.sessionAccess?.release();
       clearTimeout(entry.expiryTimer);
       const releaseHumanInputWait = entry.releaseHumanInputWait;
       entry.releaseHumanInputWait = undefined;
       releaseHumanInputWait?.(false);
       entry.admissionContinuation?.release();
       entry.admissionContinuation = null;
-      entry.ownRunAccess?.release();
       if (entry.cleanupTimer) {
         clearTimeout(entry.cleanupTimer);
       }
@@ -340,14 +390,13 @@ export class QuestionManager {
         waiter();
       }
     }
-    this.entries.clear();
   }
 
   private requireEntry(id: string): QuestionEntry {
     // get() settles expiry/requester loss; its callbacks can replace the entry.
-    this.get(id);
+    const record = this.get(id);
     const entry = this.entries.get(id);
-    if (!entry) {
+    if (!record || !entry || entry.record !== record) {
       throw this.notFound(id);
     }
     return entry;
@@ -437,36 +486,72 @@ export class QuestionManager {
 
   private finish(entry: QuestionEntry): void {
     clearTimeout(entry.expiryTimer);
-    // Requester-scope loss must not refresh the still-live run's recovery clock.
-    const releaseHumanInputWait = entry.releaseHumanInputWait;
-    entry.releaseHumanInputWait = undefined;
-    releaseHumanInputWait?.(entry.isRequesterActive?.() !== false);
-    entry.isRequesterActive = undefined;
-    entry.admissionContinuation?.release();
+    const continuation = entry.admissionContinuation;
     entry.admissionContinuation = null;
-    for (const waiter of entry.waiters) {
-      waiter();
-    }
-    const event = resolvedEvent(entry.record);
-    if (event) {
+    let settled = false;
+    const settle = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      const releaseHumanInputWait = entry.releaseHumanInputWait;
+      entry.releaseHumanInputWait = undefined;
       try {
-        entry.onResolved?.(event);
-      } catch {
-        // Broadcast fanout is observational and must not change question truth.
+        releaseHumanInputWait?.(entry.isRequesterActive?.() !== false);
+      } finally {
+        entry.isRequesterActive = undefined;
+        for (const waiter of entry.waiters) {
+          waiter();
+        }
       }
-    }
-    // A resolution callback can reset/close the owner synchronously; it must
-    // not recreate a retention timer after that entry has been retired.
-    if (this.entries.get(entry.record.id) !== entry) {
-      return;
-    }
-    const cleanupTimer = setTimeout(() => {
-      if (entry.cleanupTimer === cleanupTimer && this.entries.get(entry.record.id) === entry) {
-        entry.ownRunAccess?.release();
-        this.entries.delete(entry.record.id);
+    };
+    const publish = async () => {
+      try {
+        // Enter the original continuation before these callbacks can release its last parked root.
+        settle();
+        const event = resolvedEvent(entry.record);
+        if (event && this.entries.get(entry.record.id) === entry) {
+          await Promise.resolve(entry.onResolved?.(event, this.observeEntry(entry)));
+        }
+      } finally {
+        continuation?.release();
       }
-    }, QUESTION_RESOLVED_ENTRY_GRACE_MS);
-    entry.cleanupTimer = cleanupTimer;
-    unrefTimer(cleanupTimer);
+    };
+    // Track before invoking: synchronous truth and callbacks retain their ordering,
+    // while worker preparation and rejected publication are joined by Gateway shutdown.
+    void this.publications
+      .track(async () => {
+        try {
+          let publication: Promise<void>;
+          try {
+            publication = continuation ? continuation.run(publish) : publish();
+          } finally {
+            // Root reset can refuse entry before publish starts. Local waiters still
+            // observe the committed terminal fact without admitting another root.
+            settle();
+          }
+          await publication;
+        } finally {
+          // Worker preparation still needs this entry. Start grace only after
+          // publication settles, and never resurrect an entry retired by a callback.
+          if (this.entries.get(entry.record.id) === entry) {
+            const cleanupTimer = setTimeout(() => {
+              if (
+                entry.cleanupTimer === cleanupTimer &&
+                this.entries.get(entry.record.id) === entry
+              ) {
+                this.entries.delete(entry.record.id);
+                entry.sessionAccess?.release();
+              }
+            }, QUESTION_RESOLVED_ENTRY_GRACE_MS);
+            entry.cleanupTimer = cleanupTimer;
+            unrefTimer(cleanupTimer);
+          }
+        }
+      })
+      .catch(() => {
+        continuation?.release();
+        this.onPublicationError?.();
+      });
   }
 }

@@ -80,9 +80,10 @@ function createRecordingMattermostClient(recorder: WireRecorder): MattermostClie
       });
       return result as T;
     }
-    if (path.startsWith("/posts/")) {
-      const postId = path.slice("/posts/".length);
-      if (method === "DELETE") {
+    const postRoute = /^\/posts\/([^/]+)(\/patch)?$/.exec(path);
+    const postId = postRoute?.[1];
+    if (postId) {
+      if (method === "DELETE" && !postRoute?.[2]) {
         recorder.recordWireCall({
           method: `DELETE ${path}`,
           target: postId,
@@ -90,9 +91,11 @@ function createRecordingMattermostClient(recorder: WireRecorder): MattermostClie
         });
         return { status: "OK" } as T;
       }
-      const result = { id: postId };
-      recorder.recordWireCall({ method: `${method} ${path}`, target: postId, payload, result });
-      return result as T;
+      if (method === "PUT" && postRoute?.[2] === "/patch") {
+        const result = { id: postId };
+        recorder.recordWireCall({ method: `${method} ${path}`, target: postId, payload, result });
+        return result as T;
+      }
     }
     throw new Error(`Unexpected Mattermost request: ${method} ${path}`);
   };

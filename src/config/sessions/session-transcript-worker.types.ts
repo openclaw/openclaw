@@ -1,3 +1,4 @@
+import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   BuildSessionEntryOptions,
   SessionFileEntry,
@@ -19,6 +20,10 @@ import type {
   SessionBranchSummaryReadRequest,
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
+import type {
+  SessionTranscriptContextVersion,
+  TranscriptEvent,
+} from "./session-accessor.sqlite-contract.js";
 import type {
   SessionIdentityEvidenceIdentity,
   SessionIdentityEvidenceResult,
@@ -85,6 +90,19 @@ export type SessionTranscriptHydrationChunk = {
   kind: "transcript-hydration-chunk";
   encoding: string;
   frames: Array<{ data: Uint8Array; endOfEvent: boolean }>;
+};
+
+export type SessionTranscriptCurrentTurnEntryRequest = {
+  entryId: string;
+  version: SessionTranscriptContextVersion;
+  includeEntry: boolean;
+};
+
+export type SessionTranscriptCurrentTurnEntryRead = {
+  kind: "current-turn-entry";
+  version: SessionTranscriptContextVersion;
+  anchor?: TranscriptEntryAnchor;
+  event?: TranscriptEvent;
 };
 
 export type SessionModelContextWorkerInput = {
@@ -166,6 +184,12 @@ type SessionTranscriptHydrationWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
+type SessionTranscriptCurrentTurnEntryWorkerInput = Omit<
+  SessionTranscriptHydrationWorkerInput,
+  "kind" | "limits"
+> &
+  SessionTranscriptCurrentTurnEntryRequest & { kind: "current-turn-entry" };
+
 export type SessionRowPresenceWorkerInput = {
   kind: "session-row-presence";
   database: { agentId: string; path: string };
@@ -185,6 +209,13 @@ type SessionMembershipFactsWorkerInput = {
   sessionKeys?: readonly string[];
   env: NodeJS.ProcessEnv;
   continuation?: CanonicalSessionReaderContinuation;
+};
+
+type SessionProgressCardWorkerInput = {
+  kind: "session-progress-card";
+  database: { agentId: string; path: string };
+  sessionKey: string;
+  env: NodeJS.ProcessEnv;
 };
 
 type SessionUsageCacheWorkerInput = {
@@ -212,6 +243,8 @@ export type SessionExactEntriesWorkerInput = {
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
   projection?: "full" | "backing" | "sharing";
+  includeMembers?: boolean;
+  includeAuthorization?: boolean;
   continuation?: CanonicalSessionReaderContinuation;
 };
 
@@ -219,6 +252,13 @@ export type SessionExactEntriesWorkerResult = {
   kind: "session-exact-entries";
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
+  databaseIdentity?: {
+    identity: string;
+    incarnation: string;
+    filename: string;
+    birthtime?: string;
+  };
+  members?: Record<string, SessionMember[]>;
   sharing?: {
     source: { agentId: string; path: string };
     databaseIdentity: string;
@@ -276,12 +316,14 @@ export type SessionBranchSummaryWorkerInput = {
 
 export type SessionHistoryWorkerInput =
   | SessionTranscriptHydrationWorkerInput
+  | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptHistoryWorkerInput
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
   | SessionRowPresenceWorkerInput
   | SessionMembersWorkerInput
   | SessionMembershipFactsWorkerInput
+  | SessionProgressCardWorkerInput
   | SessionEntryListWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
@@ -307,6 +349,7 @@ export type SessionHistoryWorkerPreparedInput = {
 export type SessionTranscriptWorkerValues = {
   "transcript-search": SessionTranscriptSearchWorkerResult;
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
+  "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
   "sqlite-target": { target: ResolvedSqliteStoreTarget };
   "branch-summaries": SessionBranchSummaryReadResult;
   "history-page": SessionHistoryWorkerResult;
@@ -315,6 +358,7 @@ export type SessionTranscriptWorkerValues = {
   "session-row-presence": boolean;
   "session-members": SessionMember[];
   "session-membership-facts": SessionMembershipFacts;
+  "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
   "session-entry-list": SessionEntryListWorkerResult;
   "session-exact-entries": SessionExactEntriesWorkerResult;
   "session-row-facts": SessionRowFactsWorkerResult;
@@ -370,6 +414,10 @@ export type SessionHistoryWorkerDatabase = {
     input: Omit<SessionTranscriptHydrationWorkerInput, "kind" | "database">,
     signal?: AbortSignal,
   ) => Promise<PreparedSessionTranscriptHydration>;
+  readCurrentTurnEntry: (
+    input: Omit<SessionTranscriptCurrentTurnEntryWorkerInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<SessionTranscriptCurrentTurnEntryRead>;
   readExactEntries: (
     input: Omit<SessionExactEntriesWorkerInput, "kind" | "database">,
   ) => Promise<SessionExactEntriesWorkerResult>;
@@ -385,6 +433,9 @@ export type SessionHistoryWorkerDatabase = {
   readMembershipFacts: (
     input: Omit<SessionMembershipFactsWorkerInput, "kind" | "database">,
   ) => Promise<SessionMembershipFacts>;
+  readProgressCard: (
+    input: Omit<SessionProgressCardWorkerInput, "kind" | "database">,
+  ) => Promise<ProgressCard | null>;
   readUsageCache: (
     input: Omit<SessionUsageCacheWorkerInput, "kind" | "database">,
   ) => Promise<SessionCostUsageCacheReadResult>;

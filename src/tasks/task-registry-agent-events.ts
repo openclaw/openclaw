@@ -688,7 +688,6 @@ export function enqueueTaskAgentEvent(
     previous.input.change = {
       ...change,
       toolStarts: previous.input.change.toolStarts + change.toolStarts,
-      refreshStartedAt: previous.input.change.refreshStartedAt || change.refreshStartedAt,
       refreshError: previous.input.change.refreshError || change.refreshError,
       patch: { ...previous.input.change.patch, ...change.patch },
     };

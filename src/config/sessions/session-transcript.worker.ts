@@ -269,6 +269,25 @@ serveOwnedWorkerTasks(
           })),
         };
       }
+      if (request.kind === "session-progress-card") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { readSessionProgressCard } =
+          await import("../../session-cards/progress-card-store.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => {
+            const result = withOpenClawAgentDatabaseReadOnly(
+              (database) => readSessionProgressCard(database.db, request.sessionKey),
+              { ...request.database, env: request.env },
+            );
+            return {
+              kind: "session-progress-card" as const,
+              card: result.found ? result.value : null,
+            };
+          })),
+        };
+      }
       if (request.kind === "session-row-presence") {
         const { loadSessionEntryReadOnlyInScope } =
           await import("./session-accessor.sqlite-entry.js");
@@ -310,7 +329,7 @@ serveOwnedWorkerTasks(
               }))),
             };
           }
-          if (request.kind === "transcript-hydration") {
+          if (request.kind === "transcript-hydration" || request.kind === "current-turn-entry") {
             const { readOpenClawDatabaseQuarantineFailure } =
               await import("../../state/openclaw-quarantine-store.js");
             const quarantine = readOpenClawDatabaseQuarantineFailure(
@@ -322,6 +341,22 @@ serveOwnedWorkerTasks(
             );
             if (quarantine) {
               throw quarantine;
+            }
+            if (request.kind === "current-turn-entry") {
+              const { readSessionTranscriptCurrentTurnEntry } =
+                await import("./session-accessor.sqlite-current-turn.js");
+              return {
+                ok: true,
+                ...(await withHistoryDatabase(request.database, () =>
+                  readSessionTranscriptCurrentTurnEntry(request.target, {
+                    entryId: request.entryId,
+                    version: request.version,
+                    includeEntry: request.includeEntry,
+                    readOnly: true,
+                    resolvedScope: request.resolvedScope,
+                  }),
+                )),
+              };
             }
             const { readSessionTranscriptBoundedActiveContextCore } =
               await import("./session-accessor.sqlite-active-context.js");
