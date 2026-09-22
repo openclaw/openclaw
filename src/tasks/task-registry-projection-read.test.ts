@@ -1,20 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import type { SqliteWorkerNativeSettlementOwner } from "../infra/sqlite-worker-operation-settlement.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as taskRuntime from "./runtime-internal.js";
 import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
+import { recoverTaskAgentEventPublication } from "./task-registry-agent-event-commit.js";
+import type { TaskAgentEventInput } from "./task-registry-agent-event.operation.js";
 import { taskAgentEventMutations } from "./task-registry-agent-events.js";
 import { updateTask } from "./task-registry-mutation.js";
-import { prepareTaskRegistryRead } from "./task-registry-read.js";
+import { deleteTaskRecordById } from "./task-registry-query.js";
+import { prepareTaskRegistryRead, prepareTaskRegistryReadOwner } from "./task-registry-read.js";
 import {
   createReadTask,
   requestTasks,
   resetReadState,
   withReadState,
 } from "./task-registry-read.test-support.js";
-import { runTaskRegistryWorkerMutation, taskDeliveryStates, tasks } from "./task-registry-state.js";
-import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
+import { captureTaskPersistenceReceipt } from "./task-registry-records.js";
+import {
+  prepareTaskRegistryProjectionAsync,
+  runTaskRegistryWorkerMutation,
+  taskDeliveryStates,
+  tasks,
+} from "./task-registry-state.js";
+import {
+  configureTaskRegistryRuntime,
+  getTaskRegistryStore,
+  onTaskRegistryChange,
+} from "./task-registry.store.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "./task-registry.store.sqlite.js";
 import type {
   TaskRegistryMutationScope,
@@ -23,6 +37,384 @@ import type {
 import { createTaskFixture, prepareTaskFixtureRead } from "./task-registry.test-support.js";
 
 afterEach(resetReadState);
+
+it.each(["unchanged", "changed", "absent", "recovered"] as const)(
+  "publishes a committed task after an older refresh finishes first: %s resident row",
+  async (resident) => {
+    await withReadState(async () => {
+      const task = createReadTask("older-refresh-newer-publication");
+      const store = await prepareTaskFixtureRead(task);
+      await prepareTaskRegistryRead();
+      const context = captureOpenClawStateWorkerContext();
+      const canonical =
+        resident === "absent"
+          ? undefined
+          : resident !== "changed"
+            ? task
+            : { ...task, task: "Earlier disk value" };
+      if (resident === "absent") {
+        expect(deleteTaskRecordById(task.taskId)).toBe(true);
+      }
+      if (canonical && resident === "changed") {
+        const failedPublication = vi.fn();
+        const failure = new Error("Synthetic initial publication failure");
+        await runTaskRegistryWorkerMutation(
+          {
+            admission: context.admission,
+            scope: { taskId: task.taskId },
+            publicationRecords: () => new Map([[task.taskId, canonical]]),
+            onPublicationError: failedPublication,
+          },
+          async () => store.upsertTaskWithDeliveryState({ task: canonical }),
+          async () => {
+            throw failure;
+          },
+        );
+        expect(failedPublication).toHaveBeenCalledExactlyOnceWith(failure);
+      }
+      const readOwner = await prepareTaskRegistryReadOwner();
+      const scope = { taskId: task.taskId };
+      let next = { ...task, task: "Later committed value" };
+      const input: TaskAgentEventInput = {
+        taskId: task.taskId,
+        expectedTask: captureTaskPersistenceReceipt(task),
+        change: { kind: "terminal", at: Date.now(), toolStarts: 0, patch: { status: "succeeded" } },
+      };
+      let commitFacts: unknown;
+      const lostResult = new Error("Synthetic lost result after joined commit");
+      const releaseWrite = createDeferred();
+      const refreshCaptured = createDeferred();
+      const releaseRefresh = createDeferred();
+      const publicationCaptured = createDeferred();
+      const releasePublication = createDeferred();
+      const load = store.loadMutationSnapshotAsync.bind(store);
+      let held = false;
+      vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
+        const snapshot = await load(...args);
+        if (!held && Array.isArray(args[1])) {
+          held = true;
+          expect(snapshot.tasks.get(task.taskId)?.task).toBe(canonical?.task);
+          refreshCaptured.resolve();
+          await releaseRefresh.promise;
+        }
+        return snapshot;
+      });
+      const changed = vi.fn();
+      const stop = onTaskRegistryChange(changed);
+      let mutationFailure: unknown;
+      const mutation = runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope,
+          publicationRecords: () => new Map(resident === "recovered" ? [] : [[task.taskId, next]]),
+          ...(resident === "recovered" && {
+            recoverPublication: (snapshot: TaskRegistryStoreSnapshot) =>
+              recoverTaskAgentEventPublication(commitFacts, input, snapshot.tasks.get(task.taskId))
+                ?.task,
+          }),
+        },
+        async (beginRecovery) => {
+          await releaseWrite.promise;
+          if (resident === "recovered") {
+            beginRecovery();
+            let nativeOwner: SqliteWorkerNativeSettlementOwner | undefined;
+            const receipt = await store.runAgentEventMutationAsync(
+              context,
+              input,
+              () => context.admission.assertCurrent(),
+              (owner) => {
+                nativeOwner = owner;
+              },
+            );
+            if (!receipt) {
+              throw new Error("Expected a committed terminal task event");
+            }
+            next = receipt.task;
+            commitFacts = nativeOwner?.settlement?.committed?.facts;
+            expect(commitFacts).toBeDefined();
+            throw lostResult;
+          }
+          store.upsertTaskWithDeliveryState({ task: next });
+        },
+        async () => {
+          const snapshot = await load(context, scope);
+          expect(snapshot.tasks.get(task.taskId)).toMatchObject({
+            task: next.task,
+            status: next.status,
+          });
+          publicationCaptured.resolve();
+          await releasePublication.promise;
+          return snapshot;
+        },
+      ).catch((error: unknown) => {
+        if (resident !== "recovered" || error !== lostResult) {
+          throw error;
+        }
+        mutationFailure = error;
+      });
+      const reading = prepareTaskRegistryRead(readOwner);
+      try {
+        await withTestTimeout(refreshCaptured.promise, 5_000, "Older refresh captured");
+        releaseWrite.resolve();
+        await withTestTimeout(publicationCaptured.promise, 5_000, "Newer publication captured");
+        releaseRefresh.resolve();
+        const prepared = await withTestTimeout(reading, 5_000, "Older refresh finished first");
+        if (prepared) {
+          expect(prepared.isTaskCurrent(task.taskId)).toBe(false);
+          expect(() => prepared.getTaskById(task.taskId)).toThrow("requires preparation");
+        }
+        releasePublication.resolve();
+        await withTestTimeout(mutation, 5_000, "Newer committed mutation published");
+        expect(mutationFailure).toBe(resident === "recovered" ? lostResult : undefined);
+        expect(changed).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            kind: "upserted",
+            task: expect.objectContaining({
+              taskId: task.taskId,
+              task: next.task,
+              status: next.status,
+            }),
+          }),
+        );
+        expect(tasks.get(task.taskId)?.task).toBe(next.task);
+      } finally {
+        releaseWrite.resolve();
+        releaseRefresh.resolve();
+        releasePublication.resolve();
+        await Promise.allSettled([reading, mutation]);
+        stop();
+      }
+    });
+  },
+);
+
+it.each(["newer first", "older first", "later read"] as const)(
+  "retains the final canonical row across overlapping orphan refreshes: %s",
+  async (completion) => {
+    await withReadState(async () => {
+      const task = createReadTask("overlapping-canonical-refresh");
+      const store = await prepareTaskFixtureRead(task);
+      await prepareTaskRegistryRead();
+      const context = captureOpenClawStateWorkerContext();
+      const publicationFailure = new Error("Synthetic orphaned task publication");
+      const lostResult = new Error("Synthetic lost result after canonical commit");
+      const failedPublication = vi.fn();
+      const writeWithoutPublication = async (record: typeof task, release = Promise.resolve()) => {
+        const writing = runTaskRegistryWorkerMutation(
+          {
+            admission: context.admission,
+            scope: { taskId: task.taskId },
+            publicationRecords: () => new Map(),
+            onPublicationError: failedPublication,
+          },
+          async () => {
+            await release;
+            store.upsertTaskWithDeliveryState({ task: record });
+            throw lostResult;
+          },
+          async () => {
+            throw publicationFailure;
+          },
+        );
+        await expect(writing).rejects.toBe(lostResult);
+      };
+      const intermediate = { ...task, task: "Intermediate canonical value" };
+      const before = completion === "newer first" ? intermediate : task;
+      const after = completion === "newer first" ? task : intermediate;
+      await writeWithoutPublication(before);
+      const load = store.loadMutationSnapshotAsync.bind(store);
+      const firstCaptured = createDeferred();
+      const releaseFirst = createDeferred();
+      const secondCaptured = createDeferred();
+      const releaseSecond = createDeferred();
+      const releaseWrite = createDeferred();
+      const mutation = writeWithoutPublication(after, releaseWrite.promise);
+      let reads = 0;
+      vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
+        const snapshot = await load(...args);
+        if (Array.isArray(args[1])) {
+          reads += 1;
+          if (reads === 1) {
+            expect(snapshot.tasks.get(task.taskId)?.task).toBe(before.task);
+            firstCaptured.resolve();
+            await releaseFirst.promise;
+          } else if (reads === 2) {
+            expect(snapshot.tasks.get(task.taskId)?.task).toBe(after.task);
+            secondCaptured.resolve();
+            await releaseSecond.promise;
+          }
+        }
+        return snapshot;
+      });
+      const first = prepareTaskRegistryProjectionAsync(context, store, 1);
+      let second: ReturnType<typeof requestTasks> | undefined;
+      try {
+        await withTestTimeout(firstCaptured.promise, 5_000, "First canonical refresh captured");
+        releaseWrite.resolve();
+        await mutation;
+        expect(failedPublication).toHaveBeenCalledTimes(2);
+        if (completion !== "later read") {
+          second = requestTasks(task.ownerKey);
+          await withTestTimeout(secondCaptured.promise, 5_000, "Later canonical refresh captured");
+        }
+        if (completion !== "newer first") {
+          releaseFirst.resolve();
+          expect(await withTestTimeout(first, 5_000, "Older refresh refused the orphan")).toBe(
+            false,
+          );
+        }
+        releaseSecond.resolve();
+        second ??= requestTasks(task.ownerKey);
+        const laterResponse = await withTestTimeout(
+          second,
+          5_000,
+          "Later canonical refresh finished",
+        );
+        expect(laterResponse.mock.calls[0]).toMatchObject([
+          true,
+          { tasks: [{ id: task.taskId, title: after.task }] },
+        ]);
+        releaseFirst.resolve();
+        const prepared = await withTestTimeout(first, 5_000, "Older refresh settled");
+        if (completion === "newer first") {
+          expect(prepared).toBe(true);
+        }
+        expect(tasks.get(task.taskId)?.task).toBe(after.task);
+      } finally {
+        releaseWrite.resolve();
+        releaseFirst.resolve();
+        releaseSecond.resolve();
+        await Promise.allSettled([first, second, mutation]);
+      }
+    });
+  },
+);
+
+it.each(["newer value", "ABA during metadata"] as const)(
+  "keeps canonical data from an orphaned write after an older readback settles: %s",
+  async (change) => {
+    await withReadState(async () => {
+      const task = createReadTask("refresh-after-orphaned-write");
+      const unrelated = createTaskFixture("cli", {
+        runId: "unrelated-refresh-metadata",
+        requesterSessionKey: "agent:main:other-refresh",
+        ownerKey: "agent:main:other-refresh",
+        task: "Unrelated metadata",
+        notifyPolicy: "silent",
+        lastEventAt: 100,
+      });
+      const store = await prepareTaskFixtureRead(task);
+      await prepareTaskRegistryRead();
+      const context = captureOpenClawStateWorkerContext();
+      const scope = { taskId: task.taskId };
+      const older = { ...task, task: "Older committed value" };
+      const newer = { ...task, task: "Newer committed value", status: "succeeded" as const };
+      const canonical = change === "newer value" ? newer : older;
+      const olderRead = createDeferred();
+      const releaseOlder = createDeferred();
+      const newerCommitted = createDeferred();
+      const failure = new Error("Synthetic newer publication readback failure");
+      const failedPublication = vi.fn();
+      const mutations: Promise<unknown>[] = [];
+      const load = store.loadMutationSnapshotAsync.bind(store);
+      const capture = taskAgentEventMutations.captureReadFence.bind(taskAgentEventMutations);
+      vi.spyOn(taskAgentEventMutations, "captureReadFence").mockImplementationOnce((admission) =>
+        capture(admission).then(async () => {
+          mutations.push(
+            runTaskRegistryWorkerMutation(
+              {
+                admission: context.admission,
+                scope,
+                publicationRecords: () => new Map([[task.taskId, older]]),
+              },
+              async () => store.upsertTaskWithDeliveryState({ task: older }),
+              async () => {
+                const snapshot = await load(context, scope);
+                olderRead.resolve();
+                await releaseOlder.promise;
+                return snapshot;
+              },
+            ),
+          );
+          await withTestTimeout(olderRead.promise, 5_000, "Older canonical read captured");
+          mutations.push(
+            runTaskRegistryWorkerMutation(
+              {
+                admission: context.admission,
+                scope: { taskId: task.taskId },
+                publicationRecords: () => new Map([[task.taskId, canonical]]),
+                onPublicationError: failedPublication,
+              },
+              async () => {
+                store.upsertTaskWithDeliveryState({
+                  task: change === "newer value" ? newer : { ...older, task: "Intermediate value" },
+                });
+                if (change === "ABA during metadata") {
+                  store.upsertTaskWithDeliveryState({ task: older });
+                }
+                newerCommitted.resolve();
+              },
+              async () => {
+                throw failure;
+              },
+            ),
+          );
+          await withTestTimeout(newerCommitted.promise, 5_000, "Newer canonical write committed");
+        }),
+      );
+      let held = false;
+      let metadataWrites = 0;
+      vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
+        const snapshot = await load(...args);
+        if (!held && Array.isArray(args[1])) {
+          held = true;
+          expect(snapshot.tasks.get(task.taskId)).toMatchObject({
+            task: canonical.task,
+            status: canonical.status,
+          });
+          releaseOlder.resolve();
+          await Promise.all(mutations);
+          expect(failedPublication).toHaveBeenCalledExactlyOnceWith(failure);
+          expect(tasks.get(task.taskId)).toMatchObject({
+            task: change === "newer value" ? task.task : older.task,
+            status: "running",
+          });
+        }
+        if (Array.isArray(args[1]) && change === "ABA during metadata" && metadataWrites < 32) {
+          metadataWrites += 1;
+          expect(
+            updateTask(unrelated.taskId, { lastEventAt: 100 + metadataWrites }),
+          ).not.toBeNull();
+        }
+        return snapshot;
+      });
+      const reading = requestTasks(task.ownerKey);
+      try {
+        const response = await withTestTimeout(reading, 5_000, "Orphaned canonical row reconciled");
+        expect(held).toBe(true);
+        expect(response.mock.calls[0]).toMatchObject([
+          true,
+          {
+            tasks: [
+              {
+                id: task.taskId,
+                title: canonical.task,
+                status: canonical.status === "succeeded" ? "completed" : "running",
+              },
+            ],
+          },
+        ]);
+        expect(tasks.get(task.taskId)).toMatchObject({
+          task: canonical.task,
+          status: canonical.status,
+        });
+      } finally {
+        releaseOlder.resolve();
+        await Promise.allSettled([reading, ...mutations]);
+      }
+    });
+  },
+);
 
 it.each(["unchanged", "status and order", "delivery", "read failure"] as const)(
   "retains a prepared task page only while worker publication is unchanged: %s",

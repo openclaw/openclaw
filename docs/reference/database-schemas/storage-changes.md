@@ -737,6 +737,16 @@ fallback counts share that read owner, preserving visibility, ordering, and rece
 task windows. The caller revalidates the captured owner before formatting; a
 retired owner or failed preparation cannot render task data.
 
+Gateway `tasks.list` records each requester-session lookup with the existing
+access-revision owner before reading metadata, including missing or denied
+targets. Matching identity changes invalidate the selection across physical
+stores; ambiguous or retired-agent aliases retain global invalidation. Unrelated
+child-session creation can preserve a fresh canonical selection, while role,
+profile-alias, and policy changes still invalidate it. Carried cursors keep their
+global access revision. A fresh cursor receives the final revision only after
+the registry, page identity, and current visibility checks pass. The request
+scope records dependencies; it never grants access and is disposed on every exit.
+
 Synchronous task creation and managed-flow worker creation share one create/reuse
 operation. Each adapter keeps its selection order and transaction boundaries.
 Filling a missing delivery origin commits before optional metadata changes; that
@@ -842,6 +852,25 @@ Prepared task pages keep their revision when a ready projection republishes
 unchanged task and delivery values. Identity-preserving admission still invalidates
 worker snapshots; actual row changes, cold restore, and failed publication readback
 invalidate held pages. Committed write witnesses remain independent of value equality.
+
+Scoped task projection refreshes share mutation publication's snapshot merge and
+committed-write witnesses. Refreshes keep their independent reads, without joining
+later mutation publication. A refresh retains newer canonical rows when unrelated
+activity changes the projection epoch; broad refreshes still require an unchanged
+epoch. A refresh clears only captured scopes whose data it can certify, preserving
+unresolved orphaned writes and later publication obligations. Session pages retain their initial accepted
+work fence, current revision, selected-row identity, and final visibility checks.
+Schemas, retention, writer ordering, and update behavior are unchanged.
+
+Completed canonical reads also fence concurrently held snapshots when the installed
+values are unchanged. A snapshot that conflicts with an unread committed receipt
+cannot certify its scope or replace its pending publication. A pending lost-result
+recovery retains the same scope until its own readback establishes the committed row.
+Preparation reports readiness to internal mutation and flow
+owners only after orphaned dirty scopes are reconciled; pending publication owners
+retain their existing obligations.
+A failed publication receives a fresh dirty-scope token, so snapshots captured before
+that failure cannot clear the orphaned obligation, including when the row is unchanged.
 
 Task page request preparation also captures identity-changing mutations already
 admitted for its database and store before its first wait. It joins their persistence

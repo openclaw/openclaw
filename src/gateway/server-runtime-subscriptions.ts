@@ -672,7 +672,9 @@ export function startGatewayEventSubscriptions(params: {
   // Committed resets/rotations can change access after the originating run is gone.
   // Invalidate synchronously before any yielded reader can accept its old access snapshot.
   // Each runtime owns its callback so late disposal cannot remove a replacement's listener.
-  const unsubscribeSessionIdentity = onSessionIdentityMutation(() => bumpGatewayAccessRevision());
+  const unsubscribeSessionIdentity = onSessionIdentityMutation((change) =>
+    bumpGatewayAccessRevision(change),
+  );
   const unsubscribeProfileChanges = onUserProfilesChanged(() => {
     params.refreshConnectedUserProfiles();
     params.broadcastToConnIds(

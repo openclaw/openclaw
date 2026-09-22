@@ -1,5 +1,9 @@
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
+import { reconcileTaskRegistrySnapshot } from "./task-registry-worker-publication.js";
+import {
+  getTaskRegistryProcessState,
+  recordTaskRegistryReadCompletion,
+} from "./task-registry.process-state.js";
 import type { TaskRegistryStore } from "./task-registry.store.js";
 import type {
   TaskRegistryMutationScope,
@@ -13,7 +17,7 @@ export function createTaskRegistryProjectionPreparation(owner: {
     snapshot: TaskRegistryStoreSnapshot,
     scope?: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],
   ) => void;
-  markRestored: () => void;
+  markRestored: (scopes?: readonly TaskRegistryMutationScope[]) => void;
 }) {
   const { projection } = getTaskRegistryProcessState();
   let pending:
@@ -52,16 +56,40 @@ export function createTaskRegistryProjectionPreparation(owner: {
         preparation.epoch !== epoch
       ) {
         const scopes = projection.dirty ? undefined : [...projection.dirtyScopes];
-        const result = store.loadMutationSnapshotAsync(context, scopes).then((snapshot) => {
-          owner.assertCurrent(context, store);
-          if (epoch !== projection.epoch) {
-            return false;
-          }
-          owner.installSnapshot(snapshot, scopes);
-          // In-flight mutations retain their publication obligations after this read.
-          owner.markRestored();
-          return true;
-        });
+        const capturedScopes = new Set(scopes);
+        const result = scopes
+          ? reconcileTaskRegistrySnapshot({
+              scopes,
+              assertCurrent: () => owner.assertCurrent(context, store),
+              read: () => store.loadMutationSnapshotAsync(context, scopes),
+              consume({ snapshot, divergentScopes }) {
+                // Witnesses preserve newer publications, but cannot prepare new dirty obligations.
+                if (
+                  projection.dirty ||
+                  [...projection.dirtyScopes].some((scope) => !capturedScopes.has(scope))
+                ) {
+                  return false;
+                }
+                owner.installSnapshot(snapshot, scopes);
+                // A preserved projection may precede an orphaned disk write in this scope.
+                const restoredScopes = scopes.filter((scope) => !divergentScopes.has(scope));
+                owner.markRestored(restoredScopes);
+                recordTaskRegistryReadCompletion(restoredScopes);
+                const pendingScopes = new Set(
+                  Array.from(projection.pending, (mutation) => mutation.scope),
+                );
+                return [...projection.dirtyScopes].every((scope) => pendingScopes.has(scope));
+              },
+            })
+          : store.loadMutationSnapshotAsync(context).then((snapshot) => {
+              owner.assertCurrent(context, store);
+              if (epoch !== projection.epoch) {
+                return false;
+              }
+              owner.installSnapshot(snapshot);
+              owner.markRestored();
+              return true;
+            });
         preparation = { databaseKey, store, epoch, result };
         pending = preparation;
       }

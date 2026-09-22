@@ -11,8 +11,11 @@ import {
 import {
   getTaskRegistryProcessState,
   matchesScope,
+  recordTaskRegistryReadCompletion,
+  selectTaskRegistryScopes,
   taskIdsInScope,
   type PendingTaskRegistryMutation,
+  type TaskRegistryReadWitness,
 } from "./task-registry.process-state.js";
 import type { TaskRegistryStore } from "./task-registry.store.js";
 import type {
@@ -39,22 +42,23 @@ export type TaskRegistryWorkerMutationContext = {
   forcePublish?: () => TaskRecord | undefined;
 };
 
-function* currentTasksInScope(scope: TaskRegistryMutationScope): Iterable<TaskRecord> {
+function* currentTasksInScopes(scopes: readonly TaskRegistryMutationScope[]): Iterable<TaskRecord> {
   const { tasks } = getTaskRegistryProcessState();
-  for (const taskId of taskIdsInScope(scope)) {
+  const { taskIds, matches } = selectTaskRegistryScopes(scopes);
+  for (const taskId of taskIds) {
     const task = tasks.get(taskId);
-    if (task && matchesScope(task, scope)) {
+    if (task && matches(task)) {
       yield task;
     }
   }
 }
 
 function captureTaskRegistryWorkerSnapshot(
-  scope: TaskRegistryMutationScope,
+  scopes: readonly TaskRegistryMutationScope[],
 ): TaskRegistryStoreSnapshot {
   const state = getTaskRegistryProcessState();
   const captured: TaskRegistryStoreSnapshot = { tasks: new Map(), deliveryStates: new Map() };
-  for (const task of currentTasksInScope(scope)) {
+  for (const task of currentTasksInScopes(scopes)) {
     const taskId = task.taskId;
     const delivery = state.taskDeliveryStates.get(taskId);
     captured.tasks.set(taskId, cloneTaskRecord(task));
@@ -100,29 +104,121 @@ function createTaskRegistryPublicationRecovery(
   };
 }
 
+type TaskRegistrySnapshotReconciliation = {
+  snapshot: TaskRegistryStoreSnapshot;
+  conflicted: boolean;
+  divergentScopes: ReadonlySet<TaskRegistryMutationScope>;
+};
+
 /** Preserve committed projection writes, including ABA, without restarting the settled mutation. */
 function mergeTaskRegistryWorkerSnapshot(params: {
-  scope: TaskRegistryMutationScope;
+  scopes: readonly TaskRegistryMutationScope[];
   captured: TaskRegistryStoreSnapshot;
   snapshot: TaskRegistryStoreSnapshot;
   witness: NonNullable<PendingTaskRegistryMutation["readWitness"]>;
-}): { snapshot: TaskRegistryStoreSnapshot; conflicted: boolean } {
-  const { scope, captured, snapshot, witness } = params;
+  pending?: PendingTaskRegistryMutation;
+}): TaskRegistrySnapshotReconciliation {
+  const { scopes, captured, snapshot, witness } = params;
   const state = getTaskRegistryProcessState();
-  let conflicted = false;
+  const { matches } = selectTaskRegistryScopes(scopes);
+  const completedMatches = selectTaskRegistryScopes([...witness.completedScopes]).matches;
+  const divergentScopes = new Set<TaskRegistryMutationScope>();
+  const markDivergentScopes = (
+    taskId: string,
+    current: TaskRecord | undefined,
+    committed?: TaskRecord,
+  ) => {
+    for (const scope of scopes) {
+      if (
+        scope.taskId === taskId ||
+        [captured.tasks.get(taskId), snapshot.tasks.get(taskId), current, committed].some(
+          (task) => task && matchesScope(task, scope),
+        )
+      ) {
+        divergentScopes.add(scope);
+      }
+    }
+  };
+  const retainCanonicalRead = (taskId: string, current: TaskRecord | undefined) => {
+    const stored = snapshot.tasks.get(taskId);
+    const sameTask =
+      current && stored ? isEquivalentTaskRecord(current, stored) : current === stored;
+    if (
+      sameTask &&
+      isDeepStrictEqual(snapshot.deliveryStates.get(taskId), state.taskDeliveryStates.get(taskId))
+    ) {
+      return;
+    }
+    markDivergentScopes(taskId, current);
+  };
+  const unpublishedConflicts = new Set<string>();
+  for (const other of state.projection.pending) {
+    const publication = other.publication;
+    if (other === params.pending || !publication) {
+      continue;
+    }
+    const recovery = other.recoveryWitness;
+    const targetId = other.scope.taskId;
+    if (
+      other.readWitness &&
+      recovery &&
+      !recovery.replaced &&
+      !recovery.writtenTaskIds.has(targetId) &&
+      !publication.records.has(targetId)
+    ) {
+      // A lost result must be recovered by its own read before peers certify this scope.
+      for (const scope of scopes) {
+        if (
+          scope.taskId === targetId ||
+          (scope.runId && scope.runId === other.scope.runId) ||
+          (scope.childSessionKey && scope.childSessionKey === other.scope.childSessionKey) ||
+          [
+            captured.tasks.get(targetId),
+            snapshot.tasks.get(targetId),
+            state.tasks.get(targetId),
+          ].some((task) => task && matchesScope(task, scope))
+        ) {
+          unpublishedConflicts.add(targetId);
+          divergentScopes.add(scope);
+        }
+      }
+    }
+    for (const [taskId, committed] of publication.records) {
+      const stored = snapshot.tasks.get(taskId);
+      const current = state.tasks.get(taskId);
+      if (
+        !publication.invalidated.has(taskId) &&
+        !publication.ready.has(taskId) &&
+        [captured.tasks.get(taskId), stored, current, committed].some(
+          (task) => task && matches(task),
+        ) &&
+        (!stored || !isEquivalentTaskRecord(stored, committed))
+      ) {
+        // An unread committed receipt owns publication; this snapshot cannot certify its scope.
+        unpublishedConflicts.add(taskId);
+        markDivergentScopes(taskId, current, committed);
+      }
+    }
+  }
   const merged = {
     tasks: new Map(snapshot.tasks),
     deliveryStates: new Map(snapshot.deliveryStates),
   };
+  let conflicted = unpublishedConflicts.size > 0;
   for (const taskId of new Set([
     ...captured.tasks.keys(),
     ...snapshot.tasks.keys(),
-    ...Array.from(currentTasksInScope(scope), (task) => task.taskId),
+    ...unpublishedConflicts,
+    ...Array.from(currentTasksInScopes(scopes), (task) => task.taskId),
   ])) {
     const current = state.tasks.get(taskId);
-    if (current && !matchesScope(current, scope)) {
+    if (current && !matches(current)) {
       const stored = snapshot.tasks.get(taskId);
-      conflicted ||= captured.tasks.has(taskId) || Boolean(stored && matchesScope(stored, scope));
+      const changed = captured.tasks.has(taskId) || Boolean(stored && matches(stored));
+      conflicted ||= changed;
+      if (changed) {
+        retainCanonicalRead(taskId, current);
+      }
       merged.tasks.delete(taskId);
       merged.deliveryStates.delete(taskId);
       continue;
@@ -131,12 +227,17 @@ function mergeTaskRegistryWorkerSnapshot(params: {
     if (
       !witness.replaced &&
       !witness.writtenTaskIds.has(taskId) &&
+      !unpublishedConflicts.has(taskId) &&
+      ![captured.tasks.get(taskId), snapshot.tasks.get(taskId), current].some(
+        (task) => task && completedMatches(task),
+      ) &&
       isDeepStrictEqual(captured.tasks.get(taskId), current) &&
       isDeepStrictEqual(captured.deliveryStates.get(taskId), delivery)
     ) {
       continue;
     }
     conflicted = true;
+    retainCanonicalRead(taskId, current);
     if (current) {
       merged.tasks.set(taskId, current);
     } else {
@@ -148,10 +249,59 @@ function mergeTaskRegistryWorkerSnapshot(params: {
       merged.deliveryStates.delete(taskId);
     }
   }
-  return { snapshot: merged, conflicted };
+  return { snapshot: merged, conflicted, divergentScopes };
 }
 
-/** Order canonical reads and installs, releasing before effects or observers can await descendants. */
+/** Refresh and publication preserve newer committed rows through the same read witnesses. */
+export async function reconcileTaskRegistrySnapshot<T>(params: {
+  scopes: readonly TaskRegistryMutationScope[];
+  pending?: PendingTaskRegistryMutation;
+  assertCurrent: () => void;
+  read: () => Promise<TaskRegistryStoreSnapshot>;
+  consume: (result: TaskRegistrySnapshotReconciliation) => T;
+}): Promise<T> {
+  const { scopes, pending, assertCurrent, read } = params;
+  const projection = getTaskRegistryProcessState().projection;
+  let witness: TaskRegistryReadWitness | undefined;
+  try {
+    assertCurrent();
+    const captured = captureTaskRegistryWorkerSnapshot(scopes);
+    witness = {
+      scopes,
+      taskIds: new Set([...captured.tasks.keys(), ...(pending?.published.keys() ?? [])]),
+      writtenTaskIds: new Set<string>(),
+      completedScopes: new Set<TaskRegistryMutationScope>(),
+      replaced: false,
+    };
+    projection.readWitnesses.add(witness);
+    if (pending) {
+      pending.readWitness = witness;
+    }
+    const snapshot = await read();
+    projection.readWitnesses.delete(witness);
+    if (pending) {
+      delete pending.readWitness;
+    }
+    assertCurrent();
+    const merged = mergeTaskRegistryWorkerSnapshot({
+      scopes,
+      captured,
+      snapshot,
+      witness,
+      pending,
+    });
+    return params.consume(merged);
+  } finally {
+    if (witness) {
+      projection.readWitnesses.delete(witness);
+    }
+    if (pending) {
+      delete pending.readWitness;
+    }
+  }
+}
+
+/** Release read custody before effects or observers can await descendants. */
 export async function reconcileTaskRegistryWorkerSnapshot(params: {
   pending: PendingTaskRegistryMutation;
   assertCurrent: () => void;
@@ -160,62 +310,59 @@ export async function reconcileTaskRegistryWorkerSnapshot(params: {
   recoverPublication?: (snapshot: TaskRegistryStoreSnapshot) => TaskRecord | undefined;
   taskRowsWritten?: boolean;
 }): Promise<{ conflicted: boolean }> {
-  const { pending, assertCurrent, read, install } = params;
+  const { pending, install } = params;
   const projection = getTaskRegistryProcessState().projection;
   const predecessor = projection.readTail;
   const phase = createDeferredCore();
   projection.readTail = phase.promise;
   try {
     await predecessor;
-    assertCurrent();
-    const captured = captureTaskRegistryWorkerSnapshot(pending.scope);
-    const witness = { writtenTaskIds: new Set<string>(), replaced: false };
-    pending.readWitness = witness;
-    const snapshot = await read();
-    delete pending.readWitness;
-    assertCurrent();
-    const merged = mergeTaskRegistryWorkerSnapshot({
-      scope: pending.scope,
-      captured,
-      snapshot,
-      witness,
-    });
-    const recovery = pending.recoveryWitness;
-    if (
-      params.recoverPublication &&
-      recovery &&
-      !recovery.replaced &&
-      !recovery.writtenTaskIds.has(pending.scope.taskId)
-    ) {
-      const recovered = params.recoverPublication(merged.snapshot);
-      if (recovered) {
-        if (recovered.taskId !== pending.scope.taskId) {
-          throw new Error("Recovered publication differs from its committed task target");
+    return await reconcileTaskRegistrySnapshot({
+      scopes: [pending.scope],
+      pending,
+      assertCurrent: params.assertCurrent,
+      read: params.read,
+      consume(merged) {
+        const recovery = pending.recoveryWitness;
+        if (
+          params.recoverPublication &&
+          recovery &&
+          !recovery.replaced &&
+          !recovery.writtenTaskIds.has(pending.scope.taskId)
+        ) {
+          const recovered = params.recoverPublication(merged.snapshot);
+          if (recovered) {
+            if (recovered.taskId !== pending.scope.taskId) {
+              throw new Error("Recovered publication differs from its committed task target");
+            }
+            claimTaskRegistryPublication(pending, new Map([[recovered.taskId, recovered]]));
+          }
         }
-        claimTaskRegistryPublication(pending, new Map([[recovered.taskId, recovered]]));
-      }
-    }
-    // This owner's synchronous install is not a competing write. Keep tracking
-    // replacements across the awaited flow effects that follow it.
-    delete pending.recoveryWitness;
-    try {
-      install(
-        merged.snapshot,
-        params.taskRowsWritten === false ? undefined : pending.publication?.records,
-      );
-    } finally {
-      pending.recoveryWitness = recovery;
-    }
-    const { tasks } = getTaskRegistryProcessState();
-    for (const [taskId, expected] of pending.publication?.records ?? []) {
-      const current = tasks.get(taskId);
-      if (current !== undefined && isEquivalentTaskRecord(expected, current)) {
-        pending.publication?.ready.add(taskId);
-      }
-    }
-    return { conflicted: merged.conflicted };
+        // This owner's synchronous install is not a competing write. Keep tracking
+        // replacements across the awaited flow effects that follow it.
+        delete pending.recoveryWitness;
+        try {
+          install(
+            merged.snapshot,
+            params.taskRowsWritten === false ? undefined : pending.publication?.records,
+          );
+          if (!merged.divergentScopes.has(pending.scope)) {
+            recordTaskRegistryReadCompletion([pending.scope]);
+          }
+        } finally {
+          pending.recoveryWitness = recovery;
+        }
+        const { tasks } = getTaskRegistryProcessState();
+        for (const [taskId, expected] of pending.publication?.records ?? []) {
+          const current = tasks.get(taskId);
+          if (current !== undefined && isEquivalentTaskRecord(expected, current)) {
+            pending.publication?.ready.add(taskId);
+          }
+        }
+        return { conflicted: merged.conflicted };
+      },
+    });
   } finally {
-    delete pending.readWitness;
     if (projection.readTail === phase.promise) {
       delete projection.readTail;
     }
@@ -343,7 +490,7 @@ export function createPendingTaskRegistryMutation(
       },
     }),
     published: new Map(
-      Array.from(currentTasksInScope(scope), (task) => [
+      Array.from(currentTasksInScopes([scope]), (task) => [
         task.taskId,
         cloneTaskRecordForObserver(task),
       ]),

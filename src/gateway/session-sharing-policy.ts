@@ -117,10 +117,14 @@ export function resolveSessionSharingTarget(params: {
 export function resolveSessionSharingTargets(params: {
   cfg: OpenClawConfig;
   targets: readonly { sessionKey: string; agentId?: string }[];
+  onLookupTarget?: Parameters<
+    typeof resolveGatewaySessionStoreTargetsReadOnly
+  >[0]["onLookupTarget"];
 }): Array<SessionSharingTarget | null> {
   return resolveGatewaySessionStoreTargetsReadOnly({
     cfg: params.cfg,
     targets: params.targets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
+    onLookupTarget: params.onLookupTarget,
   }).map(toSessionSharingTarget);
 }
 

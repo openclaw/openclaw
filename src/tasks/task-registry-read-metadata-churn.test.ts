@@ -15,7 +15,9 @@ import type {
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as taskRuntime from "./runtime-internal.js";
+import { createRunningTaskRunCoreWithReceiptAsync } from "./task-executor-create.async.js";
 import * as listenerState from "./task-registry-listener-state.js";
+import { updateTask } from "./task-registry-mutation.js";
 import * as taskRead from "./task-registry-read.js";
 import { resetReadState, withReadState } from "./task-registry-read.test-support.js";
 import * as taskState from "./task-registry-state.js";
@@ -267,6 +269,143 @@ it("returns a nine-child capacity page without chasing metadata accepted after i
     expect(taskState.tasks.get(queued.taskId)?.status).toBe("queued");
   });
 });
+
+it.each(["unrelated", "same session", "unavailable snapshot"] as const)(
+  "prepares session pages during later creation and metadata: %s",
+  async (change) => {
+    await withReadState(async () => {
+      const children = seedChildren();
+      const first = expectDefined(children[0], "requested child");
+      const unrelated = createTaskFixture("cli", {
+        runId: "unrelated-metadata-source",
+        requesterSessionKey: "agent:main:unrelated-parent",
+        ownerKey: "agent:main:unrelated-parent",
+        task: "Unrelated metadata",
+        status: "running",
+        notifyPolicy: "silent",
+        deliveryStatus: "not_applicable",
+        lastEventAt: 100,
+      });
+      const store = await prepareTaskFixtureRead(first);
+      await taskRead.prepareTaskRegistryRead();
+      const expected = children.map((task) => structuredClone(taskState.tasks.get(task.taskId)));
+      const request = createTaskRequests(first.ownerKey);
+      const creationOwnerKey = change === "same session" ? first.ownerKey : unrelated.ownerKey;
+      const snapshotFailure = new Error("Synthetic canonical snapshot unavailable");
+      const committed = createDeferred();
+      const releaseCreation = createDeferred();
+      let creation: ReturnType<typeof createRunningTaskRunCoreWithReceiptAsync> | undefined;
+      let creationCompleted = false;
+      let churning = true;
+      let metadataWrites = 0;
+      let unionSnapshots = 0;
+      const mutate = store.runInitialMutationAsync.bind(store);
+      vi.spyOn(store, "runInitialMutationAsync").mockImplementation(async (...args) => {
+        const result = await mutate(...args);
+        if (args[1].type === "tasks.createRecord") {
+          committed.resolve();
+          await releaseCreation.promise;
+        }
+        return result;
+      });
+      const writeMetadata = () => {
+        metadataWrites += 1;
+        expect(
+          updateTask(unrelated.taskId, { lastEventAt: 100 + metadataWrites })?.lastEventAt,
+        ).toBe(100 + metadataWrites);
+      };
+      const capture = listenerState.captureTaskRegistryReadFence;
+      vi.spyOn(listenerState, "captureTaskRegistryReadFence").mockImplementationOnce((admission) =>
+        capture(admission).then(async () => {
+          // The new creation is accepted after the request's fixed prefix.
+          creation = createRunningTaskRunCoreWithReceiptAsync({
+            runtime: "cli",
+            runId: "unrelated-later-creation",
+            requesterSessionKey: creationOwnerKey,
+            ownerKey: creationOwnerKey,
+            scopeKind: "session",
+            task: "Unrelated later task",
+            notifyPolicy: "silent",
+            deliveryStatus: "not_applicable",
+          }).then((result) => {
+            creationCompleted = true;
+            return result;
+          });
+          void creation.catch(() => undefined);
+          await withTestTimeout(committed.promise, 5_000, "Later creation committed");
+          if (change !== "unavailable snapshot") {
+            writeMetadata();
+          }
+          const load = store.loadMutationSnapshotAsync.bind(store);
+          vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
+            if (churning && Array.isArray(args[1]) && change === "unavailable snapshot") {
+              throw snapshotFailure;
+            }
+            const snapshot = await load(...args);
+            if (Array.isArray(args[1])) {
+              unionSnapshots += 1;
+              // Bound the competing producer and change only the other session's row.
+              if (churning && metadataWrites < 32) {
+                writeMetadata();
+              }
+            }
+            return snapshot;
+          });
+        }),
+      );
+      const reading = request();
+      try {
+        if (change === "unavailable snapshot") {
+          await expect(
+            withTestTimeout(reading, 5_000, "Unknown creation requires its canonical snapshot"),
+          ).rejects.toBe(snapshotFailure);
+        } else {
+          const respond = await withTestTimeout(reading, 5_000, "Unchanged session page settled");
+          const detail = JSON.stringify({ metadataWrites, unionSnapshots, creationCompleted });
+          expect(
+            children.map((task) => taskState.tasks.get(task.taskId)),
+            detail,
+          ).toEqual(expected);
+          expect(creationCompleted, detail).toBe(false);
+          expect(respond, detail).toHaveBeenCalledOnce();
+          if (change === "same session") {
+            expect(respond.mock.calls[0], detail).toMatchObject([
+              false,
+              undefined,
+              { code: "UNAVAILABLE", retryable: true },
+            ]);
+          } else {
+            expect(respond.mock.calls[0], detail).toMatchObject([
+              true,
+              {
+                tasks: expect.arrayContaining(
+                  children.map((task) =>
+                    expect.objectContaining({ id: task.taskId, status: task.status }),
+                  ),
+                ),
+              },
+            ]);
+            expect(respond.mock.calls[0]?.[1], detail).toHaveProperty(
+              "tasks.length",
+              children.length,
+            );
+          }
+        }
+      } finally {
+        churning = false;
+        releaseCreation.resolve();
+        await Promise.allSettled([reading, creation]);
+      }
+      const created = expectDefined(await creation, "later creation completed");
+      expect(created.task.ownerKey).toBe(creationOwnerKey);
+      const published = await createTaskRequests(creationOwnerKey)();
+      expect(published.mock.calls[0]).toMatchObject([
+        true,
+        { tasks: expect.arrayContaining([expect.objectContaining({ id: created.task.taskId })]) },
+      ]);
+    });
+  },
+);
 
 it.each(["broad invalidation", "orphaned publication", "non-preserved mutation"] as const)(
   "refreshes task ownership despite later metadata when there is %s",

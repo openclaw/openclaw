@@ -25,7 +25,10 @@ import {
   prepareTaskRegistryRead,
 } from "../../tasks/runtime-internal.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
-import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import {
+  createGatewayAccessReadScope,
+  readGatewayAccessRevision,
+} from "../gateway-access-revision.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   canAccessTaskRequesterSession,
@@ -203,8 +206,6 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     // Selection stays inside the registry so ordering applies before pagination
     // and only the bounded wire page pays for defensive record cloning.
-    const prepareFilter = (tasks: readonly Readonly<TaskRecord>[]) =>
-      prepareTaskSessionReadFilter({ cfg: context.getRuntimeConfig(), client }, tasks);
     const pageParams = {
       prepareRead: createTaskRegistryReadPreparation(),
       offset: cursor?.offset ?? 0,
@@ -215,7 +216,6 @@ export const tasksHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionAgentId,
       cfg,
-      prepareFilter,
       sortBy: params.sortBy,
     };
     // Page scans yield to active task updates. Restart the complete selection
@@ -226,45 +226,58 @@ export const tasksHandlers: GatewayRequestHandlers = {
         invalidTaskListCursor(respond);
         return;
       }
-      const pageResult = await listTaskRecordPage(pageParams);
-      if (!pageResult.ok) {
-        // A cursor bound to an older revision can never succeed on retry, so it
-        // restarts the caller. Transient registry churn gets another attempt.
-        if (pageResult.error === "cursor_stale") {
-          invalidTaskListCursor(respond);
-          return;
+      const accessRead = createGatewayAccessReadScope();
+      try {
+        const prepareFilter = (tasks: readonly Readonly<TaskRecord>[]) =>
+          prepareTaskSessionReadFilter(
+            { cfg: context.getRuntimeConfig(), client },
+            tasks,
+            accessRead,
+          );
+        const pageResult = await listTaskRecordPage({ ...pageParams, prepareFilter });
+        if (!pageResult.ok) {
+          // A cursor bound to an older revision can never succeed on retry, so it
+          // restarts the caller. Transient registry churn gets another attempt.
+          if (pageResult.error === "cursor_stale") {
+            invalidTaskListCursor(respond);
+            return;
+          }
+          continue;
         }
-        continue;
-      }
-      const page = pageResult.value;
-      // Sharing changes invalidate every access decision made before a yield.
-      // Recheck selected rows in the final synchronous response turn as well.
-      if (
-        !page.isCurrent() ||
-        accessRevision !== readGatewayAccessRevision() ||
-        !page.tasks.every(prepareFilter(page.tasks))
-      ) {
-        if (cursor) {
-          invalidTaskListCursor(respond);
-          return;
+        const page = pageResult.value;
+        // Cursor continuations keep their global fence. New selections depend
+        // on every requester they read, including rows denied before pagination.
+        if (
+          !page.isCurrent() ||
+          !page.tasks.every(prepareFilter(page.tasks)) ||
+          !accessRead.isCurrent() ||
+          (cursor && accessRevision !== readGatewayAccessRevision())
+        ) {
+          if (cursor) {
+            invalidTaskListCursor(respond);
+            return;
+          }
+          continue;
         }
-        continue;
+        const responseAccessRevision = readGatewayAccessRevision();
+        const nextOffset = pageParams.offset + page.tasks.length;
+        respond(true, {
+          tasks: page.tasks.map((task) => mapTaskSummary(task)),
+          ...(page.hasMore
+            ? {
+                nextCursor: encodeTaskListCursor({
+                  offset: nextOffset,
+                  taskRevision: page.revision,
+                  accessRevision: responseAccessRevision,
+                  binding: bindCursor(nextOffset, page.revision, responseAccessRevision),
+                }),
+              }
+            : {}),
+        });
+        return;
+      } finally {
+        accessRead.dispose();
       }
-      const nextOffset = pageParams.offset + page.tasks.length;
-      respond(true, {
-        tasks: page.tasks.map((task) => mapTaskSummary(task)),
-        ...(page.hasMore
-          ? {
-              nextCursor: encodeTaskListCursor({
-                offset: nextOffset,
-                taskRevision: page.revision,
-                accessRevision,
-                binding: bindCursor(nextOffset, page.revision, accessRevision),
-              }),
-            }
-          : {}),
-      });
-      return;
     }
     respond(
       false,

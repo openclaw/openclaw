@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createGatewayAccessReadScope } from "./gateway-access-revision.js";
 import {
   authorizeGatewaySessionCreation,
   authorizeCurrentOperatorRoleScopes,
@@ -86,9 +87,13 @@ describe("operator role policy", () => {
         })!;
       const original = capture(source.id);
       const unaffected = capture(unrelated.id);
+      const accessRead = createGatewayAccessReadScope();
+      accessRead.dependOnSessionKeys(["agent:main:unrelated-requester"]);
       try {
         original.authority.assertCurrent();
+        expect(accessRead.isCurrent()).toBe(true);
         linkEmail("source-role@example.test", target.id);
+        expect(accessRead.isCurrent()).toBe(false);
         expect(original.authority.signal?.aborted).toBe(true);
         expect(original.authority.signal?.reason).toEqual(
           new Error("operator source identity changed; start a new request"),
@@ -108,6 +113,7 @@ describe("operator role policy", () => {
       } finally {
         original.release();
         unaffected.release();
+        accessRead.dispose();
       }
     });
   });
@@ -124,9 +130,13 @@ describe("operator role policy", () => {
         context: { getRuntimeConfig: () => cfg },
       })!;
       expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toBeUndefined();
+      const accessRead = createGatewayAccessReadScope();
+      accessRead.dependOnSessionKeys(["agent:main:unrelated-requester"]);
       try {
+        expect(accessRead.isCurrent()).toBe(true);
         setUserProfileRole(profile.id, "guest");
         invalidateOperatorRolePolicy(profile.id);
+        expect(accessRead.isCurrent()).toBe(false);
         expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toMatchObject({ code: "FORBIDDEN" });
         // Session/agent access narrowed even though this source's scopes still fit.
         expect(authorizeCurrentOperatorRoleScopes(reader, cfg)).toBeUndefined();
@@ -139,6 +149,7 @@ describe("operator role policy", () => {
         expect(authorizeCurrentOperatorRoleScopes(reconnected, cfg)).toBeUndefined();
       } finally {
         source.release();
+        accessRead.dispose();
       }
     });
   });

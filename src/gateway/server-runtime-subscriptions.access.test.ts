@@ -18,7 +18,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { forgetActiveSessionForShutdown } from "./active-sessions-shutdown-tracker.js";
-import { readGatewayAccessRevision } from "./gateway-access-revision.js";
+import {
+  createGatewayAccessReadScope,
+  readGatewayAccessRevision,
+} from "./gateway-access-revision.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import {
   createSubscriptionTestFixture,
@@ -76,23 +79,37 @@ async function withAccessFixture(
   });
 }
 
-it("invalidates access synchronously for committed create, move, reset, and delete", async () => {
+it("invalidates access synchronously for committed create, move, reset, delete, and recreate", async () => {
   await withAccessFixture(async ({ scope, start }) => {
     start();
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
     const revision = readGatewayAccessRevision();
-    const changes: Array<{ kind: string; revision: number; inTransaction: boolean }> = [];
+    const movedKey = "agent:main:moved-identity-access";
+    const captureRead = () => {
+      const read = createGatewayAccessReadScope();
+      read.dependOnSessionKeys([scope.sessionKey, movedKey]);
+      return read;
+    };
+    let accessRead = captureRead();
+    const changes: Array<{
+      kind: string;
+      revision: number;
+      inTransaction: boolean;
+      scopedCurrent: boolean;
+    }> = [];
     const observe = onSessionIdentityMutation((mutation) => {
       changes.push({
         kind: mutation.kind,
         revision: readGatewayAccessRevision(),
         inTransaction: database.db.isTransaction,
+        scopedCurrent: accessRead.isCurrent(),
       });
+      accessRead.dispose();
+      accessRead = captureRead();
     });
     try {
       const entry = { sessionId: "same-session", lifecycleRevision: "before", updatedAt: 1 };
       await upsertSessionEntryCore(scope, entry);
-      const movedKey = "agent:main:moved-identity-access";
       await applySessionEntryLifecycleMutation({
         agentId: scope.agentId,
         storePath: scope.storePath,
@@ -116,13 +133,49 @@ it("invalidates access synchronously for committed create, move, reset, and dele
         removals: [{ sessionKey: movedKey }],
         skipMaintenance: true,
       });
-      expect(changes.map((change) => change.kind)).toEqual(["create", "move", "reset", "delete"]);
+      await upsertSessionEntryCore(
+        { ...scope, sessionKey: movedKey },
+        { sessionId: "recreated", lifecycleRevision: "recreated-generation", updatedAt: 3 },
+      );
+      expect(changes.map((change) => change.kind)).toEqual([
+        "create",
+        "move",
+        "reset",
+        "delete",
+        "create",
+      ]);
       for (const [index, change] of changes.entries()) {
         expect(change.inTransaction).toBe(false);
         expect(change.revision).toBeGreaterThan(changes[index - 1]?.revision ?? revision);
+        expect(change.scopedCurrent).toBe(false);
       }
     } finally {
       observe();
+      accessRead.dispose();
+    }
+  });
+});
+
+it("invalidates a requester dependency created in another physical store", async () => {
+  await withAccessFixture(async ({ scope, workspaceDir, start }) => {
+    start();
+    await upsertSessionEntryCore(scope, { sessionId: "selected", updatedAt: 1 });
+    const read = createGatewayAccessReadScope();
+    read.dependOnSessionKeys([scope.sessionKey]);
+    const otherStore = path.join(workspaceDir, "secondary-openclaw-agent.sqlite");
+    try {
+      await upsertSessionEntryCore(
+        { ...scope, storePath: otherStore, sessionKey: "agent:main:unrelated" },
+        { sessionId: "unrelated", updatedAt: 1 },
+      );
+      expect(read.isCurrent()).toBe(true);
+      await upsertSessionEntryCore(
+        { ...scope, storePath: otherStore },
+        { sessionId: "duplicate", updatedAt: 2 },
+      );
+      expect(read.isCurrent()).toBe(false);
+    } finally {
+      read.dispose();
     }
   });
 });

@@ -186,6 +186,9 @@ type GatewaySessionStoreLookupParams = {
   store?: Record<string, SessionEntry>;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  onLookupTarget?: (
+    target: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storeKeys">,
+  ) => void;
 };
 
 type GatewaySessionStorePlan<T> = {
@@ -197,6 +200,11 @@ function prepareGatewaySessionStoreLookup(
   params: GatewaySessionStoreLookupParams & { canonicalKey: string; agentId: string },
 ): GatewaySessionStorePlan<GatewaySessionStoreLookup> {
   const scanTargets = buildGatewaySessionStoreScanTargets(params);
+  params.onLookupTarget?.({
+    agentId: params.agentId,
+    canonicalKey: params.canonicalKey,
+    storeKeys: scanTargets,
+  });
   const { configured, fallback, candidates } = resolveGatewaySessionStoreLookupCandidates(params);
   if (candidates.length === 0) {
     // Retired/manual agents require an existing discovered store; lookup never creates one.
@@ -260,6 +268,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
   const lookupSeeds = Array.from(
     new Set([params.key, canonicalKey, agentMainKey, `agent:${legacyAgentId}:main`]),
   );
+  params.onLookupTarget?.({ agentId: legacyAgentId, canonicalKey, storeKeys: lookupSeeds });
   const { existing } = resolveGatewaySessionStoreCandidates(
     params.cfg,
     legacyAgentId,
@@ -356,6 +365,7 @@ function prepareGatewaySessionStoreTarget(
     agentId: params.agentId,
   });
   if (isIncognitoSessionKey(canonicalKey)) {
+    params.onLookupTarget?.({ agentId, canonicalKey, storeKeys: [canonicalKey] });
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: params.env });
     const read: GatewaySessionStoreRead = {
       storePath,
@@ -499,6 +509,10 @@ export function resolveGatewaySessionStoreTargetsReadOnly(params: {
   cfg: OpenClawConfig;
   targets: readonly { key: string; agentId?: string }[];
   projection?: SessionEntryListScope["projection"];
+  onLookupTarget?: (
+    target: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storeKeys">,
+    index: number,
+  ) => void;
 }): GatewaySessionStoreTargetWithStore[] {
   return readGatewaySessionStoreTargets(params, "eager").map((result) => {
     if (!result.ok) {
@@ -522,13 +536,13 @@ function readGatewaySessionStoreTargets(
   params: Parameters<typeof resolveGatewaySessionStoreTargetsReadOnly>[0],
   mode: "eager" | "prepared",
 ): Array<Result<GatewaySessionStoreTargetWithStore, unknown>> {
-  const resolve = <T, U>(items: Result<T, unknown>[], read: (value: T) => U) =>
-    items.map((item): Result<U, unknown> => {
+  const resolve = <T, U>(items: Result<T, unknown>[], read: (value: T, index: number) => U) =>
+    items.map((item, index): Result<U, unknown> => {
       if (!item.ok) {
         return item;
       }
       try {
-        return ok(read(item.value));
+        return ok(read(item.value, index));
       } catch (error) {
         if (mode === "eager") {
           throw error;
@@ -537,7 +551,7 @@ function readGatewaySessionStoreTargets(
       }
     });
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const requests = resolve(params.targets.map(ok), (target) => {
+  const requests = resolve(params.targets.map(ok), (target, index) => {
     const lookup: GatewaySessionStoreLookupParams = {
       ...target,
       key: normalizeOptionalString(target.key) ?? "",
@@ -548,6 +562,7 @@ function readGatewaySessionStoreTargets(
       exactRead: true,
       projection: mode === "eager" ? (params.projection ?? "list") : params.projection,
       targetDiscoveryCache,
+      onLookupTarget: (dependency) => params.onLookupTarget?.(dependency, index),
     };
     return { lookup, legacy: prepareExplicitDeletedLegacyMainStoreTarget(lookup) };
   });
