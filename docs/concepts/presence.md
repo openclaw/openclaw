@@ -91,7 +91,7 @@ stay tracked because test suites use them as stand-ins for real clients.
 ### 3) `system-event` beacons
 
 Clients can send richer periodic beacons via the `system-event` method. The mac
-app uses this to report host name, IP, version, and liveness metadata. Physical
+app uses this to report host name, IP, version, and liveness metadata. Computer
 input activity is not part of this generic beacon. The purpose-specific native
 node event described in [Active computer presence](/nodes/presence) owns it. The
 Mac tags these beacons with `system-presence-clear-last-input`. Current Gateways

@@ -16,7 +16,10 @@ import {
   resolveTaskLauncherScriptPath,
   resolveTaskUser,
 } from "./schtasks-layout.js";
-import { isInstallerServiceDescription } from "./service-audit-preservation.js";
+import {
+  isInstallerServiceDescription,
+  serviceDefinitionPreserved,
+} from "./service-audit-preservation.js";
 import type {
   GatewayServiceExpectedCommand,
   ServiceDefinitionDrift,
@@ -114,6 +117,9 @@ export async function auditScheduledTaskDefinition(
   const released: Record<string, string> = {
     "Settings.DisallowStartIfOnBatteries": "true",
     "Settings.StopIfGoingOnBatteries": "true",
+    // Pre-XML installers used /Create defaults for these settings.
+    "Settings.ExecutionTimeLimit": "PT72H",
+    "Settings.IdleSettings.StopOnIdleEnd": "true",
     "Principals.Principal.LogonType": "S4U",
     "Settings.RestartOnFailure.Count": "0",
     "Settings.RestartOnFailure.Interval": "PT0S",
@@ -184,6 +190,13 @@ export async function auditScheduledTaskDefinition(
     }
     if (canonical && released[key] === current) {
       outdated(key, current, canonical.textContent);
+    } else if (
+      !expectedXml &&
+      canonical &&
+      ((key.startsWith("Settings.") && key !== "Settings.Enabled") ||
+        key === "Triggers.LogonTrigger.Enabled")
+    ) {
+      findings.push(serviceDefinitionPreserved(key, sourcePath));
     } else {
       unknown(key, "The key or value is not a recognized installer setting.");
     }

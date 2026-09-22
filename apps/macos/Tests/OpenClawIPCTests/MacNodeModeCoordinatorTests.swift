@@ -876,7 +876,7 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `node permission metadata omits unknown authorization state`() {
         let permissions = MacNodeModeCoordinator.advertisedPermissions([
-            .appleScript: .unknown,
+            .camera: .unknown,
             .accessibility: .granted,
             .screenRecording: .notGranted,
         ])

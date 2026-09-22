@@ -6,7 +6,7 @@ import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { ImageLightboxGalleryController } from "./image-lightbox-gallery.ts";
 import { imageLightboxStyles } from "./image-lightbox.styles.ts";
-import type { ImageLightboxGallery } from "./image-lightbox.types.ts";
+import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 import "./modal-dialog.ts";
 
 const SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES = new Set([
@@ -34,10 +34,13 @@ function dataUrlMimeType(source: string): string | undefined {
 
 class OpenClawImageLightbox extends OpenClawLitElement {
   @property({ attribute: false }) gallery?: ImageLightboxGallery;
+  @property({ attribute: false }) loadFullResolution?: ImageLightboxItem["loadFullResolution"];
   @property() mediaKind: "image" | "video" = "image";
   @property() src = "";
   @property() originalSrc = "";
   @property({ attribute: false }) imageTitle = "";
+  @property({ attribute: false }) imageWidth?: number;
+  @property({ attribute: false }) imageHeight?: number;
   @query(".slide") private slide?: HTMLDivElement;
   @query(".stage") private stage?: HTMLDivElement;
   @query(".image") private image?: HTMLImageElement;
@@ -58,6 +61,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     this.requestUpdate(),
   );
   private displayedIndex = 0;
+  private displayedSource = "";
   private slideAnimation?: Animation;
   private swipe:
     | {
@@ -72,7 +76,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   private suppressDoubleClick = false;
 
   private get currentImage() {
-    return this.hasGallery ? this.galleryController.current : undefined;
+    return this.mediaKind === "image" ? this.galleryController.current : undefined;
   }
 
   private get hasGallery() {
@@ -123,6 +127,9 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       src: this.src,
       originalSrc: this.originalSrc,
       title: this.imageTitle,
+      width: this.imageWidth,
+      height: this.imageHeight,
+      loadFullResolution: this.loadFullResolution,
     });
   }
 
@@ -134,6 +141,9 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       changed.has("src") ||
       changed.has("originalSrc") ||
       changed.has("gallery") ||
+      changed.has("loadFullResolution") ||
+      changed.has("imageWidth") ||
+      changed.has("imageHeight") ||
       changed.has("mediaKind")
     ) {
       this.cancelSwipe();
@@ -145,16 +155,23 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     if (!this.isConnected) {
       return;
     }
-    if (
+    const selectionChanged =
       changed.has("src") ||
       changed.has("originalSrc") ||
       changed.has("gallery") ||
+      changed.has("loadFullResolution") ||
+      changed.has("imageWidth") ||
+      changed.has("imageHeight") ||
       changed.has("mediaKind") ||
-      this.displayedIndex !== this.galleryController.index
-    ) {
+      this.displayedIndex !== this.galleryController.index;
+    if (selectionChanged) {
       this.displayedIndex = this.galleryController.index;
       this.destroyPanzoom();
       this.scale = 1;
+    }
+    const source = this.currentImage?.src ?? this.src;
+    if (selectionChanged || this.displayedSource !== source) {
+      this.displayedSource = source;
       void this.resolveOriginalUrl();
       if (this.image?.complete && this.image.naturalWidth > 0) {
         this.initializePanzoom(this.image);
@@ -164,7 +181,8 @@ class OpenClawImageLightbox extends OpenClawLitElement {
 
   override render() {
     const title =
-      (this.currentImage?.title ?? this.imageTitle).trim() || t("chat.imageLightbox.untitled");
+      (this.hasGallery ? (this.currentImage?.title ?? this.imageTitle) : this.imageTitle).trim() ||
+      t("chat.imageLightbox.untitled");
     const dialogLabel =
       this.mediaKind === "video"
         ? t("chat.mediaPlayer.videoPreview", { title })
@@ -174,6 +192,12 @@ class OpenClawImageLightbox extends OpenClawLitElement {
         ? t("chat.mediaPlayer.closeVideoPreview")
         : t("chat.imageLightbox.close");
     const canZoom = this.imageReady && this.panzoom !== undefined;
+    const width = this.currentImage?.width;
+    const height = this.currentImage?.height;
+    const sized = Number.isFinite(width) && width! > 0 && Number.isFinite(height) && height! > 0;
+    const imageSize = sized
+      ? `width: min(${width}px, 100cqw, calc(100cqh * ${width! / height!}))`
+      : nothing;
     return html`
       <openclaw-modal-dialog
         class="mobile-edge-to-edge viewport-edge-to-edge"
@@ -240,6 +264,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
                 : html`<div class="slide">
                     <img
                       class=${this.scale > 1 ? "image zoomed" : "image"}
+                      style=${imageSize}
                       src=${this.currentImage?.src ?? this.src}
                       alt=${title}
                       referrerpolicy="no-referrer"
@@ -340,7 +365,11 @@ class OpenClawImageLightbox extends OpenClawLitElement {
 
   private initializePanzoom(image: HTMLImageElement) {
     const stage = this.stage;
-    if (!stage || image !== this.image) {
+    if (!this.isConnected || !image.isConnected || !stage || image !== this.image) {
+      return;
+    }
+    // A decoded resolution upgrade keeps the current image, pan, and zoom.
+    if (image === this.panzoomImage && stage === this.panzoomStage) {
       return;
     }
     this.destroyPanzoom();
@@ -573,6 +602,10 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     const request = ++this.originalUrlRequest;
     this.revokeOriginalBlobUrl();
     this.resolvingOriginal = false;
+    if (this.currentImage?.loadFullResolution) {
+      this.openOriginalUrl = "";
+      return;
+    }
     const source = (
       this.currentImage?.originalSrc ||
       this.currentImage?.src ||

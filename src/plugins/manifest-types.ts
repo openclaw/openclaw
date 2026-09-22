@@ -26,6 +26,8 @@ export type PluginManifestTheme = {
   name: string;
   description: string;
   source: string;
+  hats?: Record<string, string>;
+  critters?: Record<string, { source: string; title?: string; crossMs?: number }>;
 };
 
 /** Top-level plugin manifest format. */
@@ -392,6 +394,12 @@ export type PluginManifestBackupResource = {
   relativePath: string;
 };
 
+export type PluginManifestDecisionModel = {
+  provider: string;
+  id: string;
+  name: string;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
@@ -498,6 +506,8 @@ export type PluginManifest = {
    * compat wiring, and contract coverage without importing plugin runtime.
    */
   contracts?: PluginManifestContracts;
+  /** Static model choices owned by contracts.decisionProviders; never conversational models. */
+  decisionModels?: PluginManifestDecisionModel[];
   /** Setup descriptors keyed by ids owned in contracts.transcriptSourceProviders. */
   transcriptSources?: Record<string, PluginManifestTranscriptSource>;
   /** Cheap media-understanding provider defaults without importing plugin runtime. */
@@ -519,6 +529,8 @@ export type PluginManifest = {
 };
 
 export type PluginManifestContracts = {
+  /** Executor ids implemented by the plugin's code-mode-executor-api artifact. */
+  codeModeExecutors?: string[];
   embeddedExtensionFactories?: string[];
   agentToolResultMiddleware?: string[];
   trustedToolPolicies?: string[];
@@ -528,6 +540,7 @@ export type PluginManifestContracts = {
    * plugin instead of every provider plugin.
    */
   externalAuthProviders?: string[];
+  decisionProviders?: string[];
   embeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];

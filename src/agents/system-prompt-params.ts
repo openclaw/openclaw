@@ -97,8 +97,7 @@ export function buildSystemPromptParams(params: {
         sessionUrl?.startsWith("https://") && sessionUrl.length <= MAX_RUNTIME_SESSION_URL_CHARS
           ? sessionUrl
           : undefined,
-      activeNode:
-        formatActiveNodeContextLabel(getCurrentActiveNodeContext()) ?? params.runtime.activeNode,
+      activeNode: formatActiveNodeContextLabel(getCurrentActiveNodeContext()),
       repoRoot,
     },
     userTimezone,

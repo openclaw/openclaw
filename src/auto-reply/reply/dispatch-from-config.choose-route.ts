@@ -57,6 +57,7 @@ import {
   prepareReplyPayloadForDispatcher,
   type ReplyDispatchDeliveryOutcome,
 } from "./reply-dispatcher.js";
+import type { ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 import { isDispatchFinalReplySessionWriterAuthorized } from "./session-writer-delivery-authority.js";
 
 export async function chooseDispatchRoute(state: PrepareDispatchOperationReadyState) {
@@ -208,8 +209,12 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     outcomes.push(outcome);
     blockDeliveryOutcomes.set(key, outcomes);
   };
-  const sendTrackedBlockReply = (payload: ReplyPayload) => {
-    const delivery = turnLedger.sendQueued("block", payload);
+  const sendTrackedBlockReply = (operation: ReplyDispatchOperation) => {
+    const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
+    const delivery =
+      operation.kind === "prepared"
+        ? turnLedger.sendPreparedQueued("block", operation.plan)
+        : turnLedger.sendQueued("block", payload);
     if (delivery.queued) {
       recordBlockOutcome(
         payload,

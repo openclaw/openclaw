@@ -9,9 +9,11 @@ import type {
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
@@ -42,6 +44,31 @@ export type ManagedPluginCatalogEntry = PluginCatalogEntry;
 export type ManagedPluginCatalog = PluginsListResult;
 
 export type ManagedPluginIconSource = { kind: "file"; path: string; rootPath: string };
+export type ManagedPluginClawHubIconSource = {
+  kind: "clawhub";
+  baseUrl: string;
+  packageName: string;
+};
+
+export function resolveInstalledPluginClawHubIconSource(params: {
+  installRecord?: PluginInstallRecord;
+  clawhubPackage?: string;
+}): ManagedPluginClawHubIconSource | undefined {
+  const record = params.installRecord;
+  const recordedPackage =
+    record?.source === "clawhub" && normalizeOptionalString(record.clawhubPackage);
+  const recordedUrl = record?.source === "clawhub" && normalizeOptionalString(record.clawhubUrl);
+  if (recordedPackage && recordedUrl) {
+    return {
+      kind: "clawhub",
+      baseUrl: resolveClawHubBaseUrl(recordedUrl),
+      packageName: recordedPackage,
+    };
+  }
+  return params.clawhubPackage
+    ? { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: params.clawhubPackage }
+    : undefined;
+}
 
 export function resolvePluginIconSource(params: {
   metadata: PluginMetadataSnapshot;
@@ -54,6 +81,43 @@ export function resolvePluginIconSource(params: {
     return { kind: "file", path: localIconPath, rootPath: manifest.rootDir };
   }
   return undefined;
+}
+
+export async function resolvePluginIconSources(params: {
+  metadata: PluginMetadataSnapshot;
+  pluginId: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<Array<ManagedPluginIconSource | ManagedPluginClawHubIconSource>> {
+  const { metadata, env } = params;
+  const pluginId = metadata.normalizePluginId(params.pluginId);
+  const file = resolvePluginIconSource({ metadata, pluginId });
+  const sources: Array<ManagedPluginIconSource | ManagedPluginClawHubIconSource> = file
+    ? [file]
+    : [];
+  const record = metadata.index.plugins.find(
+    (candidate) => metadata.normalizePluginId(candidate.pluginId) === pluginId,
+  );
+  if (!record) {
+    return sources;
+  }
+  const ownership = createInstalledPluginOwnershipResolver(metadata.index, env).resolvePackage(
+    record.pluginId,
+  );
+  const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
+  const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
+  const officialCatalog = await loadOfficialCatalog();
+  const { clawhubPackage } = resolveInstalledHostedOfficialEntry({
+    record,
+    installOwner,
+    installRecord,
+    officialEntries: prepareCatalogEntries(officialCatalog.entries),
+    bundledOfficialEntries: prepareCatalogEntries(listOfficialExternalPluginCatalogEntries()),
+  });
+  const remote = resolveInstalledPluginClawHubIconSource({ installRecord, clawhubPackage });
+  if (remote) {
+    sources.push(remote);
+  }
+  return sources;
 }
 
 export function resolvePluginActivityIconSource(params: {

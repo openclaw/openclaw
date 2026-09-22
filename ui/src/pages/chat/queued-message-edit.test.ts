@@ -214,16 +214,23 @@ describe("queued message edit round-trip", () => {
     expect(host.chatAttachments).toEqual([added]);
   });
 
-  it("replaces the row in the same slot when the edited message is sent", async () => {
-    const { host } = queueHost([{}, {}, {}]);
-    beginQueuedMessageEdit(host as never, "queued-2");
-    updateQueuedMessageEdit(host as never, "message 2, corrected");
-
-    await submitQueuedEdit(host);
-
-    expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
-    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(false);
-  });
+  it.each(["corrected prompt", "/review-this", "!echo hello"])(
+    "keeps an edited row's place and only eligible frozen context: %s",
+    async (draft) => {
+      const workContext = { page: "chat", title: "Original work" };
+      const { host } = queueHost([{}, { workContext }, {}], {
+        getWorkContext: () => ({ page: "chat", title: "Later work" }),
+      });
+      beginQueuedMessageEdit(host, "queued-2");
+      updateQueuedMessageEdit(host, draft);
+      await submitQueuedEdit(host);
+      expect(storedOrder(host)).toEqual(["message 1", draft, "message 3"]);
+      expect(host.chatQueue[1]?.workContext).toEqual(
+        draft === "corrected prompt" ? workContext : undefined,
+      );
+      expect(isQueuedMessageBeingEdited(host, "queued-2")).toBe(false);
+    },
+  );
 
   it.each(["steer", "interrupt"] as const)(
     "keeps an explicitly queued edit behind earlier messages while the composer defaults to %s",

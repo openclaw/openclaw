@@ -9,6 +9,7 @@ import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent
 type SpawnCall = {
   command: string;
   args: string[];
+  containerId?: string;
 };
 
 const spawnCalls = vi.hoisted(() => [] as SpawnCall[]);
@@ -19,9 +20,10 @@ function inspectCreatedDockerMounts(containerName: string | undefined) {
     (call) =>
       call.command === "docker" &&
       call.args[0] === "create" &&
-      call.args[call.args.indexOf("--name") + 1] === containerName,
+      (call.args[call.args.indexOf("--name") + 1] === containerName ||
+        call.containerId === containerName),
   );
-  if (!create) {
+  if (!create?.containerId) {
     throw new Error(`No recorded Docker create for ${containerName}`);
   }
   const mounts: { Type: "bind"; Source: string; Destination: string; RW: boolean }[] = [];
@@ -80,12 +82,18 @@ function inspectCreatedDockerMounts(containerName: string | undefined) {
       return `${entry.id} ${parent?.id ?? 1} ${backing} ${escapePath(entry.destination)} ${mode} - ${filesystem}`;
     }),
   ].join("\n");
-  return { mounts, tmpfs, mountinfo };
+  return { containerId: create.containerId, mounts, tmpfs, mountinfo };
 }
 
 async function spawnDockerProcess(commandAndArgs: string[]) {
   const [command = "", ...args] = commandAndArgs;
-  spawnCalls.push({ command, args });
+  spawnCalls.push({
+    command,
+    args,
+    ...(command === "docker" && args[0] === "create"
+      ? { containerId: (spawnCalls.length + 1).toString(16).padStart(64, "0") }
+      : {}),
+  });
   const shouldFailContainerInspect =
     command === "docker" &&
     args[0] === "inspect" &&
@@ -93,7 +101,9 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     args[2] === "{{.State.Running}}";
   const code = command === "docker" && !shouldFailContainerInspect ? 0 : 1;
   let stdout = "";
-  if (
+  if (command === "docker" && args[0] === "inspect" && args[2] === "{{.Id}}") {
+    stdout = inspectCreatedDockerMounts(args[3]).containerId;
+  } else if (
     command === "docker" &&
     args[0] === "inspect" &&
     args[1] === "--format" &&
@@ -139,18 +149,25 @@ async function resolveContext(config: OpenClawConfig, sessionKey: string, worksp
     workspaceDir,
   });
   if (context) {
+    const { containerId } = inspectCreatedDockerMounts(context.containerName);
     expect(
       spawnCalls.filter(
         (call) =>
           call.command === "docker" &&
-          (call.args[2] === mountInspectFormat || call.args[3] === "/proc/self/mountinfo"),
+          (call.args[2] === "{{.Id}}" ||
+            call.args[2] === mountInspectFormat ||
+            call.args[3] === "/proc/self/mountinfo"),
       ),
     ).toEqual([
       {
         command: "docker",
-        args: ["inspect", "--format", mountInspectFormat, context.containerName],
+        args: ["inspect", "--format", "{{.Id}}", context.containerName],
       },
-      { command: "docker", args: ["exec", context.containerName, "cat", "/proc/self/mountinfo"] },
+      {
+        command: "docker",
+        args: ["inspect", "--format", mountInspectFormat, containerId],
+      },
+      { command: "docker", args: ["exec", containerId, "cat", "/proc/self/mountinfo"] },
     ]);
     expect(context.fsBridge?.resolvePath({ filePath: "marker.txt" }).hostPath).toBe(
       path.join(context.workspaceDir, "marker.txt"),

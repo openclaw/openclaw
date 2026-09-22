@@ -29,7 +29,6 @@ import {
   type SessionInfoDefaults,
   type SessionInfoEntry,
 } from "./tui-session-info.js";
-import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
   getTuiSessionProjection,
   readTuiSessionProjectionScope,
@@ -340,32 +339,20 @@ export function createSessionActions(context: SessionActionContext) {
       sessionGeneration === (state.sessionGeneration ?? 0) &&
       isCurrentSessionSelection(selection);
     try {
-      const resolveListAgentId = () => {
-        if (selection.sessionKey === "global") {
-          return selection.agentId;
-        }
-        if (selection.sessionKey === "unknown") {
-          return undefined;
-        }
-        const parsed = parseAgentSessionKey(selection.sessionKey);
-        return parsed?.agentId ? normalizeAgentId(parsed.agentId) : selection.agentId;
-      };
-      const listAgentId = resolveListAgentId();
-      const result = await client.listSessions({
-        limit: TUI_SESSION_LOOKUP_LIMIT,
-        search: selection.sessionKey,
-        includeGlobal: selection.sessionKey === "global",
-        includeUnknown: selection.sessionKey === "unknown",
-        agentId: listAgentId,
+      const result = await client.describeSession({
+        sessionKey: selection.sessionKey,
+        ...(!parseAgentSessionKey(selection.sessionKey) && selection.sessionKey !== "unknown"
+          ? { agentId: selection.agentId }
+          : {}),
       });
-      // Agent-scoped list results may expand a legacy alias to its canonical key,
-      // but cannot move the selection to another agent.
       if (!isCurrentRefresh()) {
         return;
       }
-      const entry = result.sessions.find((row) => {
-        return agentSessionKeysMatchByRequestKey(row.key, selection.sessionKey);
-      });
+      const entry =
+        result.session &&
+        agentSessionKeysMatchByRequestKey(result.session.key, selection.sessionKey)
+          ? result.session
+          : undefined;
       if (entry?.key && entry.key !== state.currentSessionKey) {
         updateAgentFromSessionKey(entry.key);
         state.currentSessionKey = entry.key;
@@ -380,7 +367,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentRefresh()) {
         return;
       }
-      chatLog.addSystem(`sessions list failed: ${formatTuiErrorMessage(err)}`);
+      chatLog.addSystem(`session description failed: ${formatTuiErrorMessage(err)}`);
     }
   };
 

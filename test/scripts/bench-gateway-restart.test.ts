@@ -217,7 +217,7 @@ describe("gateway restart benchmark script", () => {
     expect(unknownArgsResult.stderr).not.toContain("\n    at ");
   });
 
-  it("guards the SIGUSR1 restart benchmark on Windows", () => {
+  it("guards the SIGUSR2 restart benchmark on Windows", () => {
     expect(() => testing.ensureSupportedRestartPlatform("linux")).not.toThrow();
     expect(() => testing.ensureSupportedRestartPlatform("darwin")).not.toThrow();
     expect(() => testing.ensureSupportedRestartPlatform("win32")).toThrow(

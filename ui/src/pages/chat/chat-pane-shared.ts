@@ -195,7 +195,7 @@ export type ChatPaneConnectionScope = {
   headerOutcomeOwner: string;
   sessions: ChatPageContext["sessions"];
 };
-export const CHAT_OPEN_DETAILS_SELECTOR =
+const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 // Menus without typeahead own activation/navigation, not printable input.
@@ -251,6 +251,21 @@ function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
       !dropdown.closest("[inert]") &&
       (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(dropdown, key)),
   );
+}
+
+/** Close this pane's disclosures, except those containing the current pointer event. */
+export function closeChatPaneDetails(
+  root: ParentNode,
+  retainedPath: readonly EventTarget[] = [],
+): boolean {
+  let changed = false;
+  root.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR).forEach((details) => {
+    if (!retainedPath.includes(details)) {
+      details.open = false;
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 export function focusChatComposerFromPrintableKeydown(

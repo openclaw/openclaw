@@ -50,7 +50,7 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:two-line"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const pin = row.getByRole("button", { name: "Unpin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const menu = row.locator("[data-sidebar-session-archive]");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await captureUiProof(suite, page, "sidebar-session-actions-centered.png");
 
@@ -167,7 +167,7 @@ suite.define(() => {
       await accessibility.detach();
       const state = row.locator(".sidebar-session-indicator .session-glyph__ring");
       const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const menu = row.locator("[data-sidebar-session-archive]");
       await expect.poll(() => state.isVisible()).toBe(true);
       await expect.poll(() => actionOpacity(state)).toBe("1");
       await page.mouse.move(500, 500);
@@ -272,7 +272,7 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const fork = row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator");
       const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const menu = row.locator("[data-sidebar-session-archive]");
       await expect.poll(() => fork.isVisible()).toBe(true);
       await expect.poll(() => row.locator(".session-row-state").count()).toBe(0);
 
@@ -308,7 +308,12 @@ suite.define(() => {
       localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
     });
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.patch",
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
         "sessions.list": sessionsListResponse([
@@ -419,7 +424,7 @@ suite.define(() => {
       await page.mouse.move(0, 0);
       await pullRequestIcon.waitFor({ state: "visible" });
       await unreadBadge.waitFor({ state: "visible" });
-      await pullRequestRow.getByRole("button", { name: "Open session menu" }).focus();
+      await pullRequestRow.locator("[data-sidebar-session-archive]").focus();
       await pullRequestIcon.waitFor({ state: "hidden" });
       await unreadBadge.waitFor({ state: "visible" });
       expect(await unreadBadge.boundingBox()).toEqual(badgeBounds);
@@ -458,7 +463,7 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const state = row.locator(".sidebar-session-indicator .session-glyph__ring");
       const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const menu = row.locator("[data-sidebar-session-archive]");
       await expect.poll(() => state.isVisible()).toBe(true);
       await expect.poll(() => actionOpacity(state)).toBe("1");
       await expect.poll(() => pin.isVisible()).toBe(true);
@@ -608,7 +613,7 @@ suite.define(() => {
       const link = row.locator(".sidebar-recent-session__link");
       const titleRow = row.locator(".sidebar-recent-session__title-row");
       const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const menu = row.locator("[data-sidebar-session-archive]");
       await expect
         .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
         .toBe("2px");

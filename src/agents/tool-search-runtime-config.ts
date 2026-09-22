@@ -17,8 +17,7 @@ export function resolveAgentToolSearchRuntimeConfig(params: {
     return runtimeConfig;
   }
   if (
-    !runtimeConfig ||
-    runtimeConfig.tools?.toolSearch !== undefined ||
+    runtimeConfig?.tools?.toolSearch !== undefined ||
     (params.model?.toolSearchMode !== "tools" &&
       !isLocalModelLeanEnabled({ ...params, config: runtimeConfig }))
   ) {
@@ -27,7 +26,7 @@ export function resolveAgentToolSearchRuntimeConfig(params: {
   return {
     ...runtimeConfig,
     tools: {
-      ...runtimeConfig.tools,
+      ...runtimeConfig?.tools,
       toolSearch: { enabled: true, mode: "tools", searchDefaultLimit: 5, maxSearchLimit: 10 },
     },
   };

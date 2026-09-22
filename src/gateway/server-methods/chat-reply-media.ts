@@ -11,9 +11,11 @@ import {
   type ReplyMediaFailure,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import type { LocalMediaAccessError } from "../../media/local-media-access.js";
 import {
   appendLocalMediaParentRoots,
@@ -29,7 +31,11 @@ import {
 import { loadSessionEntry } from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
-import { buildAssistantReplyContent } from "./chat-assistant-content.js";
+import { buildAssistantReplyContentFromInputs } from "./chat-assistant-content.js";
+import {
+  readChatSendReplyPayload,
+  replaceChatSendReplyPayload,
+} from "./chat-send-command-replies.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 
 export type WebchatReplyMediaRequesterContext = Pick<
@@ -104,7 +110,7 @@ export function captureWebchatReplyMediaScope(
 
 export async function prepareWebchatReplyMediaForDisplay(params: {
   scope: ReturnType<typeof captureWebchatReplyMediaScope>;
-  payloads: ReplyPayload[];
+  inputs: readonly ReplyDispatchOperation[];
   storePath?: string;
   transcriptTarget?: { sessionKey: string; agentId?: string };
   abortSignal?: AbortSignal;
@@ -115,7 +121,8 @@ export async function prepareWebchatReplyMediaForDisplay(params: {
   onSensitiveDisplayPrepareError?: (message: string) => void;
 }) {
   const scope = params.scope;
-  const hasMedia = params.payloads.some(
+  const sourcePayloads = params.inputs.map(readChatSendReplyPayload);
+  const hasMedia = sourcePayloads.some(
     (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls.length > 0,
   );
   return await withChannelReadAuthority(
@@ -123,18 +130,25 @@ export async function prepareWebchatReplyMediaForDisplay(params: {
     async () => {
       const payloads = await normalizeWebchatReplyMediaPathsForDisplay({
         ...scope,
-        payloads: params.payloads,
+        payloads: sourcePayloads,
+      });
+      const inputs = params.inputs.flatMap((input, index) => {
+        const payload = payloads[index];
+        return payload ? replaceChatSendReplyPayload(input, payload) : [];
       });
       const localRoots = getWebchatReplyMediaLocalRoots({ ...scope, storePath: params.storePath });
-      const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(payloads, {
-        localRoots,
-        assertCurrent: captureChannelReadAuthority(),
-        onLocalAudioAccessDenied: params.onLocalAudioAccessDenied,
-      });
-      const content = await buildAssistantReplyContent({
+      const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(
+        inputs.map(readChatSendReplyPayload),
+        {
+          localRoots,
+          assertCurrent: captureChannelReadAuthority(),
+          onLocalAudioAccessDenied: params.onLocalAudioAccessDenied,
+        },
+      );
+      const content = await buildAssistantReplyContentFromInputs({
         sessionKey: params.transcriptTarget?.sessionKey ?? scope.sessionKey,
         agentId: params.transcriptTarget?.agentId ?? scope.agentId,
-        payloads,
+        inputs,
         transcriptMediaMessage: mediaMessage,
         managedMediaLocalRoots: localRoots,
         assertCurrent: scope.assertCurrent,
@@ -144,7 +158,7 @@ export async function prepareWebchatReplyMediaForDisplay(params: {
         onManagedMediaPrepareError: params.onManagedMediaPrepareError,
         onSensitiveDisplayPrepareError: params.onSensitiveDisplayPrepareError,
       });
-      return { ...content, payloads, mediaMessage };
+      return { ...content, inputs, payloads, mediaMessage };
     },
     hasMedia ? params.abortSignal : undefined,
   );
@@ -289,28 +303,29 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
       }
       const mergedMediaUrls: string[] = [];
       const mergedAttachments: NonNullable<ReplyPayload["attachments"]> = [];
-      const mediaFailures: ReplyMediaFailure[] = [
-        ...(getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []),
-      ];
+      const previousMediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
+      const mediaFailures: ReplyMediaFailure[] = [...previousMediaFailures];
       let text = payload.text;
-      for (const [index, mediaUrl] of mediaUrls.entries()) {
-        const attachment = payload.attachments?.[index];
+      for (const { url: mediaUrl, attachment } of collectReplyMediaEntries(payload, mediaUrls)) {
         if (shouldPreserveDisplayMediaUrl(payload, mediaUrl)) {
           mergedMediaUrls.push(mediaUrl);
           mergedAttachments.push(attachment ?? {});
           continue;
         }
-        const normalizedPayload = await normalizeMediaPaths({
-          ...payload,
-          text,
-          mediaUrl,
-          mediaUrls: [mediaUrl],
-          attachments: attachment ? [attachment] : undefined,
-        });
+        const normalizedPayload = await normalizeMediaPaths(
+          copyReplyPayloadMetadata(payload, {
+            ...payload,
+            text,
+            mediaUrl,
+            mediaUrls: [mediaUrl],
+            attachments: attachment ? [attachment] : undefined,
+          }),
+        );
         const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalizedPayload).mediaUrls;
-        // Per-file copies have no WeakMap metadata, so every returned failure is new.
         mediaFailures.push(
-          ...(getReplyPayloadMetadata(normalizedPayload)?.assistantMediaFailures ?? []),
+          ...(getReplyPayloadMetadata(normalizedPayload)?.assistantMediaFailures ?? []).slice(
+            previousMediaFailures.length,
+          ),
         );
         text = normalizedPayload.text;
         if (normalizedMediaUrls.length === 0) {

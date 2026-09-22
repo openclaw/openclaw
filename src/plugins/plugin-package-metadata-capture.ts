@@ -643,11 +643,15 @@ export function createPluginPackageMetadataCapture(params: {
   };
 }
 
-const sourceCaptureDirectory = new AsyncLocalStorage<string>();
+const sourceCaptureDirectory = new AsyncLocalStorage<{ directory: string; managedRoot?: string }>();
 
 /** A compute worker's parent reclaims this scratch directory after confirmed exit. */
-export function withPluginSourceCaptureDirectory<T>(directory: string, run: () => T): T {
-  return sourceCaptureDirectory.run(directory, run);
+export function withPluginSourceCaptureDirectory<T>(
+  directory: string,
+  run: () => T,
+  managedRoot?: string,
+): T {
+  return sourceCaptureDirectory.run({ directory, managedRoot }, run);
 }
 
 /** Admissions and failed-input receipts belong to one source acquisition lifetime. */
@@ -659,7 +663,7 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
   try {
     created =
       override !== undefined
-        ? fs.mkdtempSync(path.join(override, PLUGIN_SOURCE_CAPTURE_PREFIX))
+        ? fs.mkdtempSync(path.join(override.directory, PLUGIN_SOURCE_CAPTURE_PREFIX))
         : instance!.createDirectory();
     directory = fs.realpathSync(created);
     fs.chmodSync(directory, 0o700);
@@ -723,7 +727,7 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     capture: captureAdmitted,
     assertModuleAvailable,
     directory,
-    outputRoot: instance?.managedRoot,
+    outputRoot: override?.managedRoot ?? instance?.managedRoot,
     linkHost: (hostRoot: string) => {
       const modules = path.join(directory, "node_modules");
       fs.mkdirSync(modules, { recursive: true, mode: 0o700 });

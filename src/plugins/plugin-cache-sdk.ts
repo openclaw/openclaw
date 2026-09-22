@@ -28,7 +28,6 @@ type PreparedPluginAliases = {
   cacheKey: string;
   sdkRoots: string[];
   getAliasMap: () => PluginSdkAliasMap;
-  hasSourceSdkAliases: () => boolean;
   getSourceTransformAliasMap: () => PluginSdkAliasMap;
   resolveAlias: (specifier: string) => string | undefined;
 };

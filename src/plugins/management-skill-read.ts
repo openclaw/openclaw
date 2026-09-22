@@ -9,6 +9,8 @@ export const readManagedPluginSkill = withManagedPluginCache(
     config: OpenClawConfig;
     pluginId: string;
     skillName: string;
+    path?: string;
+    version?: string;
     env?: NodeJS.ProcessEnv;
   }) => {
     const metadata = resolveManagedPluginMetadata(params.config, params.env ?? process.env);
@@ -16,6 +18,6 @@ export const readManagedPluginSkill = withManagedPluginCache(
     if (!manifest) {
       throw new ManagedPluginLifecycleError("Installed plugin not found.");
     }
-    return readPluginSkill(manifest, params.skillName);
+    return readPluginSkill(manifest, params.skillName, params);
   },
 );

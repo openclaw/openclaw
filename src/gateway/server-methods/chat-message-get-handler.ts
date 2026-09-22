@@ -5,7 +5,6 @@ import {
   validateChatMessageGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import {
@@ -26,7 +25,6 @@ import {
 } from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
-import { validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { projectPendingInputMessage } from "./chat-pending-inputs.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -93,29 +91,15 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
     }
     const { sessionKey, messageId, maxChars } = params;
     const agentIdOverride = normalizeOptionalText(params.agentId);
-    const requestedAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      sessionKey,
-      agentIdOverride,
-    );
+    const cfg = context.getRuntimeConfig();
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, sessionKey, agentIdOverride);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const session = loadGatewaySessionEntryReadOnly(sessionKey, {
-      agentId: requestedAgentId,
-    });
-    const { cfg, storePath, entry, canonicalKey } = session;
-    const selectedAgent = validateChatSelectedAgent({
-      cfg,
-      requestedSessionKey: sessionKey,
-      explicitAgentId: agentIdOverride,
-    });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-      return;
-    }
+    const session = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: requestedAgentId }, cfg);
+    const { agentId: sessionAgentId, storePath, entry, canonicalKey } = session;
     const sessionId = entry?.sessionId;
     if (!sessionId) {
       respond(true, { ok: false, unavailableReason: "not_found" });
@@ -152,11 +136,6 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-      agentId: selectedAgent.agentId,
-    });
     const effectiveMaxChars =
       typeof maxChars === "number" ? maxChars : Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
     if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
@@ -249,9 +228,13 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    respond(true, {
-      ok: true,
-      message: projected,
-    });
+    // maxChars bounds individual text fields, not the serialized message: many
+    // blocks or structured output must not bypass the WebSocket payload limit.
+    respond(
+      true,
+      jsonUtf8Bytes(projected) > MAX_PAYLOAD_BYTES - 1024
+        ? { ok: false, unavailableReason: "oversized" }
+        : { ok: true, message: projected },
+    );
   },
 };

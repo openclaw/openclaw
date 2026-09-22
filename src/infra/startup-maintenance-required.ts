@@ -3,6 +3,7 @@ import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 export const GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON = "gateway.maintenance_required";
 
 const maintenanceReasons = {
+  "state-migrations": "state migration",
   "newer-schema": "a newer OpenClaw build",
   "agent-media": "offline media migration",
   "agent-databases-composite-primary-key": "state database schema migration",
@@ -19,8 +20,9 @@ export class StartupMaintenanceRequiredError extends Error {
   constructor(
     readonly kind: keyof typeof maintenanceReasons,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
     this.name = "StartupMaintenanceRequiredError";
   }
 

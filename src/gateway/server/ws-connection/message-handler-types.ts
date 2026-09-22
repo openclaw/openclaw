@@ -18,6 +18,7 @@ import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.j
 import type { GatewayRole } from "../../role-policy.types.js";
 import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
+import type { GatewayClientRegistry } from "../client-registry.js";
 import type {
   GatewayConnectionTransport,
   PrepareGatewayAuthenticatedReceive,
@@ -38,6 +39,7 @@ type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; 
 
 export type GatewayWsMessageHandlerParams = {
   socket: GatewayConnectionTransport;
+  clients: GatewayClientRegistry;
   prepareAuthenticatedReceive: PrepareGatewayAuthenticatedReceive;
   connectionWork: GatewayConnectionWork;
   upgradeReq: IncomingMessage;

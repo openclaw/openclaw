@@ -80,6 +80,8 @@ export type ActiveSessionSqliteMigrationRun = {
   manifestPath: string;
 };
 
+export const HISTORICAL_IMPORT_REASON = "indexed-historical-primary";
+
 const SESSION_SQLITE_MIGRATION_RUNS_DIR = "session-sqlite-migration-runs";
 const COMPLETED_MIGRATION_RUN_RETENTION = 50;
 const AbsolutePathSchema = z
@@ -374,7 +376,10 @@ export function findLatestFailedSessionSqliteMigrationManifest(
     )[0];
 }
 
-function sessionSqliteMigrationTargetKey(target: { agentId: string; storePath: string }): string {
+export function sessionSqliteMigrationTargetKey(target: {
+  agentId: string;
+  storePath: string;
+}): string {
   return `${target.agentId}\u0000${canonicalMigrationFilePath(target.storePath)}`;
 }
 

@@ -3,7 +3,7 @@ import {
   runWithProcessCleanupBudget,
   type ProcessCleanupBudget,
 } from "../process/supervisor/cleanup-budget.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 
 export type GatewaySidecarStopOwner = ReturnType<typeof createGatewaySidecarStopOwner>;
 

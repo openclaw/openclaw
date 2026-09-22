@@ -102,7 +102,7 @@ suite.define(() => {
           `.sidebar-recent-session[data-session-key="${archived.key}"]`,
         );
         await archiveRow.hover();
-        await archiveRow.getByRole("button", { name: "Open session menu" }).click();
+        await archiveRow.click({ button: "right" });
         await activateSelfRemovingControl(
           page.getByRole("menuitem", { name: "Archive session", exact: true }),
         );

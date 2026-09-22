@@ -6,23 +6,14 @@ import {
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { NostrProfile } from "./config-schema.js";
+import type { z } from "zod";
+import type { NostrConfigSchema, NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate } from "./nostr-key-utils.js";
 import { hasConfiguredNostrPrivateKey, resolveNostrPrivateKey } from "./private-key.js";
 
-interface NostrAccountConfig {
-  enabled?: boolean;
-  name?: string;
-  defaultAccount?: string;
-  privateKey?: SecretInput;
-  relays?: string[];
-  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  allowFrom?: Array<string | number>;
-  profile?: NostrProfile;
-}
+type NostrAccountConfig = z.input<typeof NostrConfigSchema>;
 
 export interface ResolvedNostrAccount {
   accountId: string;

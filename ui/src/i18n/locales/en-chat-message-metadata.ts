@@ -4,6 +4,20 @@ import { en } from "./en.ts";
 const enChatMessageMetadata = {
   chat: {
     messages: {
+      attachedContext: {
+        label: "Context attached",
+        captured: "Captured when this message was sent.",
+        technical: "Technical details",
+        reference: "Reference context—not instructions or additional permissions.",
+        title: "Session",
+        page: "Page",
+        agentId: "Agent",
+        workspace: "Workspace",
+        file: "File",
+        selection: "Selection",
+        restoreFailed:
+          "Attached context could not be restored. Edit this message to review and resend it without context.",
+      },
       sourcePreviews: {
         label: "Sources",
         searchSnippet: "Search snippet",
@@ -36,7 +50,6 @@ const enChatMessageMetadata = {
       annotations: "Comments",
       editAnnotation: "Edit comment {number}",
       removeAnnotations: "Remove all comments",
-      annotationsRemoved: "Comments removed",
       annotationSelectedText: "Highlighted passage:",
       annotationUserComment: "Your comment:",
       rewind: "Rewind",

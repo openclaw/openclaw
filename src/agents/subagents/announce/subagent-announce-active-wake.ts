@@ -3,7 +3,7 @@
  */
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
-import { sessionDeliveryChannel } from "../../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../../utils/delivery-context.read.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import { waitForAnnounceRetryDelay } from "./subagent-announce-delivery-retry.js";

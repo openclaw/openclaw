@@ -4,7 +4,6 @@ import {
   logInboundDrop,
   resolveChannelInboundRouteEnvelope,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
@@ -57,7 +56,7 @@ export async function handleBuzzInbound(params: {
   const hasControlCommand =
     shouldComputeCommandAuthorized && runtime.channel.text.hasControlCommand(message.text, cfg);
   const groupConfig = account.config.groups?.[channelId];
-  const access = await resolveStableChannelMessageIngress({
+  const access = await runtime.channel.inbound.ingress.resolveStable({
     channelId: "buzz",
     accountId: account.accountId,
     identity: { key: "buzz-pubkey", entryIdPrefix: "buzz-entry" },
@@ -70,6 +69,7 @@ export async function handleBuzzInbound(params: {
     contextBinding: {
       agentId: route.agentId,
       sessionKey: route.sessionKey,
+      nativeChannelId: channelId,
       messageId: message.id,
       inboundEventKind: "user_request",
     },

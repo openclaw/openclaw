@@ -70,6 +70,7 @@ function resolveUniqueSkillCommandName(base: string, used: Set<string>): string 
 }
 
 type WorkspaceSkillCommandOptions = {
+  bundledSkillName?: string;
   config?: OpenClawConfig;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
@@ -85,6 +86,7 @@ type WorkspaceSkillCommandOptions = {
 
 function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
   return {
+    bundledSkillName: opts?.bundledSkillName,
     config: opts?.config,
     managedSkillsDir: opts?.managedSkillsDir,
     bundledSkillsDir: opts?.bundledSkillsDir,
@@ -102,9 +104,9 @@ function resolveCommandSkillLoadOptions(opts?: WorkspaceSkillCommandOptions) {
 /** Builds user-invocable slash command specs for synchronous SDK consumers. */
 export function buildWorkspaceSkillCommandSpecs(
   workspaceDir: string,
-  opts?: WorkspaceSkillCommandOptions,
+  opts?: WorkspaceSkillCommandOptions & { gatewayOnly?: boolean },
 ): SkillCommandSpec[] {
-  const loadOptions = resolveCommandSkillLoadOptions(opts);
+  const loadOptions = { ...resolveCommandSkillLoadOptions(opts), gatewayOnly: opts?.gatewayOnly };
   const eligible = opts?.entries
     ? filterWorkspaceSkills(opts.entries, {
         config: opts?.config,

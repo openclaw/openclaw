@@ -1,6 +1,9 @@
 import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websocket-transport.js";
 import { WORKER_LINEAGE_START_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createChildAdapter } from "../process/supervisor/adapters/child.js";
+import {
+  createChildAdapter,
+  type AwaitedStdoutChildAdapter,
+} from "../process/supervisor/adapters/child.js";
 import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "../process/supervisor/service-child-relay-host.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
@@ -30,7 +33,7 @@ import {
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import type { NodeWorkerLaunchInput } from "./node-worker-supervisor-contract.js";
 
-export type NodeWorkerChildAdapter = Awaited<ReturnType<typeof createChildAdapter>>["adapter"] & {
+export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter & {
   confirmExtinction?: () => boolean;
 };
 
@@ -74,6 +77,7 @@ export async function prepareNodeWorkerLaunchTransport(
       env: options.workerEnv,
       ownedWorker: true,
       stdinMode: "pipe-open",
+      stdoutConsumption: "awaited",
       onWorkerMessage: (message: unknown) => {
         const diagnostic = parseNodeWorkerConnectionFailureMessage(message);
         if (!diagnostic) {
@@ -97,7 +101,7 @@ export async function prepareNodeWorkerLaunchTransport(
     ) {
       const { adapter, ready } = await createServiceChildRelayAdapter({
         ...workerOptions,
-        cleanupBinding: options.store.cleanupBinding({
+        cleanupBinding: await options.store.cleanupBinding({
           launchId: options.input.launchId,
           planHash: options.planHash,
           supervisor: options.supervisor,
@@ -148,7 +152,7 @@ export async function prepareNodeWorkerLaunchTransport(
       env: options.workerEnv,
       ...(options.containerImage ? { image: options.containerImage } : {}),
     });
-    const claimed = options.store.get(options.input.launchId);
+    const claimed = await options.store.get(options.input.launchId);
     if (claimed?.state !== "pending") {
       await lifecycle.remove(container, options.input);
       if (!claimed) {
@@ -161,6 +165,7 @@ export async function prepareNodeWorkerLaunchTransport(
       env: options.containerEngine.env ?? options.engineEnv,
       exactEnv: true,
       stdinMode: "pipe-open",
+      stdoutConsumption: "awaited",
     });
     await ready;
     return { kind: "started", adapter, container, cleanupMode: null };

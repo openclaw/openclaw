@@ -1,6 +1,7 @@
 // Zalouser tests cover monitor.group gating plugin behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 // Preserve module setup before modules that consume it.
@@ -28,7 +29,11 @@ import { monitorZalouserProvider } from "./monitor.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sendMessageZalouser } from "./send.js";
-import { createZalouserRuntimeEnv } from "./test-helpers.js";
+import {
+  createZalouserDmMessage as createDmMessage,
+  createZalouserGroupMessage as createGroupMessage,
+  createZalouserRuntimeEnv,
+} from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 
 function createAccount(): ResolvedZalouserAccount {
@@ -276,6 +281,7 @@ function installRuntime(params: {
         dispatchReplyWithBufferedBlockDispatcher,
       },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         dispatch,
         buildContext:
           buildContext as unknown as PluginRuntime["channel"]["inbound"]["buildContext"],
@@ -369,40 +375,6 @@ async function processGroupControlCommand(params: {
     config: createConfig(),
     runtime: createRuntimeEnv(),
   });
-}
-
-function createGroupMessage(overrides: Partial<ZaloInboundMessage> = {}): ZaloInboundMessage {
-  return {
-    threadId: "g-1",
-    isGroup: true,
-    senderId: "123",
-    senderName: "Alice",
-    groupName: "Team",
-    content: "hello",
-    timestampMs: Date.now(),
-    msgId: "m-1",
-    hasAnyMention: false,
-    wasExplicitlyMentioned: false,
-    canResolveExplicitMention: true,
-    implicitMention: false,
-    raw: { source: "test" },
-    ...overrides,
-  };
-}
-
-function createDmMessage(overrides: Partial<ZaloInboundMessage> = {}): ZaloInboundMessage {
-  return {
-    threadId: "u-1",
-    isGroup: false,
-    senderId: "321",
-    senderName: "Bob",
-    groupName: undefined,
-    content: "hello",
-    timestampMs: Date.now(),
-    msgId: "dm-1",
-    raw: { source: "test" },
-    ...overrides,
-  };
 }
 
 describe("zalouser monitor group mention gating", () => {

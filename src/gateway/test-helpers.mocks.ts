@@ -290,7 +290,8 @@ vi.mock("../status/summary.js", () => ({
 vi.mock("../commands/agent.js", () => ({
   agentCommand: agentCommandMock,
   agentCommandFromGatewayIngress: agentCommandMock,
-  agentCommandFromIngress: agentCommandMock,
+  agentCommandFromIngress: (...args: Parameters<typeof agentCommandMock>) =>
+    agentCommandMock(...args),
 }));
 vi.mock("../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>

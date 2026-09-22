@@ -322,10 +322,14 @@ describe("stale OAuth profile shadow doctor repair", () => {
     expect(raw.profiles[profileId]?.oauthRef).toBeDefined();
   });
 
-  it("removes stale child OAuth shadows and local cooldown state", async () => {
+  it("retires a local OAuth copy without changing the authored account order", async () => {
     const profileId = "anthropic:default";
     const now = Date.now();
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
+    const localId = "anthropic:local";
+    const localCredential = oauthCredential({ accountId: "acct-local" });
+    const localHealth = { errorCount: 1, lastUsed: now - 1_000 };
+    const order = [localId, profileId, "anthropic:missing"];
     saveAuthProfileStore(
       storeWith(
         profileId,
@@ -338,20 +342,23 @@ describe("stale OAuth profile shadow doctor repair", () => {
       ),
       undefined,
     );
+    const sharedBefore = loadPersistedAuthProfileStore();
     writePersistedAuthProfileStoreRaw(
       {
-        ...storeWith(
-          profileId,
-          oauthCredential({
+        version: 1,
+        profiles: {
+          [profileId]: oauthCredential({
             access: "child-access",
             refresh: "child-refresh",
             expires: now - 60_000,
             accountId: "acct-shared",
           }),
-        ),
-        order: { anthropic: [profileId] },
+          [localId]: localCredential,
+        },
+        order: { anthropic: order },
         lastGood: { anthropic: profileId },
         usageStats: {
+          [localId]: localHealth,
           [profileId]: {
             cooldownReason: "auth",
             failureCounts: { auth: 2 },
@@ -362,20 +369,18 @@ describe("stale OAuth profile shadow doctor repair", () => {
     );
 
     const result = await repairStaleOAuthProfileShadows({
-      cfg: { agents: { list: [{ id: "telegram" }] } } satisfies OpenClawConfig,
+      cfg: {} satisfies OpenClawConfig,
       now,
     });
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toHaveLength(1);
-    expect(result.changes[0]).toContain(
-      "Removed stale OAuth auth profile shadow anthropic:default",
-    );
     const childStore = loadPersistedAuthProfileStore(childAgentDir);
-    expect(childStore?.profiles[profileId]).toBeUndefined();
-    expect(childStore?.usageStats?.[profileId]).toBeUndefined();
-    expect(childStore?.order?.anthropic).toBeUndefined();
+    expect(childStore?.profiles).toEqual({ [localId]: localCredential });
+    expect(childStore?.usageStats).toEqual({ [localId]: localHealth });
+    expect(childStore?.order?.anthropic).toEqual(order);
     expect(childStore?.lastGood?.anthropic).toBeUndefined();
+    expect(loadPersistedAuthProfileStore()).toEqual(sharedBefore);
   });
 
   it("does not remove a child OAuth profile for a different account", async () => {

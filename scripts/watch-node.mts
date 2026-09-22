@@ -361,7 +361,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
   const useChildProcessGroup = platform !== "win32" && !deps.process.stdin?.isTTY;
   childEnv.OPENCLAW_WATCH_MODE = "1";
   childEnv.OPENCLAW_WATCH_SESSION = watchSession;
-  // The watcher owns process restarts; keep SIGUSR1/config reloads in-process
+  // The watcher owns process restarts; keep SIGUSR2/config reloads in-process
   // so inherited launchd/systemd markers do not make the child exit and stall.
   childEnv.OPENCLAW_NO_RESPAWN = "1";
   if (deps.args.length > 0) {

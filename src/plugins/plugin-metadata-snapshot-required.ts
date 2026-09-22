@@ -1,14 +1,10 @@
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { isPluginSourceModulePath } from "./native-module-require.js";
+import { isPluginSourceModulePath, tryNativeRequireModule } from "./native-module-require.js";
 import {
   snapshotReaderSlot,
   type CurrentSnapshotModule,
   type SnapshotLoaderModule,
 } from "./plugin-metadata-snapshot-readers.js";
-import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
-
-const require = createRequire(import.meta.url);
 
 // Required policy readers must preserve loader failures. Source and built code
 // select one owner entry; neither falls back to optional/empty policy on error.
@@ -20,13 +16,12 @@ function loadRequiredSnapshotReaders(): typeof import("./plugin-metadata-readers
       import.meta.url,
     ),
   );
-  const loaded: unknown = source
-    ? getCachedPluginModuleLoader({ modulePath, importerUrl: import.meta.url, tryNative: false })(
-        modulePath,
-      )
-    : require(modulePath);
+  const native = tryNativeRequireModule(modulePath);
+  if (!native.ok) {
+    throw new Error(`Host plugin metadata runtime requires native loading: ${modulePath}`);
+  }
   // SAFETY: Both fixed targets expose the typed metadata owner exports through the same entry.
-  return loaded as typeof import("./plugin-metadata-readers.runtime.js");
+  return native.moduleExport as typeof import("./plugin-metadata-readers.runtime.js");
 }
 
 /** Reads current policy through its canonical owner, requiring a working runtime. */

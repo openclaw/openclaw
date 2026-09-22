@@ -8,6 +8,7 @@ import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
+import { compactCronListJob } from "../../gateway/server-methods/cron-list-projection.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import {
@@ -31,7 +32,7 @@ const job: CronJob = {
   payload: { kind: "systemEvent", text: "Check unpaid invoices" },
   state: {},
 };
-const compactJob = {
+const legacyCompactJob = {
   id: job.id,
   name: job.name,
   enabled: true,
@@ -44,6 +45,18 @@ const compactJob = {
   lastRunAtMs: null,
   lastRunStatus: null,
   lastRunError: null,
+};
+const compactJob = {
+  ...compactCronListJob({
+    ...job,
+    agentId: "main",
+    enabled: false,
+    state: {
+      runningAtMs: 0,
+      autoDisabled: { reason: "consecutive-failures", atMs: 0, consecutiveErrors: 3 },
+    },
+  }),
+  effectiveAgentId: "main",
 };
 const page = {
   total: 1,
@@ -91,6 +104,11 @@ describe("automations output contract", () => {
       },
     },
     { name: "compact inventory", args: { action: "list" }, reply: list },
+    {
+      name: "older compact inventory",
+      args: { action: "list" },
+      reply: { ...list, jobs: [legacyCompactJob] },
+    },
     { name: "job details", args: { action: "get", jobId: job.id }, reply: job },
     {
       name: "creation",
@@ -247,7 +265,7 @@ describe("automations output contract", () => {
     }
   });
 
-  it("composes action results through generated declarations and a typechecked cell", async () => {
+  it("composes action results through generated declarations and JavaScript", async () => {
     onTestFinished(resetCodeModeTestState);
     const h = createCodeModeHarness();
     const replies: Record<string, unknown> = {
@@ -274,15 +292,15 @@ describe("automations output contract", () => {
     const composition = `
 async function consume() {
   const listed = await automations({ action: "list" });
-  const names: string[] = listed.jobs.map(job => job.name);
-  const next: number | null = listed.nextOffset;
+  const names = listed.jobs.map(job => job.name);
+  const next = listed.nextOffset;
   const status = await automations({ action: "status" });
-  const enabled: boolean = status.enabled;
-  const jobCount: number | undefined = status.jobs;
+  const enabled = status.enabled;
+  const jobCount = status.jobs;
   const details = await automations({ action: "get", jobId: "invoice-check" });
-  const name: string = details.name;
+  const name = details.name;
   const runs = await automations({ action: "runs", jobId: details.id });
-  const summaries: (string | undefined)[] = runs.entries.map(entry => entry.summary);
+  const summaries = runs.entries.map(entry => entry.summary);
   return { names, next, enabled, jobCount, name, summaries };
 }
 `;
@@ -334,8 +352,6 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
       details: resultDetails(
         await expectDefined(h.tools[0], "Code Mode exec").execute("compose-automations", {
           code: `${composition}\nreturn await consume();`,
-          language: "typescript",
-          typecheck: true,
         }),
       ),
       waitTool: expectDefined(h.tools[1], "Code Mode wait"),

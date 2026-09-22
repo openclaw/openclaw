@@ -20,5 +20,8 @@
     "extensions": [
       "./index.ts"
     ]
+  },
+  "dependencies": {
+    "@openclaw/fs-safe": "0.18.1"
   }
 }

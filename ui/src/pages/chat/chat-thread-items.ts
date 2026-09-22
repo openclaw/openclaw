@@ -283,14 +283,17 @@ export function isPendingSendMessage(message: unknown): boolean {
 export function readPendingSendStatus(message: unknown): {
   error?: string;
   id: string;
-  state: "failed" | "unconfirmed" | "waiting-reconnect";
+  state: "failed" | "unconfirmed" | "held" | "waiting-reconnect";
 } | null {
   const metadata = asRecord(asRecord(message)?.["__openclaw"]);
   const state = metadata?.state;
   const id = metadata?.id;
   if (
     metadata?.kind !== "pending-send" ||
-    (state !== "failed" && state !== "unconfirmed" && state !== "waiting-reconnect") ||
+    (state !== "failed" &&
+      state !== "unconfirmed" &&
+      state !== "held" &&
+      state !== "waiting-reconnect") ||
     typeof id !== "string"
   ) {
     return null;
@@ -424,6 +427,8 @@ export function sanitizeStreamText(text: string): string {
 export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
   return buildLocalUserMessage({
     text: item.text,
+    workContext: item.workContext,
+    mentions: item.mentions,
     attachments: item.attachments,
     createdAt: item.createdAt,
     runId: item.sendRunId ?? item.pendingRunId,

@@ -307,6 +307,8 @@ export function createGatewaySubagentRuntime(
     },
     async run(request) {
       const params = { ...request };
+      const assertCurrent = params.assertCurrent;
+      assertCurrent?.();
       if (params.disableTools === true && (params.toolsAlsoAllow?.length ?? 0) > 0) {
         throw new Error("Tool-free plugin subagent runs cannot request additive tools.");
       }
@@ -323,7 +325,7 @@ export function createGatewaySubagentRuntime(
         toolsAlsoAllow: params.toolsAlsoAllow,
       });
       const { allowOverride, allowSyntheticModelOverride, policy } = authorizeModelOverride(params);
-      let sessionMutationCommitGuard: (() => void) | undefined;
+      let sessionMutationCommitGuard = assertCurrent;
       if (policy) {
         const context = getInProcessGatewayRequestContext(resolveGatewayContext);
         if (!context) {
@@ -331,6 +333,7 @@ export function createGatewaySubagentRuntime(
         }
         const cfg = context.getRuntimeConfig();
         sessionMutationCommitGuard = () => {
+          assertCurrent?.();
           runtimeLifetime?.throwIfAborted();
           if (
             getInProcessGatewayRequestContext(resolveGatewayContext) !== context ||

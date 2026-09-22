@@ -8,6 +8,7 @@ import chokidar from "chokidar";
 import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveSkillsWatcherUsePolling } from "./refresh-watch-path.js";
 
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
@@ -123,15 +124,25 @@ it("refreshes skills created beneath an initially missing project skills root", 
   const turnContext = new AsyncLocalStorage<string>();
   const pendingInputContext = new AsyncLocalStorage<string>();
   const inheritedContexts: Array<{ turn?: string; pendingInput?: string }> = [];
-  const originalWatch = nativeFs.watch;
-  const watchObserver = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+  const usePolling = resolveSkillsWatcherUsePolling();
+  const observeRegistration = (watched: nativeFs.PathLike, polling: boolean) => {
     inheritedContexts.push({
       turn: turnContext.getStore(),
       pendingInput: pendingInputContext.getStore(),
     });
-    const watcher = originalWatch(...args);
-    registeredPaths.add(path.resolve(String(args[0])));
-    return watcher;
+    if (polling === usePolling) {
+      registeredPaths.add(path.resolve(String(watched)));
+    }
+  };
+  const originalWatch = nativeFs.watch;
+  const watchObserver = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+    observeRegistration(args[0], false);
+    return originalWatch(...args);
+  });
+  const originalWatchFile = nativeFs.watchFile;
+  const watchFileObserver = vi.spyOn(nativeFs, "watchFile").mockImplementation((...args) => {
+    observeRegistration(args[0], true);
+    return originalWatchFile(...args);
   });
   syncBuiltinESMExports();
   const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
@@ -196,24 +207,25 @@ it("refreshes skills created beneath an initially missing project skills root", 
     unregister();
     await closeSkillsWatchers();
     watchObserver.mockRestore();
+    watchFileObserver.mockRestore();
     syncBuiltinESMExports();
     await fs.rm(root, { recursive: true, force: true });
   }
 });
 
 describe("shared missing skill ancestors", () => {
-  let captureFailure: (() => void) | undefined;
+  let captureFailure: ((stage: "before test teardown" | "afterEach fallback") => void) | undefined;
   const roots = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async ({ task }) => {
-      // onTestFailed runs after afterEach. Freeze the failed operation's state
-      // before closing watches or clearing their pending timers.
+      // afterEach may follow the body's cleanup; retain any earlier snapshot.
       if (task.result?.state === "fail") {
-        captureFailure?.();
+        captureFailure?.("afterEach fallback");
       }
       captureFailure = undefined;
       const { closeSkillsWatchers } = await import("./refresh.js");
       await closeSkillsWatchers(true);
       vi.restoreAllMocks();
+      syncBuiltinESMExports();
       cleanup();
     }),
   );
@@ -229,6 +241,24 @@ describe("shared missing skill ancestors", () => {
         paths: Parameters<typeof chokidar.watch>[0];
       }> = [];
       const watcherErrors: unknown[] = [];
+      const nativeAncestor =
+        process.platform === "linux" && !process.versions.bun && !resolveSkillsWatcherUsePolling();
+      const nativeHandles: Array<{ closed: boolean }> = [];
+      const originalNativeWatch = nativeFs.watch;
+      const nativeWatch = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+        const watcher = originalNativeWatch(...args);
+        const observation = { closed: false };
+        nativeHandles.push(observation);
+        watcher.once("close", () => {
+          observation.closed = true;
+        });
+        watcher.on("error", (error) => {
+          observation.closed = true;
+          watcherErrors.push(error);
+        });
+        return watcher;
+      });
+      syncBuiltinESMExports();
       const pendingTimers = new Map<
         Parameters<typeof clearTimeout>[0],
         {
@@ -239,8 +269,9 @@ describe("shared missing skill ancestors", () => {
           stack: string | undefined;
         }
       >();
-      captureFailure = () => {
-        failureSnapshot = JSON.stringify({
+      captureFailure = (captureStage) => {
+        failureSnapshot ??= JSON.stringify({
+          captureStage,
           ancestor,
           phase,
           pendingTimers: Array.from(pendingTimers.values(), ({ delayMs, createdAt, stack }) => ({
@@ -256,10 +287,11 @@ describe("shared missing skill ancestors", () => {
           watcherErrors: watcherErrors.map((error) =>
             error instanceof Error ? error.stack : String(error),
           ),
+          nativeHandles,
         });
       };
       onTestFailed(() => {
-        console.error(`[skills ancestor failure before cleanup] ${failureSnapshot}`);
+        console.error(`[skills ancestor failure] ${failureSnapshot}`);
       });
       const root = await fs.realpath(roots.make("skills-shared-ancestor-"));
       const source = (name: string) => {
@@ -277,7 +309,8 @@ describe("shared missing skill ancestors", () => {
         await fs.mkdir(path.join(current.workspaceDir, "skills"), { recursive: true });
       }
       phase = "import refresh owner";
-      const { ensureSkillsWatcher, registerSkillsChangeListener } = await import("./refresh.js");
+      const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
+        await import("./refresh.js");
       phase = "import skill loader";
       const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
       const originalWatch = chokidar.watch;
@@ -320,6 +353,9 @@ describe("shared missing skill ancestors", () => {
       });
       const settleWatchers = async (stage: string) => {
         for (;;) {
+          // Native registration is synchronous; its ready/reconciliation callbacks
+          // are microtasks. Finish those before inspecting recursive scan readiness.
+          await Promise.resolve();
           phase = `${stage}: wait for watcher readiness`;
           await vi.waitFor(() => {
             expect(watcherErrors).toEqual([]);
@@ -350,9 +386,13 @@ describe("shared missing skill ancestors", () => {
         ensureSkillsWatcher(current);
       }
       await settleWatchers("initial acquisition");
-      expect(
-        watch.mock.calls.filter(([watched]) => watched === root.replaceAll("\\", "/")),
-      ).toHaveLength(1);
+      if (nativeAncestor) {
+        expect(nativeWatch.mock.calls.filter(([watched]) => watched === root)).toHaveLength(1);
+      } else {
+        expect(
+          watch.mock.calls.filter(([watched]) => watched === root.replaceAll("\\", "/")),
+        ).toHaveLength(1);
+      }
       const changes: string[] = [];
       const unregister = registerSkillsChangeListener((event) => {
         if (event.workspaceDir) {
@@ -379,11 +419,23 @@ describe("shared missing skill ancestors", () => {
         phase = "prime empty discovery";
         expect(read(first)).toEqual([]);
         expect(read(second)).toEqual([]);
-        phase = "write unrelated file";
-        await fs.writeFile(path.join(root, "unrelated.sqlite-wal"), "unrelated");
-        await writeSkill(first, "first-proof");
-        phase = "discover first skill";
-        await expect.poll(() => read(first), { timeout: 3_000 }).toContain("first-proof");
+        const unrelatedFile = path.join(root, "unrelated.sqlite-wal");
+        const lstat = vi.spyOn(fs, "lstat");
+        syncBuiltinESMExports();
+        try {
+          phase = "write unrelated file";
+          await fs.writeFile(unrelatedFile, "unrelated");
+          await writeSkill(first, "first-proof");
+          phase = "discover first skill";
+          await expect.poll(() => read(first), { timeout: 3_000 }).toContain("first-proof");
+          await settleWatchers("first discovery");
+          if (nativeAncestor) {
+            expect(lstat.mock.calls.filter(([file]) => file === unrelatedFile)).toEqual([]);
+          }
+        } finally {
+          lstat.mockRestore();
+          syncBuiltinESMExports();
+        }
         expect(changes).not.toContain(second.workspaceDir);
         phase = "wait for root promotion";
         await vi.waitFor(() => {
@@ -417,6 +469,24 @@ describe("shared missing skill ancestors", () => {
         await expect.poll(() => read(first), { timeout: 3_000 }).toEqual(["returned-proof"]);
         await settleWatchers("recreated root");
         expect(read(first)).toEqual(["returned-proof"]);
+        if (nativeAncestor) {
+          phase = "replace ancestor at the same path before native delivery";
+          nativeFs.renameSync(movedAncestor, `${movedAncestor}-replaced`);
+          const replacementSkill = path.join(first.sourceRoot, "replacement-proof");
+          nativeFs.mkdirSync(replacementSkill, { recursive: true });
+          nativeFs.writeFileSync(
+            path.join(replacementSkill, "SKILL.md"),
+            "---\nname: replacement-proof\ndescription: Replaced ancestor\n---\n",
+          );
+          await expect.poll(() => read(first), { timeout: 3_000 }).toEqual(["replacement-proof"]);
+          await settleWatchers("same-path replacement");
+          // A one-time cache invalidation is insufficient: subsequent writes must
+          // reach a content watcher registered on the replacement directory.
+          await writeSkill(first, "replacement-later-proof");
+          await expect
+            .poll(() => read(first), { timeout: 3_000 })
+            .toContain("replacement-later-proof");
+        }
         // Retiring one logical workspace must not retire the shared missing-root observer.
         phase = "retire first workspace";
         ensureSkillsWatcher({
@@ -443,67 +513,155 @@ describe("shared missing skill ancestors", () => {
         await writeSkill(second, "recreated-proof");
         phase = "discover recreated sibling skill";
         await expect.poll(() => read(second), { timeout: 3_000 }).toContain("recreated-proof");
+      } catch (error) {
+        try {
+          captureFailure?.("before test teardown");
+        } catch {
+          // Diagnostic failure must not replace the original operation error.
+        }
+        throw error;
       } finally {
         unregister();
+        await closeSkillsWatchers(true);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        if (nativeAncestor) {
+          expect(nativeHandles.every(({ closed }) => closed)).toBe(true);
+        }
       }
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "does not promote missing roots through newly created ancestor symlinks",
-    async () => {
-      const root = await fs.realpath(roots.make("skills-ancestor-symlink-"));
-      const outside = await fs.realpath(roots.make("skills-ancestor-outside-"));
-      const workspaceDir = path.join(root, "workspace");
-      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
-      const link = path.join(root, "missing");
-      const sourceRoot = path.join(link, "nested", "skills");
-      await fs.mkdir(path.join(outside, "nested", "skills", "outside-proof"), { recursive: true });
-      const config = { skills: { load: { extraDirs: [sourceRoot] } } };
-      const watch = vi.spyOn(chokidar, "watch");
-      const { ensureSkillsWatcher } = await import("./refresh.js");
-      const { getSkillsSourceVersion } = await import("./refresh-state.js");
-      const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
-      const read = () =>
-        loadWorkspaceSkills(workspaceDir, {
-          config,
-          bundledSkillsDir: "",
-          managedSkillsDir: path.join(root, "unused"),
-        }).map((entry) => entry.skill.name);
-      ensureSkillsWatcher({ workspaceDir, config });
-      expect(read()).toEqual([]);
-      await Promise.all(
-        watch.mock.results.map((result) => {
-          if (result.type !== "return") {
-            throw new Error("Watcher acquisition failed");
+  it.runIf(process.platform !== "win32").each([
+    {
+      name: "does not promote missing roots through newly created ancestor symlinks",
+      replaceAncestor: false,
+    },
+    {
+      name: "rediscovers ordinary roots after a watched ancestor is replaced by a symlink",
+      replaceAncestor: true,
+    },
+  ])("$name", async ({ replaceAncestor }) => {
+    const root = await fs.realpath(roots.make("skills-ancestor-symlink-"));
+    const outside = await fs.realpath(roots.make("skills-ancestor-outside-"));
+    const workspaceDir = path.join(root, "workspace");
+    await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+    const link = path.join(root, "missing");
+    const sourceRoot = path.join(link, "nested", "skills");
+    if (replaceAncestor) {
+      await fs.mkdir(link);
+    }
+    await fs.mkdir(path.join(outside, "nested", "skills", "outside-proof"), { recursive: true });
+    const config = { skills: { load: { extraDirs: [sourceRoot] } } };
+    const pollingRawPaths: string[] = [];
+    let pollingRawDeliveries = 0;
+    const unwatchedDuringPollingRaw: string[] = [];
+    const originalUnwatchFile = nativeFs.unwatchFile;
+    vi.spyOn(nativeFs, "unwatchFile").mockImplementation((...args) => {
+      const unwatched = path.resolve(String(args[0]));
+      if (pollingRawPaths.includes(unwatched)) {
+        unwatchedDuringPollingRaw.push(unwatched);
+      }
+      return originalUnwatchFile(...args);
+    });
+    const originalWatch = chokidar.watch;
+    const watch = vi.spyOn(chokidar, "watch").mockImplementation((...args) => {
+      const watcher = originalWatch(...args);
+      if (resolveSkillsWatcherUsePolling()) {
+        const originalEmit = watcher.emit.bind(watcher);
+        vi.spyOn(watcher, "emit").mockImplementation((...emitArgs) => {
+          if (emitArgs[0] !== "raw") {
+            return originalEmit(...emitArgs);
           }
-          return new Promise<void>((resolve, reject) => {
-            result.value.once("ready", resolve);
-            result.value.once("error", reject);
-          });
-        }),
-      );
-      // Ready handlers reconcile synchronously before these promises resolve.
-      // Unchanged empty inventory suppresses public events, but discovery still invalidates.
-      const sourceVersion = getSkillsSourceVersion(workspaceDir);
+          pollingRawPaths.push(path.resolve(String(emitArgs[2])));
+          pollingRawDeliveries += 1;
+          try {
+            return originalEmit(...emitArgs);
+          } finally {
+            pollingRawPaths.pop();
+          }
+        });
+      }
+      return watcher;
+    });
+    const nativeWatch = vi.spyOn(nativeFs, "watch");
+    syncBuiltinESMExports();
+    const { ensureSkillsWatcher } = await import("./refresh.js");
+    const { getSkillsSourceVersion } = await import("./refresh-state.js");
+    const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+    const read = () =>
+      loadWorkspaceSkills(workspaceDir, {
+        config,
+        bundledSkillsDir: "",
+        managedSkillsDir: path.join(root, "unused"),
+      }).map((entry) => entry.skill.name);
+    ensureSkillsWatcher({ workspaceDir, config });
+    expect(read()).toEqual([]);
+    await Promise.all(
+      watch.mock.results.map((result) => {
+        if (result.type !== "return") {
+          throw new Error("Watcher acquisition failed");
+        }
+        return new Promise<void>((resolve, reject) => {
+          result.value.once("ready", resolve);
+          result.value.once("error", reject);
+        });
+      }),
+    );
+    // Ready handlers reconcile synchronously before these promises resolve.
+    // Unchanged empty inventory suppresses public events, but discovery still invalidates.
+    const sourceVersion = getSkillsSourceVersion(workspaceDir);
+    const chokidarAdmissionStart = replaceAncestor ? watch.mock.calls.length : 0;
+    const nativeAdmissionStart = replaceAncestor ? nativeWatch.mock.calls.length : 0;
+    if (replaceAncestor) {
+      // Finish replacement in this turn so delivery cannot rely on observing
+      // the intermediate absence before the same path becomes a symlink.
+      nativeFs.renameSync(link, `${link}-away`);
+      nativeFs.symlinkSync(outside, link, "dir");
+    } else {
       await fs.symlink(outside, link, "dir");
-      await expect
-        .poll(() => getSkillsSourceVersion(workspaceDir), { timeout: 3_000 })
-        .toBeGreaterThan(sourceVersion);
-      expect(
-        watch.mock.calls.some(
+    }
+    await expect
+      .poll(() => getSkillsSourceVersion(workspaceDir), { timeout: 3_000 })
+      .toBeGreaterThan(sourceVersion);
+    expect(
+      watch.mock.calls
+        .slice(chokidarAdmissionStart)
+        .some(
           ([watched]) =>
             typeof watched === "string" && (watched === link || watched.startsWith(`${link}/`)),
         ),
+    ).toBe(false);
+    if (
+      process.platform === "linux" &&
+      !process.versions.bun &&
+      !resolveSkillsWatcherUsePolling()
+    ) {
+      expect(
+        nativeWatch.mock.calls.some(([watched]) => watched === (replaceAncestor ? link : root)),
+      ).toBe(true);
+      expect(
+        nativeWatch.mock.calls
+          .slice(nativeAdmissionStart)
+          .some(
+            ([watched]) =>
+              typeof watched === "string" && (watched === link || watched.startsWith(`${link}/`)),
+          ),
       ).toBe(false);
-      await fs.unlink(link);
-      const skillDir = path.join(sourceRoot, "ordinary-proof");
-      await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(
-        path.join(skillDir, "SKILL.md"),
-        "---\nname: ordinary-proof\ndescription: Ordinary replacement\n---\n",
-      );
-      await expect.poll(read, { timeout: 3_000 }).toContain("ordinary-proof");
-    },
-  );
+    }
+    await fs.unlink(link);
+    const skillDir = path.join(sourceRoot, "ordinary-proof");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: ordinary-proof\ndescription: Ordinary replacement\n---\n",
+    );
+    await expect.poll(read, { timeout: 3_000 }).toContain("ordinary-proof");
+    if (resolveSkillsWatcherUsePolling()) {
+      // watchFile still reads its listener container after synchronous raw delivery.
+      expect(pollingRawDeliveries).toBeGreaterThan(0);
+      expect(unwatchedDuringPollingRaw).toEqual([]);
+    }
+  });
 });

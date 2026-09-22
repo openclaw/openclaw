@@ -266,32 +266,6 @@ describe("agent harness registry", () => {
     expectOwner("active-plugin");
   });
 
-  it("dispatches generic session reset to registered harnesses", async () => {
-    const resets: unknown[] = [];
-    registerAgentHarness({
-      ...makeHarness("custom"),
-      reset: async (params) => {
-        resets.push(params);
-      },
-    });
-
-    await resetRegisteredAgentHarnessSessions({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile: "/tmp/session.jsonl",
-      reason: "reset",
-    });
-
-    expect(resets).toEqual([
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile: "/tmp/session.jsonl",
-        reason: "reset",
-      },
-    ]);
-  });
-
   it("disposes registered harness runtime state", async () => {
     const dispose = vi.fn(async () => undefined);
     registerAgentHarness({

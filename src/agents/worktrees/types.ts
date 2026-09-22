@@ -92,6 +92,9 @@ export type RemoveManagedWorktreeResult = {
   removed: boolean;
   snapshotRef?: string;
   snapshotError?: string;
+  /** Exact retirement retains the original checkout, not merely its captured bytes. */
+  recoveryPath?: string;
+  recoveryRetainedUntil?: number;
 };
 
 export type ManagedWorktreeBranch = {
@@ -113,4 +116,16 @@ export type ManagedWorktreeGcResult = {
   removed: string[];
   orphansDeleted: number;
   snapshotsPruned: number;
+  outcome: "completed" | "deferred" | "partial";
+  /** Bounded per-worktree cleanup disposition; issueCount includes omitted entries. */
+  issues: {
+    id?: string;
+    stage: "idle" | "templates" | "limits" | "size" | "orphans" | "snapshots";
+    outcome: "failed" | "deferred";
+    reason: string;
+  }[];
+  issueCount: number;
+  protectedCount: number;
+  /** Null when incomplete inventory or size measurements prevent a conclusion. */
+  limitsSatisfied: boolean | null;
 };

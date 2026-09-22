@@ -3,7 +3,6 @@ import { closedObject } from "./closed-object.js";
 import { WorkerExecutionModeSchema } from "./environments.js";
 import { NonEmptyString } from "./primitives.js";
 
-/** Model option shown in selectors and model catalog results. */
 export const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),

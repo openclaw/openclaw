@@ -320,7 +320,7 @@ describe("Codex native configuration", () => {
             isError: false,
             content: expect.arrayContaining([
               expect.objectContaining({
-                type: "toolResult",
+                type: "text",
                 text: "synthetic-completed-work",
               }),
             ]),

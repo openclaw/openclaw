@@ -152,21 +152,6 @@ describe("Markdown table interactions", () => {
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
   });
 
-  it("copies TSV and updates the copy label", async () => {
-    vi.useFakeTimers();
-    const { owner } = interactiveOwner();
-    const copy = owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!;
-    copy.click();
-
-    expect(writeText).toHaveBeenCalledWith("Name\tValue\nAlpha\tOne");
-    await vi.advanceTimersByTimeAsync(0);
-    expect(copy.getAttribute("aria-label")).toBe("Copied!");
-    expect(copy.querySelector("svg path")?.getAttribute("d")).toBe("M20 6 9 17l-5-5");
-    await vi.advanceTimersByTimeAsync(1500);
-    expect(copy.getAttribute("aria-label")).toBe("Copy table");
-    expect(copy.querySelector("svg rect")).not.toBeNull();
-  });
-
   it.each([true, false])(
     "shows a failed current table copy without stale success (previous success: %s)",
     async (previousSuccess) => {

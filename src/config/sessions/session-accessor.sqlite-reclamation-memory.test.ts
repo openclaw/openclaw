@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { encodeMemoryEmbedding } from "../../plugin-sdk/memory-core-host-engine-storage.js";
 import { resetPluginStateStoreForTests } from "../../plugin-sdk/plugin-state-test-runtime.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -151,10 +152,11 @@ describe("reclamation with the public memory runtime", () => {
     ]);
     const insert = db.prepare(`INSERT INTO memory_embedding_cache
       (provider, model, provider_key, hash, embedding, dims, updated_at)
-      VALUES ('fixture', 'fixture-model', 'fixture-owner', ?, '[1]', 1, ?)`);
+      VALUES ('fixture', 'fixture-model', 'fixture-owner', ?, ?, 1, ?)`);
+    const embedding = encodeMemoryEmbedding([1]);
     runSqliteImmediateTransactionSync(db, () => {
       for (let index = 0; index <= maxEntries; index += 1) {
-        insert.run(`entry-${index}`, index);
+        insert.run(`entry-${index}`, embedding, index);
       }
     });
     expect(manager.status().cache?.entries).toBe(maxEntries + 1);

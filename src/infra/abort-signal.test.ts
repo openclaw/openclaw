@@ -20,6 +20,14 @@ describe("abort errors", () => {
     expect(isAbortError(createAbortError("aborted"))).toBe(true);
     expect(isAbortError({ name: "AbortError", message: "test" })).toBe(true);
     expect(isAbortError(new Error("This operation was aborted"))).toBe(true);
+    expect(
+      isAbortError({
+        name: "AbortError",
+        get message() {
+          throw new Error("Abort metadata is unavailable");
+        },
+      }),
+    ).toBe(true);
   });
 
   it.each([
@@ -30,6 +38,13 @@ describe("abort errors", () => {
     new Error("Operation aborted"),
     new Error("aborted"),
     new Error("Request was aborted"),
+    ...(["name", "message"] as const).map((field) =>
+      Object.defineProperty(new Error("Metadata is unavailable"), field, {
+        get() {
+          throw new Error("Error metadata is unavailable");
+        },
+      }),
+    ),
   ])("rejects non-abort input %#", (value) => {
     expect(isAbortError(value)).toBe(false);
   });

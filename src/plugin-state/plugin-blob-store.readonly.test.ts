@@ -6,7 +6,10 @@ import {
   clearOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "../state/openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   clearOpenClawStateDatabaseOpenFailure,
@@ -21,7 +24,10 @@ import {
   resetPluginBlobStoreForTests,
 } from "./plugin-blob-store.js";
 
-afterEach(() => resetPluginBlobStoreForTests());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginBlobStoreForTests();
+});
 
 function createStore(env: NodeJS.ProcessEnv) {
   return createPluginBlobStoreForTests<{ version: number }>(
@@ -49,7 +55,7 @@ describe("plugin blob read-only access", () => {
       const store = createStore(state.env);
       await store.register("saved", new Uint8Array([1, 2]), { version: 1 });
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
-      expect(closeOpenClawStateDatabaseByPath(databasePath)).toBe(true);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
 
       const entry = await store.lookup("saved");
       expect(entry).toMatchObject({ metadata: { version: 1 }, bytes: new Uint8Array([1, 2]) });
@@ -115,7 +121,7 @@ describe("plugin blob read-only access", () => {
       await store.register("saved", new Uint8Array([1]), { version: 1 });
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
       openOpenClawStateDatabase({ env: state.env }).db.exec("DROP TABLE plugin_blob_entries");
-      closeOpenClawStateDatabaseByPath(databasePath);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
       const before = readFileSync(databasePath);
 
       for (const operation of ["lookup", "entries"] as const) {
@@ -141,7 +147,7 @@ describe("plugin blob read-only access", () => {
         const { db, path: databasePath } = openOpenClawStateDatabase({ env: state.env });
         db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
         if (temperature === "cold") {
-          closeOpenClawStateDatabaseByPath(databasePath);
+          await closeOpenClawStateDatabaseByPathAsync(databasePath);
         }
         for (const operation of ["lookup", "entries"] as const) {
           await expect(
@@ -163,7 +169,7 @@ describe("plugin blob read-only access", () => {
         const store = createStore(state.env);
         await store.register("saved", new Uint8Array([1]), { version: 1 });
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
-        closeOpenClawStateDatabaseByPath(databasePath);
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
         recordOpenClawStateDatabaseOpenFailure(databasePath, new Error("latched failure"));
         try {
           await expect(store.lookup("saved")).rejects.toMatchObject({

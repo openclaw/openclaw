@@ -5,6 +5,7 @@ import {
   setDiscordTranscriptsVoiceManager,
 } from "../extensions/discord/test-api.js";
 import { createTranscriptsTool } from "../src/agents/tools/transcripts-tool.js";
+import * as workerAdmission from "../src/infra/sqlite-worker-store.js";
 import { createPluginMetadataSnapshotFixture } from "../src/plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../src/plugins/runtime/generation-scope.js";
@@ -13,6 +14,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../src/state/openclaw-state-db.js";
 import { TranscriptsStore } from "../src/transcripts/store.js";
+import { createDeferred } from "./helpers/promise.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
 const { defineDiscordVoiceTests } = await loadDiscordVoiceTestHarness();
@@ -33,9 +35,10 @@ defineDiscordVoiceTests(
     lastRealtimeBridgeParams,
     beginSpeakerTurn,
   }) => {
-    it.each(["manager destruction", "completed", "error"] as const)(
+    it.each(["manager destruction", "completed", "error", "interleaved finalization"] as const)(
       "retires replaced captures and handles %s without stopping a Discord replacement",
-      async (terminal) => {
+      async (scenario) => {
+        const terminal = scenario === "interleaved finalization" ? "manager destruction" : scenario;
         const tempDirs = createTempDirTracker();
         const stateDir = tempDirs.make("discord-transcripts-replacement-");
         const accountId = "transcript-replacement";
@@ -79,6 +82,42 @@ defineDiscordVoiceTests(
         const source = { providerId: "discord-voice", accountId, guildId: "g1", channelId: "1001" };
         const providerStop = vi.spyOn(discordVoiceTranscriptsSourceProvider, "stop");
         setDiscordTranscriptsVoiceManager({ accountId, manager });
+        const finalizerReady = createDeferred();
+        let resumeFinalizer: (() => void) | undefined;
+        let finalizerCompletion: Promise<string> | undefined;
+        const createAdmission = workerAdmission.createSqliteWorkerWriteAdmission;
+        const summaryWrite = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
+        TranscriptsStore.prototype.writeSummary = function (
+          this: TranscriptsStore,
+          ...args: Parameters<TranscriptsStore["writeSummary"]>
+        ) {
+          if (
+            scenario !== "interleaved finalization" ||
+            args[1].sessionId !== "first" ||
+            finalizerCompletion
+          ) {
+            return summaryWrite.apply(this, args);
+          }
+          const completion = createDeferred<string>();
+          finalizerCompletion = completion.promise;
+          resumeFinalizer = () => {
+            resumeFinalizer = undefined;
+            void summaryWrite.apply(this, args).then(completion.resolve, completion.reject);
+          };
+          finalizerReady.resolve();
+          return completion.promise;
+        };
+        const admission = vi
+          .spyOn(workerAdmission, "createSqliteWorkerWriteAdmission")
+          .mockImplementation((assertCurrent, locations) =>
+            createAdmission(() => {
+              // Grant the replacement transaction before its predecessor's finalizer contends.
+              if (resumeFinalizer) {
+                queueMicrotask(() => resumeFinalizer?.());
+              }
+              assertCurrent();
+            }, locations),
+          );
 
         try {
           await expect(
@@ -95,7 +134,11 @@ defineDiscordVoiceTests(
           ).resolves.toMatchObject({
             details: { sessionId: "second", providerId: "discord-voice", accountId },
           });
+          if (scenario === "interleaved finalization") {
+            await finalizerReady.promise;
+          }
           await record("This belongs only to the replacement.");
+          await finalizerCompletion;
 
           const first = expectDefined(await store.readSession("first"), "first capture");
           const second = expectDefined(await store.readSession("second"), "second capture");
@@ -121,7 +164,9 @@ defineDiscordVoiceTests(
           expect
             .soft(active.map((capture) => requireRecord(capture, "active capture").sessionId))
             .toEqual(["second"]);
-          expect.soft(first.stoppedAt).toEqual(expect.any(String));
+          await vi.waitFor(async () => {
+            expect((await store.readSession("first"))?.stoppedAt).toEqual(expect.any(String));
+          });
 
           await execute({ action: "stop", sessionId: "first" });
           await expect(execute({ action: "summarize", sessionId: "first" })).resolves.toMatchObject(
@@ -228,6 +273,10 @@ defineDiscordVoiceTests(
             expect(await store.readUtterancesForSession(third)).toEqual([]);
           }
         } finally {
+          summaryWrite.mockRestore();
+          resumeFinalizer?.();
+          await Promise.allSettled([finalizerCompletion]);
+          admission.mockRestore();
           try {
             for (const capture of await discordVoiceTranscriptsSourceProvider.status!(source)) {
               if (capture.sessionId) {

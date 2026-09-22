@@ -14,10 +14,8 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  addSessionMember,
-  listSessionMembers,
-} from "../../config/sessions/session-sharing-store.js";
+import { listSessionMembers } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -29,6 +27,7 @@ import {
   getGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "../local-user-ingress.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   authorizeResolvedSessionMutation,
   resolveSessionMutationAuthorization,
@@ -717,8 +716,8 @@ describe("session sharing handlers", () => {
       const requestContext = {
         ...context(vi.fn()),
         execApprovalManager: {
-          lookupApprovalId: () => ({ kind: "exact", id: "approval-1" }),
-          getSnapshot: () => ({ request: { sessionKey, agentId: "main" } }),
+          lookupLocalApprovalId: () => ({ kind: "exact", id: "approval-1" }),
+          getLocalSnapshot: () => ({ request: { sessionKey, agentId: "main" } }),
         },
       } as unknown as GatewayRequestContext;
       const mutations: Array<[string, Record<string, unknown>]> = [
@@ -878,6 +877,7 @@ describe("session sharing handlers", () => {
           category: "Projects",
         },
       );
+      await getSessionRowProjection(requestContext)!.prepareMembership();
       expect(
         resolveSessionMutationAuthorization({
           client: identifiedClient("viewer"),
