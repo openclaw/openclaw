@@ -172,11 +172,19 @@
   --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
   --chat-run-block-gap: 8px;
   --chat-turn-gap: 28px;
+  --chat-turn-margin: 16px;
   display: flex;
   gap: var(--chat-avatar-gap);
   align-items: flex-start;
   padding-bottom: var(--chat-turn-gap);
   margin-inline: 4px 16px;
+}
+
+/* Keep desktop turns separate after their sender/action footer. Virtual rows
+   include this margin in their measured height; tool-only groups stay attached
+   to the following reply. */
+.chat-thread .chat-group:not(.tool) {
+  margin-block-end: var(--chat-turn-margin);
 }
 
 /* Both sides share the content edge inside the trailing avatar gutter. */
@@ -276,6 +284,7 @@
   .chat-group {
     /* Separate turns beyond the space reserved for inline touch actions. */
     --chat-turn-gap: calc(var(--space-7) * 2);
+    --chat-turn-margin: 0px;
     --chat-avatar-column: 0px;
     --chat-avatar-gap: 0px;
     --chat-message-column-max: 82%;
