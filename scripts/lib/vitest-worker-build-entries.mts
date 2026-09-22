@@ -26,6 +26,7 @@ import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-ru
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
 import { sqliteReadOnlyCompileCacheParentEntrypoint } from "../../src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts";
+import { sqliteSnapshotStagingEntrypoints } from "../../src/infra/sqlite-snapshot-staging-runtime.test-support.ts";
 import {
   triageTestRuntimeEntrypoints,
   triageMaintenanceRuntimeEntrypoints,
@@ -111,6 +112,7 @@ export const vitestWorkerBuildEntries = {
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
     sqliteReadOnlyCompileCacheParentEntrypoint,
+    ...Object.values(sqliteSnapshotStagingEntrypoints),
     ...Object.values(triageTestRuntimeEntrypoints),
     ...Object.values(triageMaintenanceRuntimeEntrypoints),
     authProfileScopeCwdEntrypoint,
