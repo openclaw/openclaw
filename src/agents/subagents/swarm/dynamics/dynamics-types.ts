@@ -1,8 +1,4 @@
-export type InformationBoundary =
-  | "isolated"
-  | "artifact-only"
-  | "evidence-only"
-  | "summary-only";
+export type InformationBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
 
 export type DynamicsRequirement = "optional" | "required";
 
