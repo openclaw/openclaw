@@ -75,7 +75,7 @@ describe("gateway suspend CLI", () => {
       // Number("0x10") would coerce to 16 s; the strict parser must reject a
       // radix-literal --wait so it cannot silently suspend for the wrong time.
       await expect(
-        runGatewaySuspend({ rpcOpts: {}, waitSeconds }, { callGateway, runtime: createRuntime() }),
+        runGatewaySuspend({ rpcOpts: {}, waitSeconds }, { callGateway, runtime: {} as never }),
       ).rejects.toThrow("--wait must be a non-negative number of seconds");
       expect(callGateway).not.toHaveBeenCalled();
     },
