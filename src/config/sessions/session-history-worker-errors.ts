@@ -1,6 +1,13 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import {
+  hydrateOpenClawStateWorkerError,
+  retainOpenClawStateWorkerErrorPayload,
+} from "../../state/openclaw-state-worker-error.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
-import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
+import {
+  SessionTranscriptProjectionUnavailableError,
+  SessionTranscriptStorageUnavailableError,
+} from "./session-transcript-projection-error.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
 import type {
   SessionTranscriptWorkerReply,
@@ -12,6 +19,14 @@ export function unwrapSessionTranscriptWorkerReply<
 >(reply: SessionTranscriptWorkerReply<Kind>) {
   if (reply.ok) {
     return reply.value;
+  }
+  if (reply.error.kind === "read-error") {
+    const error = new Error(reply.error.message);
+    retainOpenClawStateWorkerErrorPayload(error, reply.error.payload);
+    throw hydrateOpenClawStateWorkerError(error, { includeOrdinary: true });
+  }
+  if (reply.error.kind === "storage") {
+    throw new SessionTranscriptStorageUnavailableError(reply.error.reason);
   }
   if (reply.error.kind === "cold") {
     throw new SessionTranscriptColdError(reply.error.sessionId);
@@ -25,7 +40,7 @@ export function unwrapSessionTranscriptWorkerReply<
   throw new SessionTranscriptReadFenceError(reply.error.message);
 }
 
-/** Keep both diagnostics in the message-only worker response and both causes locally. */
+/** Keep read and cleanup failures together through the worker error graph. */
 export function sessionHistoryCleanupError(
   error: unknown,
   cleanupError: unknown,

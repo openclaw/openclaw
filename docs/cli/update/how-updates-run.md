@@ -103,6 +103,12 @@ An interrupted update is not a successful update or a verified rollback.
 Unresolved effects remain visible in the update report. Unsupported pending
 checkpoint records block further mutable update work and remain unchanged.
 
+After the target Doctor migrates shared state, the installed target runtime owns
+database validation, service finalization, and update-history writes, including
+rollback outcomes. The parent updater retains its live installation and requester
+checks without reopening migrated state through its older schema. A successful
+migration proceeds to finalization; it still prohibits code-only rollback.
+
 For versions that support checks before installation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the new version to run health checks
 (`doctor --lint --json --severity-min error`), config validation, and read-only

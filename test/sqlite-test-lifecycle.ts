@@ -21,6 +21,7 @@ export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new 
   [source("src/infra/sqlite-coordinator.ts"), coordinatorPoolKey],
   [source("src/state/openclaw-state-db-cache.ts"), Symbol.for("openclaw.stateDatabaseLifecycle")],
   [source("src/state/openclaw-state-read-worker.ts"), Symbol.for("openclaw.stateReadWorkers")],
+  [source("src/gateway/session-group-catalog.ts"), Symbol.for("openclaw.sessionGroupCatalog")],
   [agentSource, agentKey],
 ]);
 

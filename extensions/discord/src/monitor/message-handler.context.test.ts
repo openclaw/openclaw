@@ -138,9 +138,12 @@ describe("discord message context", () => {
   });
 
   it("builds the payload through the host channel context builder when one is supplied", async () => {
+    const routeMetadata = Symbol("opaque route metadata");
+    const metadata = { capturedAt: "route resolution" };
     const host = { buildContext: buildChannelInboundEventContext };
     const buildContext = vi.spyOn(host, "buildContext");
     const ctx = { ...(await createBaseDiscordMessageContext()), buildContext: host.buildContext };
+    ctx.route = Object.assign({}, ctx.route, { [routeMetadata]: metadata });
 
     const result = await buildDiscordMessageProcessContext({ ctx, text: "hi", mediaList: [] });
     if (!result) {
@@ -148,6 +151,7 @@ describe("discord message context", () => {
     }
 
     expect(buildContext).toHaveBeenCalledTimes(1);
+    expect(buildContext.mock.calls[0]?.[0].route).toMatchObject({ [routeMetadata]: metadata });
     expect(result.ctxPayload).toBe(await buildContext.mock.results[0]?.value);
     expect(result.ctxPayload.NativeChannelId).toBe(ctx.messageChannelId);
   });

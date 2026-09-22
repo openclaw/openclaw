@@ -2493,7 +2493,7 @@ describe("exec approval handlers", () => {
   });
 
   it("rejects approval requests when the command display would be truncated", async (testContext) => {
-    const fixture = await createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { handlers, broadcasts, respond, context } = fixture;
       await requestExecApproval({
@@ -2521,7 +2521,7 @@ describe("exec approval handlers", () => {
   });
 
   it("rejects approval registration after the owning run was aborted", async (testContext) => {
-    const fixture = await createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { manager, handlers, broadcasts, respond, context } = fixture;
       context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
@@ -3558,7 +3558,7 @@ describe("exec approval handlers", () => {
   ])(
     "rejects an unsafe explicit approval id containing an %s",
     async ([_label, id], testContext) => {
-      const fixture = await createExecApprovalFixture(testContext);
+      const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
       return await fixture.run(async () => {
         const { manager, handlers, broadcasts, respond, context } = fixture;
 
@@ -3612,7 +3612,7 @@ describe("exec approval handlers", () => {
   });
 
   it("rejects explicit approval ids with the reserved plugin prefix", async (testContext) => {
-    const fixture = await createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { handlers, respond, context } = fixture;
 
@@ -3686,7 +3686,7 @@ describe("exec approval handlers", () => {
   });
 
   it("returns deterministic unknown/expired message for missing approval ids", async (testContext) => {
-    const fixture = await createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { handlers, respond, context } = fixture;
 

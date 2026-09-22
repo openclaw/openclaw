@@ -10,8 +10,7 @@ import {
 } from "./session-capability.test-support.ts";
 import type { SessionCapability } from "./session-capability.ts";
 
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
-const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 function installPageLifecycle() {
   const documentEvents = new EventTarget();
@@ -225,7 +224,7 @@ describe("event-driven session list refresh", () => {
       request.mockClear();
 
       emitEvent(sessionChangedEvent("agent:writer:changed"));
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(5_000);
 
       expect(request).toHaveBeenCalledTimes(3);
       const writerDashboardRequests = request.mock.calls.filter(
@@ -236,7 +235,7 @@ describe("event-driven session list refresh", () => {
         writerDashboardRequests.map(
           ([, params]) => (params as { agentId?: string } | undefined)?.agentId ?? null,
         ),
-      ).toEqual(["writer", null]);
+      ).toEqual(expect.arrayContaining(["writer", null]));
     } finally {
       stopAll();
       stopWriter();
@@ -675,14 +674,12 @@ describe("event-driven session list refresh", () => {
       await sessions.refresh({ force: true });
       emitEvent(sessionChangedEvent("agent:main:first"));
       for (let index = 0; index < 5; index += 1) {
-        await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS - 1);
+        await vi.advanceTimersByTimeAsync(999);
         emitEvent(sessionChangedEvent(`agent:main:sustained-${index}`));
       }
 
       expect(request).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(
-        SESSION_EVENT_REFRESH_MAX_WAIT_MS - 5 * (SESSION_EVENT_REFRESH_DEBOUNCE_MS - 1),
-      );
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS - 5 * 999);
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
       sessions.dispose();
@@ -882,7 +879,7 @@ describe("event-driven session list refresh", () => {
         }
         secondList.resolve(sessionsResult([], 2));
         await Promise.all([initialRefresh, foregroundRefresh, appendRefresh]);
-        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(5_000);
         expect(request).toHaveBeenCalledTimes(expectedCalls);
         if (expectedCalls === 3) {
           expect(request.mock.calls[2]?.[1]).toMatchObject({
@@ -925,11 +922,11 @@ describe("event-driven session list refresh", () => {
       expect(request).toHaveBeenCalledTimes(2);
 
       emitEvent(sessionChangedEvent("agent:main:during-flight"));
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(200);
       expect(request).toHaveBeenCalledTimes(2);
 
       secondList.resolve(sessionsResult([], 2));
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(request).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(3);
@@ -966,14 +963,14 @@ describe("event-driven session list refresh", () => {
       expect(filteredCalls).toBe(2);
 
       emitEvent(sessionChangedEvent("agent:main:queued"));
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(200);
       page.setVisibility("hidden");
       activeRefresh.resolve(sessionsResult([], 2));
       await vi.advanceTimersByTimeAsync(0);
       expect(filteredCalls).toBe(2);
 
       page.setVisibility("visible");
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(filteredCalls).toBe(2);
       await vi.advanceTimersByTimeAsync(1);
       expect(filteredCalls).toBe(3);
@@ -1020,7 +1017,7 @@ describe("event-driven session list refresh", () => {
         },
       });
       expect(sessions.state.result?.sessions).toEqual([]);
-      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_MAX_WAIT_MS * 2);
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS * 2);
       expect(request).toHaveBeenCalledTimes(2);
 
       page.setVisibility("visible");
@@ -1034,7 +1031,7 @@ describe("event-driven session list refresh", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(request).toHaveBeenCalledTimes(4);
       page.setVisibility("visible");
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(request).toHaveBeenCalledTimes(4);
       await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(6);

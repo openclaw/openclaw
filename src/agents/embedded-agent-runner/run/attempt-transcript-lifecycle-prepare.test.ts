@@ -274,7 +274,7 @@ describe("admitted lazy session writer", () => {
           });
           expect(Boolean(loadSessionEntry(target))).toBe(existing);
           expect(
-            preparePersistedCurrentUserTurn({
+            await preparePersistedCurrentUserTurn({
               sessionManager: manager,
               message,
               recorder,

@@ -38,6 +38,7 @@ import {
   type CurrentConversationBindingScope,
 } from "./current-conversation-bindings.kernel.js";
 import type { CurrentConversationBindingTouch } from "./current-conversation-bindings.worker-contract.js";
+import { SessionBindingError } from "./session-binding-errors.js";
 import {
   buildChannelAccountKey,
   normalizeConversationRef,
@@ -442,6 +443,23 @@ export async function resolveCurrentConversationBindingRecordAsync(
   return result;
 }
 
+/** Reads one live ordered selection without repairing rows or inheriting discovery snapshots. */
+export async function readCurrentConversationBindingSelectionAsync(
+  refs: readonly ConversationRef[],
+  assertCurrent?: () => void,
+): Promise<ReadonlyArray<SessionBindingRecord | null>> {
+  const conversations = refs.map(captureCurrentConversationRef);
+  const context = captureOpenClawStateWorkerContext();
+  const result = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "conversationBindings.readSelection", input: conversations }),
+    { assertCurrent, existingOnly: true, requireStateLifecycle: true },
+  );
+  context.admission.assertCurrent();
+  assertCurrent?.();
+  return result ?? conversations.map(() => null);
+}
+
 /** Domain input only crosses IPC; read/modify/write predicates execute in one worker transaction. */
 export async function touchCurrentConversationBindingRecordAsync(
   input: CurrentConversationBindingTouch,
@@ -479,13 +497,14 @@ export async function touchCurrentConversationBindingRecordAsync(
 }
 
 /** Eligibility callbacks run before IPC; native grants only revalidate recorded ownership. */
-function captureGenericBindingAssertion(ref: ConversationRef): (() => void) | undefined {
+function captureGenericBindingSupport(ref: ConversationRef) {
   const registry = getActivePluginChannelRegistrySnapshotFromState();
   const support = resolveChannelConversationBindingSupport(ref);
+  const supportsCurrentConversationBinding = support?.supportsCurrentConversationBinding;
+  const bindingStore = support?.bindingStore;
+  const createManager = support?.createManager;
   const eligibility = support?.isCurrentConversationBindingSupported;
-  if (!supportsGenericCurrentConversationBinding(ref)) {
-    return undefined;
-  }
+  const supported = supportsGenericCurrentConversationBinding(ref);
   const assertCurrent = () => {
     if (ref.channel === INTERNAL_MESSAGE_CHANNEL) {
       return;
@@ -493,16 +512,20 @@ function captureGenericBindingAssertion(ref: ConversationRef): (() => void) | un
     if (
       getActivePluginChannelRegistrySnapshotFromState() !== registry ||
       resolveChannelConversationBindingSupport(ref) !== support ||
-      support?.supportsCurrentConversationBinding !== true ||
-      support.bindingStore === "adapter" ||
-      typeof support.createManager === "function" ||
-      support.isCurrentConversationBindingSupported !== eligibility
+      support?.supportsCurrentConversationBinding !== supportsCurrentConversationBinding ||
+      support?.bindingStore !== bindingStore ||
+      support?.createManager !== createManager ||
+      support?.isCurrentConversationBindingSupported !== eligibility
     ) {
-      throw new Error("Generic conversation binding owner is no longer available");
+      throw new SessionBindingError(
+        "BINDING_ADAPTER_UNAVAILABLE",
+        "Generic conversation binding owner is no longer available",
+        { channel: ref.channel, accountId: ref.accountId },
+      );
     }
   };
   assertCurrent();
-  return assertCurrent;
+  return { supported, assertCurrent };
 }
 
 export async function inspectGenericCurrentConversationBindingAsync(
@@ -510,14 +533,14 @@ export async function inspectGenericCurrentConversationBindingAsync(
   options?: { assertCurrent?: () => void },
 ): Promise<SessionBindingRecord | null> {
   const conversation = captureCurrentConversationRef(ref);
-  const assertGenericCurrent = captureGenericBindingAssertion(conversation);
-  if (!assertGenericCurrent) {
+  const captured = captureGenericBindingSupport(conversation);
+  if (!captured.supported) {
     return null;
   }
   options?.assertCurrent?.();
   const record = await inspectCurrentConversationBindingRecordAsync(conversation);
   options?.assertCurrent?.();
-  assertGenericCurrent();
+  captured.assertCurrent();
   return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
 }
 
@@ -526,15 +549,38 @@ export async function resolveGenericCurrentConversationBindingAsync(
   options?: { assertCurrent?: () => void },
 ): Promise<SessionBindingRecord | null> {
   const conversation = captureCurrentConversationRef(ref);
-  const assertGenericCurrent = captureGenericBindingAssertion(conversation);
-  if (!assertGenericCurrent) {
+  const captured = captureGenericBindingSupport(conversation);
+  if (!captured.supported) {
     return null;
   }
   const record = await resolveCurrentConversationBindingRecordAsync(conversation, () => {
     options?.assertCurrent?.();
-    assertGenericCurrent();
+    captured.assertCurrent();
   });
   return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
+}
+
+export async function readGenericCurrentConversationBindingSelectionAsync(
+  refs: readonly ConversationRef[],
+  options?: { assertCurrent?: () => void },
+): Promise<ReadonlyArray<SessionBindingRecord | null>> {
+  const conversations = refs.map(captureCurrentConversationRef);
+  const captured = conversations.map(captureGenericBindingSupport);
+  const assertCurrent = () => {
+    options?.assertCurrent?.();
+    for (const support of captured) {
+      support.assertCurrent();
+    }
+  };
+  const eligible = conversations.filter((_, index) => captured[index]?.supported);
+  assertCurrent();
+  const records = await readCurrentConversationBindingSelectionAsync(eligible, assertCurrent);
+  assertCurrent();
+  let index = 0;
+  return captured.map((support) => {
+    const record = support.supported ? records[index++] : null;
+    return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
+  });
 }
 
 export async function touchGenericCurrentConversationBindingAsync(
@@ -548,13 +594,13 @@ export async function touchGenericCurrentConversationBindingAsync(
     return;
   }
   const conversation = captureCurrentConversationRef(ref);
-  const assertGenericCurrent = captureGenericBindingAssertion(conversation);
-  if (!assertGenericCurrent) {
+  const captured = captureGenericBindingSupport(conversation);
+  if (!captured.supported) {
     return;
   }
   await touchCurrentConversationBindingRecordAsync({ conversation, bindingId, at }, () => {
     options?.assertCurrent?.(conversation);
-    assertGenericCurrent();
+    captured.assertCurrent();
   });
 }
 

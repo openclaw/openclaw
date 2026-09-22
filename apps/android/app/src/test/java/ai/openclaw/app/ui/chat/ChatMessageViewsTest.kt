@@ -375,7 +375,7 @@ class ChatMessageViewsTest {
     val reference = composeRule.onNode(hasContentDescription("You") and hasAnyAncestor(hasTestTag("confirmed-reference")))
     val expectedBounds = reference.fetchSemanticsNode().boundsInRoot
     val rowBounds = composeRule.onNodeWithTag("confirmed-reference").fetchSemanticsNode().boundsInRoot
-    assertEquals(rowBounds.width * 0.78f, expectedBounds.width, 1f)
+    assertTrue("Short text does not force a full-width bubble", expectedBounds.width < rowBounds.width * 0.78f)
     assertEquals(rowBounds.right, expectedBounds.right, 1f)
     val expectedPixels = reference.captureToImage().toPixelMap()
     val topBand = with(composeRule.density) { 6.dp.roundToPx() }
@@ -399,15 +399,18 @@ class ChatMessageViewsTest {
       }
       val actual = composeRule.onNode(hasContentDescription("You") and hasAnyAncestor(hasTestTag("delivery")))
       val bounds = actual.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-      assertEquals("$status: width", expectedBounds.width, bounds.width, 1f)
-      assertEquals("$status: leading edge", expectedBounds.left, bounds.left, 1f)
+      assertTrue("$status: keeps the same maximum text budget", bounds.width <= rowBounds.width * 0.78f + 1f)
+      assertTrue("$status: preserves the leading gutter", bounds.left >= rowBounds.right - rowBounds.width * 0.78f - 1f)
       assertEquals("$status: trailing edge", expectedBounds.right, bounds.right, 1f)
       val pixels = actual.captureToImage().toPixelMap()
       // Above the text: compare the painted corners, fill, and top border, not a style helper.
+      val cornerBand = with(composeRule.density) { 24.dp.roundToPx() }
       for (y in 0 until topBand) {
-        for (x in 0 until expectedPixels.width) {
-          assertEquals("$status: shell pixel $x,$y", expectedPixels[x, y], pixels[x, y])
+        for (x in 0 until cornerBand) {
+          assertEquals("$status: leading corner $x,$y", expectedPixels[x, y], pixels[x, y])
+          assertEquals("$status: trailing corner $x,$y", expectedPixels[expectedPixels.width - 1 - x, y], pixels[pixels.width - 1 - x, y])
         }
+        assertEquals("$status: fill", expectedPixels[expectedPixels.width / 2, y], pixels[pixels.width / 2, y])
       }
       val sideY = with(composeRule.density) { 30.dp.roundToPx() }
       assertEquals("$status: no leading border", userSurface.toArgb(), pixels[0, sideY].toArgb())
@@ -434,7 +437,7 @@ class ChatMessageViewsTest {
   @Test
   @Config(sdk = [36], qualifiers = "en-rUS-w360dp-h800dp-420dpi")
   @GraphicsMode(GraphicsMode.Mode.NATIVE)
-  fun typingStreamingAndConfirmedAssistantKeepFullWidthTransparentGeometry() {
+  fun typingStreamingAndConfirmedAssistantKeepInsetTransparentGeometry() {
     val resolver = RuntimeEnvironment.getApplication().contentResolver
     val originalScale = Settings.Global.getString(resolver, Settings.Global.ANIMATOR_DURATION_SCALE)
     Settings.Global.putFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
@@ -460,7 +463,7 @@ class ChatMessageViewsTest {
         val row = composeRule.onNodeWithTag("assistant-row").fetchSemanticsNode().boundsInRoot
         val bubble = composeRule.onNode(hasContentDescription("OpenClaw"))
         val bounds = bubble.assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-        assertEquals("Phase $nextPhase: full width", row.width, bounds.width, 1f)
+        assertTrue("Phase $nextPhase: content fits the transcript", bounds.width <= row.width)
         assertEquals("Phase $nextPhase: leading edge", row.left, bounds.left, 1f)
         val pixels = bubble.captureToImage().toPixelMap()
         // The top padding and trailing edge must expose the canvas, not a raised panel or border.
@@ -670,7 +673,9 @@ class ChatMessageViewsTest {
     composeRule.onNode(hasContentDescription("OpenClaw") and hasText("Attachment")).assertIsDisplayed()
     (1..4).forEach { index -> composeRule.onNodeWithText("redacted-$index.png").assertIsDisplayed() }
     composeRule.onAllNodesWithText("redacted-5.png").assertCountEquals(0)
-    composeRule.onNodeWithText("Additional images hidden: 1").assertIsDisplayed()
+    composeRule.onNodeWithText("Next images").assertIsDisplayed().performClick()
+    composeRule.onNodeWithText("redacted-5.png").assertIsDisplayed()
+    (1..4).forEach { index -> composeRule.onAllNodesWithText("redacted-$index.png").assertCountEquals(0) }
     assertEquals(0, artifactRequests)
   }
 

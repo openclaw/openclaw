@@ -16,6 +16,11 @@ import { proveNestedRetention } from "./nested-retention.test-support.js";
 import { createPreparedWorkerCompiler } from "./vitest-worker-artifacts.prepared.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const cacheDirs = useAutoCleanupTempDirTracker(afterAll);
+let compileCache: string;
+beforeAll(() => {
+  compileCache = cacheDirs.make("oc-state-cleanup-compile-");
+});
 const nestedLifetime = createFixtureLifetime();
 afterEach(() => nestedLifetime.cleanup());
 const repoRoot = path.resolve(import.meta.dirname, "../..");
@@ -378,6 +383,7 @@ export default {
       OPENCLAW_LIVE_TEST: "0",
       OPENCLAW_LIVE_GATEWAY: "0",
       CI: "1",
+      NODE_COMPILE_CACHE: compileCache,
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
       pnpm_config_verify_deps_before_run: "false",
     };

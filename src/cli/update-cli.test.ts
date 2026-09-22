@@ -720,16 +720,13 @@ vi.mock("../commands/triage.js", () => ({ triageCommand }));
 vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
 vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks);
 
-const { mockUpdateStateSnapshotWorker } =
+const { createUpdateStateProfileInitializer, mockUpdateStateSnapshotWorker } =
   await import("./update-cli-state-snapshot.test-support.js");
 const { updateGitCheckout } = await import("../infra/update-runner-git.js");
 const { createUpdateRun, getUpdateRun, listUpdateRuns } =
   await import("../infra/update-run-ledger.js");
-const {
-  openOpenClawStateDatabase,
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} = await import("../state/openclaw-state-db.js");
+const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
+  await import("../state/openclaw-state-db.js");
 // Real recovery dependencies need the initialized runtime and child-process mocks.
 const { runUpdateFailureTriage } = await import("../infra/update-triage.js");
 const { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
@@ -830,12 +827,10 @@ describe("update-cli", () => {
     return dir;
   };
 
-  // Ordinary update cases model the existing schema advertised by their inspection fixture.
-  const initializeExistingUpdateProfile = (env: NodeJS.ProcessEnv = process.env) => {
-    const database = openOpenClawStateDatabase({ env });
-    fixtureStateDatabases.add(database.path);
-    closeOpenClawStateDatabaseForTest();
-  };
+  const initializeExistingUpdateProfile = createUpdateStateProfileInitializer(
+    fixtureRoot,
+    fixtureStateDatabases,
+  );
 
   const baseConfig: OpenClawConfig = {};
   const baseSnapshot = createUpdateCliBaseSnapshot(baseConfig);

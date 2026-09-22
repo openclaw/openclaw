@@ -1,3 +1,20 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  describe0AfterEach0,
+  backendGatewayClient,
+  expectRecordFields,
+  expectStringFieldContains,
+  getAgentTestMocks,
+  invokeAgent,
+  makeContext,
+  mockCallArg,
+  primeMainAgentRun,
+  resetAgentTaskRegistryForTests,
+  restoreAgentTaskRegistryRuntimeAfterTests,
+  useTestStateDir,
+  waitForAssertion,
+} from "./agent.test-harness.js";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -24,21 +41,6 @@ import {
   removeChatAbortControllerEntry,
   type ChatAbortControllerEntry,
 } from "../chat-abort.js";
-import {
-  describe0AfterEach0,
-  backendGatewayClient,
-  expectRecordFields,
-  expectStringFieldContains,
-  getAgentTestMocks,
-  invokeAgent,
-  makeContext,
-  mockCallArg,
-  primeMainAgentRun,
-  resetAgentTaskRegistryForTests,
-  restoreAgentTaskRegistryRuntimeAfterTests,
-  useTestStateDir,
-  waitForAssertion,
-} from "./agent.test-harness.js";
 
 resetAgentTaskRegistryForTests();
 afterAll(restoreAgentTaskRegistryRuntimeAfterTests);

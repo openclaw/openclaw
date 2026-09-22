@@ -710,9 +710,7 @@ export async function buildTelegramInboundContextPayload(params: {
       threadId: threadSpec.id != null ? String(threadSpec.id) : undefined,
     },
     route: {
-      agentId: route.agentId,
-      dmScope: route.dmScope,
-      accountId: route.accountId,
+      ...route,
       routeSessionKey: route.sessionKey,
       mainSessionKey: route.mainSessionKey,
     },

@@ -25,6 +25,11 @@ import {
   isPendingOAuthRefreshFence,
 } from "./auth-profiles/oauth-refresh-marker.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import {
+  getSoonestCooldownExpiry,
+  isProfileInCooldown,
+  resolveProfilesUnavailableReason,
+} from "./auth-profiles/usage-state.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { createCliTimeoutError } from "./cli-runner/no-output-timeout-policy.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -109,13 +114,10 @@ const authSourceCheckMock = vi.hoisted(() => ({
 vi.mock("./auth-profiles/source-check.js", () => authSourceCheckMock);
 
 const authRuntimeMock = vi.hoisted(() => {
-  // In-memory auth runtime mirrors cooldown/disabled semantics without writing
-  // real profile stores during fallback unit tests.
+  // Keep stores in memory while using the canonical cooldown and reason policy.
   const stores = new Map<string, AuthProfileStore>();
   const keyFor = (agentDir?: string) => agentDir ?? "__main__";
   const now = () => Date.now();
-  const isActive = (value: unknown, ts = now()) =>
-    typeof value === "number" && Number.isFinite(value) && value > ts;
   const getStore = (agentDir?: string): AuthProfileStore =>
     stores.get(keyFor(agentDir)) ?? { version: 1, profiles: {} };
   const getProfileIds = (store: AuthProfileStore, provider: string) =>
@@ -158,55 +160,6 @@ const authRuntimeMock = vi.hoisted(() => {
       ? { eligible: true, reasonCode: "ok" as const }
       : { eligible: false, reasonCode: "missing_credential" as const };
   };
-  const isProfileInCooldown = (
-    store: AuthProfileStore,
-    profileId: string,
-    tsOrOptions?: number | { now?: number; forModel?: string },
-    forModel?: string,
-  ) => {
-    const stats = store.usageStats?.[profileId];
-    if (!stats || store.profiles[profileId]?.provider === "openrouter") {
-      return false;
-    }
-    const ts = typeof tsOrOptions === "number" ? tsOrOptions : (tsOrOptions?.now ?? now());
-    const model = typeof tsOrOptions === "object" ? tsOrOptions.forModel : forModel;
-    if (isActive(stats.disabledUntil, ts)) {
-      return true;
-    }
-    if (!isActive(stats.cooldownUntil, ts)) {
-      return false;
-    }
-    return !stats.cooldownModel || !model || stats.cooldownModel === model;
-  };
-  const resolveReason = (store: AuthProfileStore, profileIds: string[], ts = now()) => {
-    for (const profileId of profileIds) {
-      const stats = store.usageStats?.[profileId];
-      if (!stats) {
-        continue;
-      }
-      if (isActive(stats.disabledUntil, ts)) {
-        return stats.disabledReason ?? "auth";
-      }
-      if (!isActive(stats.cooldownUntil, ts)) {
-        continue;
-      }
-      if (stats.cooldownReason) {
-        return stats.cooldownReason;
-      }
-      const counts = stats.failureCounts ?? {};
-      if ((counts.rate_limit ?? 0) > 0) {
-        return "rate_limit";
-      }
-      if ((counts.overloaded ?? 0) > 0) {
-        return "overloaded";
-      }
-      if ((counts.timeout ?? 0) > 0) {
-        return "timeout";
-      }
-      return "unknown";
-    }
-    return null;
-  };
   return {
     clear: () => stores.clear(),
     setStore: (agentDir: string | undefined, store: AuthProfileStore) => {
@@ -235,43 +188,13 @@ const authRuntimeMock = vi.hoisted(() => {
       ),
       resolveAuthProfileEligibility,
       maybeReprobeWhamBlockedProfiles: vi.fn(),
-      isProfileInCooldown,
-      resolveProfilesUnavailableReason: (params: {
-        store: AuthProfileStore;
-        profileIds: string[];
-        now?: number;
-      }) => resolveReason(params.store, params.profileIds, params.now),
-      getSoonestCooldownExpiry: (
-        store: AuthProfileStore,
-        profileIds: string[],
-        options?: { now?: number; forModel?: string },
-      ) => {
-        const ts = options?.now ?? now();
-        let soonest: number | null = null;
-        for (const profileId of profileIds) {
-          if (!isProfileInCooldown(store, profileId, { now: ts, forModel: options?.forModel })) {
-            continue;
-          }
-          const stats = store.usageStats?.[profileId];
-          const cooldownUntil = stats?.cooldownUntil;
-          const disabledUntil = stats?.disabledUntil;
-          let expiry: number | undefined;
-          if (isActive(cooldownUntil, ts)) {
-            expiry = cooldownUntil;
-          }
-          if (
-            disabledUntil !== undefined &&
-            isActive(disabledUntil, ts) &&
-            (expiry === undefined || disabledUntil < expiry)
-          ) {
-            expiry = disabledUntil;
-          }
-          if (expiry !== undefined && (soonest === null || expiry < soonest)) {
-            soonest = expiry;
-          }
-        }
-        return soonest;
-      },
+      isProfileInCooldown: (...args: Parameters<typeof isProfileInCooldown>) =>
+        isProfileInCooldown(...args),
+      resolveProfilesUnavailableReason: (
+        ...args: Parameters<typeof resolveProfilesUnavailableReason>
+      ) => resolveProfilesUnavailableReason(...args),
+      getSoonestCooldownExpiry: (...args: Parameters<typeof getSoonestCooldownExpiry>) =>
+        getSoonestCooldownExpiry(...args),
     },
   };
 });
