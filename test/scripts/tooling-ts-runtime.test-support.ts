@@ -1,4 +1,24 @@
 export const toolingTsEntrypoints = {
+  sqliteReliabilityWriter: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/lib/sqlite-reliability-writer",
+    distWorkerPath: "legacy-finalizer/scripts/lib/sqlite-reliability-writer.js",
+  },
+  pluginPretagPackCheck: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/plugin-release-pretag-pack-check",
+    distWorkerPath: "legacy-finalizer/scripts/plugin-release-pretag-pack-check.js",
+  },
+  crossOsProcess: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/lib/cross-os-release-checks/process",
+    distWorkerPath: "legacy-finalizer/scripts/lib/cross-os-release-checks/process.js",
+  },
+  controlUiI18n: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/control-ui-i18n",
+    distWorkerPath: "legacy-finalizer/scripts/control-ui-i18n.js",
+  },
   sparkleBuild: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../../scripts/sparkle-build",

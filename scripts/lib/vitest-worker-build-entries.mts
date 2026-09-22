@@ -97,6 +97,19 @@ import { nativeSchtasksIntegrationEnabled } from "./vitest-worker-declarations.m
 
 // These fixture hooks require physical module boundaries and complete namespaces.
 export const preservedModuleBuildSources = [
+  "extensions/acpx/src/runtime.admission-retention.test-support.ts",
+  "scripts/lib/tsdown-declaration-boundary.mts",
+  "scripts/lib/sqlite-reliability-writer.ts",
+  "scripts/plugin-release-pretag-pack-check.ts",
+  "scripts/lib/cross-os-release-checks/process.ts",
+  "scripts/check-plugin-gateway-gauntlet.mts",
+  "scripts/lib/managed-child-process.mts",
+  "scripts/e2e/kitchen-sink-rpc-walk.mts",
+  "scripts/control-ui-i18n.ts",
+  "scripts/test-docker-all.mts",
+  "scripts/run-tsgo-core-test-shards.mts",
+  "scripts/check-tsgo-core-boundary.mts",
+  "scripts/run-tsgo.mts",
   "scripts/docs-link-audit.mts",
   "scripts/check-openclaw-package-tarball.mts",
   "scripts/test-live-shard.mts",
@@ -216,6 +229,23 @@ export const preservedModuleBuildSources = [
 
 // Source-relative script readers retain their exact input bytes in the prepared layout.
 export const preservedModuleBuildAssets = [
+  "test/fixtures/acp/owner-agent.mjs",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/agents.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-discord.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-feishu.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-matrix.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-telegram.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/channels-whatsapp.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/gateway-password.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/gateway.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/models-anthropic.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/models-google.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/models-openai.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/plugins-acpx-openclaw-tools-bridge.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/plugins-configured-installs.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/plugins-feishu.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/plugins.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/skills.json",
   ".github/workflows/plugin-npm-release.yml",
   "scripts/lib/vitest-worker-bootstrap.mts",
 ];

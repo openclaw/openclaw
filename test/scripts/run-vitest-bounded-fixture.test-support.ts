@@ -9,7 +9,10 @@ import { createPreparedWorkerCompiler } from "./vitest-worker-artifacts.prepared
 export function createPreparedVitestCliFixture(
   repoRoot: string,
   scripts: string[],
-  { prepareWorkerArtifacts = false }: { prepareWorkerArtifacts?: boolean } = {},
+  {
+    prepareWorkerArtifacts = false,
+    preserveSourceModuleExports = false,
+  }: { prepareWorkerArtifacts?: boolean; preserveSourceModuleExports?: boolean } = {},
 ) {
   const lifetime = createFixtureLifetime();
   const compiler = prepareWorkerArtifacts ? createPreparedWorkerCompiler() : undefined;
@@ -41,12 +44,13 @@ export function createPreparedVitestCliFixture(
       ].map((script) => `scripts/${script}`);
       // Report merging selects these module URLs from generated configuration text.
       entries.push("test/vitest/vitest.reporters.ts", "test/vitest/redacting-reporter.ts");
+      const closure = collectRuntimeImportClosure(
+        repoRoot,
+        [...entries, "scripts/run-vitest.mjs", "scripts/tsx.mjs"],
+        { includeDynamicImports: true },
+      );
       const files = new Set([
-        ...collectRuntimeImportClosure(
-          repoRoot,
-          [...entries, "scripts/run-vitest.mjs", "scripts/tsx.mjs"],
-          { includeDynamicImports: true },
-        ),
+        ...closure,
         "scripts/lib/vitest-worker-bootstrap.mts",
         "scripts/lib/vitest-worker-compiler.mts",
         "package.json",
@@ -63,7 +67,13 @@ export function createPreparedVitestCliFixture(
         path.join(root, "node_modules"),
         "junction",
       );
-      await prepareCopiedSourceModules(root, entries);
+      // Source URL adapters must also serve exports used by unchanged native wrappers.
+      await prepareCopiedSourceModules(
+        root,
+        preserveSourceModuleExports
+          ? closure.filter((source) => /\.[cm]?ts$/u.test(source))
+          : entries,
+      );
       // CLI wrappers and generated configs retain their original entry paths.
       for (const source of entries) {
         fs.copyFileSync(

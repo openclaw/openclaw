@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { build } from "tsdown";
 
-export async function prepareCopiedSourceModules(root: string, entries: string[]) {
+export async function prepareCopiedSourceModules(
+  root: string,
+  entries: string[],
+  { externalModules = {} }: { externalModules?: Readonly<Record<string, URL>> } = {},
+) {
   const { bundles } = await build({
     config: false,
     cwd: root,
@@ -15,12 +19,28 @@ export async function prepareCopiedSourceModules(root: string, entries: string[]
     dts: false,
     clean: false,
     treeshake: false,
+    ...(Object.keys(externalModules).length
+      ? {
+          plugins: [
+            {
+              name: "copied-fixture-external-modules",
+              resolveId(id: string) {
+                const target = externalModules[id];
+                return target ? { id: target.href, external: "absolute" as const } : null;
+              },
+            },
+          ],
+        }
+      : {}),
     deps: {
       alwaysBundle: (id) =>
         id.startsWith("@openclaw/") &&
         !id.startsWith("@openclaw/fs-safe") &&
         !id.startsWith("@openclaw/proxyline"),
       neverBundle(id, importer) {
+        if (externalModules[id]) {
+          return false;
+        }
         if (/^(?:vitest|vite|tsdown|rolldown|esbuild|typescript)(?:\/|$)/u.test(id)) {
           return true;
         }

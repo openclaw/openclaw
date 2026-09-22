@@ -1,5 +1,53 @@
 // Keep CLI main guards and lazy-import probes on physical prepared modules.
 export const toolingMtsEntrypoints = {
+  tsdownDeclarationBoundary: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/lib/tsdown-declaration-boundary",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/lib/tsdown-declaration-boundary.js",
+  },
+  pluginGatewayGauntlet: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/check-plugin-gateway-gauntlet",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/check-plugin-gateway-gauntlet.js",
+  },
+  managedChildProcess: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/lib/managed-child-process",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/lib/managed-child-process.js",
+  },
+  kitchenSinkRpcWalk: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/e2e/kitchen-sink-rpc-walk",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/e2e/kitchen-sink-rpc-walk.js",
+  },
+  dockerAll: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/test-docker-all",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/test-docker-all.js",
+  },
+  tsgoCoreTestShards: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/run-tsgo-core-test-shards",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/run-tsgo-core-test-shards.js",
+  },
+  tsgoCoreBoundary: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/check-tsgo-core-boundary",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/check-tsgo-core-boundary.js",
+  },
+  tsgo: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../scripts/run-tsgo",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/run-tsgo.js",
+  },
   crabboxSourceCapsule: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../../scripts/crabbox-source-capsule",
