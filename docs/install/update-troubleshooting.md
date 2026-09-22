@@ -43,8 +43,12 @@ and **Ask OpenClaw**. It previews a bounded report containing the OpenClaw
 version, platform, update target, failed phase, sanitized diagnostics, and
 verified rollback outcome. The report excludes secrets, tokens, chat content,
 raw logs, private absolute paths, and recovery commands. Nothing is submitted
-until an administrator confirms that preview. OpenClaw then uses the existing
-GitHub CLI issue flow. Fallback and pending outcomes retain the sanitized report
+until an identified administrator confirms that preview. Named administrators
+receive a prefilled issue to review and submit using their own GitHub account in
+their browser. This path never invokes the host's GitHub CLI, including for
+authentication or reconciliation. Connecting My GitHub does not grant host-account
+publication authority. Only the Gateway owner or an internal system administrator
+can authorize the existing host GitHub CLI issue flow. Fallback and pending outcomes retain the sanitized report
 locally; a confirmed issue keeps only its durable issue URL. OpenClaw first makes
 a silent, read-only request with the active `github.com` account. A missing CLI
 or a failed, unavailable, or timed-out authentication check returns a prefilled
