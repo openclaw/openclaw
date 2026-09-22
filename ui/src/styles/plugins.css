@@ -535,6 +535,21 @@
   min-width: 180px;
 }
 
+.skills-toolbar__refresh {
+  position: relative;
+}
+
+/* Keep the localized idle footprint while the spinner replaces its label. */
+.skills-toolbar__refresh[aria-busy="true"] > .btn__label {
+  visibility: hidden;
+}
+
+.skills-toolbar__refresh > .btn__spinner {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+}
+
 /* ---------- collapsible skill groups ---------- */
 
 /* <details> shell keeps the settings-section look while restoring the native
