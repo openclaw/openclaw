@@ -33,5 +33,5 @@ it("loads installed tooling when the prepared CLI validates native Vitest option
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("Unknown option");
   expect(result.stderr).toContain("invalid");
-  expect(result.stderr).not.toContain("[test] starting");
+  expect(result.stderr).toContain("[test] starting ");
 });
