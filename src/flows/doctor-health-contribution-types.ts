@@ -21,6 +21,7 @@ import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
+  warnings?: string[];
   /** Original authored/resolved pair; retained across every committed Doctor write. */
   referenceSource?: DoctorConfigReferenceSource;
   pluginInstallConfigImport?: ShippedPluginInstallConfigImport;

@@ -663,22 +663,64 @@ export function configureSqliteWalMaintenance(
   };
 }
 
+type SqliteExitRegistration = { close: () => void; fired: boolean };
+type SqliteExitGroup = {
+  pending: Set<SqliteExitRegistration>;
+  dispatch: () => void;
+};
+let lastSqliteExitGroup: SqliteExitGroup | undefined;
+
+function detachEmptySqliteExitGroup(group: SqliteExitGroup): void {
+  if (group.pending.size > 0) {
+    return;
+  }
+  if (lastSqliteExitGroup === group) {
+    lastSqliteExitGroup = undefined;
+  }
+  process.removeListener("exit", group.dispatch);
+}
+
 /**
  * Register a best-effort exit-time close for a SQLite handle cache. Returns an
  * unregister callback the cache's orderly close path must invoke, so tests and
  * runtime shutdowns do not accumulate listeners on shared worker processes.
  */
 export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
-  const closeOnExit = () => {
-    try {
-      closeAll();
-    } catch {
-      // Exit-time close is best-effort; unclean exits rely on WAL recovery.
-    }
-  };
-  process.once("exit", closeOnExit);
+  const registration = { close: closeAll, fired: false };
+  let group = lastSqliteExitGroup;
+  // Preserve intervening owners, such as capture finalization before database close.
+  if (!group || process.listeners("exit").at(-1) !== group.dispatch) {
+    const pending = new Set([registration]);
+    const created: SqliteExitGroup = {
+      pending,
+      dispatch: () => {
+        // Snapshot this batch before callbacks; disposal cannot skip an admitted close.
+        const snapshot = [...pending];
+        for (const entry of snapshot) {
+          if (entry.fired) {
+            continue;
+          }
+          entry.fired = true;
+          pending.delete(entry);
+          detachEmptySqliteExitGroup(created);
+          try {
+            entry.close();
+          } catch {
+            // Exit-time close is best-effort; unclean exits rely on WAL recovery.
+          }
+        }
+      },
+    };
+    // Keep the dispatcher until the last callback starts, including nested emissions.
+    process.on("exit", created.dispatch);
+    lastSqliteExitGroup = group = created;
+  } else {
+    group.pending.add(registration);
+  }
+  const owner = group;
   return () => {
-    process.removeListener("exit", closeOnExit);
+    owner.pending.delete(registration);
+    detachEmptySqliteExitGroup(owner);
   };
 }
 

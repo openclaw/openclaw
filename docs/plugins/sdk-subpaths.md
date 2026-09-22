@@ -390,7 +390,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/tool-results` | Typed text and JSON agent tool result builders |
     | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
     | `plugin-sdk/sandbox` | Private-local after July 2026; Sandbox backend types and SSH/OpenShell command helpers, including fail-fast exec command preflight and `resolveReadOnlyWorkspaceSkillMounts` for canonical read-only skill overlays in writable workspaces |
-    | `plugin-sdk/temp-path` | Shared temp-download path helpers and private secure temp workspaces |
+    | `plugin-sdk/temp-path` | Shared temp-download path helpers and private secure temp workspaces. `buildRandomTempFilePath` retains relative `tmpDir` paths and trims an optional `uuid`; blank values generate a UUID, while nonblank values must be safe filename components. `sanitizeTempFileName` adds a suffix to reserved Windows device names, preserving their extension. |
     | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
     | `plugin-sdk/markdown-table-runtime` | Private-local after July 2026; Markdown table mode and conversion helpers |
     | `plugin-sdk/model-session-runtime` | Model/session override helpers such as `applyModelOverrideToSessionEntry` and `resolveAgentMaxConcurrent` |

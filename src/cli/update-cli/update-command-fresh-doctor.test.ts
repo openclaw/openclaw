@@ -33,6 +33,7 @@ import {
   createConfigValidationFailure,
 } from "./update-cli-config.test-support.js";
 import { registerFreshDoctorDiagnosticTests } from "./update-command-fresh-doctor-diagnostics.test-support.js";
+import { registerFreshDoctorOutcomeTests } from "./update-command-fresh-doctor-outcomes.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
@@ -528,36 +529,7 @@ describe("post-plugin update readiness", () => {
     expect(mocks.runUtf8).not.toHaveBeenCalled();
   });
 
-  it("retains Doctor failure precedence and bounds combined validation facts", async () => {
-    const doctorFacts = Array.from({ length: 4 }, (_, index) => ({
-      check: "doctor",
-      code: "doctor-failed",
-      message: `Earlier failure ${index}`,
-    }));
-    mocks.runExec.mockImplementation(async (_command, args: string[], options) => {
-      if (args.includes("--repair")) {
-        await writeUpdatePostInstallDoctorResult({
-          resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
-          result: { status: "error", failureFacts: doctorFacts },
-        });
-        throw Object.assign(new Error("Doctor failed"), { exitCode: 1 });
-      }
-      throw Object.assign(new Error("private argv"), {
-        failed: true,
-        timedOut: true,
-        cleanup: "uncertain",
-        stderr: "Validation process could not settle",
-      });
-    });
-    const { pluginUpdate: result } = await completePostCorePluginUpdate(updateOptions);
-    expect(result.reason).toBe("post-plugin-doctor-execution-failed");
-    expect(result.failureFacts).toHaveLength(5);
-    expect(result.failureFacts?.slice(0, 4)).toEqual(doctorFacts);
-    expect(result.failureFacts?.[4]?.message).toContain("cleanup=uncertain");
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings?.[0]?.message).toContain("migrations could not be run");
-    expect(mocks.runUtf8).not.toHaveBeenCalled();
-  });
+  registerFreshDoctorOutcomeTests(mocks, updateOptions);
 
   registerFreshDoctorDiagnosticTests({ mocks, tempDirs, updateOptions });
 

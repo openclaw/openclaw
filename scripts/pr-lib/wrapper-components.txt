@@ -888,6 +888,7 @@ src/plugins/dev-source-root.ts
 src/plugins/discovery-availability.ts
 src/plugins/discovery-required-plugins.ts
 src/plugins/discovery.ts
+src/plugins/doctor-compatibility-migration.ts
 src/plugins/doctor-contract-artifact.ts
 src/plugins/doctor-contract-module.ts
 src/plugins/doctor-contract-registry-loader-state.ts

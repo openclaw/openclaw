@@ -49,7 +49,10 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
 import { readPackageUpdateIdentity } from "./update-command-package.js";
-import { collectPostCorePluginAdvisories } from "./update-command-plugins-internals.js";
+import {
+  collectPostCorePluginAdvisories,
+  type PluginUpdateWarning,
+} from "./update-command-plugins-internals.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -224,6 +227,8 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
 async function resumePostCoreUpdateInternal(
   params: ResumePostCoreUpdateParams,
 ): Promise<{ pluginUpdate: PostCorePluginUpdateResult; result: UpdateRunResult }> {
+  const runId = process.env[UPDATE_RUN_ID_ENV]?.trim();
+  const postCoreUpdate = process.env[POST_CORE_UPDATE_ENV] === "1";
   const { assertCurrent } = createUpdateCommandAuthority({ opts: params.opts }, "Post-core update");
   assertCurrent?.();
   if (
@@ -268,6 +273,34 @@ async function resumePostCoreUpdateInternal(
   try {
     outcome = {
       pluginUpdate: await withCommandProcessScope(async () => {
+        const doctorWarnings: PluginUpdateWarning[] = [];
+        const recordDoctorWarnings = (additionalWarnings: string[] = []) => {
+          const warnings = [
+            ...additionalWarnings,
+            ...doctorWarnings.map((warning) => warning.message),
+          ];
+          if (!postCoreUpdate || !runId || warnings.length === 0) {
+            return;
+          }
+          try {
+            // Settled diagnostics survive later failure without claiming candidate completion.
+            recordPostCoreUpdateEvidence(runId, { warnings });
+          } catch (error) {
+            defaultRuntime.error(
+              `Post-core update evidence could not be saved: ${formatErrorMessage(error)} Update completion may require Doctor verification.`,
+            );
+          }
+        };
+        const onDoctorWarnings = (warnings: string[]) => {
+          doctorWarnings.push(
+            ...warnings.map((message) => ({
+              reason: "doctor-advisory",
+              message,
+              guidance: ["Run `openclaw doctor --fix` after repairing the plugin."],
+            })),
+          );
+          recordDoctorWarnings();
+        };
         if (!parentOwnsCompletion) {
           const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
           assertCurrent?.();
@@ -281,7 +314,7 @@ async function resumePostCoreUpdateInternal(
           await maintenance?.releaseState();
           // Shipped parents expect the child to prepare migration plugins and settle
           // Doctor before plugin config writes; Doctor owns that preparation and its guards.
-          await runUpdateFinalizationDoctorInFreshProcess({
+          const warning = await runUpdateFinalizationDoctorInFreshProcess({
             opts: params.opts,
             phase: "post-plugin",
             assertCurrent,
@@ -289,7 +322,12 @@ async function resumePostCoreUpdateInternal(
             yes: params.opts.yes === true,
             json: params.opts.json === true,
             timeoutMs: params.timeoutMs,
+            onWarnings: onDoctorWarnings,
           });
+          if (warning) {
+            doctorWarnings.push(warning);
+            recordDoctorWarnings();
+          }
         }
 
         const configSnapshot = await readConfigFileSnapshot({
@@ -330,15 +368,23 @@ async function resumePostCoreUpdateInternal(
             yes: params.opts.yes === true,
             json: params.opts.json === true,
             timeoutMs: params.timeoutMs,
+            onWarnings: onDoctorWarnings,
           });
           pluginUpdate = completed.pluginUpdate;
+          recordDoctorWarnings(collectPostCorePluginAdvisories(pluginUpdate));
         }
         // Only the target process may restamp an unchanged downgrade config.
         const finalSnapshot = await readConfigFileSnapshot({ observe: false });
         assertCurrent?.();
         await persistValidatedDowngradeConfig(finalSnapshot, assertCurrent);
         assertCurrent?.();
-        return pluginUpdate;
+        return doctorWarnings.length
+          ? {
+              ...pluginUpdate,
+              status: pluginUpdate.status === "error" ? "error" : "warning",
+              warnings: [...(pluginUpdate.warnings ?? []), ...doctorWarnings],
+            }
+          : pluginUpdate;
       }),
     };
   } catch (error) {
@@ -381,7 +427,6 @@ async function resumePostCoreUpdateInternal(
   }
   const { pluginUpdate } = outcome;
   assertCurrent?.();
-  const runId = process.env[UPDATE_RUN_ID_ENV]?.trim();
   const result: UpdateRunResult = {
     status: pluginUpdate.status === "error" ? "error" : "ok",
     mode: "unknown",
@@ -391,7 +436,7 @@ async function resumePostCoreUpdateInternal(
     durationMs: 0,
     postUpdate: { plugins: pluginUpdate },
   };
-  if (process.env[POST_CORE_UPDATE_ENV] === "1" && runId) {
+  if (postCoreUpdate && runId) {
     try {
       recordPostCoreUpdateEvidence(runId, {
         candidate:

@@ -5,7 +5,9 @@ import { vi } from "vitest";
 const source = (name: string) => normalizeModuleId(path.resolve(import.meta.dirname, "..", name));
 const agentSource = source("src/state/openclaw-agent-db-lifecycle.ts");
 const agentKey = Symbol.for("openclaw.agentDatabaseLifecycle");
+const brokerKey = Symbol.for("openclaw.sqliteWorkerBroker");
 const resetKey = Symbol.for("openclaw.globalSingletonLifecycleResets");
+const retainedCustodyKey = Symbol.for("openclaw.sqliteTestRetainedCustody");
 
 // These owners retain module closures and each other's lifecycle callbacks.
 // Keep their native custody intact through drainage, then retire the whole generation.
@@ -14,7 +16,7 @@ export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new 
     source("src/state/openclaw-state-worker-store.ts"),
     Symbol.for("openclaw.sharedStateWorkerOwner"),
   ],
-  [source("src/infra/sqlite-worker-store.ts"), Symbol.for("openclaw.sqliteWorkerBroker")],
+  [source("src/infra/sqlite-worker-store.ts"), brokerKey],
   [source("src/state/openclaw-state-db-cache.ts"), Symbol.for("openclaw.stateDatabaseLifecycle")],
   [source("src/state/openclaw-state-read-worker.ts"), Symbol.for("openclaw.stateReadWorkers")],
   [agentSource, agentKey],
@@ -26,6 +28,68 @@ type AgentLifecycleModule = Pick<
 >;
 type AgentOwner = AgentLifecycleModule["agentDatabaseLifecycle"];
 const agentClosers = new WeakMap<AgentOwner, () => Promise<void>>();
+
+type SingletonReset = {
+  lifecycle: "close-and-restart" | "close-only" | "plugin-registry";
+  reset: () => void | Promise<void>;
+};
+
+function retainedCustody() {
+  const store = globalThis as typeof globalThis & {
+    [retainedCustodyKey]?: { sqlite: boolean; failedResets: WeakSet<SingletonReset> };
+  };
+  return (store[retainedCustodyKey] ??= { sqlite: false, failedResets: new WeakSet() });
+}
+
+export function hasRetainedSqliteTestCustody(): boolean {
+  return retainedCustody().sqlite;
+}
+
+export function retainSqliteTestCustody(): void {
+  // A non-main-thread broker refusal leaves its lease for the process-death stale-lease sweep.
+  // Until retirement facts exist, later files must not retry the closer or retire its broker.
+  retainedCustody().sqlite = true;
+}
+
+/** Settle independent owners before shared storage; a failure retains its dependent family. */
+export async function drainSqliteTestSingletons(
+  onError: (phase: string, error: unknown) => void,
+): Promise<void> {
+  const resets = (globalThis as Record<PropertyKey, unknown>)[resetKey] as
+    | Map<symbol, SingletonReset>
+    | undefined;
+  const { failedResets } = retainedCustody();
+  const entries = [...(resets ?? [])].filter(
+    ([, reset]) => reset.lifecycle !== "plugin-registry" && !failedResets.has(reset),
+  );
+  const sqliteKeys = new Set(sqliteTestSingletonPublications.values());
+  await Promise.all(
+    entries
+      .filter(([key]) => !sqliteKeys.has(key))
+      .map(async ([key, reset]) => {
+        try {
+          await reset.reset();
+        } catch (error) {
+          failedResets.add(reset);
+          onError(`singleton ${key.description}`, error);
+        }
+      }),
+  );
+  const sqlite = entries
+    .filter(([key]) => sqliteKeys.has(key))
+    .toSorted(([left], [right]) => Number(left === brokerKey) - Number(right === brokerKey));
+  for (const [key, reset] of sqlite) {
+    if (hasRetainedSqliteTestCustody()) {
+      break;
+    }
+    try {
+      await reset.reset();
+    } catch (error) {
+      retainSqliteTestCustody();
+      onError(`singleton ${key.description}`, error);
+    }
+  }
+}
 
 /** Preserve the verified owner's closer before a test hook can reset its module exports. */
 export function rememberSqliteTestAgentOwner(
