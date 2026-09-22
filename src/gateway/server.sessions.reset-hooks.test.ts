@@ -833,9 +833,9 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
     releaseHook.resolve();
     admissionController.abort();
     return (cleaningUp ??= (async () => {
-      await Promise.all(settledWork);
       const lease = await admission?.catch(() => undefined);
       lease?.release();
+      await Promise.all(settledWork);
       sessionHookMocks.triggerInternalHook.mockReset();
     })());
   };

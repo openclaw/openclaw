@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  DEFAULT_WORKER_PENDING_BYTES,
+  DEFAULT_WORKER_PENDING_TASKS,
+} from "../infra/worker-task-capacity.js";
+import { WorkerTaskError } from "../infra/worker-task-pool-core.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { SessionRowPlacementFacts } from "./session-row-placement-projection.types.js";
@@ -10,10 +15,13 @@ import type { WorkerSessionPlacementProjection } from "./worker-environments/pla
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const MAX_CONCURRENT_PLACEMENT_READS = 2;
+const MAX_COALESCED_PLACEMENT_IDS = 256;
+const MAX_COALESCED_PLACEMENT_BYTES = 64 * 1024;
 type PlacementReadKind = "resident" | "exact";
 type PlacementReadBatch = {
   kind: PlacementReadKind;
   ids: Set<string>;
+  inputBytes: number;
   stale: Set<string>;
   staleAll: boolean;
   started: boolean;
@@ -34,8 +42,9 @@ export function createSessionRowPlacementProjection(
   let exact: ReadonlyMap<string, SessionRowPlacementFacts> | undefined;
   let disposed = false;
   const activeReads = new Set<PlacementReadBatch>();
-  const queuedReads = new Map<PlacementReadKind, PlacementReadBatch>();
+  const queuedReads: PlacementReadBatch[] = [];
   const reads = new Set<PlacementReadBatch>();
+  let retainedInputBytes = 0;
   const invalidateReads = (id?: string) => {
     for (const read of reads) {
       // Queued reads capture state when dispatched, after these publications.
@@ -50,16 +59,13 @@ export function createSessionRowPlacementProjection(
     }
   };
   const releaseRead = (read: PlacementReadBatch) => {
-    if (read.settled && read.readers === 0) {
-      reads.delete(read);
+    if (read.settled && read.readers === 0 && reads.delete(read)) {
+      retainedInputBytes -= read.inputBytes;
     }
   };
   function dispatchQueuedReads() {
-    for (const batch of queuedReads.values()) {
-      if (activeReads.size >= MAX_CONCURRENT_PLACEMENT_READS) {
-        break;
-      }
-      queuedReads.delete(batch.kind);
+    while (queuedReads.length && activeReads.size < MAX_CONCURRENT_PLACEMENT_READS) {
+      const batch = queuedReads.shift()!;
       batch.started = true;
       activeReads.add(batch);
       void runRead(batch);
@@ -82,18 +88,56 @@ export function createSessionRowPlacementProjection(
     }
   }
   const acquireRead = (ids: readonly string[], kind: PlacementReadKind) => {
+    if (disposed) {
+      throw new Error("Session row projection is no longer active");
+    }
+    const covers = (batch: PlacementReadBatch) =>
+      batch.kind === kind &&
+      !batch.staleAll &&
+      ids.every((id) => batch.ids.has(id) && !batch.stale.has(id));
     // Exact requests must not join broader resident preparation and wait for unrelated work.
-    let read =
-      [...activeReads].find(
-        (active) =>
-          active.kind === kind &&
-          !active.staleAll &&
-          ids.every((id) => active.ids.has(id) && !active.stale.has(id)),
-      ) ?? queuedReads.get(kind);
+    let read = [...activeReads].find(covers) ?? queuedReads.find(covers);
+    let addedBytes = 0;
+    if (!read) {
+      const tail = queuedReads.at(-1);
+      if (tail?.kind === kind && ids.length <= MAX_COALESCED_PLACEMENT_IDS) {
+        let count = tail.ids.size;
+        for (const id of ids) {
+          if (!tail.ids.has(id)) {
+            count++;
+            // Upper-bound JSON escaping without allocating another copy of each ID.
+            addedBytes += 6 * id.length + 3;
+          }
+        }
+        if (
+          count <= MAX_COALESCED_PLACEMENT_IDS &&
+          tail.inputBytes + addedBytes <= MAX_COALESCED_PLACEMENT_BYTES
+        ) {
+          read = tail;
+        }
+      }
+    }
+    if (!read) {
+      // A large caller keeps one snapshot. Capacity counts batches, never joined consumers.
+      if (reads.size >= DEFAULT_WORKER_PENDING_TASKS) {
+        throw new WorkerTaskError("Placement read capacity reached", "overloaded");
+      }
+      addedBytes = 2;
+      for (const id of ids) {
+        addedBytes += 6 * id.length + 3;
+        if (retainedInputBytes + addedBytes > DEFAULT_WORKER_PENDING_BYTES) {
+          throw new WorkerTaskError("Placement read capacity reached", "overloaded");
+        }
+      }
+    }
+    if (retainedInputBytes + addedBytes > DEFAULT_WORKER_PENDING_BYTES) {
+      throw new WorkerTaskError("Placement read capacity reached", "overloaded");
+    }
     if (!read) {
       const batch: PlacementReadBatch = {
         kind,
         ids: new Set(),
+        inputBytes: 0,
         stale: new Set(),
         staleAll: false,
         started: false,
@@ -102,7 +146,7 @@ export function createSessionRowPlacementProjection(
         completion: createDeferredCore<WorkerSessionPlacementProjection>(),
       };
       read = batch;
-      queuedReads.set(kind, batch);
+      queuedReads.push(batch);
       reads.add(batch);
       queueMicrotask(dispatchQueuedReads);
     }
@@ -110,6 +154,8 @@ export function createSessionRowPlacementProjection(
       for (const id of ids) {
         read.ids.add(id);
       }
+      read.inputBytes += addedBytes;
+      retainedInputBytes += addedBytes;
     }
     read.readers++;
     return {
@@ -305,12 +351,12 @@ export function createSessionRowPlacementProjection(
     dispose() {
       disposed = true;
       invalidateReads();
-      for (const read of queuedReads.values()) {
+      for (const read of queuedReads) {
         read.settled = true;
         read.completion.reject(new Error("Session row projection is no longer active"));
         releaseRead(read);
       }
-      queuedReads.clear();
+      queuedReads.length = 0;
       resident.clear();
       registered.clear();
       dirty.clear();

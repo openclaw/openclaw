@@ -23,11 +23,14 @@ afterEach(() => vi.restoreAllMocks());
 const cfg = { agents: { entries: { main: {} } } };
 const query = { agentId: "main", key: "agent:main:dashboard:incognito-prepared" };
 
-async function heldPlacementReads(sessionCount: number) {
+async function heldPlacementReads(
+  sessionCount: number,
+  options: { sessionId?: (index: number) => string; maxPendingBytes?: number } = {},
+) {
   const placements = createWorkerSessionPlacementStore();
   const rows = Array.from({ length: sessionCount }, (_, index) => {
-    const sessionId = `held-placement-${index}`;
-    const key = `agent:main:${sessionId}`;
+    const sessionId = options.sessionId?.(index) ?? `held-placement-${index}`;
+    const key = `agent:main:held-placement-${index}`;
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: key },
       { sessionId, updatedAt: 1, archivedAt: 1 },
@@ -39,15 +42,28 @@ async function heldPlacementReads(sessionCount: number) {
     };
   });
   const entered = createDeferredCore();
+  const atCapacity = createDeferredCore();
   const release = createDeferredCore();
   let pending = 0;
+  let pendingBytes = 0;
+  let peakPending = 0;
   const readProjection = vi.fn(
     async (ids: readonly string[]): Promise<WorkerSessionPlacementProjection> => {
       // A small admission budget reproduces the shared worker's bounded queue.
-      if (pending >= 2) {
+      const inputBytes = Buffer.byteLength(JSON.stringify(ids));
+      if (
+        pending >= 2 ||
+        (options.maxPendingBytes !== undefined &&
+          pendingBytes + inputBytes > options.maxPendingBytes)
+      ) {
         throw new WorkerTaskError("worker task capacity reached", "overloaded");
       }
       pending++;
+      pendingBytes += inputBytes;
+      peakPending = Math.max(peakPending, pending);
+      if (pending === 2) {
+        atCapacity.resolve();
+      }
       try {
         const snapshot: WorkerSessionPlacementProjection = {
           placements: new Map(
@@ -64,6 +80,7 @@ async function heldPlacementReads(sessionCount: number) {
         return snapshot;
       } finally {
         pending--;
+        pendingBytes -= inputBytes;
       }
     },
   );
@@ -81,13 +98,17 @@ async function heldPlacementReads(sessionCount: number) {
     rows,
     projection,
     entered,
+    atCapacity,
     release,
     readProjection,
+    get peakPending() {
+      return peakPending;
+    },
     describe(row: (typeof rows)[number]) {
       const respond = vi.fn();
       const completion = Promise.resolve(
         sessionByKeyReadHandlers["sessions.describe"]!({
-          req: { type: "req", id: row.sessionId, method: "sessions.describe" },
+          req: { type: "req", id: row.key, method: "sessions.describe" },
           params: { key: row.key },
           client: null,
           context,
@@ -130,6 +151,105 @@ it("serves overlapping cold descriptions within bounded placement-read admission
       fixture.release.resolve();
       await completed;
       fixture.dispose();
+    }
+  });
+});
+
+it.each([
+  {
+    name: "serves more than 128 descriptions without joining inputs beyond reader capacity",
+    count: 160,
+    idLength: 4 * 1024,
+    accepted: 160,
+    maxPendingBytes: 128 * 1024,
+  },
+  {
+    name: "refuses only new descriptions at retained-batch capacity and admits them after drain",
+    count: 130,
+    idLength: 12 * 1024,
+    accepted: 128,
+    maxPendingBytes: undefined,
+  },
+])("$name", async ({ count, idLength, accepted, maxPendingBytes }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const fixture = await heldPlacementReads(count, {
+      sessionId: (index) => `placement-${index}-${"x".repeat(idLength)}`,
+      maxPendingBytes,
+    });
+    const selected = new Set<string>();
+    const allSelected = createDeferredCore();
+    const prepare = fixture.projection.withPreparedExactRows.bind(fixture.projection);
+    vi.spyOn(fixture.projection, "withPreparedExactRows").mockImplementation(
+      (queries, consume, options) =>
+        prepare(
+          (config) => {
+            const rows = queries(config);
+            for (const { key } of rows) {
+              selected.add(key);
+            }
+            if (selected.size === fixture.rows.length) {
+              allSelected.resolve();
+            }
+            return rows;
+          },
+          consume,
+          options,
+        ),
+    );
+    const requests: ReturnType<typeof fixture.describe>[] = [];
+    const pending: Promise<unknown>[] = [];
+    const describe = (row: (typeof fixture.rows)[number]) => {
+      const request = fixture.describe(row);
+      requests.push(request);
+      pending.push(Promise.allSettled([request.completion]));
+    };
+    try {
+      describe(fixture.rows[0]!);
+      await withTestTimeout(fixture.entered.promise, 2_000, "First placement read did not enter");
+      describe(fixture.rows[1]!);
+      await withTestTimeout(
+        fixture.atCapacity.promise,
+        2_000,
+        "Second placement read did not enter",
+      );
+      for (const row of fixture.rows.slice(2)) {
+        describe(row);
+      }
+      await withTestTimeout(allSelected.promise, 2_000, "Description burst was not selected");
+      fixture.release.resolve();
+      expect(await Promise.all(pending)).toEqual(
+        requests.map((_, index) => [
+          index < accepted
+            ? { status: "fulfilled", value: undefined }
+            : { status: "rejected", reason: expect.objectContaining({ code: "overloaded" }) },
+        ]),
+      );
+      for (const { row, respond } of requests.slice(0, accepted)) {
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+          session: expect.objectContaining({
+            key: row.key,
+            sessionId: row.sessionId,
+            placement: projectWorkerSessionPlacement(row.placement),
+          }),
+        });
+      }
+      for (const { respond } of requests.slice(accepted)) {
+        expect(respond).not.toHaveBeenCalled();
+      }
+      expect(fixture.peakPending).toBe(2);
+      expect(fixture.readProjection.mock.calls.flatMap(([ids]) => ids)).toEqual(
+        fixture.rows.slice(0, accepted).map(({ sessionId }) => sessionId),
+      );
+      const afterDrain = fixture.describe(fixture.rows.at(-1)!);
+      pending.push(Promise.allSettled([afterDrain.completion]));
+      await afterDrain.completion;
+      expect(afterDrain.respond).toHaveBeenCalledExactlyOnceWith(true, {
+        session: expect.objectContaining({ sessionId: afterDrain.row.sessionId }),
+      });
+    } finally {
+      fixture.dispose();
+      fixture.release.resolve();
+      await Promise.all(pending);
     }
   });
 });
