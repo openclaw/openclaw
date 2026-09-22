@@ -35,9 +35,6 @@ export async function createMatrixDraftController(params: {
     client,
     logVerboseMessage,
   } = params;
-  type DraftDisposition = "active" | "retained" | "consumed";
-  let draftDisposition: DraftDisposition = "active";
-
   const draftStreamingEnabled = streaming !== "off";
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
   const progressDraftStreaming = streaming === "progress";
@@ -215,19 +212,19 @@ export async function createMatrixDraftController(params: {
   };
 
   const finalizeAcceptedPartialDraft = async () => {
-    if (streaming !== "partial" || draftDisposition !== "active" || !draftStream?.eventId()) {
+    if (streaming !== "partial" || previewLifecycle.previewFinalized || !draftStream?.eventId()) {
       return;
     }
     // Only an already-visible partial may become the terminal reply. Drafts accepted
     // during shutdown stay active so the handler's final cleanup removes them.
     const draftEventId = await draftStream.stop().catch(() => undefined);
     if (draftEventId && (await draftStream.finalizeLive())) {
-      draftDisposition = "retained";
+      previewLifecycle.retainPreview();
     }
   };
 
   const settleAcceptedDraftAfterError = async () => {
-    if (draftDisposition !== "active" || !draftStream?.eventId()) {
+    if (previewLifecycle.previewFinalized || !draftStream?.eventId()) {
       return;
     }
     if (streaming === "partial") {
@@ -236,7 +233,7 @@ export async function createMatrixDraftController(params: {
     }
     // Quiet and progress previews are ordinary Matrix events rather than live
     // drafts. Preserve current behavior once Matrix has accepted the event.
-    draftDisposition = "retained";
+    previewLifecycle.retainPreview();
   };
 
   return {
@@ -252,7 +249,6 @@ export async function createMatrixDraftController(params: {
     updateDraftFromLatestFullText,
     finalizeAcceptedPartialDraft,
     settleAcceptedDraftAfterError,
-    draftDisposition: () => draftDisposition,
     beginDraftGeneration: () => {
       previewLifecycle.reset();
       progressDraft.beginNewTurn({ force: true });

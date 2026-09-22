@@ -85,7 +85,7 @@ describe("Matrix progress visibility", () => {
 
       await controller.settleAcceptedDraftAfterError();
 
-      expect(controller.draftDisposition()).toBe("retained");
+      expect(controller.previewLifecycle.previewFinalized).toBe(true);
       expect(draftStream.stop).not.toHaveBeenCalled();
       expect(draftStream.finalizeLive).not.toHaveBeenCalled();
       controller.cancelProgressDraft();
