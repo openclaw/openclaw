@@ -471,8 +471,22 @@ export type AgentHarnessSessionDeletionMutation = {
   rollback: () => void;
 };
 
+type AgentHarnessSessionContextResetParams = Omit<
+  AgentHarnessSessionDeletionParams,
+  "initialization"
+> & {
+  /** Exact recorded predecessor may still own native context after interrupted compaction. */
+  previousSessionId?: string;
+};
+
 type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
+  /** Invalidate native context only when a same-key history cut commits; preserve compaction. */
+  withSessionContextReset?<T>(
+    this: void,
+    params: AgentHarnessSessionContextResetParams,
+    run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
+  ): Promise<T>;
   /** Prepare outside the session writer; release native resources after its commit completes. */
   withSessionDeletion?<T>(
     this: void,

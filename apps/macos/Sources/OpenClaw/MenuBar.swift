@@ -19,7 +19,10 @@ enum OpenClawProcessMain {
 }
 
 enum OpenClawProcessEntrypoint {
-    static func run(arguments: [String], launchApplication: () -> Void) -> Int32? {
+    static func run(arguments: [String], bundle: Bundle = .main, launchApplication: () -> Void) -> Int32? {
+        if let status = CloudWorkerHost.runIfRequested(arguments: arguments, bundle: bundle) {
+            return status
+        }
         if let status = ElevationExclusiveRename.runIfRequested(arguments: arguments) {
             return status
         }

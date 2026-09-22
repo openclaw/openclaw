@@ -16,7 +16,7 @@ import {
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePluginHandle,
 } from "./provider-hook-runtime.js";
-import { findProviderRuntimePluginInRegistry } from "./provider-registry-selection.js";
+import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
@@ -320,7 +320,11 @@ describe("provider selection registration coverage", () => {
     const registry = proof.load("full");
     setActivePluginRegistry(registry, "failed-receiver");
     const lookup = () =>
-      findProviderRuntimePluginInRegistry({ registry, provider: "helper-provider", ownerRefs: [] });
+      findProviderRuntimeRegistrationInRegistry({
+        registry,
+        provider: "helper-provider",
+        ownerRefs: [],
+      });
     expect(lookup() === undefined).toBe(true);
     withPluginRuntimeGenerationScope(
       { metadataSnapshot: proof.snapshot, pluginRegistry: registry },

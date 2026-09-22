@@ -42,6 +42,7 @@ import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
   applyUnknownConfigKeyStep,
+  prepareDoctorConfigReferenceSource,
 } from "./doctor/shared/config-flow-steps.js";
 import { prepareDoctorConfigMigrationResult } from "./doctor/shared/config-migration-result.js";
 import {
@@ -170,6 +171,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     };
   }
   const { snapshot, baseConfig: baseCfg } = preflight;
+  const referenceSource = prepareDoctorConfigReferenceSource(snapshot);
   const pluginMetadataSnapshotState: DoctorPluginMetadataSnapshotState = {
     current: preflight.pluginMetadataSnapshot,
   };
@@ -716,7 +718,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
           },
         }
       : {}),
-    sourceConfigForWrite: snapshot.sourceConfig,
+    ...(referenceSource ? { referenceSource } : {}),
     ...(pluginInstallConfigImport ? { pluginInstallConfigImport } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,

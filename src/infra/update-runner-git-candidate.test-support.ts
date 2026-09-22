@@ -10,6 +10,16 @@ import { updateGitCheckout } from "./update-runner-git.js";
 
 const { runCommandWithTimeout } = processExec;
 
+export async function runFixtureGit(root: string, ...args: string[]) {
+  const result = await processExec.runCommandWithTimeout(["git", "-C", root, ...args], {
+    timeoutMs: 5000,
+  });
+  if (result.code !== 0) {
+    throw new Error(result.stderr);
+  }
+  return result.stdout.trim();
+}
+
 export async function resolveCandidateNodeRuntimeForTest(): Promise<{
   path: string;
   version: string;
@@ -102,6 +112,10 @@ export async function expectCancelledGitCandidateCleanup({
       opts: {
         devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: targetSha },
         inspectGitTarget: async () => {},
+        validateCandidate: async () => {},
+        runGitDoctor: async () => {
+          throw new Error("cancelled update reached Doctor");
+        },
         beforeGitMutation,
       },
     });

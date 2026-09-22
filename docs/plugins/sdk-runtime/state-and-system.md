@@ -215,6 +215,40 @@ await store.register("key-1", { value: "hello" });
 const value = await store.lookup("key-1");
 ```
 
+For writes on behalf of a current tool invocation or other revocable action,
+require `store.withCurrent` before starting effects. Bind the host-provided
+assertion together with any action-specific permission check:
+
+```typescript
+if (!store.withCurrent) {
+  throw new Error("Update OpenClaw to authorize this state mutation.");
+}
+const actionStore = store.withCurrent({
+  assertCurrent: () => {
+    context.assertInvocationCurrent();
+    assertActionAllowed();
+  },
+});
+await actionStore.register("key-1", { value: "hello" });
+```
+
+The returned `PluginStateKeyedStore<T, 2>` is an immutable binding to the same
+namespace, settings, and plugin lifetime. It exposes the data-only operations;
+it has no `update`, `deleteIf`, or rebinding method. The assertion stays on the
+host and is checked after reads and at both transaction and final commit
+admission for writes, including bounded stores. Create a separate view for each
+action; do not keep one caller's authority on a shared service. The legacy
+`PluginStateKeyedStore<T>` keeps this capability optional for older hosts and
+adapters. An action requiring it must refuse when it is absent.
+
+`observe` and a comparison conflict return observations without committing the
+requested mutation; they also require current authority when returning that data.
+
+A refusal before the commit grant rolls back the mutation. Once commit is
+authorized, later revocation does not turn the settled write into a refusal.
+Recheck authority before the next external effect, and preserve the recorded
+result; never retry a committed or unknown write to compensate for revocation.
+
 The async store's `update` updater and `deleteIf` predicate are deprecated
 compatibility methods. They still run synchronously on the main thread inside
 the transaction containing the authoritative read and mutation, and remain
@@ -284,6 +318,13 @@ Discord and Slack use scalar conditional deletion when relinquishing a presence
 cooldown. On older hosts without that optional capability, they leave it to expire
 instead of risking deletion of a newer reservation.
 
+FaceTime persists pending dial snapshots in invocation order and uses worker
+comparisons to clear only the matching dial. Helper dispatch waits for durable
+intent, and shutdown joins accepted persistence. Its supported 2026.9.4 hosts
+without comparisons retain atomic `deleteIf` cleanup; a failed worker operation
+never selects that compatibility path. The namespace, stored records, and
+retention remain unchanged, so this cutover requires no data migration.
+
 This deprecation adds editor annotations, documentation, and compatibility
 inventory metadata. It adds no runtime warning and changes no trust eligibility:
 the runtime openers remain limited to bundled plugins and trusted official
@@ -307,9 +348,34 @@ Asynchronous AgentSession message, model, compaction, and tree operations use
 this admission for their transcript writes. Embedded prompt preparation, replay
 repair, and tool-result cleanup await their writes before publishing dependent
 results or disposing their resources. Model-selection hooks run after write
-admission releases. Synchronous SessionManager and extension APIs, including
-`setThinkingLevel`, retain their existing synchronous contracts and still need
-an appropriate caller-owned write boundary.
+admission releases. SessionManager `appendModelChange` and
+`appendThinkingLevelChange` return promises for their committed entry IDs;
+AgentSession and extension `setThinkingLevel` return `Promise<void>`. Await these
+operations before using the resulting model or thinking state. Other synchronous
+SessionManager operations still need an appropriate caller-owned write boundary.
+
+`SessionManager.open`, `openBounded`, and `setSessionTarget` capture `storePath`
+as an absolute lexical locator before reading the transcript or invoking
+`onTruncated`. Relative locators resolve against the process working directory
+at entry; `getSessionTarget()` returns that captured locator. Later working
+directory changes leave the manager bound to its original store. Existing
+`sessions.json` and custom-store routing and symlink spelling are preserved.
+
+File-backed model and thinking transcript writes execute through the canonical
+agent database worker. Queued extension actions retain their original runtime
+and session authority through transaction and commit admission. Session opening,
+final model-context validation, and incognito transcript persistence still use
+their native owners; an asynchronous method does not imply that every storage
+operation in the enclosing session flow runs off-thread.
+
+Committed metadata updates the bound session's model or thinking state alongside
+transcript-view adoption, before asynchronous cleanup. Settings setters retain
+their existing persistence queue. If view reconstruction, local publication, or
+a dependent thinking change fails after the append commits, the error preserves
+the committed entry and prevents model fallback from replaying it. A failed view
+reconstruction makes the existing manager refuse further transcript access;
+discard it and reopen through the session owner after resolving the read failure.
+Retrying the append would duplicate a write that already committed.
 
 The signature is `withOpenClawAgentDatabaseWrite(options, operation, expectedDatabase?)`.
 `options` uses the existing agent database options, including the required

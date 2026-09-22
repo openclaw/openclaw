@@ -168,7 +168,10 @@ export function createApplicationGateway(
   };
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
     const eventClient = client;
-    if (event.event === "plugins.changed" && eventClient) {
+    if (
+      (event.event === "plugins.changed" || event.event === "plugins.controlUi.changed") &&
+      eventClient
+    ) {
       // Capability updates keep hello identity; reconnects replace it.
       const eventHello = snapshot.hello;
       const readCurrent = () =>
@@ -179,7 +182,7 @@ export function createApplicationGateway(
           : null;
       void import("./plugin-capabilities.runtime.ts")
         .then(({ refreshPluginCapabilities }) =>
-          refreshPluginCapabilities(event.payload, eventClient, readCurrent, setSnapshot, (url) =>
+          refreshPluginCapabilities(event, eventClient, readCurrent, setSnapshot, (url) =>
             canvasSurface.start(eventClient, canvasSurface.generation, url),
           ),
         )

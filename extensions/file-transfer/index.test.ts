@@ -37,12 +37,14 @@ afterAll(() => {
 
 describe("file-transfer plugin entry", () => {
   it("registers static command and tool descriptors without importing runtime handlers", () => {
+    const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();
     const registerTool = vi.fn();
     const registerCli = vi.fn();
 
     pluginEntry.register({
       registerCli,
+      registerNodeHostCommand,
       registerNodeInvokePolicy,
       registerTool,
     } as never);
@@ -55,7 +57,11 @@ describe("file-transfer plugin entry", () => {
       "file.create",
       "file.write",
     ]);
-    expect(registerNodeInvokePolicy).toHaveBeenCalledTimes(1);
+    expect(registerNodeHostCommand.mock.calls.map(([entry]) => entry.command)).toEqual([
+      "workspace.memory",
+      "workspace.skills",
+    ]);
+    expect(registerNodeInvokePolicy).toHaveBeenCalledTimes(3);
     expect(registerCli.mock.calls[0]?.[1]?.descriptors).toEqual([
       {
         name: "file-transfer",
@@ -63,7 +69,10 @@ describe("file-transfer plugin entry", () => {
         hasSubcommands: true,
       },
     ]);
-    expect(registerNodeInvokePolicy.mock.calls[0]?.[0].commands).toEqual([
+    const filePolicy = registerNodeInvokePolicy.mock.calls.find(([entry]) =>
+      entry.commands.includes("file.fetch"),
+    )?.[0];
+    expect(filePolicy?.commands).toEqual([
       "file.fetch",
       "file.stat",
       "dir.list",
@@ -86,6 +95,7 @@ describe("file-transfer plugin entry", () => {
   });
 
   it("fails closed if the lazy policy module cannot load", async () => {
+    const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();
     const registerTool = vi.fn();
     const registerCli = vi.fn();
@@ -93,11 +103,14 @@ describe("file-transfer plugin entry", () => {
 
     pluginEntry.register({
       registerCli,
+      registerNodeHostCommand,
       registerNodeInvokePolicy,
       registerTool,
     } as never);
 
-    const policy = registerNodeInvokePolicy.mock.calls[0]?.[0];
+    const policy = registerNodeInvokePolicy.mock.calls.find(([entry]) =>
+      entry.commands.includes("file.fetch"),
+    )?.[0];
     await expect(
       policy.handle({
         nodeId: "node-1",

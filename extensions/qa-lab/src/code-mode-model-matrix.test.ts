@@ -11,7 +11,6 @@ import {
   modelCellPrefix,
   parseCodeModeMatrixOptions,
   reserveCodeModeMatrixOutputDir,
-  resolveCodeModeMatrixOutputDir,
   runCodeModeModelMatrix,
   validateQaEvidenceSummaryJson,
   type CodeModeMatrixCellResult,
@@ -84,69 +83,7 @@ console.log(JSON.stringify({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("Code Mode model matrix options", () => {
-  it("defaults to the complete bounded matrix", () => {
-    expect(parseCodeModeMatrixOptions(["--model", "ollama/qwen3.5:9b"], "/repo")).toMatchObject({
-      models: ["ollama/qwen3.5:9b"],
-      modes: ["direct", "auto", "code"],
-      tasks: ["read", "dependent-read-write"],
-      repetitions: 3,
-      timeoutSeconds: 180,
-      thinking: "off",
-      repoRoot: "/repo",
-    });
-  });
-
-  it("rejects invalid and duplicate extended task selectors", () => {
-    for (const tasks of [["unknown"], ["dependent-chain", "dependent-chain"]]) {
-      expect(() =>
-        parseCodeModeMatrixOptions([
-          "--model",
-          "fixture/model",
-          ...tasks.flatMap((task) => ["--task", task]),
-        ]),
-      ).toThrow(tasks.length === 1 ? "--task must be one of" : "Duplicate --task");
-    }
-  });
-
-  it("keeps Gateway interviews opt-in and resolves comparison inputs independently of output storage", () => {
-    const selection = ["--model", "openai/gpt-5.6-luna", "--task", "inventory-join"];
-    expect(() => parseCodeModeMatrixOptions(selection, "/harness")).toThrow("--mode code");
-    expect(
-      parseCodeModeMatrixOptions(
-        [
-          ...selection,
-          "--mode",
-          "code",
-          "--runtime-dir",
-          "../baseline",
-          "--baseline-results",
-          "artifacts/previous/results.jsonl",
-          "--repetitions",
-          "1",
-        ],
-        "/harness",
-      ),
-    ).toMatchObject({
-      repoRoot: "/harness",
-      runtimeDir: "/baseline",
-      baselineResults: "/harness/artifacts/previous/results.jsonl",
-      tasks: ["inventory-join"],
-      modes: ["code"],
-      repetitions: 1,
-    });
-    expect(() =>
-      parseCodeModeMatrixOptions([
-        "--model",
-        "fixture/model",
-        "--mode",
-        "code",
-        "--task",
-        "partial-failure",
-      ]),
-    ).toThrow("OpenAI models");
-  });
-
+describe("Code Mode model matrix runtime and output admission", () => {
   it("rejects a dirty frozen runtime before building or dispatching any model", async () => {
     const root = tempDirs.make("openclaw-code-mode-frozen-runtime-");
     const options = parseCodeModeMatrixOptions(
@@ -179,33 +116,6 @@ describe("Code Mode model matrix options", () => {
     await expect(fs.stat(path.join(root, "artifacts/frozen"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-  });
-
-  it("rejects ambiguous selectors and output paths", () => {
-    expect(() => parseCodeModeMatrixOptions([])).toThrow("At least one --model");
-    expect(() => parseCodeModeMatrixOptions(["--model", "qwen3.5:9b"])).toThrow("provider/model");
-    expect(() =>
-      parseCodeModeMatrixOptions(["--model", "ollama/qwen3.5:9b", "--skip-build"]),
-    ).toThrow("Unknown argument");
-    expect(() =>
-      parseCodeModeMatrixOptions([
-        "--model",
-        "ollama/qwen3.5:9b",
-        "--mode",
-        "code",
-        "--mode",
-        "code",
-      ]),
-    ).toThrow("Duplicate --mode");
-    expect(() =>
-      resolveCodeModeMatrixOutputDir("/repo", "../outside", new Date("2026-07-28T12:00:00Z")),
-    ).toThrow("within the repository");
-    expect(() =>
-      resolveCodeModeMatrixOutputDir("/repo", "/tmp/out", new Date("2026-07-28T12:00:00Z")),
-    ).toThrow("repo-relative");
-    expect(() =>
-      resolveCodeModeMatrixOutputDir("/repo", ".", new Date("2026-07-28T12:00:00Z")),
-    ).toThrow("within the repository");
   });
 
   it("reserves a fresh output path without symlink traversal", async () => {
@@ -540,11 +450,14 @@ describe("Code Mode model matrix extended fixtures", () => {
         .map((line) => JSON.parse(line) as CodeModeMatrixCellResult);
       expect(result.exitCode).toBe(failureCategory ? 1 : 0);
       expect(rows).toHaveLength(failureCategory ? 3 : 6);
-      expect(JSON.parse(await readArtifact("manifest.json"))).toMatchObject({
+      const manifest = JSON.parse(await readArtifact("manifest.json"));
+      expect(manifest).toMatchObject({
         tasks: extendedTasks,
         cells: rows.map((row) => row.id),
       });
+      expect(manifest).not.toHaveProperty("gatewayExecutor");
       for (const row of rows) {
+        expect(row).not.toHaveProperty("executor");
         expect(row).toMatchObject({
           failureCategory,
           passed: failureCategory === null,

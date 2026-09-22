@@ -1,7 +1,7 @@
 // Manages compile-cache respawn behavior for the CLI entrypoint.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { enableCompileCache, getCompileCacheDir } from "node:module";
+import { getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -11,6 +11,7 @@ import {
   isTerminalInteractiveRespawnArgv,
   shouldKeepNativeHookRelayInProcess,
 } from "./cli/respawn-policy.js";
+import { enableOwnedNodeCompileCache } from "./infra/node-compile-cache-env.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import {
   runRespawnChildWithSignalBridge,
@@ -213,7 +214,7 @@ export function enableOpenClawCompileCache(params: {
     return;
   }
   try {
-    enableCompileCache(resolveOpenClawCompileCacheDirectory(params));
+    enableOwnedNodeCompileCache(resolveOpenClawCompileCacheDirectory(params));
   } catch {
     // Best-effort only; never block startup.
   }

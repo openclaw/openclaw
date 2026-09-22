@@ -54,6 +54,7 @@ export type SqliteWorkerRequest = {
       existingIdentity?: string;
       openAdmission?: "input" | "identity";
       input: Uint8Array;
+      preparation?: Uint8Array;
     }
   | { type: "execute"; input: Uint8Array }
   | { type: "execute-start"; transfer: SqliteWorkerTransferHandle }

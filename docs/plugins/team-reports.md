@@ -130,6 +130,18 @@ sessions** (or **Work sessions** in the report navigation) to page through the
 current session list. Each entry links to the conversation and shows its current
 owner, run status, and project when present. Sessions are ordered by recent activity.
 
+Each person’s history page and each member section in daily, weekly, and monthly
+reports also shows **Current work / owned sessions**, including when filtering a
+report by person. These direct conversation links reflect current ownership, not
+the historical report window. **All owned sessions** opens a paginated directory
+filtered to that member before pagination.
+
+Members are matched case-insensitively using their configured and report GitHub
+aliases against linked GitHub identities on Gateway profiles. Merged profiles
+resolve to their canonical owner. Unlinked or ambiguous identities are labeled
+separately from a linked member with no sessions visible to you. Display names
+are never used to infer ownership.
+
 The list is read when you open or refresh the page, using your existing session
 permissions. Archived, incognito, automation, system, and hidden subagent sessions
 are excluded. Session owners are not guessed from GitHub handles or display names.

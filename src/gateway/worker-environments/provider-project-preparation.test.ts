@@ -10,9 +10,12 @@ import type {
   WorkerNodeRuntimePreparation,
   WorkerNodeEnrollment,
 } from "../../plugins/types.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import * as support from "./service.test-support.js";
+import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
 type ProjectPreparation = NonNullable<
@@ -88,14 +91,20 @@ describe("worker provider project preparation ownership", () => {
           if (enrollment.mode !== "connect") {
             throw new Error("Fresh worker must use its pending enrollment");
           }
-          bindCloudWorkerSetupCompletion({
-            db: support.testState.stateDb.db,
-            completion: {
-              setupId: enrollment.setupId,
-              deviceId,
-              completedAtMs: support.testState.nowMs,
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              const { environmentId, ...patch } = bindCloudWorkerSetupCompletion({
+                db,
+                completion: {
+                  setupId: enrollment.setupId,
+                  deviceId,
+                  completedAtMs: support.testState.nowMs,
+                },
+              });
+              publishWorkerEnvironmentNativeMutation(db, environmentId, patch);
             },
-          });
+            { database: support.testState.stateDb },
+          );
           return {
             leaseId: "lease-prepared-host",
             node: { deviceId: await enrollment.waitForDeviceId() },
@@ -117,7 +126,7 @@ describe("worker provider project preparation ownership", () => {
           assertCurrent: () => {},
         }),
         prepareNodeEnrollment: async (record) => {
-          const pending = support.testState.store.ensureNodeEnrollment(record.environmentId);
+          const pending = await support.testState.store.ensureNodeEnrollment(record.environmentId);
           return {
             mode: "connect",
             setupId: expectDefined(pending.nodeSetupId, "pending node enrollment"),
@@ -350,6 +359,16 @@ describe("worker provider project preparation ownership", () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const controller = new AbortController();
+    const stopRecorded = createDeferredCore();
+    const unsubscribe = sessionChanges.subscribe((change) => {
+      if (
+        "all" in change &&
+        change.scope === "worker-environments" &&
+        typeof support.testState.store.list()[0]?.destroyRequestedAtMs === "number"
+      ) {
+        stopRecorded.resolve();
+      }
+    });
     let transportSignal: AbortSignal | undefined;
     let settled = false;
     const events: string[] = [];
@@ -384,7 +403,7 @@ describe("worker provider project preparation ownership", () => {
     try {
       await entered.promise;
       controller.abort(new DOMException("Stop project transfer", "AbortError"));
-      await setImmediate();
+      await stopRecorded.promise;
       expect(transportSignal?.aborted).toBe(true);
       expect(settled).toBe(false);
       expect(events).toEqual([]);
@@ -393,6 +412,7 @@ describe("worker provider project preparation ownership", () => {
         destroyRequestedAtMs: support.testState.nowMs,
       });
     } finally {
+      unsubscribe();
       release.resolve();
       await creation;
     }

@@ -139,6 +139,13 @@ async function withStatusPeer(
     }
     instance = await createOpenClawTestInstance({ name: "status-acquisition", port: address.port });
     instance.state.applyEnv();
+    const { loadDeviceAuthToken } = await import("../../src/infra/device-auth-store.js");
+    const { loadOrCreateDeviceIdentity } = await import("../../src/infra/device-identity.js");
+    // Complete real auth worker startup before measuring hello and polling lifetimes.
+    await loadDeviceAuthToken({
+      deviceId: loadOrCreateDeviceIdentity().deviceId,
+      role: "operator",
+    });
     await body({
       instance,
       clients,

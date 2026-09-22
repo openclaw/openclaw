@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { preparePublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 // Prepare the real catalog/worker prerequisites before individual test deadlines.
 await preparePublicUpdateFailureIdentifiers();
@@ -18,6 +19,31 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it.each([
+    "Package rollback launcher backup changed",
+    "Package rollback verification timed out",
+    "Package rollback verification failed",
+  ])("preserves the recorded %s cause without publishing private details", async (cause) => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "swap-summary",
+        result: { mode: "npm", status: "error", steps: [], durationMs: 1 },
+        recordedRun: {
+          runId: "swap-summary",
+          steps: updateRunStepsFromResultStep({
+            name: "package-swap",
+            exitCode: 1,
+            stderrTail: `${cause}: /private/customer/launcher. Installation recovery is unverified; inspect the installation and backups before restarting.`,
+          }),
+        },
+      },
+      context,
+    );
+    expect(report.body).toContain(`Failed phase package-swap: exit 1 (${cause})`);
+    expect(report.body).not.toContain("/private/customer");
+    expect(report.body).not.toContain("Installation recovery is unverified");
+  });
+
   it("includes every named lint finding using the existing public diagnostic redaction", async () => {
     const findings = Array.from({ length: 40 }, (_, index) => ({
       checkId: "core/doctor/security",
@@ -371,6 +397,56 @@ describe("update report diagnostic command boundary", () => {
     expect(report.body.toLowerCase()).not.toContain("rollback");
   });
 
+  it.each([
+    { healthy: true, code: undefined, expected: "verified serving 2026.9.5" },
+    { healthy: false, code: "stopped-free", expected: "not serving (stopped-free)" },
+    {
+      healthy: false,
+      code: "private-probe-identifier",
+      expected: "recovery probe failed (gateway-probe-failed)",
+    },
+  ])("reports observed recovery without inventing an outcome ($healthy, $code)", async (entry) => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "observed-recovery",
+        recordedRun: {
+          runId: "observed-recovery",
+          steps: [],
+          verification: {
+            runningVersion: "2026.9.4",
+            versionMatch: true,
+            readyz: true,
+            settled: true,
+          },
+        },
+        result: {
+          mode: "npm",
+          status: "error",
+          reason: "post-update-plugins",
+          after: { version: "2026.9.5" },
+          recovery: entry.healthy
+            ? { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" }
+            : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          steps: [
+            {
+              name: "gateway recovery verification",
+              command: "gateway verification",
+              cwd: "/fixture",
+              durationMs: 0,
+              exitCode: entry.healthy ? 0 : 1,
+              ...(entry.code ? { failureFacts: [{ check: "settled", code: entry.code }] } : {}),
+            },
+          ],
+          durationMs: 0,
+        },
+      },
+      context,
+    );
+    expect(report.body).toContain(`Recovery outcome: ${entry.expected}`);
+    expect(report.body).not.toContain("not verified");
+    expect(report.body).not.toContain("private-probe-identifier");
+  });
+
   it("records the running Node version in the reviewed report", async () => {
     const report = await prepareDiagnosticReport("node-runtime-preflight");
     expect(report.body).toContain(`- Node version: ${process.versions.node}\n`);
@@ -551,10 +627,11 @@ describe("update report diagnostic command boundary", () => {
     ["Checking update health cleanup", "candidate-doctor-lint-cleanup"],
     ["candidate snapshot", "candidate-state-snapshot"],
     ["post-install verification", "post-install-verify"],
+    ["gateway recovery verification", "gateway-recovery-verification"],
     ["finalize:targetConfigConvergence", "finalize-target-config-convergence"],
     ["git checkout refs/private/tenant", "git-checkout"],
     ["preflight deps install (ignore scripts) (abcdef01)", "preflight-deps-install-ignore-scripts"],
-  ])("projects the released step %s without copying its command", async (name, id) => {
+  ])("projects the step %s without copying its command", async (name, id) => {
     const report = await prepareUpdateFailureReport(
       {
         attemptId: "structured-phase",

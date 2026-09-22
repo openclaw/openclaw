@@ -221,7 +221,9 @@ export function renderTextInput(
       ? rawAvailable
         ? t("configForm.structuredSecretRaw")
         : t("configForm.structuredSecretFile")
-      : redactedPlaceholder()
+      : masked
+        ? "••••••••"
+        : redactedPlaceholder()
     : (hint?.placeholder ??
       (!masked && schema.default !== undefined
         ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
@@ -532,9 +534,10 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       aria-describedby=${helpId ?? nothing}
       aria-invalid="false"
       placeholder=${
-        schema.default !== undefined
+        hintForPath(path, hints)?.placeholder ??
+        (schema.default !== undefined
           ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-          : nothing
+          : nothing)
       }
       min=${constraints.min ?? nothing}
       max=${constraints.max ?? nothing}

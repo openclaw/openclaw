@@ -1284,10 +1284,12 @@ async function supervise() {
       process.platform === "win32"
         ? [
             "-c",
-            'export PATH="$(cygpath -u "$1"):$PATH"; source "$2"',
+            'export PATH="$(cygpath -u "$1"):$PATH"; export TEMP="$3" TMP="$4"; source "$2"',
             "checkout-fixture",
             bin,
             checkoutScript,
+            options.env?.TEMP ?? root,
+            options.env?.TMP ?? root,
           ]
         : [checkoutScript];
     shell = spawn(workflowShell, ["--noprofile", "--norc", "-eo", "pipefail", ...shellArgs], {
@@ -1314,6 +1316,12 @@ async function supervise() {
         CHECKOUT_BASE_SHA: linux && scenario === "early-leader-exit" ? "c".repeat(40) : "",
         WORKFLOW_SHA: "b".repeat(40),
         ...options.env,
+        // MSYS shares its first /tmp mount across overlapping Bash processes.
+        // Bootstrap it from the retained artifact parent, then restore private
+        // TEMP/TMP in Bash before any checkout actor starts.
+        ...(process.platform === "win32"
+          ? { TEMP: path.dirname(root), TMP: path.dirname(root) }
+          : {}),
       },
     });
     const closed = track(shell);

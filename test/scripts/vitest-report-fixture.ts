@@ -9,6 +9,11 @@ const configs = [
   "test/vitest/vitest.unit-fast-isolated.config.ts",
   "test/vitest/vitest.agents-embedded-agent.config.ts",
 ];
+// Cross Telegram's ten-file process boundary without adding another config.
+export const reportChunkTestFiles: readonly string[] = Array.from(
+  { length: 11 },
+  (_, index) => `extensions/telegram/src/owned-${String(index).padStart(2, "0")}.test.ts`,
+);
 
 export type ReportFixtureMode =
   | "overlap"
@@ -53,7 +58,11 @@ export type ReportFixtureMode =
   | "chunks";
 
 /** Tiny native configs shared by regression tests and retained operator proofs. */
-export function createVitestReportFixture(root: string, evidence = path.join(root, "reports")) {
+export function createVitestReportFixture(
+  root: string,
+  evidence = path.join(root, "reports"),
+  compileCache = path.join(root, "node-compile-cache"),
+) {
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(evidence, { recursive: true });
   const write = (file: string, contents: string) => {
@@ -77,7 +86,7 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
     XDG_RUNTIME_DIR: path.join(root, "xdg/runtime"),
     TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
     TSX_DISABLE_CACHE: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
+    NODE_COMPILE_CACHE: compileCache,
     COREPACK_ENABLE_NETWORK: "0",
     GIT_OPTIONAL_LOCKS: "0",
     CI: "1",
@@ -265,14 +274,11 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       );
     }
     if (mode === "chunks") {
-      const files = [
-        "extensions/telegram/src/owned-one.test.ts",
-        "extensions/telegram/src/owned-two.test.ts",
-      ];
+      const files = reportChunkTestFiles;
       for (const [i, file] of files.entries()) {
         write(
           path.join(root, file),
-          `import {test,expect} from 'vitest';test('chunk/${i}',()=>expect(1).toBe(1));`,
+          `import {test,expect} from 'vitest';test('chunk/${String(i).padStart(2, "0")}',()=>expect(1).toBe(1));`,
         );
       }
       write(
@@ -367,6 +373,8 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
     }
     const childEnv = {
       ...env,
+      // V8 coverage needs fresh compilation; other phases can share private bytecode.
+      NODE_DISABLE_COMPILE_CACHE: ["metadata", "coverage-missing"].includes(mode) ? "1" : undefined,
       OPENCLAW_TEST_PROJECTS_PARALLEL: isParallel ? "2" : "1",
       OPENCLAW_TEST_PROJECTS_SERIAL: isParallel ? "0" : "1",
       OPENCLAW_EXTENSION_BATCH_PARALLEL: isParallel ? "2" : "1",

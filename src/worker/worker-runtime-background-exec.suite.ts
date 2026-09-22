@@ -9,6 +9,8 @@ import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protoc
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { NodeWorkerJournalWorker } from "../node-host/node-worker-journal-worker.js";
 import type { NodeWorkerLaunchReceipt } from "../node-host/node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -22,6 +24,10 @@ import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import type { NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
+import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exec-entrypoints.test-support.js";
+
+const workerProcessUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.worker);
+const supervisorUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.supervisor);
 
 type WorkerCrashFixture = {
   setup: (options: {
@@ -77,8 +83,12 @@ export function registerWorkerBackgroundExecLifecycleTests({
         [
           'import { writeFileSync } from "node:fs";',
           "globalThis.WORKER_DEPLOY_BUILD = true;",
-          `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
-          `const { runWorkerProcess } = await import(${JSON.stringify(new URL("./worker-process.ts", import.meta.url).href)});`,
+          ...(workerProcessUrl.pathname.endsWith(".ts")
+            ? [
+                `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
+              ]
+            : []),
+          `const { runWorkerProcess } = await import(${JSON.stringify(workerProcessUrl.href)});`,
           `writeFileSync(${JSON.stringify(path.join(workspaceDir, "runtime.pid"))}, String(process.pid));`,
           ...(crashed === "anchor"
             ? [
@@ -129,8 +139,12 @@ export function registerWorkerBackgroundExecLifecycleTests({
           await writeFile(
             entry,
             [
-              `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
-              `const { createNodeWorkerSupervisor } = await import(${JSON.stringify(new URL("../node-host/node-worker-supervisor.ts", import.meta.url).href)});`,
+              ...(supervisorUrl.pathname.endsWith(".ts")
+                ? [
+                    `await import(${JSON.stringify(new URL("../../scripts/tsx.mjs", import.meta.url).href)});`,
+                  ]
+                : []),
+              `const { createNodeWorkerSupervisor } = await import(${JSON.stringify(supervisorUrl.href)});`,
               `const supervisor = createNodeWorkerSupervisor({ ...${JSON.stringify(supervisorOptions)}, onCapacityChanged: (capacity) => process.send?.({ type: "capacity", capacity }) });`,
               'process.once("SIGTERM", () => { void supervisor.close().then(() => process.exit(0)); });',
               `const receipt = await supervisor.launch(${JSON.stringify(input)}, ${JSON.stringify(connectionEndpoint)});`,
@@ -178,7 +192,9 @@ export function registerWorkerBackgroundExecLifecycleTests({
             const turn =
               crashed !== "node-host"
                 ? await supervisor.status(input.launchId)
-                : new NodeWorkerTurnStore({ env: supervisorOptions.env }).get(input.launchId);
+                : await new NodeWorkerTurnStore(
+                    new NodeWorkerJournalWorker({ env: supervisorOptions.env }),
+                  ).get(input.launchId);
             expect(turn?.state).toBe("completed");
           },
           { timeout: WORKER_INFERENCE_START_TIMEOUT_MS },

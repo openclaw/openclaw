@@ -19,6 +19,7 @@ import {
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
 const heartbeatWorkers = vi.hoisted(() => ({
+  beforeCreate: undefined as (() => void) | undefined,
   onCreate: undefined as ((worker: Worker) => void) | undefined,
 }));
 
@@ -33,6 +34,9 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     ...actual,
     Worker: class extends actual.Worker {
       constructor(filename: string | URL, workerOptions: WorkerOptions = {}) {
+        if (String(filename) === heartbeatUrl.href) {
+          heartbeatWorkers.beforeCreate?.();
+        }
         super(filename, workerOptions);
         if (String(filename) === heartbeatUrl.href) {
           heartbeatWorkers.onCreate?.(this);
@@ -73,11 +77,45 @@ function readLease(env: NodeJS.ProcessEnv) {
 }
 
 afterEach(() => {
+  heartbeatWorkers.beforeCreate = undefined;
   heartbeatWorkers.onCreate = undefined;
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("maintenance lease heartbeat", () => {
+  it("preserves a native renewal error through the real worker and lease rejection", async () => {
+    await withOpenClawTestState({ label: "maintenance-renewal-error" }, async (state) => {
+      const { db } = openOpenClawStateDatabase({ env: state.env });
+      // Inject only after schema validation/acquisition, and remove before release.
+      heartbeatWorkers.beforeCreate = () => {
+        db.exec(`CREATE TRIGGER fail_renewal BEFORE UPDATE ON state_leases
+          WHEN OLD.scope = 'core:test-maintenance'
+          BEGIN SELECT RAISE(ABORT, 'synthetic renewal failure'); END`);
+      };
+      heartbeatWorkers.onCreate = (worker) => {
+        worker.once("exit", () => db.exec("DROP TRIGGER fail_renewal"));
+      };
+      await expect(
+        withOpenClawStateLease({ ...options(state.env), leaseMs: 60_000 }, async () => {
+          throw new Error("must not enter maintenance");
+        }),
+      ).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_LOST",
+        cause: {
+          message: expect.stringContaining("synthetic renewal failure"),
+          cause: {
+            name: "Error",
+            message: "synthetic renewal failure",
+            code: "ERR_SQLITE_ERROR",
+            errcode: 1811,
+            attempt: 1,
+          },
+        },
+      });
+      expect(readLease(state.env)).toBeUndefined();
+    });
+  });
+
   it("does not open after its original lease deadline while parent callbacks are blocked", async () => {
     await withOpenClawTestState({ label: "maintenance-child-open-expired" }, async (state) => {
       const databasePath = openOpenClawStateDatabase({ env: state.env }).path;

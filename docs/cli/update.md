@@ -77,6 +77,8 @@ and inspect `lastRun.origin.nextAction` and `lastRun.target` for the recorded
 reason and target. A candidate release cannot repair an installed updater that
 refuses before staging it; correct the configuration before retrying.
 
+Updaters without the admission fix first shipped in 2026.7.2-beta.5 (including 2026.6.34–2026.6.35 and the 2026.7.33–2026.7.35 extended-stable line) also refuse before staging with `plugins.load.paths: plugin path not found`; restore a missing custom plugin directory or remove its configured path before retrying. `openclaw doctor --fix` can repair recognized bundled-path aliases and preserves unrelated custom paths.
+
 Update admission recognizes orphan `task_delivery_state` rows whose parent tasks
 are missing as repairable. When it can acquire Doctor's ownership fences, it runs
 the same [preservation-first recovery](/reference/database-schemas/integrity-and-recovery#doctor-reports-orphan-task-delivery-rows)
@@ -189,9 +191,8 @@ A different observed identity still refuses the
 handoff. Scheduled Tasks using `InteractiveToken` remain supported; this does not
 require storing a task password.
 
-This target-CLI protection does not cover every Doctor or plugin child, the
-in-process service preparation before package mutation, or the separate
-deferred-install activation checks.
+This target-CLI protection does not cover every Doctor or plugin child or the
+in-process service preparation before package mutation.
 
 ## Options
 
@@ -235,12 +236,13 @@ file log level (`logging.level: "debug"`/`"trace"`) are independent knobs; see
 [Gateway logging](/gateway/logging).
 
 Interactive updates show phase transitions, the current step, and elapsed time.
-The phases match the Control UI: requested, staging, validating, optional
-repairing, activating, restarting, verifying, and finished. When output is
-piped or captured in a log, progress prints without animation. `repairing` can
-follow failed candidate validation or failed post-activation verification when
-rollback is unsafe or has failed; successful repair returns to validation or
-verification. The Control UI shows this optional phase only after it starts.
+The phases match the Control UI: requested, staging, validating, activating,
+restarting, verifying, and finished. When output is piped or captured in a log,
+progress prints without animation. Updates, verification, and rollback do not
+require inference or model authentication. Model-auth findings remain warnings.
+Automatic inference repair belongs to triage after an update has finished with
+a failed outcome and released its update ownership; it does not change that
+recorded outcome. Reports from older updaters can still contain a `repairing` phase.
 Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not

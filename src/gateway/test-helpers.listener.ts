@@ -31,10 +31,12 @@ export async function startClaimedGateway(
   try {
     const server = await start();
     const close = server.close.bind(server);
-    server.close = async (...args) => {
-      await close(...args);
-      await claim.release();
-    };
+    let closePromise: Promise<void> | undefined;
+    server.close = (...args) =>
+      (closePromise ??= (async () => {
+        await close(...args);
+        await claim.release();
+      })());
     return server;
   } catch (error) {
     if (

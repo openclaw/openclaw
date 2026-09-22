@@ -118,7 +118,7 @@ describe("gateway host desktop observe integration", () => {
 
       const registry = createDesktopSessionRegistry();
       const service = createHostDesktopService({
-        config: { enabled: true, port: rfbAddress.port },
+        getConfig: () => ({ enabled: true, port: rfbAddress.port }),
         registry,
       });
       cleanups.push(async () => registry.stopAll());

@@ -110,8 +110,6 @@ async function resetRuntime(persist: boolean): Promise<void> {
   ]);
   subagents.resetSubagentRegistryForTests({ persist });
   subagents.testing.setDepsForTest();
-  tasks.resetTaskRegistryControlRuntimeForTests();
-  tasks.resetTaskRegistryDeliveryRuntimeForTests();
   tasks.resetDetachedTaskLifecycleRuntimeForTests();
   tasks.resetTaskRegistryForTests({ persist });
   tasks.resetTaskFlowRegistryForTests({ persist });

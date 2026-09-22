@@ -173,6 +173,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   if (originalBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -423,8 +424,16 @@ describe("resolveBundledPluginsDir", () => {
     );
 
     const resolveRoot = vi.spyOn(openClawRoot, "resolveOpenClawPackageRootSync");
+    let runtimeEnvReads = 0;
+    const env: NodeJS.ProcessEnv = {
+      get VITEST() {
+        runtimeEnvReads++;
+        return undefined;
+      },
+    };
     const sourceDir = path.join(repoRoot, "extensions");
-    expect(withPluginCache(owner, resolveBundledPluginsDir)).toBe(sourceDir);
+    expect(withPluginCache(owner, () => resolveBundledPluginsDir(env))).toBe(sourceDir);
+    expect(runtimeEnvReads).toBe(0);
     seedBundledPluginTree(repoRoot, path.join("dist", "extensions"));
     expect(withPluginCache(owner, resolveBundledPluginsDir)).toBe(sourceDir);
     expect(resolveRoot).not.toHaveBeenCalled();
@@ -485,35 +494,60 @@ describe("resolveBundledPluginsDir", () => {
     );
   });
 
-  it("rechecks changed override trust within one cache owner", () => {
-    const overrideRoot = makeRepoRoot("openclaw-bundled-dir-vitest-override-reject-");
-    seedBundledPluginTree(overrideRoot, "extensions", "memory-core");
+  it.each([
+    { separateEnv: false, trustSource: "ambient", runtimeSource: "ambient" },
+    { separateEnv: true, trustSource: "explicit", runtimeSource: "explicit" },
+    { separateEnv: true, trustSource: "explicit", runtimeSource: "ambient" },
+    { separateEnv: true, trustSource: "ambient", runtimeSource: "explicit" },
+    { separateEnv: true, trustSource: "ambient", runtimeSource: "ambient" },
+  ])(
+    "rechecks $trustSource trust with $runtimeSource runtime (separate env: $separateEnv)",
+    ({ separateEnv, trustSource, runtimeSource }) => {
+      const overrideRoot = makeRepoRoot("openclaw-bundled-dir-vitest-override-reject-");
+      seedBundledPluginTree(overrideRoot, "extensions", "memory-core");
 
-    vi.spyOn(process, "cwd").mockReturnValue(overrideRoot);
-    process.argv[1] = "/usr/bin/env";
-    process.execArgv.length = 0;
-    process.env.VITEST = "true";
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(overrideRoot, "extensions");
-    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-
-    const expectedOverride = fs.realpathSync(path.join(overrideRoot, "extensions"));
-    withPluginCache(createPluginCache(), () => {
-      for (const trust of [false, true, false]) {
-        if (trust) {
-          process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-        } else {
-          delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-        }
-        const bundledDir = fs.realpathSync(requireBundledDir(resolveBundledPluginsDir()));
-        if (trust) {
-          expect(bundledDir).toBe(expectedOverride);
-        } else {
-          expect(bundledDir).not.toBe(expectedOverride);
-        }
+      vi.spyOn(process, "cwd").mockReturnValue(overrideRoot);
+      process.argv[1] = "/usr/bin/env";
+      process.execArgv.length = 0;
+      for (const key of ["VITEST", "VITEST_POOL_ID", "VITEST_WORKER_ID", "NODE_ENV"]) {
+        vi.stubEnv(key, undefined);
       }
-    });
-  });
+      const env: NodeJS.ProcessEnv = separateEnv ? {} : process.env;
+      const trustEnv = trustSource === "explicit" ? env : process.env;
+      const runtimeEnv = runtimeSource === "explicit" ? env : process.env;
+      runtimeEnv.VITEST = "true";
+      env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(overrideRoot, "extensions");
+      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+      delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+      const expectedOverride = fs.realpathSync(path.join(overrideRoot, "extensions"));
+      withPluginCache(createPluginCache(), () => {
+        for (const trust of [false, true, false]) {
+          if (trust) {
+            trustEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+          } else {
+            delete trustEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+          }
+          const bundledDir = fs.realpathSync(requireBundledDir(resolveBundledPluginsDir(env)));
+          if (trust) {
+            expect(bundledDir).toBe(expectedOverride);
+          } else {
+            expect(bundledDir).not.toBe(expectedOverride);
+          }
+        }
+        trustEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+        for (const vitest of ["true", undefined, "true"]) {
+          if (vitest) {
+            runtimeEnv.VITEST = vitest;
+          } else {
+            delete runtimeEnv.VITEST;
+          }
+          const bundledDir = fs.realpathSync(requireBundledDir(resolveBundledPluginsDir(env)));
+          expect(bundledDir === expectedOverride).toBe(vitest !== undefined);
+        }
+      });
+    },
+  );
 
   it("does not let VITEST add cwd to bundled plugin resolution candidates", () => {
     const cwdRepoRoot = createOpenClawRoot({

@@ -4,6 +4,7 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { appendPluginInstanceCleanupFailures } from "./host-hook-cleanup-result.js";
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
 import {
   createPluginCacheArtifacts,
@@ -80,6 +81,44 @@ const cacheRetainers = resolveGlobalSingleton(
     >(),
 );
 
+const instanceCacheOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginInstanceCacheOwners"),
+  () => new WeakMap<PluginInstanceResource, Set<PluginCache>>(),
+);
+
+/** Inventories retain admitted instances until transfer or successful physical disposal. */
+export function retainPluginCacheInstance(
+  instance: PluginInstanceResource,
+  cache = getPluginCache(),
+): void {
+  cache.instances.add(instance);
+  let owners = instanceCacheOwners.get(instance);
+  if (!owners) {
+    instanceCacheOwners.set(instance, (owners = new Set()));
+  }
+  owners.add(cache);
+}
+
+/** A retiring inventory releases its own custody; terminal disposal releases every birth cache. */
+export function releasePluginCacheInstance(
+  instance: PluginInstanceResource,
+  cache?: PluginCache,
+): void {
+  const owners = instanceCacheOwners.get(instance);
+  if (cache) {
+    cache.instances.delete(instance);
+    owners?.delete(cache);
+  } else {
+    for (const owner of owners ?? []) {
+      owner.instances.delete(instance);
+    }
+    owners?.clear();
+  }
+  if (owners?.size === 0) {
+    instanceCacheOwners.delete(instance);
+  }
+}
+
 function getPluginCacheRetainers(cache: PluginCache) {
   let retained = cacheRetainers.get(cache);
   if (!retained) {
@@ -128,6 +167,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       snapshot: undefined,
       owner: "operation",
       configFingerprint: undefined,
+      agentWorkspaceFingerprint: undefined,
       envFingerprint: undefined,
       defaultDiscoveryCompatible: false,
       compatiblePolicyHashes: undefined,
@@ -339,14 +379,14 @@ export function retirePluginCacheInstance(
   instance: PluginInstanceResource,
   cache = getPluginCache(),
 ): Promise<void> {
-  cache.instances.add(instance);
+  retainPluginCacheInstance(instance, cache);
   // A registration caller may receive a self-retirement acknowledgment; this owner must join fully.
   const completion = pluginInstanceInvocation
     .exit(() => instance.dispose())
     .then((result) => {
       // Failed outcomes stay available to the cache's existing disposal aggregator.
       if (result.errors.length === 0) {
-        cache.instances.delete(instance);
+        releasePluginCacheInstance(instance, cache);
       }
     });
   void completion.catch(() => {});
@@ -424,7 +464,9 @@ function beginPluginCacheRetirement(
       [...resources].map(async (resource) => ({ resource, result: await resource.dispose() })),
     );
     cache.setupModules.clear();
-    cache.instances.clear();
+    for (const instance of cache.instances) {
+      releasePluginCacheInstance(instance, cache);
+    }
     const unexpected = [
       ...(registry.status === "rejected" ? [registry.reason] : []),
       ...outcomes.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
@@ -439,19 +481,7 @@ function beginPluginCacheRetirement(
         continue;
       }
       const { resource, result } = outcome.value;
-      for (const error of result.errors) {
-        // A registry join may have already included this same instance's outcome.
-        if (
-          !failures.some(
-            (failure) =>
-              failure.pluginId === resource.pluginId &&
-              failure.hookId === "instance" &&
-              failure.error === error,
-          )
-        ) {
-          failures.push({ pluginId: resource.pluginId, hookId: "instance", error });
-        }
-      }
+      appendPluginInstanceCleanupFailures(failures, resource.pluginId, result.errors);
     }
     return { cleanupCount: host?.cleanupCount ?? 0, failures };
   };

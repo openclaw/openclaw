@@ -14,11 +14,12 @@ import {
   createWorkerEnvironmentTransportLifecycle,
   type WorkerEnvironmentNodeTunnel,
 } from "./environment-access.js";
-import { registerWorkerInferenceSessionDrain } from "./inference-control-internal.js";
+import { registerWorkerInferenceSessionControl } from "./inference-control-internal.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
+import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
@@ -224,17 +225,19 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     }
   };
 
-  const move = (
+  const move = async (
     record: WorkerEnvironmentRecord,
     to: WorkerEnvironmentState,
     patch?: TransitionPatch,
+    assertCurrent?: () => void,
   ) => {
-    const next = store.transition({
+    const next = await store.transition({
       environmentId: record.environmentId,
       from: record.state,
       expectedOwnerEpoch: record.ownerEpoch,
       to,
       patch,
+      assertCurrent,
     });
     if (to !== "ready" && to !== "idle" && to !== "attached") {
       credentialBroker.clearEnvironment(record.environmentId);
@@ -246,7 +249,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return next;
   };
 
-  const saveError = (record: WorkerEnvironmentRecord, error: unknown) => {
+  const saveError = async (
+    record: WorkerEnvironmentRecord,
+    error: unknown,
+    assertCurrent?: () => void,
+  ) => {
+    assertCurrent?.();
     // Once bootstrap failure owns the terminal outcome, preserve that causal error across
     // transient provider/inspection failures so the final failed row stays actionable.
     if (record.teardownTerminalState === "failed" && record.lastError) {
@@ -256,6 +264,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       environmentId: record.environmentId,
       state: record.state,
       error: boundedError(error),
+      assertCurrent,
     });
   };
 
@@ -353,6 +362,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return;
     }
     await withLock(environmentId, async () => {
+      await store.ready();
       const current = store.get(environmentId);
       if (!current || inState(current, "destroyed", "failed", "orphaned")) {
         return;
@@ -416,6 +426,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   };
 
   const reconcilePass = async (environmentId?: string) => {
+    await store.ready();
     if (environmentId === undefined) {
       await sessionAttachments.reconcileSessionAttachments();
     }
@@ -436,7 +447,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return;
     }
     try {
-      store.pruneTerminalEnvironments({ canPruneDemand: preparedPool.canPruneDemand });
+      await store.pruneTerminalEnvironments({ canPruneDemand: preparedPool.canPruneDemand });
     } catch (error) {
       // Pruning is opportunistic and retries on the next sweep; lock contention must not
       // turn a healthy worker reconciliation into a startup or periodic-reconcile failure.
@@ -660,10 +671,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     inventoryVersion: store.inventoryVersion,
     machineShapeVersion: providerLifecycle.machineShapeVersion,
     subscribeMachineShapeChanged: providerLifecycle.subscribeMachineShapeChanged,
-    readMachineShape: (environmentId: string) => {
-      const record = store.get(environmentId);
-      return record ? providerLifecycle.readMachineShape(record) : undefined;
-    },
+    readMachineShape: (environmentId: string, prepared?: WorkerEnvironmentPlacementFacts) =>
+      providerLifecycle.readMachineShape(prepared ?? store.get(environmentId)),
     supportsNodePortal: async (environmentId: string, ownerEpoch: number) =>
       (await options.nodePortalCarrier?.supports(environmentId, ownerEpoch)) === true,
     hasPendingNodeEnrollmentSetup: store.hasPendingNodeEnrollmentSetup.bind(store),
@@ -690,13 +699,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),
       ),
     destroyUnattached: async (environmentId: string) => {
-      preparedPool.cancelPreparation(environmentId);
+      await preparedPool.cancelPreparation(environmentId);
       return environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { requireUnattached: true }),
       );
     },
     observeDesktop: environmentAccess.observeDesktop,
     launchDesktopApp: environmentAccess.launchDesktopApp,
+    reconcileDesktopPolicy: environmentAccess.reconcileDesktopPolicy,
     admitWorker: turnRpc.admitWorker,
     validateWorkerConnection: turnRpc.validateWorkerConnection,
     commitTranscript: turnRpc.commitTranscript,
@@ -709,24 +719,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     cancelInferenceForSession: turnRpc.cancelInferenceForSession,
     hasInferenceForSession: turnRpc.hasInferenceForSession,
     resolveInferenceSessionForRunId: turnRpc.resolveInferenceSessionForRunId,
-    resolveSshIdentity: async (environmentId: string) => {
-      const record = store.get(environmentId);
-      if (!record) {
-        throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
-      }
-      if (!record.leaseId || !record.sshEndpoint) {
-        throw serviceError(
-          "invalid_state",
-          `Worker environment ${environmentId} has no active SSH endpoint`,
-        );
-      }
-      const provider = providerLifecycle.providerFor(record.providerId);
-      return await providerLifecycle.identityResolverFor(
-        record,
-        provider,
-        record.leaseId,
-      )(record.sshEndpoint.keyRef);
-    },
+    resolveSshIdentity: environmentAccess.resolveSshIdentity,
     attachSession: credentialBroker.attachSession,
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
@@ -746,7 +739,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     start,
     stop,
   };
-  registerWorkerInferenceSessionDrain(service, inference.beginSessionDrain);
+  registerWorkerInferenceSessionControl(service, {
+    beginDrain: inference.beginSessionDrain,
+    captureCancel: inference.captureSessionCancellation,
+  });
   return service;
 }
 

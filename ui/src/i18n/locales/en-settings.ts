@@ -3,6 +3,75 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  searchPage: {
+    enabled: "Web search",
+    advanced: "Advanced search settings",
+    enabledHint: "Allow agents to find up-to-date information on the web.",
+    provider: "Search provider",
+    automatic: "Automatic",
+    automaticHint:
+      "Prefer native search when supported; otherwise use a configured search provider.",
+    scopeHint:
+      "Search settings apply to all agents. Choose an agent and model to see their effective route.",
+    agent: "Agent",
+    model: "Model",
+    agentDefault: "Agent default",
+    route: "Search for this model",
+    routeKinds: {
+      native: "Native search",
+      external: "Check in chat",
+      managed: "Provider search",
+      disabled: "Off",
+      unavailable: "Unavailable",
+    },
+    loading: "Checking search configuration…",
+    offline: "Connect to the Gateway to configure search.",
+    readOnly: "An administrator can change search settings and credentials.",
+    setup: "Provider setup",
+    setupProvider: "Configure provider",
+    setupHint:
+      "Configure a provider for OpenClaw web search. External harnesses may also supply their own search tools.",
+    configured: "Configured",
+    pluginUnavailable: "Enable plugin to use",
+    pluginMissing: "Install plugin to use",
+    testInChat: "Test in chat",
+    testInChatHint:
+      "Open a new chat with this agent and model selected. Nothing is sent automatically.",
+    needsSetup: "Needs setup",
+    configuration: "Configuration",
+    credentialSources: {
+      config: "Saved credential",
+      secretRef: "Secret reference",
+      env: "Gateway environment",
+      "auth-profile": "Connected account",
+      none: "No separate API key required",
+      missing: "Credential missing",
+    },
+    health: "Search health",
+    untested: "Not tested",
+    untestedHint:
+      "Configuration alone does not verify access. Run a search to check the current route.",
+    test: "Test search",
+    testProvider: "Test {provider}",
+    testing: "Searching…",
+    query: "Search query",
+    queryPlaceholder: "What would you like to find?",
+    queryDefault: "OpenClaw documentation",
+    success: "Search succeeded",
+    failure: "Search failed",
+    duration: "{ms} ms",
+    cached: "Cached result",
+    result: "Answer",
+    sources: "Sources",
+    noResults: "The provider returned no results for this query.",
+    pluginSettings: "All provider settings",
+    pluginSettingsHint: "Open the plugin’s complete configuration and access controls.",
+    moreProviders: "Add search providers",
+    moreProvidersHint:
+      "Install a search plugin, or configure a custom endpoint with a compatible provider.",
+    docs: "Provider documentation",
+    refresh: "Refresh search status",
+  },
   connection: {
     browser: {
       title: "Browser",
@@ -149,8 +218,8 @@ const enSettings = {
       keepNone: "None (default)",
       keepOne: "Keep one",
       savePolicy: "Save retention policy",
-      policyRestart: "Policy changes take effect after the Gateway restarts.",
-      policySaved: "Retention policy saved. Restart the Gateway to apply it.",
+      policyApplies: "Policy changes apply without restarting the Gateway.",
+      policySaved: "Retention policy saved.",
       policySaveFailed: "Could not save retention policy. Refresh the config and try again.",
       buildSnapshot: "Build snapshot",
       rebuild: "Rebuild",
@@ -181,7 +250,6 @@ const enSettings = {
         "Request cleanup for this failed build and hide it from this view. The Gateway keeps the failed record until its retention window ends, so it can reappear after a reload.",
       buildDismissed: "Failed build dismissed",
       buildAge: "Age: {age}",
-      buildAfterRestart: "After the Gateway restarts, build a snapshot from the Snapshots view.",
       buildStates: {
         requested: "Requested",
         provisioning: "Provisioning",
@@ -201,8 +269,7 @@ const enSettings = {
       recoverMessage:
         "Clear this capture reservation after manual provider cleanup. Recovery preserves recorded images and allocation choices. It does not stop workers or delete provider artifacts.",
       acknowledgement: "I stopped the owning capture and worker and reconciled provider artifacts",
-      recovered:
-        "Capture reservation cleared. Restart the Gateway after reconciliation; the next eligible worker can capture again.",
+      recovered: "Capture reservation cleared. The next eligible worker can capture again.",
       recoveryChanged: "The Gateway connection changed. Refresh snapshots and try recovery again.",
       migration: "Needs migration",
       migrationHint:
@@ -217,9 +284,11 @@ const enSettings = {
     editAction: "Edit",
     deleteTitle: "Delete cloud worker profile",
     deleteConfirm:
-      "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions cannot use it after restart.",
+      "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions will no longer use it.",
     advertised: "Advertised",
-    restartRequired: "Restart required",
+    unavailable: "Unavailable",
+    profileSaved: "Profile saved. Build a snapshot from the Snapshots view.",
+    settingsSaved: "Saved. Changes apply without restarting the Gateway.",
     adminRequired: "Administrator access is required to manage cloud worker profiles.",
     catalogFailed: "Could not load advertised profiles: {error}. Check the gateway and retry.",
     providerFact: "Provider: {provider}",
@@ -272,7 +341,7 @@ const enSettings = {
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
-        "Linux only. Warm a direct or coordinator-backed AWS or Azure worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
+        "Enable Browser and Terminal access on Linux, native Windows, or prepared macOS workers. Supports direct or coordinator-backed AWS and Azure, and coordinator-backed Hetzner. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
@@ -289,7 +358,8 @@ const enSettings = {
       suspendAfterHelp:
         "Reclaim an idle worker after a duration such as 45m or 2h (minimum 1m). Leave empty to keep workers running.",
       actions: "Save profile",
-      actionsHelp: "Saving updates the config; the gateway must restart before using it.",
+      actionsHelp:
+        "New workers use the saved profile. Existing workers keep their provisioning settings.",
     },
     errors: {
       title: "Profile needs attention",
@@ -1079,14 +1149,14 @@ const enSettings = {
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
         "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
-      collapseTaskProgress: "Collapse task progress by default",
+      collapseTaskProgress: "Collapse task progress by default on desktop",
       collapseTaskProgressHint:
-        "Start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session.",
+        "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",
     },
     sessionSources: {
       title: "Session sources",
       hint: "Choose which coding apps show their existing conversations in the sidebar.",
-      scope: "Applies to everyone on this Gateway. Changes require a Gateway restart.",
+      scope: "Applies to everyone on this Gateway without restarting it.",
       claude: "Show Claude Code sessions",
       codex: "Show Codex sessions",
       opencode: "Show OpenCode sessions",
@@ -1400,6 +1470,7 @@ export const registerSettingsEnglish = Object.assign(
   () => {
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;
+    en.searchPage = enSettings.searchPage;
     // Extend the shared objects: eager save/update copy and existing readers survive.
     en.cloudWorkersPage = enSettings.cloudWorkersPage;
     Object.assign(en.connection, enSettings.connection);

@@ -11,14 +11,19 @@ import {
   normalizeRestoredFlowRecord,
   prepareTaskMirroredFlowSyncFromCurrent,
 } from "../tasks/task-flow-registry.records.js";
-import type { getTaskFlowRegistryStore } from "../tasks/task-flow-registry.store.js";
+import { getTaskFlowRegistryStore } from "../tasks/task-flow-registry.store.js";
 import type {
   TaskFlowRegistryMirroredSync,
   TaskFlowRegistryObservedUpdate,
   TaskFlowRegistryStoreSnapshot,
 } from "../tasks/task-flow-registry.store.types.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
+import {
+  ensureTaskFlowRegistryReadyAsync,
+  runTaskFlowRegistryWorkerMutation,
+} from "../tasks/task-flow-runtime-internal.js";
 import type { TaskInitialWorkerOperations } from "../tasks/task-initial-worker.types.js";
+import { acknowledgeTaskStateNotification } from "../tasks/task-notification.operation.js";
 import { captureTaskCreationEventTarget } from "../tasks/task-registry-agent-event-target.js";
 import {
   captureTaskAgentEventLineage,
@@ -37,6 +42,25 @@ import type { TaskRegistryStore, TaskRegistryStoreSnapshot } from "../tasks/task
 import type { TaskRegistryMutationScope } from "../tasks/task-registry.store.types.js";
 
 type TaskFlowRegistryStore = ReturnType<typeof getTaskFlowRegistryStore>;
+
+/** Synthetic stores supply the same host reconciliation continuation as native restore receipts. */
+export async function reconcileTaskFlowRestoreForTests(
+  context: OpenClawStateWorkerContext,
+  flowIds: readonly string[],
+): Promise<void> {
+  if (flowIds.length === 0) {
+    return;
+  }
+  const store = getTaskFlowRegistryStore();
+  await ensureTaskFlowRegistryReadyAsync(context);
+  for (const flowId of new Set(flowIds)) {
+    await runTaskFlowRegistryWorkerMutation(
+      { flowId, admission: context.admission },
+      () => Promise.resolve(),
+      () => store.readFlowAsync(context, flowId),
+    );
+  }
+}
 
 function syncRestoredTaskFlow(
   taskStore: TaskRegistryStore,
@@ -162,6 +186,21 @@ export function createInMemoryTaskRegistryStore(
           input: TaskInitialWorkerOperations[Key]["input"],
         ) => TaskInitialWorkerOperations[Key]["output"];
       } = {
+        "tasks.acknowledgeStateChange": (input) =>
+          acknowledgeTaskStateNotification(input, {
+            readCurrent: () => ({
+              task: state.tasks.get(input.taskId),
+              deliveryState: state.deliveryStates.get(input.taskId),
+            }),
+            write: (write) => write(),
+            assertCurrent,
+            upsertDelivery: (deliveryState) => this.upsertDeliveryState(deliveryState),
+            upsertTask: (task, deliveryState) =>
+              this.upsertTaskWithDeliveryState({ task, deliveryState }),
+            deferCommit: (publish) => publish(),
+            onCommitted() {},
+            onFailure() {},
+          }),
         "tasks.createRecord": (input) =>
           runTaskCreateOperation(input, {
             readSelection: (identity) => {
@@ -279,8 +318,8 @@ export function createInMemoryTaskRegistryStore(
     },
     async withSnapshotAsync<T>(
       this: TaskRegistryStore,
-      _context: OpenClawStateWorkerContext,
-      consume: (result: TaskRegistryRestoreResult) => T,
+      context: OpenClawStateWorkerContext,
+      consume: (result: TaskRegistryRestoreResult, reconcileFlows: () => Promise<void>) => T,
     ): Promise<T> {
       const restored = restoreTaskExecutionSnapshot(this);
       const flowSyncs = restored.settledTasks.flatMap((task) => {
@@ -300,17 +339,24 @@ export function createInMemoryTaskRegistryStore(
           }),
         ];
       });
-      return consume({ ...restored, flowSyncs });
+      return consume({ ...restored, flowSyncs }, () =>
+        reconcileTaskFlowRestoreForTests(
+          context,
+          flowSyncs.flatMap((outcome) => (outcome.flowId ? [outcome.flowId] : [])),
+        ),
+      );
     },
     async syncTaskFlowAsync(
       this: TaskRegistryStore,
-      _context: OpenClawStateWorkerContext,
+      context: OpenClawStateWorkerContext,
       params: { taskId: string; expectedParentFlowId?: string },
     ): Promise<TaskMirroredFlowSyncOutcome> {
       if (!flowStore) {
         throw new Error("In-memory task flow synchronization requires an explicit flow store.");
       }
-      return syncRestoredTaskFlow(this, flowStore, params);
+      const outcome = syncRestoredTaskFlow(this, flowStore, params);
+      await reconcileTaskFlowRestoreForTests(context, outcome.flowId ? [outcome.flowId] : []);
+      return outcome;
     },
     loadSnapshot: () => structuredClone(state),
     async loadMutationSnapshotAsync(
@@ -400,7 +446,6 @@ export function createInMemoryTaskFlowRegistryStore(
       const publication = preparePublication(result);
       publication.stage();
       publication.commit();
-      publication.publish();
       return result;
     },
     updateFlow: (params, preparePublication) => {
@@ -408,7 +453,6 @@ export function createInMemoryTaskFlowRegistryStore(
         const publication = preparePublication(result);
         publication.stage();
         publication.commit();
-        publication.publish();
         return result;
       };
       const stored = state.flows.get(params.flowId);

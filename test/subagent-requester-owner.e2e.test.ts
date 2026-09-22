@@ -332,12 +332,15 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
     },
   );
 
-  it(
-    "delivers a private result once when the child finishes before the parent yields",
+  it.each([undefined, { kind: "local" } as const])(
+    "delivers a private result once when the child finishes before the parent yields (placement: %j)",
     { timeout: TEST_TIMEOUT_MS },
-    async () => {
+    async (placement) => {
       const yieldGate = createDeferred();
-      const modelServer = await startProofModelServer({ yieldAfterSpawn: yieldGate.promise });
+      const modelServer = await startProofModelServer({
+        yieldAfterSpawn: yieldGate.promise,
+        placement,
+      });
       modelServers.push(modelServer);
       const instance = await createOpenClawTestInstance({
         name: "private-completion-before-yield",
@@ -821,6 +824,7 @@ function buildToolCallEvents(name: string, args: Record<string, unknown>): SseEv
 async function startProofModelServer(options?: {
   yieldAfterSpawn: Promise<void>;
   childReply?: Promise<void>;
+  placement?: { kind: "local" };
 }): Promise<ProofModelServer> {
   const requestBodies: string[] = [];
   let parentCheckedChildren = false;
@@ -889,6 +893,7 @@ async function startProofModelServer(options?: {
         buildToolCallEvents("sessions_spawn", {
           task: CHILD_TASK,
           label: "requester-owner-child",
+          ...(options?.placement ? { placement: options.placement } : {}),
           thread: false,
           mode: "run",
           ...(options?.yieldAfterSpawn ? { completionTarget: "parent" } : {}),

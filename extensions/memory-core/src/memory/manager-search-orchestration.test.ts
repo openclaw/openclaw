@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
@@ -342,7 +343,7 @@ describe("memory index", () => {
         `cancel-scan-hash-${index}`,
         "mock-embed",
         `fallback scan row ${index}`,
-        JSON.stringify([0, 1, 0, 0]),
+        encodeMemoryEmbedding([0, 1, 0, 0]),
         index,
       );
     }

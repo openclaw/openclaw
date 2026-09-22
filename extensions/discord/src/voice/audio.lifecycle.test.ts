@@ -1,6 +1,8 @@
 import { once } from "node:events";
 import { Readable } from "node:stream";
+import { MessageChannel } from "node:worker_threads";
 import type { OpusEncoderHandle } from "libopus-wasm";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, expect, it, vi } from "vitest";
 
 const { createEncoderMock, createDecoderMock } = vi.hoisted(() => ({
@@ -13,11 +15,58 @@ vi.mock("libopus-wasm", async (importOriginal) => ({
   createDecoder: createDecoderMock,
 }));
 
+import { startDiscordPacingReceiver } from "./audio-starvation.test-support.js";
 import { createDiscordOpusEncodeStream, decodeOpusStreamChunks } from "./audio.js";
 
 beforeEach(() => {
   createEncoderMock.mockReset();
   createDecoderMock.mockReset();
+});
+
+it("starts the pacing receiver measurement only after consuming encoded source audio", async () => {
+  const codec = await vi.importActual<typeof import("libopus-wasm")>("libopus-wasm");
+  const encoder = await codec.createEncoder({ channels: 2, sampleRate: 48_000 });
+  const constructing = createDeferred<void>();
+  const releaseEncoder = createDeferred<OpusEncoderHandle>();
+  const released = createDeferred<void>();
+  const played = createDeferred<void>();
+  const free = encoder.free.bind(encoder);
+  vi.spyOn(encoder, "free").mockImplementation(() => {
+    free();
+    released.resolve();
+  });
+  createEncoderMock.mockImplementationOnce(() => {
+    constructing.resolve();
+    return releaseEncoder.promise;
+  });
+  const started = vi.fn(() => played.resolve());
+  const { port1, port2 } = new MessageChannel();
+  const receiver = startDiscordPacingReceiver(port1, new SharedArrayBuffer(4), started);
+  const audio = Buffer.alloc(960 * 6);
+  for (let sample = 0; sample < audio.length / 2; sample += 1) {
+    audio.writeInt16LE(
+      Math.round(Math.sin((sample * 2 * Math.PI * 440) / 24_000) * 12_000),
+      sample * 2,
+    );
+  }
+  try {
+    const acknowledged = once(port2, "message");
+    port2.postMessage({ type: "audio", audio }, []);
+    await Promise.all([constructing.promise, acknowledged]);
+    expect(receiver.times).toEqual([]);
+    expect(started).not.toHaveBeenCalled();
+
+    releaseEncoder.resolve(encoder);
+    await played.promise;
+    expect(receiver.times).toHaveLength(1);
+    expect(started).toHaveBeenCalledOnce();
+  } finally {
+    releaseEncoder.resolve(encoder);
+    receiver.close();
+    port2.close();
+    await released.promise;
+    vi.restoreAllMocks();
+  }
 });
 
 it.each([false, true])(

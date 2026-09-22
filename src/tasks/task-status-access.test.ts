@@ -13,14 +13,14 @@ import {
 
 const mocks = vi.hoisted(() => ({
   listTaskRecords: vi.fn(),
-  listTaskRecordsUnsorted: vi.fn(),
+  listTaskSessionActivity: vi.fn(),
 }));
 
 vi.mock("./task-registry.js", () => ({
   findTaskByRunId: vi.fn(),
   getTaskById: vi.fn(),
   listTaskRecords: mocks.listTaskRecords,
-  listTaskRecordsUnsorted: mocks.listTaskRecordsUnsorted,
+  listTaskSessionActivity: mocks.listTaskSessionActivity,
   listTasksForRelatedSessionKey: vi.fn(),
 }));
 
@@ -30,7 +30,7 @@ describe("generated media task snapshots", () => {
   beforeEach(() => {
     resetGeneratedMediaTaskActivityForTests();
     mocks.listTaskRecords.mockReset();
-    mocks.listTaskRecordsUnsorted.mockReset();
+    mocks.listTaskSessionActivity.mockReset();
   });
 
   it("detects only media admitted by the current exact-run attempt", () => {
@@ -82,17 +82,17 @@ describe("buildPendingGeneratedMediaSessionKeySet", () => {
 
   beforeEach(() => {
     resetGeneratedMediaTaskActivityForTests();
-    mocks.listTaskRecordsUnsorted.mockReset();
+    mocks.listTaskSessionActivity.mockReset();
   });
 
   it("returns an empty set when no active media and no persisted tasks", () => {
-    mocks.listTaskRecordsUnsorted.mockReturnValue([]);
+    mocks.listTaskSessionActivity.mockReturnValue([]);
     expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(new Set());
   });
 
   it("combines active, requester, and owner session keys in one unsorted snapshot", () => {
     registerGeneratedMediaTaskActivity("tool:image_generate:run-1", "active-key");
-    mocks.listTaskRecordsUnsorted.mockReturnValue([
+    mocks.listTaskSessionActivity.mockReturnValue([
       {
         taskId: "img-task",
         taskKind: "image_generation",
@@ -104,11 +104,11 @@ describe("buildPendingGeneratedMediaSessionKeySet", () => {
     expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(
       new Set(["active-key", sessionKey, "owner-key"]),
     );
-    expect(mocks.listTaskRecordsUnsorted).toHaveBeenCalledOnce();
+    expect(mocks.listTaskSessionActivity).toHaveBeenCalledOnce();
   });
 
   it("excludes terminal and non-generated-media tasks", () => {
-    mocks.listTaskRecordsUnsorted.mockReturnValue([
+    mocks.listTaskSessionActivity.mockReturnValue([
       {
         taskId: "done-task",
         taskKind: "image_generation",

@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
-import { searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
 import * as sessionTargets from "../config/sessions/targets.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -410,76 +410,138 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
   });
 });
 
-it("uses archived registry lineage without overwriting a newer SQLite session", async () => {
-  await withOpenClawTestState({ label: "doctor-archived-lineage" }, async (state) => {
-    const sessions = state.sessionsDir();
-    fs.mkdirSync(sessions, { recursive: true });
-    const store = path.join(sessions, "sessions.json");
-    const key = "agent:main:main";
-    const id = "66666666-6666-4666-8666-666666666666";
-    const original = path.join(sessions, `2026-06-15T00-00-00-000Z_${id}.jsonl`);
-    fs.writeFileSync(original, transcript(id, "archivedfamilyneedle"));
-    fs.writeFileSync(
-      store,
-      JSON.stringify({
-        [key]: {
-          sessionId: "old-current",
-          updatedAt: 1,
-          previousSessionId: id,
-          usageFamilySessionIds: [id],
-        },
-      }),
-    );
-    const target = {
-      agentId: "main",
-      storePath: store,
-      sqlitePath: resolveTargetSqlitePath({ agentId: "main", storePath: store }, state.env),
-    };
-    const old = createSessionSqliteMigrationRun(state.env, [target]);
-    const archiveDir = path.join(path.dirname(sessions), "session-sqlite-import-archive");
-    fs.mkdirSync(archiveDir, { recursive: true });
-    const saved = new Map<string, string>();
-    for (const source of [store, original]) {
-      const archivePath = path.join(archiveDir, `${path.basename(source)}.imported-1`);
-      const move: SessionSqliteMigrationMove = {
-        kind: source === store ? "legacy-store" : "unreferenced-jsonl",
-        sourcePath: source,
-        archivePath,
-        artifact: {
-          identity: readMigrationArtifactIdentity(source),
-          classification: source === store ? "imported" : "protected",
-          reason: source === store ? "validated-session-store" : "unreferenced-history",
-          dependencies: [],
-          disposal: { state: "retained" },
-        },
+it.each(["unchanged", "metadata changed", "contents changed"])(
+  "uses a 2026.9.4 archived registry under current SQLite state: %s",
+  async (archiveState) => {
+    await withOpenClawTestState({ label: "doctor-archived-lineage" }, async (state) => {
+      const sessions = state.sessionsDir();
+      fs.mkdirSync(sessions, { recursive: true });
+      const store = path.join(sessions, "sessions.json");
+      const key = "agent:main:main";
+      const id = "66666666-6666-4666-8666-666666666666";
+      const original = path.join(sessions, `2026-06-15T00-00-00-000Z_${id}.jsonl`);
+      fs.writeFileSync(original, transcript(id, "archivedfamilyneedle"));
+      fs.writeFileSync(
+        store,
+        JSON.stringify({
+          [key]: {
+            sessionId: "old-current",
+            updatedAt: 1,
+            previousSessionId: id,
+            usageFamilySessionIds: [id],
+          },
+        }),
+      );
+      const target = {
+        agentId: "main",
+        storePath: store,
+        sqlitePath: resolveTargetSqlitePath({ agentId: "main", storePath: store }, state.env),
       };
-      saved.set(archivePath, fs.readFileSync(source, "utf8"));
-      recordPlannedMigrationMoves(old, target, [move]);
-      await moveMigrationArtifact(source, archivePath, move.artifact!.identity);
-      recordCompletedMigrationMoves(old, target, [move]);
-    }
-    updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
-    old.manifest.completedAt = new Date().toISOString();
-    writeSessionSqliteMigrationManifest(old);
-    const scope = { agentId: "main", env: state.env };
-    await importSqliteSessionRows({
-      ...scope,
-      storePath: store,
-      sessionKey: key,
-      entry: { sessionId: "new-current", updatedAt: 999, pinnedAt: 998, label: "newer-user-label" },
+      const old = createSessionSqliteMigrationRun(state.env, [target]);
+      // v2026.9.4 wrote manifest v3 with the same dev/ino/mtimeNs/size/sha256 identity.
+      old.manifest.openClawVersion = "2026.9.4";
+      old.manifest.manifestVersion = 3;
+      const archiveDir = path.join(path.dirname(sessions), "session-sqlite-import-archive");
+      fs.mkdirSync(archiveDir, { recursive: true });
+      const saved = new Map<string, string>();
+      for (const source of [store, original]) {
+        const archivePath = path.join(
+          archiveDir,
+          `${source === store ? "legacy-store" : "archive-tier"}.${path.basename(source)}.imported-1788290346376`,
+        );
+        const move: SessionSqliteMigrationMove = {
+          kind: source === store ? "legacy-store" : "unreferenced-jsonl",
+          sourcePath: source,
+          archivePath,
+          artifact: {
+            identity: readMigrationArtifactIdentity(source),
+            classification: source === store ? "imported" : "protected",
+            reason: source === store ? "verified-index-import" : "unreferenced-history",
+            dependencies: [],
+            disposal: { state: "retained" },
+          },
+        };
+        saved.set(archivePath, fs.readFileSync(source, "utf8"));
+        recordPlannedMigrationMoves(old, target, [move]);
+        await moveMigrationArtifact(source, archivePath, move.artifact!.identity);
+        recordCompletedMigrationMoves(old, target, [move]);
+      }
+      updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
+      old.manifest.completedAt = new Date().toISOString();
+      writeSessionSqliteMigrationManifest(old);
+      const scope = { agentId: "main", env: state.env };
+      await importSqliteSessionRows({
+        ...scope,
+        storePath: store,
+        sessionKey: key,
+        entry: {
+          sessionId: "new-current",
+          updatedAt: 999,
+          pinnedAt: 998,
+          label: "newer-user-label",
+        },
+      });
+      const before = loadExactSessionEntry({ ...scope, storePath: store, sessionKey: key });
+      const preview = await runDoctorSessionSqlite({ mode: "dry-run", store, env: state.env });
+      expect(preview.totals).toMatchObject({ legacyEntries: 1, issues: 0, sqliteEntries: 1 });
+      if (archiveState !== "unchanged") {
+        const registry = [...saved.keys()].find((file) => file.includes("legacy-store."))!;
+        if (archiveState === "metadata changed") {
+          fs.utimesSync(registry, new Date(0), new Date(0));
+        } else {
+          fs.appendFileSync(registry, "\n");
+          saved.set(registry, saved.get(registry)! + "\n");
+        }
+        for (const mode of ["dry-run", "validate", "import", "import"] as const) {
+          const report = await runDoctorSessionSqlite({ mode, store, env: state.env });
+          expect(report.totals).toMatchObject({
+            importedEntries: 0,
+            importedTranscriptEvents: 0,
+            issues: 1,
+            sqliteEntries: 1,
+          });
+          const issue = report.targets[0]!.issues[0]!;
+          expect(issue.code).toBe("historical_transcript_deferred");
+          expect(issue.message).toContain("no longer matches its migration receipt");
+          expect(issue.message).toContain("Historical transcript import skipped");
+          expect(issue.message).toContain("does not indicate SQLite corruption");
+          expect(issue.message).toContain(
+            "No action is needed if all expected conversations are present",
+          );
+          expect(issue.message).toContain(
+            "https://docs.openclaw.ai/cli/doctor/sqlite-maintenance#changed-archived-registry",
+          );
+          expect(issue.message).not.toContain("Error:");
+          if (report.migrationRun) {
+            const receipt = migrationRun.readSessionSqliteMigrationManifest(
+              report.migrationRun.manifestPath,
+            )!;
+            expect(receipt.targets[0]!.issues).toEqual([issue]);
+            expect(receipt.failedAt).toBeUndefined();
+            expect(receipt.targets[0]!.completedMoves).toEqual([]);
+          }
+        }
+        const inspected = await runDoctorSessionSqlite({ mode: "inspect", store, env: state.env });
+        expect(inspected.totals).toMatchObject({ sqliteEntries: 1, issues: 0 });
+        expect(searchSessionTranscripts({ ...scope, query: "archivedfamilyneedle" }).hits).toEqual(
+          [],
+        );
+      } else {
+        const report = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
+        expect(report.targets.flatMap((item) => item.issues)).toEqual([]);
+        expect(searchSessionTranscripts({ ...scope, query: "archivedfamilyneedle" }).hits).toEqual([
+          expect.objectContaining({ sessionId: id, sessionKey: key }),
+        ]);
+      }
+      expect(loadExactSessionEntry({ ...scope, storePath: store, sessionKey: key })).toEqual(
+        before,
+      );
+      for (const [archivePath, bytes] of saved) {
+        expect(fs.readFileSync(archivePath, "utf8")).toBe(bytes);
+      }
     });
-    const before = loadExactSessionEntry({ ...scope, storePath: store, sessionKey: key });
-    const report = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
-    expect(report.targets.flatMap((item) => item.issues)).toEqual([]);
-    expect(searchSessionTranscripts({ ...scope, query: "archivedfamilyneedle" }).hits).toEqual([
-      expect.objectContaining({ sessionId: id, sessionKey: key }),
-    ]);
-    expect(loadExactSessionEntry({ ...scope, storePath: store, sessionKey: key })).toEqual(before);
-    for (const [archivePath, bytes] of saved) {
-      expect(fs.readFileSync(archivePath, "utf8")).toBe(bytes);
-    }
-  });
-});
+  },
+);
 
 it("resolves one generated primary for a missing registry filename at the Doctor boundary", async () => {
   await withOpenClawTestState({ label: "doctor-generated-current" }, async (state) => {

@@ -43,6 +43,7 @@ export type ShardTargetPlan = { kind: "target"; name: string; target: string };
 type ShardGroupConfig = {
   configs: string[];
   fallbackMaxWorkers?: number;
+  minTotalMemoryBytes?: number;
   env?: Record<string, unknown> | null;
   includePatterns?: string[] | null;
   shard_name?: string;
@@ -163,20 +164,24 @@ export function buildChildEnv(
   baseEnv: NodeJS.ProcessEnv,
   scratchDir: string,
   index: number,
-  options: { serial?: boolean; cacheSlot?: number } = {},
+  options: { serial?: boolean; cacheSlot?: number; runtime?: "node" | "bun" } = {},
 ) {
   const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+  const cachePrefix = options.runtime === "bun" ? "vitest-cache-bun" : "vitest-cache";
   const cacheDirectory = persistentCacheRoot
-    ? `vitest-cache-${options.cacheSlot ?? index}`
+    ? `${cachePrefix}-${options.cacheSlot ?? index}`
     : options.serial
-      ? "vitest-cache-shared"
-      : `vitest-cache-${index}`;
+      ? `${cachePrefix}-shared`
+      : `${cachePrefix}-${index}`;
   // Persistent worker slots let serial plans reuse transforms without concurrent
   // writers. Scratch caches stay per-plan; group overrides still apply last.
   const childEnv = prepareChildEnv(entry, {
     ...baseEnv,
     [FS_MODULE_CACHE_PATH_ENV_KEY]: join(persistentCacheRoot || scratchDir, cacheDirectory),
   });
+  if (options.runtime) {
+    childEnv.OPENCLAW_VITEST_RUNTIME = options.runtime;
+  }
   if (entry.kind === "group") {
     const plan = entry.plan;
     if (Array.isArray(plan.includePatterns) && plan.includePatterns.length > 0) {
@@ -446,6 +451,12 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const inheritedEnv = options.env ?? process.env;
   const jobEnv = mergePlanEnv({}, parseJsonEnv(inheritedEnv, "OPENCLAW_NODE_TEST_ENV_JSON"));
   const baseEnv = mergePlanEnv(inheritedEnv, jobEnv);
+  // Historical targets use a five-file workflow-owned adapter. Their Node
+  // contract must not import current target discovery or runtime policy code.
+  const runtimePolicy = baseEnv.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
+  const runtimeOwner =
+    runtimePolicy === "node" ? undefined : await import("./lib/ci-test-runtime.mts");
+  const policy = runtimeOwner?.resolveCiTestRuntimePolicy(baseEnv) ?? "node";
   // Respect serial timing-sensitive bins and never clone cache slots that
   // cannot receive a plan.
   const requestedConcurrency =
@@ -477,18 +488,24 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
     );
   }
-  const hasMeasuredHeadroom =
+  const measuredHost =
     hostResources !== null &&
     !isConstrainedCiCheckHost(hostResources) &&
     concurrency === 1 &&
     baseEnv.RUNNER_ENVIRONMENT === "self-hosted" &&
-    baseEnv.FROZEN_TARGET !== "true";
+    baseEnv.FROZEN_TARGET !== "true"
+      ? hostResources
+      : null;
   const admittedPlans = plans.map((entry): ShardPlan => {
     if (entry.kind !== "group" || entry.plan.fallbackMaxWorkers === undefined) {
       return entry;
     }
     const fallback = parsePositiveInt(entry.plan.fallbackMaxWorkers, "Fallback worker limit");
-    if (hasMeasuredHeadroom) {
+    const minTotalMemoryBytes =
+      entry.plan.minTotalMemoryBytes === undefined
+        ? 0
+        : parsePositiveInt(entry.plan.minTotalMemoryBytes, "Worker memory floor");
+    if (measuredHost && measuredHost.totalMemoryBytes >= minTotalMemoryBytes) {
       return entry;
     }
     return {
@@ -558,20 +575,42 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
           });
           const args =
             vitestExtraArgs.length > 0 ? [...targetArgs, "--", ...vitestExtraArgs] : targetArgs;
-          const childEnv = buildChildEnv(entry, baseEnv, scratchDir, index, {
-            serial: concurrency === 1,
-            cacheSlot,
-          });
-          const code = await runner(
-            args,
-            childEnv,
-            entry.name,
-            entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name,
-          );
-          if (code !== 0) {
-            // Ordinary CI stops scheduling after failure; cache warmers explicitly
-            // continue so later groups still seed their independent transforms.
-            exitCode = exitCode || code;
+          const selections = runtimeOwner?.resolveCiTestRuntimeSelections(
+            {
+              ...(entry.kind === "target" ? { targets: [entry.target] } : entry.plan),
+              env: prepareChildEnv(entry, baseEnv),
+              vitestArgs: vitestExtraArgs,
+            },
+            policy,
+          ) ?? [{ runtime: "node" as const }];
+          for (const selection of selections) {
+            if (interrupted) {
+              return;
+            }
+            const runtime = selection.runtime;
+            const selectedEntry =
+              entry.kind === "group" && selection.includePatterns
+                ? { ...entry, plan: { ...entry.plan, includePatterns: selection.includePatterns } }
+                : entry;
+            const childEnv = buildChildEnv(selectedEntry, baseEnv, scratchDir, index, {
+              serial: concurrency === 1,
+              cacheSlot,
+              runtime,
+            });
+            const timingKey = entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name;
+            const timingPrefix =
+              runtime === "bun" ? "bun:" : selection.includePatterns ? "node-subset:" : "";
+            const code = await runner(
+              args,
+              childEnv,
+              `${timingPrefix}${entry.name}`,
+              `${timingPrefix}${timingKey}`,
+            );
+            // A dual-runtime envelope always completes both ordinary test runs;
+            // its first failure still stops admission of later envelopes.
+            if (code !== 0) {
+              exitCode = exitCode || code;
+            }
           }
         }
       } catch (error) {

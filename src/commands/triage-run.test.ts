@@ -23,7 +23,6 @@ vi.mock("@clack/prompts", async (importOriginal) => ({
 }));
 const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
-  agentExecCommand: vi.fn(),
   collectDoctorFindings: vi.fn(),
   runUpdateRepairLoop: vi.fn(),
   runUtf8CommandWithTimeout: vi.fn(),
@@ -31,7 +30,6 @@ const mocks = vi.hoisted(() => ({
   prepareUpdateRepairInference: vi.fn(),
   runUpdateRepairTurn: vi.fn(),
 }));
-vi.mock("./agent-exec.js", () => ({ agentExecCommand: mocks.agentExecCommand }));
 vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
 vi.mock("../infra/update-repair-agent.js", () => ({
   runUpdateRepairLoop: mocks.runUpdateRepairLoop,
@@ -205,7 +203,7 @@ describe("triage --run", () => {
     expect(output).toContain("openclaw update repair");
     expect(output).not.toContain("already resolved");
     if (pendingMigration) {
-      expect(output).toContain('Plugin "codex" state migration is pending');
+      expect(output).toContain('Plugin "codex" data/settings upgrade is unfinished');
     }
     expect(getUpdateRun(run.runId)?.status).toBe("failed");
     expect(await readRestartSentinelReadOnly()).toBeNull();
@@ -548,7 +546,6 @@ describe("triage --run", () => {
       JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
     );
     mocks.confirm.mockResolvedValue(false);
-    mocks.agentExecCommand.mockResolvedValue({ exitCode: 0 });
     const runtime = createTriageRuntime();
     await withTriageTerminal(true, () =>
       triageCommand(
@@ -562,7 +559,8 @@ describe("triage --run", () => {
       ),
     );
     expect(mocks.confirm).toHaveBeenCalledOnce();
-    expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+    expect(mocks.prepareUpdateRepairInference).not.toHaveBeenCalled();
+    expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
     expect(runtime.log.mock.calls.flat().join("\n")).toContain(
       "the embedded OpenClaw agent using your configured model",
     );

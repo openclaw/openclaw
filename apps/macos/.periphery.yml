@@ -5,5 +5,9 @@ retain_unused_protocol_func_params: true
 retain_assign_only_properties: true
 relative_results: true
 disable_update_check: true
+# Periphery 3.8 reads the native SwiftPM backend's .build/debug/index/store.
+build_arguments:
+  - --build-system
+  - native
 report_include:
   - Sources/**

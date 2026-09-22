@@ -25,6 +25,7 @@ import {
 } from "./plugin-runtime-mock-overrides.js";
 import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
 import { createPluginTasksRuntimeMock } from "./plugin-runtime-tasks-mock.js";
+import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
 
 type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
 type InboundDebounceFlushFactory = Parameters<InboundDebounceCreateParams<unknown>["onFlush"]>[1];
@@ -895,12 +896,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       },
       inbound: inboundRuntime,
       turn: inboundRuntime,
-      threadBindings: {
-        setIdleTimeoutBySessionKey:
-          vi.fn<PluginRuntime["channel"]["threadBindings"]["setIdleTimeoutBySessionKey"]>(),
-        setMaxAgeBySessionKey:
-          vi.fn<PluginRuntime["channel"]["threadBindings"]["setMaxAgeBySessionKey"]>(),
-      },
+      threadBindings: createPluginThreadBindingsRuntimeMock(),
       runtimeContexts: {
         register: vi.fn<PluginRuntime["channel"]["runtimeContexts"]["register"]>(
           runtimeContexts.register,

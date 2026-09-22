@@ -6,11 +6,14 @@ import { filterCurrentTaskRunBackings } from "./task-backing-records.js";
 import { getTaskMirroredFlowIds } from "./task-flow-runtime-internal.js";
 import { clearTaskActivity } from "./task-registry-activity.js";
 import { isActiveTaskStatus } from "./task-registry-common.js";
-import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
 import { clearTaskFlowSyncRetries } from "./task-registry-flow-sync.js";
 import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
-import { prepareTaskRegistryRead, prepareTaskRegistryReadOwner } from "./task-registry-read.js";
+import {
+  createTaskRegistryReadPreparation,
+  prepareTaskRegistryRead,
+  prepareTaskRegistryReadOwner,
+} from "./task-registry-read.js";
 import {
   cloneTaskRecord,
   listTasksFromIndex,
@@ -18,17 +21,9 @@ import {
   normalizeTaskTimestamps,
   compareTasksNewestFirst,
   pickPreferredRunIdTask,
-  snapshotTaskRecords,
   selectTaskRecordsForOwnerTree,
 } from "./task-registry-records.js";
-import {
-  TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY,
-  TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY,
-  controlRuntimeLoader,
-  deliveryRuntimeLoader,
-  type TaskRegistryDeliveryRuntime,
-  type TaskRegistryGlobalWithRuntimeOverrides,
-} from "./task-registry-runtime-loaders.js";
+import { controlRuntimeLoader, deliveryRuntimeLoader } from "./task-registry-runtime-loaders.js";
 import {
   withTaskRegistryMutation,
   bumpTaskRegistryRevision,
@@ -58,9 +53,20 @@ import {
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 import { resolveTaskSessionAgentId, taskMatchesRelatedSession } from "./task-session-identity.js";
 
-export function listTaskRecordsUnsorted(): TaskRecord[] {
+type TaskSessionActivity = Pick<
+  TaskRecord,
+  "taskKind" | "status" | "requesterSessionKey" | "ownerKey"
+>;
+
+/** Cleanup reads session activity without copying retained task payloads. */
+export function listTaskSessionActivity(): TaskSessionActivity[] {
   ensureTaskRegistryReady();
-  return snapshotTaskRecords(tasks);
+  return Array.from(tasks.values(), (task) => ({
+    taskKind: task.taskKind,
+    status: task.status,
+    requesterSessionKey: task.requesterSessionKey,
+    ownerKey: task.ownerKey,
+  }));
 }
 
 /** Coarse tree candidates; callers still enforce agent identity and current control authority. */
@@ -151,6 +157,7 @@ const TASK_PAGE_MAX_ATTEMPTS = 3;
 const TASK_PAGE_YIELD_INTERVAL_MS = 12;
 
 export async function listTaskRecordPage(params: {
+  prepareRead?: ReturnType<typeof createTaskRegistryReadPreparation>;
   offset: number;
   limit: number;
   expectedRevision?: number;
@@ -169,7 +176,8 @@ export async function listTaskRecordPage(params: {
     "cursor_stale" | "registry_changed"
   >
 > {
-  let read = await prepareTaskRegistryRead();
+  const prepareRead = params.prepareRead ?? createTaskRegistryReadPreparation();
+  let read = await prepareRead();
   if (!read) {
     return err("registry_changed");
   }
@@ -185,7 +193,7 @@ export async function listTaskRecordPage(params: {
   for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
     if (attempt > 0) {
       const preparationStartedAt = performance.now();
-      read = await prepareTaskRegistryRead();
+      read = await prepareRead();
       if (!read) {
         return err("registry_changed");
       }
@@ -542,32 +550,4 @@ export function resetTaskRegistryForTests() {
   controlRuntimeLoader.clear();
   // Close the default SQLite handle too, even when a custom store was configured.
   getTaskRegistryStore().close?.();
-}
-
-export function resetTaskRegistryDeliveryRuntimeForTests() {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
-  ] = null;
-  deliveryRuntimeLoader.clear();
-}
-
-export function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY
-  ] = runtime;
-  deliveryRuntimeLoader.clear();
-}
-
-export function resetTaskRegistryControlRuntimeForTests() {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
-  ] = null;
-  controlRuntimeLoader.clear();
-}
-
-export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void {
-  (globalThis as TaskRegistryGlobalWithRuntimeOverrides)[
-    TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY
-  ] = runtime;
-  controlRuntimeLoader.clear();
 }

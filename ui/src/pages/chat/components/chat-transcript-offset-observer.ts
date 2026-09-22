@@ -1,11 +1,12 @@
 import { elementScroll, observeElementOffset, type Virtualizer } from "@tanstack/virtual-core";
 import { isTranscriptScrollKey } from "../chat-scroll-input.ts";
-import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../scroll.ts";
+import { CHAT_TRANSCRIPT_END_THRESHOLD_PX, type ChatScrollToEndOptions } from "../scroll.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import type { ChatTranscriptInteractionAnchor } from "./chat-transcript-interaction-anchor.ts";
 import type { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import {
   publishTranscriptScroll,
+  subscribeTranscriptScroll,
   type TranscriptScrollObservation,
 } from "./chat-transcript-scroll-events.ts";
 import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-session.ts";
@@ -13,7 +14,8 @@ import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-sessio
 type TranscriptOffsetState = {
   pendingScrollOffset: ChatTranscriptPendingScrollOffset | null;
   scrollCommand:
-    | { behavior: ScrollBehavior; target: "end" | "index" }
+    | { behavior: ScrollBehavior; target: "end"; source: "auto" | "manual" }
+    | { behavior: ScrollBehavior; target: "index" }
     | { behavior: ScrollBehavior; target: "message"; messageId: string }
     | null;
   touching: boolean;
@@ -62,6 +64,40 @@ export function isTranscriptProgrammaticScroll(
     state.pendingScrollOffset !== null ||
     (state.scrollCommand !== null && distanceFromEnd > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
   );
+}
+
+export function isTranscriptManualScroll(
+  state: TranscriptOffsetState,
+  element: HTMLDivElement | null,
+): boolean {
+  const command = state.scrollCommand;
+  if (!command || (command.target === "end" && command.source !== "manual")) {
+    return false;
+  }
+  // Native idle can lag a completed journey or never fire for a no-op.
+  return (
+    command.target !== "end" ||
+    Math.abs((maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0)) > 1
+  );
+}
+
+export function scrollTranscriptToEnd(
+  state: TranscriptOffsetState,
+  instance: Virtualizer<HTMLDivElement, HTMLElement>,
+  { source, behavior }: Required<ChatScrollToEndOptions>,
+  cancelScroll: () => void,
+): void {
+  // Retargeting automatic follow must not insert an instant stop or lose manual ownership.
+  if (source !== "auto" || state.scrollCommand?.target !== "end") {
+    cancelScroll();
+  }
+  const current = state.scrollCommand;
+  state.scrollCommand = {
+    behavior,
+    target: "end",
+    source: source === "auto" && current?.target === "end" ? current.source : source,
+  };
+  instance.scrollToEnd({ behavior });
 }
 
 export function scrollTranscriptOffset(
@@ -127,6 +163,14 @@ export function observeTranscriptOffset(
     }
   };
   owner.state.recordProgrammaticScroll = recordProgrammaticScroll;
+  const stopCorrections = element
+    ? subscribeTranscriptScroll(element, (observation) => {
+        if (observation.type === "resize" && observation.scrollCorrection) {
+          const { before, after } = observation.scrollCorrection;
+          recordProgrammaticScroll(before, after, true);
+        }
+      })
+    : undefined;
   const publishOffset = (offset: number, scrolling: boolean) => {
     if (
       scrolling &&
@@ -303,6 +347,7 @@ export function observeTranscriptOffset(
       owner.state.maintenanceScrollOffset = null;
     }
     cleanup?.();
+    stopCorrections?.();
     contactIds.clear();
     owner.state.touching = false;
     owner.state.touchScrolling = false;

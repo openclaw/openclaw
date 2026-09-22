@@ -7,6 +7,8 @@ import Testing
 
 @MainActor
 struct GatewayReadinessDeadlinePolicyTests {
+    private let epoch = ContinuousClock.now
+
     @Test(arguments: [
         (true, false, false),
         (false, true, false),
@@ -19,32 +21,32 @@ struct GatewayReadinessDeadlinePolicyTests {
     {
         let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
         let decision = try #require(policy.extensionDecision(
-            deadline: Date(timeIntervalSince1970: 1006),
-            finalProbeDeadline: Date(timeIntervalSince1970: 1120),
+            deadline: self.epoch.advanced(by: .seconds(6)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
             responsiveStartupProgressObserved: responsiveProgress,
             freshInstallGraceAuthorized: priorGrace))
 
-        #expect(decision.deadline == Date(timeIntervalSince1970: 1012))
+        #expect(decision.deadline == self.epoch.advanced(by: .seconds(12)))
         #expect(decision.requiresLaunchdProof == requiresLaunchdProof)
     }
 
     @Test func `migration extension is capped at the final deadline`() throws {
         let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
         let decision = try #require(policy.extensionDecision(
-            deadline: Date(timeIntervalSince1970: 1116),
-            finalProbeDeadline: Date(timeIntervalSince1970: 1120),
+            deadline: self.epoch.advanced(by: .seconds(116)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
             responsiveStartupProgressObserved: true,
             freshInstallGraceAuthorized: false))
 
-        #expect(decision.deadline == Date(timeIntervalSince1970: 1120))
+        #expect(decision.deadline == self.epoch.advanced(by: .seconds(120)))
     }
 
-    @Test(arguments: [1120.0, 1126.0])
+    @Test(arguments: [120.0, 126.0])
     func `exhausted migration budget cannot extend despite progress and prior grace`(deadline: TimeInterval) {
         let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.migration(window: 6, tolerance: 120)
         #expect(policy.extensionDecision(
-            deadline: Date(timeIntervalSince1970: deadline),
-            finalProbeDeadline: Date(timeIntervalSince1970: 1120),
+            deadline: self.epoch.advanced(by: .seconds(deadline)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
             responsiveStartupProgressObserved: true,
             freshInstallGraceAuthorized: true) == nil)
     }
@@ -52,8 +54,8 @@ struct GatewayReadinessDeadlinePolicyTests {
     @Test func `fixed readiness policy refuses migration extensions`() {
         let policy = GatewayProcessManager.GatewayReadinessDeadlinePolicy.fixed(timeout: 6)
         #expect(policy.extensionDecision(
-            deadline: Date(timeIntervalSince1970: 1006),
-            finalProbeDeadline: Date(timeIntervalSince1970: 1120),
+            deadline: self.epoch.advanced(by: .seconds(6)),
+            finalProbeDeadline: self.epoch.advanced(by: .seconds(120)),
             responsiveStartupProgressObserved: true,
             freshInstallGraceAuthorized: true) == nil)
     }
@@ -194,6 +196,7 @@ struct GatewayProcessManagerTests {
 
     private func makeGatewayReadinessFixture(
         url: URL,
+        clock: any Clock<Duration> = ContinuousClock(),
         taskFactory: @escaping GatewayTestWebSocketSession.TaskFactory)
         -> (session: GatewayTestWebSocketSession, connection: GatewayConnection, manager: GatewayProcessManager)
     {
@@ -203,7 +206,7 @@ struct GatewayProcessManagerTests {
             sessionBox: WebSocketSessionBox(session: session))
         // Keep fixture dependencies private for the manager's whole lifetime;
         // late probe cleanup must not fall back to shared app services.
-        let manager = GatewayProcessManager()
+        let manager = GatewayProcessManager(readinessClock: clock)
         manager.setTestingConnection(connection)
         manager.setTestingSkipControlChannelRefresh(true)
         return (session, connection, manager)
@@ -244,7 +247,8 @@ struct GatewayProcessManagerTests {
     private nonisolated func gatewayTask(
         healthSucceedsAfter unavailableResponses: Int?,
         stallsFirstHealthResponse: Bool = false,
-        healthResponseGates: [AsyncTestGate] = []) -> GatewayTestWebSocketTask
+        healthResponseGates: [AsyncTestGate] = [],
+        firstHealthRequest: AsyncTestGate? = nil) -> GatewayTestWebSocketTask
     {
         let healthRequests = Mutex(0)
         return GatewayTestWebSocketTask(
@@ -259,6 +263,7 @@ struct GatewayProcessManagerTests {
                     $0 += 1
                     return $0
                 }
+                if healthIndex == 1 { firstHealthRequest?.open() }
                 if healthResponseGates.indices.contains(healthIndex - 1) {
                     await healthResponseGates[healthIndex - 1].wait()
                 }
@@ -1261,7 +1266,16 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    @Test func `transient unavailable health response retries until ready`() async throws {
+    @Test(arguments: [
+        (Duration.zero, Duration.milliseconds(300), true),
+        (.milliseconds(600), .milliseconds(300), true),
+        (.milliseconds(900), .milliseconds(100), false),
+    ])
+    func `transient unavailable health response retries within its budget`(
+        responseDelay: Duration,
+        retryDelay: Duration,
+        becomesReady: Bool) async throws
+    {
         let stateDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-gateway-ready-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: stateDir) }
@@ -1271,14 +1285,23 @@ struct GatewayProcessManagerTests {
                 // Named profiles require the healthy listener to match their managed service.
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(self.loadedGatewayStatus(port: port))
                 let url = try #require(URL(string: "ws://example.invalid"))
-                let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-                    self.gatewayTask(healthSucceedsAfter: 1)
+                let clock = ManualTestClock()
+                let startedAt = clock.now
+                let firstHealthRequest = AsyncTestGate()
+                let responseGate = AsyncTestGate()
+                defer { responseGate.open() }
+                let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url, clock: clock) {
+                    self.gatewayTask(
+                        healthSucceedsAfter: 1,
+                        healthResponseGates: [responseGate],
+                        firstHealthRequest: firstHealthRequest)
                 }
                 let descriptor = self.gatewayDescriptor(pid: 4242)
 
                 manager.setTestingDesiredActive(true)
                 manager.setTestingStatus(.starting)
                 manager._testClearLaunchAgentReadinessFailure()
+                manager._testSetLaunchAgentReadinessCandidate(port: port, pid: 4242)
                 await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
                 defer {
                     manager.setTestingDesiredActive(false)
@@ -1287,13 +1310,24 @@ struct GatewayProcessManagerTests {
                     manager._testSetLastObservedGatewayPID(nil)
                 }
 
-                // The readiness budget covers the unavailable reply and retry; cold
-                // connection setup must not consume the behavior under test.
                 _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
-                #expect(await manager.waitForGatewayReady(timeout: 1))
+                let readiness = Task { await manager.waitForGatewayReady(timeout: 1) }
+                await clock.waitForSleep(until: startedAt.advanced(by: .seconds(1)))
+                await firstHealthRequest.wait()
+                clock.advance(by: responseDelay)
+                let probeRegistration = clock.sleepRegistrations
+                responseGate.open()
+                // A clipped retry shares the old probe's deadline, but must own a new timer.
+                await clock.waitForSleep(until: clock.now.advanced(by: retryDelay), after: probeRegistration)
+                #expect(session.latestTask()?.snapshotSendCount() == 3)
+                #expect(manager.status == .starting)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+                clock.advance(by: retryDelay)
+
+                #expect(await readiness.value == becomesReady)
                 #expect(session.snapshotMakeCount() == 1)
-                #expect(session.latestTask()?.snapshotSendCount() == 4)
-                #expect(manager.status == .running(details: "pid 4242"))
+                #expect(session.latestTask()?.snapshotSendCount() == (becomesReady ? 4 : 3))
+                #expect(manager.status == (becomesReady ? .running(details: "pid 4242") : .starting))
                 #expect(!manager._testHasLaunchAgentReadinessFailure())
 
                 await connection.shutdown()

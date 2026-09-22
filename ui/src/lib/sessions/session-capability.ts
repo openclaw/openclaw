@@ -13,10 +13,7 @@ import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "..
 import type {
   GatewaySessionRow,
   SessionBranch,
-  SessionCompactionCheckpoint,
   SessionsBranchesSwitchResult,
-  SessionsCompactionBranchResult,
-  SessionsCompactionRestoreResult,
   SessionsForkResult,
   SessionsListResult,
   SessionsRewindResult,
@@ -35,7 +32,8 @@ import type {
 } from "./github-publication-controller.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
-import type { SessionChangedResult, SessionReconcileOptions } from "./reconcile.ts";
+import type { SessionReconcileOptions } from "./reconcile.ts";
+import type { SessionChangedRowResult } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
 export type SessionState = {
@@ -110,10 +108,18 @@ type SessionRowReadOutcome =
 
 export type SessionRowObservation = {
   readonly row: GatewaySessionRow | null;
+  readonly sessionId: string | null;
+  /** False until this owner accepts a row or confirms its absence. */
+  readonly hasObserved: boolean;
   isCurrent: () => boolean;
   captureReconcile: () => (row: GatewaySessionRow | undefined) => SessionRowReadOutcome;
   dispose: () => void;
 };
+
+export type SessionRowEventListener = (
+  event: GatewayEventFrame,
+  result: SessionChangedRowResult,
+) => void;
 
 export type SessionDeleteOptions = {
   agentId?: string;
@@ -229,7 +235,11 @@ export type SessionCapability = {
     target: SessionRowTarget,
     listener: (row: GatewaySessionRow | null) => void,
     /** Matching events can omit descriptor-only fields; re-read those without watching roster revisions. */
-    options?: { onInvalidate?: (reason?: string) => void },
+    options?: {
+      onInvalidate?: (reason?: string) => void;
+      /** Receives the frame after shared reconciliation, even without an admitted row. */
+      onEvent?: SessionRowEventListener;
+    },
   ) => SessionRowObservation;
   /** Preserve an existing row observation through a local presentation copy. */
   inheritRow: (
@@ -239,7 +249,6 @@ export type SessionCapability = {
   ) => GatewaySessionRow;
   /** Projects held field observations without changing the input rows' keys or membership. */
   projectRows: (rows: readonly GatewaySessionRow[]) => GatewaySessionRow[];
-  reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   /** Schedules background list refreshes without replacing queued foreground queries. */
@@ -270,8 +279,12 @@ export type SessionCapability = {
   ) => Promise<SessionOwner | null>;
   retireModelOverride: (key: string) => void;
   think: (key: string, agentId?: string | null) => string | undefined;
-  /** Keep optimistic row changes in the published snapshot through later publishes. */
-  patchRowLocal: (key: string, patch: Partial<GatewaySessionRow>) => void;
+  /** Local previews update the primary snapshot; explicit targets also update held incarnations. */
+  patchRowLocal: (
+    key: string,
+    patch: Partial<GatewaySessionRow>,
+    target?: { agentId: string; sessionId: string },
+  ) => void;
   /** True while a just-created work session awaits its canonical placement row. */
   isPreparedWorkSession: (key: string) => boolean;
   pullRequestSummary: (key: string) => SessionCatalogPullRequestSummary | undefined;
@@ -310,20 +323,6 @@ export type SessionCapability = {
     options?: { agentId?: string | null; includeApprovals?: boolean },
   ) => Promise<SessionMessageSubscription>;
   unsubscribeMessages: (subscription: SessionMessageSubscription) => Promise<void>;
-  listCheckpoints: (
-    key: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionCompactionCheckpoint[]>;
-  branchCheckpoint: (
-    key: string,
-    checkpointId: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionsCompactionBranchResult>;
-  restoreCheckpoint: (
-    key: string,
-    checkpointId: string,
-    options?: { agentId?: string | null },
-  ) => Promise<SessionsCompactionRestoreResult>;
   rewind: (
     key: string,
     entryId: string,

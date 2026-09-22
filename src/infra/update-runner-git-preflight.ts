@@ -129,12 +129,20 @@ async function resetPreflightCandidateWorktree(worktreeDir: string, step: StepFa
 
 async function resolveExplicitTarget(params: {
   devTargetRef: string;
+  refreshedRemotes: readonly string[];
   gitRoot: string;
   steps: UpdateStepResult[];
   step: StepFactory;
   workStep: StepFactory;
 }): Promise<string | null> {
+  const warnings: string[] = [];
   for (const candidate of buildDevTargetRefResolutionCandidates(params.devTargetRef)) {
+    if (
+      candidate.startsWith("refs/remotes/") &&
+      !params.refreshedRemotes.some((remote) => candidate.startsWith(`refs/remotes/${remote}/`))
+    ) {
+      continue;
+    }
     const tagFetchRef = resolveTagFetchRef(candidate);
     if (tagFetchRef) {
       const remoteStep = await runStep(
@@ -146,13 +154,37 @@ async function resolveExplicitTarget(params: {
       const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
       let fetchedTag = false;
       for (const remote of remotes) {
-        const fetchStep = await runStep(
-          params.workStep(
-            "git-fetch-target-tag",
-            ["git", "-C", params.gitRoot, "fetch", remote, `+${tagFetchRef}:${tagFetchRef}`],
-            params.gitRoot,
-          ),
+        const options = params.workStep(
+          "git-fetch-target-tag",
+          ["git", "-C", params.gitRoot, "fetch", remote, `+${tagFetchRef}:${tagFetchRef}`],
+          params.gitRoot,
         );
+        const fetchStep = await runStep({
+          ...options,
+          progress: { ...options.progress, onStepComplete: undefined },
+        });
+        const interrupted =
+          fetchStep.termination === "signal" ||
+          fetchStep.exitCode === 130 ||
+          fetchStep.exitCode === 143;
+        if (fetchStep.exitCode !== 0 && !interrupted) {
+          fetchStep.advisory = {
+            kind: "recoverable-maintenance",
+            message: `Could not fetch the requested tag from ${remote}; trying another remote. ${fetchStep.stderrTail ?? ""}`,
+          };
+          warnings.push(fetchStep.advisory.message);
+        }
+        if (warnings.length > 0) {
+          fetchStep.warnings = [...warnings];
+        }
+        options.progress?.onStepComplete?.({
+          ...fetchStep,
+          index: options.stepIndex,
+          total: options.totalSteps,
+        });
+        if (interrupted) {
+          return null;
+        }
         if (fetchStep.exitCode === 0) {
           fetchedTag = true;
           break;
@@ -180,6 +212,7 @@ async function resolveExplicitTarget(params: {
 async function resolveUpstreamCandidates(params: {
   gitRoot: string;
   needsCheckoutMain: boolean;
+  refreshedRemotes: readonly string[];
   steps: UpdateStepResult[];
   step: StepFactory;
 }): Promise<
@@ -205,13 +238,7 @@ async function resolveUpstreamCandidates(params: {
     localDevBranchExists = localMainStep.exitCode === 0;
   }
   if (params.needsCheckoutMain && localDevBranchExists === false) {
-    const remoteStep = await runStep(
-      params.step("git-remote", ["git", "-C", params.gitRoot, "remote"], params.gitRoot),
-    );
-    if (remoteStep.exitCode !== 0) {
-      return { status: "error", reason: "preflight-remote-failed" };
-    }
-    remoteBranchRefs = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n")).map(
+    remoteBranchRefs = params.refreshedRemotes.map(
       (remote) => `refs/remotes/${remote}/${DEV_BRANCH}`,
     );
   }
@@ -315,9 +342,8 @@ async function testPreflightCandidate(params: {
   sha: string;
   rebaseFrom?: string;
   runLint: boolean;
-  beforeCandidate?: (revision: string) => Promise<void>;
-  validateCandidate?: (root: string) => Promise<void>;
-  inspectGitCandidate?: UpdateRunnerOptions["inspectGitCandidate"];
+  beforeCandidate: (revision: string) => Promise<void>;
+  validateCandidate: (root: string) => Promise<void>;
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
   runCommand: CommandRunner;
@@ -386,7 +412,7 @@ async function testPreflightCandidate(params: {
   }
   const candidateSha = candidateHead.stdout.trim();
   // A local rebase can change package metadata from the fetched base revision.
-  await params.beforeCandidate?.(candidateSha);
+  await params.beforeCandidate(candidateSha);
   const nodeRuntimeStep = await checkGitCandidateNodeRuntime(params.worktreeDir);
   if (nodeRuntimeStep) {
     params.steps.push(nodeRuntimeStep);
@@ -430,11 +456,6 @@ async function testPreflightCandidate(params: {
       candidateCommand.env,
       path.join(params.gitRoot, ".artifacts", "build-all-cache"),
     );
-    const configArgs = managerScriptArgs(manager.manager, "openclaw", [
-      "config",
-      "validate",
-      "--json",
-    ]);
     const lintArgs = managerScriptArgs(manager.manager, "lint");
     let failure =
       (await runCandidateCheck(installName, installArgv, candidateCommand.env)) ??
@@ -464,17 +485,13 @@ async function testPreflightCandidate(params: {
       return { status: "failed" };
     }
     if (!failure) {
-      failure =
-        (params.validateCandidate
-          ? null
-          : await runCandidateCheck("config-validate", configArgs, candidateCommand.env)) ??
-        (params.runLint
-          ? await runCandidateCheck(
-              "lint",
-              lintArgs,
-              resolveDevPreflightLintEnv(candidateCommand.env),
-            )
-          : null);
+      failure = params.runLint
+        ? await runCandidateCheck(
+            "lint",
+            lintArgs,
+            resolveDevPreflightLintEnv(candidateCommand.env),
+          )
+        : null;
     }
     if (failure) {
       return { status: classifyPreflightFailure(failure) };
@@ -483,7 +500,7 @@ async function testPreflightCandidate(params: {
     // the resulting candidate only after that preparation finishes.
     await params.prepareGitExposure?.(params.worktreeDir, candidateSha, candidateCommand.env);
     await candidateCommand.restoreWorkspace?.();
-    await params.validateCandidate?.(params.worktreeDir);
+    await params.validateCandidate(params.worktreeDir);
     // Activation checks out candidateSha and promotes only generated runtime paths.
     // Check after repair so validated source edits cannot disappear at activation.
     const cleanCheck = await runCandidateCheck(
@@ -510,7 +527,6 @@ async function testPreflightCandidate(params: {
         "Update source differs from the selected commit. Repair the source revision before retrying the update.";
       return { status: "failed" };
     }
-    await params.inspectGitCandidate?.(params.worktreeDir);
     await params.prepareCandidate?.(params.worktreeDir, params.preflightRoot);
     return { status: "ok", candidateSha };
   } finally {
@@ -521,11 +537,11 @@ async function testPreflightCandidate(params: {
 export async function runGitCandidatePreflight(params: {
   gitRoot: string;
   devTarget?: DevUpdateTarget;
+  refreshedRemotes: readonly string[];
   targetRevision?: string;
   beforeSha?: string | null;
   beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];
-  validateCandidate?: (root: string) => Promise<void>;
-  inspectGitCandidate?: UpdateRunnerOptions["inspectGitCandidate"];
+  validateCandidate: (root: string) => Promise<void>;
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
   needsCheckoutMain: boolean;
@@ -536,7 +552,7 @@ export async function runGitCandidatePreflight(params: {
   step: StepFactory;
   workStep: StepFactory;
   workTimeoutMs?: number;
-  beforeCandidate?: (revision: string) => Promise<void>;
+  beforeCandidate: (revision: string) => Promise<void>;
 }): Promise<GitCandidatePreflightResult> {
   const devTargetRef = params.devTarget
     ? normalizeDevTargetRef(resolveDevUpdateTargetRevision(params.devTarget))
@@ -616,7 +632,7 @@ export async function runGitCandidatePreflight(params: {
 
   // Worktree checkout can execute filters, and subsequent checks run target code.
   // Admit its metadata before either operation, then admit each distinct fallback.
-  await params.beforeCandidate?.(preflightBaseSha);
+  await params.beforeCandidate(preflightBaseSha);
   let preflightRoot: string;
   try {
     preflightRoot = await createPreflightRoot(params.gitRoot);
@@ -652,7 +668,7 @@ export async function runGitCandidatePreflight(params: {
         return { status: "skipped", reason: "already-current" };
       }
       if (sha !== preflightBaseSha) {
-        await params.beforeCandidate?.(sha);
+        await params.beforeCandidate(sha);
       }
       const candidate = await testPreflightCandidate({
         ...params,

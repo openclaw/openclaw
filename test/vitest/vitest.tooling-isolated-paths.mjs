@@ -1,4 +1,4 @@
-// Tooling tests that need fresh module or process state instead of the shared serial worker.
+// Tooling tests that need fresh module or process state instead of shared workers.
 export const toolingIsolatedTestFiles = [
   "test/plugins/bundled-provider-auth-literal-parity.test.ts",
   "test/plugins/bundled-provider-auth-literal-parity.2.test.ts",

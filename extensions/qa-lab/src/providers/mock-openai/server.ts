@@ -4,7 +4,6 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { format as formatUrl } from "node:url";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -144,9 +143,7 @@ import {
   buildRemoteCompactionV2Events,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
-  extractPlannedToolName,
   extractPlannedToolIdentity,
-  extractPlannedToolArgs,
   splitMockStreamingText,
   buildChannelStreamingFixtureEvents,
   QA_TELEGRAM_PREPARED_DELIVERY_RE,
@@ -189,9 +186,25 @@ import {
 import { attachQaMockResponsesWebSocketServer } from "./mock-openai-responses-websocket.js";
 import { resolveMockSubagentHandoff } from "./mock-openai-subagent-completion.js";
 import {
+  QA_CODE_MODE_TARGET_MARKER,
+  stringifyScenarioToolOutput,
+  encodeCodeModeTarget,
+  resolveCodeModeExecSurface,
+  canCallScenarioTool,
+  readScenarioCompletedToolName,
+  readProgressCommand,
+  unwrapScenarioCatalogOutput,
+  resolveCurrentToolDeclarationSurface,
+  findToolCallByCallId,
+  parseNativeCodeModeOutput,
+  readRestartCheckpointProgress,
+  isCodeModeControlToolOutput,
+  buildScenarioToolCallEvents,
+  extractScenarioPlannedTool,
+} from "./mock-openai-tool-routing.js";
+import {
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
-  buildCustomToolCallEventsWithInput,
   buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
   extractOrbitCode,
   extractToolSearchTarget,
@@ -304,7 +317,6 @@ function hasCompactionOutputRecoveryMarker(allInputText: string) {
   );
 }
 
-const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
 const QA_RESTART_CHECKPOINT_COUNT = 3;
 const QA_RESTART_FINAL_TEXT = "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
@@ -317,451 +329,6 @@ const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEF
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
 const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
-
-function stringifyScenarioToolOutput(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value === undefined) {
-    return "";
-  }
-  try {
-    return JSON.stringify(value) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function encodeCodeModeTarget(name: string, args: Record<string, unknown>) {
-  return Buffer.from(JSON.stringify({ name, args }), "utf8").toString("base64url");
-}
-
-function decodeCodeModeTarget(code: string | undefined) {
-  const marker = code
-    ?.split("\n")
-    .map((line) => line.trim())
-    .find((line) => line.startsWith(`// ${QA_CODE_MODE_TARGET_MARKER}`));
-  if (!marker) {
-    return null;
-  }
-  try {
-    const encoded = marker.slice(`// ${QA_CODE_MODE_TARGET_MARKER}`.length).trim();
-    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    if (
-      typeof record.name !== "string" ||
-      !record.args ||
-      typeof record.args !== "object" ||
-      Array.isArray(record.args)
-    ) {
-      return null;
-    }
-    return {
-      name: record.name,
-      args: record.args as Record<string, unknown>,
-    };
-  } catch {
-    return null;
-  }
-}
-
-type CodeModeExecSurface = "native" | "guest";
-
-function resolveCodeModeExecSurface(body: Record<string, unknown>): CodeModeExecSurface | null {
-  const tools = [
-    ...(Array.isArray(body.tools) ? body.tools : []),
-    ...(Array.isArray(body.dynamicTools) ? body.dynamicTools : []),
-  ];
-  const execDefinition = findNamedToolDefinition(tools, "exec");
-  if (!execDefinition || !hasToolDefinition(body, "wait")) {
-    return null;
-  }
-  if (execDefinition.type === "custom") {
-    return "native";
-  }
-  const schema =
-    (execDefinition.input_schema as Record<string, unknown> | undefined) ??
-    (execDefinition.parameters as Record<string, unknown> | undefined);
-  if (!schema) {
-    return null;
-  }
-  const properties = schema.properties;
-  const required = schema.required;
-  return properties !== null &&
-    typeof properties === "object" &&
-    !Array.isArray(properties) &&
-    Object.hasOwn(properties, "code") &&
-    Array.isArray(required) &&
-    required.includes("code")
-    ? "guest"
-    : null;
-}
-
-function hasCodeModeExecSurface(body: Record<string, unknown>) {
-  return resolveCodeModeExecSurface(body) !== null;
-}
-
-function resolveCurrentToolDeclarationSurface(
-  body: Record<string, unknown>,
-  input: ResponsesInputItem[],
-) {
-  const additionalTools = input.flatMap((item) =>
-    item.type === "additional_tools" && item.role === "developer" && Array.isArray(item.tools)
-      ? item.tools
-      : [],
-  );
-  return additionalTools.length === 0
-    ? body
-    : {
-        ...body,
-        tools: [...(Array.isArray(body.tools) ? body.tools : []), ...additionalTools],
-      };
-}
-
-function findToolCallByCallId(input: ResponsesInputItem[], callId: string) {
-  return input.toReversed().find((item) => {
-    const type = item.type;
-    return (type === "function_call" || type === "custom_tool_call") && item.call_id === callId;
-  });
-}
-
-function parseToolCallArguments(toolCall: ResponsesInputItem) {
-  if (typeof toolCall.arguments !== "string") {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(toolCall.arguments) as unknown;
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function readProgressCommandOutput(input: ResponsesInputItem[], command: string, isPoll = false) {
-  const text = extractToolOutput(input);
-  // Provider wires carry content, not process details; JSON stdout remains data.
-  const sessionId = !isPoll
-    ? /(?:^|\n\n)Command still running \(session ([^,\s]+), pid (?:\d+|n\/a)\)\. Use process \(list\/poll\/log\/write\/send-keys\/submit\/paste\/kill\/clear\/remove\) for follow-up\.$/u.exec(
-        text,
-      )?.[1]
-    : undefined;
-  const running =
-    Boolean(sessionId) ||
-    (isPoll &&
-      /\n\n(?:Process still running\.|No new output for [^;\n]+; this session may be waiting for input\. Use process write, send-keys, submit, or paste to provide input\.)$/u.test(
-        text,
-      ));
-  // Final footers own lifecycle: Node exec joins with one newline; other owners append two.
-  // Timeout guidance is one line, so earlier stdout cannot swallow a later real footer.
-  const exitPattern = isPoll
-    ? /(?:^|\n\n)Process exited with (code -?\d+|signal \S+|unknown exit code)\.(\n\nThe command was terminated,[^\n]*)?$/u
-    : /^Node: [^\n]+\n/u.test(text)
-      ? /(?:^|\n)\(Command exited with (code -?\d+)\)$/u
-      : /(?:^|\n\n)\(Command exited with (code -?\d+)\)$/u;
-  const exit = exitPattern.exec(text);
-  // Bind the command inside the matcher so warning text cannot hide a later native notice.
-  const commandPattern = escapeRegExp(command);
-  const approval = new RegExp(
-    String.raw`(?:^|\n\n)Approval required \(id (?<approvalSlug>[^,\n]+), full [^\n]+\)\.\nHost: (?:gateway|node)\n(?:Node: [^\n]+\n)?CWD: [^\n]+\nCommand:\n(?<fence>\x60{3,})sh\n${commandPattern}\n\k<fence>\nMode: foreground \(interactive approvals available\)\.\n(?:Background mode [^\n]+\n)?Reply with: \/approve \k<approvalSlug> (?<decisions>allow-once(?:\|allow-always)?\|deny)\n(?<unavailable>Allow Always is unavailable for this command\.\n)?If the short code is ambiguous, use the full id in \/approve\.$`,
-    "u",
-  ).exec(text)?.groups;
-  const fence = approval?.fence;
-  // Require the formatter's canonical fence and decision guidance so malformed quoted notices stay stdout.
-  const pendingApproval =
-    fence &&
-    !command.includes(fence) &&
-    (fence.length === 3 || command.includes(fence.slice(1))) &&
-    Boolean(approval?.decisions?.includes("allow-always")) !== Boolean(approval?.unavailable);
-  const unknownNotice = new RegExp(
-    String.raw`(?:^|\n\n)Node command outcome is unknown for [^\n]+\.\nThe command may have executed\. Do not rerun it automatically\.\n\nCommand:\n${commandPattern}\n\nDetails: `,
-    "u",
-  ).test(text);
-  let state: "running" | "completed" | "failed" | "unconfirmed";
-  if (
-    !isPoll &&
-    (pendingApproval ||
-      /(?:^|\n\n)Approval required\. I sent approval DMs to the approvers for this account\.$/u.test(
-        text,
-      ) ||
-      /(?:^|\n\n)Exec approval is required, but no interactive approval client is currently available\.\n\nApprove it from the Web UI or terminal UI[^\n]* Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox\.[^\n]* Then retry the command\. You can usually leave execApprovals\.approvers unset when owner config already identifies the approvers\.$/u.test(
-        text,
-      ) ||
-      unknownNotice)
-  ) {
-    // Complete notices own lifecycle state; an unknown result's Details tail is only diagnostic text.
-    state = "unconfirmed";
-  } else if (extractToolOutputStructuredError(input) === true) {
-    // A poll error without terminal evidence cannot establish that the command failed.
-    state = running || (isPoll && !exit) ? "unconfirmed" : "failed";
-  } else if (running) {
-    state = "running";
-  } else if (exit) {
-    state = exit[2] !== undefined || exit[1] !== "code 0" ? "failed" : "completed";
-  } else {
-    // Foreground success can be empty; a poll needs an explicit terminal result.
-    state = isPoll ? "unconfirmed" : "completed";
-  }
-  return { state, sessionId };
-}
-
-function readProgressCommand(input: ResponsesInputItem[], command: string) {
-  let current: ReturnType<typeof readProgressCommandOutput> | undefined;
-  let sessionId: string | undefined;
-  let pendingCall: ResponsesInputItem | undefined;
-  // Walk the whole turn so a valid exec or poll cannot hide an earlier foreign call.
-  for (const item of input) {
-    if (item.type === "function_call" || item.type === "custom_tool_call") {
-      const args = parseToolCallArguments(item);
-      if (
-        pendingCall ||
-        typeof item.call_id !== "string" ||
-        item.call_id.length === 0 ||
-        (current
-          ? current.state !== "running" ||
-            !sessionId ||
-            item.name !== "process" ||
-            args?.action !== "poll" ||
-            args.sessionId !== sessionId
-          : item.type !== "function_call" || item.name !== "exec" || args?.command !== command)
-      ) {
-        return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
-      }
-      pendingCall = item;
-    } else if (item.type === "function_call_output" || item.type === "custom_tool_call_output") {
-      if (!pendingCall || item.call_id !== pendingCall.call_id) {
-        return { error: "BUG-TOOL-PROGRESS-CALL-MISMATCH" };
-      }
-      const isPoll = current !== undefined;
-      current = readProgressCommandOutput([item], command, isPoll);
-      if (!isPoll) {
-        sessionId = current.sessionId;
-      }
-      pendingCall = undefined;
-    }
-  }
-  if (!current) {
-    return {
-      error: pendingCall ? "BUG-TOOL-PROGRESS-RESULT-MISSING" : "BUG-TOOL-PROGRESS-CALL-MISMATCH",
-    };
-  }
-  if (pendingCall || current.state === "unconfirmed") {
-    return { error: "BUG-TOOL-DID-NOT-COMPLETE" };
-  }
-  if (current.state === "running") {
-    return sessionId ? { sessionId } : { error: "BUG-TOOL-PROGRESS-SESSION-MISSING" };
-  }
-  return { failed: current.state === "failed" };
-}
-
-function readGeneratedCodeModeExecSource(toolCall: ResponsesInputItem | undefined) {
-  if (toolCall?.type === "custom_tool_call" && typeof toolCall.input === "string") {
-    return toolCall.input;
-  }
-  const code = toolCall ? parseToolCallArguments(toolCall)?.code : undefined;
-  return typeof code === "string" ? code : undefined;
-}
-
-function isGeneratedCodeModeExecCall(toolCall: ResponsesInputItem | undefined) {
-  const source = toolCall?.name === "exec" ? readGeneratedCodeModeExecSource(toolCall) : undefined;
-  return typeof source === "string" && decodeCodeModeTarget(source) !== null;
-}
-
-function parseNativeCodeModeOutput(
-  output: unknown,
-): { status: "waiting"; cellId: string } | { status: "completed"; value: unknown } | null {
-  if (!Array.isArray(output)) {
-    return null;
-  }
-  const readText = (item: unknown) =>
-    typeof item === "string"
-      ? item
-      : item &&
-          typeof item === "object" &&
-          typeof (item as Record<string, unknown>).text === "string"
-        ? String((item as Record<string, unknown>).text)
-        : null;
-  const statusText = readText(output[0]);
-  if (!statusText) {
-    return null;
-  }
-  const cellId = /^Script running with cell ID ([^\s\n]+)/u.exec(statusText)?.[1];
-  if (cellId) {
-    return { status: "waiting", cellId };
-  }
-  if (!statusText.startsWith("Script completed\n")) {
-    return null;
-  }
-  for (const item of output.slice(1).toReversed()) {
-    const text = readText(item);
-    if (!text) {
-      continue;
-    }
-    try {
-      return { status: "completed", value: JSON.parse(text) as unknown };
-    } catch {
-      // Native Code Mode may emit non-JSON content before the final value.
-    }
-  }
-  return null;
-}
-
-function isGeneratedCodeModeWaitCall(input: ResponsesInputItem[], toolCall: ResponsesInputItem) {
-  if (toolCall.name !== "wait") {
-    return false;
-  }
-  const args = parseToolCallArguments(toolCall);
-  const waitId =
-    typeof args?.cell_id === "string"
-      ? args.cell_id
-      : typeof args?.runId === "string"
-        ? args.runId
-        : undefined;
-  if (!waitId) {
-    return false;
-  }
-  return input.some((item) => {
-    if (
-      (item.type !== "function_call_output" && item.type !== "custom_tool_call_output") ||
-      typeof item.call_id !== "string"
-    ) {
-      return false;
-    }
-    const native = parseNativeCodeModeOutput(item.output);
-    const parsed = native ?? parseToolOutputJson(stringifyScenarioToolOutput(item.output));
-    return (
-      parsed?.status === "waiting" &&
-      (("cellId" in parsed && parsed.cellId === waitId) ||
-        ("runId" in parsed && parsed.runId === waitId)) &&
-      isGeneratedCodeModeExecCall(findToolCallByCallId(input, item.call_id))
-    );
-  });
-}
-
-function readRestartCheckpointProgress(input: ResponsesInputItem[]) {
-  const checkpoints = new Set<number>();
-  for (const item of input) {
-    if (item.name !== "exec") {
-      continue;
-    }
-    const source = readGeneratedCodeModeExecSource(item);
-    if (!source?.includes("qa_restart_wait")) {
-      continue;
-    }
-    for (const match of source.matchAll(/\bCHECKPOINT-([1-3])\b/gu)) {
-      checkpoints.add(Number(match[1]));
-    }
-  }
-  const waitCount = input.filter((item) => isGeneratedCodeModeWaitCall(input, item)).length;
-  return {
-    checkpoints: [...checkpoints].toSorted((left, right) => left - right),
-    waitCount,
-  };
-}
-
-function isCodeModeControlToolOutput(body: Record<string, unknown>, input: ResponsesInputItem[]) {
-  if (!hasCodeModeExecSurface(body)) {
-    return false;
-  }
-  const toolOutputCallId = extractToolOutputCallId(input);
-  if (!toolOutputCallId) {
-    return false;
-  }
-  const toolCall = findToolCallByCallId(input, toolOutputCallId);
-  return (
-    isGeneratedCodeModeExecCall(toolCall) ||
-    (toolCall ? isGeneratedCodeModeWaitCall(input, toolCall) : false)
-  );
-}
-
-function buildScenarioToolCallEvents(
-  body: Record<string, unknown>,
-  name: string,
-  args: Record<string, unknown>,
-) {
-  // Code Mode hides catalog capabilities behind exec/wait. Route through that
-  // visible surface while retaining the nested capability as debug evidence.
-  if (
-    name === "exec" ||
-    name === "wait" ||
-    hasToolDefinition(body, name) ||
-    !hasCodeModeExecSurface(body)
-  ) {
-    const declaration = [
-      ...(Array.isArray(body.tools) ? body.tools : []),
-      ...(Array.isArray(body.dynamicTools) ? body.dynamicTools : []),
-    ].find((tool) => findNamedToolDefinition(tool, name));
-    const definition = findNamedToolDefinition(declaration, name);
-    // Function and custom calls both retain their declared namespace; Codex
-    // dispatches the complete identity and rejects a flattened nested tool.
-    const namespace =
-      declaration &&
-      typeof declaration === "object" &&
-      declaration.type === "namespace" &&
-      typeof declaration.name === "string"
-        ? declaration.name
-        : undefined;
-    if (definition?.type === "custom" && typeof args.input === "string") {
-      return buildCustomToolCallEventsWithInput(name, args.input, namespace);
-    }
-    return buildRawToolCallEventsWithArgs(name, args, namespace);
-  }
-  const encodedTarget = encodeCodeModeTarget(name, args);
-  if (resolveCodeModeExecSurface(body) === "native") {
-    return buildCustomToolCallEventsWithInput(
-      "exec",
-      [
-        `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
-        `const targetName = ${JSON.stringify(name)};`,
-        `const targetArgs = ${JSON.stringify(args)};`,
-        "const target = ALL_TOOLS.find((entry) => entry.name === targetName);",
-        "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
-        "let value = await tools[target.name](targetArgs);",
-        'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
-        "  value = { ...value, content: value.content.slice(0, 2048) };",
-        "}",
-        "text(JSON.stringify(value));",
-      ].join("\n"),
-    );
-  }
-  return buildRawToolCallEventsWithArgs("exec", {
-    language: "javascript",
-    code: [
-      `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
-      `const targetName = ${JSON.stringify(name)};`,
-      `const targetArgs = ${JSON.stringify(args)};`,
-      "const target = (await catalog.search(targetName)).find((entry) => entry.toolName === targetName);",
-      "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
-      "const value = await target(targetArgs);",
-      'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
-      "  return { ...value, content: value.content.slice(0, 2048) };",
-      "}",
-      "return value;",
-    ].join("\n"),
-  });
-}
-
-function extractScenarioPlannedTool(events: StreamEvent[]) {
-  const wireName = extractPlannedToolName(events);
-  const wireArgs = extractPlannedToolArgs(events);
-  const source =
-    typeof wireArgs?.input === "string"
-      ? wireArgs.input
-      : typeof wireArgs?.code === "string"
-        ? wireArgs.code
-        : undefined;
-  if (wireName !== "exec" || !source) {
-    return { name: wireName, args: wireArgs, wireName };
-  }
-  const target = decodeCodeModeTarget(source);
-  return target
-    ? { name: target.name, args: target.args, wireName }
-    : { name: wireName, args: wireArgs, wireName };
-}
 
 type TerminalRequesterSettleGate = {
   markSettled: (caseName: string, childSessionKey: string) => void;
@@ -831,7 +398,7 @@ function resolveQaChildSessionKey(input: ResponsesInputItem[], body: Record<stri
 }
 
 function resolveAcceptedChildSessionKey(input: ResponsesInputItem[]) {
-  const output = parseToolOutputJson(extractToolOutput(input));
+  const output = parseToolOutputJson(unwrapScenarioCatalogOutput(input));
   return output?.status === "accepted" && typeof output.childSessionKey === "string"
     ? output.childSessionKey.trim() || undefined
     : undefined;
@@ -912,15 +479,9 @@ async function buildResponsesPayload(
       ? stringifyScenarioToolOutput(codeModeControlJson.value)
       : codeModeSurface === "native" && hasCodeModeControlOutput
         ? ""
-        : rawToolOutput;
+        : unwrapScenarioCatalogOutput(input, rawToolOutput);
   const completedToolCall = findToolCallByCallId(input, extractToolOutputCallId(input));
-  const completedToolName = (() => {
-    if (completedToolCall?.name !== "exec") {
-      return completedToolCall?.name;
-    }
-    const code = readGeneratedCodeModeExecSource(completedToolCall);
-    return typeof code === "string" ? decodeCodeModeTarget(code)?.name : undefined;
-  })();
+  const completedToolName = readScenarioCompletedToolName(completedToolCall);
   const buildToolCallEventsWithArgs = (name: string, args: Record<string, unknown>) =>
     buildScenarioToolCallEvents(toolDeclarationBody, name, args);
   const pendingCommandProgress = (
@@ -1061,7 +622,6 @@ async function buildResponsesPayload(
       if (hasDeclaredTool(body, "exec")) {
         const encodedTarget = encodeCodeModeTarget("qa_restart_wait", {});
         return buildToolCallEventsWithArgs("exec", {
-          language: "javascript",
           restartSafe: true,
           code: [
             `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
@@ -1154,11 +714,9 @@ async function buildResponsesPayload(
   );
   const sideEffectKind =
     QA_EMPTY_RESPONSE_SIDE_EFFECT_PROMPT_RE.exec(sideEffectPrompt)?.[1]?.toLowerCase();
-  const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
-  const canCallSessionsSpawn =
-    hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
-  const canCallSessionsYield =
-    hasToolDefinition(toolDeclarationBody, "sessions_yield") || hasCallableCodeMode;
+  const canCallSessionsSpawn = canCallScenarioTool(toolDeclarationBody, "sessions_spawn");
+  const canCallSessionsYield = canCallScenarioTool(toolDeclarationBody, "sessions_yield");
+  const canCallMessage = canCallScenarioTool(toolDeclarationBody, "message");
   const slackProgressTurn = extractLastMatchingUserTurn(
     input,
     QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
@@ -1248,7 +806,6 @@ async function buildResponsesPayload(
     if (!hasCompletedToolOutput && hasDeclaredTool(body, "exec")) {
       const useApiFiles = QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText);
       return buildToolCallEventsWithArgs("exec", {
-        language: "javascript",
         code: useApiFiles
           ? [
               "const [files, root, api, result, failure, resources, resource, prompts, prompt] = await Promise.all([",
@@ -1391,7 +948,7 @@ async function buildResponsesPayload(
       if (completedToolName === "message") {
         return buildAssistantEvents("");
       }
-      if (hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode) {
+      if (canCallMessage) {
         const deliveryInstructions = extractAllRequestTexts(
           input.filter((item) => item.role === "system" || item.role === "developer"),
           body,
@@ -1424,7 +981,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("NO_REPLY");
   }
   if (terminalWorkerCase === "empty") {
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "write")) {
+    if (!hasCompletedToolOutput && canCallScenarioTool(toolDeclarationBody, "write")) {
       return buildToolCallEventsWithArgs("write", {
         path: "qa-terminal-empty-side-effect.txt",
         content: "empty terminal QA side effect completed\n",
@@ -2312,7 +1869,7 @@ async function buildResponsesPayload(
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&
     !hasCompletedToolOutput &&
-    (hasToolDefinition(body, "image_generate") || hasCodeModeExecSurface(body))
+    canCallScenarioTool(toolDeclarationBody, "image_generate")
   ) {
     return buildToolCallEventsWithArgs("image_generate", {
       prompt: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
@@ -2337,9 +1894,7 @@ async function buildResponsesPayload(
       /visible reply must use `?message\(action=send\)`?;\s*final text is private/i.test(
         currentFanoutInstructions,
       ));
-  const fanoutRequiresMessageTool =
-    fanoutHasPrivateSourceReply &&
-    (hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode);
+  const fanoutRequiresMessageTool = fanoutHasPrivateSourceReply && canCallMessage;
   if (
     scenarioState.subagentFanoutPhase === 3 &&
     fanoutRequiresMessageTool &&
@@ -2436,7 +1991,7 @@ async function buildResponsesPayload(
       if (completedToolName === "message") {
         return buildAssistantEvents("NO_REPLY");
       }
-      return hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode
+      return canCallMessage
         ? buildToolCallEventsWithArgs("message", {
             action: "send",
             message: forkCompletion,

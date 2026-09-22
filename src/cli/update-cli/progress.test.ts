@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
+import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import { createUpdateProgress, printResult } from "./progress.js";
@@ -199,8 +201,11 @@ describe("update progress", () => {
         .mockReturnValueOnce(present ? captured : undefined)
         .mockReturnValue(later);
       try {
-        await printResult(result, { run: context });
+        const nextAction = "Update is not finished. Check progress: openclaw update status";
+        await printResult(result, { run: context }, { nextAction });
         const lines = log.mock.calls.flat();
+        expect(lines.at(-1)).toBe(nextAction);
+        expect(lines.join("\n").match(/openclaw update status/g)).toHaveLength(1);
         expect(
           lines.filter((line) => typeof line === "string" && line.startsWith("Phase:")),
         ).toEqual(present ? ["Phase: requested", "Phase: verifying"] : ["Phase: requested"]);
@@ -349,6 +354,7 @@ describe("update progress", () => {
       },
       {},
     );
+    expect(log.mock.calls.flat().join("\n")).toContain(`Distinct detail ${"y".repeat(40)}`);
     expect(log.mock.calls.flat().join("\n")).toContain("deadline exceeded");
     log.mockClear();
     presentation.progress.onStepComplete?.({
@@ -410,6 +416,207 @@ describe("update progress", () => {
     await printResult(result, { json: true, run: context });
     expect(log).not.toHaveBeenCalled();
     expect(writeJson).toHaveBeenCalledExactlyOnceWith({ ...result, run, reportPath });
+  });
+
+  it.each([
+    { history: "running", rolledBack: false },
+    { history: "succeeded", rolledBack: false },
+    { history: "rolled-back", rolledBack: false },
+    { history: "rolled-back", rolledBack: true },
+  ] as const)(
+    "prints current failure facts over $history history (verified rollback=$rolledBack)",
+    async ({ history, rolledBack }) => {
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      run.status = history;
+      run.phase = history === "running" ? "verifying" : "finished";
+      run.reason = rolledBack ? "doctor-failed" : "build-failed";
+      run.after = { version: "2026.9.4" };
+      run.target = { version: "2026.9.5" };
+      const saved = structuredClone(run);
+      const latest: UpdateRunResult = {
+        ...result,
+        status: "error",
+        reason: "doctor-failed",
+        before: { version: "2026.9.4" },
+        after: { version: rolledBack ? "2026.9.4" : "2026.9.5" },
+        verification: { runningVersion: "2026.9.4", versionMatch: rolledBack },
+        ...(rolledBack
+          ? {
+              recovery: {
+                serviceRestartSafe: true,
+                packageRollbackVerified: true,
+                service: "healthy",
+                version: "2026.9.4",
+              },
+            }
+          : {}),
+      };
+
+      await printResult(latest, { run: context });
+      const output = log.mock.calls.flat().join("\n");
+      expect(output).toContain(
+        rolledBack
+          ? "OpenClaw update rolled back to 2026.9.4: doctor-failed"
+          : "OpenClaw update failed: doctor-failed",
+      );
+      const identity = rolledBack ? "version verified" : "version mismatch";
+      expect(output).toContain(identity);
+      const publicReport = await prepareUpdateFailureReport(
+        { attemptId: runId, result: latest, recordedRun: run },
+        { env: {}, stateDir: "/isolated/update-progress" },
+      );
+      expect(publicReport.body).toContain(`Recorded verification: ${identity}`);
+      await printResult(latest, { json: true, run: context });
+      expect(writeJson).toHaveBeenCalledExactlyOnceWith({ ...latest, run: saved, reportPath });
+      expect(run).toEqual(saved);
+    },
+  );
+
+  it.each([true, false, undefined])(
+    "prints raw recovery observations without rewriting saved history (running=%s)",
+    async (serviceRunning) => {
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      run.status = "failed";
+      run.phase = "finished";
+      run.reason = "post-update-plugins";
+      run.after = { version: "2026.9.5" };
+      run.verification = {
+        serviceRunning: serviceRunning !== true,
+        runningVersion: "2026.8.99",
+        versionMatch: true,
+        readyz: true,
+        settled: true,
+        booted: true,
+        noticeDelivered: true,
+        doctorHint: "Retained lifecycle guidance",
+        recovery:
+          serviceRunning === true
+            ? { serviceRestartSafe: false, reason: "state-migration-started" }
+            : { serviceRestartSafe: true, version: "2026.8.99", service: "healthy" },
+      };
+      run.steps.push({
+        step: "gateway recovery verification",
+        status: "completed",
+        exitCode: 0,
+      });
+      const saved = structuredClone(run);
+      const latest: UpdateRunResult = {
+        ...result,
+        status: "error",
+        reason: "post-update-plugins",
+        after: run.after,
+        verification:
+          serviceRunning === undefined
+            ? {}
+            : {
+                serviceRunning,
+                runningVersion: "2026.9.5",
+                versionMatch: true,
+                readyz: serviceRunning,
+                settled: serviceRunning,
+              },
+        ...(serviceRunning === true
+          ? { recovery: { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" } }
+          : {}),
+        steps:
+          serviceRunning === undefined
+            ? []
+            : [
+                {
+                  name: "gateway recovery verification",
+                  command: "gateway verification",
+                  cwd: "/fixture",
+                  durationMs: 0,
+                  exitCode: serviceRunning ? 0 : 1,
+                  ...(!serviceRunning
+                    ? { failureFacts: [{ check: "service", code: "service-not-running" }] }
+                    : {}),
+                },
+              ],
+      };
+
+      await printResult(latest, { run: context });
+
+      const output = log.mock.calls.flat().join("\n");
+      expect(output).toContain("gateway booted");
+      expect(output).toContain("Retained lifecycle guidance");
+      expect(output).not.toContain("2026.8.99");
+      if (serviceRunning === undefined) {
+        expect(output).not.toContain("service running");
+        expect(output).not.toContain("service stopped");
+        expect(output).not.toContain("verified serving");
+      } else {
+        expect(output).toContain(serviceRunning ? "service running" : "service stopped");
+        expect(output).toContain(
+          serviceRunning
+            ? "verified serving 2026.9.5; restart remains unsafe (state-migration-started)"
+            : "not serving (service-not-running)",
+        );
+      }
+      await printResult(latest, { json: true, run: context });
+      expect(writeJson).toHaveBeenCalledExactlyOnceWith({ ...latest, run: saved, reportPath });
+      expect(run).toEqual(saved);
+    },
+  );
+
+  it("preserves a captured success receipt over stale raw recovery proof", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const captured: UpdateRunRecord = {
+      ...run,
+      status: "succeeded",
+      phase: "finished",
+      after: { version: "2026.9.5" },
+      steps: [{ step: "gateway recovery verification", status: "completed", exitCode: 0 }],
+      verification: {
+        serviceRunning: true,
+        runningVersion: "2026.9.5",
+        versionMatch: true,
+        readyz: true,
+        settled: true,
+        channelsReady: true,
+        pluginErrors: [],
+        recovery: { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" },
+      },
+      confirmedAtMs: 300,
+      finishedAtMs: 301,
+    };
+    const saved = structuredClone(captured);
+    const stale: UpdateRunResult = {
+      ...result,
+      after: captured.after,
+      recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
+      steps: [
+        {
+          name: "gateway recovery verification",
+          command: "gateway verification",
+          cwd: "/fixture",
+          durationMs: 1,
+          exitCode: 1,
+          failureFacts: [{ check: "settled", code: "stale-readiness-failure" }],
+        },
+      ],
+    };
+    const read = vi
+      .mocked(getUpdateRun)
+      .mockClear()
+      .mockImplementation(() => {
+        throw new Error("Captured terminal publication must not reopen history.");
+      });
+
+    await printResult(stale, { run: context }, { record: captured });
+
+    const output = log.mock.calls.flat().join("\n");
+    expect(output).toContain("OpenClaw updated to 2026.9.5");
+    expect(output).toContain("Recovery: verified serving 2026.9.5.");
+    expect(output).not.toContain("stale-readiness-failure");
+    expect(output).not.toContain("state-migration-started");
+    await printResult(stale, { json: true, run: context }, { record: captured });
+    expect(writeJson).toHaveBeenCalledExactlyOnceWith({ ...stale, run: saved, reportPath });
+    expect(read).not.toHaveBeenCalled();
+    expect(captured).toEqual(saved);
   });
 
   it("suspends every ledger reader through activation and resumes the recorded timeline", () => {

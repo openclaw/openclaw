@@ -74,13 +74,15 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       token_endpoint_auth_methods_supported: ["none"],
     });
     const observeProvider = (
-      observe: (provider: ReturnType<typeof oauthProvider.createMcpOAuthClientProvider>) => void,
+      observe: (
+        provider: Awaited<ReturnType<typeof oauthProvider.createMcpOAuthClientProvider>>,
+      ) => void,
     ) => {
       const create = oauthProvider.createMcpOAuthClientProvider;
       const spy = vi
         .spyOn(oauthProvider, "createMcpOAuthClientProvider")
-        .mockImplementation((params) => {
-          const provider = create(params);
+        .mockImplementation(async (params) => {
+          const provider = await create(params);
           if (params.login) {
             observe(provider);
           }
@@ -136,8 +138,8 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       const started = await begin();
       expect((await callback(started.state)).status).toBe(200);
       expect(await terminal(started.sessionId)).toMatchObject({ status: "done" });
-      expect(stored().tokens?.access_token).toBe("fixture-access");
-      expect(stored().tokensAuthorizationServerUrl).toBe(new URL(resourceUrl).origin);
+      expect((await stored()).tokens?.access_token).toBe("fixture-access");
+      expect((await stored()).tokensAuthorizationServerUrl).toBe(new URL(resourceUrl).origin);
     };
 
     beforeEach(async () => {
@@ -181,18 +183,20 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         effects.tokenLifetimeSeconds = 30;
         await seed();
         effects.tokenLifetimeSeconds = 3600;
-        const cached = { ...expectDefined(stored().discoveryState, "seed discovery") };
+        const cached = { ...expectDefined((await stored()).discoveryState, "seed discovery") };
         if (missing === "resource") {
           delete cached.resourceMetadata;
         } else {
           delete cached.authorizationServerMetadata;
         }
-        const seedProvider = oauthProvider.createMcpOAuthClientProvider({ identity: identity() });
+        const seedProvider = await oauthProvider.createMcpOAuthClientProvider({
+          identity: identity(),
+        });
         await expectDefined(
           seedProvider.saveDiscoveryState?.bind(seedProvider),
           "canonical discovery writer",
         )(cached);
-        const before = stored();
+        const before = await stored();
         const beforeRequests = requests.length;
         const saves: Parameters<NonNullable<typeof seedProvider.saveDiscoveryState>>[0][] = [];
         observeProvider((provider) => {
@@ -215,7 +219,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
             ? "/.well-known/oauth-protected-resource/mcp"
             : "/.well-known/oauth-authorization-server",
         ]);
-        expect(stored()).toEqual(before);
+        expect(await stored()).toEqual(before);
         expect(before.pendingAuthorizationChallenge).toBeUndefined();
         expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeGreaterThan(Date.now());
       },
@@ -238,17 +242,17 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         return true;
       };
       let attemptedClient: unknown;
-      let beforeSave: ReturnType<typeof stored> | undefined;
+      let beforeSave: Awaited<ReturnType<typeof stored>> | undefined;
       let saveCalls = 0;
       observeProvider((provider) => {
         const save = expectDefined(
           provider.saveClientInformation?.bind(provider),
           "client information writer",
         );
-        vi.spyOn(provider, "saveClientInformation").mockImplementation((value) => {
+        vi.spyOn(provider, "saveClientInformation").mockImplementation(async (value) => {
           saveCalls++;
           attemptedClient = value;
-          beforeSave = stored();
+          beforeSave = await stored();
           revoke();
           return save(value);
         });
@@ -260,9 +264,9 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       expect(beforeSave?.discoveryState?.authorizationServerMetadata).toMatchObject({
         client_id_metadata_document_supported: true,
       });
-      expect(stored()).toEqual(expectDefined(beforeSave, "pre-client-save store"));
-      expect(stored().clientInformation).toBeUndefined();
-      expect(stored().tokens).toBeUndefined();
+      expect(await stored()).toEqual(expectDefined(beforeSave, "pre-client-save store"));
+      expect((await stored()).clientInformation).toBeUndefined();
+      expect((await stored()).tokens).toBeUndefined();
       expect(requests.slice(beforeRequests)).toEqual([
         "/.well-known/oauth-protected-resource/mcp",
         "/.well-known/oauth-authorization-server",
@@ -354,17 +358,17 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
             }
           },
         });
-        const before = stored();
+        const before = await stored();
         const beforeRequests = requests.length;
         if (withdraw) {
           await finishError(await start());
-          expect(stored()).toEqual(before);
+          expect(await stored()).toEqual(before);
           expect(requests.slice(beforeRequests)).not.toContain(cell.next);
           expect(requests.at(-1)).toBe(stopPath);
         } else {
           await begin();
           expect(requests.slice(beforeRequests)).toContain(cell.next);
-          expect(stored().lastAuthorizationUrl).toBeDefined();
+          expect((await stored()).lastAuthorizationUrl).toBeDefined();
         }
         expect(boundaryCount).toBe(1);
         expect(attempts).toContain(cell.next);
@@ -402,10 +406,10 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
             }
           },
         });
-        const before = stored();
+        const before = await stored();
         if (withdraw) {
           await finishError(await start());
-          expect(stored()).toEqual(before);
+          expect(await stored()).toEqual(before);
           expect(wireRequests).toBe(1);
         } else {
           await begin();
@@ -432,7 +436,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           effects.tokenLifetimeSeconds = lifetime;
           await seed();
           effects.tokenLifetimeSeconds = 3600;
-          const before = stored();
+          const before = await stored();
           expect(before.pendingAuthorizationChallenge).toBeUndefined();
           let requestParams: URLSearchParams | undefined;
           let responseBoundary = 0;
@@ -477,13 +481,13 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           const beforeRequests = requests.length;
           if (lifetime === 0 && !withdraw) {
             const started = await begin();
-            expect(oauthStore.readMcpOAuthPendingAuthorization(started.state)).toBe(
+            expect(await oauthStore.readMcpOAuthPendingAuthorization(started.state)).toBe(
               identity().storeKey,
             );
-            expect(stored().lastAuthorizationUrl).toBeDefined();
+            expect((await stored()).lastAuthorizationUrl).toBeDefined();
           } else {
             await finishError(await start());
-            expect(stored()).toEqual(before);
+            expect(await stored()).toEqual(before);
           }
           expect(responseBoundary).toBe(1);
           if (error === "transport") {
@@ -495,9 +499,11 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           expect(requestParams?.get("refresh_token")).toBe(before.tokens?.refresh_token);
           expect(requestParams?.get("client_id")).toBe(before.clientInformation?.client_id);
           expect(requests.slice(beforeRequests)).toEqual(["/token"]);
-          expect(stored().tokens).toEqual(before.tokens);
-          expect(stored().clientInformation).toEqual(before.clientInformation);
-          expect(stored().tokensAuthorizationServerUrl).toBe(before.tokensAuthorizationServerUrl);
+          expect((await stored()).tokens).toEqual(before.tokens);
+          expect((await stored()).clientInformation).toEqual(before.clientInformation);
+          expect((await stored()).tokensAuthorizationServerUrl).toBe(
+            before.tokensAuthorizationServerUrl,
+          );
           if (lifetime > 0) {
             expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeGreaterThan(Date.now());
           } else {
@@ -520,8 +526,8 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       let verifierFailure: unknown;
       observeProvider((provider) => {
         const state = expectDefined(provider.state?.bind(provider), "state owner");
-        vi.spyOn(provider, "state").mockImplementation(() => {
-          const value = state();
+        vi.spyOn(provider, "state").mockImplementation(async () => {
+          const value = await state();
           const digest = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle);
           const spy = vi
             .spyOn(globalThis.crypto.subtle, "digest")
@@ -561,7 +567,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
             .then(() => "settled-before-digest"),
         ]),
       ).toBe("digest");
-      const before = stored();
+      const before = await stored();
       const beforeRequests = requests.length;
       revoke();
       release.resolve();
@@ -573,9 +579,9 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       expect(digestInput).toEqual(
         new TextEncoder().encode(expectDefined(verifier, "SDK verifier")),
       );
-      expect(stored()).toEqual(before);
-      expect(stored().codeVerifier).toBeUndefined();
-      expect(stored().lastAuthorizationUrl).toBeUndefined();
+      expect(await stored()).toEqual(before);
+      expect((await stored()).codeVerifier).toBeUndefined();
+      expect((await stored()).lastAuthorizationUrl).toBeUndefined();
       expect(requests).toHaveLength(beforeRequests);
     });
 
@@ -615,9 +621,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           .spyOn(oauthStore, "writeMcpOAuthPendingAuthorization")
           .mockImplementation((...args) => {
             insert(...args);
-            if (oauthStore.readMcpOAuthPendingAuthorization(args[1]) !== undefined) {
-              publishedPending.push(args[1]);
-            }
+            publishedPending.push(args[1]);
           });
         restoreEffects.push(() => spy.mockRestore());
         const sessionId = await start();
@@ -629,7 +633,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
               .then(() => "settled-before-publication"),
           ]),
         ).toBe("published");
-        const published = stored();
+        const published = await stored();
         const rejectedState = expectDefined(state, "published state");
         expect(
           new URL(expectDefined(published.lastAuthorizationUrl, "published URL")).searchParams.get(
@@ -637,11 +641,11 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           ),
         ).toBe(rejectedState);
         expect(published.codeVerifier).toHaveLength(43);
-        expect(oauthStore.readMcpOAuthPendingAuthorization(rejectedState)).toBeUndefined();
+        expect(await oauthStore.readMcpOAuthPendingAuthorization(rejectedState)).toBeUndefined();
         const beforeRequests = requests.length;
         revoke();
         release.resolve();
-        let replacement: ReturnType<typeof stored> | undefined;
+        let replacement: Awaited<ReturnType<typeof stored>> | undefined;
         let replacementState: string | undefined;
         if (newerCli) {
           expect(
@@ -661,27 +665,27 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
             throw new Error("New CLI authorization was not published");
           }
           replacementState = newer.state;
-          replacement = stored();
+          replacement = await stored();
           expect(replacementState).not.toBe(rejectedState);
-          expect(oauthStore.readMcpOAuthPendingAuthorization(replacementState)).toBe(
+          expect(await oauthStore.readMcpOAuthPendingAuthorization(replacementState)).toBe(
             identity().storeKey,
           );
         }
         releaseCleanup.resolve();
         await finishError(sessionId);
         expect(publishedPending).toEqual(replacementState ? [replacementState] : []);
-        expect(oauthStore.readMcpOAuthPendingAuthorization(rejectedState)).toBeUndefined();
+        expect(await oauthStore.readMcpOAuthPendingAuthorization(rejectedState)).toBeUndefined();
         expect((await callback(rejectedState)).status).toBe(410);
         if (replacementState) {
-          expect(stored()).toEqual(expectDefined(replacement, "newer CLI store"));
-          expect(oauthStore.readMcpOAuthPendingAuthorization(replacementState)).toBe(
+          expect(await stored()).toEqual(expectDefined(replacement, "newer CLI store"));
+          expect(await oauthStore.readMcpOAuthPendingAuthorization(replacementState)).toBe(
             identity().storeKey,
           );
         } else {
-          expect(stored().codeVerifier).toBeUndefined();
-          expect(stored().lastAuthorizationUrl).toBeUndefined();
+          expect((await stored()).codeVerifier).toBeUndefined();
+          expect((await stored()).lastAuthorizationUrl).toBeUndefined();
         }
-        expect(stored().tokens).toBeUndefined();
+        expect((await stored()).tokens).toBeUndefined();
         expect(requests).toHaveLength(beforeRequests);
       },
     );

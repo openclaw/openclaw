@@ -176,10 +176,24 @@ Other agent state, including sessions and transcripts in the same database,
 is retained. Use the [memory index command](/cli/memory#memory-index) for
 memory-only repair.
 
-`openclaw memory status` reports stored chunk text and JSON embedding bytes
+`openclaw memory status` reports stored chunk text and binary embedding bytes
 for each source (`sourceCounts[].chunkBytes` in JSON). These are payload sizes,
 not total disk usage: embedding cache, FTS/vector tables, SQLite overhead, and
 WAL/free pages are excluded.
+
+Chunk and embedding-cache vectors use little-endian 64-bit floating-point
+BLOBs. The software search fallback reads these full-precision vectors even
+when the optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
+separate 32-bit vector index. The keyword index uses each chunk's stable integer
+identity, so edits and deletion update the corresponding FTS rows directly.
+
+Agent schema 23 converts existing JSON vectors locally, without contacting an
+embedding provider. It preserves chunk IDs, provenance, recall metadata, and
+cache identities. Malformed legacy vectors retain their searchable text and
+mark their sources for reindexing. Unknown schema extensions that cannot be
+preserved cause migration to stop without rewriting those tables. Follow the
+[database versioning and rollback contract](/reference/database-schemas/versioning)
+when upgrading or returning to an older build.
 
 After an upgrade, automatic project and trigger recall may need to repair
 legacy provenance. That repair runs in the background. Replies continue while

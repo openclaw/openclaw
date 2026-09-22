@@ -112,9 +112,12 @@ it.each([
   }
 });
 
-it.each([false, true])(
-  "retains frozen-runtime Gateway workloads and independent evidence (interrupted=%s)",
-  async (interrupted) => {
+it.each([
+  { interrupted: false, executor: "node" },
+  { interrupted: true, executor: "quickjs" },
+] as const)(
+  "retains frozen-runtime $executor Gateway workloads and independent evidence (interrupted=$interrupted)",
+  async ({ interrupted, executor }) => {
     const repoRoot = tempDirs.make("openclaw-matrix-gateway-evidence-");
     const runtimeDir = tempDirs.make("openclaw-matrix-frozen-runtime-");
     const { head: harnessSha } = initializeGitFixture(repoRoot);
@@ -145,7 +148,7 @@ it.each([false, true])(
       passed: true,
       gitSha: "baseline",
       elapsedMs: 10,
-      workload: createGatewayMatrixWorkload(task, repetition, "off", 10),
+      workload: createGatewayMatrixWorkload(task, repetition, "off", 10, executor),
     }));
     await fs.writeFile(baselineResults, baselineRows.map((row) => JSON.stringify(row)).join("\n"));
     const outputDir = path.join(repoRoot, "artifacts");
@@ -158,6 +161,7 @@ it.each([false, true])(
         dryRun: false,
         keepState: false,
         models: [model],
+        gatewayExecutor: executor,
         modes: ["code"],
         tasks: [task],
         repetitions: 3,
@@ -186,7 +190,12 @@ it.each([false, true])(
         // not a live Gateway, model, or target-runtime attestation.
         runCell: async (params): Promise<CodeModeMatrixCellResult> => {
           calls += 1;
-          expect(params).toMatchObject({ repoRoot: runtimeDir, gitSha: runtimeSha, buildSha256 });
+          expect(params).toMatchObject({
+            repoRoot: runtimeDir,
+            gitSha: runtimeSha,
+            buildSha256,
+            executor,
+          });
           const before = validateQaEvidenceSummaryJson(
             JSON.parse(await fs.readFile(path.join(outputDir, "qa-evidence.json"), "utf8")),
           );
@@ -264,6 +273,7 @@ it.each([false, true])(
       gitSha: runtimeSha,
       buildSha256,
       harness: { gitSha: harnessSha },
+      gatewayExecutor: executor,
     });
     const rows: CodeModeMatrixCellResult[] = (
       await fs.readFile(path.join(outputDir, "results.jsonl"), "utf8")
@@ -286,6 +296,7 @@ it.each([false, true])(
     expect(evidence.occurrences).toHaveLength(3 + calls);
     expect(new Set(rows.map((row) => row.evidenceOccurrenceId)).size).toBe(calls);
     for (const row of rows) {
+      expect(row.executor).toBe(executor);
       expect(row.workload).toEqual(baselineRows[row.repetition - 1]?.workload);
       const occurrence = evidence.occurrences.find((item) => item.id === row.evidenceOccurrenceId);
       expect(occurrence).toMatchObject({

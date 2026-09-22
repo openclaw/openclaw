@@ -21,6 +21,7 @@ import {
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { isPersistedSessionRow } from "../../lib/sessions/session-row-reconcile.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -579,10 +580,11 @@ async function refreshChat(
       return;
     }
     // The shared roster may belong to another agent. Keep this pane's accepted
-    // global history separate rather than relabeling or borrowing that roster.
+    // history separate rather than relabeling or borrowing that roster.
     const scopedHistory =
-      isUiSelectedGlobalSessionKey(host, refreshedSessionKey) &&
-      host.sessions.state.agentId !== refreshedAgentId;
+      host.sessions.state.agentId !== refreshedAgentId &&
+      (isUiSelectedGlobalSessionKey(host, refreshedSessionKey) ||
+        isPersistedSessionRow(history.sessionInfo));
     host.sessionsResult = scopedHistory
       ? reconcileSessionHistory(
           host.sessionsResultAgentId === refreshedAgentId ? host.sessionsResult : null,

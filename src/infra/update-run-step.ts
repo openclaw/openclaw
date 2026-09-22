@@ -25,12 +25,14 @@ export function isFailedUpdateStep(
 export function isUpdateGatewayReadinessPending(result: UpdateRunResult): boolean {
   const step = result.steps.findLast(
     (entry) =>
-      entry.name === "gateway verification" || entry.name === "rollback gateway verification",
+      entry.name === "gateway verification" ||
+      entry.name === "rollback gateway verification" ||
+      entry.name === "gateway recovery verification",
   );
   return step?.termination === "timeout" && step.advisory?.kind === "recoverable-maintenance";
 }
 
-/** Warning rows preserve producer-classified advisories in the existing diagnostic ledger. */
+/** Preserve producer-classified diagnostics without turning successful inventory into warnings. */
 export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] {
   const text = (value: string) => truncateUtf16Safe(value, UPDATE_RUN_TEXT_LIMIT);
   const failed = isFailedUpdateStep(step);
@@ -91,11 +93,16 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
           },
         ]
       : []),
-    ...warnings.slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((detail, index) => ({
-      step: text(`warning:${step.name}${index === 0 ? "" : `:${index + 1}`}`),
-      status: "completed" as const,
-      detail: text(detail),
-    })),
+    ...[
+      { kind: "warning", messages: warnings },
+      { kind: "diagnostic", messages: step.diagnostics ?? [] },
+    ].flatMap(({ kind, messages }) =>
+      messages.slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((detail, index) => ({
+        step: text(`${kind}:${step.name}${index === 0 ? "" : `:${index + 1}`}`),
+        status: "completed" as const,
+        detail: text(detail),
+      })),
+    ),
     ...(step.configChanges ?? []).slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((change, index) => {
       const configChange =
         change.kind === "key"
@@ -113,7 +120,9 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
 
 export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
   return steps.flatMap((step) =>
-    step.status === "completed" && step.step.startsWith("warning:") && step.detail
+    (step.step === "reconcile:settle" ||
+      (step.status === "completed" && step.step.startsWith("warning:"))) &&
+    step.detail
       ? [step.detail]
       : [],
   );

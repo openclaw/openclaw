@@ -67,6 +67,13 @@ export async function runUpdateLeaseChild(): Promise<void> {
     assert.deepEqual(process.argv.slice(2), ["config", "validate", "--json"]);
     assert.equal(process.env.OPENCLAW_UPDATE_IN_PROGRESS, "0");
     await record("validate");
+    process.stdout.write(
+      JSON.stringify(
+        scenario.invalidConfig
+          ? { valid: false, issues: [{ path: "gateway.port", message: "Invalid port" }] }
+          : { valid: true },
+      ),
+    );
     process.exitCode = scenario.invalidConfig ? 1 : 0;
     return;
   }

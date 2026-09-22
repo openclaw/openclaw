@@ -314,7 +314,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:legacy-plugin-source-captures",
       label: "Legacy plugin captures",
-      updateWork: { kind: "standalone" },
+      updateWork: { kind: "startup" },
       run: runLegacyPluginSourceCapturesHealth,
     }),
     createDoctorHealthContribution({

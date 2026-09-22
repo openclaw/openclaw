@@ -6,7 +6,7 @@ import type {
   PlacementStandingGrantMintSpec,
   PlacementStandingGrantRuntime,
 } from "./operator-approval-placement-grants.js";
-import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.js";
+import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.types.js";
 import type {
   ForceDenyOperatorApprovalResult,
   OperatorApprovalKind,

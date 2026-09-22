@@ -169,9 +169,6 @@ async function deactivateLaunchAgentDefinition(domain: string, plistPath: string
 export async function installLaunchAgent(
   args: GatewayServiceInstallArgs,
 ): Promise<{ plistPath: string }> {
-  if (args.beforeLoad) {
-    throw new Error("Deferred native service load is not supported on this platform.");
-  }
   const targetPlistPath = resolveLaunchAgentPlistPath(args.env);
   const label = resolveLaunchAgentLabel(args.env);
   const domain = resolveLaunchAgentGuiDomain();

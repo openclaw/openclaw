@@ -1,5 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
+import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import {
   isSqliteNativeOpenFailure,
@@ -35,6 +37,7 @@ type ErrorValue =
   | { undefined: true };
 
 type ErrorIdentity =
+  | { type: "worker-session-already-attached"; sessionId: string; environmentId: string }
   | {
       type: "workspace-alias-repointed";
       aliasPath: string;
@@ -51,7 +54,8 @@ type ErrorIdentity =
         | "range-error"
         | "syntax-error"
         | "type-error"
-        | "skill-upload-request";
+        | "skill-upload-request"
+        | "mcp-oauth-corruption";
     }
   | { type: "coordinator-contention"; family: CoordinatorFamily }
   | { type: "ownership-metadata"; databasePath: string }
@@ -87,6 +91,13 @@ export type OpenClawStateWorkerErrorPayload = {
 type ErrorGraphOptions = { includeOrdinary?: boolean };
 
 function identifyError(error: Error): ErrorIdentity {
+  if (error instanceof WorkerSessionAlreadyAttachedError) {
+    return {
+      type: "worker-session-already-attached",
+      sessionId: error.sessionId,
+      environmentId: error.environmentId,
+    };
+  }
   if (error instanceof PluginBlobStoreError) {
     return {
       type: "plugin-blob",
@@ -102,6 +113,9 @@ function identifyError(error: Error): ErrorIdentity {
       storedWorkspacePath: error.storedWorkspacePath,
       currentWorkspacePath: error.currentWorkspacePath,
     };
+  }
+  if (error instanceof McpOAuthStoreCorruptionError) {
+    return { type: "mcp-oauth-corruption" };
   }
   if (error instanceof SkillUploadRequestError) {
     return { type: "skill-upload-request" };
@@ -261,6 +275,10 @@ function isBlobOperation(value: unknown): value is PluginBlobStoreError["operati
 
 function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined {
   switch (node.type) {
+    case "worker-session-already-attached":
+      return typeof node.sessionId === "string" && typeof node.environmentId === "string"
+        ? { type: node.type, sessionId: node.sessionId, environmentId: node.environmentId }
+        : undefined;
     case "workspace-alias-repointed":
       return typeof node.aliasPath === "string" &&
         typeof node.storedWorkspacePath === "string" &&
@@ -281,6 +299,7 @@ function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined
     case "syntax-error":
     case "type-error":
     case "skill-upload-request":
+    case "mcp-oauth-corruption":
       return { type: node.type };
     case "coordinator-contention":
       return node.family === "gateway-lifecycle" ||
@@ -410,6 +429,8 @@ function unreachableErrorNode(node: never): never {
 
 function createError(node: ErrorNode): Error {
   switch (node.type) {
+    case "worker-session-already-attached":
+      return new WorkerSessionAlreadyAttachedError(node.sessionId, node.environmentId);
     case "workspace-alias-repointed":
       return new WorkspaceAliasRepointedError(node);
     case "error":
@@ -422,6 +443,8 @@ function createError(node: ErrorNode): Error {
       return new TypeError(node.message);
     case "skill-upload-request":
       return new SkillUploadRequestError(node.message);
+    case "mcp-oauth-corruption":
+      return new McpOAuthStoreCorruptionError("", "");
     case "aggregate":
       return new AggregateError([], node.message);
     case "coordinator":

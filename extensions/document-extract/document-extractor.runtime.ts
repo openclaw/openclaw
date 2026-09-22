@@ -5,7 +5,7 @@ import type {
   DocumentExtractionRequest,
   DocumentExtractionResult,
 } from "openclaw/plugin-sdk/document-extractor";
-import type { WorkerTaskControl } from "openclaw/plugin-sdk/process-runtime";
+import type { WorkerTaskControl } from "openclaw/plugin-sdk/worker-task-server";
 
 const MAX_EXTRACTED_TEXT_CHARS = 200_000;
 const MAX_RENDER_DIMENSION = 10_000;

@@ -15,10 +15,6 @@ import {
   confirmSqliteFileIntegrity,
   type SqliteIntegrityConfirmation,
 } from "../infra/sqlite-integrity.js";
-import {
-  prepareSqliteReadOnlyLocationFromOwnedDatabase,
-  prepareSqliteReadOnlyLocationSyncInProcess,
-} from "../infra/sqlite-readonly-location.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { registerSqliteCacheExitClose, type SqliteWalHealth } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
@@ -120,7 +116,7 @@ function notifyOpenClawStateDatabaseClosed(database: StateDatabaseHandle): void 
 }
 
 export function requireOpenClawStateDatabaseIdentity(
-  database: StateDatabaseHandle,
+  database: Pick<StateDatabaseHandle, "db">,
 ): DatabasePathIdentity {
   const identity = databaseIdentities.get(database.db);
   if (!identity) {
@@ -662,64 +658,6 @@ export async function acquireOpenClawStateDatabaseFileExclusion(pathname: string
   return {
     assertCurrent: handles.assertCurrent,
     runWithSourceReads: handles.runWithSourceReads,
-    assertMutationCurrent: handles.assertMutationCurrent,
-    async mutate<T>(assertCurrent: () => void, operation: () => Promise<T>): Promise<T> {
-      let outcome: { value: T } | { error: unknown };
-      try {
-        outcome = {
-          value: await handles.runWithCanonicalMutation(
-            assertCurrent,
-            operation,
-            async (assertInspection, signal) => {
-              signal?.throwIfAborted();
-              assertInspection();
-              const opened = getOpenClawStateDatabaseIfOpenAtPath(databasePath);
-              if (opened) {
-                return await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-                  opened.db,
-                  () => {
-                    assertInspection();
-                    if (getOpenClawStateDatabaseIfOpenAtPath(databasePath) !== opened) {
-                      throw new Error("SQLite inspection lost its original native owner");
-                    }
-                  },
-                  signal,
-                );
-              }
-              // Before first open, no cached OR uncached source handle may exist.
-              handles.assertDrainedDuringMutation();
-              return await handles.runWithSourceReads(async () => {
-                assertInspection();
-                return prepareSqliteReadOnlyLocationSyncInProcess(databasePath);
-              });
-            },
-          ),
-        };
-      } catch (error) {
-        outcome = { error };
-      }
-      const errors: unknown[] = "error" in outcome ? [outcome.error] : [];
-      closeWriter(errors);
-      try {
-        handles.assertNoPins();
-      } catch (error) {
-        errors.push(error);
-      }
-      if (errors.length > 1) {
-        throw createSqliteLifecycleAggregateError(
-          errors,
-          "SQLite mutation or drainage failed",
-          errors[0],
-        );
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if ("error" in outcome) {
-        throw outcome.error;
-      }
-      return outcome.value;
-    },
     async bindCaptured(assertCurrent: () => void, operation: () => undefined): Promise<void> {
       const errors: unknown[] = [];
       let result: unknown;

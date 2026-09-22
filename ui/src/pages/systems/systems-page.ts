@@ -290,7 +290,7 @@ class SystemsPage extends OpenClawLightDomElement {
               : "systems.desktopServerNeeded"
             : "systems.desktopSetupAttention";
     const hint = enabled
-      ? "systems.desktopSetupReconnecting"
+      ? "systems.desktopSetupConnecting"
       : ready
         ? "systems.desktopSetupEnableHint"
         : isMac && setup?.state === "needs-server"
@@ -313,7 +313,7 @@ class SystemsPage extends OpenClawLightDomElement {
                 ${t(controller.desktopSetupBusy ? "systems.desktopSetupEnabling" : "systems.enableDesktopAccess")}
               </button>
               <p>
-                ${t(controller.context.runtimeConfig.canPatch === true ? "systems.desktopSetupRestartHint" : "systems.desktopSetupAdminHint")}
+                ${t(controller.context.runtimeConfig.canPatch === true ? "systems.desktopSetupApplyHint" : "systems.desktopSetupAdminHint")}
               </p>
             `
           : nothing

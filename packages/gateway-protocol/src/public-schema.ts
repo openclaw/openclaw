@@ -1,5 +1,6 @@
 // Explicit schema exports keep public protocol changes reviewable.
 export * from "./schema/sessions-goal.js";
+export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
@@ -190,9 +191,6 @@ export {
   SessionDiffScopeSchema,
   SessionsDiffParamsSchema,
   SessionsDiffResultSchema,
-  SessionsCompactionListParamsSchema,
-  SessionsCompactionBranchParamsSchema,
-  SessionsCompactionRestoreParamsSchema,
   SessionBranchSchema,
   SessionRowSchema,
   SessionsBranchesListParamsSchema,

@@ -445,20 +445,23 @@ export async function writeDesktopResizeProvider(root: string, fixture: DesktopR
   return pluginDir;
 }
 
-export function seedDesktopResizeSources(fixture: DesktopResizeFixture, nodeDeviceId?: string) {
+export async function seedDesktopResizeSources(
+  fixture: DesktopResizeFixture,
+  nodeDeviceId?: string,
+) {
   if (fixture.carrier === "node" && !nodeDeviceId) {
     throw new Error("Node desktop proof requires the actually admitted node device");
   }
-  const store = createWorkerEnvironmentStore();
+  const store = await createWorkerEnvironmentStore();
   for (const [kind, environmentId] of Object.entries(resizeSources)) {
-    const intent = store.createIntent({
+    const intent = await store.createIntent({
       environmentId,
       providerId: kind === "unmanaged" ? "desktop-unmanaged-fixture" : "desktop-resize-fixture",
       profileId: "resize-fixture",
       profileSnapshot: { executionMode: "remote-exec", settings: {} },
       provisionOperationId: `provision:${environmentId}`,
     });
-    const provisioning = store.transition({
+    const provisioning = await store.transition({
       environmentId,
       from: intent.state,
       to: "provisioning",
@@ -468,13 +471,13 @@ export function seedDesktopResizeSources(fixture: DesktopResizeFixture, nodeDevi
     const preparing =
       fixture.carrier === "node"
         ? provisioning
-        : store.transition({
+        : await store.transition({
             environmentId,
             from: provisioning.state,
             to: "bootstrapping",
             patch: { ...owner, sshEndpoint: fixture.ssh },
           });
-    store.transition({
+    await store.transition({
       environmentId,
       from: preparing.state,
       to: "ready",

@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveStableNodePath } from "./stable-node-path.js";
+import * as diskSpace from "./disk-space.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { updateGitCheckout } from "./update-runner-git.js";
@@ -15,7 +15,7 @@ import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.j
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 
-function fixture(relativeRemote = false, partialClone = false) {
+function fixture(relativeRemote = false, partialClone = false, shallow = false) {
   const root = temporary.make("openclaw-git-admission-test-");
   const source = path.join(root, "remote with spaces");
   const install = path.join(root, "installed");
@@ -56,9 +56,20 @@ function fixture(relativeRemote = false, partialClone = false) {
     return git(source, "rev-parse", "HEAD");
   };
   commit("2026.7.1", 13);
+  if (shallow) {
+    commit("2026.7.1-beta.1", 13);
+    commit("2026.7.1-beta.2", 13);
+  }
   if (partialClone) {
     git(source, "config", "uploadpack.allowFilter", "true");
-    git(root, "clone", "--filter=blob:none", pathToFileURL(source).href, install);
+    git(
+      root,
+      "clone",
+      "--filter=blob:none",
+      ...(shallow ? ["--depth=2"] : []),
+      pathToFileURL(source).href,
+      install,
+    );
   } else {
     git(root, "clone", source, install);
   }
@@ -73,9 +84,6 @@ function fixture(relativeRemote = false, partialClone = false) {
   const target = commit("2026.7.2", 14);
   const calls: string[][] = [];
   const runCommand: CommandRunner = async (argv, options) => {
-    if (argv.includes("doctor") && argv[0] === (await resolveStableNodePath(process.execPath))) {
-      return { code: 0, stdout: "", stderr: "" };
-    }
     if (argv[0] === "pnpm") {
       if (argv.includes("build")) {
         const dist = path.join(options.cwd!, "dist");
@@ -97,14 +105,26 @@ function fixture(relativeRemote = false, partialClone = false) {
     });
     return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
   };
-  const run = (options: UpdateRunnerOptions, command: CommandRunner = runCommand) =>
+  const run = (options: Partial<UpdateRunnerOptions>, command: CommandRunner = runCommand) =>
     updateGitCheckout({
       gitRoot: install,
       runCommand: command,
       defaultCommandEnv: env,
       timeoutMs: 15_000,
       startedAt: Date.now(),
-      opts: { channel: "stable", inspectGitTarget: async () => undefined, ...options },
+      opts: {
+        channel: "stable",
+        inspectGitTarget: async () => undefined,
+        validateCandidate: async () => {},
+        runGitDoctor: async (doctorRoot) => ({
+          name: "openclaw doctor",
+          command: "CLI activation doctor",
+          cwd: doctorRoot,
+          durationMs: 0,
+          exitCode: 0,
+        }),
+        ...options,
+      },
     });
   return { root, source, install, globalConfig, git, commit, target, calls, runCommand, run };
 }
@@ -128,14 +148,15 @@ function snapshotTree(root: string): string[] {
 
 describe("Git database admission", () => {
   it.each([
-    { channel: "stable", publish: false, downgrade: false },
-    { channel: "dev", publish: false, downgrade: false },
-    { channel: "stable", publish: true, downgrade: false },
-    { channel: "dev", publish: false, downgrade: true },
+    { channel: "stable", publish: false, downgrade: false, shallow: false },
+    { channel: "dev", publish: false, downgrade: false, shallow: false },
+    { channel: "stable", publish: true, downgrade: false, shallow: false },
+    { channel: "dev", publish: false, downgrade: true, shallow: false },
+    { channel: "dev", publish: false, downgrade: false, shallow: true },
   ] as const)(
-    "activates a partial clone without upstream access after admission ($channel, publish=$publish, downgrade=$downgrade)",
-    async ({ channel, publish, downgrade }) => {
-      const state = fixture(false, true);
+    "activates a partial clone without upstream access after admission ($channel, publish=$publish, downgrade=$downgrade, shallow=$shallow)",
+    async ({ channel, publish, downgrade, shallow }) => {
+      const state = fixture(false, true, shallow);
       const published = path.join(state.root, "published");
       const target = downgrade
         ? state.git(state.source, "rev-parse", "v2026.7.2-beta.1")
@@ -214,6 +235,51 @@ describe("Git database admission", () => {
       expect(fs.readdirSync(packs).filter((name) => name.endsWith(".keep"))).toEqual([]);
     },
   );
+
+  it("refuses insufficient object-volume capacity before stopping the Gateway", async () => {
+    const state = fixture();
+    const before = state.git(state.install, "rev-parse", "HEAD");
+    const prepareMutation = vi.fn();
+    const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
+      targetPath: state.install,
+      checkedPath: state.install,
+      availableBytes: 0,
+      totalBytes: 1024,
+    });
+    try {
+      const result = await state.run({ beforeGitMutation: prepareMutation });
+      expect(result).toMatchObject({ status: "error", reason: "snapshot-capacity-insufficient" });
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "git update pack capacity",
+          stderrTail: expect.stringContaining("0 bytes available"),
+        }),
+      );
+      expect(prepareMutation).not.toHaveBeenCalled();
+      expect(state.git(state.install, "rev-parse", "HEAD")).toBe(before);
+    } finally {
+      capacity.mockRestore();
+    }
+  });
+
+  it("continues with a warning when object-volume capacity is unknown", async () => {
+    const state = fixture();
+    const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue(null);
+    try {
+      const result = await state.run({ beforeGitMutation: async () => undefined });
+      expect(result.status, JSON.stringify(result)).toBe("ok");
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({
+          name: "git update pack capacity",
+          exitCode: 0,
+          warnings: [expect.stringContaining("free space could not be measured")],
+        }),
+      );
+      expect(state.git(state.install, "rev-parse", "HEAD")).toBe(state.target);
+    } finally {
+      capacity.mockRestore();
+    }
+  });
 
   it("does not release another owner's keep file after import", async () => {
     const state = fixture();
@@ -486,7 +552,12 @@ describe("Git database admission", () => {
         ...captured,
         timeoutMs: 15_000,
         startedAt: Date.now(),
-        opts: { channel: "stable", inspectGitTarget: admission },
+        opts: {
+          channel: "stable",
+          inspectGitTarget: admission,
+          validateCandidate: async () => {},
+          runGitDoctor: async () => null,
+        },
       });
       if (configured) {
         await expect(result).rejects.toBe(refused);
@@ -671,10 +742,19 @@ process.exit(result.status ?? 93);
     expect(publish).toHaveBeenCalledTimes(refuse ? 0 : 1);
     expect(fs.existsSync(published)).toBe(!refuse);
   });
-  it.each([false, true])(
-    "refuses before installed Git writes (relative remote=%s)",
-    async (relative) => {
-      const state = fixture(relative);
+  it.each([
+    { relative: false, shallow: false },
+    { relative: true, shallow: false },
+    { relative: false, shallow: true },
+  ])(
+    "refuses before installed Git writes (relative remote=$relative, shallow=$shallow)",
+    async ({ relative, shallow }) => {
+      const state = fixture(relative, shallow, shallow);
+      if (shallow) {
+        expect(
+          state.git(state.install, "rev-list", "--objects", "--missing=print", "--all"),
+        ).toMatch(/^\?/m);
+      }
       // Unchanged content with a stale index stat cache must remain read-only too.
       fs.utimesSync(path.join(state.install, "package.json"), new Date(1000), new Date(1000));
       const before = snapshotTree(state.install);
@@ -690,7 +770,7 @@ process.exit(result.status ?? 93);
       await expect(state.run({ inspectGitTarget: inspect })).rejects.toBe(refusal);
       expect(inspect).toHaveBeenCalledOnce();
       expect(snapshotTree(state.install)).toEqual(before);
-      const mirror = state.calls.find((argv) => argv.includes("clone"))?.at(-1);
+      const mirror = state.calls.find((argv) => argv.includes("init"))?.at(-1);
       expect(mirror).toBeDefined();
       expect(fs.existsSync(mirror!)).toBe(false);
     },

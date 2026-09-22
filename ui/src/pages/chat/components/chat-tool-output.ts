@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
-import { keyed } from "lit/directives/keyed.js";
 import { renderCopyButton } from "../../../components/copy-button.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
@@ -158,7 +157,7 @@ class ChatToolOutput extends OpenClawLightDomElement {
         this.loadState === "loading"
           ? nothing
           : html`<div class="chat-tool-output__actions">
-              ${keyed(text, renderCopyButton(text, t("chat.toolCards.copyOutput")))}
+              ${renderCopyButton(text, t("chat.toolCards.copyOutput"))}
               <button class="btn btn--sm" type="button" @click=${() => this.downloadOutput(card)}>
                 ${t("chat.toolCards.downloadOutput")}
               </button>

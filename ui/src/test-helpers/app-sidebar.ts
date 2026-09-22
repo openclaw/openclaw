@@ -61,7 +61,6 @@ export type SidebarLifecycleState = HTMLElement & {
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
   connectionStatus: GatewayStatus | null;
-  queuedOutboxCount: number;
   lastError: string | null;
   outboxAttentionCountForSession: (sessionKey: string) => number;
   hasSessionDraft: (sessionKey: string) => boolean;

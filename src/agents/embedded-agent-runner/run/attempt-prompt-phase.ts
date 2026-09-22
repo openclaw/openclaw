@@ -128,8 +128,8 @@ export async function runEmbeddedAttemptPromptPhase(
     });
     leasedSteering = undefined;
   };
-  const handleMidTurnPrecheckRequest = (request: MidTurnPrecheckRequest) => {
-    const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+  const handleMidTurnPrecheckRequest = async (request: MidTurnPrecheckRequest) => {
+    const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
       attempt,
       request,
       sessionAgentId,
@@ -491,12 +491,12 @@ export async function runEmbeddedAttemptPromptPhase(
   const pendingMidTurnPrecheckRequest = contextGuards.takePendingMidTurnPrecheckRequest();
   if (pendingMidTurnPrecheckRequest) {
     await withOwnedTranscriptWrite(() =>
-      withSessionManagerWrite(sessionManager, () => {
+      withSessionManagerWrite(sessionManager, async () => {
         removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
         const terminal = projectAgentRunAttemptTerminal(input.state.terminal);
         if (!promptState.preflightRecovery && terminal.promptErrorSource !== "precheck") {
           setFailure(null, null);
-          handleMidTurnPrecheckRequest(pendingMidTurnPrecheckRequest);
+          await handleMidTurnPrecheckRequest(pendingMidTurnPrecheckRequest);
         }
       }),
     );

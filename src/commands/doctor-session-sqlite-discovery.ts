@@ -23,6 +23,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute as canonicalFilePath } from "../infra/boundary-path.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
@@ -127,6 +128,61 @@ export function collectHistoricalArchiveSources(params: {
     result.set(first.target.storePath, sources);
   }
   return result;
+}
+
+/** Archived registries supply lineage only; never replay their entries over live SQLite state. */
+export function readArchivedSessionOwnership(
+  target: SessionStoreTarget,
+  stores: readonly SessionSqliteMigrationMove[],
+  issues: DoctorSessionSqliteIssue[],
+): LegacySessionRecord[] | undefined {
+  const records: LegacySessionRecord[] = [];
+  let verified = true;
+  for (const move of stores) {
+    if (!fs.existsSync(move.archivePath)) {
+      continue;
+    }
+    const ownershipIssues: DoctorSessionSqliteIssue[] = [];
+    try {
+      if (
+        !sameMigrationArtifact(
+          readMigrationArtifactIdentity(move.archivePath),
+          move.artifact!.identity,
+        )
+      ) {
+        throw new Error(
+          "Archived session registry no longer matches its migration receipt (file metadata or contents changed).",
+        );
+      }
+      records.push(
+        ...readLegacySessionRecords(target, ownershipIssues, { sourcePath: move.archivePath }),
+      );
+      if (
+        ownershipIssues.length ||
+        !sameMigrationArtifact(
+          readMigrationArtifactIdentity(move.archivePath),
+          move.artifact!.identity,
+        )
+      ) {
+        throw new Error(
+          "Archived session registry changed during verification or contains invalid entries.",
+        );
+      }
+    } catch (error) {
+      verified = false;
+      issues.push({
+        code: "historical_transcript_deferred",
+        message:
+          `${move.archivePath}: ${formatErrorMessage(error)} ` +
+          "Historical transcript import skipped for this store; originals retained. " +
+          "This archive warning does not indicate SQLite corruption. " +
+          "No action is needed if all expected conversations are present. " +
+          "If history is missing, preserve the archive and migration manifests and follow " +
+          "https://docs.openclaw.ai/cli/doctor/sqlite-maintenance#changed-archived-registry",
+      });
+    }
+  }
+  return verified ? records : undefined;
 }
 
 export async function discoverLegacyHistoricalTranscripts(params: {

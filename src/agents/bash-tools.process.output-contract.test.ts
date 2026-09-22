@@ -15,8 +15,8 @@ import {
 } from "./code-mode.test-support.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
 
-afterEach(() => {
-  resetCodeModeTestState();
+afterEach(async () => {
+  await resetCodeModeTestState();
   resetProcessRegistryForTests();
 });
 

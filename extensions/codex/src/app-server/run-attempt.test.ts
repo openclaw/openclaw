@@ -2917,85 +2917,6 @@ describe("runCodexAppServerAttempt", () => {
     },
   );
 
-  it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
-    const llmInput = vi.fn();
-    const beforePromptBuild = vi.fn(async () => ({
-      systemPrompt: "custom codex system",
-      prependSystemContext: "pre system",
-      appendSystemContext: "post system",
-      prependContext: "queued context",
-      appendContext: "tail context",
-      toolsAllow: ["*"],
-    }));
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        { hookName: "before_prompt_build", handler: beforePromptBuild },
-        { hookName: "llm_input", handler: llmInput },
-      ]),
-    );
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = openRunSession(sessionFile);
-    sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
-    params.inputProvenance = { kind: "inter_session", sourceTool: "sessions_send" };
-    params.config = {
-      ...params.config,
-      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-    };
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-    expect(beforePromptBuild).toHaveBeenCalledOnce();
-    const [hookInput, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
-      {
-        messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
-        prompt?: string;
-      },
-      { runId?: string; sessionId?: string },
-    ];
-    expect(hookInput.prompt).toBe("hello");
-    expect(hookInput.messages).toEqual([
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: "previous turn" }],
-      }),
-    ]);
-    expect(hookContext.runId).toBe("run-1");
-    expect(hookContext.sessionId).toBe("session-1");
-    expect(hookContext).toMatchObject({
-      modelProviderId: params.provider,
-      modelId: params.modelId,
-      inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
-    });
-    const threadStart = harness.requests.find((request) => request.method === "thread/start");
-    const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
-    const wrappedPluginSystemContext = (text: string) =>
-      `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
-    expect(threadStartParams?.developerInstructions).toContain(
-      `${wrappedPluginSystemContext("pre system")}\n\ncustom codex system\n\n${wrappedPluginSystemContext("post system")}`,
-    );
-    const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const turnStartParams = turnStart?.params as
-      | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }
-      | undefined;
-    expect(turnStartParams?.input).toEqual([
-      { type: "text", text: "queued context\n\nhello\n\ntail context", text_elements: [] },
-    ]);
-    expect(JSON.stringify(turnStartParams)).not.toContain("previous turn");
-    const [llmInputPayload] = mockCall(llmInput, "llm_input") as [
-      { historyMessages?: unknown[]; prompt?: string },
-      unknown,
-    ];
-    expect(llmInputPayload.prompt).toBe("queued context\n\nhello\n\ntail context");
-    expect(llmInputPayload.historyMessages).toEqual([]);
-    expect(JSON.stringify(llmInputPayload)).not.toContain("previous turn");
-  });
-
   it.each([
     {
       channel: "whatsapp",
@@ -3358,7 +3279,7 @@ describe("runCodexAppServerAttempt", () => {
         sessionManager.branchWithSummary(null, summary);
       }
       // A metadata entry gives compaction a real retained boundary even for a summary-only cut.
-      const firstKeptEntryId = sessionManager.appendThinkingLevelChange("off");
+      const firstKeptEntryId = await sessionManager.appendThinkingLevelChange("off");
       if (tail === "user-assistant") {
         sessionManager.appendMessage(userMessage("canonical SQLite startup question", Date.now()));
       }

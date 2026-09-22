@@ -3,12 +3,13 @@
 // Node >=24: node --experimental-vm-modules --test this-file.mjs
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import { createRequire, stripTypeScriptTypes } from "node:module";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
+import ts from "typescript";
 import { createDiskSwap } from "./update-restart-swap-fixture.mjs";
 
 const sourceRoot = path.resolve(
@@ -25,6 +26,9 @@ const { normalizeOptionalString } = await import(
 const { collectNestedErrorCandidates } = await import(
   pathToFileURL(path.join(normalizationRoot, "packages/normalization-core/src/error-coercion.ts"))
     .href
+);
+const { sliceUtf16Safe, truncateUtf16Safe } = await import(
+  pathToFileURL(path.join(normalizationRoot, "packages/normalization-core/src/utf16-slice.ts")).href
 );
 const main = process.env.RESTART_VARIANT !== "pr";
 const root = "/fixture/openclaw"; // Identifier only; never accessed.
@@ -44,14 +48,13 @@ class UpdateActivationTimeoutError extends Error {}
 async function fixture({
   error,
   commandError,
-  serviceLoadBoundaryFailure = false,
   verification = { ok: true },
   mutateExecutor = false,
   packageTransaction,
   verifyOnDisk,
   installRoot = root,
 } = {}) {
-  let commandFailure = commandError;
+  const commandFailure = commandError;
   const events = [],
     messages = [],
     completion = [],
@@ -63,7 +66,14 @@ async function fixture({
     commandCalls = 0,
     assertions = 0,
     verifiedCalls = 0;
-  const service = { readRuntime: async () => ({ status: "stopped" }) };
+  const service = {
+    readRuntime: async () => {
+      if (mutateExecutor === "native-state") {
+        run.executorFence = { assertCurrent() {} };
+      }
+      return { status: "stopped" };
+    },
+  };
   const run = {
     runId: "fixture-run",
     env: {},
@@ -161,6 +171,10 @@ async function fixture({
     getUpdateRun: () => undefined,
     recordUpdateRunPhase: (_id, phase) => phases.push(phase),
     recordUpdateRunVerification: (_id, record) => records.push(record),
+    recordUpdateRunDiagnostics: (_id, readResult) => {
+      const observed = readResult();
+      return { verification: { ...observed.verification, recovery: observed.recovery } };
+    },
     recordUpdateRunStep: () => {},
     async runUpdatedInstallGatewayCommand(activation, command, preserve) {
       commandCalls++;
@@ -175,11 +189,11 @@ async function fixture({
     },
     async verifyUpdatedGateway(params) {
       verifyCalls++;
-      events.push("verification");
+      events.push(params.purpose === "recovery" ? "recovery-verification" : "verification");
       assert.equal(params.expectedVersion, "2026.9.4");
-      assert.equal(params.requireRunningService, true);
+      assert.equal(params.requireRunningService, params.purpose === "recovery" ? undefined : true);
       params.assertCurrent?.();
-      if (mutateExecutor) {
+      if (mutateExecutor === "verification") {
         run.executorFence = { assertCurrent() {} };
       }
       if (verifyOnDisk) {
@@ -203,10 +217,6 @@ async function fixture({
       events.push("rollback-unverified");
       return { result: params.result, rolledBack: false };
     },
-    repairUpdateService: async (params) => {
-      events.push("repair-unverified");
-      return params.result;
-    },
     resolveUpdateResultNextAction: () => "Retain recovery material until health is verified.",
     completeUpdateCommandRun: (value) => value,
     printResult: (value) => printed.push(value),
@@ -221,6 +231,16 @@ async function fixture({
     normalizeControlPlaneUpdateResult: (value) => value,
     isUpdateGatewayReadinessPending: (value) => value.reason === "gateway-readiness-pending",
     collectNestedErrorCandidates,
+    sliceUtf16Safe,
+    truncateUtf16Safe,
+    withCommandProcessScope: async (action) => action(),
+    readPackageVersion: async (packageRoot) => {
+      assert.equal(packageRoot, installRoot);
+      return "2026.9.4";
+    },
+    readBuiltGatewayBuildId: async () => undefined,
+    readActiveGatewayLockPort: async () => 19305,
+    createUpdateFailureFact: (fact) => fact,
     resolveOpenClawStateSqlitePath: () => "/fixture/state.sqlite",
     assertUpdateRecoveryAdmission: async () => {},
     readGatewayOwnerLease: async () => undefined,
@@ -243,9 +263,17 @@ async function fixture({
           "update-command-terminal",
           "update-command-terminal-publication",
           "update-command-post-update-maintenance",
-          // Keep pending-load retention policy and Error identity production-owned.
-          "update-command-service-load",
-          "../../daemon/service-stage",
+          // Recovery and reporting stay real; only their I/O uses finite fixture facts.
+          "update-command-failure-recovery",
+          "update-command-plugins-internals",
+          "../../process/exec-result",
+          "../../shared/update-outcome",
+          "../../infra/update-run-report",
+          "../../infra/update-run-record",
+          "../../infra/update-run-limits",
+          "../../infra/update-doctor-config",
+          "../../infra/update-failure-facts-format",
+          "../../../packages/gateway-protocol/src/update-run-vocabulary",
         ]
       : ["update-restart-module-error"]),
   ];
@@ -255,10 +283,14 @@ async function fixture({
   // no function extraction, production-body rewrites, or replacement outcome logic.
   for (const name of realNames) {
     const filename = path.join(sourceRoot, "src/cli/update-cli", name + ".ts");
-    const code = stripTypeScriptTypes(await fs.readFile(filename, "utf8"), {
-      mode: "transform",
-      sourceUrl: filename,
-    });
+    const code = ts.transpileModule(await fs.readFile(filename, "utf8"), {
+      fileName: filename,
+      compilerOptions: {
+        target: ts.ScriptTarget.ESNext,
+        module: ts.ModuleKind.ESNext,
+        verbatimModuleSyntax: true,
+      },
+    }).outputText;
     const mod = new vm.SourceTextModule(code, { context, identifier: filename });
     modules.set(path.basename(name) + ".js", mod);
     const imports = new Map();
@@ -330,16 +362,11 @@ async function fixture({
     await verificationOwner.evaluate();
     values.recordFailedUpdateGatewayState =
       verificationOwner.namespace.recordFailedUpdateGatewayState;
+    values.readFailedUpdateGatewayState = verificationOwner.namespace.readFailedUpdateGatewayState;
   }
   const entry = modules.get("update-command-post-update.js");
   await entry.link(link);
   await entry.evaluate();
-  if (serviceLoadBoundaryFailure) {
-    const { UpdateServiceLoadBoundaryError } = modules.get(
-      "update-command-service-load.js",
-    ).namespace;
-    commandFailure = new UpdateServiceLoadBoundaryError("fixture service load boundary");
-  }
   return {
     commandError: commandFailure,
     direct: (params) =>
@@ -422,12 +449,14 @@ for (const [name, makeError] of thrownCases) {
       assert.equal(error.result.reason, "restart-unhealthy");
       return true;
     });
-    assert.equal(f.counts().verifyCalls, 1);
+    assert.equal(f.counts().verifyCalls, main ? 2 : 1);
     assert.equal(f.counts().commandCalls, 1);
     assert.deepEqual(f.completion, [false]);
     assert.equal(f.printed.at(-1).status, "error");
     assert.ok(f.events.includes("rollback-unverified"));
-    assert.ok(f.events.includes("repair-unverified"));
+    if (main) {
+      assert.ok(f.events.indexOf("complete:false") < f.events.indexOf("recovery-verification"));
+    }
     assert.deepEqual(f.unexpected, []);
   });
 }
@@ -454,23 +483,19 @@ void test("accepted restart without healthy successor cannot authorize retiremen
     (error) => error instanceof f.failureClass && error.result.reason === "successor-not-healthy",
   );
   assert.deepEqual(f.completion, [false]);
-  assert.equal(f.counts().verifyCalls, 1);
+  assert.equal(f.counts().verifyCalls, main ? 2 : 1);
   assert.deepEqual(f.unexpected, []);
 });
 if (main) {
-  void test("current-main service-load boundary error propagates unchanged", async () => {
-    const f = await fixture({ serviceLoadBoundaryFailure: true });
-    await assert.rejects(f.direct(), (actual) => actual === f.commandError);
-    assert.equal(f.counts().verifyCalls, 0);
-    assert.equal(f.counts().commandCalls, 1);
-    assert.deepEqual(f.unexpected, []);
-  });
-  void test("current-main cannot turn executor replacement during thrown verification into success", async () => {
-    const f = await fixture({ error: thrownCases[0][1](), mutateExecutor: true });
-    await assert.rejects(f.direct(), /lost its original update executor/);
-    assert.equal(f.counts().verifyCalls, 1);
-    assert.deepEqual(f.unexpected, []);
-  });
+  for (const mutateExecutor of ["verification", "native-state"]) {
+    void test(`current-main cannot publish after executor replacement during ${mutateExecutor}`, async () => {
+      const f = await fixture({ error: thrownCases[0][1](), mutateExecutor });
+      await assert.rejects(f.direct(), /lost its original update executor/);
+      assert.equal(f.counts().verifyCalls, 1);
+      assert.deepEqual(f.records, []);
+      assert.deepEqual(f.unexpected, []);
+    });
+  }
   void test("current-main readiness pending remains distinct from verified success", async () => {
     const f = await fixture({
       verification: { ok: false, stopReason: "gateway-readiness-pending" },

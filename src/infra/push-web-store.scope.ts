@@ -101,11 +101,15 @@ export async function useWebPushStoreSnapshot<Snapshot, T>(
   context: OpenClawStateWorkerContext,
   input: unknown,
   read: () => Promise<Snapshot>,
-  prepare: (snapshot: Snapshot) => WebPushSnapshotAction<T> | undefined,
+  prepare: (
+    snapshot: Snapshot,
+    assertCurrent: () => void,
+  ) => WebPushSnapshotAction<T> | undefined | Promise<WebPushSnapshotAction<T> | undefined>,
 ): Promise<T | undefined> {
   const begun = await runScope(context, input, async (releaseBudget) => {
     const snapshot = await read();
-    const action = prepare(snapshot);
+    const prepared = prepare(snapshot, () => context.admission.assertCurrent());
+    const action = prepared instanceof Promise ? await prepared : prepared;
     context.admission.assertCurrent();
     // The read is settled. A synchronous start may enqueue its own subsequent write.
     releaseBudget();

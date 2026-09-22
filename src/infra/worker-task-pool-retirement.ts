@@ -1,3 +1,4 @@
+import type { Worker } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
 import {
@@ -8,6 +9,7 @@ import type { Slot, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
 export type WorkerTaskPoolRetirement<Input, Output> = {
   retire(slot: Slot<Input, Output>): Promise<void>;
+  retireIdle(resourceClosures: WeakMap<Worker, { pending: number }>): void;
   retryFailedRetirements(): Promise<void>;
   joinArtifacts(): Promise<void[]>;
 };
@@ -104,6 +106,19 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
 
   return {
     retire,
+    retireIdle(resourceClosures) {
+      for (const slot of slots) {
+        if (
+          !slot.task &&
+          !slot.retiring &&
+          !slot.retirementFailed &&
+          slot.worker &&
+          !resourceClosures.get(slot.worker)?.pending
+        ) {
+          void retire(slot).catch(() => undefined);
+        }
+      }
+    },
     retryFailedRetirements,
     joinArtifacts: () => Promise.all(artifactCleanups),
   };

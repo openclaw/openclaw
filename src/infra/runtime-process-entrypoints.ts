@@ -4,6 +4,11 @@ const currentModuleUrl = import.meta.url;
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 
 export const runtimeProcessEntrypoints = {
+  codeModeNode: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/code-mode-node.worker",
+    distWorkerPath: "agents/code-mode-node.worker.js",
+  },
   cronReadOnly: {
     currentModuleUrl,
     sourceWorkerName: "../cron/store/read-only.worker",
@@ -158,6 +163,11 @@ export const runtimeProcessEntrypoints = {
     currentModuleUrl,
     sourceWorkerName: "../config/sessions/session-transcript.worker",
     distWorkerPath: "config/sessions/session-transcript.worker.js",
+  },
+  sessionManagerMetadata: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/sessions/session-manager-metadata.worker",
+    distWorkerPath: "agents/sessions/session-manager-metadata.worker.js",
   },
   sessionTranscriptReconcile: {
     currentModuleUrl,

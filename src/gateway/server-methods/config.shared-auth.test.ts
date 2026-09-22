@@ -172,7 +172,7 @@ async function runConfigPatch(
   raw: unknown,
   params: { sessionKey?: string; restartDelayMs?: number; replacePaths?: string[] } = {},
 ) {
-  const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+  const { options, respond, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
     method: "config.patch",
     params: {
       baseHash: "base-hash",
@@ -188,7 +188,7 @@ async function runConfigPatch(
     'configHandlers["config.patch"] test invariant',
   )(options);
   await flushConfigHandlerMicrotasks();
-  return { disconnectClientsUsingSharedGatewayAuth };
+  return { respond, disconnectClientsUsingSharedGatewayAuth };
 }
 
 function expectNoDirectRestart(): void {
@@ -518,6 +518,7 @@ describe("config shared auth disconnects", () => {
   );
 
   it("does not disconnect shared-auth clients when config.patch changes only inactive password auth", async () => {
+    runtimeApplication.claimed = false;
     mockPreviousConfig(tokenAuthConfig("old-token"));
 
     const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch({
@@ -525,10 +526,12 @@ describe("config shared auth disconnects", () => {
     });
 
     expectNoDirectRestart();
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
-  it("disconnects gateway-auth clients when active trusted-proxy policy changes", async () => {
+  it("disconnects gateway-auth clients after an unclaimed trusted-proxy policy write responds", async () => {
+    runtimeApplication.claimed = false;
     mockPreviousConfig(
       trustedProxyConfig({
         allowUsers: ["alice@example.com"],
@@ -536,7 +539,7 @@ describe("config shared auth disconnects", () => {
       }),
     );
 
-    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+    const { respond, disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
       {
         gateway: {
           auth: {
@@ -552,16 +555,18 @@ describe("config shared auth disconnects", () => {
 
     expectNoDirectRestart();
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledBefore(disconnectClientsUsingSharedGatewayAuth);
   });
 
-  it("disconnects gateway-auth clients when trusted-proxy source list changes", async () => {
+  it("disconnects gateway-auth clients after an unclaimed trusted-proxy source write responds", async () => {
+    runtimeApplication.claimed = false;
     mockPreviousConfig(
       trustedProxyConfig({
         trustedProxies: ["127.0.0.1"],
       }),
     );
 
-    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+    const { respond, disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
       {
         gateway: {
           trustedProxies: ["10.0.0.10"],
@@ -572,9 +577,11 @@ describe("config shared auth disconnects", () => {
 
     expectNoDirectRestart();
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledBefore(disconnectClientsUsingSharedGatewayAuth);
   });
 
   it("does not disconnect gateway-auth clients when trusted-proxy lists are reordered", async () => {
+    runtimeApplication.claimed = false;
     mockPreviousConfig(
       trustedProxyConfig({
         requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
@@ -597,6 +604,7 @@ describe("config shared auth disconnects", () => {
     });
 
     expectNoDirectRestart();
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 

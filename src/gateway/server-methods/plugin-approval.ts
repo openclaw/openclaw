@@ -57,11 +57,11 @@ export function createPluginApprovalHandlers(
     "plugin.approval.list": async ({ respond, client, context }) => {
       respond(
         true,
-        listVisiblePendingApprovalRequests({
+        await listVisiblePendingApprovalRequests({
           manager,
           client,
           approvalKind: "plugin",
-          ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+          ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         }),
         undefined,
       );
@@ -228,14 +228,14 @@ export function createPluginApprovalHandlers(
         });
       }
 
-      const decisionPromise = registerPendingApprovalRecord({
+      const registration = await registerPendingApprovalRecord({
         manager,
         record,
         timeoutMs,
         respond,
         context,
       });
-      if (!decisionPromise) {
+      if (!registration) {
         return;
       }
 
@@ -257,7 +257,7 @@ export function createPluginApprovalHandlers(
         manager,
         inputId: (params as { id?: string }).id,
         client,
-        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         respond,
       });
     },

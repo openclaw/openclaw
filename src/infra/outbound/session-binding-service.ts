@@ -9,7 +9,11 @@ import {
   listGenericCurrentConversationBindingsBySession,
   requiresRegisteredSessionBindingAdapter,
   resolveGenericCurrentConversationBinding,
+  inspectGenericCurrentConversationBinding,
+  inspectGenericCurrentConversationBindingAsync,
+  resolveGenericCurrentConversationBindingAsync,
   touchGenericCurrentConversationBinding,
+  touchGenericCurrentConversationBindingAsync,
   unbindGenericCurrentConversationBindings,
 } from "./current-conversation-bindings.js";
 import {
@@ -60,8 +64,17 @@ export type SessionBindingService = {
   getCapabilities: (params: { channel: string; accountId: string }) => SessionBindingCapabilities;
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
+  /** @deprecated Use touchAsync. Retained through the next Plugin SDK major. */
   touch: (bindingId: string, at?: number, scope?: SessionBindingScope) => void;
   unbind: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
+};
+
+/** Host service with explicit awaited mutations; the legacy structural type stays assignable. */
+export type AsyncSessionBindingService = SessionBindingService & {
+  inspectByConversationAsync: typeof inspectSessionBindingByConversationAsync;
+  resolveByConversationAsync: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
+  /** Joins the selected adapter's mutation; legacy adapters may still perform synchronous work. */
+  touchAsync: (bindingId: string, at?: number, scope?: SessionBindingScope) => Promise<void>;
 };
 
 type SessionBindingAdapterCapabilities = {
@@ -77,7 +90,15 @@ export type SessionBindingAdapter = {
   bind?: (input: SessionBindingBindInput) => Promise<SessionBindingRecord | null>;
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
+  /** Pure selection for ownership checks; defaults to resolveByConversation for legacy adapters. */
+  inspectByConversation?: (ref: ConversationRef) => SessionBindingRecord | null;
+  /** Inspects committed ownership without creating storage or pruning rows. */
+  inspectByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
+  resolveByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
+  /** @deprecated Use touchAsync. Retained through the next Plugin SDK major. */
   touch?: (bindingId: string, at?: number) => void;
+  /** Settles accepted persistence before resolving. */
+  touchAsync?: (bindingId: string, at?: number) => Promise<void>;
   unbind?: (input: SessionBindingUnbindInput) => Promise<SessionBindingRecord[]>;
 };
 
@@ -192,6 +213,39 @@ function resolveAdapterForChannelAccount(params: {
   );
 }
 
+/** Revalidates the exact registration, including its original adapter's retained callbacks. */
+export function isSessionBindingAdapterCurrent(adapter: SessionBindingAdapter): boolean {
+  const registration = ADAPTERS_BY_CHANNEL_ACCOUNT.get(buildChannelAccountKey(adapter))?.at(-1);
+  return registration?.adapter === adapter || registration?.normalizedAdapter === adapter;
+}
+
+function assertAdapterSelectionCurrent(
+  ref: SessionBindingScope,
+  adapter: SessionBindingAdapter | null,
+) {
+  if (
+    resolveAdapterForChannelAccount(ref) !== adapter ||
+    (!adapter && requiresRegisteredSessionBindingAdapter(ref))
+  ) {
+    throw new SessionBindingError(
+      "BINDING_ADAPTER_UNAVAILABLE",
+      `Session binding owner changed for ${ref.channel}:${ref.accountId}`,
+      { channel: ref.channel, accountId: ref.accountId },
+    );
+  }
+}
+
+function captureConversationRef(ref: ConversationRef): ConversationRef {
+  return normalizeConversationRef({
+    channel: ref.channel,
+    accountId: ref.accountId,
+    conversationId: ref.conversationId,
+    ...(ref.parentConversationId !== undefined
+      ? { parentConversationId: ref.parentConversationId }
+      : {}),
+  });
+}
+
 function getActiveRegisteredAdapters(scope?: SessionBindingScope): SessionBindingAdapter[] {
   if (scope) {
     const adapter = resolveAdapterForChannelAccount(scope);
@@ -226,7 +280,12 @@ export function inspectSessionBindingByConversation(
   }
   const adapter = resolveAdapterForChannelAccount(normalized);
   if (adapter) {
-    return { status: "available", binding: adapter.resolveByConversation(normalized) };
+    return {
+      status: "available",
+      binding: adapter.inspectByConversation
+        ? adapter.inspectByConversation(normalized)
+        : adapter.resolveByConversation(normalized),
+    };
   }
   // A channel-owned adapter may disappear briefly during restart. That gap is not an
   // authoritative empty result and must not let callers fall through to another owner.
@@ -235,12 +294,41 @@ export function inspectSessionBindingByConversation(
   }
   return {
     status: "available",
-    binding: resolveGenericCurrentConversationBinding(normalized),
+    binding: inspectGenericCurrentConversationBinding(normalized),
   };
 }
 
-function createDefaultSessionBindingService(): SessionBindingService {
+/** Awaits worker-backed ownership inspection; legacy external adapters retain their sync reader. */
+async function inspectSessionBindingByConversationAsync(
+  ref: ConversationRef,
+): Promise<ReturnType<typeof inspectSessionBindingByConversation>> {
+  const normalized = captureConversationRef(ref);
+  if (!normalized.channel || !normalized.conversationId) {
+    return { status: "available", binding: null };
+  }
+  const adapter = resolveAdapterForChannelAccount(normalized);
+  if (!adapter && requiresRegisteredSessionBindingAdapter(normalized)) {
+    return { status: "unavailable" };
+  }
+  const binding = adapter
+    ? adapter.inspectByConversationAsync
+      ? await adapter.inspectByConversationAsync(normalized)
+      : adapter.inspectByConversation
+        ? adapter.inspectByConversation(normalized)
+        : adapter.resolveByConversation(normalized)
+    : await inspectGenericCurrentConversationBindingAsync(normalized);
+  if (
+    resolveAdapterForChannelAccount(normalized) !== adapter ||
+    (!adapter && requiresRegisteredSessionBindingAdapter(normalized))
+  ) {
+    return { status: "unavailable" };
+  }
+  return { status: "available", binding };
+}
+
+function createDefaultSessionBindingService(): AsyncSessionBindingService {
   return {
+    inspectByConversationAsync: inspectSessionBindingByConversationAsync,
     bind: async (input) => {
       const normalizedConversation = normalizeConversationRef(input.conversation);
       const adapter = resolveAdapterForChannelAccount(normalizedConversation);
@@ -340,6 +428,23 @@ function createDefaultSessionBindingService(): SessionBindingService {
       }
       return adapter.resolveByConversation(normalized);
     },
+    resolveByConversationAsync: async (ref) => {
+      const normalized = captureConversationRef(ref);
+      if (!normalized.channel || !normalized.conversationId) {
+        return null;
+      }
+      const adapter = resolveAdapterForChannelAccount(normalized);
+      assertAdapterSelectionCurrent(normalized, adapter);
+      const binding = adapter
+        ? adapter.resolveByConversationAsync
+          ? await adapter.resolveByConversationAsync(normalized)
+          : adapter.resolveByConversation(normalized)
+        : await resolveGenericCurrentConversationBindingAsync(normalized, {
+            assertCurrent: () => assertAdapterSelectionCurrent(normalized, null),
+          });
+      assertAdapterSelectionCurrent(normalized, adapter);
+      return binding;
+    },
     touch: (bindingId, at, scope) => {
       const normalizedBindingId = bindingId.trim();
       if (!normalizedBindingId) {
@@ -351,6 +456,31 @@ function createDefaultSessionBindingService(): SessionBindingService {
       }
       if (!scope || adapters.length === 0) {
         touchGenericCurrentConversationBinding(normalizedBindingId, at, scope);
+      }
+    },
+    touchAsync: async (bindingId, at, scope) => {
+      const normalizedBindingId = bindingId.trim();
+      if (!normalizedBindingId) {
+        return;
+      }
+      const ownerScope = scope ? { channel: scope.channel, accountId: scope.accountId } : undefined;
+      const adapters = getActiveRegisteredAdapters(ownerScope);
+      for (const adapter of adapters) {
+        // Earlier adapters may await across retirement; never invoke or replace a stale owner.
+        if (!isSessionBindingAdapterCurrent(adapter)) {
+          continue;
+        }
+        if (adapter.touchAsync) {
+          await adapter.touchAsync(normalizedBindingId, at);
+        } else {
+          // External adapters keep their synchronous contract during migration.
+          adapter.touch?.(normalizedBindingId, at);
+        }
+      }
+      if (!ownerScope || adapters.length === 0) {
+        await touchGenericCurrentConversationBindingAsync(normalizedBindingId, at, ownerScope, {
+          assertCurrent: (ref) => assertAdapterSelectionCurrent(ref, null),
+        });
       }
     },
     unbind: async (input) => {
@@ -375,7 +505,7 @@ function createDefaultSessionBindingService(): SessionBindingService {
 
 const DEFAULT_SESSION_BINDING_SERVICE = createDefaultSessionBindingService();
 
-export function getSessionBindingService(): SessionBindingService {
+export function getSessionBindingService(): AsyncSessionBindingService {
   return DEFAULT_SESSION_BINDING_SERVICE;
 }
 

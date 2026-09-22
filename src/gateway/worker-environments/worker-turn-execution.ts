@@ -9,7 +9,10 @@ import { withSessionManagerWrite } from "../../agents/sessions/session-manager-w
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
-import { buildActiveNodeContextText } from "../../infra/active-node-context.js";
+import {
+  buildActiveNodeContextText,
+  prepareActiveNodeContext,
+} from "../../infra/active-node-context.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   registerAgentRunDelegatedAuthorityClosedHandler,
@@ -337,6 +340,8 @@ export async function executeWorkerTurn(
       throw new Error("Worker tunnel does not support worker turns");
     }
     // Presence belongs to the Gateway; workers cannot read its process-local node registry.
+    await prepareActiveNodeContext();
+    params.assertRunCurrent?.();
     const systemPrompt = [turn.extraSystemPrompt, buildActiveNodeContextText()]
       .filter(Boolean)
       .join("\n\n");
@@ -415,6 +420,7 @@ export async function executeWorkerTurn(
     turn.onExecutionPhase?.({ phase: "attempt_dispatch", backend: "cloud-worker" });
     const handoffAbort = new AbortController();
     let handoffError: Error | undefined;
+    let handoffPending: Promise<void> | undefined;
     let dispatchReady = false;
     const onDispatchReady = () => {
       if (dispatchReady) {
@@ -423,25 +429,34 @@ export async function executeWorkerTurn(
       dispatchReady = true;
       params.onHandoff();
       turn.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
-      try {
-        if (!params.environments.acknowledgeCredentialDelivery(credential)) {
-          handoffError = new Error("Cloud worker credential owner changed during process handoff");
+      handoffPending = (async () => {
+        try {
+          if (!(await params.environments.acknowledgeCredentialDelivery(credential))) {
+            handoffError = new Error(
+              "Cloud worker credential owner changed during process handoff",
+            );
+          }
+        } catch (error) {
+          handoffError = new Error("Cloud worker credential handoff failed", { cause: error });
         }
-      } catch (error) {
-        handoffError = new Error("Cloud worker credential handoff failed", { cause: error });
-      }
-      if (handoffError) {
-        handoffAbort.abort(handoffError);
-      }
+        if (handoffError) {
+          handoffAbort.abort(handoffError);
+        }
+      })();
     };
-    const processResult = await tunnel.launchTurn({
-      plan: launchPlan.plan,
-      turnClaim: params.turnClaim,
-      timeoutMs: turn.timeoutMs,
-      credentialExpiresAtMs: credential.expiresAtMs,
-      signal: AbortSignal.any([signal, handoffAbort.signal]),
-      onDispatchReady,
-    });
+    let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
+    try {
+      processResult = await tunnel.launchTurn({
+        plan: launchPlan.plan,
+        turnClaim: params.turnClaim,
+        timeoutMs: turn.timeoutMs,
+        credentialExpiresAtMs: credential.expiresAtMs,
+        signal: AbortSignal.any([signal, handoffAbort.signal]),
+        onDispatchReady,
+      });
+    } finally {
+      await handoffPending;
+    }
     // Node launches return only after the exact launch journal receipt is terminal,
     // including any admission re-arms. Transport failures never reach this fact.
     if (environment.nodeDeviceId && environment.sshEndpoint === null) {

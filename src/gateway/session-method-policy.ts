@@ -27,8 +27,6 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
   ["sessions.companion.ask", ["sessionKey"]],
   ["sessions.companion.reset", ["sessionKey"]],
   ["sessions.companion.state", ["sessionKey"]],
-  ["sessions.compaction.branch", ["key"]],
-  ["sessions.compaction.restore", ["key"]],
   ["sessions.compact", ["key"]],
   ["sessions.create", ["key", "parentSessionKey"]],
   ["sessions.delete", ["key"]],
@@ -40,6 +38,7 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
   ["sessions.patch", ["key"]],
   ["sessions.goal.update", ["sessionKey"]],
   ["sessions.goal.clear", ["sessionKey"]],
+  ["sessions.providerReview.continue", ["sessionKey"]],
   ["sessions.pluginPatch", ["key"]],
   ...(["sessions.move", "sessions.reclaim"] as const).map((method) => [method, ["key"]] as const),
   ["sessions.recover", ["key"]],
@@ -86,8 +85,6 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "sessions.branches.switch",
   "sessions.compact",
   "sessions.companion.reset",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
   "sessions.delete",
   "sessions.dispatch",
   "sessions.files.set",
@@ -100,6 +97,7 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "sessions.patch",
   "sessions.goal.update",
   "sessions.goal.clear",
+  "sessions.providerReview.continue",
   "sessions.pluginPatch",
   "sessions.reclaim",
   "sessions.recover",
@@ -166,6 +164,7 @@ export function isSessionProfileDependentMethod(method: string): boolean {
 }
 
 const AGENT_RUN_START_METHODS = new Set([
+  "sessions.providerReview.continue",
   "progressCard.refresh",
   "agent",
   "chat.send",

@@ -43,6 +43,17 @@ export type ExtensionInstallDeps = {
   sleep?: (ms: number) => Promise<void>;
 };
 
+export async function approvedInstallRealpaths(
+  installed: string,
+  bundled: string,
+): Promise<string[]> {
+  const installedPath = await fs.realpath(installed);
+  const bundledPath = await fs.realpath(bundled);
+  await assertOwnedPath(installedPath, "directory");
+  await assertOwnedPath(bundledPath, "directory", { allowRootOwner: true });
+  return [...new Set([installedPath, bundledPath])];
+}
+
 /** Chromium crx_file::id_util::GenerateIdForPath for a canonical absolute path. */
 export function generateChromeExtensionIdForPath(
   canonicalPath: string,

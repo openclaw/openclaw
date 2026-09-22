@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Value } from "typebox/value";
 import { AgentActivityItemSchema } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
+import { stripOpenClawMcpToolPrefix } from "../../agents/cli-runner/tool-policy.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { extractToolResultText } from "../../agents/embedded-agent-tool-results.js";
@@ -298,7 +299,10 @@ export function createCliToolSummaryTracker(params: {
       if (payload.toolCallId) {
         toolByCallId.delete(payload.toolCallId);
       }
-      if (payload.isError !== true && isAgentPlanProgressToolName(toolName)) {
+      if (
+        payload.isError !== true &&
+        isAgentPlanProgressToolName(stripOpenClawMcpToolPrefix(toolName ?? ""))
+      ) {
         return false;
       }
       if (!params.shouldEmitToolResult()) {

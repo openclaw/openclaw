@@ -562,9 +562,8 @@ describe("supplemental session reconciliation", () => {
           current.updatedAt,
         );
       });
-      const sessions = createTestSessionCapability(
-        createGatewayHarness(createTestGatewayClient(request)).gateway,
-      );
+      const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
+      const sessions = createTestSessionCapability(gateway);
       const query = { ownerId: "ada", agentId: "main" };
       const unsubscribe = sessions.subscribeList(query, () => {});
       let refresh: Promise<void> | undefined;
@@ -586,14 +585,16 @@ describe("supplemental session reconciliation", () => {
           expect(reconcile(accepted)).toBe(true);
           expect(sessions.listSnapshot(query).result?.sessions[0]).toMatchObject(accepted);
           if (permission !== undefined) {
-            expect(
-              sessions.reconcileChanged({
+            emitEvent({
+              type: "event",
+              event: "sessions.changed",
+              payload: {
                 key,
                 sessionId: initial.sessionId,
                 updatedAt: 30,
                 permissionMode: permission,
-              }).applied,
-            ).toBe(true);
+              },
+            });
             expect(sessions.state.result?.sessions[0]?.permissionMode).toBe(
               permission ?? undefined,
             );
@@ -630,11 +631,15 @@ describe("supplemental session reconciliation", () => {
             );
           }
         } else if (scenario === "deletion") {
-          sessions.reconcileChanged({
-            key,
-            sessionId: initial.sessionId,
-            agentId: "main",
-            reason: "delete",
+          emitEvent({
+            type: "event",
+            event: "sessions.changed",
+            payload: {
+              key,
+              sessionId: initial.sessionId,
+              agentId: "main",
+              reason: "delete",
+            },
           });
           expect(reconcile(accepted)).toBe(false);
           expect(sessions.state.result?.sessions).toEqual([]);

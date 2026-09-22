@@ -1,5 +1,6 @@
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
+import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
@@ -12,6 +13,7 @@ import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
 import {
   clearWorkspaceTimer,
   getSessionWorkspace,
+  isCurrentSessionWorkspace,
   loadSessionWorkspace,
   openSessionCheckoutSidebar,
   refreshSessionWorkspaceState,
@@ -121,29 +123,43 @@ function artifactSidebarContent(params: {
   mimeType: string;
   title: string;
   url?: string;
+  text?: string;
+  imageSource?: string;
+  download?: (signal: AbortSignal) => Promise<Blob | null>;
 }): SidebarContent {
-  const { data, encoding, mimeType, title, url } = params;
-  if (encoding === "base64" && data && mimeType.startsWith("image/")) {
+  const { data, encoding, mimeType, title, url, imageSource } = params;
+  let { text } = params;
+  if (imageSource || (encoding === "base64" && data && mimeType.startsWith("image/"))) {
     return {
       kind: "image",
       title,
-      src: `data:${mimeType};base64,${data}`,
+      src: imageSource ?? `data:${mimeType};base64,${data}`,
       mimeType,
       rawText: url ?? null,
     };
   }
-  if (
-    encoding === "base64" &&
-    data &&
-    (mimeType === "application/json" || mimeType.startsWith("text/"))
-  ) {
-    const bytes = Uint8Array.from(globalThis.atob(data), (char) => char.charCodeAt(0));
-    const decoded = new TextDecoder().decode(bytes);
+  if (mimeType === "application/json" || mimeType.startsWith("text/")) {
+    if (text === undefined && encoding === "base64" && data) {
+      text = new TextDecoder().decode(
+        Uint8Array.from(globalThis.atob(data), (char) => char.charCodeAt(0)),
+      );
+    }
+  }
+  if (text !== undefined) {
     const language = mimeType === "application/json" ? "json" : "";
     return {
       kind: "markdown",
-      content: `# ${title}\n\n${formatFencedCodeBlock(decoded, language)}`,
-      rawText: decoded,
+      content: `# ${title}\n\n${formatFencedCodeBlock(text, language)}`,
+      rawText: text,
+    };
+  }
+  if (params.download) {
+    return {
+      kind: "attachment",
+      attachmentKind: "document",
+      title,
+      mimeType,
+      download: params.download,
     };
   }
   if (url) {
@@ -152,6 +168,55 @@ function artifactSidebarContent(params: {
   }
   const content = `# ${title}\n\nArtifact download is not previewable in the sidebar.`;
   return { kind: "markdown", content, rawText: content };
+}
+
+async function loadArtifactSidebarContent(
+  result: ArtifactDownloadResult & { blob?: Blob },
+  download: (signal: AbortSignal) => Promise<Blob | null>,
+  resourceBasePath?: string,
+): Promise<SidebarContent> {
+  const params = {
+    data: result.data,
+    encoding: result.encoding,
+    mimeType: result.artifact.mimeType ?? "",
+    title: result.artifact.title,
+    url: result.url,
+    download:
+      result.encoding === "base64" ||
+      (result.url && isHttpArtifactDownloadUrl(result.url, resourceBasePath))
+        ? download
+        : undefined,
+  };
+  if (!result.blob) {
+    return artifactSidebarContent(params);
+  }
+  if (!params.mimeType.startsWith("image/")) {
+    return artifactSidebarContent({ ...params, text: await result.blob.text() });
+  }
+  const blob = result.blob;
+  // Workspace previews outlive the ticket. Retain the fetched image in the
+  // preview's existing data URL representation without a second Blob URL owner.
+  const imageSource = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener(
+      "load",
+      () => {
+        if (typeof reader.result === "string") {
+          resolve(reader.result);
+        } else {
+          reject(new Error("Artifact image could not be decoded"));
+        }
+      },
+      { once: true },
+    );
+    reader.addEventListener(
+      "error",
+      () => reject(reader.error ?? new Error("Artifact image could not be decoded")),
+      { once: true },
+    );
+    reader.readAsDataURL(blob);
+  });
+  return artifactSidebarContent({ ...params, imageSource });
 }
 
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
@@ -365,26 +430,57 @@ function openArtifact(
   workspace: SessionWorkspaceState,
   artifactId: string,
 ) {
+  const query = {
+    sessionKey: workspace.sessionKey,
+    artifactId,
+    ...(workspace.agentId ? { agentId: workspace.agentId } : {}),
+  };
+  const readDownload = async (signal: AbortSignal): Promise<Blob | null> => {
+    const currentWorkspace = getSessionWorkspace(state);
+    if (
+      currentWorkspace.sessionKey !== query.sessionKey ||
+      currentWorkspace.agentId !== workspace.agentId
+    ) {
+      return null;
+    }
+    // Cached preview actions bind a fresh connection on click; an in-flight
+    // transfer must never follow a reconnect to a replacement Gateway.
+    const client = state.client;
+    const connectionEpoch = state.connectionEpoch;
+    const result = await downloadArtifact(state, query, signal, { readBinary: true });
+    if (
+      signal.aborted ||
+      !state.connected ||
+      state.client !== client ||
+      state.connectionEpoch !== connectionEpoch ||
+      !isCurrentSessionWorkspace(state, currentWorkspace)
+    ) {
+      return null;
+    }
+    if (result?.blob) {
+      return result.blob;
+    }
+    if (result?.encoding !== "base64" || result.data === undefined) {
+      return null;
+    }
+    return new Blob([Uint8Array.from(atob(result.data), (char) => char.charCodeAt(0))], {
+      type: result.artifact.mimeType ?? "application/octet-stream",
+    });
+  };
   openWorkspaceItem(
     state,
     workspace,
     `artifact:${artifactId}`,
-    () =>
-      state.client!.request<ArtifactDownloadResult | null>("artifacts.download", {
-        sessionKey: workspace.sessionKey,
-        artifactId,
-        ...(workspace.agentId ? { agentId: workspace.agentId } : {}),
-      }),
-    (result) =>
-      !result.artifact
-        ? null
-        : artifactSidebarContent({
-            data: result.data,
-            encoding: result.encoding,
-            mimeType: result.artifact.mimeType ?? "",
-            title: result.artifact.title,
-            url: result.url,
-          }),
+    async () => {
+      const result = await downloadArtifact(state, query);
+      return result?.artifact
+        ? {
+            artifact: result.artifact,
+            content: await loadArtifactSidebarContent(result, readDownload, state.resourceBasePath),
+          }
+        : null;
+    },
+    (result) => result.content,
     `Failed to load artifact ${artifactId}`,
     {
       label:

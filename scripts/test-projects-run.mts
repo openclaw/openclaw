@@ -252,7 +252,7 @@ async function runVitestSpecs(
   let stopScheduling = false;
   const failures: FailedVitestShard[] = [];
   const timings: ShardTiming[] = [];
-  const withCacheSlot = createVitestCacheSlots(concurrency);
+  const withCacheSlot = createVitestCacheSlots();
   await pMap(
     specs,
     async (spec, index) => {

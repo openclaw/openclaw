@@ -24,6 +24,7 @@ import type { GatewayRequestContext, RespondFn } from "./types.js";
 describe("progress card request authorization", () => {
   it.each([
     { method: "progressCard.get", beforeCommit: false },
+    { method: "progressCard.refresh", beforeCommit: false },
     { method: "progressCard.put", beforeCommit: true },
     { method: "progressCard.put", beforeCommit: false },
   ] as const)(
@@ -91,6 +92,7 @@ describe("progress card request authorization", () => {
             params: {
               ...target,
               ...(method === "progressCard.put" ? { markdown: "committed card" } : {}),
+              ...(method === "progressCard.refresh" ? { idempotencyKey: "delayed-refresh" } : {}),
             },
           },
           client,
@@ -137,8 +139,13 @@ describe("progress card request authorization", () => {
 
   it.each(
     (["global", "agent:work:progress-authorization"] as const).flatMap((sessionKey) =>
-      (["progressCard.get", "progressCard.put"] as const).flatMap((method) =>
-        [false, true].map((replace) => ({ sessionKey, method, replace })),
+      (["progressCard.get", "progressCard.put", "progressCard.refresh"] as const).flatMap(
+        (method) =>
+          (method === "progressCard.refresh" ? [true] : [false, true]).map((replace) => ({
+            sessionKey,
+            method,
+            replace,
+          })),
       ),
     ),
   )(
@@ -177,6 +184,9 @@ describe("progress card request authorization", () => {
         const params = {
           ...target,
           ...(testCase.method === "progressCard.put" ? { markdown: "request update" } : {}),
+          ...(testCase.method === "progressCard.refresh"
+            ? { idempotencyKey: "revoked-refresh" }
+            : {}),
         };
         const oracle = resolveSessionMutationAuthorization({
           client,

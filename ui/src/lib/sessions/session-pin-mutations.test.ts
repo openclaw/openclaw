@@ -392,13 +392,10 @@ describe("session pin mutations", () => {
       const operation = sessions.patch(key, { pinned: true });
       expect(rowPinned(sessions.state.result, key)).toBe(true);
 
-      // A routine turn event for the same row, still carrying the pre-patch pin
-      // value, reaches both the direct merge and the canonical list refresh.
       const stalePayload = sessionChangedPayload(key, false);
-      sessions.reconcileChanged(stalePayload);
+      emitEvent({ type: "event", event: "sessions.changed", payload: stalePayload });
       expect(rowPinned(sessions.state.result, key)).toBe(true);
 
-      emitEvent({ type: "event", event: "sessions.changed", payload: stalePayload });
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       expect(rowPinned(sessions.state.result, key)).toBe(true);
 
@@ -442,14 +439,16 @@ describe("session pin mutations", () => {
       }
       throw new Error(`Unexpected Gateway method: ${method}`);
     });
-    const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
+    const { gateway, emitEvent } = createGatewayHarness(client);
+    const sessions = createTestSessionCapability(gateway);
     let observer: ReturnType<typeof sessions.observeRow> | undefined;
     let operation: ReturnType<typeof sessions.patch> | undefined;
     const observeArchived = () =>
-      sessions.reconcileChanged(
-        { ...current, sessionKey: key, reason: "patch", pinnedAt: null },
-        { archivedFilter: "all" },
-      );
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { ...current, sessionKey: key, reason: "patch", pinnedAt: null },
+      });
     const expectObservedPin = (pinned: boolean) => {
       for (const row of [sessions.state.result?.sessions[0], observer?.row]) {
         expect(row).toMatchObject({ key, sessionId, archived: true, pinned });

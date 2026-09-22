@@ -9,9 +9,9 @@ import * as network from "openclaw/plugin-sdk/ssrf-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ensureManagedCrabboxBinary } from "../cli-runtime-api.js";
 import {
   CRABBOX_MIN_VERSION,
-  ensureManagedCrabboxBinary,
   probeCrabboxVersion,
   resolveManagedCrabboxBinaryPath,
 } from "./crabbox-managed-binary.js";

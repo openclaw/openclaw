@@ -64,11 +64,12 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import {
-  readMessageIdempotencyKey,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 export { withSessionPendingInputRelocation };
 export type { SessionPendingInput, SessionPendingInputPage };
@@ -650,7 +651,7 @@ export function readSessionSubmittedInput(
                     .onRef("event.session_id", "=", "identity.session_id")
                     .onRef("event.seq", "=", "identity.seq"),
                 )
-                .select((eb) => eb.fn<number>("octet_length", ["event.event_json"]).as("bytes"))
+                .select(transcriptEventReadBytesSql("event").as("bytes"))
                 .where("identity.session_id", "=", resolved.sessionId)
                 .where("identity.message_idempotency_key", "=", idempotencyKey)
                 .orderBy("identity.seq", "desc")

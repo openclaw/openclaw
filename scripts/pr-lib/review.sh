@@ -334,15 +334,21 @@ review_init() {
   local json pr_url
   # Metadata reads are read-only, so fetching before the side-effect marker keeps a
   # transient GitHub failure inside the lock's auto-release window.
-  json=$(pr_meta_json "$pr") || return 1
+  json=$(pr_meta_json "$pr" false) || return 1
 
   enter_worktree "$pr" true || return 1
-  write_pr_meta_files "$json"
+  if [ "$(printf '%s\n' "$json" | jq -r .baseRefOid)" != "$PR_MAIN_SHA" ]; then
+    # Cold provisioning can outlive the metadata's base. Collect a new snapshot
+    # before acquisition rather than compare files from different main states.
+    json=$(pr_meta_json "$pr" false) || return 1
+  fi
   pr_url=$(printf '%s\n' "$json" | jq -r .url)
 
   local expected_sha
   expected_sha=$(pr_view_string_field "$json" headRefOid "$pr") || return 1
-  fetch_pr_head "$pr" "$expected_sha" "refs/heads/pr-$pr" || return 1
+  fetch_pr_head "$pr" "$expected_sha" "refs/heads/pr-$pr" "$json" || return 1
+  verify_pr_metadata_identity "$pr" "$json" "$PR_HEAD_OBSERVATION" || return 1
+  write_pr_meta_files "$json"
   local mb
   mb=$(pr_git merge-base "$PR_MAIN_SHA" "refs/heads/pr-$pr")
 

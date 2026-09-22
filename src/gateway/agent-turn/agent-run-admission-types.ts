@@ -1,4 +1,7 @@
-import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type {
+  AdmittedRunOperatorAuthority,
+  OperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import type {
   PreparedModelRuntimeLease,
@@ -25,6 +28,7 @@ export type PreparedAgentRunDispatch = {
   activeRunAbort: ReturnType<typeof registerChatAbortController>;
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   releaseCallerAuthority?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   operationalRunInstance: OperationalRunInstanceRef;
   effectiveProviderOverride?: string;
   effectiveModelOverride?: string;

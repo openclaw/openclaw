@@ -81,7 +81,7 @@ async function connectTestWs(
     host?: string;
     headers?: Record<string, string>;
     socket?: GatewayWsTestSocket;
-    clients?: Set<unknown>;
+    clients?: GatewayClientRegistry;
     options?: Partial<Parameters<typeof attachGatewayWsConnectionHandler>[0]>;
     trustedProxies?: string[];
   } = {},
@@ -128,7 +128,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       socket: { terminate: vi.fn() },
       worker: { environmentId: "worker-1" },
     };
-    const clients = new Set<unknown>([previous]);
+    const clients = new GatewayClientRegistry([previous] as never);
     const gatewayBudget = { release: vi.fn() };
     const rateLimiter = { check: vi.fn() };
     const getPluginNodeCapabilities = vi.fn(() => [{ surface: "canvas" }]);
@@ -169,7 +169,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(handler.setClient(client as never)).toBe(true);
     expect(previous).toMatchObject({ invalidated: true });
     expect(previous.socket.terminate).toHaveBeenCalledOnce();
-    expect(clients).toEqual(new Set([client]));
+    expect(new Set(clients)).toEqual(new Set([client]));
     expect(attachGatewayWsMessageHandlerMock).not.toHaveBeenCalled();
     socket.emit("close", 1000, Buffer.alloc(0));
     expect(buildRequestContext).not.toHaveBeenCalled();
@@ -251,7 +251,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       try {
         expect(handler.setClient(node)).toBe(accepted);
         if (accepted) {
-          expect(clients).toEqual(new Set([node]));
+          expect(new Set(clients)).toEqual(new Set([node]));
           expect(socket.close).not.toHaveBeenCalled();
         } else {
           expect(node).toMatchObject({ invalidated: true });
@@ -289,7 +289,7 @@ describe("attachGatewayWsConnectionHandler", () => {
   });
 
   it("rejects late client registration after a pre-connect socket close", async () => {
-    const clients = new Set();
+    const clients = new GatewayClientRegistry();
     const { passed, socket } = await connectTestWs({ clients });
     const handlerParams = passed as { setClient: (client: unknown) => boolean };
     socket.emit("close", 1001, Buffer.from("client left"));
@@ -307,7 +307,7 @@ describe("attachGatewayWsConnectionHandler", () => {
 
   it("allows only one authenticated client registration per socket", async () => {
     vi.useFakeTimers();
-    const clients = new Set();
+    const clients = new GatewayClientRegistry();
     const socket = createGatewayWsTestSocket({ ping: true });
     const { passed } = await connectTestWs({ clients, socket });
     const handlerParams = passed as { setClient: (client: unknown) => boolean };
@@ -324,7 +324,7 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     expect(handlerParams.setClient(firstClient)).toBe(true);
     expect(handlerParams.setClient(racedClient)).toBe(false);
-    expect(clients).toEqual(new Set([firstClient]));
+    expect(new Set(clients)).toEqual(new Set([firstClient]));
 
     vi.advanceTimersByTime(25_000);
     expect(socket.ping).toHaveBeenCalledOnce();
@@ -405,7 +405,7 @@ describe("attachGatewayWsConnectionHandler", () => {
     vi.useFakeTimers();
     const unregister = vi.fn();
     const get = vi.fn(() => undefined);
-    const clients = new Set<unknown>();
+    const clients = new GatewayClientRegistry();
     const socket = Object.assign(createGatewayWsTestSocket({ ping: true }), {
       terminate: vi.fn(),
     });

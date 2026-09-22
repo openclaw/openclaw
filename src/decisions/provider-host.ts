@@ -238,7 +238,7 @@ export class DecisionProviderHost {
     const controller = new AbortController();
     const signal = AbortSignal.any([options.signal, controller.signal]);
     const started = performance.now();
-    const budget = Math.min(options.timeoutMs, 10_000);
+    const budget = Math.min(options.timeoutMs, 30_000);
     const deadlineMonotonicMs = started + budget;
     const timer = setTimeout(() => controller.abort("decision-deadline"), budget);
     let settle!: () => void;

@@ -16,8 +16,6 @@
     "../../src/logging/**/*.test.tsx",
     "../../src/shared/**/*.test.ts",
     "../../src/shared/**/*.test.tsx",
-    "../../src/infra/sqlite-*.test.ts",
-    "../../src/config/sessions/**/*.test.ts",
-    "../../src/config/sessions/**/*.test.tsx"
+    "../../src/infra/sqlite-*.test.ts"
   ]
 }

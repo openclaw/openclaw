@@ -188,7 +188,6 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     updateAttentionDismissed,
     profileViewer: selfUser ? { ...selfUser, watchedSessions: [] } : undefined,
     canRetryConnection: canRetryGatewayStatus(host.connectionStatus),
-    queuedOutboxCount: host.queuedOutboxCount,
     themeMode: host.themeMode,
     triggerWidth: position.width,
     onTabAway: () => trigger?.focus(),

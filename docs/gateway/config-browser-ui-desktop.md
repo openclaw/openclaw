@@ -124,7 +124,9 @@ For the full key index and the other top-level config domains, see [Configuratio
   `snapshotDefaults`, and `tabCleanup` hot-reload.
   Changed launch settings replace affected managed browsers on their next use;
   externally attached browsers stay running. Enablement, evaluation, SSRF policy,
-  and extension relay require a Gateway restart.
+  and extension relay authentication changes replace the Browser control service
+  and its owned relay connections without restarting the Gateway. Independently
+  running relay daemons keep their own lifecycle and policy.
 
 ---
 
@@ -184,11 +186,11 @@ default.
 
 In **Systems**, select the **Gateway host** to check for an existing screen-sharing
 server. When one is available, **Enable desktop access in OpenClaw** turns on Host
-Desktop and requests a Gateway restart; the page reconnects automatically. This
-requires Gateway administrator access. Detection does not expose the desktop or
-change system permissions. Existing managed Linux desktops can be enabled from
-the same view. **Settings → Labs → Host Desktop** remains available to turn access
-off or manage it separately.
+Desktop without restarting the Gateway; the desktop becomes available on the
+same connection. Gateway administrator access is required. Detection does not
+expose the desktop or change system permissions. Existing managed Linux desktops
+can be enabled from the same view. **Settings → Labs → Host Desktop** remains
+available to turn access off or manage it separately.
 
 Enabling macOS Screen Sharing, a paired node's Desktop sharing, or screenshot
 capture alone does not enable the Gateway's desktop. On macOS, Remote Management
@@ -215,9 +217,11 @@ a Gateway connection keep TTL-only tokens.
 }
 ```
 
-- `desktop.host.enabled`: advertises **This machine** as a desktop source after
-  the Gateway restarts. Turning Host Desktop off in Labs writes `enabled: false`
-  and preserves its managed mode, port, and password-file settings.
+- `desktop.host.enabled`: advertises **This machine** as a desktop source.
+  Changes apply without restarting the Gateway and update connected desktop
+  pickers. Turning Host Desktop off in Labs writes `enabled: false`, closes host
+  desktop observations, and preserves its managed mode, port, and password-file
+  settings. The existing system VNC or Screen Sharing service stays running.
 - `desktop.host.managed`: Linux only. Starts a gateway-supervised, loopback-only
   TigerVNC/XFCE desktop lazily on the first observation or computer discovery.
   Stops it after the desktop session's linger period when no observer or active
@@ -227,6 +231,10 @@ a Gateway connection keep TTL-only tokens.
   Without it, the Control UI prompts for a VNC password and keeps it in browser
   memory for that connection. Managed mode always creates its own ephemeral
   password.
+
+Changes to `managed`, `port`, or `passwordFile` retire the current host source,
+close its observers, and release its computer execution holds. The replacement
+starts on demand without restarting the Gateway. External VNC servers stay running.
 
 OpenClaw connects only through loopback. An explicit `port` always selects
 attach mode, and an existing RFB listener on port `5900` takes precedence over

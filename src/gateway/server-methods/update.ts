@@ -24,17 +24,14 @@ import {
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import {
   type RestartSentinelPayload,
   writeRestartSentinel,
   formatDoctorNonInteractiveHint,
 } from "../../infra/restart-sentinel.js";
-import {
-  normalizeGatewayRestartDelayMs,
-  resolveGatewayRestartDeferralTimeoutMs,
-  scheduleGatewayRestart,
-} from "../../infra/restart.js";
+import { normalizeGatewayRestartDelayMs, scheduleGatewayRestart } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { gatewayUpdateCampaign } from "../../infra/update-campaign.js";
 import {
@@ -97,7 +94,7 @@ const MANAGED_HANDOFF_ALREADY_RUNNING_REASON = "managed-service-handoff-already-
 export const updateHandlers: GatewayRequestHandlers = {
   ...updateStatusHandlers,
   "update.report": updateReportHandler,
-  "update.run": async ({ params, respond, client, context }) => {
+  "update.run": async ({ params, respond, client, context, sessionMutationCommitGuard }) => {
     if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
       return;
     }
@@ -463,6 +460,13 @@ export const updateHandlers: GatewayRequestHandlers = {
             return;
           }
           assertForegroundRespawnEnabled();
+          try {
+            sessionMutationCommitGuard?.();
+          } catch {
+            outcomeMessage =
+              "This update no longer has a live requester principal or scheduled operator admission. Ask the operator to run the update again.";
+            throw new UpdatePreMutationError("owner_required", outcomeMessage);
+          }
           const started = await startManagedServiceUpdateHandoff({
             runId,
             beforePark: async () => {

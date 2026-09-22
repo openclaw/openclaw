@@ -74,6 +74,25 @@ it.each(["running", "queued", "capacity-wait"] as const)(
           subagentRuns.commitOwnership(entry);
         }
       }
+      const retainedRunIds: string[] = [];
+      if (state === "running") {
+        for (let index = 0; index < 2_048; index++) {
+          const entry = createSubagentRunRecord({
+            runId: `retained-history-${index}`,
+            childSessionKey: `agent:main:subagent:retained-${index}`,
+            requesterSessionKey: "agent:main:unrelated-parent",
+            createdAt: endedAt - 1_000,
+            startedAt: endedAt - 1_000,
+            endedAt,
+            outcome: { status: "ok" },
+            completion: { required: false },
+            delivery: { status: "not_required" },
+          });
+          subagentRuns.set(entry.runId, entry);
+          subagentRuns.commitOwnership(entry);
+          retainedRunIds.push(entry.runId);
+        }
+      }
       const projection = await createSessionRowProjection({ cfg });
       const connection = createGatewayConnectionState({ bootId: "follow-up", cfg });
       const runId = "follow-up";
@@ -104,6 +123,27 @@ it.each(["running", "queued", "capacity-wait"] as const)(
           hasActiveSubagentRun: true,
           childSessions: [child],
         });
+        if (retainedRunIds.length) {
+          const history = projection.state.rowContext.subagentRuns.latestRunsByChildSessionKey;
+          const iterate = history[Symbol.iterator].bind(history);
+          let visited = 0;
+          const historyIterator = vi
+            .spyOn(history, Symbol.iterator)
+            .mockImplementation(function* () {
+              for (const entry of iterate()) {
+                visited++;
+                yield entry;
+              }
+              return undefined;
+            });
+          replaceSessionEntrySync(
+            { agentId: "main", sessionKey: movedParent },
+            { sessionId: movedParent, updatedAt: endedAt + 1, label: "Unrelated update" },
+          );
+          expect((await list()).sessions[0]?.hasActiveSubagentRun).toBe(true);
+          expect(visited).toBeLessThan(16);
+          historyIterator.mockRestore();
+        }
         const presentation = prepareProjectedSessionPresentation(
           projection,
           undefined,
@@ -154,6 +194,9 @@ it.each(["running", "queued", "capacity-wait"] as const)(
         connection.mentionInbox.dispose();
         for (const key of [child, grandchild]) {
           subagentRuns.delete(`original:${key}`);
+        }
+        for (const retainedRunId of retainedRunIds) {
+          subagentRuns.delete(retainedRunId);
         }
       }
     });

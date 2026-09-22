@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import type { PluginUpdateOutcome } from "../plugins/update.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { UpdateRecoveryStep } from "../shared/update-outcome.js";
@@ -14,7 +15,7 @@ import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { UpdateFailureFact } from "./update-failure-facts.js";
 import type { GlobalInstallManager } from "./update-global.js";
 import type { UpdateRecovery } from "./update-recovery.js";
-import type { UpdateRollbackOutcome } from "./update-run-schema.js";
+import type { UpdateRollbackOutcome, UpdateRunRecordSchema } from "./update-run-schema.js";
 import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
 type UpdateStepAdvisory =
@@ -37,6 +38,8 @@ export type UpdateStepResult = {
   advisory?: UpdateStepAdvisory;
   /** Complete owner-classified warnings when one step reports several outcomes. */
   warnings?: string[];
+  /** Owner-selected informational messages, retained separately from warnings and raw output. */
+  diagnostics?: string[];
   /** Suggested operator actions, distinct from executed update steps. */
   recoverySteps?: readonly UpdateRecoveryStep[];
   failureFacts?: UpdateFailureFact[];
@@ -65,6 +68,10 @@ export type UpdateRunResult = {
   steps: UpdateStepResult[];
   durationMs: number;
   recovery?: UpdateRecovery;
+  verification?: Omit<
+    z.infer<typeof UpdateRunRecordSchema>["verification"],
+    "recovery" | "rollbackOutcome"
+  >;
   rollbackOutcome?: UpdateRollbackOutcome;
   postUpdate?: {
     plugins?: {
@@ -141,38 +148,25 @@ type GitUpdateTarget = {
 };
 
 export type UpdateRunnerOptions = {
-  runId?: string;
-  cwd?: string;
-  argv1?: string;
-  tag?: string;
   channel?: UpdateChannel;
   devTarget?: DevUpdateTarget;
-  deferConfiguredPluginInstallRepair?: boolean;
-  allowGatewayServiceRepair?: boolean;
-  allowGatewayActivation?: boolean;
   /** Expose a new checkout only after target admission; subsequent work uses the published path. */
   publishGitCheckout?: () => Promise<string>;
   /** Read-only admission before executing a fetched candidate; never stops a service. */
-  inspectGitTarget?: (target: GitUpdateTarget) => Promise<void>;
-  /** Admit the built candidate after validation, before retention or activation. */
-  inspectGitCandidate?: (candidateRoot: string) => Promise<void>;
+  inspectGitTarget: (target: GitUpdateTarget) => Promise<void>;
   /** Admit required preparation after no-op detection, before allocating the candidate worktree. */
   beforeGitStaging?: () => Promise<{ step: UpdateStepResult; failureReason: string }>;
-  validateCandidate?: (root: string) => Promise<void>;
+  validateCandidate: (root: string) => Promise<void>;
   /** CLI-owned activation Doctor retains its config writer and requester authority. */
-  runGitDoctor?: (root: string) => Promise<UpdateStepResult | null>;
+  runGitDoctor: (root: string) => Promise<UpdateStepResult | null>;
   prepareGitExposure?: (
     candidateRoot: string,
     candidateSha: string,
     env: NodeJS.ProcessEnv | undefined,
   ) => Promise<void>;
-  beforeGitMutation?: (target: GitUpdateTarget) => Promise<{
-    allowGatewayServiceRepair?: boolean;
-    allowGatewayActivation?: boolean;
-  } | void>;
+  beforeGitMutation?: (target: GitUpdateTarget) => Promise<void>;
   /** Operator-selected work deadline; omission leaves work unbounded, not probes or cleanup. */
   timeoutMs?: number;
-  runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
 };
 

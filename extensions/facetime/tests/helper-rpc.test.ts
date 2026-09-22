@@ -1,11 +1,8 @@
 import { createHmac } from "node:crypto";
 import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  FaceTimeHelperActionError,
-  FaceTimeHelperSocketServer,
-  FaceTimeHelperUnavailableError,
-} from "../src/helper-rpc.js";
+import { FaceTimeHelperActionError } from "../src/helper-results.js";
+import { FaceTimeHelperSocketServer, FaceTimeHelperUnavailableError } from "../src/helper-rpc.js";
 
 const TEST_HELPER_AUTH_TOKEN = "a".repeat(64);
 const TEST_HELPER_BUILD_ID = "b".repeat(64);
@@ -798,7 +795,9 @@ describe("FaceTime helper RPC", () => {
       logger: console,
       ipcKey: TEST_HELPER_AUTH_TOKEN,
       buildId: TEST_HELPER_BUILD_ID,
-      onMessage: (message) => events.push(message),
+      onMessage: (message) => {
+        events.push(message);
+      },
     });
     await helper.start();
     client = net.createConnection({ host: "127.0.0.1", port });

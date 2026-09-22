@@ -77,17 +77,16 @@ export default defineConfig({
     expect(result.code, result.stdout + result.stderr).toBe(0);
     const output = result.stdout + result.stderr;
     for (const file of Object.keys(files)) {
-      expect(output).toContain(
-        `[sqlite-test-lifecycle] ${file}: retiring openclaw.sharedStateWorkerOwner`,
-      );
+      const owner = file.startsWith("12-") ? "stateReadWorkers" : "sharedStateWorkerOwner";
+      expect(output).toContain(`[sqlite-test-lifecycle] ${file}: retiring openclaw.${owner}`);
     }
     expect(output).toContain(
       "[sqlite-test-lifecycle] 11-a-sqlite-owner.test.ts: draining agent database custody",
     );
     const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
     expect(report).toMatchObject({
-      numTotalTests: 2,
-      numPassedTests: 2,
+      numTotalTests: 5,
+      numPassedTests: 5,
       numFailedTests: 0,
       numPendingTests: 0,
       numTodoTests: 0,

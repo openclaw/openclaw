@@ -9,7 +9,7 @@ import { prepareTaskRegistryRead } from "./task-registry-read.js";
 import {
   findTaskByRunId,
   listTaskRecords,
-  listTaskRecordsUnsorted,
+  listTaskSessionActivity,
   listTasksForRelatedSessionKey,
 } from "./task-registry.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
@@ -107,7 +107,7 @@ export function hasPendingGeneratedMediaTaskForSessionKey(sessionKey: string): b
  */
 export function buildPendingGeneratedMediaSessionKeySet(): Set<string> {
   const keys = getAllActiveGeneratedMediaSessionKeys();
-  for (const task of listTaskRecordsUnsorted()) {
+  for (const task of listTaskSessionActivity()) {
     if (GENERATED_MEDIA_TASK_KINDS.has(task.taskKind ?? "") && !isTerminalTaskStatus(task.status)) {
       if (task.requesterSessionKey) {
         keys.add(task.requesterSessionKey);

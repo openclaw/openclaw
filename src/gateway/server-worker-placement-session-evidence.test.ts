@@ -262,9 +262,11 @@ describe("worker placement session evidence", () => {
           updatedAt: 1,
         });
       }
-      // Settle fixture maintenance before corruption can revoke a reader's validation receipt.
-      const databasePath = openOpenClawAgentDatabase({ agentId: "main" }).path;
-      await closeOpenClawAgentDatabaseByPathAsync(databasePath, "main");
+      // Join seeded disk maintenance before corrupting a store; retain native incognito state.
+      for (const agentId of ["main", "healthy"]) {
+        const seeded = openOpenClawAgentDatabase({ agentId });
+        await closeOpenClawAgentDatabaseByPathAsync(seeded.path, agentId);
+      }
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       expect(
         readSessionIdentityEvidenceInDatabase(database, [broken]).map((row) => row.status),
@@ -275,6 +277,7 @@ describe("worker placement session evidence", () => {
       const requested = [broken, healthy, absent, incognito];
       const resolve = await createWorkerPlacementSessionEvidenceResolver(requested);
 
+      expect(evidenceWarnSpy).not.toHaveBeenCalled();
       expect(await Promise.all(requested.map(resolve))).toEqual([
         "unknown",
         "current",

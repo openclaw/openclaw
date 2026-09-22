@@ -139,6 +139,8 @@ export type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   /** Private source-owner fence; cancellation alone does not establish current authority. */
   assertSourceCurrent?: () => void;
+  /** Original operator restriction; host-only and never accepted from public ingress. */
+  operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
   lane?: string;
   runId?: string;
   /** Immutable gateway lifecycle ownership captured when this run was admitted. */
@@ -244,6 +246,8 @@ type AgentCommandGatewayOnlyKey =
   | "pinnedWidgetAuthoring"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
+  | "operatorAuthority"
+  | "assertSourceCurrent"
   | "skillLibraryAuthoring"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
@@ -252,7 +256,7 @@ type AgentCommandGatewayOnlyKey =
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride" | "assertSourceCurrent"
+  AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride"
 > & {
   /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
   senderIsOwner?: boolean;

@@ -52,9 +52,14 @@ const settleProvenance = [
 ].join("\n");
 
 describe("mock subagent handoff completion", () => {
-  it.each(["error", "forbidden"])(
-    "reports %s admission without waiting for a child",
-    async (status) => {
+  it.each([
+    { status: "error", structured: false },
+    { status: "forbidden", structured: false },
+    { status: "error", structured: true },
+    { status: "forbidden", structured: true },
+  ])(
+    "reports $status admission without waiting for a child (structured=$structured)",
+    async ({ status, structured }) => {
       const server = await startQaMockOpenAiServer({ host: "127.0.0.1", port: 0 });
       try {
         const response = await fetch(`${server.baseUrl}/v1/responses`, {
@@ -63,14 +68,35 @@ describe("mock subagent handoff completion", () => {
           body: JSON.stringify({
             model: "gpt-5.6-luna",
             stream: false,
-            tools,
+            tools: structured
+              ? ["tool_call", "sessions_yield"].map((name) => ({ type: "function", name }))
+              : tools,
             input: [
               user(kickoff),
-              { type: "function_call", name: "sessions_spawn", call_id: "spawn", arguments: "{}" },
+              {
+                type: "function_call",
+                name: structured ? "tool_call" : "sessions_spawn",
+                call_id: "spawn",
+                arguments: JSON.stringify(structured ? { id: "sessions_spawn", args: {} } : {}),
+              },
               {
                 type: "function_call_output",
                 call_id: "spawn",
-                output: JSON.stringify({ status, error: "Child admission denied" }),
+                output: JSON.stringify(
+                  structured
+                    ? {
+                        tool: { id: "sessions_spawn", name: "sessions_spawn", source: "core" },
+                        result: {
+                          content: [
+                            {
+                              type: "text",
+                              text: JSON.stringify({ status, error: "Child admission denied" }),
+                            },
+                          ],
+                        },
+                      }
+                    : { status, error: "Child admission denied" },
+                ),
               },
             ],
           }),

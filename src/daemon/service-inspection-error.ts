@@ -92,6 +92,20 @@ export class ServiceDefinitionInspectionError extends Error {
   }
 }
 
+export class GatewayServiceStopUnsafeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayServiceStopUnsafeError";
+  }
+}
+
+/** Native preparation can wrap a custody refusal alongside an authority or cleanup failure. */
+export function hasGatewayServiceStopUnsafeError(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some(
+    (candidate) => candidate instanceof GatewayServiceStopUnsafeError,
+  );
+}
+
 export function sanitizeServiceInspectionError(error: unknown): Error {
   return error instanceof ServiceInspectionError ||
     error instanceof ServiceDefinitionInspectionError ||

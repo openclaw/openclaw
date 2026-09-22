@@ -272,6 +272,9 @@ export function prepareCrabboxSourceCapsule(options: {
     ]).trim();
     writeFileSync(join(directory, ".git", "objects", "info", "alternates"), `${objectDir}\n`);
     git(directory, ["update-ref", "--no-deref", "HEAD", sourceSha], privateEnv);
+    // Native Blacksmith sync compares against literal main. Use the captured
+    // base so committed source changes remain part of that transport delta.
+    git(directory, ["update-ref", "refs/heads/main", baseSha], privateEnv);
     // Git expands ~/ paths; relative excludesFile paths are relative to the source
     // checkout. Keep this policy reference local, including an explicit empty override.
     const excludesFile = spawnSync(

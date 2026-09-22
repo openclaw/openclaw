@@ -46,7 +46,7 @@ export type HostDesktopInspection = {
 };
 
 function nonRfbError(port: number): string {
-  return `desktop.host.port ${port} is occupied by a non-VNC service; configure desktop.host.port for the loopback VNC server, then restart the gateway`;
+  return `desktop.host.port ${port} is occupied by a non-VNC service; configure desktop.host.port for the loopback VNC server, then retry`;
 }
 
 function unavailableError(port: number, platform: NodeJS.Platform): string {
@@ -147,8 +147,7 @@ export async function inspectHostDesktop(
         state: "disabled",
         port: params.config?.port ?? DEFAULT_HOST_DESKTOP_PORT,
       },
-      detail:
-        "disabled; enable the Desktop lab with desktop.host.enabled=true, then restart the gateway",
+      detail: "disabled; enable the Desktop lab with desktop.host.enabled=true",
     };
   }
   return inspectConfiguredHostDesktop(params);
@@ -287,22 +286,25 @@ export function createHostDesktopSource(params: {
     };
   };
 
-  const acquire = async (): Promise<HostDesktopAcquireResult> => {
+  const acquire = async (assertCurrent?: () => void): Promise<HostDesktopAcquireResult> => {
+    assertCurrent?.();
     selectedManagedDesktop = false;
     const probe = await probeRfb({
       host: "127.0.0.1",
       port,
       timeoutMs: HOST_DESKTOP_PROBE_TIMEOUT_MS,
     });
+    assertCurrent?.();
     if (probe.kind === "unreachable" || probe.kind === "timeout") {
       if (params.config.port === undefined && params.config.managed === true) {
         if (platform !== "linux") {
           throw new Error(managedPlatformError(platform));
         }
         if (!managedDesktop) {
-          throw new Error("managed Linux desktop lifecycle is unavailable; restart the gateway");
+          throw new Error("managed Linux desktop lifecycle is unavailable; retry");
         }
         const acquired = await managedDesktop.acquire();
+        assertCurrent?.();
         selectedManagedDesktop = true;
         return acquired;
       }
@@ -355,40 +357,116 @@ export type HostDesktopService = {
   }>;
   acquireComputer(params: { onStop(): Promise<void> }): Promise<DesktopComputerLease>;
   status(): Promise<HostDesktopStatus>;
+  reconcileRuntimePolicy(): Promise<void>;
 };
 
 /** Combines host acquisition, registry ownership, and observer-token minting. */
 export function createHostDesktopService(params: {
-  config: DesktopHostConfig;
+  getConfig: () => DesktopHostConfig | undefined;
   registry: DesktopSessionRegistry;
   platform?: NodeJS.Platform;
   managedDesktop?: ManagedLinuxDesktop;
 }): HostDesktopService {
   const platform = params.platform ?? process.platform;
-  const managedDesktop =
-    params.managedDesktop ??
-    (params.config.managed === true && platform === "linux"
-      ? createManagedLinuxDesktop({
-          onFailed: () => {
-            void params.registry.stop("host", 0);
-          },
-        })
-      : undefined);
-  const source = createHostDesktopSource({
-    config: params.config,
-    platform,
-    ...(managedDesktop ? { managedDesktop } : {}),
-  });
-  const acquire = () =>
-    params.registry.acquire({
+  type HostDesktopRuntime = {
+    config: DesktopHostConfig;
+    ownerEpoch: number;
+    controller: AbortController;
+    source: ReturnType<typeof createHostDesktopSource>;
+    stopping?: Promise<void>;
+  };
+  let current: HostDesktopRuntime | undefined;
+  let nextOwnerEpoch = 0;
+  const isCurrent = (runtime: HostDesktopRuntime) => {
+    const config = params.getConfig();
+    return (
+      current === runtime &&
+      !runtime.controller.signal.aborted &&
+      config?.enabled === true &&
+      config.managed === runtime.config.managed &&
+      config.port === runtime.config.port &&
+      config.passwordFile === runtime.config.passwordFile
+    );
+  };
+  const assertCurrent = (runtime: HostDesktopRuntime) => {
+    if (!isCurrent(runtime)) {
+      throw new Error("gateway host desktop configuration changed; retry");
+    }
+  };
+  const reconcileRuntimePolicy = async () => {
+    const runtime = current;
+    if (!runtime || isCurrent(runtime)) {
+      return;
+    }
+    // Revoke tickets before waiting for acquisition and managed-process cleanup.
+    runtime.controller.abort();
+    if (!runtime.stopping) {
+      runtime.stopping = params.registry.stop("host", runtime.ownerEpoch).then(
+        () => {
+          if (current === runtime) {
+            current = undefined;
+          }
+        },
+        (error: unknown) => {
+          runtime.stopping = undefined;
+          throw error;
+        },
+      );
+    }
+    await runtime.stopping;
+  };
+  const resolveRuntime = async () => {
+    await reconcileRuntimePolicy();
+    const config = params.getConfig();
+    if (config?.enabled !== true) {
+      return undefined;
+    }
+    if (!current) {
+      const ownerEpoch = nextOwnerEpoch++;
+      const managedDesktop =
+        params.managedDesktop ??
+        (config.managed === true && platform === "linux"
+          ? createManagedLinuxDesktop({
+              onFailed: () => {
+                void params.registry.stop("host", ownerEpoch);
+              },
+            })
+          : undefined);
+      const snapshot = { ...config };
+      current = {
+        config: snapshot,
+        ownerEpoch,
+        controller: new AbortController(),
+        source: createHostDesktopSource({
+          config: snapshot,
+          platform,
+          ...(managedDesktop ? { managedDesktop } : {}),
+        }),
+      };
+    }
+    return current;
+  };
+  const acquire = async () => {
+    const runtime = await resolveRuntime();
+    if (!runtime) {
+      throw new Error(
+        "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true)",
+      );
+    }
+    assertCurrent(runtime);
+    const acquired = await params.registry.acquire({
       sourceKey: "host",
-      ownerEpoch: 0,
-      start: source.acquire,
-      ...(source.teardown ? { teardown: source.teardown } : {}),
+      ownerEpoch: runtime.ownerEpoch,
+      start: () => runtime.source.acquire(() => assertCurrent(runtime)),
+      ...(runtime.source.teardown ? { teardown: runtime.source.teardown } : {}),
     });
+    assertCurrent(runtime);
+    return { acquired, runtime };
+  };
   return {
     async observe(observeParams) {
-      const acquired = await acquire();
+      const { acquired, runtime } = await acquire();
+      assertCurrent(runtime);
       const auth = acquired.auth;
       if (!auth) {
         throw new Error("gateway host desktop authentication state is unavailable; retry observe");
@@ -410,9 +488,15 @@ export function createHostDesktopService(params: {
       }
       const minted = mintDesktopObserverToken({
         sourceKey: "host",
-        ownerEpoch: 0,
+        ownerEpoch: runtime.ownerEpoch,
         control: observeParams.control,
-        requester: observeParams.requester,
+        requester: {
+          ...observeParams.requester,
+          signal: observeParams.requester?.signal
+            ? AbortSignal.any([runtime.controller.signal, observeParams.requester.signal])
+            : runtime.controller.signal,
+          isCurrent: () => isCurrent(runtime) && observeParams.requester?.isCurrent() !== false,
+        },
         attachment: acquired.attachment,
         ...(preauth ? { preauth } : {}),
       });
@@ -428,20 +512,21 @@ export function createHostDesktopService(params: {
       };
     },
     async acquireComputer(computerParams) {
-      await acquire();
-      const activity = params.registry.retainActivity("host", 0);
+      const { runtime } = await acquire();
+      assertCurrent(runtime);
+      const activity = params.registry.retainActivity("host", runtime.ownerEpoch);
       if (!activity) {
         throw new Error("COMPUTER_HOST_UNAVAILABLE: the host desktop stopped during acquisition");
       }
       try {
-        const computer = await source.acquireComputer(computerParams);
-        if (!activity.isCurrent() || !computer.isCurrent()) {
+        const computer = await runtime.source.acquireComputer(computerParams);
+        if (!isCurrent(runtime) || !activity.isCurrent() || !computer.isCurrent()) {
           computer.release();
           throw new Error("COMPUTER_HOST_UNAVAILABLE: the host desktop stopped during acquisition");
         }
         return {
           env: computer.env,
-          isCurrent: () => activity.isCurrent() && computer.isCurrent(),
+          isCurrent: () => isCurrent(runtime) && activity.isCurrent() && computer.isCurrent(),
           release() {
             computer.release();
             activity.release();
@@ -453,7 +538,17 @@ export function createHostDesktopService(params: {
       }
     },
     async status() {
-      return (await source.inspect()).status;
+      for (;;) {
+        const runtime = await resolveRuntime();
+        if (!runtime) {
+          return (await inspectHostDesktop({ config: params.getConfig(), platform })).status;
+        }
+        const inspection = await runtime.source.inspect();
+        if (isCurrent(runtime)) {
+          return inspection.status;
+        }
+      }
     },
+    reconcileRuntimePolicy,
   };
 }

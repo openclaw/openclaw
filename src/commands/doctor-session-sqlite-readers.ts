@@ -15,6 +15,7 @@ import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
+  getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -22,6 +23,7 @@ import {
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "../config/sessions/session-entry-codec.js";
+import { transcriptEventReadBytesSql } from "../config/sessions/session-transcript-read-bytes.js";
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -73,6 +75,7 @@ export function readLegacyPrimaryTranscriptIdentity(
   filePath: string,
   originalPath: string,
   retainedSharedAliasIds?: ReadonlySet<string>,
+  registered = false,
 ): { sessionId: string; updatedAt: number } | undefined {
   const filename = path.basename(originalPath);
   const filenameId =
@@ -116,13 +119,16 @@ export function readLegacyPrimaryTranscriptIdentity(
       !parseOpaqueLeafEntry(raw) &&
       !parseParentLinkedOpaqueEntry(raw)
     ) {
+      if (registered) {
+        return undefined;
+      }
       throw new Error("Unrecognized primary transcript record");
     }
     if (classified.recognized && classified.entry.type === "message") {
       messages += 1;
     }
   }
-  return sessionId && messages > 0
+  return sessionId && (messages > 0 || registered)
     ? { sessionId, updatedAt: Math.max(0, Math.floor(fs.statSync(filePath).mtimeMs)) }
     : undefined;
 }
@@ -499,13 +505,17 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
         },
       };
     }
+    // Logical payload bytes exclude JSONL separators; identity rows retain the database's encoding.
+    const eventBytes = tableHasColumn(database, "transcript_events", "event_zstd")
+      ? transcriptEventReadBytesSql().compile(getSessionKysely(database)).sql
+      : "octet_length(event_json)";
     const totalRow = database
-      .prepare("SELECT COALESCE(SUM(LENGTH(event_json)), 0) AS row_bytes FROM transcript_events")
+      .prepare(`SELECT COALESCE(SUM(${eventBytes}), 0) AS row_bytes FROM transcript_events`)
       .get() as { row_bytes?: unknown } | undefined;
     const largestRows = database
       .prepare(
         `
-          SELECT session_id, COUNT(*) AS events, COALESCE(SUM(LENGTH(event_json)), 0) AS row_bytes
+          SELECT session_id, COUNT(*) AS events, COALESCE(SUM(${eventBytes}), 0) AS row_bytes
           FROM transcript_events
           GROUP BY session_id
           ORDER BY row_bytes DESC, events DESC, session_id ASC

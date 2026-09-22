@@ -112,31 +112,6 @@ describe("gateway server chat", () => {
     dispatchInboundMessageMock.mockReset();
   });
 
-  const buildNoReplyHistoryFixture = (includeMixedAssistant = false) => [
-    createGatewayHistoryText("user", "hello", 1),
-    createGatewayHistoryText("assistant", "NO_REPLY", 2),
-    createGatewayHistoryText("assistant", "real reply", 3),
-    {
-      role: "assistant",
-      text: "real text field reply",
-      content: "NO_REPLY",
-      timestamp: 4,
-    },
-    createGatewayHistoryText("user", "NO_REPLY", 5),
-    ...(includeMixedAssistant
-      ? [
-          {
-            role: "assistant",
-            content: [
-              { type: "text", text: "NO_REPLY" },
-              { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
-            ],
-            timestamp: 6,
-          },
-        ]
-      : []),
-  ];
-
   const loadChatHistoryWithMessages = async (
     messages: Array<Record<string, unknown>>,
   ): Promise<unknown[]> => {
@@ -1615,44 +1590,103 @@ describe("gateway server chat", () => {
     },
   );
 
-  test("chat.history hides assistant NO_REPLY-only entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture());
-    const textValues = collectHistoryTextValues(historyMessages);
-    // The NO_REPLY assistant message (content block) should be dropped.
-    // The assistant with text="real text field reply" + content="NO_REPLY" stays
-    // because entry.text takes precedence over entry.content for the silent check.
-    // The user message with NO_REPLY text is preserved (only assistant filtered).
-    expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
-  });
+  test.each([
+    {
+      name: "hides assistant control replies in Responses output blocks",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "NO_REPLY" }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "visible response" }],
+          timestamp: 2,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "input_text", text: "NO_REPLY" }],
+          timestamp: 3,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "input_text", text: "visible assistant input" }],
+          timestamp: 4,
+        },
+      ],
+      expected: ["assistant:visible response", "assistant:visible assistant input"],
+    },
+    {
+      name: "hides commentary-only assistant entries",
+      messages: [
+        createGatewayHistoryText("user", "hello", 1),
+        {
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "text", text: "thinking like caveman" }],
+          timestamp: 2,
+        },
+        createGatewayHistoryText("assistant", "real reply", 3),
+      ],
+      expected: ["user:hello", "assistant:real reply"],
+    },
+    {
+      name: "hides assistant announce/reply skip-only entries",
+      messages: [
+        createGatewayHistoryText("assistant", "ANNOUNCE_SKIP", 1),
+        createGatewayHistoryText("assistant", "REPLY_SKIP", 2),
+        {
+          role: "assistant",
+          text: "real text field reply",
+          content: "ANNOUNCE_SKIP",
+          timestamp: 3,
+        },
+        createGatewayHistoryText("assistant", "real reply", 4),
+      ],
+      expected: ["assistant:real text field reply", "assistant:real reply"],
+    },
+    {
+      name: "hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries",
+      messages: [
+        createGatewayHistoryText("user", "hello", 1),
+        createGatewayHistoryText("assistant", "NO_REPLY", 2),
+        createGatewayHistoryText("assistant", "real reply", 3),
+        {
+          role: "assistant",
+          text: "real text field reply",
+          content: "NO_REPLY",
+          timestamp: 4,
+        },
+        createGatewayHistoryText("user", "NO_REPLY", 5),
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "NO_REPLY" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
+          ],
+          timestamp: 6,
+        },
+      ],
+      expected: [
+        "user:hello",
+        "assistant:real reply",
+        "assistant:real text field reply",
+        "user:NO_REPLY",
+        "assistant:NO_REPLY",
+      ],
+    },
+  ])("chat.history $name", async ({ messages, expected }) => {
+    const historyMessages = await loadChatHistoryWithMessages(messages);
+    const roleAndText = historyMessages.map((message) => {
+      const entry = isRecord(message) ? message : {};
+      const role = typeof entry.role === "string" ? entry.role : "unknown";
+      const text =
+        typeof entry.text === "string" ? entry.text : (extractFirstTextBlock(message) ?? "");
+      return `${role}:${text}`;
+    });
 
-  test("chat.history hides assistant control replies in Responses output blocks", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      {
-        role: "assistant",
-        content: [{ type: "output_text", text: "NO_REPLY" }],
-        timestamp: 1,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "output_text", text: "visible response" }],
-        timestamp: 2,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "input_text", text: "NO_REPLY" }],
-        timestamp: 3,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "input_text", text: "visible assistant input" }],
-        timestamp: 4,
-      },
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual([
-      "visible response",
-      "visible assistant input",
-    ]);
+    expect(roleAndText).toEqual(expected);
   });
 
   test.each([
@@ -1783,53 +1817,6 @@ describe("gateway server chat", () => {
     expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(false);
   });
 
-  test("chat.history hides commentary-only assistant entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("user", "hello", 1),
-      {
-        role: "assistant",
-        phase: "commentary",
-        content: [{ type: "text", text: "thinking like caveman" }],
-        timestamp: 2,
-      },
-      createGatewayHistoryText("assistant", "real reply", 3),
-    ]);
-
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
-  });
-
-  test("chat.history hides assistant announce/reply skip-only entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages([
-      createGatewayHistoryText("assistant", "ANNOUNCE_SKIP", 1),
-      createGatewayHistoryText("assistant", "REPLY_SKIP", 2),
-      {
-        role: "assistant",
-        text: "real text field reply",
-        content: "ANNOUNCE_SKIP",
-        timestamp: 3,
-      },
-      createGatewayHistoryText("assistant", "real reply", 4),
-    ]);
-    const roleAndText = historyMessages
-      .map((message) => {
-        const role =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { role?: unknown }).role === "string"
-            ? (message as { role: string }).role
-            : "unknown";
-        const text =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { text?: unknown }).text === "string"
-            ? (message as { text: string }).text
-            : (extractFirstTextBlock(message) ?? "");
-        return `${role}:${text}`;
-      })
-      .filter((entry) => entry !== "unknown:");
-
-    expect(roleAndText).toEqual(["assistant:real text field reply", "assistant:real reply"]);
-  });
   test("preserves split fenced-code indentation in chat.send events and history", async () => {
     await withMainSessionStore(async () => {
       const expected = "```yaml\nroot:\n  nested:\n    value: true\n```";
@@ -2192,35 +2179,6 @@ describe("gateway server chat", () => {
       },
       { sessionId: "sess-managed-image-history" },
     );
-  });
-
-  test("chat.history hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries", async () => {
-    const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture(true));
-    const roleAndText = historyMessages
-      .map((message) => {
-        const role =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { role?: unknown }).role === "string"
-            ? (message as { role: string }).role
-            : "unknown";
-        const text =
-          message &&
-          typeof message === "object" &&
-          typeof (message as { text?: unknown }).text === "string"
-            ? (message as { text: string }).text
-            : (extractFirstTextBlock(message) ?? "");
-        return `${role}:${text}`;
-      })
-      .filter((entry) => entry !== "unknown:");
-
-    expect(roleAndText).toEqual([
-      "user:hello",
-      "assistant:real reply",
-      "assistant:real text field reply",
-      "user:NO_REPLY",
-      "assistant:NO_REPLY",
-    ]);
   });
 
   test("chat.history uses the owning agent thinkingDefault for non-default agent sessions", async () => {

@@ -28,8 +28,62 @@ describe("Claude project directory watch", () => {
     await promises.rm(root, { recursive: true, force: true });
   });
 
+  it.each([1000.1, 65530.12])(
+    "arms at the deadline with a fractional clock starting at %s",
+    (start) => {
+      const driver = createClaudeCatalogWatchDriver(root);
+      const clock = vi.spyOn(performance, "now").mockReturnValue(start);
+      watch = createDirtyDirectoryWatch(path.join(root, "projects"));
+      watch.observeChildDirectories(["changed"]);
+      clock.mockReturnValue(start + 249);
+      expect(watch.takeDirty()).toBe("all");
+      expect(watch.takeDirty()).toBe("all");
+      clock.mockReturnValue(start + 250);
+      expect(watch.takeDirty()).toBe("all");
+      expect(watch.takeDirty()).toEqual(new Set());
+      driver.change("projects/changed/session.jsonl");
+      expect(watch.takeDirty()).toEqual(new Set(["changed"]));
+      expect(watch.takeDirty()).toEqual(new Set());
+    },
+  );
+
   it("reports dirty children for transcript writes and new project directories", async () => {
-    await promises.mkdir(path.join(root, "existing"));
+    if (process.platform === "darwin") {
+      // Let FSEvents observe the new fixture directory through its existing parent
+      // before asking a new stream to watch that directory's descendants.
+      const reported = new Set<string>();
+      const parentWatch = fs.watch(
+        path.dirname(root),
+        { recursive: true, persistent: false },
+        (_event, name) => {
+          if (name) {
+            reported.add(name);
+          }
+        },
+      );
+      try {
+        // fs.watch returns before its FSEvents stream is live. Keep emitting a
+        // fixture-only probe until the parent actually observes it, then create
+        // the directory whose one-shot birth event must not be lost.
+        const probe = path.join(root, ".watch-ready");
+        await vi.waitFor(
+          async () => {
+            await promises.appendFile(probe, ".");
+            expect(reported).toContain(`${path.basename(root)}/.watch-ready`);
+          },
+          { timeout: 2_000, interval: 25 },
+        );
+        await promises.mkdir(path.join(root, "existing"));
+        await vi.waitFor(() => expect(reported).toContain(`${path.basename(root)}/existing`), {
+          timeout: 2_000,
+          interval: 25,
+        });
+      } finally {
+        parentWatch.close();
+      }
+    } else {
+      await promises.mkdir(path.join(root, "existing"));
+    }
     watch = createDirtyDirectoryWatch(root);
     watch.observeChildDirectories(["existing"]);
     await armed(watch);

@@ -8,6 +8,8 @@ export type DiagnosticMemoryUsage = {
   workerHeapSampledCount?: number;
   workerHeapTotalBytes?: number;
   workerHeapUsedBytes?: number;
+  /** Live, fresh isolate samples; script is an allowlisted basename or "other". */
+  workerHeaps?: { script: string; heapUsed: number; heapTotal: number }[];
 };
 
 export type DiagnosticChildProcessSpawnFields = {

@@ -315,7 +315,7 @@ suite.define(() => {
             node = await startSkillLibraryNodeProcess(endpoint, admin);
             nodeDeviceId = node.nodeId;
           }
-          seedDesktopResizeSources(tappedFixture, nodeDeviceId);
+          await seedDesktopResizeSources(tappedFixture, nodeDeviceId);
           phase("guest-ssh");
           guest = await createDesktopResizeGuest(fixture);
           phase("browser-context");

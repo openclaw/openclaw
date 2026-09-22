@@ -9,7 +9,6 @@ import {
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
-import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -65,7 +64,6 @@ export async function ensureManagerRuntimeHandle(params: {
     params.cfg.acp?.backend ||
     ""
   ).trim();
-  const configSignature = resolveRuntimeConfigCacheKey(params.cfg);
   const backend = params.deps.requireRuntimeBackend(configuredBackend || undefined);
   const runtime = backend.runtime;
   assertAcpRuntimeOwnerSupport(runtime, params);
@@ -75,7 +73,6 @@ export async function ensureManagerRuntimeHandle(params: {
     const agentMatches = cached.agent === agent;
     const modeMatches = cached.mode === mode;
     const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
-    const configMatches = cached.configSignature === configSignature;
     const handleMatchesMeta = params.runtimeHandles.handleMatchesMeta({
       handle: cached.handle,
       meta: params.meta,
@@ -85,7 +82,7 @@ export async function ensureManagerRuntimeHandle(params: {
       agentMatches &&
       modeMatches &&
       cwdMatches &&
-      configMatches &&
+      cached.runtime === runtime &&
       handleMatchesMeta &&
       (await params.runtimeHandles.isReusable({
         sessionKey: params.sessionKey,
@@ -310,7 +307,6 @@ export async function ensureManagerRuntimeHandle(params: {
     agent,
     mode,
     cwd: effectiveCwd,
-    configSignature,
     appliedControlSignature: undefined,
   });
   return {

@@ -137,6 +137,7 @@ async function runCommandWithOutputEncoding(
     timeoutMs,
     cwd,
     input,
+    stdinFileDescriptor,
     baseEnv,
     env,
     noOutputTimeoutMs,
@@ -151,8 +152,13 @@ async function runCommandWithOutputEncoding(
     throw new Error("Process-tree extinction requires process-tree ownership");
   }
   const hasInput = input !== undefined;
-  if (hasInput && options.stdinFileDescriptor !== undefined) {
-    throw new Error("Command accepts either input or stdinFileDescriptor, not both");
+  if (stdinFileDescriptor !== undefined) {
+    if (!Number.isInteger(stdinFileDescriptor) || stdinFileDescriptor < 0) {
+      throw new Error("stdinFileDescriptor must be a nonnegative integer");
+    }
+    if (hasInput) {
+      throw new Error("Command accepts either input or stdinFileDescriptor, not both");
+    }
   }
   if (options.beforeInput && !hasInput) {
     throw new Error("Child input admission requires explicit input");
@@ -532,7 +538,7 @@ async function runCommandWithOutputEncoding(
       nodeChild.stdin.end(input);
     } catch (cause) {
       inputAdmissionError = toErrorObject(cause, "Child input admission failed");
-      nodeChild.stdin?.destroy();
+      // EOF releases children blocked on input; keep it withheld until process exit.
       cancel("signal");
     }
   }

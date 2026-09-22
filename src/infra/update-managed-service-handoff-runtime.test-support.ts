@@ -7,14 +7,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
-import type {
-  ManagedRepairBoundary,
-  ManagedServiceBoundaryOptions,
-} from "./update-managed-service-handoff-boundary-contract.test-support.js";
-import {
-  managedRepairConfig,
-  prepareManagedRepairSpawnEnv,
-} from "./update-managed-service-handoff-repair.test-support.js";
+import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 
 export async function prepareManagedServiceRuntimeFixture(params: {
@@ -28,7 +21,6 @@ export async function prepareManagedServiceRuntimeFixture(params: {
     replaceLedgerWriter?: boolean;
     requester?: { channel?: string; accountId?: string; senderId?: string };
     cancelAtActivation?: "requester" | "inspection";
-    repair?: ManagedRepairBoundary;
   };
 }) {
   const {
@@ -62,14 +54,10 @@ export async function prepareManagedServiceRuntimeFixture(params: {
     await fs.writeFile(statePath, "{}");
     await fs.writeFile(
       configPath,
-      JSON.stringify(
-        options.repair
-          ? managedRepairConfig(options.repair.baseUrl)
-          : {
-              commands: { ownerAllowFrom: ["slack:owner"] },
-              channels: { slack: { enabled: true } },
-            },
-      ),
+      JSON.stringify({
+        commands: { ownerAllowFrom: ["slack:owner"] },
+        channels: { slack: { enabled: true } },
+      }),
     );
     await fs.appendFile(
       recoveryModulePath,
@@ -103,12 +91,9 @@ export async function prepareManagedServiceSpawn(
   root: string,
   scriptPath: string,
   childEnv: NodeJS.ProcessEnv,
-  options?: Pick<
-    ManagedServiceBoundaryOptions,
-    "repair" | "beforeParkNotice" | "finalizationWorkMs"
-  >,
+  options?: Pick<ManagedServiceBoundaryOptions, "beforeParkNotice" | "finalizationWorkMs">,
 ) {
-  let env = options?.repair ? await prepareManagedRepairSpawnEnv(root, childEnv) : childEnv;
+  let env = childEnv;
   if (options?.finalizationWorkMs !== undefined) {
     const preloadPath = path.join(root, "finalization-clock-preload.cjs");
     const statePath = path.join(root, "manager-state.json");

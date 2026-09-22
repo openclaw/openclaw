@@ -1184,11 +1184,8 @@ describe("gateway send mirroring", () => {
       expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
       expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
     } finally {
-      clearInterval(maintenance.tickInterval);
-      clearInterval(maintenance.healthInterval);
-      clearInterval(maintenance.dedupeCleanup);
-      clearInterval(maintenance.worktreeCleanup);
-      await maintenance.stopMediaCleanup();
+      await maintenance.stopPeriodicTasks();
+      await maintenance.skillUsageCleanup();
       vi.useRealTimers();
     }
   });
@@ -1236,11 +1233,8 @@ describe("gateway send mirroring", () => {
       expect(firstRespondCall(retryRespond)?.[0]).toBe(true);
       expect(firstRespondCall(retryRespond)?.[3]?.cached).toBe(true);
     } finally {
-      clearInterval(maintenance.tickInterval);
-      clearInterval(maintenance.healthInterval);
-      clearInterval(maintenance.dedupeCleanup);
-      clearInterval(maintenance.worktreeCleanup);
-      await maintenance.stopMediaCleanup();
+      await maintenance.stopPeriodicTasks();
+      await maintenance.skillUsageCleanup();
       vi.useRealTimers();
     }
   });

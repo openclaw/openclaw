@@ -79,7 +79,7 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
-  it("names Macs consistently and enables a discovered desktop through the config owner", async () => {
+  it("names Macs consistently and enables a discovered desktop without reconnecting", async () => {
     const artifacts = createControlUiE2eArtifactDir("systems-platform-labels");
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
@@ -168,6 +168,7 @@ suite.define(() => {
           .toEqual(["macOS", "macOS 27.0.0"]);
 
         const enable = page.getByRole("button", { name: "Enable desktop access in OpenClaw" });
+        const connectionCount = await gateway.getSocketCount();
         await gateway.deferNext("config.patch");
         await enable.click();
         const rejected = await gateway.waitForRequest("config.patch");
@@ -206,7 +207,7 @@ suite.define(() => {
           hash: "desktop-config-1",
         });
         await page.getByRole("heading", { name: "Desktop access is enabled" }).waitFor();
-        await page.screenshot({ path: path.join(artifacts, "desktop-enabled-reconnecting.png") });
+        await page.screenshot({ path: path.join(artifacts, "desktop-enabled-applying.png") });
         expect(await gateway.getRequests("config.patch")).toHaveLength(2);
 
         await gateway.setMethodResponse("desktop.observe", {
@@ -228,10 +229,11 @@ suite.define(() => {
             },
           ],
         });
-        await gateway.emitGatewayEvent("presence", {});
+        await gateway.emitGatewayEvent("config.changed", { hash: "desktop-config-1" });
         const observed = await gateway.waitForRequest("desktop.observe");
         expect(observed.params).toEqual({ source: { kind: "host" }, control: false });
         await page.getByLabel("macOS username").waitFor();
+        expect(await gateway.getSocketCount()).toBe(connectionCount);
         await page.screenshot({ path: path.join(artifacts, "desktop-account-access.png") });
       },
     );

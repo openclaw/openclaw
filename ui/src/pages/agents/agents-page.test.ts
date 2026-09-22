@@ -730,15 +730,12 @@ describe("AgentsPage gateway lifecycle", () => {
   });
 
   it("does not let an old-client file load overwrite a replacement load", async () => {
-    let resolveFirst!: (value: AgentsFilesListResult) => void;
-    let resolveSecond!: (value: AgentsFilesListResult) => void;
-    const first = new Promise<AgentsFilesListResult>((resolve) => {
-      resolveFirst = resolve;
-    });
-    const second = new Promise<AgentsFilesListResult>((resolve) => {
-      resolveSecond = resolve;
-    });
-    const ensureFiles = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const first = deferred<AgentsFilesListResult>();
+    const second = deferred<AgentsFilesListResult>();
+    const ensureFiles = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     const oldClient = {} as GatewayBrowserClient;
     const nextClient = {} as GatewayBrowserClient;
@@ -760,12 +757,12 @@ describe("AgentsPage gateway lifecycle", () => {
     const replacementLoad = page.loadAgentFiles("main");
     expect(page.agentFilesLoading).toBe(true);
 
-    resolveFirst(files("main", "old"));
+    first.resolve(files("main", "old"));
     await oldLoad;
     expect(page.agentFilesList).toBeNull();
     expect(page.agentFilesLoading).toBe(true);
 
-    resolveSecond(files("main", "new"));
+    second.resolve(files("main", "new"));
     await replacementLoad;
     expect(page.agentFilesList?.workspace).toBe("new");
     expect(page.agentFilesLoading).toBe(false);
@@ -818,15 +815,12 @@ describe("AgentsPage gateway lifecycle", () => {
   });
 
   it("retries an in-flight panel load after a same-client disconnect", async () => {
-    let resolveFirst!: (value: AgentsFilesListResult) => void;
-    let resolveSecond!: (value: AgentsFilesListResult) => void;
-    const first = new Promise<AgentsFilesListResult>((resolve) => {
-      resolveFirst = resolve;
-    });
-    const second = new Promise<AgentsFilesListResult>((resolve) => {
-      resolveSecond = resolve;
-    });
-    const ensureFiles = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const first = deferred<AgentsFilesListResult>();
+    const second = deferred<AgentsFilesListResult>();
+    const ensureFiles = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
     const client = {} as GatewayBrowserClient;
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     setPageGateway(page, client);
@@ -861,12 +855,12 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(ensureFiles).toHaveBeenCalledTimes(2);
     expect(page.agentFilesLoading).toBe(true);
 
-    resolveFirst(files("main", "old"));
+    first.resolve(files("main", "old"));
     await oldLoad;
     expect(page.agentFilesList).toBeNull();
     expect(page.agentFilesLoading).toBe(true);
 
-    resolveSecond(files("main", "new"));
+    second.resolve(files("main", "new"));
     await waitForFast(() => expect(page.agentFilesList?.workspace).toBe("new"));
     expect(page.agentFilesLoading).toBe(false);
   });

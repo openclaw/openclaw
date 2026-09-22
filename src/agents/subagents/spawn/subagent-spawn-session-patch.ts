@@ -12,7 +12,6 @@ import {
   normalizeInheritedToolDenylist,
 } from "../../inherited-tool-deny.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import {
   loadSessionEntry,
@@ -100,10 +99,6 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
     }
   }
   return entry;
-}
-
-export function loadSubagentConfig() {
-  return getSubagentSpawnDeps().getRuntimeConfig();
 }
 
 export async function createInitialSubagentSession(params: {

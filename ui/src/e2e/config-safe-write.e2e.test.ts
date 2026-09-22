@@ -139,6 +139,79 @@ async function capture(page: Page, name: string, content: Locator): Promise<void
 }
 
 suite.define(() => {
+  it("saves and reloads the Code Mode executor without changing enablement or limits", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const initialConfig = {
+          tools: { codeMode: { enabled: "auto", timeoutMs: 5000 } },
+        };
+        const quickjsConfig = {
+          tools: { codeMode: { ...initialConfig.tools.codeMode, executor: "quickjs" } },
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(initialConfig, "executor-node"),
+          },
+        });
+
+        expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
+        const executorRow = settingsRow(page, "Code Mode executor");
+        const executor = executorRow.getByRole("combobox", { name: "Code Mode executor" });
+        const enabled = settingsRow(page, "Code Mode").getByRole("switch", {
+          name: "Code Mode",
+          exact: true,
+        });
+        await expect.poll(() => executor.inputValue()).toBe("node");
+        expect(await executorRow.textContent()).toContain("not a security sandbox");
+        expect(await enabled.getAttribute("aria-checked")).toBe("true");
+        await capture(page, "code-mode-node-default.png", executor);
+
+        await gateway.deferNext("config.patch");
+        await executor.selectOption("quickjs");
+        const quickjsPatch = mutationParams(await gateway.waitForRequest("config.patch"));
+        expect(quickjsPatch.baseHash).toBe("executor-node");
+        expect(JSON.parse(String(quickjsPatch.raw))).toEqual({
+          tools: { codeMode: { executor: "quickjs" } },
+        });
+        expect(await executor.isDisabled()).toBe(true);
+
+        const quickjsResponse = configResponse(quickjsConfig, "executor-quickjs");
+        await gateway.setMethodResponse("config.get", quickjsResponse);
+        await gateway.resolveDeferred("config.patch", { ok: true, ...quickjsResponse });
+        await expect.poll(() => executor.isDisabled()).toBe(false);
+        expect((await page.reload())?.status()).toBe(200);
+        await expect.poll(() => executor.inputValue()).toBe("quickjs");
+        expect(await enabled.getAttribute("aria-checked")).toBe("true");
+        await capture(page, "code-mode-quickjs-reloaded.png", executor);
+
+        const priorPatches = (await gateway.getRequests("config.patch")).length;
+        await gateway.deferNext("config.patch");
+        await executor.selectOption("node");
+        const nodePatch = mutationParams(
+          await gateway.waitForRequest("config.patch", { after: priorPatches }),
+        );
+        expect(nodePatch.baseHash).toBe("executor-quickjs");
+        expect(JSON.parse(String(nodePatch.raw))).toEqual({
+          tools: { codeMode: { executor: null } },
+        });
+
+        const nodeResponse = configResponse(initialConfig, "executor-node-restored");
+        await gateway.setMethodResponse("config.get", nodeResponse);
+        await gateway.resolveDeferred("config.patch", { ok: true, ...nodeResponse });
+        await expect.poll(() => executor.isDisabled()).toBe(false);
+        expect((await page.reload())?.status()).toBe(200);
+        await expect.poll(() => executor.inputValue()).toBe("node");
+        expect(await enabled.getAttribute("aria-checked")).toBe("true");
+      },
+    );
+  });
+
   it("retains a Raw revert when an autosave commits after its connection closes", async () => {
     await suite.withPage(
       {

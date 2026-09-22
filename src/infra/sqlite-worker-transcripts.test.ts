@@ -183,6 +183,7 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
   const databasePath = resolveOpenClawStateSqlitePath(env);
   expect(existsSync(databasePath)).toBe(false);
   await withoutParentSql(async () => {
+    expect(await store.listReadEntries({ limit: 2 })).toEqual([]);
     expect(await store.listSessionEntries()).toEqual([]);
     expect(await store.readLatestEntry()).toBeUndefined();
     expect(await store.readSession("missing")).toBeUndefined();

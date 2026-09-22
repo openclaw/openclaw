@@ -46,7 +46,6 @@ export type LabFeature = {
    * explicit off value instead of deleting it.
    */
   resetScope: LabFeatureResetScope;
-  restartHint: (() => string) | null;
 };
 
 type LabFeatureState = {
@@ -86,7 +85,6 @@ export const LAB_FEATURES = [
     readEnabled: null,
     enableAlso: null,
     resetScope: "gate",
-    restartHint: null,
   },
   {
     id: "toolSearch",
@@ -104,7 +102,6 @@ export const LAB_FEATURES = [
     // Pin structured calls when writing an enabled override from Labs.
     enableAlso: { mode: "tools" },
     resetScope: "parent",
-    restartHint: null,
   },
   {
     id: "customPluginUi",
@@ -118,7 +115,6 @@ export const LAB_FEATURES = [
     readEnabled: null,
     enableAlso: null,
     resetScope: "gate",
-    restartHint: () => t("labsPage.customPluginUi.restartRequired"),
   },
   {
     id: "hostDesktop",
@@ -132,8 +128,6 @@ export const LAB_FEATURES = [
     readEnabled: null,
     enableAlso: null,
     resetScope: null,
-    // Method advertisement is resolved at Gateway startup, so the panel appears after restart.
-    restartHint: () => t("labsPage.restartRequired"),
   },
   {
     id: "workerDesktop",
@@ -147,8 +141,6 @@ export const LAB_FEATURES = [
     readEnabled: null,
     enableAlso: null,
     resetScope: "gate",
-    // Method advertisement is resolved at Gateway startup, so the panel appears after restart.
-    restartHint: () => t("labsPage.restartRequired"),
   },
 ] as const satisfies readonly LabFeature[];
 

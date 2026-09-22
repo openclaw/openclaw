@@ -18,7 +18,7 @@ import {
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
 
 type OutputRuntime = typeof import("./subagent-announce.runtime.js");
-export type SubagentAnnounceResultDeps = Pick<
+type SubagentAnnounceResultDeps = Pick<
   OutputRuntime,
   | "getRuntimeConfig"
   | "readSubagentSessionEntry"

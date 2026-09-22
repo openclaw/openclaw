@@ -309,6 +309,10 @@ development commands.
 
 ### Quick Chat
 
+`Ctrl+Shift+O` opens a new session only in the focused dashboard. The companion
+does not reserve this chord globally, so other foreground apps keep their own
+shortcut behavior.
+
 Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The agent
 chip shows the configured avatar, emoji, or monogram; select it to switch agents.
 Messages use the selected agent's main session and honor global session scope.

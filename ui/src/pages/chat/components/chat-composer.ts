@@ -321,7 +321,8 @@ export function renderChatComposer(props: ChatComposerProps) {
     if (!goalComposer.active) {
       updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
       updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
-      state.mentionMenu.update(target.value, target.selectionStart, requestUpdate, typedAtSign);
+      const mentionIntent = typedAtSign ? "trigger" : "input";
+      state.mentionMenu.update(target, requestUpdate, mentionIntent);
     }
     state.emojiMenu.update(
       target,
@@ -395,12 +396,15 @@ export function renderChatComposer(props: ChatComposerProps) {
         !state.slashMenuOpen &&
         !state.mentionMenu.open,
     );
-    if (event.type === "keyup" || goalComposer.active) {
+    if (goalComposer.active) {
+      return;
+    }
+    state.mentionMenu.update(target, requestUpdate);
+    if (event.type === "keyup") {
       return;
     }
     updateSlashMenu(target.value, state, slashMenuHost, requestUpdate);
     updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
-    state.mentionMenu.update(target.value, target.selectionStart, requestUpdate);
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
     state.composerComposing = false;

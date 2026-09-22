@@ -92,6 +92,12 @@ export default definePluginEntry({
   grant new authority, or permit starting work after the owner retires. Providers
   remain responsible for bounded work that settles after cancellation.
 
+  The Gateway admits at most four foreground catalog lists or fill steps at once,
+  with one active step per provider ID and up to 32 queued steps globally. Queued
+  work keeps FIFO order within each provider; the oldest eligible step starts when
+  capacity becomes available. A slow provider cannot occupy every slot. Lists for
+  the same provider wait their turn, including calls from different clients.
+
   Keep `allowPartialResults`, `onHost`, `waitUntil`, and `signal` separate from validated catalog query
   objects and node command payloads. The request-owned `sessionEntries` snapshot
   and `listNodes` hook must be released when `list` settles, or when the optional

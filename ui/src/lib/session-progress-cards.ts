@@ -350,6 +350,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       if (!changed) {
         return;
       }
+      let removed = false;
       for (const [key, entry] of entries) {
         if (
           uiSessionEventMatches(
@@ -364,9 +365,12 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
         ) {
           retireRefresh(entry);
           entries.delete(key);
+          removed = true;
         }
       }
-      notify();
+      if (removed) {
+        notify();
+      }
       refreshWatched();
       return;
     }

@@ -1,21 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
-export type OpenClawStateMutationOperation<T, R> = {
-  /** Fresh executor authority. Checked by every coordinated canonical write. */
-  assertCurrent: () => void;
-  mutate: (assertCurrent: () => void) => Promise<T>;
-  capture: (mutated: T, assertCurrent: () => void) => Promise<R>;
-  bind: (captured: R, assertCurrent: () => void) => undefined;
-};
-
 export type OpenClawStateLeaseContext = {
   signal: AbortSignal;
-  /** Asynchronous canonical mutation under physical exclusion, followed by
-   * owner-held capture and synchronous binding before writers resume. */
-  withDatabaseFileMutation?<T, R>(
-    this: void,
-    operation: OpenClawStateMutationOperation<T, R>,
-  ): Promise<R>;
   /** Drain the heartbeat and capture while the original durable lease remains live. */
   withDatabaseFileExclusion?<T>(
     this: void,

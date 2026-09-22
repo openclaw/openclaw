@@ -433,7 +433,10 @@ suite.define(() => {
               .poll(() => rpc.slice(start).every((entry) => entry.elapsedMs !== undefined))
               .toBe(true);
             await expect.poll(() => results.getAttribute("aria-busy")).toBe("false");
-            const notices = await palette.getByRole("status").allTextContents();
+            const notices = await palette
+              .locator(".cmd-palette__search")
+              .getByRole("status")
+              .allTextContents();
             const traffic = rpc.slice(start);
             const searches = traffic.filter((entry) => entry.method === "sessions.search");
             // The sidebar can fetch lineage concurrently; identify this query

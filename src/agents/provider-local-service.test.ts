@@ -15,8 +15,8 @@ import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { getDeterministicFreePortBlock, getFreePort } from "../test-utils/ports.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
+import { hasLocalServiceProcessExited } from "./provider-local-service-process.js";
 import {
   attachModelProviderLocalService,
   createConfiguredProviderLocalServiceAcquirer,
@@ -24,9 +24,9 @@ import {
   ensureProviderLocalService,
   getManagedProviderLocalServiceDiagnosticsForTest,
   getModelProviderLocalService,
-  hasLocalServiceProcessExited,
   stopManagedProviderLocalServices,
 } from "./provider-local-service.js";
+import { createProviderLocalServiceTestFixture } from "./provider-local-service.test-support.js";
 import { hasManagedProviderLocalServices } from "./provider-runtime-lifecycle.js";
 
 const ONE_SHOT_HOST_READY_TIMEOUT_MS = 30_000;
@@ -167,10 +167,8 @@ async function waitForOneShotHostExit(
 
 describe("provider local service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-  afterEach(async () => {
-    await stopManagedProviderLocalServices();
-  });
+  const fixture = createProviderLocalServiceTestFixture();
+  afterEach(fixture.cleanup);
 
   it("attaches local service metadata to model objects", () => {
     const model = attachModelProviderLocalService(
@@ -191,7 +189,7 @@ describe("provider local service", () => {
   });
 
   it("starts an on-demand local service and stops it after idle", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const reconcile = vi.fn<NonNullable<ProviderPlugin["reconcileLocalService"]>>(async () => {
       expect((await fetch(healthUrl)).ok).toBe(true);
@@ -255,11 +253,12 @@ describe("provider local service", () => {
     expect((await fetch(healthUrl)).ok).toBe(true);
     secondLease.release();
     await waitForProbeFailure(healthUrl);
+    await stopManagedProviderLocalServices();
     expect(hasManagedProviderLocalServices()).toBe(false);
   });
 
   it("resolves process configuration for root and exact legacy baseURL endpoints", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const providerId = "gpu-spark";
     const rootBaseUrl = `http://127.0.0.1:${port}`;
     const healthUrl = `${rootBaseUrl}/v1/models`;
@@ -302,7 +301,7 @@ describe("provider local service", () => {
   });
 
   it("allows a default loopback endpoint when provider baseUrl is empty", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const acquire = createConfiguredProviderLocalServiceAcquirer(() => ({
       models: {
@@ -387,7 +386,7 @@ describe("provider local service", () => {
 
   it("caps oversized local service idle stop timers", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const model = attachModelProviderLocalService(
       {
@@ -423,7 +422,7 @@ describe("provider local service", () => {
   });
 
   it("sends provider request headers on local service health probes", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const model = attachModelProviderLocalService(
       {
@@ -467,7 +466,7 @@ describe("provider local service", () => {
   });
 
   it("rejects unknown sentinels before starting a local service", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
     const model = attachModelProviderLocalService(
       {
@@ -550,7 +549,7 @@ describe("provider local service", () => {
   });
 
   it("serializes concurrent chat and embedding starts with independent leases", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-"));
     const startsPath = path.join(tempDir, "starts.txt");
@@ -603,7 +602,7 @@ describe("provider local service", () => {
   });
 
   it("keeps configured provider aliases on different local endpoints independent", async () => {
-    const firstPort = await getDeterministicFreePortBlock({ offsets: [0, 1] });
+    const firstPort = await fixture.claimPort([0, 1]);
     const secondPort = firstPort + 1;
     const firstHealthUrl = `http://127.0.0.1:${firstPort}/v1/models`;
     const secondHealthUrl = `http://127.0.0.1:${secondPort}/v1/models`;
@@ -661,7 +660,7 @@ describe("provider local service", () => {
   });
 
   it("restarts an OpenClaw-managed local service when its health endpoint is down", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-service-restart-"));
     const startsPath = path.join(tempDir, "starts.txt");
@@ -723,7 +722,7 @@ describe("provider local service", () => {
   });
 
   it("reports a local service startup exit without waiting for readiness timeout", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const target = {
       providerId: "local-fast-exit",
       baseUrl: `http://127.0.0.1:${port}/v1`,
@@ -742,7 +741,7 @@ describe("provider local service", () => {
   });
 
   it("preserves UTF-8 split across local service startup diagnostic chunks", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const expected = "startup-😀-failure";
     const serviceScript = [
       `const bytes=Buffer.from(${JSON.stringify(expected)},"utf8");`,
@@ -766,7 +765,7 @@ describe("provider local service", () => {
   });
 
   it("reports a local service startup signal exit without waiting for readiness timeout", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const model = attachModelProviderLocalService(
       {
         id: "demo",
@@ -789,7 +788,7 @@ describe("provider local service", () => {
   });
 
   it("does not keep one-shot hosts alive through diagnostic pipes", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const tempDir = tempDirs.make("openclaw-local-service-unref-");
     const servicePidPath = path.join(tempDir, "service.pid");
     const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
@@ -845,7 +844,7 @@ describe("provider local service", () => {
   });
 
   it("does not keep failed one-shot hosts alive through diagnostic pipes", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const tempDir = tempDirs.make("openclaw-local-service-failed-unref-");
     const servicePidPath = path.join(tempDir, "service.pid");
     const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
@@ -921,7 +920,7 @@ describe("provider local service", () => {
   });
 
   it("honors request aborts while waiting for local service readiness", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const controller = new AbortController();
     const target = {
@@ -951,7 +950,7 @@ describe("provider local service", () => {
   });
 
   it("reports only bounded redacted startup diagnostics", async () => {
-    const port = await getFreePort();
+    const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const diagnosticSecret = "local-service-diagnostic-secret";
     const inheritedDiagnosticSecret = "inherited-local-service-diagnostic-secret";

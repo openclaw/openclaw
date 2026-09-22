@@ -137,14 +137,14 @@ describe("Crabbox runtime preflight cleanup", () => {
   it.each(["restart reconciliation", "direct destroy"])(
     "retains unresolved legacy allocation responsibility after %s and cleanup restart",
     async (entrance) => {
-      const intent = support.testState.store.createIntent({
+      const intent = await support.testState.store.createIntent({
         environmentId: "worker-legacy-provision",
         providerId: "crabbox",
         profileId: "development",
         profileSnapshot: { settings: PROFILE },
         provisionOperationId: `provision:${"0".repeat(64)}`,
       });
-      const original = support.testState.store.transition({
+      const original = await support.testState.store.transition({
         environmentId: intent.environmentId,
         from: intent.state,
         to: "provisioning",
@@ -243,6 +243,8 @@ describe("Crabbox runtime preflight cleanup", () => {
     };
     support.getDevelopmentProfile().provider = "crabbox";
     support.getDevelopmentProfile().settings = profile;
+    // This replay fixture owns lifecycle commands; periodic heartbeats have separate coverage.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let changed = false;
     let live = false;
     let leaseId = "";

@@ -2,15 +2,28 @@ import AppKit
 import Observation
 import OpenClawChatUI
 import SwiftUI
-import XCTest
+import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
 @MainActor
-final class QuickChatCatalogPresentationTests: XCTestCase {
-    func testRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed() async throws {
+struct QuickChatCatalogPresentationTests {
+    @Test func `rendered Quick Chat preserves catalog disclosure and shortcut behavior in order`() async throws {
+        try await TestIsolation.withIsolatedState {
+            try await AppKitTestSupport.startApplication()
+            let application = AppKitTestSupport.application
+            let previousAppearance = application.appearance
+            defer { application.appearance = previousAppearance }
+            try await self.checkRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed()
+            let presentation = QuickChatPresentationTests()
+            try await presentation.checkConversationDisclosurePreservesOneComposerAndItsDraft()
+            try await presentation.checkShortcutPresentsAnEditorWithoutRequiringForegroundOwnership()
+        }
+    }
+
+    private func checkRenderedPickerUsesCatalogAvailabilityReasoningAndSpeed() async throws {
         let application = AppKitTestSupport.application
-        XCTAssertTrue(AppKitTestSupport.didSetActivationPolicy)
+        #expect(AppKitTestSupport.didSetActivationPolicy)
         if ProcessInfo.processInfo.environment["OPENCLAW_TEST_QUICKCHAT_APPEARANCE"] == "dark" {
             application.appearance = NSAppearance(named: .darkAqua)
         }
@@ -33,7 +46,7 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
             modelCatalogEventsProvider: { await gateway.subscribe() },
             settingsPatchProvider: { target, settings in
                 let routeLease = await transport.acquireSessionSettingsRouteLease()
-                let lease = try XCTUnwrap(routeLease)
+                let lease = try #require(routeLease)
                 return try await lease.patchSessionSettings(
                     sessionKey: target.sessionKey, agentID: target.agentID,
                     patch: settings)
@@ -46,97 +59,124 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
             application.deactivate()
             controller.present()
             try await self.waitForModel { model.canUseModelControls }
-            XCTAssertTrue(model.speed.supportsFastMode)
+            #expect(model.speed.supportsFastMode)
             model.selectModel("fixture/current")
-            XCTAssertNil(model.selectedModelSelectionID, "Retained metadata does not permit manual selection")
-            let panel = try XCTUnwrap(application.windows.first {
+            #expect(model.selectedModelSelectionID == nil, "Retained metadata does not permit manual selection")
+            let panel = try #require(application.windows.first {
                 ($0.contentView as? NSHostingView<QuickChatView>)?.rootView.model === model
             })
-            XCTAssertTrue(panel.isVisible)
-            let content = try XCTUnwrap(panel.contentView)
+            #expect(panel.isVisible)
+            let content = try #require(panel.contentView)
             content.layoutSubtreeIfNeeded()
-            let elements = try await AppKitTestSupport.accessibilityElements(in: content)
-            let button = try XCTUnwrap(elements.first {
-                $0.accessibilityRole?() == .button &&
-                    $0.accessibilityLabel?() == "Model"
-            })
+            let button = try await self.waitForModelButton(in: panel, value: "Current fixture")
 
             try await AppKitTestSupport.openMenu(button, in: panel) { menu in
                 try AppKitTestSupport.record(menu: menu, content: content, name: "catalog")
-                let provider = try XCTUnwrap(menu.items.first { $0.submenu != nil })
-                let choices = try XCTUnwrap(provider.submenu)
-                XCTAssertFalse(choices.items.contains { $0.title.hasPrefix("Current fixture") })
-                let unavailable = try XCTUnwrap(choices.items.first { $0.title.hasPrefix("Locked fixture") })
-                XCTAssertFalse(unavailable.isEnabled, "The catalog requires sign-in before this model can be selected")
-                XCTAssertTrue(unavailable.title.contains("Sign-in needed"))
-                let unknown = try XCTUnwrap(choices.items.first { $0.title.hasPrefix("Unknown fixture") })
-                XCTAssertTrue(unknown.isEnabled, "Missing availability must not refuse a model")
-                let allowed = try XCTUnwrap(choices.items.firstIndex { $0.title.hasPrefix("Allowed fixture") })
-                XCTAssertTrue(choices.items[allowed].isEnabled)
+                let provider = try #require(menu.items.first { $0.submenu != nil })
+                let choices = try #require(provider.submenu)
+                #expect(!choices.items.contains { $0.title.hasPrefix("Current fixture") })
+                let unavailable = try #require(choices.items.first { $0.title.hasPrefix("Locked fixture") })
+                #expect(!unavailable.isEnabled, "The catalog requires sign-in before this model can be selected")
+                #expect(unavailable.title.contains("Sign-in needed"))
+                let unknown = try #require(choices.items.first { $0.title.hasPrefix("Unknown fixture") })
+                #expect(unknown.isEnabled, "Missing availability must not refuse a model")
+                let allowed = try #require(choices.items.firstIndex { $0.title.hasPrefix("Allowed fixture") })
+                #expect(choices.items[allowed].isEnabled)
                 choices.performActionForItem(at: allowed)
             }
             try await self.waitForModel { !model.isUpdatingModel }
-            XCTAssertEqual(model.selectedModelSelectionID, "fixture/allowed")
-            XCTAssertEqual(model.displayedModelSelectionID, "fixture/allowed")
+            #expect(model.selectedModelSelectionID == "fixture/allowed")
+            #expect(model.displayedModelSelectionID == "fixture/allowed")
 
-            try await AppKitTestSupport.openMenu(button, in: panel) { menu in
+            let selectedButton = try await self.waitForModelButton(in: panel, value: "Allowed fixture")
+            try await AppKitTestSupport.openMenu(selectedButton, in: panel) { menu in
                 try AppKitTestSupport.record(menu: menu, content: content, name: "selected")
-                let provider = try XCTUnwrap(menu.items.first { $0.submenu != nil })
-                let selected = try XCTUnwrap(provider.submenu?.items.first {
+                let provider = try #require(menu.items.first { $0.submenu != nil })
+                let selected = try #require(provider.submenu?.items.first {
                     $0.title.hasPrefix("Allowed fixture")
                 })
-                XCTAssertEqual(selected.state, .on)
+                #expect(selected.state == .on)
             }
 
-            let effort = try await AppKitTestSupport.waitForAccessibilityElement(
-                in: panel, description: "the effort control")
-            { elements in
-                elements.first { $0.accessibilityLabel?() == "Effort" && $0.accessibilityRole?() == .button }
-            }
-            XCTAssertEqual(model.thinkingOptions.map(\.label), ["Brief", "Thorough"])
-            XCTAssertTrue(effort.accessibilityPerformPress?() == true)
+            var effort = try await self.waitForEffort(in: panel, value: "Inherited Brief")
+            #expect(model.thinkingOptions.map(\.label) == ["Brief", "Thorough"])
+            #expect(effort.accessibilityPerformPress?() == true)
             let popover = try await self.waitForEffortPopover(application: application)
-            let slider = try XCTUnwrap(popover.elements.first {
+            let slider = try #require(popover.elements.first {
                 $0.accessibilityRole?() == .slider && $0.accessibilityLabel?() == "Thinking effort"
             })
-            XCTAssertTrue(slider.accessibilityPerformIncrement?() == true)
+            #expect(slider.accessibilityPerformIncrement?() == true)
             try await self.waitForModel { model.selectedThinkingLevel == "high" }
+            effort = try await self.waitForEffort(in: panel, value: "Thorough")
             let effortValue: Any? = effort.accessibilityValue?()
-            XCTAssertEqual(effortValue as? String, "Thorough")
+            #expect(effortValue as? String == "Thorough")
             try await self.captureEffortPopover(popover.window, name: "effort")
-            let fast = try XCTUnwrap(popover.elements.first { $0.accessibilityLabel?() == "Fast mode" })
-            XCTAssertTrue(fast.isAccessibilityEnabled?() == true)
+            let fast = try await AppKitTestSupport.waitForAccessibilityElement(
+                in: popover.window, description: "the enabled Fast mode control")
+            { elements in
+                elements.first { $0.accessibilityLabel?() == "Fast mode" && $0.isAccessibilityEnabled?() == true }
+            }
+            #expect(fast.isAccessibilityEnabled?() == true)
             _ = fast.accessibilityPerformPress?()
             try await self.waitForModel { model.speed.isEnabled && !model.isUpdatingModel }
-            XCTAssertTrue(model.speed.isEnabled)
-            XCTAssertEqual(model.speed.override, .on)
+            #expect(model.speed.isEnabled)
+            #expect(model.speed.override == .on)
+            effort = try await self.waitForEffort(in: panel, value: "Thorough, Fast")
             let fastEffortValue: Any? = effort.accessibilityValue?()
-            XCTAssertEqual(fastEffortValue as? String, "Thorough, Fast")
+            #expect(fastEffortValue as? String == "Thorough, Fast")
             let defaults = try await AppKitTestSupport.accessibilityElements(in: popover.window)
                 .filter { $0.accessibilityRole?() == .button && $0.accessibilityLabel?() == "Use session default" }
-            XCTAssertEqual(defaults.count, 2, "Thinking and speed each have their own inheritance control")
-            XCTAssertTrue(try XCTUnwrap(defaults.last).accessibilityPerformPress?() == true)
+            #expect(defaults.count == 2, "Thinking and speed each have their own inheritance control")
+            #expect(try #require(defaults.last).accessibilityPerformPress?() == true)
             try await self.waitForModel { !model.isUpdatingModel }
-            XCTAssertNil(model.speed.override)
-            XCTAssertFalse(model.speed.isEnabled)
-            XCTAssertEqual(model.selectedThinkingLevel, "high")
-            XCTAssertTrue(effort.accessibilityPerformPress?() == true)
-            try await AppKitTestSupport.openMenu(button, in: panel) { menu in
+            #expect(model.speed.override == nil)
+            #expect(!model.speed.isEnabled)
+            #expect(model.selectedThinkingLevel == "high")
+            effort = try await self.waitForEffort(in: panel, value: "Thorough")
+            #expect(effort.accessibilityPerformPress?() == true)
+            let inheritedButton = try await self.waitForModelButton(in: panel, value: "Allowed fixture")
+            try await AppKitTestSupport.openMenu(inheritedButton, in: panel) { menu in
                 try AppKitTestSupport.record(menu: menu, content: content, name: "inherited")
-                let choices = try XCTUnwrap(menu.items.first { $0.title == "Fixture" }?.submenu)
-                let unknown = try XCTUnwrap(choices.items.firstIndex { $0.title == "Unknown fixture" })
+                let choices = try #require(menu.items.first { $0.title == "Fixture" }?.submenu)
+                let unknown = try #require(choices.items.firstIndex { $0.title == "Unknown fixture" })
                 choices.performActionForItem(at: unknown)
             }
             try await self.waitForModel { !model.isUpdatingModel }
-            XCTAssertEqual(model.displayedModelSelectionID, "fixture/unknown")
+            #expect(model.displayedModelSelectionID == "fixture/unknown")
             let patches = await fixture.patches
-            XCTAssertEqual(patches, ["model=fixture/allowed", "fast=true", "fast=null", "model=fixture/unknown"])
+            #expect(patches == ["model=fixture/allowed", "fast=true", "fast=null", "model=fixture/unknown"])
             controller.stop()
             await gateway.shutdown()
         } catch {
             controller.stop()
             await gateway.shutdown()
             throw error
+        }
+    }
+
+    private func waitForModelButton(in window: NSWindow, value expectedValue: String) async throws -> AnyObject {
+        // SwiftUI can reuse the previous Model accessibility node for its loading indicator.
+        try await AppKitTestSupport.waitForAccessibilityElement(
+            in: window, description: "the enabled Model button for \(expectedValue)")
+        { elements in
+            elements.first { element in
+                let value: Any? = element.accessibilityValue?()
+                return element.accessibilityRole?() == .button && element.accessibilityLabel?() == "Model" &&
+                    element.isAccessibilityEnabled?() == true && value as? String == expectedValue
+            }
+        }
+    }
+
+    private func waitForEffort(in window: NSWindow, value expectedValue: String) async throws -> AnyObject {
+        // Model observation can complete before SwiftUI publishes its current accessibility tree.
+        try await AppKitTestSupport.waitForAccessibilityElement(
+            in: window, description: "the enabled effort control with value \(expectedValue)")
+        { elements in
+            elements.first { element in
+                let value: Any? = element.accessibilityValue?()
+                return element.accessibilityLabel?() == "Effort" && element.accessibilityRole?() == .button &&
+                    element.isAccessibilityEnabled?() == true && value as? String == expectedValue
+            }
         }
     }
 
@@ -167,13 +207,22 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
     }
 
     private func waitForModel(_ condition: @escaping @MainActor () -> Bool) async throws {
-        let ready = XCTestExpectation(description: "Quick Chat model state settled")
+        let ready = AsyncTestGate()
         let observation = QuickChatCatalogObservation(condition: condition, ready: ready)
+        let timeout = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .seconds(5))
+                ready.open()
+            } catch {}
+        }
         observation.observe()
-        let result = await XCTWaiter.fulfillment(of: [ready], timeout: 5)
+        await ready.wait()
         observation.stop()
-        XCTAssertEqual(result, .completed)
-        XCTAssertTrue(condition())
+        timeout.cancel()
+        await timeout.value
+        try Task.checkCancellation()
+        #expect(observation.satisfied)
+        #expect(condition())
     }
 
     private static func makeGateway(fixture: QuickChatCatalogFixture) -> GatewayConnection {
@@ -207,17 +256,17 @@ private actor QuickChatCatalogFixture {
     private(set) var patches: [String] = []
 
     func response(to data: Data) throws -> Data {
-        let request = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let id = try XCTUnwrap(request["id"] as? String)
-        let method = try XCTUnwrap(request["method"] as? String)
+        let request = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let id = try #require(request["id"] as? String)
+        let method = try #require(request["method"] as? String)
         let payload: String
         switch method {
         case "health": payload = "{}"
         case "agents.list":
             payload = #"{"defaultId":"main","mainKey":"main","scope":"per-sender","agents":[{"id":"main","kind":"agent","name":"Fixture"}]}"#
         case "models.list":
-            let params = try XCTUnwrap(request["params"] as? [String: Any])
-            XCTAssertEqual(params["sessionKey"] as? String, "agent:main:main")
+            let params = try #require(request["params"] as? [String: Any])
+            #expect(params["sessionKey"] as? String == "agent:main:main")
             payload = """
             {"models":[
               {"id":"current","name":"Current fixture","provider":"fixture","available":true,"manualSelectionAllowed":false,
@@ -237,15 +286,15 @@ private actor QuickChatCatalogFixture {
             {"sessions":[{"key":"agent:main:main","modelProvider":"fixture","model":"\(self.model)"\(fast)}]}
             """
         case "sessions.patch":
-            let params = try XCTUnwrap(request["params"] as? [String: Any])
-            XCTAssertEqual(params["key"] as? String, "agent:main:main")
+            let params = try #require(request["params"] as? [String: Any])
+            #expect(params["key"] as? String == "agent:main:main")
             if let model = params["model"] as? String {
-                XCTAssertTrue(["fixture/allowed", "fixture/unknown"].contains(model))
+                #expect(["fixture/allowed", "fixture/unknown"].contains(model))
                 self.model = model
                 self.patches.append("model=\(model)")
             } else {
-                let fast = try XCTUnwrap(params["fastMode"])
-                XCTAssertTrue(fast is Bool || fast is NSNull)
+                let fast = try #require(params["fastMode"])
+                #expect(fast is Bool || fast is NSNull)
                 self.fastMode = fast as? Bool
                 self.patches.append(self.fastMode.map { "fast=\($0)" } ?? "fast=null")
             }
@@ -262,10 +311,11 @@ private actor QuickChatCatalogFixture {
 @MainActor
 private final class QuickChatCatalogObservation {
     let condition: @MainActor () -> Bool
-    let ready: XCTestExpectation
+    let ready: AsyncTestGate
+    private(set) var satisfied = false
     private var stopped = false
 
-    init(condition: @escaping @MainActor () -> Bool, ready: XCTestExpectation) {
+    init(condition: @escaping @MainActor () -> Bool, ready: AsyncTestGate) {
         self.condition = condition
         self.ready = ready
     }
@@ -276,8 +326,9 @@ private final class QuickChatCatalogObservation {
             Task { @MainActor in self?.observe() }
         }
         if satisfied {
+            self.satisfied = true
             self.stopped = true
-            self.ready.fulfill()
+            self.ready.open()
         }
     }
 

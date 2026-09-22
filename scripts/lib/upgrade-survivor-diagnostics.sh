@@ -5,6 +5,7 @@ prepare_diagnostics_capture() {
   if [ -L "$ARTIFACT_DIR" ] || [ -L "$ARTIFACT_DIR/diagnostics" ] ||
     ! rm -f "$ARTIFACT_DIR/diagnostics/raw.json" "$ARTIFACT_DIR/diagnostics/post-core.json" "$ARTIFACT_DIR/diagnostics/last-rpc" "$ARTIFACT_DIR/summary.json" \
       "$ARTIFACT_DIR/update.json" "$ARTIFACT_DIR/repair.json" "$ARTIFACT_DIR/recovery-update.json" \
+      "$ARTIFACT_DIR/candidate-cohort.json" \
       "$ARTIFACT_DIR"/legacy-operator-baseline-turn.{out,err} \
       "$ARTIFACT_DIR"/legacy-operator-candidate-turn.{out,err} \
       "$ARTIFACT_DIR/sibling-registrations.jsonl" "$ARTIFACT_DIR/sibling-source.json" "$ARTIFACT_DIR/sibling-canary.json" \

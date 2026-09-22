@@ -2,7 +2,9 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
+import { createPreparedTranscriptDateReader } from "./store-date-preparation.js";
 import {
+  queryTranscriptReadEntries,
   readLatestTranscriptEntry,
   readStoredTranscriptNotes,
   readTranscriptEntry,
@@ -10,12 +12,16 @@ import {
   TranscriptLibraryError,
 } from "./store-read.js";
 import {
+  readTranscriptExportOwnership,
+  readTranscriptExportPathCollisions,
+  readTranscriptExportPathOwners,
   readTranscriptSessionByIdentity,
   readTranscriptSessionEntries,
   readTranscriptSessionMatches,
   readStoredTranscriptSummary,
   readTranscriptUtterances,
   readTranscriptSummarySnapshot,
+  readTranscriptJsonlDigest,
 } from "./store-sqlite-read.js";
 import {
   readRecentStoppedTranscriptSession,
@@ -36,6 +42,30 @@ export function executeTranscriptRead(
   const database = target.database.db;
   try {
     switch (command.type) {
+      case "transcripts.readEntries":
+        return {
+          ok: true,
+          value: queryTranscriptReadEntries(
+            database,
+            command.input.params,
+            createPreparedTranscriptDateReader(),
+          ),
+        };
+      case "transcripts.exportOwnership":
+        return {
+          ok: true,
+          value: readTranscriptExportOwnership(database, command.input.params.session),
+        };
+      case "transcripts.exportPathCollisions":
+        return {
+          ok: true,
+          value: readTranscriptExportPathCollisions(database, command.input.params.exportKey),
+        };
+      case "transcripts.exportPathOwners":
+        return {
+          ok: true,
+          value: readTranscriptExportPathOwners(database, command.input.params.exportKey),
+        };
       case "transcripts.summarySnapshot":
         return {
           ok: true,
@@ -121,6 +151,11 @@ export function executeTranscriptRead(
         return {
           ok: true,
           value: readStoredTranscriptSummary(database, command.input.params.session),
+        };
+      case "transcripts.exportDigest":
+        return {
+          ok: true,
+          value: readTranscriptJsonlDigest(database, command.input.params.session),
         };
       default:
         throw new Error("Unknown transcript SQLite command");

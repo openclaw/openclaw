@@ -240,15 +240,19 @@ export function registerGatewayCronHandoffTests({
     async (outcome) => {
       const watched = [createWatchedRun(false), createWatchedRun(false)] as const;
       const exits = [watched[0].exit, watched[1].exit] as const;
+      const firstStarted = createDeferred();
+      const secondStarted = createDeferred();
       const releaseFirst = createDeferred();
       const releaseSecond = createDeferred();
       const { spawn } = mockCronSupervisor(...watched);
       requestHeartbeatAndWaitMock
         .mockImplementationOnce(async () => {
+          firstStarted.resolve();
           await releaseFirst.promise;
           return { status: "ran", durationMs: 1 };
         })
         .mockImplementationOnce(async () => {
+          secondStarted.resolve();
           await releaseSecond.promise;
           return { status: "ran", durationMs: 1 };
         });
@@ -284,7 +288,8 @@ export function registerGatewayCronHandoffTests({
         await previous.reconcileExitWatchers();
         expect(spawn).toHaveBeenCalledTimes(2);
         exits[0].resolve(runExit({ reason: "exit", exitCode: 0 }));
-        await vi.waitFor(() => expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce());
+        await firstStarted.promise;
+        expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
         const oldHandoff = expectDefined(
           await previous.prepareExitWatcherHandoff?.(),
           "previous handoff",
@@ -310,16 +315,21 @@ export function registerGatewayCronHandoffTests({
             expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
           }
           await next.cron.start();
-          await vi.waitFor(() => expect(requestHeartbeatAndWaitMock).toHaveBeenCalledTimes(2));
+          await secondStarted.promise;
+          expect(requestHeartbeatAndWaitMock).toHaveBeenCalledTimes(2);
+          expect(nextRun).toHaveBeenCalledOnce();
           expect(requestHeartbeatAndWaitMock).toHaveBeenNthCalledWith(
             2,
             expect.objectContaining({ reason: "cron:" + secondId }),
             expect.anything(),
           );
           releaseSecond.resolve();
-          await vi.waitFor(() =>
-            expect(next.cron.getJob(secondId)?.state.lastRunStatus).toBe("ok"),
-          );
+          const completion = expectDefined(nextRun.mock.results[0], "adopted on-exit run");
+          if (completion.type !== "return") {
+            throw new Error("Adopted on-exit run did not return a completion");
+          }
+          await completion.value;
+          expect(next.cron.getJob(secondId)?.state.lastRunStatus).toBe("ok");
           expect(enqueueSystemEventMock).toHaveBeenLastCalledWith(
             expect.stringContaining("completed before reload"),
             expect.anything(),

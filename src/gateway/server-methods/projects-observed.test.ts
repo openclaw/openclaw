@@ -99,6 +99,61 @@ beforeEach(() => {
 });
 
 describe("projects.list observed projects", () => {
+  it("deduplicates probes and overlaps bounded work without changing result order", async () => {
+    seededSessions.store = Object.fromEntries(
+      Array.from({ length: 5_000 }, (_, index) => [
+        `agent:main:session-${index}`,
+        { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index % 8}` },
+      ]),
+    );
+    let active = 0;
+    let peak = 0;
+    const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        // Newer candidates finish later; output must retain admission order.
+        for (let step = 0; step < Number(checkoutPath.at(-1)); step += 1) {
+          await Promise.resolve();
+        }
+        if (checkoutPath === "/repos/3") {
+          throw new Error("checkout unavailable");
+        }
+        return {
+          checkoutRoot: checkoutPath.replace("/repos/", "/physical/"),
+          repoRoot: "/physical/main",
+          originUrl: "https://example.test/project.git",
+          fingerprint: "project",
+        };
+      } finally {
+        active -= 1;
+      }
+    });
+
+    await expect(
+      listObservedProjects({
+        service: { listRegistryRecords: async () => [], resolveRepositoryIdentity },
+      }),
+    ).resolves.toEqual([
+      {
+        name: "7",
+        originUrl: "https://example.test/project.git",
+        lastUsedAt: 4_999,
+        checkouts: [7, 6, 5, 4, 2, 1, 0].map((index) => ({
+          runnerId: "gateway",
+          path: `/physical/${index}`,
+        })),
+      },
+    ]);
+    expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(8);
+    expect(new Set(resolveRepositoryIdentity.mock.calls.map(([checkout]) => checkout)).size).toBe(
+      8,
+    );
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(4);
+    expect(active).toBe(0);
+  });
+
   it.each([["operator.write"], ["operator.admin"]])(
     "returns detailed observed projects to %s callers",
     async (scope) => {

@@ -10,6 +10,7 @@ import {
   listFreshTasksForOwnerKey,
   listTaskRecordsForOwnerTree,
   listTaskRecordPage,
+  listTaskSessionActivity,
   deleteTaskRecordById,
   resetTaskRegistryForTests,
 } from "./task-registry-query.js";
@@ -45,6 +46,57 @@ async function readTaskPage(params: Parameters<typeof listTaskRecordPage>[0]) {
   }
   return result.value;
 }
+
+describe("listTaskSessionActivity", () => {
+  it("copies current session activity without retaining or cloning task payloads", () => {
+    const task: TaskRecord = {
+      taskId: "media",
+      runtime: "cli",
+      requesterSessionKey: "agent:main:requester",
+      ownerKey: "agent:main:owner",
+      scopeKind: "session",
+      taskKind: "image_generation",
+      task: "Generate an image",
+      status: "queued",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: 1,
+      detail: { nested: { value: "retained" } },
+      executionOwner: { host: "fixture", pid: 1, startIdentity: 1 },
+    };
+    const other = { ...task, taskId: "other", taskKind: undefined, createdAt: 2 };
+    configureTaskSnapshot([task, other]);
+    const activity = listTaskSessionActivity();
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    expect(listTaskSessionActivity()).toEqual(activity);
+    expect(clone).not.toHaveBeenCalled();
+    clone.mockRestore();
+    expect(activity).toEqual([
+      {
+        taskKind: "image_generation",
+        status: "queued",
+        requesterSessionKey: task.requesterSessionKey,
+        ownerKey: task.ownerKey,
+      },
+      {
+        taskKind: undefined,
+        status: "queued",
+        requesterSessionKey: task.requesterSessionKey,
+        ownerKey: task.ownerKey,
+      },
+    ]);
+    expectDefined(activity[0], "detached activity").status = "cancelled";
+    expect(getTaskById(task.taskId)?.status).toBe("queued");
+    publishTaskRecordAfterAtomicStore({ ...task, status: "succeeded", ownerKey: "new-owner" });
+    expect(listTaskSessionActivity()[0]).toMatchObject({
+      status: "succeeded",
+      ownerKey: "new-owner",
+    });
+    expect(activity[0]).toMatchObject({ status: "cancelled", ownerKey: task.ownerKey });
+    deleteTaskRecordById(task.taskId);
+    expect(listTaskSessionActivity()).toEqual([activity[1]]);
+  });
+});
 
 describe("listTasksForAgentId", () => {
   it("clones only selected details from a 10000-task registry", async () => {

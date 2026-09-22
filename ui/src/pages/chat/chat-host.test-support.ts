@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { UiSettings } from "../../app/settings.ts";
@@ -35,6 +36,29 @@ export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestM
 }
 
 type RequestMock = ReturnType<typeof makeRequestMock>;
+
+type MockCallSource<Call extends ReadonlyArray<unknown> = ReadonlyArray<unknown>> = {
+  mock: {
+    calls: ArrayLike<Call>;
+  };
+};
+
+export function requestCalls<Call extends ReadonlyArray<unknown>>(
+  source: MockCallSource<Call>,
+  method: string,
+): Call[] {
+  return Array.from(source.mock.calls).filter(([calledMethod]) => calledMethod === method);
+}
+
+export const requireRecord = createRequireRecord("object", "expected-label");
+
+export function findRequestPayload(source: MockCallSource, method: string, label: string) {
+  const call = Array.from(source.mock.calls).find((candidate) => candidate[0] === method);
+  if (!call) {
+    throw new Error(`expected request call: ${label}`);
+  }
+  return requireRecord(call[1], label);
+}
 
 export function createBrowserAnnotationAttachment(
   id: string,

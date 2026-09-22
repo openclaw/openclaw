@@ -1,4 +1,4 @@
-// Shared real Gateway metadata/cache fixture; spies live only during acquisition.
+// Shared real Gateway metadata/cache fixture; startup joins owned audit maintenance.
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -100,6 +100,14 @@ export async function createGatewayMetadataCloseFixture(label: string) {
     return reservation.port;
   };
   const create = createGatewayKernel;
+  const audit = await import("../audit/audit-event-writer.js");
+  const createAuditWriter = audit.createAuditEventWriter;
+  const auditReadiness = new Set<Promise<void>>();
+  const auditFactory = vi.spyOn(audit, "createAuditEventWriter").mockImplementation((options) => {
+    const writer = createAuditWriter(options);
+    auditReadiness.add(writer.ready);
+    return writer;
+  });
   setActivePluginRegistry(createEmptyPluginRegistry());
   return {
     state,
@@ -170,17 +178,24 @@ export async function createGatewayMetadataCloseFixture(label: string) {
         factory.mockRestore();
       }
       await server.startupSettled;
+      // Initial audit pruning admits a worker and arms its idle timer. Finish
+      // that real-clock setup before callers install a controlled test clock.
+      await Promise.all(auditReadiness);
       return server;
     },
     async cleanup() {
-      for (const server of servers.toReversed()) {
-        await server.close().catch(() => {});
+      try {
+        for (const server of servers.toReversed()) {
+          await server.close().catch(() => {});
+        }
+        for (const listener of reservedListeners.values()) {
+          await listener.closeUnadopted();
+        }
+        restoreActivePluginRegistrySnapshot(original);
+        await state.cleanup();
+      } finally {
+        auditFactory.mockRestore();
       }
-      for (const listener of reservedListeners.values()) {
-        await listener.closeUnadopted();
-      }
-      restoreActivePluginRegistrySnapshot(original);
-      await state.cleanup();
     },
   };
 }

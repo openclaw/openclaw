@@ -24,6 +24,40 @@ const autoMigrateLegacyState = vi.hoisted(() =>
     }): Promise<StateMigrationResult> => makeStateMigrationResult(["imported"]),
   ),
 );
+const prepareLegacyStateDatabaseSchema = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/state-migrations.doctor.js").prepareLegacyStateDatabaseSchema>(
+    async () => ({
+      id: "state-schema",
+      phase: "shared",
+      source: [],
+      target: [],
+      requiredness: "conditional",
+      reversibility: "checkpoint-required",
+      outcome: "skipped",
+      changes: [],
+      warnings: [],
+    }),
+  ),
+);
+const prepareDoctorDatabasePreflight = vi.hoisted(() =>
+  vi.fn<typeof import("./doctor-database-preflight.js").prepareDoctorDatabasePreflight>(
+    async () => ({ incompatible: [], indeterminate: [] }),
+  ),
+);
+const doctorMaintenanceRelease = vi.hoisted(() => vi.fn(async () => {}));
+const beginDoctorMaintenance = vi.hoisted(() =>
+  vi.fn<typeof import("./doctor-maintenance.js").beginDoctorMaintenance>(async () => ({
+    run: <T>(operation: () => T): T => operation(),
+    releaseState: vi.fn(async () => {}),
+    release: doctorMaintenanceRelease,
+    finish: vi.fn(async () => {}),
+  })),
+);
+const noteSessionTranscriptHealth = vi.hoisted(() =>
+  vi.fn<typeof import("./doctor-session-transcripts.js").noteSessionTranscriptHealth>(
+    async () => undefined,
+  ),
+);
 const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
   vi.fn(async (): Promise<StateMigrationResult> => makeStateMigrationResult(["plugin-imported"])),
 );
@@ -167,7 +201,12 @@ vi.mock("./doctor/shared/plugin-migration-availability.js", () => ({
 
 vi.mock("../infra/state-migrations.doctor.js", () => ({
   autoMigrateLegacyState,
+  prepareLegacyStateDatabaseSchema,
 }));
+
+vi.mock("./doctor-database-preflight.js", () => ({ prepareDoctorDatabasePreflight }));
+vi.mock("./doctor-maintenance.js", () => ({ beginDoctorMaintenance }));
+vi.mock("./doctor-session-transcripts.js", () => ({ noteSessionTranscriptHealth }));
 
 vi.mock("../infra/state-migrations.state-dir.js", () => ({
   autoMigrateLegacyStateDir,
@@ -242,6 +281,11 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 export const preflightStateMigrationMocks = {
   autoMigrateLegacyStateDir,
   autoMigrateLegacyState,
+  prepareLegacyStateDatabaseSchema,
+  prepareDoctorDatabasePreflight,
+  beginDoctorMaintenance,
+  doctorMaintenanceRelease,
+  noteSessionTranscriptHealth,
   autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
   repairLegacyCronStoreWithoutPrompt,
@@ -267,6 +311,11 @@ export const preflightStateMigrationMocks = {
 
 export function resetStateMigrationPreflightMocks(): void {
   vi.clearAllMocks();
+  prepareLegacyStateDatabaseSchema.mockReset();
+  prepareDoctorDatabasePreflight.mockReset();
+  beginDoctorMaintenance.mockReset();
+  doctorMaintenanceRelease.mockReset();
+  noteSessionTranscriptHealth.mockReset();
   pendingPluginMigrations.mockReset().mockReturnValue([]);
   inspectPluginMigrationAvailability.mockReset().mockResolvedValue({
     pending: [],

@@ -15,6 +15,7 @@ import {
   useNodeBootstrapArtifactFixtures,
   version,
   write,
+  writeBundledBrowser,
   writeOwnedChunks,
   type OwnedRuntimeChunk,
 } from "./node-bootstrap-artifact.test-support.js";
@@ -22,7 +23,50 @@ import {
 const { fixture, tempDirs } = useNodeBootstrapArtifactFixtures();
 
 describe("node bootstrap distribution", () => {
-  it.each(["source", "package", "external-plugin"] as const)(
+  it("preserves an installed bundled dependency's runtime layout and assets", async () => {
+    const { root, packageRoot, provider } = await fixture();
+    const browserRoot = await writeBundledBrowser(packageRoot);
+    await write(browserRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
+    await write(root, "nested-native/host-native", "do-not-transfer-native");
+    await fs.symlink(
+      path.join(root, "nested-native"),
+      path.join(browserRoot, "node_modules"),
+      "junction",
+    );
+    await write(
+      packageRoot,
+      "dist/entry.js",
+      'import { notice } from "@fixture/browser"; console.log(notice);',
+    );
+    const artifact = await provider.prepare();
+    const installed = path.join(root, "node");
+    await fs.mkdir(installed);
+    await tar.extract({ file: artifact.tarballPath, cwd: installed });
+    const target = path.join(installed, "package");
+    for (const relative of [".env", "node_modules"]) {
+      await expect(
+        fs.access(path.join(target, "node_modules/@fixture/browser", relative)),
+      ).rejects.toHaveProperty("code", "ENOENT");
+    }
+    for (const entry of [
+      "openclaw.mjs",
+      "node_modules/@fixture/browser/build/src/bin/browser.js",
+    ]) {
+      const { stdout } = await promisify(execFile)(process.execPath, [path.join(target, entry)]);
+      expect(stdout.trim()).toBe("bundled-notice");
+    }
+    for (const [relative, contents] of [
+      ["build/src/OPENCLAW_PATCH_NOTICE.md", "patched-runtime"],
+      ["skills/browser/SKILL.md", "browser-skill"],
+      ["LICENSE", "fixture-license"],
+    ]) {
+      expect(
+        await fs.readFile(path.join(target, "node_modules/@fixture/browser", relative!), "utf8"),
+      ).toBe(contents);
+    }
+  });
+
+  it.each(["source", "package", "external-plugin", "linked-package"] as const)(
     "runs an unpublished %s snapshot with its plugin and private JavaScript dependency",
     async (mode) => {
       const { root, packageRoot, provider, sourcePackage } = await fixture(mode);
@@ -395,12 +439,19 @@ describe("node bootstrap distribution", () => {
     }
   });
 
-  it.each(["plugin", "private runtime"])(
+  it.each(["plugin", "private runtime", "bundled runtime"])(
     "rejects an incomplete %s import closure before publishing the artifact",
     async (owner) => {
       const { packageRoot, provider } = await fixture();
       if (owner === "plugin") {
         await fs.rm(path.join(packageRoot, "dist/shared.js"));
+      } else if (owner === "bundled runtime") {
+        const browserRoot = await writeBundledBrowser(packageRoot);
+        await write(browserRoot, "build/src/transport.js", 'import "./missing.js";');
+        await fs.appendFile(
+          path.join(browserRoot, "build/src/index.js"),
+          'import "./transport.js";',
+        );
       } else {
         const aiRoot = await fs.realpath(path.join(packageRoot, "node_modules/@fixture/ai"));
         await write(aiRoot, "dist/index.js", 'export { name } from "./missing.js";');
@@ -418,12 +469,21 @@ describe("node bootstrap distribution", () => {
     await expect(provider.prepare()).rejects.toThrow("requires an exact dependency pin");
   });
 
-  it("rejects a link escaping the build tree without reading the target into the artifact", async () => {
-    const { root, packageRoot, provider } = await fixture();
-    await write(root, "private.json", { secret: "fixture-only" });
-    await fs.symlink(path.join(root, "private.json"), path.join(packageRoot, "dist/private.json"));
-    await expect(provider.prepare()).rejects.toThrow("Unsafe package dist path");
-  });
+  it.each(["Gateway", "bundled dependency"])(
+    "rejects a link escaping the %s tree without reading the target into the artifact",
+    async (owner) => {
+      const { root, packageRoot, provider } = await fixture();
+      await write(root, "private.json", { secret: "fixture-only" });
+      const destination =
+        owner === "Gateway"
+          ? path.join(packageRoot, "dist/private.json")
+          : path.join(await writeBundledBrowser(packageRoot), "build/src/private.json");
+      await fs.symlink(path.join(root, "private.json"), destination);
+      await expect(provider.prepare()).rejects.toThrow(
+        owner === "Gateway" ? "Unsafe package dist path" : "Unsafe bundled node distribution path",
+      );
+    },
+  );
 
   it("gives different archive identities to different built bytes with the same package version", async () => {
     const first = await fixture();

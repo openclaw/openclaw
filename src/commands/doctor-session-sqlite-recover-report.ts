@@ -23,6 +23,10 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import {
+  readActiveSqliteTranscriptFiles,
+  summarizeDoctorSessionSqliteReport,
+} from "./doctor-session-sqlite-diagnostics.js";
+import {
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
@@ -37,9 +41,7 @@ import {
 } from "./doctor-session-sqlite-readers.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
-  createDoctorSessionSqliteTotals,
   createDoctorSessionSqliteTargetReport,
-  sumDoctorSessionSqliteTargets,
   type DoctorSessionSqliteOptions,
   type DoctorSessionSqliteReport,
   type DoctorSessionSqliteTargetReport,
@@ -67,15 +69,26 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       { env: params.env },
       (maintenance) => recoverCorruptSqliteTargets(params.targets, params.env, maintenance),
     );
-    if (recoveredCorruptTargets.length > 0) {
-      return summarizeRecoverReport(recoveredCorruptTargets);
-    }
-    const retainedReports: DoctorSessionSqliteTargetReport[] = [];
+    const retainedReports: DoctorSessionSqliteTargetReport[] = [...recoveredCorruptTargets];
     for (const target of trustedTargets) {
-      if (
-        hasDeferredPluginSessionImport({ target, sqlitePath: target.sqlitePath, env: params.env })
-      ) {
-        retainedReports.push(await params.validateTarget(target));
+      if (recoveredCorruptTargets.some((report) => report.sqlitePath === target.sqlitePath)) {
+        continue;
+      }
+      try {
+        if (
+          hasDeferredPluginSessionImport({
+            target,
+            sqlitePath: target.sqlitePath,
+            env: params.env,
+          }) ||
+          readActiveSqliteTranscriptFiles(target).length > 0
+        ) {
+          retainedReports.push(await params.validateTarget(target));
+        }
+      } catch (error) {
+        retainedReports.push(
+          createRecoverInspectionFailureTargetReport(target, target.sqlitePath, error),
+        );
       }
     }
     if (retainedReports.length > 0) {
@@ -356,16 +369,8 @@ function createEmptyRecoverTargetReport(
 function summarizeRecoverReport(
   targets: DoctorSessionSqliteTargetReport[],
 ): DoctorSessionSqliteReport {
-  const sum = (value: (target: DoctorSessionSqliteTargetReport) => number) =>
-    sumDoctorSessionSqliteTargets(targets, value);
-  return {
-    mode: "recover",
-    targets,
-    totals: createDoctorSessionSqliteTotals(targets, {
-      legacyEntries: sum((target) => target.legacyEntries),
-      unreferencedJsonlFiles: sum((target) => target.unreferencedJsonlFiles.length),
-      validatedEntries: sum((target) => target.validatedEntries),
-      validatedTranscriptEvents: sum((target) => target.validatedTranscriptEvents),
-    }),
-  };
+  const report = summarizeDoctorSessionSqliteReport("recover", targets);
+  delete report.totals.archivedLegacyStoreFiles;
+  delete report.totals.reclaimedBytes;
+  return report;
 }

@@ -12,7 +12,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
   const entered = createDeferred();
   const release = createDeferred();
   const bridgeCalls: Promise<void>[] = [];
-  const cleanups: Array<() => void> = [];
+  const cleanups: Array<() => Promise<void>> = [];
   const lookup =
     vi.fn<
       typeof import("./subagents/registry/subagent-registry.js").getSwarmRunByLaunchReplayKey
@@ -141,8 +141,8 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       };
       applyCodeModeCatalog({ ...ctx, tools: [...createCodeModeTools(ctx), spawnTool] });
       const owner = createCodeModeRunOwner(ctx, resolveCodeModeConfig(config));
-      cleanups.push(() => {
-        owner.close();
+      cleanups.push(async () => {
+        await owner.close();
         clearToolSearchCatalog(ctx);
       });
       const limits = resolveCodeModeConfig(config);
@@ -194,7 +194,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     await entered.promise;
     for (const { kind, run, pending } of closedRuns) {
       if (kind === "owner") {
-        run.owner.close(new Error("owner closed"));
+        await run.owner.close(new Error("owner closed"));
       } else if (kind === "catalog") {
         clearToolSearchCatalog(run.ctx);
       } else if (kind === "disabled") {
@@ -244,8 +244,9 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
       text: "Still live",
     });
   } finally {
-    cleanups.forEach((cleanup) => cleanup());
+    const closing = cleanups.map((cleanup) => cleanup());
     release.resolve();
+    await Promise.all(closing);
     await Promise.allSettled(bridgeCalls);
     vi.restoreAllMocks();
     vi.doUnmock("./code-mode-swarm.runtime.js");

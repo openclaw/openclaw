@@ -35,7 +35,7 @@ function installXSearchFetch(payload?: Record<string, unknown>) {
       ),
     ),
   );
-  global.fetch = withFetchPreconnect(mockFetch);
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
 
@@ -243,7 +243,7 @@ describe("xai x_search tool", () => {
           queueMicrotask(() => controller.abort(reason));
         }),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createConfiguredXSearchTool();
 
     await expect(
@@ -282,7 +282,7 @@ describe("xai x_search tool", () => {
         return jsonResponse({ output_text: "Cancelled X answer", citations: [] });
       })
       .mockResolvedValueOnce(jsonResponse({ output_text: "Recovered X answer", citations: [] }));
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createConfiguredXSearchTool();
     const query = "unique standalone x_search late-cancel cache regression";
 
@@ -489,7 +489,7 @@ describe("xai x_search tool", () => {
         }),
       ),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createConfiguredXSearchTool({
       apiKey: "xai-plugin-key",
       xSearch: { enabled: true },
@@ -506,7 +506,7 @@ describe("xai x_search tool", () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
       Promise.resolve(jsonResponse({ status: "incomplete", output: [] })),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createConfiguredXSearchTool({
       apiKey: "xai-plugin-key",
       xSearch: { enabled: true },

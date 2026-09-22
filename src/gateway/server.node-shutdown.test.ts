@@ -185,8 +185,8 @@ test.for(["direct", "restart"] as const)(
             entries: { [REQUEST.sessionKey]: sessionStoreEntry(REQUEST.sessionId) },
           });
           const environmentId = "environment-node-shutdown";
-          const environments = createWorkerEnvironmentStore();
-          environments.createIntent({
+          const environments = await createWorkerEnvironmentStore();
+          await environments.createIntent({
             environmentId,
             providerId: DEVICE_WORKER_PROVIDER_ID,
             profileId: `device:${pairedNode.identity.deviceId}`,
@@ -196,8 +196,8 @@ test.for(["direct", "restart"] as const)(
             },
             provisionOperationId: "provision-node-shutdown",
           });
-          environments.transition({ environmentId, from: "requested", to: "provisioning" });
-          environments.transition({
+          await environments.transition({ environmentId, from: "requested", to: "provisioning" });
+          await environments.transition({
             environmentId,
             from: "provisioning",
             to: "ready",
@@ -222,7 +222,7 @@ test.for(["direct", "restart"] as const)(
               },
             },
           });
-          const attached = environments.transition({
+          const attached = await environments.transition({
             environmentId,
             from: "ready",
             to: "attached",

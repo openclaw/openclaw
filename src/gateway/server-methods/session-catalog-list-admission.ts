@@ -11,6 +11,7 @@ export type SessionCatalogListTiming = {
 };
 
 type QueuedProviderList = {
+  providerId: string;
   start: () => void;
 };
 
@@ -19,14 +20,14 @@ type ProviderListStep<T> = { done: false } | { done: true; value: T };
 class SessionCatalogListBusyError extends Error {
   readonly code = "catalog_busy";
 
-  constructor(maxConcurrent: number, maxQueued: number) {
-    super(`session catalog is busy (${maxConcurrent} active, ${maxQueued} queued); retry shortly`);
+  constructor(active: number, queued: number) {
+    super(`session catalog is busy (${active} active, ${queued} queued); retry shortly`);
     this.name = "SessionCatalogListBusyError";
   }
 }
 
 export class SessionCatalogListAdmission {
-  private active = 0;
+  private readonly activeProviders = new Set<string>();
   private readonly queue: QueuedProviderList[] = [];
 
   constructor(
@@ -42,21 +43,28 @@ export class SessionCatalogListAdmission {
   }
 
   async run<T>(
+    providerId: string,
     task: () => Promise<T>,
     signal?: AbortSignal,
     timing?: SessionCatalogListTiming,
   ): Promise<T> {
-    return await this.runSteps(async () => ({ done: true, value: await task() }), signal, timing);
+    return await this.runSteps(
+      providerId,
+      async () => ({ done: true, value: await task() }),
+      signal,
+      timing,
+    );
   }
 
   async runSteps<T>(
+    providerId: string,
     step: () => Promise<ProviderListStep<T>>,
     signal?: AbortSignal,
     timing?: SessionCatalogListTiming,
   ): Promise<T> {
     signal?.throwIfAborted();
-    if (this.active >= this.maxConcurrent && this.queue.length >= this.maxQueued) {
-      throw new SessionCatalogListBusyError(this.maxConcurrent, this.maxQueued);
+    if (!this.canStart(providerId) && this.queue.length >= this.maxQueued) {
+      throw new SessionCatalogListBusyError(this.activeProviders.size, this.queue.length);
     }
     // Even an immediate first step may later resume from another caller's drain.
     const runInAsyncContext = AsyncLocalStorage.snapshot();
@@ -90,12 +98,13 @@ export class SessionCatalogListAdmission {
       }
     };
     const entry: QueuedProviderList = {
+      providerId,
       start: () => {
         signal?.removeEventListener("abort", onAbort);
         void runInAsyncContext(async () => {
           const startedAt = performance.now();
           finishQueueWait(startedAt);
-          this.active += 1;
+          this.activeProviders.add(providerId);
           if (timing) {
             timing.admittedAt ??= startedAt;
             timing.stepCount = (timing.stepCount ?? 0) + 1;
@@ -120,41 +129,39 @@ export class SessionCatalogListAdmission {
                 timing.settledAt = settledAt;
               }
             }
-            this.active -= 1;
+            this.activeProviders.delete(providerId);
             if (continued) {
               if (timing) {
                 timing.continuationWaitMs ??= 0;
               }
               // Reserve the accepted continuation before the next caller runs:
               // its synchronous arrivals cannot take this operation's queue place.
-              const next = this.queue.shift();
-              if (next) {
-                continuationQueuedAt = settledAt;
-                enqueue();
-                next.start();
-              } else {
-                entry.start();
-              }
+              continuationQueuedAt = settledAt;
+              enqueue();
             }
             this.drain();
           }
         });
       },
     };
-    if (this.active < this.maxConcurrent) {
-      entry.start();
-    } else {
-      enqueue();
-    }
+    enqueue();
+    this.drain();
     return await completion.promise;
   }
 
+  private canStart(providerId: string): boolean {
+    return this.activeProviders.size < this.maxConcurrent && !this.activeProviders.has(providerId);
+  }
+
   private drain(): void {
-    while (this.active < this.maxConcurrent) {
-      const next = this.queue.shift();
+    while (this.activeProviders.size < this.maxConcurrent) {
+      // A slow provider keeps its FIFO place without blocking other providers' slots.
+      const index = this.queue.findIndex((entry) => this.canStart(entry.providerId));
+      const next = this.queue[index];
       if (!next) {
         return;
       }
+      this.queue.splice(index, 1);
       next.start();
     }
   }

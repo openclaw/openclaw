@@ -81,8 +81,9 @@ describe("physical session disk usage", () => {
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const terminate = retiringWorker.terminate.bind(retiringWorker);
+        // Observe the worker being drained; other pools may retire workers concurrently.
         const retirement = vi
-          .spyOn(Worker.prototype, "terminate")
+          .spyOn(retiringWorker, "terminate")
           .mockImplementationOnce(async () => {
             const code = await terminate();
             entered.resolve();

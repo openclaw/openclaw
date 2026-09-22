@@ -1027,11 +1027,12 @@ describe("skills-remote", () => {
       ok: false as const,
       error: { code: "TIMEOUT", message: "node invoke timed out" },
     }));
-    const listCurrentConnectedSync = vi.fn(() => [currentSession]);
+    const listCurrentConnected = vi.fn(async () => [currentSession]);
     try {
       setSkillsRemoteRegistry({
         listConnected: () => [staleSession, currentSession],
-        listCurrentConnectedSync,
+        listCurrentConnected,
+        listCurrentConnectedSync: () => [currentSession],
         get: (nodeId: string) => (nodeId === currentNodeId ? currentSession : staleSession),
         invoke,
       } as unknown as NodeRegistry);
@@ -1052,7 +1053,7 @@ describe("skills-remote", () => {
 
       await refreshRemoteBinsForConnectedNodes(cfg);
 
-      expect(listCurrentConnectedSync).toHaveBeenCalled();
+      expect(listCurrentConnected).toHaveBeenCalled();
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: currentNodeId }));
     } finally {

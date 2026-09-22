@@ -130,8 +130,6 @@ extensions/memory-core/src/dreaming-phases.ts
 extensions/memory-core/src/dreaming.test.ts
 extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
-extensions/memory-core/src/memory/manager-search.test.ts
-extensions/memory-core/src/memory/manager-search.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
 extensions/memory-core/src/tools.test.ts
@@ -430,7 +428,6 @@ src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts
 src/channels/plugins/setup-wizard-helpers.test.ts
 src/channels/plugins/setup-wizard-helpers.ts
-src/channels/plugins/types.adapters.ts
 src/channels/streaming.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
@@ -478,7 +475,6 @@ src/commands/doctor-gateway-services.ts
 src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-memory-search.test.ts
 src/commands/doctor-memory-search.ts
-src/commands/doctor-session-sqlite.test.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
 src/commands/doctor-state-migrations.test.ts
@@ -563,7 +559,6 @@ src/gateway/openai-http.test.ts
 src/gateway/openai-http.ts
 src/gateway/openresponses-http.test.ts
 src/gateway/openresponses-http.ts
-src/gateway/operator-approval-store.ts
 src/gateway/server-channels.test.ts
 src/gateway/server-channels.ts
 src/gateway/server-chat.agent-events.test.ts
@@ -613,7 +608,6 @@ src/gateway/server.sessions.compaction.test.ts
 src/gateway/server.sessions.create.test.ts
 src/gateway/server.sessions.list-changed.test.ts
 src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts
-src/gateway/session-compaction-checkpoints.ts
 src/gateway/session-create-service.ts
 src/gateway/session-message-events.test.ts
 src/gateway/session-reset-service.ts
@@ -629,7 +623,6 @@ src/gateway/test-helpers.server.ts
 src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
-src/gateway/worker-environments/store.ts
 src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts
 src/infra/command-explainer/extract.ts
@@ -660,7 +653,6 @@ src/infra/state-migrations.storage.ts
 src/infra/state-migrations.test.ts
 src/infra/update-global.ts
 src/infra/update-managed-service-handoff.ts
-src/infra/update-runner.test.ts
 src/infra/update-startup.test.ts
 src/infra/update-startup.ts
 src/interactive/payload.ts

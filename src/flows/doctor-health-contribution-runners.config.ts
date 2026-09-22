@@ -53,7 +53,6 @@ export async function runWriteConfigHealth(
   const { collectChangedConfigPaths } = await import("../config/include-write-boundary.js");
   const { hashConfigRaw } = await import("../config/io.read-helpers.js");
   const { resolveConfigIncludeWriteBoundary } = await import("../config/mutate.js");
-  const { getConfigValueAtPath } = await import("../config/config-paths.js");
   const { isDeepStrictEqual } = await import("node:util");
   const { getDeferredPluginMigrationConfigFacts, preserveDeferredPluginMigrationConfig } =
     await import("../config/deferred-plugin-migration-config.js");
@@ -63,9 +62,7 @@ export async function runWriteConfigHealth(
   const { shortenHomePath } = await import("../utils.js");
   const configResultWritePending =
     ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true;
-  const confirmedConfigSource = configResultWritePending
-    ? ctx.configResult.confirmedConfigSource
-    : undefined;
+  const confirmedConfigSource = ctx.configResult.confirmedConfigSource;
   const shouldWriteConfig =
     configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
@@ -88,6 +85,17 @@ export async function runWriteConfigHealth(
       await import("../commands/doctor/shared/plugin-registry-migration.js");
     let committed: Awaited<ReturnType<typeof transformConfigFile>>;
     try {
+      if (!confirmedConfigSource?.hash) {
+        throw new ConfigMutationConflictError("Doctor config write has no source revision", {
+          retryable: false,
+        });
+      }
+      const { path, hash } = confirmedConfigSource;
+      const nextConfig = restoreDoctorConfigEnvRefs(
+        ctx.cfg,
+        ctx.configResult.referenceSource,
+        ctx.configResult.explicitSetPaths,
+      );
       const authority = getUpdateDoctorConfigWriteAuthority(ctx.configPath);
       const includeSnapshot = authority
         ? await readConfigFileSnapshot({ skipPluginValidation: updateDoctorRun, observe: false })
@@ -96,27 +104,23 @@ export async function runWriteConfigHealth(
         includeSnapshot &&
         resolveConfigIncludeWriteBoundary({
           snapshot: includeSnapshot,
-          nextConfig: ctx.cfg,
+          nextConfig,
           persistCanonicalAgentRoster: configResultWritePending
             ? ctx.configResult.persistCanonicalAgentRoster
             : undefined,
           explicitSetPaths: ctx.configResult.explicitSetPaths,
         });
       const includeWrite = includeBoundary ? includeSnapshot : undefined;
-      const writeSource =
-        confirmedConfigSource ??
-        (includeWrite ? { path: includeWrite.path, hash: includeWrite.hash } : undefined);
       const writeConfig = () =>
         transformConfigFile({
-          ...(writeSource ? { baseHash: writeSource.hash } : {}),
-          transform: (_current, { snapshot }, { envSnapshotForRestore }) => {
+          baseHash: hash,
+          transform: (_current, { snapshot }) => {
             authority?.assertCurrent();
             // Revalidate the copied source under the config lock; never import after plugin repair.
             assertShippedPluginInstallConfigImportCurrent(
               snapshot,
               ctx.configResult.pluginInstallConfigImport,
             );
-            const nextConfig = restoreDoctorConfigEnvRefs(ctx.cfg, snapshot, envSnapshotForRestore);
             if (includeBoundary) {
               const currentBoundary = resolveConfigIncludeWriteBoundary({
                 snapshot,
@@ -126,14 +130,9 @@ export async function runWriteConfigHealth(
                   : undefined,
                 explicitSetPaths: ctx.configResult.explicitSetPaths,
               });
-              const source = ctx.configResult.sourceConfigForWrite ?? ctx.cfgForPersistence;
-              if (
-                !isDeepStrictEqual(currentBoundary, includeBoundary) ||
-                !isDeepStrictEqual(
-                  getConfigValueAtPath(snapshot.sourceConfig, [...includeBoundary.boundaryPath]),
-                  getConfigValueAtPath(source, [...includeBoundary.boundaryPath]),
-                )
-              ) {
+              // baseHash fences authored bytes and include targets. Resolved values may
+              // legitimately change with the environment while this plan still owns the revision.
+              if (!isDeepStrictEqual(currentBoundary, includeBoundary)) {
                 throw new ConfigMutationConflictError(
                   "included config changed after Doctor prepared its repairs",
                   { retryable: false },
@@ -144,7 +143,7 @@ export async function runWriteConfigHealth(
           },
           afterWrite: { mode: "auto" },
           writeOptions: {
-            ...(writeSource ? { expectedConfigPath: writeSource.path } : {}),
+            expectedConfigPath: path,
             auditOrigin: "doctor",
             allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
             skipPluginValidation:
@@ -187,6 +186,10 @@ export async function runWriteConfigHealth(
       if (error instanceof ConfigWritePostCommitError) {
         // Preserve terminal publication failure before a diagnostic can replace it. No later contribution may replay this committed candidate.
         ctx.configWriteError = error;
+        if (error.publication === "partial") {
+          // The saved baseline is historical; a partial write invalidates its active revision.
+          delete ctx.configResult.confirmedConfigSource;
+        }
         throw error;
       }
       recordUpdateDoctorConfigWriteRefusal({
@@ -194,7 +197,7 @@ export async function runWriteConfigHealth(
         message: formatErrorMessage(error),
         keys: [],
       });
-      if (confirmedConfigSource && error instanceof ConfigMutationConflictError) {
+      if (error instanceof ConfigMutationConflictError) {
         const { note } = await import("../../packages/terminal-core/src/note.js");
         note(
           [
@@ -269,6 +272,10 @@ export async function runWriteConfigHealth(
       ctx.configWriteRefusal = "cron-owner-safety";
       return false;
     }
+    ctx.configResult.confirmedConfigSource = {
+      path: committed.path,
+      hash: committed.persistedHash,
+    };
     // The atomic write committed: repair panels queued by the config flow are now
     // true statements about disk state, so print them exactly once.
     const pendingChangePanels = ctx.configResult.pendingChangePanels;
@@ -291,10 +298,8 @@ export async function runWriteConfigHealth(
         pending: getDeferredPluginMigrationConfigFacts(committed.nextConfig) ?? [],
       }),
     );
-    delete ctx.configResult.sourceConfigForWrite;
     if (ctx.configResult.shouldWriteConfig === true) {
       ctx.configResultWriteCommitted = true;
-      delete ctx.configResult.confirmedConfigSource;
     }
     // logConfigUpdated already prints the `.bak` backup line when it exists.
     logConfigUpdated(ctx.runtime);

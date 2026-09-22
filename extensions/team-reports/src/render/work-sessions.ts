@@ -1,6 +1,6 @@
 import { buildControlUiSessionPath } from "openclaw/plugin-sdk/session-discussion";
 import { WORK_SESSIONS_PAGE_SIZE } from "../limits.js";
-import type { WorkSession, WorkSessions } from "../work-sessions.js";
+import type { PersonWorkSessions, WorkSession, WorkSessions } from "../work-sessions.js";
 import { banner, href, shell, type PageContext } from "./page.js";
 import { escapeHtml } from "./shared.js";
 
@@ -29,7 +29,10 @@ function sessionRow(ctx: PageContext, session: WorkSession): string {
   return `<li class="oc-resource-list-item work-session"><div class="work-session-main"><a class="work-session-title" href="${escapeHtml(path)}" target="_top" data-work-session-key="${escapeHtml(session.key)}"${session.agentId ? ` data-work-session-agent="${escapeHtml(session.agentId)}"` : ""}>${escapeHtml(title)}</a><span class="muted">${escapeHtml(owner)}${session.projectId ? ` · ${escapeHtml(session.projectId)}` : ""}</span></div><div class="work-session-meta"><span class="oc-badge oc-badge-${tone}">${escapeHtml(status)}</span></div></li>`;
 }
 
-function workSessionList(ctx: PageContext, result: WorkSessions): string {
+function workSessionList(ctx: PageContext, result: PersonWorkSessions): string {
+  if (!result.available && "reason" in result) {
+    return `<p class="oc-empty">${result.reason === "unlinked" ? "No linked GitHub profile for this member." : "Multiple or unresolved linked profiles for this member; ownership cannot be determined."}</p>`;
+  }
   if (!result.available) {
     return banner(
       "warning",
@@ -48,22 +51,36 @@ export function renderWorkSessionsPreview(ctx: PageContext, result: WorkSessions
 
 export function renderWorkSessionsPage(
   ctx: PageContext,
-  result: WorkSessions,
+  result: PersonWorkSessions,
   offset: number,
+  login?: string,
 ): string {
   const page = href(ctx.basePath, "sessions");
+  const personQuery = login ? `person=${encodeURIComponent(login)}&` : "";
   const previous =
     offset > 0
-      ? `<a class="oc-action oc-action-ghost" href="${escapeHtml(page)}?offset=${Math.max(0, offset - WORK_SESSIONS_PAGE_SIZE)}">Newer sessions</a>`
+      ? `<a class="oc-action oc-action-ghost" href="${escapeHtml(page)}?${personQuery}offset=${Math.max(0, offset - WORK_SESSIONS_PAGE_SIZE)}">Newer sessions</a>`
       : "";
   const next =
     result.available && result.nextOffset !== undefined
-      ? `<a class="oc-action" href="${escapeHtml(page)}?offset=${result.nextOffset}">Older sessions</a>`
+      ? `<a class="oc-action" href="${escapeHtml(page)}?${personQuery}offset=${result.nextOffset}">Older sessions</a>`
       : "";
   return shell(
     ctx,
     "Work sessions",
-    `<header class="people-header"><div><div class="oc-eyebrow">on this server</div><h1>Work sessions</h1><p>Open a conversation to see the work behind it. Owners and status come from the current session, not GitHub activity counts.</p><p class="muted">Most recent activity first. Archived, incognito, automated, and hidden subagent sessions are excluded. Access follows your session permissions.</p></div><a class="oc-action oc-action-ghost" href="${escapeHtml(page)}">Refresh</a></header><section class="oc-card" aria-label="Work sessions">${workSessionList(ctx, result)}</section><nav class="actions" aria-label="Session pages">${previous}${next}</nav>`,
+    `<header class="people-header"><div><div class="oc-eyebrow">on this server</div><h1>${login ? `Current work / owned sessions for @${escapeHtml(login)}` : "Work sessions"}</h1><p>Open a conversation to see the work behind it. Owners and status come from the current session, not GitHub activity counts.</p><p class="muted">Most recent activity first. Archived, incognito, automated, and hidden subagent sessions are excluded. Access follows your session permissions.</p></div><a class="oc-action oc-action-ghost" href="${escapeHtml(page)}${login ? `?person=${encodeURIComponent(login)}` : ""}">Refresh</a></header><section class="oc-card" aria-label="Work sessions">${workSessionList(ctx, result)}</section><nav class="actions" aria-label="Session pages">${previous}${next}</nav>`,
     "sessions",
   );
+}
+
+export function renderPersonWorkSessions(
+  ctx: PageContext,
+  login: string,
+  result: PersonWorkSessions,
+): string {
+  const all =
+    result.available && result.nextOffset !== undefined
+      ? `<a class="oc-action oc-action-ghost" href="${escapeHtml(href(ctx.basePath, "sessions"))}?person=${encodeURIComponent(login)}">All owned sessions <span aria-hidden="true">→</span></a>`
+      : "";
+  return `<section class="person-work-sessions" aria-label="Current work / owned sessions"><h3>Current work / owned sessions</h3><p class="section-note">Visible to you now, not activity from this report period.</p>${workSessionList(ctx, result)}${all}</section>`;
 }

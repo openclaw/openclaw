@@ -692,6 +692,8 @@ export function activateSubagentRegistry(resolveGatewayContext: GatewayContextRe
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;
+export const listUnsettledRequesterChildren = publicApi.listUnsettledRequesterChildren;
+export type { UnsettledRequesterChild } from "./subagent-registry-requester-yield.js";
 
 /** Attaches presentation to an existing wake without changing completion ownership. */
 export function attachRequesterProgressPresentation(params: {

@@ -25,6 +25,7 @@ import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
+  estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   listTrackedTestPlanFiles,
   resolveExtensionBatchPlan,
@@ -262,7 +263,7 @@ describe("scripts/test-extension.mts", () => {
       name: "Telegram",
       config: "test/vitest/vitest.extension-telegram.config.ts",
       root: "telegram",
-      limit: 1,
+      limit: 10,
     },
   ])("bounds $name test files across balanced process lifetimes", ({ config, root, limit }) => {
     const roots = [bundledPluginRoot(root)];
@@ -726,6 +727,14 @@ describe("scripts/test-extension.mts", () => {
   });
 
   it("balances extension test shards by estimated CI cost", () => {
+    for (const [config, singletonSeconds, tenFileSeconds] of [
+      ["test/vitest/vitest.extension-slack.config.ts", 2, 12],
+      ["test/vitest/vitest.extension-telegram.config.ts", 6, 43],
+      ["test/vitest/vitest.extension-database-workers.config.ts", 8, 76],
+    ] as const) {
+      expect(estimateExtensionTestCost(config, 1), config).toBe(singletonSeconds);
+      expect(estimateExtensionTestCost(config, 10), config).toBe(tenFileSeconds);
+    }
     const shards = balancedExtensionShards;
 
     expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
@@ -1173,9 +1182,14 @@ await new Promise(()=>{});export default {};`,
       databaseWorkerExtensionTestFiles.includes(`extensions/${file}`),
     ).length;
     expect(calls).toHaveLength(
-      Math.ceil(workerCount / 12) + Math.ceil((expectedFiles.length - workerCount) / 12),
+      Math.ceil(workerCount / 12) + Math.ceil((expectedFiles.length - workerCount) / 24),
     );
-    expect(calls.every((call) => call.targets.length <= 12)).toBe(true);
+    expect(calls.every((call) => call.targets.length <= 24)).toBe(true);
+    expect(
+      calls
+        .filter((call) => call.config === "test/vitest/vitest.extension-database-workers.config.ts")
+        .every((call) => call.targets.length <= 12),
+    ).toBe(true);
     expect(calls.flatMap((call) => call.targets).toSorted()).toEqual(expectedFiles.toSorted());
     expect(new Set(calls.flatMap((call) => call.targets)).size).toBe(expectedFiles.length);
     for (const call of calls) {

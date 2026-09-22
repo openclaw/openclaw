@@ -42,7 +42,7 @@ export function captureSqliteWorkerOpen(
   assertCurrent?: () => void,
   custody: SqliteWorkerOpenCustody = {},
 ): PreparedSqliteWorkerOpen {
-  const { createAdmission, ...native } = custody;
+  const { createAdmission, preparation, ...native } = custody;
   const inCaller = createAdmission ? AsyncLocalStorage.snapshot() : undefined;
   const ownedAdmission = options.admission;
   const assertOpening = ownedAdmission
@@ -61,6 +61,7 @@ export function captureSqliteWorkerOpen(
   assertOpening?.();
   return {
     ...native,
+    ...(preparation !== undefined ? { preparation: serialize(preparation) } : {}),
     createAdmission:
       createAdmission && inCaller ? (operation) => inCaller(createAdmission, operation) : undefined,
     assertCurrent: assertOpening,

@@ -448,6 +448,12 @@ export function createCodexAppServerAgentHarness(
       params.assertCurrent();
       return withCodexAppServerSessionDeletion(options.bindingStore, params, run);
     },
+    withSessionContextReset: async (params, run) => {
+      const { withCodexAppServerSessionContextReset } =
+        await import("./src/app-server/session-retirement.js");
+      params.assertCurrent();
+      return withCodexAppServerSessionContextReset(options.bindingStore, params, run);
+    },
     reset: async (params) => {
       if (params.sessionId && params.reason !== "deleted") {
         const [

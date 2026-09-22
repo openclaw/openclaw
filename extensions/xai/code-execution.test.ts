@@ -41,7 +41,7 @@ function installCodeExecutionFetch(payload?: Record<string, unknown>) {
       ),
     ),
   );
-  global.fetch = withFetchPreconnect(mockFetch);
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
 
@@ -253,7 +253,7 @@ describe("xai code_execution tool", () => {
     const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
       Promise.resolve(malformedJsonResponse()),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createCodeExecutionTool({
       config: {
         plugins: {
@@ -283,7 +283,7 @@ describe("xai code_execution tool", () => {
         jsonResponse({ status: "incomplete", output: [{ type: "code_interpreter_call" }] }),
       ),
     );
-    global.fetch = withFetchPreconnect(mockFetch);
+    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const tool = createCodeExecutionTool({
       config: {
         plugins: {

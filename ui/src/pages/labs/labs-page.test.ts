@@ -138,7 +138,7 @@ describe("LabsPage", () => {
     const introLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
     expect(introLink?.textContent?.trim()).toBe("Learn more");
     expect(introLink?.href).toBe("https://docs.openclaw.ai/concepts/experimental-features");
-    expect(page.querySelectorAll(".settings-row")).toHaveLength(LAB_FEATURES.length);
+    expect(page.querySelectorAll(".settings-row wa-switch")).toHaveLength(LAB_FEATURES.length);
     expect(page.textContent).toContain("Code Mode");
     for (const title of [
       "Swarm",
@@ -171,6 +171,25 @@ describe("LabsPage", () => {
 
     expect(codeModeToggle(page).checked).toBe(true);
   });
+
+  it.each([true, false, "auto"])(
+    "preserves the %s Code Mode shorthand when choosing an executor",
+    async (enabled) => {
+      const { page, runtimeConfig } = await mountPage({ tools: { codeMode: enabled } });
+      const select = page.querySelector<HTMLSelectElement>(
+        'select[aria-label="Code Mode executor"]',
+      );
+      expect(select).not.toBeNull();
+      select!.value = "quickjs";
+      select!.dispatchEvent(new Event("change", { bubbles: true }));
+
+      await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+      expect(runtimeConfig.patch).toHaveBeenCalledWith({
+        raw: { tools: { codeMode: { enabled, executor: "quickjs" } } },
+        note: "labs: update codeModeExecutor",
+      });
+    },
+  );
 
   it.each([
     {
@@ -276,24 +295,6 @@ describe("LabsPage", () => {
       raw: testCase.expectedPatch,
       note: testCase.note,
     });
-  });
-
-  it("marks startup-scoped entries as needing a restart", async () => {
-    const { page } = await mountPage({});
-    const rows = [...page.querySelectorAll(".settings-row")];
-
-    const restartRows = rows.filter((row) => row.textContent?.toLowerCase().includes("restart"));
-    expect(restartRows).toHaveLength(3);
-    expect(restartRows.map((row) => row.textContent)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Custom plugin UI"),
-        expect.stringContaining("Host Desktop"),
-        expect.stringContaining("Cloud Worker Desktop"),
-      ]),
-    );
-    expect(labRow(page, "Custom plugin UI").textContent).toContain(
-      "Restart the Gateway and reload this browser tab",
-    );
   });
 
   it("shows default provenance", async () => {

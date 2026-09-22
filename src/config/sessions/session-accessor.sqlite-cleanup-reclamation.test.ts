@@ -275,6 +275,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
       // Native age and payload reads advance the clock, not the number of timer calls.
       database.db.exec(`CREATE TEMP VIEW transcript_events AS
         SELECT session_id, seq, cleanup_marker_event(event_json) AS event_json,
+          event_zstd, event_utf8_bytes, navigation_json,
           cleanup_event_age(created_at) AS created_at
         FROM main.transcript_events`);
       const logPath = path.join(tempDirs.make("cleanup-diagnostics-log-"), "writer.log");

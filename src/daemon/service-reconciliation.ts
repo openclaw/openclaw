@@ -63,6 +63,7 @@ export async function reconcileGatewayServiceDefinition(params: {
     }
     const inspectHint = `Run ${formatCliCommand("openclaw gateway status --deep", params.env)} before retrying after the active maintenance or update finishes.`;
     let keys: string[] = [];
+    let preservePolicy: string[] = [];
     const transaction = await captureGatewayServiceDefinitionBackup({
       env: params.env,
       command,
@@ -109,7 +110,26 @@ export async function reconcileGatewayServiceDefinition(params: {
           expectedCommand: params.expectedCommand,
         });
         assertCurrent();
-        const edits = audit.definitionDrift?.filter((fact) => fact.kind === "unknown-edit") ?? [];
+        preservePolicy = [];
+        for (const fact of audit.definitionDrift ?? []) {
+          if (fact.kind === "preserved") {
+            preservePolicy.push(fact.key);
+            warn(fact.message);
+          }
+        }
+        const edits =
+          audit.definitionDrift?.filter(
+            (fact) =>
+              fact.kind === "unknown-edit" &&
+              // Drop-ins are guarded inputs, never installer publication targets.
+              !(
+                process.platform === "linux" &&
+                command.sourcePath &&
+                fact.sourcePath !== command.sourcePath &&
+                fact.sourcePath &&
+                command.definitionPaths?.includes(fact.sourcePath)
+              ),
+          ) ?? [];
         if (audit.definitionDriftError || edits.length) {
           throw new Error(
             [audit.definitionDriftError, ...edits.map((fact) => `${fact.key}: ${fact.message}`)]
@@ -117,7 +137,10 @@ export async function reconcileGatewayServiceDefinition(params: {
               .join(" "),
           );
         }
-        keys = audit.definitionDrift?.map((fact) => fact.key) ?? [];
+        keys =
+          audit.definitionDrift
+            ?.filter((fact) => fact.kind === "outdated")
+            .map((fact) => fact.key) ?? [];
       },
     }).catch((error: unknown) => {
       if (hasCommandProcessCleanupError(error)) {
@@ -139,7 +162,7 @@ export async function reconcileGatewayServiceDefinition(params: {
       try {
         return await withGatewayServiceInstallationRecovery(
           async () => {
-            await params.install(transaction.hooks);
+            await params.install({ ...transaction.hooks, preservePolicy });
             assertCurrent();
             const receipt = await transaction.finish();
             warn(

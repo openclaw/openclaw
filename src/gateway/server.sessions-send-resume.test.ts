@@ -32,10 +32,10 @@ import {
   listOpenClawRegisteredAgentDatabases,
 } from "../state/openclaw-agent-db.js";
 import { findTaskByRunId } from "../tasks/task-registry.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   agentCommandMock,
-  getGatewayTestPort,
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
   startTestGatewayServer,
@@ -67,7 +67,7 @@ beforeAll(async () => {
     return kernel;
   });
   try {
-    server = await startTestGatewayServer(await getGatewayTestPort());
+    server = await startTestGatewayServer(await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] }));
   } finally {
     capture.mockRestore();
   }

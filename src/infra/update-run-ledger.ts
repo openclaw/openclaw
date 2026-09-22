@@ -33,7 +33,11 @@ import {
   type UpdateRunDriver,
 } from "./update-run-driver.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
-import { decodeRun, readUpdateRunRecord as readRun } from "./update-run-read.kernel.js";
+import {
+  decodeRun,
+  hasStoredUpdateRecovery,
+  readUpdateRunRecord as readRun,
+} from "./update-run-read.kernel.js";
 import {
   inspectUpdateRunReconciliation,
   readUpdateRunReconciliationCandidates,
@@ -44,13 +48,12 @@ import {
   finishUpdateRunRecord,
   isAbandonedUpdateRun,
   isUnacknowledgedPackageOwnerRefusal,
-  type FinishUpdateRunResult,
   type UpdateRunRecord,
   type UpdateRunPhase,
   type UpdateRunStep,
 } from "./update-run-record.js";
 import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
-import { hasStoredUpdateRecovery, readRecoveries } from "./update-run-recovery-store.js";
+import { readRecoveries } from "./update-run-recovery-store.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
   mutateRun,
@@ -65,11 +68,12 @@ export {
   getLatestUpdateFetchFailure,
   getUpdateRun,
   getUpdateRunAsync,
+  getUpdateRunStatusAsync,
   listUpdateRuns,
   listUpdateRunsAsync,
 } from "./update-run-reader.js";
 
-export { recordUpdateRunDiagnostics } from "./update-run-write.js";
+export { finishUpdateRun, recordUpdateRunDiagnostics } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 type RunPatch = Partial<
@@ -528,27 +532,15 @@ export function recordUpdateRunDiagnostic(
   runId: string,
   detail: string,
   options: LedgerOptions = {},
+  step = "finalize:exit",
 ): UpdateRunRecord {
   return mutateRun(
     runId,
     (record) => {
-      upsertStep(record, {
-        step: "finalize:exit",
-        status: "completed",
-        endedAtMs: Date.now(),
-        detail,
-      });
+      upsertStep(record, { step, status: "completed", endedAtMs: Date.now(), detail });
     },
     options,
   );
-}
-
-export function finishUpdateRun(
-  runId: string,
-  result: FinishUpdateRunResult,
-  options: LedgerOptions = {},
-): UpdateRunRecord {
-  return mutateRun(runId, (record) => finishUpdateRunRecord(record, result), options);
 }
 
 /** Correct the shipped refusal classification only after its install target was satisfied. */

@@ -1,3 +1,7 @@
+import {
+  loadDeviceIdentityIfPresent,
+  loadOrCreateDeviceIdentity,
+} from "../infra/device-identity.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
@@ -12,15 +16,25 @@ import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { acquireOpenClawStateLeaseInWorker } from "./openclaw-state-lease-worker.js";
-import type { OpenClawStateWorkerBackend } from "./openclaw-state-worker-contract.js";
+import type {
+  OpenClawStateWorkerBackend,
+  OpenClawStateWorkerOpenPreparation,
+} from "./openclaw-state-worker-contract.js";
 
 const loadRuntime = createLazyRuntimeModule(() => import("./openclaw-state-worker-runtime.js"));
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
 
 export function createSqliteWorkerBackend(
   _input: undefined,
-  context: { databasePath: string },
+  context: { databasePath: string; preparation?: OpenClawStateWorkerOpenPreparation },
 ): OpenClawStateWorkerBackend {
+  if (context.preparation?.type === "deviceIdentity") {
+    loadOrCreateDeviceIdentity({
+      path: context.databasePath,
+      env: getSqliteWorkerStateContext().environment,
+      identityKey: context.preparation.identityKey,
+    });
+  }
   const database = openOpenClawStateDatabase({
     path: context.databasePath,
     env: getSqliteWorkerStateContext().environment,
@@ -70,17 +84,47 @@ function createSharedStateWorkerBackend(
         commandType === "plugins.metadata.read" ||
         commandType === "database.inspectIdle" ||
         commandType === "stateLease.acquire" ||
-        runtime
+        commandType === "deviceIdentity.read" ||
+        commandType === "deviceIdentity.load"
       ) {
         return undefined;
       }
+      if (runtime) {
+        return runtime.prepareSharedStateCommand(commandType);
+      }
       return loadRuntime().then((loaded) => {
         runtime = loaded;
+        return runtime.prepareSharedStateCommand(commandType);
       });
     },
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");
+      }
+      if (command.type === "deviceIdentity.read") {
+        return loadDeviceIdentityIfPresent({
+          path: context.databasePath,
+          identityKey: command.input.identityKey,
+          env: getSqliteWorkerStateContext().environment,
+        });
+      }
+      if (command.type === "deviceIdentity.load") {
+        try {
+          return loadOrCreateDeviceIdentity({
+            path: context.databasePath,
+            identityKey: command.input.identityKey,
+            env: getSqliteWorkerStateContext().environment,
+          });
+        } finally {
+          // An existing-only actor may acquire its first writable handle through this owner.
+          const database = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(
+            context.databasePath,
+          );
+          if (!nativeDatabase && database) {
+            borrow = retainOpenClawStateDatabase(database);
+            nativeDatabase = database;
+          }
+        }
       }
       if (command.type === "stateLease.acquire") {
         return acquireOpenClawStateLeaseInWorker(command.input, context.databasePath, open);

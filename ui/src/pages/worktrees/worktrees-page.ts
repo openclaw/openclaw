@@ -4,6 +4,7 @@ import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type {
   WorktreeRecord,
+  WorktreesBranchesResult,
   WorktreesRemoveResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -38,12 +39,6 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
 type WorktreesListResult = { worktrees: WorktreeRecord[] };
-type WorktreeBranchesResult = {
-  branches: Array<{ name: string }>;
-  defaultBranch?: string;
-  headBranch?: string;
-};
-
 class WorktreesPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -100,13 +95,10 @@ class WorktreesPage extends OpenClawLightDomElement {
       [this.gateway.connected ? this.gateway.client : null, this.createRepoRoot.trim()] as const,
     task: ([client, repoRoot], { signal }) =>
       client && repoRoot
-        ? client.request<WorktreeBranchesResult>("worktrees.branches", { repoRoot }, { signal })
+        ? client.request<WorktreesBranchesResult>("worktrees.branches", { repoRoot }, { signal })
         : initialState,
     onComplete: (result) => {
       this.createBranches = result.branches.map((branch) => branch.name);
-      if (!this.createBaseRef) {
-        this.createBaseRef = result.defaultBranch ?? result.headBranch ?? "";
-      }
     },
     onError: () => {
       this.createBranches = [];
@@ -367,6 +359,7 @@ class WorktreesPage extends OpenClawLightDomElement {
             type="text"
             aria-label=${t("worktrees.baseBranch")}
             ?disabled=${this.creating}
+            placeholder=${t("worktrees.baseBranchPlaceholder")}
             list="worktrees-create-branches"
             .value=${this.createBaseRef}
             @input=${(event: Event) => {

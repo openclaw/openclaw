@@ -53,6 +53,11 @@ requirement.
 See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
 for package updates, desktop limitations, and native-app distinctions.
 
+New Session uses `Cmd+Shift+O` on macOS and `Ctrl+Shift+O` on Linux and Windows
+only while its dashboard is focused. Quick Chat keeps the separate global
+`Cmd+Shift+Space` or `Ctrl+Shift+Space` shortcut, including when another app is
+in front.
+
 ## Omarchy
 
 The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.
@@ -113,6 +118,16 @@ cargo build
 The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/bin/openclaw`, then `openclaw` on `PATH`.
 
 Desktop notifications use each platform's system notification service. macOS 13+ uses Apple's User Notifications framework; Windows uses native system toasts and Linux uses the desktop notification service through `notify-rust`. On macOS, test notifications from a signed `.app` bundle: a direct `cargo run` stays unbundled, so the app disables notifications instead of initializing Apple's framework with no bundle identity.
+
+On macOS, a test launch with an isolated `HOME` or `CFFIXED_USER_HOME` can make
+the user's default keychain unavailable to that process. The saved-Gateway notice
+describes the app's launch environment; it does not mean the Mac has no login
+keychain. Keep credential-free tests isolated and treat saved-Gateway storage as
+unavailable in that fixture. Do not restore the user's keychain or redirect the
+test to real credentials to silence the notice. For an installed app, quit and
+reopen it from Finder to use the normal login environment. If the configured
+keychain is still unavailable, check its configuration in Keychain Access before
+attempting any repair.
 
 ### Inline browser live regression on Linux
 

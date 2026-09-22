@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { prepareLegacyConfigMigrationRuntime } from "../commands/doctor/shared/legacy-config-migrate.test-support.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -30,7 +31,6 @@ import {
   clobberedUpdateChannelConfig,
   clobberedUpdateChannelRaw,
   largeRecoverableCoreConfig,
-  prepareConfigRecoveryMigrationRuntime,
   recoverableCoreConfig,
   recoverableTelegramConfig,
 } from "./io.observe-recovery.test-support.js";
@@ -65,7 +65,7 @@ describe("config observe recovery", () => {
   beforeAll(async () => {
     fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-config-observe-recovery-"));
     await workerFixture.setup(fixtureRoot);
-    restoreMigrationRuntime = await prepareConfigRecoveryMigrationRuntime();
+    restoreMigrationRuntime = await prepareLegacyConfigMigrationRuntime();
   });
 
   afterAll(async () => {

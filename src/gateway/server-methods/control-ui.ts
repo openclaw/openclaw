@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   GitHubIdentityError,
   prepareGitHubReadIdentity,
@@ -9,17 +8,24 @@ import {
 } from "../../agents/github-tool-identity.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
-import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
 import type {
   ControlUiSessionPullRequestChecksParams,
   loadControlUiSessionPullRequestChecks,
 } from "../control-ui-session-pr-check-details.js";
+import {
+  prepareControlUiSessionPrRead,
+  resolveControlUiSessionPrTarget,
+  type ControlUiSessionPrReadContext,
+  type ControlUiSessionPrTarget,
+} from "../control-ui-session-pr-read.js";
+import { withControlUiSessionPrSource } from "../control-ui-session-pr-source.js";
 import { parseControlUiSessionPullRequestsSubscribeParams } from "../control-ui-session-pr-subscriptions.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { gitHubPublicApi, type ControlUiGitHubPreviewIdentity } from "../github-public-api.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { buildGatewaySessionRow } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
@@ -266,13 +272,13 @@ function resolveCheckDetailsSession(
   sessionKey: string,
   context: GatewayRequestContext,
   client: GatewayClient | null,
-): { sessionScope: string; agentId: string } | null {
+): ControlUiSessionPrTarget | null {
   const cfg = context.getRuntimeConfig();
   const requested = resolveRequestedGlobalAgentId(cfg, sessionKey);
   if (!requested.ok) {
     return null;
   }
-  const { target, entry } = loadSessionEntriesForTarget({
+  const { target, entry, storePath } = loadSessionEntriesForTarget({
     key: sessionKey,
     cfg,
     agentId: requested.agentId,
@@ -281,39 +287,44 @@ function resolveCheckDetailsSession(
   if (!entry?.sessionId || (entryFilter && !entryFilter(target.canonicalKey, entry))) {
     return null;
   }
-  const repository = entry.repositoryWorkspaceId
-    ? getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId)
-    : undefined;
-  return {
+  const selected = resolveControlUiSessionPrTarget({
+    cfg,
     agentId: target.agentId,
-    sessionScope: JSON.stringify([
-      target.agentId,
-      target.canonicalKey,
-      entry.sessionId,
-      entry.lifecycleRevision,
-      entry.repositoryWorkspaceId,
-      repository?.url,
-      repository?.branch,
-      entry.spawnedCwd,
-      entry.spawnedWorkspaceDir,
-      resolveAgentWorkspaceDir(cfg, target.agentId),
-    ]),
-  };
+    canonicalKey: target.canonicalKey,
+    storePath,
+    readSource: target.readSource,
+    entry,
+  });
+  return selected ?? null;
 }
 
-async function loadSessionCheckDetails(
-  ...args: Parameters<typeof loadControlUiSessionPullRequestChecks>
-): ReturnType<typeof loadControlUiSessionPullRequestChecks> {
+type LoadSessionCheckDetails = (
+  params: ControlUiSessionPullRequestChecksParams,
+  deps: Omit<Parameters<typeof loadControlUiSessionPullRequestChecks>[1], "loadPullRequests"> & {
+    read: ControlUiSessionPrReadContext;
+  },
+) => ReturnType<typeof loadControlUiSessionPullRequestChecks>;
+
+const loadSessionCheckDetails: LoadSessionCheckDetails = async (params, deps) => {
+  deps.assertCurrent();
   const { loadControlUiSessionPullRequestChecks } =
     await import("../control-ui-session-pr-check-details.js");
-  return loadControlUiSessionPullRequestChecks(...args);
-}
+  const { loadControlUiSessionPullRequests } = await import("../control-ui-session-prs.js");
+  return loadControlUiSessionPullRequestChecks(params, {
+    ...deps,
+    loadPullRequests: (request, options) =>
+      loadControlUiSessionPullRequests(request, {
+        ...options,
+        read: deps.read,
+      }),
+  });
+};
 
 export function createControlUiHandlers(
   loadGitHubPreview: LoadGitHubPreview = (...args) =>
     gitHubPublicApi.loadControlUiGitHubPreview(...args),
   loadSessionPreview: LoadSessionPreview = loadControlUiSessionPreview,
-  loadChecks: typeof loadControlUiSessionPullRequestChecks = loadSessionCheckDetails,
+  loadChecks: LoadSessionCheckDetails = loadSessionCheckDetails,
 ): GatewayRequestHandlers {
   return {
     "controlUi.linkPreview": async ({ params, context, respond, signal }) => {
@@ -393,30 +404,57 @@ export function createControlUiHandlers(
         return;
       }
       try {
-        const binding = resolveCheckDetailsSession(parsed.sessionKey, context, client);
+        const reader = client
+          ? prepareControlUiSessionPrRead({
+              client,
+              sessionKey: parsed.sessionKey,
+              getRuntimeConfig: context.getRuntimeConfig,
+              getSessionRowProjection: () => getSessionRowProjection(context),
+              isCurrentClient: () =>
+                !client.connId ||
+                context
+                  .getClientConnIds?.((candidate) => candidate === client)
+                  .has(client.connId) === true,
+            })
+          : undefined;
+        const currentBinding = () => {
+          if (!client) {
+            return resolveCheckDetailsSession(parsed.sessionKey, context, client);
+          }
+          return reader?.() ?? null;
+        };
+        const binding = currentBinding();
         if (!binding) {
           throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
         }
         const assertCurrent = () => {
-          const current = resolveCheckDetailsSession(parsed.sessionKey, context, client);
-          if (
-            signal?.aborted ||
-            current?.sessionScope !== binding.sessionScope ||
-            (client?.connId &&
-              !context.getClientConnIds?.((candidate) => candidate === client).has(client.connId))
-          ) {
+          const current = currentBinding();
+          if (signal?.aborted || current?.identity !== binding.identity) {
             throw new gitHubPublicApi.ControlUiGitHubError(
               409,
               "Session changed; reopen CI details",
             );
           }
         };
-        const result = await loadChecks(
-          { ...parsed, agentId: binding.agentId },
-          { ...binding, assertCurrent },
+        await withControlUiSessionPrSource(
+          binding.readSource,
+          async (assertSourceCurrent, sourceIdentity) => {
+            const assertReadCurrent = () => {
+              assertSourceCurrent();
+              assertCurrent();
+            };
+            const result = await loadChecks(
+              { ...parsed, agentId: binding.params.agentId },
+              {
+                sessionScope: binding.identity,
+                assertCurrent: assertReadCurrent,
+                read: { target: binding, sourceIdentity, assertCurrent: assertReadCurrent },
+              },
+            );
+            assertReadCurrent();
+            respond(true, result, undefined);
+          },
         );
-        assertCurrent();
-        respond(true, result, undefined);
       } catch (error) {
         const message =
           error instanceof gitHubPublicApi.ControlUiGitHubError &&

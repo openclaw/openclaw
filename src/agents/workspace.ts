@@ -38,6 +38,8 @@ import {
   hasGlobPattern,
   normalizeWorkspacePatternPath,
   resolveGlobWalkRoot,
+  type WorkspaceBootstrapFile,
+  type WorkspaceBootstrapFileName,
 } from "./workspace-bootstrap-policy.js";
 import {
   publishAgentInstructions,
@@ -78,6 +80,8 @@ export {
   DEFAULT_USER_FILENAME,
   GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
   WORKSPACE_BOOTSTRAP_FILENAMES,
+  type WorkspaceBootstrapFile,
+  type WorkspaceBootstrapFileName,
 } from "./workspace-bootstrap-policy.js";
 export {
   getWorkspaceFileSourceRelativePath,
@@ -140,15 +144,6 @@ async function loadTemplate(name: string): Promise<string> {
     throw error;
   }
 }
-
-export type WorkspaceBootstrapFileName = (typeof WORKSPACE_BOOTSTRAP_FILENAMES)[number];
-
-export type WorkspaceBootstrapFile = {
-  name: WorkspaceBootstrapFileName;
-  path: string;
-  content?: string;
-  missing: boolean;
-};
 
 export type ExtraBootstrapLoadDiagnosticCode =
   | "invalid-bootstrap-filename"

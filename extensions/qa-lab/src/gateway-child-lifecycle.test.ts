@@ -189,6 +189,49 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
   });
 
+  it.each([
+    { failedWork: false, label: "successful" },
+    { failedWork: true, label: "failed" },
+  ])("cleans retained fixture roots after $label stopped work", async ({ failedWork }) => {
+    const { params } = await fixture();
+    const owner = own({
+      ...params,
+      command: { ...params.command, usePackagedPlugins: false },
+    });
+    const gateway = await owner.start();
+    const stagedRoot = resolveQaStagedBundledPluginsRoot({
+      repoRoot: params.repoRoot,
+      tempRoot: gateway.tempRoot,
+    });
+    await expect(owner.stop({ keepTemp: true })).resolves.toEqual({
+      process: "confirmed-stopped",
+      errors: [],
+    });
+    await expect(fs.stat(gateway.tempRoot)).resolves.toBeDefined();
+    await expect(fs.stat(stagedRoot)).resolves.toBeDefined();
+
+    const failure = new Error("stopped probe failed");
+    const stoppedWork = async () => {
+      try {
+        if (failedWork) {
+          throw failure;
+        }
+      } finally {
+        await expect(owner.stop({ keepTemp: false })).resolves.toEqual({
+          process: "confirmed-stopped",
+          errors: [],
+        });
+      }
+    };
+    if (failedWork) {
+      await expect(stoppedWork()).rejects.toBe(failure);
+    } else {
+      await expect(stoppedWork()).resolves.toBeUndefined();
+    }
+    await expect(fs.stat(gateway.tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(stagedRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("owns an unaccepted launcher and separates boundary diagnostics from termination", async () => {
     const { params } = await fixture();
     const rejected = new Error("verified acceptance failed");

@@ -8,12 +8,17 @@ import type {
   prepareDeliveryQueueTerminalEntry,
 } from "./delivery-queue-sqlite.kernel.js";
 import type { loadDeliveryQueueMediaRetentionSnapshotInDatabase } from "./outbound/delivery-queue-media-staging.kernel.js";
+import type { findDeliveryIntentOwnersInDatabase } from "./outbound/delivery-queue-ownership.kernel.js";
 import type {
   AckDeliveryOptions,
   FailPendingDeliveryResult,
 } from "./outbound/delivery-queue-settlement.types.js";
 
 export type DeliveryQueueWorkerOperations = {
+  "deliveryQueue.findIntentOwners": {
+    input: Parameters<typeof findDeliveryIntentOwnersInDatabase>[1];
+    output: ReturnType<typeof findDeliveryIntentOwnersInDatabase>;
+  };
   "deliveryQueue.claimPlatformSend": {
     input: Parameters<typeof claimDeliveryQueueEntryPlatformSendInDatabase>[1] & {
       claimId: string;
