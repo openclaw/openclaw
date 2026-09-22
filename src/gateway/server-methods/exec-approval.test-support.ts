@@ -89,9 +89,9 @@ function toExecApprovalRequestContext(context: {
   } as unknown as ExecApprovalRequestArgs["context"];
 }
 
-function toExecApprovalResolveContext(context: {
-  broadcast: (event: string, payload: unknown) => void;
-}): ExecApprovalResolveArgs["context"] {
+function toExecApprovalResolveContext(
+  context: { broadcast?: (event: string, payload: unknown) => void } = {},
+): ExecApprovalResolveArgs["context"] {
   return {
     getRuntimeConfig: () => ({}),
     ...context,
@@ -110,7 +110,7 @@ export async function getExecApproval(params: {
   )({
     params: { id: params.id } as ExecApprovalGetArgs["params"],
     respond: params.respond as unknown as ExecApprovalGetArgs["respond"],
-    context: {} as ExecApprovalGetArgs["context"],
+    context: toExecApprovalResolveContext(),
     client: params.client ?? null,
     req: { id: "req-get", type: "req", method: "exec.approval.get" },
     isWebchatConnect: execApprovalNoop,
@@ -128,7 +128,7 @@ export async function listExecApprovals(params: {
   )({
     params: {} as never,
     respond: params.respond as never,
-    context: {} as never,
+    context: toExecApprovalResolveContext(),
     client: params.client ?? null,
     req: { id: "req-list", type: "req", method: "exec.approval.list" },
     isWebchatConnect: execApprovalNoop,

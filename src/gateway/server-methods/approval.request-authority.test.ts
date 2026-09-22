@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequestPayload,
@@ -18,6 +19,8 @@ import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import * as operatorApprovalStore from "../operator-approval-store.js";
+import { publishOperatorRoleConfigChange } from "../operator-role-policy.js";
+import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createApprovalHandlers } from "./approval.js";
 import {
   createApprovalInvocation,
@@ -41,18 +44,34 @@ it.each([
   "verdict-source",
   "native",
   "native-refused",
+  "native-config-equivalent",
+  "native-config-unrelated",
+  "native-config-role-aba",
+  "native-config-routing-aba",
   "access",
   "reviewer",
   "source",
   "binding",
   "profile",
   "config",
+  "config-equivalent",
+  "config-unrelated",
+  "config-role-revoked",
+  "config-role-aba",
+  "config-routing-aba",
   "transport-reviewer",
   "transport-source",
 ] as const)("preserves disconnected request custody with %s authority", async (revocation) => {
   const verdictChange = revocation.startsWith("verdict");
-  const native = revocation === "native" || revocation === "native-refused";
-  const revoke = revocation !== "current" && revocation !== "native";
+  const native = revocation.startsWith("native");
+  const revoke = ![
+    "current",
+    "native",
+    "config-equivalent",
+    "config-unrelated",
+    "native-config-equivalent",
+    "native-config-unrelated",
+  ].includes(revocation);
   const state = expectDefined(sharedState, "shared approval test state");
   {
     const databaseOptions = { env: state.env };
@@ -107,6 +126,13 @@ it.each([
       client,
       ...(native ? { sessionMutationCommitGuard: nativeGuard } : {}),
     });
+    const initialConfig: OpenClawConfig = {};
+    let currentConfig = initialConfig;
+    invocation.context.getRuntimeConfig = () => currentConfig;
+    const publishConfig = (config: OpenClawConfig) => {
+      currentConfig = config;
+      publishOperatorRoleConfigChange(invocation.context);
+    };
     expect(before).toMatchObject({
       status: "pending",
       decision: null,
@@ -134,6 +160,10 @@ it.each([
               case "lookup":
               case "native":
               case "native-refused":
+              case "native-config-equivalent":
+              case "native-config-unrelated":
+              case "native-config-role-aba":
+              case "native-config-routing-aba":
               case "verdict":
               case "verdict-reviewer":
               case "verdict-source":
@@ -157,6 +187,23 @@ it.each([
                 break;
               case "config":
                 invocation.context.getRuntimeConfig = () => ({});
+                break;
+              case "config-equivalent":
+                publishConfig(structuredClone(initialConfig));
+                break;
+              case "config-unrelated":
+                publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
+                break;
+              case "config-role-revoked":
+                publishConfig(rolePolicyConfig());
+                break;
+              case "config-role-aba":
+                publishConfig(rolePolicyConfig());
+                publishConfig(initialConfig);
+                break;
+              case "config-routing-aba":
+                publishConfig({ ...initialConfig, session: { mainKey: "other" } });
+                publishConfig(initialConfig);
                 break;
             }
           }
@@ -184,6 +231,17 @@ it.each([
       const pending = invocation.invoke();
       if (revocation === "native-refused") {
         nativeRevoked = true;
+      }
+      if (revocation === "native-config-equivalent") {
+        publishConfig(structuredClone(initialConfig));
+      } else if (revocation === "native-config-unrelated") {
+        publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
+      } else if (revocation === "native-config-role-aba") {
+        publishConfig(rolePolicyConfig());
+        publishConfig(initialConfig);
+      } else if (revocation === "native-config-routing-aba") {
+        publishConfig({ ...initialConfig, session: { mainKey: "other" } });
+        publishConfig(initialConfig);
       }
       const response = await pending;
       expect(stages).toEqual(

@@ -6,9 +6,9 @@ import {
   isExecApprovalRuntimeActive,
   isExecApprovalMutationRefused,
 } from "./exec-approval-authority.js";
+import { ExecApprovalExpiry } from "./exec-approval-expiry.js";
 import {
   EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS,
-  ExecApprovalLifecycle,
   prepareExecApprovalRedemptionWindow,
 } from "./exec-approval-lifecycle.js";
 import type {
@@ -26,6 +26,7 @@ import {
   assertUncertainExecApprovalPersistenceCurrent,
   captureExecApprovalMutationPersistence,
   readUncertainExecApprovalVerdict,
+  runWithExecApprovalMutationPersistence,
   type ExecApprovalMutationPersistence,
 } from "./exec-approval-recovery.js";
 import {
@@ -65,7 +66,7 @@ export type {
 /** Approval creation and persistence precede every local wait or delivery handoff. */
 export class ExecApprovalManager<
   TPayload = ExecApprovalRequestPayload,
-> extends ExecApprovalLifecycle<TPayload> {
+> extends ExecApprovalExpiry<TPayload> {
   constructor(protected readonly options: ExecApprovalManagerOptions<TPayload>) {
     super();
   }
@@ -188,7 +189,8 @@ export class ExecApprovalManager<
     options.guard?.assertCurrent();
     options.assertCurrent?.();
     const capturedEntry = this.pending.get(recordId);
-    capturedEntry?.uncertainVerdict?.assertCurrent();
+    const retainedPersistence = capturedEntry?.expiryPersistence;
+    this.assertPendingPersistenceCurrent(capturedEntry);
     if (
       decision !== "deny" &&
       capturedEntry &&
@@ -227,51 +229,60 @@ export class ExecApprovalManager<
       let result: ResolveOperatorApprovalResult;
       let committedResolutionKey: string | undefined;
       try {
-        persistence = captureExecApprovalMutationPersistence(persistence);
-        result = await resolveOperatorApproval({
-          id: recordId,
-          nowMs,
-          decision,
-          resolver,
-          expectedKind: this.approvalKind,
-          runtimeEpoch: persistence.runtimeEpoch,
-          databaseOptions: persistence.databaseOptions,
-          onCommitted: (key) => {
-            committedResolutionKey = key;
+        persistence = retainedPersistence ?? captureExecApprovalMutationPersistence(persistence);
+        const guard = createExecApprovalMutationGuard(
+          () => this.assertNotRetired(),
+          () => {
+            if (retainedPersistence) {
+              assertExecApprovalMutationPersistenceCurrent(retainedPersistence);
+            }
+            this.assertPendingPersistenceCurrent(localEntry);
+            if (
+              this.pending.get(recordId) !== localEntry ||
+              (localEntry &&
+                localEntry.record.expiresAtMs > nowMs &&
+                localEntry.record.expiresAtMs <= Date.now()) ||
+              (decision !== "deny" &&
+                (!localEntry || !isExecApprovalRuntimeActive(this.options, localEntry.record)))
+            ) {
+              throw new ApprovalMutationRefusedError("approval authority is no longer active");
+            }
+            if (
+              standingGrantSpec &&
+              localEntry &&
+              (JSON.stringify(
+                this.options.resolveStandingGrantMint?.(localEntry.record.request),
+              ) !== JSON.stringify(standingGrantSpec) ||
+                (standingGrantSpec.kind === "mcp-tool" &&
+                  localEntry.record.mcpToolApprovalActive?.() !== true))
+            ) {
+              throw new ApprovalMutationRefusedError(
+                "approval standing grant authority is no longer active",
+              );
+            }
           },
-          guard: createExecApprovalMutationGuard(
-            () => this.assertNotRetired(),
-            () => {
-              localEntry?.uncertainVerdict?.assertCurrent();
-              if (
-                this.pending.get(recordId) !== localEntry ||
-                (localEntry &&
-                  localEntry.record.expiresAtMs > nowMs &&
-                  localEntry.record.expiresAtMs <= Date.now()) ||
-                (decision !== "deny" &&
-                  (!localEntry || !isExecApprovalRuntimeActive(this.options, localEntry.record)))
-              ) {
-                throw new ApprovalMutationRefusedError("approval authority is no longer active");
-              }
-              if (
-                standingGrantSpec &&
-                localEntry &&
-                (JSON.stringify(
-                  this.options.resolveStandingGrantMint?.(localEntry.record.request),
-                ) !== JSON.stringify(standingGrantSpec) ||
-                  (standingGrantSpec.kind === "mcp-tool" &&
-                    localEntry.record.mcpToolApprovalActive?.() !== true))
-              ) {
-                throw new ApprovalMutationRefusedError(
-                  "approval standing grant authority is no longer active",
-                );
-              }
+          options,
+        );
+        if (retainedPersistence) {
+          guard.assertCurrent();
+        }
+        result = await runWithExecApprovalMutationPersistence(persistence, () =>
+          resolveOperatorApproval({
+            id: recordId,
+            nowMs,
+            decision,
+            resolver,
+            expectedKind: this.approvalKind,
+            runtimeEpoch: persistence.runtimeEpoch,
+            databaseOptions: persistence.databaseOptions,
+            onCommitted: (key) => {
+              committedResolutionKey = key;
             },
-            options,
-          ),
-          ...(standingGrant?.kind === "cron" ? { standingGrant } : {}),
-          ...(standingGrant?.kind === "mcp-tool" ? { mcpToolGrant: standingGrant } : {}),
-        });
+            guard,
+            ...(standingGrant?.kind === "cron" ? { standingGrant } : {}),
+            ...(standingGrant?.kind === "mcp-tool" ? { mcpToolGrant: standingGrant } : {}),
+          }),
+        );
       } catch (error) {
         const uncertain = await this.recoverUnknownVerdict(
           error,
@@ -297,6 +308,7 @@ export class ExecApprovalManager<
       if (this.pending.get(recordId) !== localEntry) {
         return result;
       }
+      this.assertPendingPersistenceCurrent(localEntry);
       if (
         result.outcome === "resolved" &&
         standingGrant?.kind === "placement" &&
@@ -349,12 +361,13 @@ export class ExecApprovalManager<
     callerGuard?.assertCurrent();
     assertResolverCurrent?.();
     const capturedEntry = this.pending.get(recordId);
+    const retainedPersistence = capturedEntry?.expiryPersistence;
     const capturedRecord = capturedEntry?.record;
     // Cancellation closes executable authority before its durable CAS can yield.
     if (!this.retired && status === "cancelled" && capturedRecord) {
       capturedRecord.approvalAuthority = () => false;
     }
-    capturedEntry?.uncertainVerdict?.assertCurrent();
+    this.assertPendingPersistenceCurrent(capturedEntry);
     return this.trackMutation(async () => {
       if (this.retired) {
         return { outcome: "not-found" };
@@ -367,27 +380,36 @@ export class ExecApprovalManager<
 
       let result: ForceDenyOperatorApprovalResult;
       try {
-        persistence = captureExecApprovalMutationPersistence(persistence);
-        result = await forceDenyOperatorApproval({
-          id: recordId,
-          status,
-          requireDue,
-          reason,
-          resolver,
-          expectedKind: this.approvalKind,
-          runtimeEpoch: persistence.runtimeEpoch,
-          databaseOptions: persistence.databaseOptions,
-          guard: createExecApprovalMutationGuard(
-            () => this.assertNotRetired(),
-            () => {
-              capturedEntry?.uncertainVerdict?.assertCurrent();
-              if (this.pending.get(recordId) !== capturedEntry) {
-                throw new Error("approval binding changed before cancellation");
-              }
-            },
-            { guard: callerGuard, assertCurrent: assertResolverCurrent },
-          ),
-        });
+        persistence = retainedPersistence ?? captureExecApprovalMutationPersistence(persistence);
+        const guard = createExecApprovalMutationGuard(
+          () => this.assertNotRetired(),
+          () => {
+            if (retainedPersistence) {
+              assertExecApprovalMutationPersistenceCurrent(retainedPersistence);
+            }
+            this.assertPendingPersistenceCurrent(capturedEntry);
+            if (this.pending.get(recordId) !== capturedEntry) {
+              throw new Error("approval binding changed before cancellation");
+            }
+          },
+          { guard: callerGuard, assertCurrent: assertResolverCurrent },
+        );
+        if (retainedPersistence) {
+          guard.assertCurrent();
+        }
+        const deny = () =>
+          forceDenyOperatorApproval({
+            id: recordId,
+            status,
+            requireDue,
+            reason,
+            resolver,
+            expectedKind: this.approvalKind,
+            runtimeEpoch: persistence.runtimeEpoch,
+            databaseOptions: persistence.databaseOptions,
+            guard,
+          });
+        result = await runWithExecApprovalMutationPersistence(persistence, deny);
       } catch (error) {
         const uncertain = await this.recoverUnknownVerdict(error, localRecord, persistence);
         if (
@@ -403,6 +425,7 @@ export class ExecApprovalManager<
       if (this.pending.get(recordId)?.record !== localRecord) {
         return result;
       }
+      this.assertPendingPersistenceCurrent(capturedEntry);
       if (result.outcome === "denied") {
         this.settleLocalFromStore(result.record, localDecision, localResolvedBy);
       } else if (result.outcome === "expired" || result.outcome === "already-terminal") {
@@ -539,37 +562,6 @@ export class ExecApprovalManager<
       this.emitLifecycle({ phase: "terminal", record: result.record });
     }
     return "record" in result ? { ...result, liveRecord: localEntry.record } : result;
-  }
-
-  protected override async expireDue(
-    recordId: string,
-    authority?: ExecApprovalReadAuthority,
-  ): Promise<boolean> {
-    authority?.assertCurrent();
-    if (this.retired) {
-      return false;
-    }
-    const entry = this.pending.get(recordId);
-    if (!entry || entry.record.resolvedAtMs !== undefined) {
-      return false;
-    }
-    const result = await this.forceDenyDetailed(
-      recordId,
-      "timeout",
-      { kind: "system", id: null },
-      "expired",
-      undefined,
-      true,
-      null,
-      undefined,
-      authority?.guard,
-    );
-    authority?.assertCurrent();
-    if (result.outcome === "not-due") {
-      this.scheduleExpiryTimer(entry);
-      return false;
-    }
-    return result.outcome === "denied" || result.outcome === "expired";
   }
 
   async resolve(

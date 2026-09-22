@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
@@ -17,6 +16,10 @@ import type {
   ExecApprovalResolutionSource,
   OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.types.js";
+import {
+  assertExecApprovalMutationPersistenceCurrent,
+  type ExecApprovalMutationPersistence,
+} from "./exec-approval-recovery.js";
 import {
   prepareExecApprovalSettlement,
   prepareExecApprovalStorageFailure,
@@ -46,7 +49,7 @@ type DecisionHandoff = {
   cancel: () => void;
 };
 
-type PendingEntry<TPayload> = {
+export type PendingEntry<TPayload> = {
   record: ExecApprovalRecord<TPayload>;
   resolve: (decision: ExecApprovalDecision | null) => void;
   timer: ReturnType<typeof setTimeout> | null;
@@ -58,6 +61,8 @@ type PendingEntry<TPayload> = {
   handoffs: Set<DecisionHandoff>;
   admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
   mutation?: Promise<void>;
+  expiryPersistence?: ExecApprovalMutationPersistence;
+  expiryRefusals?: number;
   uncertainVerdict?: {
     assertCurrent: () => void;
     autoReview?: { committedResolutionKey?: string };
@@ -118,10 +123,17 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     }
   }
 
+  protected assertPendingPersistenceCurrent(entry: PendingEntry<TPayload> | undefined): void {
+    entry?.uncertainVerdict?.assertCurrent();
+    if (entry?.expiryPersistence) {
+      assertExecApprovalMutationPersistenceCurrent(entry.expiryPersistence);
+    }
+  }
+
   protected clearUncommittedVerdict(record: ExecApprovalRecord<TPayload>): void {
     const entry = this.pending.get(record.id);
     if (entry?.record === record && !entry.uncertainVerdict?.autoReview?.committedResolutionKey) {
-      entry.uncertainVerdict?.assertCurrent();
+      this.assertPendingPersistenceCurrent(entry);
       delete entry.uncertainVerdict;
     }
   }
@@ -449,8 +461,10 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     if (!pending || pending.record.resolvedAtMs !== undefined || !this.canUseRetainedBinding()) {
       return false;
     }
-    pending.uncertainVerdict?.assertCurrent();
+    this.assertPendingPersistenceCurrent(pending);
     delete pending.uncertainVerdict;
+    delete pending.expiryPersistence;
+    delete pending.expiryRefusals;
     clearTimeout(pending.timer ?? undefined);
     pending.timer = null;
     pending.record.resolvedAtMs = params.resolvedAtMs;
@@ -549,22 +563,7 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     };
   }
 
-  protected scheduleExpiryTimer(entry: PendingEntry<TPayload>): void {
-    if (this.retired) {
-      return;
-    }
-    entry.timer = setTimeout(
-      () => {
-        if (this.retired || this.pending.get(entry.record.id) !== entry) {
-          return;
-        }
-        void this.expireDue(entry.record.id).catch((error: unknown) => {
-          this.reportError(error, { approvalId: entry.record.id, operation: "expire" });
-        });
-      },
-      resolveTimerTimeoutMs(entry.record.expiresAtMs - Date.now(), 1),
-    );
-  }
+  protected abstract scheduleExpiryTimer(entry: PendingEntry<TPayload>, delayMs?: number): void;
 
   async getSnapshot(
     recordId: string,

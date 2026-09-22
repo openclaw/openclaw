@@ -34,6 +34,18 @@ export function captureExecApprovalMutationPersistence(
   };
 }
 
+/** Keep later work inside the original write target's maintenance, schema and coordinator scope. */
+export function runWithExecApprovalMutationPersistence<T>(
+  persistence: ExecApprovalMutationPersistence,
+  operation: () => Promise<T>,
+): Promise<T> {
+  assertExecApprovalMutationPersistenceCurrent(persistence);
+  const context = expectDefined(persistence.workerContext, "Approval mutation worker context");
+  return runWithCapturedWorkerContext(context, () =>
+    withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, operation),
+  );
+}
+
 /** Recovery may observe only the original physical owner, including before local publication. */
 export function assertExecApprovalMutationPersistenceCurrent(
   persistence: ExecApprovalMutationPersistence,

@@ -56,7 +56,7 @@ export function createPluginApprovalHandlers(
 ): GatewayRequestHandlers {
   return {
     "plugin.approval.list": async (options) => {
-      const authority = createApprovalRequestAuthority(options);
+      using authority = createApprovalRequestAuthority(options);
       const { respond, client, context } = options;
       const approvals = await listVisiblePendingApprovalRequests({
         authority,
@@ -255,7 +255,7 @@ export function createPluginApprovalHandlers(
     },
 
     "plugin.approval.waitDecision": async (options) => {
-      const authority = createApprovalRequestAuthority(options);
+      using authority = createApprovalRequestAuthority(options);
       const { params, respond, client, context } = options;
       await handleApprovalWaitDecision({
         authority,
@@ -268,7 +268,7 @@ export function createPluginApprovalHandlers(
     },
 
     "plugin.approval.resolve": async (options) => {
-      const authority = createApprovalRequestAuthority(options);
+      using authority = createApprovalRequestAuthority(options);
       const { params, respond, client, context } = options;
       const resolveParams = resolveApprovalDecisionParams({
         rawParams: params,

@@ -161,7 +161,7 @@ export function createApprovalInvocation(params: ApprovalInvocationParams) {
 }
 
 /** Direct helper fixtures use native SDK custody; transport proofs bind their real request owner. */
-export function handleApprovalResolve<
+export async function handleApprovalResolve<
   TPayload extends ExecApprovalRequestPayload | PluginApprovalRequestPayload,
 >(params: Omit<Parameters<typeof handleOwnedApprovalResolve<TPayload>>[0], "authority">) {
   const context = {
@@ -181,9 +181,6 @@ export function handleApprovalResolve<
     respond: params.respond,
     isWebchatConnect: () => false,
   };
-  return handleOwnedApprovalResolve({
-    ...params,
-    context,
-    authority: createApprovalRequestAuthority(options),
-  });
+  using authority = createApprovalRequestAuthority(options);
+  return await handleOwnedApprovalResolve({ ...params, context, authority });
 }

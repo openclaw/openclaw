@@ -192,7 +192,7 @@ export function createApprovalHandlers(
   return {
     "approval.history": async (options) => {
       const { params: rawParams, respond, client, context } = options;
-      const authority = createApprovalRequestAuthority(options);
+      using authority = createApprovalRequestAuthority(options);
       if (!validateApprovalHistoryParams(rawParams)) {
         respond(
           false,
@@ -260,7 +260,7 @@ export function createApprovalHandlers(
 
     "approval.get": async (options) => {
       const { params: rawParams, respond, client, context } = options;
-      const authority = createApprovalRequestAuthority(options);
+      using authority = createApprovalRequestAuthority(options);
       if (!validateApprovalGetParams(rawParams)) {
         respond(
           false,
@@ -306,7 +306,7 @@ export function createApprovalHandlers(
 
     "approval.resolve": async (options) => {
       const { params: rawParams, respond, client, context } = options;
-      const authority = createApprovalRequestAuthority(options);
+      using authority = createApprovalRequestAuthority(options);
       const validParams = validateApprovalResolveParams(rawParams);
       const resolveParams = validParams ? (rawParams as ApprovalResolveParams) : null;
       const hasReviewer = isRecord(rawParams) && "reviewer" in rawParams;
