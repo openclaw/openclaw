@@ -69,9 +69,7 @@ function readRequirements(value: unknown): DynamicsSpawnRequirements {
   }
   const raw = readRecord(value, "dynamics.requirements");
   if (
-    Object.keys(raw).some(
-      (key) => !["sandbox", "candidateDigest", "artifactRefs"].includes(key),
-    )
+    Object.keys(raw).some((key) => !["sandbox", "candidateDigest", "artifactRefs"].includes(key))
   ) {
     throw new Error("unsupported dynamics requirement");
   }
@@ -137,8 +135,7 @@ export function prepareDynamicsSpawn(params: {
   const requirements = readRequirements(options.requirements);
   validateContract(boundary, requirements);
 
-  const raw =
-    options.handoff === undefined ? {} : readRecord(options.handoff, "dynamics.handoff");
+  const raw = options.handoff === undefined ? {} : readRecord(options.handoff, "dynamics.handoff");
   if (
     Object.keys(raw).some(
       (key) => !["candidateDigest", "artifactRefs", "evidenceRefs", "summary"].includes(key),
