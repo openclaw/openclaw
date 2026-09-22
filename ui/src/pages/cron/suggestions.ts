@@ -1,10 +1,13 @@
 /**
  * Curated automation ideas for the Automations page.
  *
- * Pure UI data: each idea prefills the inline create form. Nothing here talks
+ * Each idea prefills the inline create form. Nothing here talks
  * to the gateway or adds config surface.
  */
 
+import { html } from "lit";
+import { icons } from "../../components/icons.ts";
+import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import type { CronFormState } from "../../lib/cron/types.ts";
 
@@ -48,7 +51,7 @@ function suggestion(
   };
 }
 
-export const CRON_SUGGESTIONS: CronSuggestion[] = [
+const CRON_SUGGESTIONS: CronSuggestion[] = [
   suggestion("repoPulse", "🐙", "cron.suggestions.schedules.weekdayMornings", WEEKDAY_MORNINGS),
   suggestion(
     "standupGhostwriter",
@@ -62,7 +65,7 @@ export const CRON_SUGGESTIONS: CronSuggestion[] = [
   suggestion("polyglotMinute", "🗣️", "cron.suggestions.schedules.everyMorning", EVERY_MORNING),
 ];
 
-export function suggestionFormPatch(idea: CronSuggestion): Partial<CronFormState> {
+function suggestionFormPatch(idea: CronSuggestion): Partial<CronFormState> {
   return {
     name: t(idea.nameKey),
     payloadText: t(idea.promptKey),
@@ -73,4 +76,36 @@ export function suggestionFormPatch(idea: CronSuggestion): Partial<CronFormState
     enabled: true,
     ...idea.schedule,
   };
+}
+
+export function renderCronSuggestions(
+  onOpenCreate: (patch: Partial<CronFormState>) => void,
+  busy: boolean,
+) {
+  // Starter ideas are drill-in rows: activating one prefills the create form.
+  return renderSettingsSection(
+    { title: t("cron.suggestions.title") },
+    CRON_SUGGESTIONS.map(
+      (idea) => html`
+        <button
+          type="button"
+          class="settings-row settings-row--nav cron-suggestion"
+          data-suggestion=${idea.id}
+          ?disabled=${busy}
+          @click=${() => onOpenCreate(suggestionFormPatch(idea))}
+        >
+          <div class="settings-row__text">
+            <span class="settings-row__title">
+              <span aria-hidden="true">${idea.emoji}</span> ${t(idea.nameKey)}
+            </span>
+            <span class="settings-row__desc">${t(idea.taglineKey)}</span>
+          </div>
+          <div class="settings-row__control">
+            <span class="settings-row__value">${t(idea.scheduleKey)}</span>
+            <span class="settings-row__chevron">${icons.chevronRight}</span>
+          </div>
+        </button>
+      `,
+    ),
+  );
 }

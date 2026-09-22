@@ -736,7 +736,8 @@ describe("CronPage editor state sync", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const gateway = createGateway(client, true);
-    const page = createPage(createContext(gateway, "writer"), { render: true });
+    const context = createContext(gateway, "writer");
+    const page = createPage(context, { render: true });
 
     await waitForCronPage(() =>
       expect(page.querySelector('[data-test-id="cron-new-task"]')).not.toBeNull(),
@@ -751,7 +752,7 @@ describe("CronPage editor state sync", () => {
     let currentPage = page;
     if (navigated) {
       page.remove();
-      currentPage = createPage(createContext(gateway, "writer"));
+      currentPage = createPage(context, { render: true });
       await currentPage.updateComplete;
     }
     added.resolve({ id: "job-fresh" });
@@ -765,15 +766,11 @@ describe("CronPage editor state sync", () => {
       expect.objectContaining({ agentId: "writer" }),
     );
     expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
-    await waitForCronPage(() => expect(submittedState.cronCreateOpen).toBe(false));
+    await waitForCronPage(() => expect(currentPage.querySelector(".cron-editor")).toBeNull());
     if (navigated) {
       expect(currentPage.cron).not.toBe(submittedState);
-      expect(currentPage.cron.cronError).toBeNull();
-    } else {
-      await waitForCronPage(() =>
-        expect(page.textContent).toContain("Run queued. Run ID: run-fresh"),
-      );
     }
+    expect(currentPage.textContent).toContain("Run queued. Run ID: run-fresh");
   });
 
   it.each([

@@ -227,7 +227,7 @@ describe("CronPage hidden refreshes", () => {
       visibility("hidden");
       request.mockClear();
       saved.resolve();
-      await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
+      await waitForCronPage(() => expect(page.querySelector(".cron-editor")).toBeNull());
       expect(request).toHaveBeenCalledExactlyOnceWith("cron.run", {
         id: "created-job",
         mode: "force",

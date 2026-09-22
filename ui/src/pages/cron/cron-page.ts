@@ -41,9 +41,11 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
+import { showToast } from "../../lib/toast.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { cronCreationDraftFor } from "./creation-draft.ts";
 import { CronEditorClearance } from "./editor-clearance.ts";
 import { buildCronSuggestions, THINKING_SUGGESTIONS } from "./form-suggestions.ts";
 import { resolveCronRouteData } from "./route-model.ts";
@@ -82,6 +84,7 @@ class CronPage extends OpenClawLightDomElement {
         }
       : null;
   });
+  private creationRouteOverride = false;
   private pendingRouteData: ReturnType<typeof resolveCronRouteData> | null = null;
   private routeJobRequested = false;
   private highlightedRunId: string | null = null;
@@ -125,6 +128,28 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context,
+      (context) => {
+        const owner = cronCreationDraftFor(context);
+        const unsubscribe = owner.subscribe((saved) => {
+          this.syncCreationDraft();
+          if (saved) {
+            if (!this.cron.cronEditingJob && !this.creationRouteOverride) {
+              this.cron.cronError = saved.error;
+              updateCronRunsFilter(this.cron, { cronRunsScope: "all" });
+              this.cron.cronRunsJobId = null;
+            } else if (saved.error) {
+              showToast({ message: saved.error });
+            }
+            void this.refreshCron({ tableFilters: true });
+          }
+          this.requestUpdate();
+        });
+        this.syncCreationDraft();
+        return unsubscribe;
+      },
+    )
     .watch(
       () => this.context?.agents,
       (agents, notify) => agents.subscribe(notify),
@@ -185,6 +210,7 @@ class CronPage extends OpenClawLightDomElement {
     this.cron = cron;
     const routeData = resolveCronRouteData(this.routeSearch);
     cron.cronSessionFilter = routeData.session;
+    this.creationRouteOverride = Boolean(routeData.jobId || routeData.session);
     this.routeJobRequested = false;
     this.pageHidden = document.visibilityState === "hidden";
     this.cron.cronAgentId = this.context.agentSelection.state.scopeId;
@@ -192,6 +218,24 @@ class CronPage extends OpenClawLightDomElement {
     this.cronModelSuggestions = [];
     this.modelSuggestionsError = null;
     this.modelSuggestionsRequest = null;
+    this.syncCreationDraft();
+  }
+
+  private syncCreationDraft() {
+    if (this.creationRouteOverride || this.cron.cronEditingJob) {
+      return;
+    }
+    const draft = cronCreationDraftFor(this.context).draft;
+    if (draft) {
+      this.cron.cronCreateOpen = true;
+      this.cron.cronForm = draft.form;
+      this.cron.cronCloningJob = draft.source;
+      this.cron.cronFieldErrors = draft.fieldErrors;
+      this.cron.cronError = draft.error;
+    } else if (this.cron.cronCreateOpen) {
+      cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
+      this.cron.cronCreateOpen = false;
+    }
   }
 
   private syncAgentsState() {
@@ -240,6 +284,10 @@ class CronPage extends OpenClawLightDomElement {
       this.listTab = "tasks";
       this.detailTab = "settings";
       this.pendingRouteData = routeData.jobId || routeData.session ? routeData : null;
+      this.creationRouteOverride = Boolean(this.pendingRouteData);
+      if (this.creationRouteOverride) {
+        this.cron.cronCreateOpen = false;
+      }
       this.routeJobRequested = false;
       this.highlightedRunId = null;
       this.pendingRunScroll = false;
@@ -369,6 +417,10 @@ class CronPage extends OpenClawLightDomElement {
     if (!this.canManageCron) {
       return;
     }
+    if (this.cron.cronCreateOpen && !this.cron.cronEditingJob) {
+      cronCreationDraftFor(this.context).patch(patch);
+      return;
+    }
     this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch }, patch);
     this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
     this.requestCronUpdate();
@@ -383,6 +435,7 @@ class CronPage extends OpenClawLightDomElement {
       this.detailTab = "history";
     }
     this.cron.cronCreateOpen = false;
+    this.creationRouteOverride = true;
     startCronEdit(this.cron, job);
     this.requestCronUpdate();
     if (job.payload?.kind === "heartbeat") {
@@ -435,29 +488,33 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private openCreate(patch?: Partial<CronFormState>) {
-    if (!this.canManageCron) {
+    const owner = cronCreationDraftFor(this.context);
+    if (!this.canManageCron || owner.draft?.pending) {
       return;
     }
     this.clearHeartbeatScratch();
     this.pendingRouteData = null;
+    this.creationRouteOverride = false;
     cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
-    this.cron.cronCreateOpen = true;
-    if (patch) {
-      this.patchForm(patch);
-      return;
+    if (patch || !owner.draft) {
+      const form = normalizeCronFormState({ ...this.cron.cronForm, ...patch }, patch);
+      owner.begin(form, null, patch ? validateCronForm(form) : {});
+    } else {
+      this.syncCreationDraft();
     }
     this.requestCronUpdate();
   }
 
   private cloneJob(job: CronJob) {
-    if (!this.canManageCron) {
+    const owner = cronCreationDraftFor(this.context);
+    if (!this.canManageCron || owner.draft?.pending) {
       return;
     }
     this.clearHeartbeatScratch();
     this.pendingRouteData = null;
-    // A clone is a prefilled create: the editor submits cron.add, not update.
+    this.creationRouteOverride = false;
     startCronClone(this.cron, job);
-    this.cron.cronCreateOpen = true;
+    owner.begin(this.cron.cronForm, this.cron.cronCloningJob, this.cron.cronFieldErrors);
     this.requestCronUpdate();
   }
 
@@ -513,6 +570,9 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private closePanel() {
+    if (this.cron.cronCreateOpen) {
+      cronCreationDraftFor(this.context).discard();
+    }
     this.clearHeartbeatScratch();
     this.pendingRouteData = null;
     cancelCronEdit(this.cron, this.context.agentSelection.state.selectedId);
@@ -526,29 +586,11 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private submitForm(options: { runNow?: boolean } = {}) {
-    this.runCronAdminTask(async (cronState) => {
-      const editing = Boolean(cronState.cronEditingJob);
-      const result = await addCronJob(cronState);
-      if (!result.saved) {
-        return;
-      }
-      if (editing || cronState.cronEditingJob) {
-        return;
-      }
-      if (options.runNow && result.jobId) {
-        // Create & run now: kick the new task once so the first result arrives
-        // immediately instead of waiting for the first scheduled tick.
-        await runCronJob(cronState, result.jobId, "force");
-      }
-      cronState.cronCreateOpen = false;
-      // Creating from a selected task drops back to overview; recent activity
-      // must cover all tasks again, not the previously selected job.
-      if (cronState.cronRunsScope === "job") {
-        updateCronRunsFilter(cronState, { cronRunsScope: "all" });
-        cronState.cronRunsJobId = null;
-        await loadCronRuns(cronState);
-      }
-    });
+    if (this.cron.cronEditingJob) {
+      this.runCronAdminTask(addCronJob);
+    } else if (this.canManageCron && this.cron.cronCreateOpen && !this.cron.cronBusy) {
+      void cronCreationDraftFor(this.context).submit(options.runNow === true);
+    }
   }
 
   override render() {
@@ -611,7 +653,7 @@ class CronPage extends OpenClawLightDomElement {
           listTab: this.listTab,
           detailTab: this.detailTab,
           error: this.cron.cronError ?? this.cron.cronRunsError ?? this.modelSuggestionsError,
-          busy: this.cron.cronBusy,
+          busy: this.cron.cronBusy || cronCreationDraftFor(this.context).draft?.pending === true,
           form: this.cron.cronForm,
           heartbeatScratch: canManage ? this.heartbeatScratch : "",
           channels: channels.channelsSnapshot?.channelMeta?.length
