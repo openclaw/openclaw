@@ -7,11 +7,12 @@ import {
 } from "./audio.ts";
 
 class MockAudioBufferSource {
-  buffer: unknown = null;
+  buffer: { duration: number } | null = null;
   readonly connect = vi.fn();
   readonly start = vi.fn();
   readonly stop = vi.fn();
   private ended: (() => void) | null = null;
+  private finished = false;
 
   addEventListener(type: string, handler: () => void): void {
     if (type === "ended") {
@@ -20,7 +21,19 @@ class MockAudioBufferSource {
   }
 
   emitEnded(): void {
+    this.finished = true;
     this.ended?.();
+  }
+
+  /** Fires `ended` once the context clock passes this source's scheduled end. */
+  settleAt(currentTime: number): void {
+    const startAt = this.start.mock.calls[0]?.[0] as number | undefined;
+    if (this.finished || startAt === undefined || this.buffer === null) {
+      return;
+    }
+    if (currentTime >= startAt + this.buffer.duration) {
+      this.emitEnded();
+    }
   }
 }
 
@@ -41,6 +54,18 @@ class MockOutputAudioContext {
     const source = new MockAudioBufferSource();
     this.sources.push(source);
     return source;
+  }
+
+  /**
+   * Advances the clock the way a real AudioContext does: sources whose
+   * scheduled playback has finished release themselves through `ended`, so
+   * pending-source counts reflect queued-ahead audio rather than total frames.
+   */
+  advanceTo(currentTime: number): void {
+    this.currentTime = currentTime;
+    for (const source of this.sources) {
+      source.settleAt(currentTime);
+    }
   }
 }
 
@@ -183,6 +208,35 @@ describe("RealtimeTalkPcmOutputQueue", () => {
     expect(queue.queuedUntil).toBe(6);
   });
 
+  it("keeps a relay reply queued while the queued-seconds budget has room", () => {
+    // The gateway-relay contract is 960 bytes == 20ms of 24kHz mono PCM16 per
+    // browser event (src/gateway/talk/relay/session-create.ts), and one event
+    // becomes one source. Providers generate faster than real time -- Gemini
+    // 3.1 measures ~3.6x -- so the queue runs ahead of the context clock.
+    // 12.5s of speech leaves ~9s queued ahead, inside the 10s budget, so no
+    // frame here may be rejected on a frame count.
+    const context = new MockOutputAudioContext();
+    const queue = new RealtimeTalkPcmOutputQueue();
+    const sampleRateHz = 24_000;
+    const frameSeconds = 0.02;
+    const frame = silentPcmBase64(sampleRateHz * frameSeconds);
+    const frameCount = 625;
+    const results = new Set<string>();
+
+    for (let index = 0; index < frameCount; index += 1) {
+      results.add(queue.play(frame, context as unknown as AudioContext, sampleRateHz));
+      context.advanceTo(((index + 1) * frameSeconds) / 3.6);
+    }
+
+    expect([...results]).toEqual(["queued"]);
+    expect(queue.queuedUntil).toBeCloseTo(frameCount * frameSeconds, 5);
+    // Queued further ahead than the 6.4s that 320 pending sources used to buy,
+    // and still inside the queued-seconds budget.
+    const queuedAheadSeconds = queue.queuedUntil - context.currentTime;
+    expect(queuedAheadSeconds).toBeGreaterThan(6.4);
+    expect(queuedAheadSeconds).toBeLessThan(10);
+  });
+
   it("rejects an oversized frame before base64 decoding", () => {
     const context = new MockOutputAudioContext();
     const queue = new RealtimeTalkPcmOutputQueue();
@@ -201,6 +255,9 @@ describe("RealtimeTalkPcmOutputQueue", () => {
   });
 
   it("hard-caps source ownership across ten thousand suspended-context chunks", () => {
+    // Single-sample frames are far below the 20ms relay contract, so they carry
+    // almost no audio and the queued-seconds budget never bounds them. The
+    // derived source cap is what stops them owning graph nodes.
     const context = new MockOutputAudioContext();
     const queue = new RealtimeTalkPcmOutputQueue();
     let queued = 0;
@@ -215,9 +272,10 @@ describe("RealtimeTalkPcmOutputQueue", () => {
       }
     }
 
-    expect(queued).toBe(320);
-    expect(overflowed).toBe(9_680);
-    expect(context.sources).toHaveLength(320);
+    expect(queued).toBe(500);
+    expect(overflowed).toBe(9_500);
+    expect(context.sources).toHaveLength(500);
+    expect(queue.queuedUntil).toBeLessThan(1);
   });
 
   it("releases source ownership on ended", () => {
@@ -225,7 +283,7 @@ describe("RealtimeTalkPcmOutputQueue", () => {
     const queue = new RealtimeTalkPcmOutputQueue();
     const chunk = silentPcmBase64(1);
 
-    for (let index = 0; index < 320; index += 1) {
+    for (let index = 0; index < 500; index += 1) {
       expect(queue.play(chunk, context as unknown as AudioContext, 48_000)).toBe("queued");
     }
     expect(queue.play(chunk, context as unknown as AudioContext, 48_000)).toBe("overflow");
@@ -233,7 +291,7 @@ describe("RealtimeTalkPcmOutputQueue", () => {
     context.sources[0]?.emitEnded();
 
     expect(queue.play(chunk, context as unknown as AudioContext, 48_000)).toBe("queued");
-    expect(context.sources).toHaveLength(321);
+    expect(context.sources).toHaveLength(501);
   });
 
   it("stops idempotently and isolates late ended events from replacement playback", () => {

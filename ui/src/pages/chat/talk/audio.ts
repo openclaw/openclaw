@@ -221,7 +221,19 @@ export function estimateBase64DecodedByteLength(value: string): number {
 }
 
 const REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS = 10;
-const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = 320;
+// One relayed event becomes one AudioBufferSourceNode, and the gateway-relay
+// contract is 20ms of PCM16 per event (src/gateway/talk/relay/session-create.ts
+// splits every provider chunk into 960-byte frames). The source cap exists only
+// so frames smaller than that contract cannot multiply graph nodes for almost
+// no audio; queued seconds is the real bound. Size it as the number of
+// contract-sized frames the seconds budget holds, so the two gates bind
+// together. A fixed node count binds on frame count instead: at 320 the relay
+// overflowed 6.4s ahead, inside any queued-seconds budget, and cancelled
+// ordinary replies as "playback-overflow" (#148658).
+const REALTIME_TALK_PCM_OUTPUT_RELAY_FRAME_SECONDS = 0.02;
+const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = Math.ceil(
+  REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS / REALTIME_TALK_PCM_OUTPUT_RELAY_FRAME_SECONDS,
+);
 
 type RealtimeTalkPcmOutputQueuePlayResult = "queued" | "ignored" | "overflow";
 
