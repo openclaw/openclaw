@@ -12,6 +12,7 @@ import type {
   ExecutionIdentityInspectionQuery,
   ExecutionIdentityInspectionOutcome,
 } from "../audit/execution-identity-inspection.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   CronRunRecoveryReadCommand,
   CronRunRecoveryObservation,
@@ -21,6 +22,10 @@ import type {
   ListTerminalOperatorApprovalsInput,
   ListTerminalOperatorApprovalsResult,
 } from "../gateway/operator-approval-store.types.js";
+import type {
+  SessionGroupCatalogSnapshot,
+  SessionGroupMembershipSnapshot,
+} from "../gateway/session-group-catalog.types.js";
 import type {
   WorkerPlacementConflictBinding,
   WorkerSessionPlacementReadResult,
@@ -53,6 +58,10 @@ import type {
 } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
+import type {
+  TaskRegistryMutationScope,
+  TaskRegistryStoreSnapshot,
+} from "../tasks/task-registry.store.types.js";
 import type {
   GitHubPublicationReceiptTarget,
   GitHubPublicationRow,
@@ -109,6 +118,7 @@ export type OpenClawStateReadCommand =
       scope: { kind: "session"; sessionKey: string } | { kind: "ids"; runIds: readonly string[] };
     }
   | CronRunRecoveryReadCommand
+  | { type: "subagents.forChildSession"; childSessionKey: string }
   | { type: "exec-approvals.read" }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
@@ -119,6 +129,12 @@ export type OpenClawStateReadCommand =
   | { type: "agentDatabaseRegistry.read" }
   | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "workerEnvironments.pruneCandidates"; input: WorkerEnvironmentPruneReadInput }
+  | {
+      type: "tasks.mutationSnapshot";
+      input: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[] | undefined;
+    }
+  | { type: "sessionGroups.snapshot" }
+  | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
   | { type: "userProfiles.reconcile"; profileId: string }
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
@@ -189,6 +205,13 @@ export type OpenClawStateReadReply = (
       history: ListTerminalOperatorApprovalsResult;
     }
   | PluginBlobReadReply
+  | { ok: true; type: "subagents.forChildSession"; sourceAdmitted: true; runs: SubagentRunRecord[] }
+  | {
+      ok: true;
+      type: "tasks.mutationSnapshot";
+      sourceAdmitted: true;
+      snapshot: TaskRegistryStoreSnapshot;
+    }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
         ok: true;
@@ -197,6 +220,18 @@ export type OpenClawStateReadReply = (
         value: SkillLibraryReadOnlyOperations[Kind]["output"];
       };
     }[keyof SkillLibraryReadOnlyOperations]
+  | {
+      ok: true;
+      type: "sessionGroups.members";
+      sourceAdmitted: true;
+      snapshot: SessionGroupMembershipSnapshot;
+    }
+  | {
+      ok: true;
+      type: "sessionGroups.snapshot";
+      sourceAdmitted: true;
+      snapshot: SessionGroupCatalogSnapshot;
+    }
   | {
       ok: true;
       type: "userProfiles.email.resolve";

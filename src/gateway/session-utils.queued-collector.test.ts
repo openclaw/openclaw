@@ -1,4 +1,7 @@
 import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as subagentKill from "../agents/subagents/registry/subagent-control-kill.js";
@@ -33,7 +36,6 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
-import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 
 const {
   parentKey,

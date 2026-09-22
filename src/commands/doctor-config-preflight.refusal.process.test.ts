@@ -510,44 +510,52 @@ it.each([
           );
           managedRoot = fs.realpathSync(previous);
         }
-        const resultPath = createUpdatePostInstallDoctorResultPath();
-        // The shipped updater disables compile caching before both child handoffs.
-        const result = await runBuiltRuntime(
-          runtimeRoot,
-          disableUpdatedPackageCompileCacheEnv({
-            ...process.env,
-            OPENCLAW_DEBUG_PROXY_ENABLED: "1",
-            [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: resultPath,
-            NODE_ENV: undefined,
-            VITEST: undefined,
-            VITEST_POOL_ID: undefined,
-            VITEST_WORKER_ID: undefined,
-          }),
-          ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-          DOCTOR_CHILD_TIMEOUT_MS,
-        );
-        const output = `${result.stdout}\n${result.stderr}`;
-        const receipt = await consumeUpdatePostInstallDoctorResult(resultPath);
-        expect(result.signal, output).toBeNull();
-        expect(
-          originals.map((file) => fs.readFileSync(file)),
-          output,
-        ).toEqual(bytes);
-        if (mode === "failed schema publication") {
-          expect(result.code, output).toBe(1);
-          expect(output).toContain("Private Doctor schema validation failed");
-          expect(output).toContain("Failing check media-persistence (step-refused)");
-          expect(output).not.toContain("Repair is deferred");
-          return;
+        // Rehearsal preserves these exact bytes. Exercise both package layouts once;
+        // the remaining variants differ only at the post-core boundary below.
+        if (
+          mode === "valid" ||
+          mode === "valid managed pnpm" ||
+          mode === "failed schema publication"
+        ) {
+          const resultPath = createUpdatePostInstallDoctorResultPath();
+          // The shipped updater disables compile caching before both child handoffs.
+          const result = await runBuiltRuntime(
+            runtimeRoot,
+            disableUpdatedPackageCompileCacheEnv({
+              ...process.env,
+              OPENCLAW_DEBUG_PROXY_ENABLED: "1",
+              [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: resultPath,
+              NODE_ENV: undefined,
+              VITEST: undefined,
+              VITEST_POOL_ID: undefined,
+              VITEST_WORKER_ID: undefined,
+            }),
+            ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
+            DOCTOR_CHILD_TIMEOUT_MS,
+          );
+          const output = `${result.stdout}\n${result.stderr}`;
+          const receipt = await consumeUpdatePostInstallDoctorResult(resultPath);
+          expect(result.signal, output).toBeNull();
+          expect(
+            originals.map((file) => fs.readFileSync(file)),
+            output,
+          ).toEqual(bytes);
+          if (mode === "failed schema publication") {
+            expect(result.code, output).toBe(1);
+            expect(output).toContain("Private Doctor schema validation failed");
+            expect(output).toContain("Failing check media-persistence (step-refused)");
+            expect(output).not.toContain("Repair is deferred");
+            return;
+          }
+          expect(result.code, output).toBe(0);
+          expect(receipt).toMatchObject({
+            status: "ok",
+            configHash: "unchanged",
+            warnings: [expect.stringContaining("live agent databases are unchanged")],
+          });
+          expect(output).toContain("live agent databases are unchanged");
+          expect(output).not.toContain("Doctor complete.");
         }
-        expect(result.code, output).toBe(0);
-        expect(receipt).toMatchObject({
-          status: "ok",
-          configHash: "unchanged",
-          warnings: [expect.stringContaining("live agent databases are unchanged")],
-        });
-        expect(output).toContain("live agent databases are unchanged");
-        expect(output).not.toContain("Doctor complete.");
         // The published driver has now discarded package rollback and recorded its
         // fresh post-core boundary. Only the native child can carry live authority.
         recordUpdateRunStep(run.runId, { step: "openclaw doctor", status: "completed" });

@@ -527,9 +527,13 @@ completed imports and unrelated files. Device backfill remains nonblocking at st
 monitor retirement cancels and joins it before releasing storage. Hosts without
 data-only comparison support retain the existing native metadata and import decisions
 under the declared plugin API floor. Worker failures never select that fallback.
+Monitor bot-account discovery awaits selected credential reads after authentication,
+then checks cancellation before acquiring the client or installing handlers. Each
+identity uses one observed credential and the shared account-readiness rules; no
+namespace scan or new bulk-read capability is required.
 Approval actor and reaction approver lists resolve from account configuration without
 reading credentials; native delivery eligibility still checks enabled and configured
-account readiness. Synchronous credential readiness and package auth-presence probes
+account readiness. Synchronous public account readiness and package auth-presence probes
 retain their separate SDK contracts.
 
 Node-host launch and turn journals execute on the same shared-state worker.
@@ -731,8 +735,37 @@ the current delivery origin and newest event watermark, with separate best-effor
 watermark and task timestamp writes. A committed acknowledgement is not replayed
 when projection publication fails; the existing read and flow owners retain recovery.
 Preparation cleanup joins any acknowledgement it already started. Terminal delivery
-status writes and native notification preparation retain their existing owners.
+and missing-owner status writes use that same worker, rereading the selected task's
+run scope, notification policy, and current delivery metadata inside the write.
+Each terminal delivery retains its own pending claim; a retired delivery cannot
+release a successor's claim. After an accepted or ambiguous transport result, that invocation does not enqueue
+fallback because follow-up preparation or persistence failed. Notification preparation
+joins its captured store's pending acknowledgements and accepted event prefix, then
+prepares task and flow projections asynchronously. Its synchronous consumer uses
+only those maps and rechecks the delivery claim and registry owners before effects.
+Full and scoped task snapshots use the existing shared-state read worker, retaining
+the original database admission without entering the writer queue. The delivery
+owner observes and reports notification failures while returning the same rejecting
+promise to awaiting callers. Synchronous producers therefore cannot leak an
+unhandled preparation rejection; owner retirement still forbids late effects.
+The restart-draining fallback returns resident rows without storage work and
+keeps a recorded restore failure visible while its store and database remain current.
+For the same database identity, the failure survives close/reopen until explicit reload.
 Storage representation, schemas, retention, and update behavior are unchanged.
+
+Terminal subagent cancellation prepares retained child-session rows in the same
+fixed read worker, retries after registry publication changes, and applies current
+live runs last. Each synchronous decision retains the original database admission.
+Failed best-effort publications remain authoritative through cache hydration:
+fresh reads overlay unpublished named changes or an explicitly failed full
+replacement. Exact successful commits release only their rows back to durable
+reads; full success and restore clear that intent. These overlays remain bound to
+their producing database, and returned persisted records cannot mutate them.
+The progress observer uses its existing live-run owner, matching the admission
+and generation checks that already require a live entry.
+Inspection links prepare their configuration through the existing asynchronous
+config reader. Delivery rechecks its claim after that wait, then resolves the link
+from the captured config during its synchronous send decision.
 
 Agent-event task progress uses the same shared-state worker and publication owner.
 Ingestion retains exact task, run, and backing identities without waiting for a native
@@ -747,6 +780,10 @@ in-flight count.
 Inside an enclosing native transaction, consumption defers delivery until commit and
 rechecks event ownership and the committed receipt. Rollback drops queued delivery;
 later row replacement, including ABA replacement, suppresses stale delivery.
+Committed notification dispatch follows the publishing event's completion, so an
+event cleanup failure remains visible to external readers without suppressing its
+notification. Delivery owns a separate Gateway continuation and cleanup lifetime;
+its accepted event prefix never joins the producer's cleanup drain.
 
 Prepared task pages keep their revision when a ready projection republishes
 unchanged task and delivery values. Identity-preserving admission still invalidates
@@ -1347,6 +1384,13 @@ schema setup and mutation. A changed route, closed request, or revoked session c
 publish a queued write. SQLite kernels remain synchronous inside their native transactions, with existing
 revision, grant, session-existence, and transaction semantics.
 
+Progress-card GET resolves its captured session store through the existing target
+preparation owner and reads the card on the session transcript worker. Reads do
+not create missing databases or unused card tables. The same worker custody joins
+native cleanup and rejects retired owners; Gateway authorization is rechecked
+before returning a delayed card. Incognito reads retain their process-held owner.
+Progress-card writes and reset clears keep their existing transaction owners.
+
 MCP App pinning retains its existing source-interaction checks. A delayed adapter must
 revalidate that source authority at its actual write admission; checking view registration
 alone cannot replace the supported asynchronous interaction policy.
@@ -1735,6 +1779,21 @@ lifecycle owner. A future backend must supply equivalent product behavior or
 an explicit capability boundary; a second SQL dialect alone cannot replace
 these features. Schema, retention, migration, and multi-host changes still use
 the review checkpoint below.
+
+Session membership, participant display facts, and category membership are prepared
+in the existing session read worker and retained by the session-row projection.
+Store admission acquires a compact snapshot; committed session publications refresh
+exact keys and fence delayed results. List and broadcast readers reuse these facts
+without querying membership tables or transferring full session rows per viewer.
+Committed cache and membership facts settle before resident row projections refresh;
+ordinary observers run afterward, so even an earlier registered broadcaster sees
+current sharing policy and revocations while display rows are still dirty. Rolled-back
+savepoint changes never reach either phase. The group catalog similarly
+publishes its ordered snapshot from the shared-state worker. These projections do
+not authorize writes: live caller admission and transaction-held session and
+cross-store catalog checks remain with the mutation owners. Process-local
+incognito databases retain their native owner. Schema, stored bytes, retention,
+and update behavior are unchanged.
 
 ## Review checkpoint for material changes
 

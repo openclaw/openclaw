@@ -15,8 +15,18 @@ import {
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
 import * as directoryDurability from "../infra/directory-durability.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+} from "../state/agent-deletion-journal.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
 import { isSessionSqliteMigrationWarning } from "./doctor-session-sqlite-types.js";
@@ -763,6 +773,90 @@ describe("session sources needed by deferred plugin migrations", () => {
       });
     },
   );
+
+  it("admits mixed top-level sources only after the live owner has a verified import", async () => {
+    await withOpenClawTestState({ label: "deferred-mixed-retained-owner" }, async (state) => {
+      const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
+        state,
+        "legacy-root",
+      );
+      cfg.agents = { ownership: "explicit", entries: { main: {}, retired: {} } };
+      const retiredPath = openOpenClawAgentDatabase({ agentId: "retired", env: state.env }).path;
+      closeOpenClawAgentDatabasesForTest();
+      const deletion = beginAgentDeletionJournal(
+        {
+          agentId: "retired",
+          operationId: "delete-mixed-retired-owner",
+          agentDir: path.dirname(retiredPath),
+          sessionsDir: state.sessionsDir("retired"),
+          workspaceDir: state.statePath("workspace-retired"),
+          deleteFiles: false,
+        },
+        { env: state.env },
+      );
+      runOpenClawStateWriteTransaction(
+        (database) =>
+          completeAgentDeletionJournalInDatabase(database, "retired", deletion.operationId),
+        { env: state.env },
+      );
+      const retiredTranscript = path.join(path.dirname(storePath), "legacy-retired.jsonl");
+      fs.writeFileSync(
+        retiredTranscript,
+        [
+          { type: "session", version: 3, id: "legacy-retired" },
+          {
+            type: "message",
+            id: "retired-message",
+            parentId: null,
+            message: { role: "user", content: "Retained deleted history" },
+          },
+        ]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n") + "\n",
+      );
+      const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
+      entries["agent:retired:waiting"] = {
+        sessionId: "legacy-retired",
+        sessionFile: path.basename(retiredTranscript),
+        updatedAt: 1,
+      };
+      fs.writeFileSync(storePath, JSON.stringify(entries));
+      for (const file of [storePath, retiredPath, retiredTranscript]) {
+        originals.set(file, fs.readFileSync(file));
+      }
+      const assertReady = () =>
+        assertSessionStoreMigrationComplete({ cfg, env: state.env, operation: "doctor" });
+      expect(assertReady).toThrow("Legacy session store requires migration");
+
+      const imported = await runDoctorSessionSqlite({
+        cfg,
+        env: state.env,
+        allAgents: true,
+        mode: "import",
+      });
+      expect(imported.totals).toMatchObject({ importedEntries: 2, importedTranscriptEvents: 4 });
+      expect(imported.targets.flatMap((target) => target.issues)).toContainEqual(
+        expect.objectContaining({ code: "plugin_migration_source_retained" }),
+      );
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      expect(assertReady).not.toThrow();
+      expect(
+        loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.sessionId,
+      ).toBe("legacy-kept");
+      for (const [file, bytes] of originals) {
+        expect(fs.readFileSync(file)).toEqual(bytes);
+      }
+
+      fs.appendFileSync(storePath, "\n");
+      expect(assertReady).toThrow("Retained session migration source changed");
+      entries["voice:unassigned"] = { sessionId: "unassigned", updatedAt: 1 };
+      fs.writeFileSync(storePath, JSON.stringify(entries));
+      expect(assertReady).toThrow("Legacy session store requires migration");
+      expect(fs.readFileSync(retiredPath)).toEqual(originals.get(retiredPath));
+      expect(fs.readFileSync(retiredTranscript)).toEqual(originals.get(retiredTranscript));
+    });
+  });
 
   it.each(["unimported-owner", "unassigned", "retired-owner", "malformed", "unreadable"] as const)(
     "keeps readiness blocked for a retained source with %s state",

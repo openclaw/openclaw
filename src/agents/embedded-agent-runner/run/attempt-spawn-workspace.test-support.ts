@@ -354,7 +354,7 @@ vi.mock("../../sessions/index.js", () => {
     ModelRegistry,
     SessionManager: {
       inMemory: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
-      open: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
+      openAsync: async (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
     },
   };
 });

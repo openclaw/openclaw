@@ -96,6 +96,7 @@ export async function executeMutableUpdate(
   const {
     assertCurrent: assertExecutionCurrent,
     assertBoundChildCurrent,
+    onStateHandoff,
     admitExecutor,
   } = createUpdateCommandExecutionGuards(opts, params.root);
   const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv, activationTimeoutMs?: number) => {
@@ -182,6 +183,7 @@ export async function executeMutableUpdate(
       changes: doctorConfigChanges,
       assertCurrent: assertExecutionCurrent,
       assertBoundChildCurrent,
+      onStateHandoff,
     });
   const originalRecovery = () =>
     params.installKind === "git"
@@ -622,7 +624,7 @@ export async function executeMutableUpdate(
       mode,
       root: params.root,
       originalRecovery,
-      run: params.opts.run,
+      run: mutationStarted ? undefined : params.opts.run,
     }));
   }
 

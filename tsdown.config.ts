@@ -720,6 +720,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     "extensions/browser/relay-daemon-entry": "extensions/browser/relay-daemon-entry.ts",
+    "extensions/browser/setup-entry": "extensions/browser/setup-entry.ts",
     ...bundledHookEntries,
   };
 }

@@ -105,7 +105,9 @@ Use the administrator-scoped `users.setRole` Gateway method with
 `{ profileId, role }` to assign a configured role. Set `role: null` to clear an
 assignment. Assignment changes immediately invalidate and close that profile's
 active Gateway connections. Reconnecting applies the current role and scope
-ceiling. `gateway.roles.default` is required whenever roles are configured,
+ceiling. A committed change still retires the previous access if returning the
+result fails. An authorized self-downgrade receives its response before its
+connection closes. `gateway.roles.default` is required whenever roles are configured,
 must name an existing definition, and applies to profiles without a valid
 assigned role. Omitting `gateway.roles` entirely leaves solo and shared-secret
 deployments unchanged.

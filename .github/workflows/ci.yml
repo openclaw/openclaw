@@ -145,6 +145,7 @@ jobs:
       run_checks_node_core_dist: ${{ steps.manifest.outputs.run_checks_node_core_dist }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       startup_corpus_node_revision: ${{ steps.manifest.outputs.startup_corpus_node_revision }}
+      startup_corpus_test_files_json: ${{ steps.manifest.outputs.startup_corpus_test_files_json }}
       changed_core_test_paths_json: ${{ steps.manifest.outputs.changed_core_test_paths_json }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
       check_additional_matrix: ${{ steps.manifest.outputs.check_additional_matrix }}
@@ -1643,6 +1644,16 @@ jobs:
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
+          const runtimePullRequest = isCanonicalRepository && (compactPullRequest || releaseGate);
+          const includeReleaseOnlyRuntimeTests =
+            !isCanonicalRepository || (!runtimePullRequest && eventName !== "push");
+          const startupCorpusTestFiles =
+            typeof nodeTestPlan.resolveStartupCorpusTestFiles === "function"
+              ? nodeTestPlan.resolveStartupCorpusTestFiles({
+                  includeReleaseOnlyRuntimeTests,
+                  ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
+                })
+              : undefined;
           const ownerPathEvent = isCanonicalRepository &&
             eventName === "push" && process.env.GITHUB_REF === "refs/heads/main";
           const dockerSeedLanes =
@@ -1683,6 +1694,7 @@ jobs:
             }
             changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
               includeReleaseOnlyToolingShards: false,
+              includeReleaseOnlyRuntimeTests,
               runnerBackend: runnerProfile,
               onFallback: (reason) => console.log(`Node test plan broad fallback: ${reason}`),
               dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
@@ -1752,7 +1764,8 @@ jobs:
                     includeProofTests: runProofTier,
                     includeReleaseOnlyPluginShards: false,
                     includeReleaseOnlyToolingShards: eventName === "workflow_dispatch" || !isCanonicalRepository,
-                    ...(compactPullRequest && changedPaths ? { changedPaths } : {}),
+                    includeReleaseOnlyRuntimeTests,
+                    ...(runtimePullRequest && changedPaths ? { changedPaths } : {}),
                     // Keep the legacy boolean for historical target planners;
                     // current planners use the event-specific mode.
                     compact: compactPlanMode !== undefined,
@@ -1834,6 +1847,7 @@ jobs:
                       env: shard.env,
                       includePatterns: shard.includePatterns,
                       shard_name: shard.shardName,
+                      timing_key: shard.timing_key,
                     }]
                   : undefined
               );
@@ -1894,14 +1908,14 @@ jobs:
             );
           }
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
-          // The required Node matrix can own PR corpus coverage on this exact
-          // tree; frozen/release targets retain their independent corpus step.
+          // The required Node matrix can own the selected PR corpus on this
+          // exact tree; frozen/release targets retain their independent corpus step.
           const startupCorpusNodeRevision =
             isCanonicalRepository && eventName === "pull_request" && runNodeFull &&
             !frozenTarget && !compatibilityTarget && !releaseGate &&
             /^[0-9a-f]{40}$/u.test(checkoutRevision) && checkoutRevision === workflowRevision &&
             typeof nodeTestPlan.hasCompleteStartupCorpusCoverage === "function" &&
-            nodeTestPlan.hasCompleteStartupCorpusCoverage(rawNodeTestShards)
+            nodeTestPlan.hasCompleteStartupCorpusCoverage(rawNodeTestShards, startupCorpusTestFiles)
               ? checkoutRevision : "";
           // Targeted jobs cannot discover repository-scanning boundary tests
           // through imports. Keep the full boundary gate inside build-artifacts
@@ -1983,6 +1997,7 @@ jobs:
             run_checks_node_core_dist: runNodeCoreDist,
             run_check: runNodeFull,
             startup_corpus_node_revision: startupCorpusNodeRevision,
+            startup_corpus_test_files_json: startupCorpusTestFiles ? JSON.stringify(startupCorpusTestFiles) : "",
             changed_core_test_paths_json: changedCoreTestPaths ? JSON.stringify(changedCoreTestPaths) : "",
             run_check_additional: runNodeFull,
             check_additional_matrix: createMatrix(runNodeFull ? additionalChecks : []),
@@ -2501,8 +2516,17 @@ jobs:
 
           const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, "browser-native-host.json"), "utf8"));
           assert.equal(report.success, true);
-          assert.equal(report.numTotalTests, 1);
-          assert.equal(report.numPassedTests, 1);
+          const expectedNames = [
+            "does not inspect or migrate configuration before rejecting a malformed native request",
+            "rejects an unauthorized bootstrap caller before config, keys or database creation",
+            "rejects an unauthorized ensure_relay caller before config, keys or database creation",
+            ...["status", "setup", "pair"].map((command) =>
+              `preserves invalid-config diagnostics for ordinary extension command ${JSON.stringify(command)}`),
+            ...["launcher", "cli"].map((entry) =>
+              `launches ${entry} with the exact custom installation context when Chrome has no selectors`),
+          ].map((name) => `native host registration ${name}`).sort();
+          assert.equal(report.numTotalTests, expectedNames.length);
+          assert.equal(report.numPassedTests, expectedNames.length);
           for (const key of ["numFailedTestSuites", "numPendingTestSuites", "numFailedTests", "numPendingTests", "numTodoTests"]) {
             assert.equal(report[key], 0, key);
           }
@@ -2510,11 +2534,11 @@ jobs:
           const file = report.testResults[0];
           assert.equal(file.name, path.resolve("extensions/browser/src/browser/extension-install.native-host.e2e.test.ts"));
           assert.equal(file.status, "passed");
-          assert.equal(file.assertionResults.length, 1);
-          const fullName = "native host registration launches with the exact custom installation context when Chrome has no selectors";
-          assert.equal(file.assertionResults[0].fullName, fullName);
-          assert.equal(file.assertionResults[0].status, "passed");
-          console.log(JSON.stringify({ proof: "browser-native-host", fullName, passed: 1, failed: 0, pending: 0 }));
+          assert.deepEqual(file.assertionResults.map((entry) => entry.fullName).sort(), expectedNames);
+          for (const entry of file.assertionResults) {
+            assert.equal(entry.status, "passed", entry.fullName);
+          }
+          console.log(JSON.stringify({ proof: "browser-native-host", fullNames: expectedNames, passed: expectedNames.length, failed: 0, pending: 0 }));
           BROWSER_PROOF_REPORT
 
       # Startup RSS is measured alone on every runner before independent dist
@@ -3414,11 +3438,13 @@ jobs:
           esac
 
       - name: Check startup corpus
-        # Main owns full coverage. PRs need an exact-tree coverage receipt from
+        # Main owns the selected corpus. PRs need an exact-tree coverage receipt from
         # their admitted Node plan; release gates retain their separate merge tree.
         # State cases mutate process-global config and database state. Independent
         # files let Vitest distribute the complete matrix across up to four workers.
         if: matrix.task == 'baseline-ratchets' && !(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.preflight.outputs.run_check == 'true') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'pull_request' && needs.preflight.outputs.startup_corpus_node_revision && needs.preflight.outputs.startup_corpus_node_revision == needs.preflight.outputs.checkout_revision)
+        env:
+          OPENCLAW_CI_STARTUP_CORPUS_TEST_FILES_JSON: ${{ needs.preflight.outputs.startup_corpus_test_files_json }}
         run: |
           set -euo pipefail
           # Prepare once before Vitest workers consume the runtime.
@@ -3431,7 +3457,14 @@ jobs:
                 --reporter verbose --reporter github-actions --reporter ./scripts/lib/vitest-resource-reporter.mts "$@"
             fi
           }
-          if [[ -f test/vitest/vitest.startup-corpus-paths.mjs ]]; then
+          if [[ -n "${OPENCLAW_CI_STARTUP_CORPUS_TEST_FILES_JSON:-}" ]]; then
+            # Use the manifest's inventory for both Node receipts and this fallback.
+            startup_files_text="$(node -p 'JSON.parse(process.env.OPENCLAW_CI_STARTUP_CORPUS_TEST_FILES_JSON).join(" ")')"
+            read -r -a startup_files <<< "$startup_files_text"
+            startup_workers="$(node -p 'Math.min(4, require("node:os").availableParallelism())')"
+            run_startup_corpus --maxWorkers="$startup_workers" "${startup_files[@]}"
+            exit 0
+          elif [[ -f test/vitest/vitest.startup-corpus-paths.mjs ]]; then
             # Runner labels can advertise more CPUs than this process can use.
             startup_workers="$(node -p 'Math.min(4, require("node:os").availableParallelism())')"
             run_startup_corpus --maxWorkers="$startup_workers" src/config/config-startup-corpus.test.ts \

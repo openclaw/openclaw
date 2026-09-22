@@ -608,12 +608,9 @@ describe("memory vector KNN subprocess boundary", () => {
   });
 
   it("fails vector recall closed when the subprocess is unavailable", async () => {
-    const prepare = vi.fn(() => {
-      throw new Error("same-thread SQLite must not run");
-    });
+    const runFallback = vi.fn(async () => []);
     await expect(
       searchVector({
-        db: { prepare } as unknown as DatabaseSync,
         vectorTable: "memory_index_chunks_vec",
         providerModel: "test-model",
         queryVec: [1, 0],
@@ -623,10 +620,10 @@ describe("memory vector KNN subprocess boundary", () => {
         runVectorKnn: async () => {
           throw new Error("subprocess unavailable");
         },
+        runFallback,
         sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
       }),
     ).rejects.toThrow("subprocess unavailable");
-    expect(prepare).not.toHaveBeenCalled();
+    expect(runFallback).not.toHaveBeenCalled();
   });
 });

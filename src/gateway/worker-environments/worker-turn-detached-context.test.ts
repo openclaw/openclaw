@@ -10,7 +10,10 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import {
+  buildPersistedUserTurnMessage,
+  createUserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createCoordinatorTestService } from "./placement-dispatch-coordinator.test-support.js";
@@ -30,6 +33,7 @@ import {
   dispatchInitialWorkerPlacement,
   measureLaunchTurn,
   placements,
+  readWorkerTurnTranscriptStorageRows,
   root,
   seedActivePlacement,
   sessionTarget,
@@ -311,6 +315,75 @@ describe("worker detached model-context branch parity", () => {
       await pendingPersistence;
     }
   });
+
+  it.each(["current", "cancel"] as const)(
+    "hydrates a runtime-persisted recorder leaf with %s authority without replaying its input",
+    async (change) => {
+      const { manager } = seedPrevious();
+      const beforeRows = readWorkerTurnTranscriptStorageRows();
+      const inputRecorder = recorder();
+      const abort = new AbortController();
+      const message = buildPersistedUserTurnMessage({
+        text: "current request",
+        idempotencyKey: "synthetic-current-user",
+      });
+      let runtimePersisted = false;
+      const snapshot = vi
+        .spyOn(SessionManager.prototype, "buildSessionContext")
+        .mockImplementationOnce(function (this: SessionManager) {
+          snapshot.mockRestore();
+          const context = this.buildSessionContext();
+          const persisted = manager.appendMessageWithTranscriptAnchor(message);
+          if (!persisted.anchor) {
+            throw new Error("expected canonical runtime anchor");
+          }
+          inputRecorder.markRuntimePersisted(message, persisted.anchor, {
+            appended: persisted.appended,
+          });
+          runtimePersisted = true;
+          return context;
+        });
+      const open = SessionManager.openAsync.bind(SessionManager);
+      const hydration = vi
+        .spyOn(SessionManager, "openAsync")
+        .mockImplementationOnce(async (...args) => {
+          const prepared = await open(...args);
+          if (change === "cancel") {
+            abort.abort(new Error("cancel during recorder leaf hydration"));
+          }
+          return prepared;
+        });
+      try {
+        const result = await launchProbe({
+          ...request(`runtime-recorder-${change}`),
+          userTurnTranscriptRecorder: inputRecorder,
+          abortSignal: abort.signal,
+        });
+        expect(runtimePersisted).toBe(true);
+        expect(hydration).toHaveBeenCalledOnce();
+        if (change === "current") {
+          expect(result.launch).toEqual({
+            baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
+            history: prior,
+          });
+        } else {
+          expect(result.credentialCalls).toBe(0);
+          expect(result.tunnelCalls).toBe(0);
+          expect(result.outcome).toMatchObject({ kind: "rejected", error: expect.any(Error) });
+        }
+        expect(visible(SessionManager.open(sessionTarget).buildSessionContext().messages)).toEqual([
+          ...prior,
+          { role: "user", text: "current request" },
+        ]);
+        expect(readWorkerTurnTranscriptStorageRows().slice(0, beforeRows.length)).toEqual(
+          beforeRows,
+        );
+      } finally {
+        snapshot.mockRestore();
+        hydration.mockRestore();
+      }
+    },
+  );
 
   it("preserves logical base leaf when durable side-append placement differs", async () => {
     const { manager, previousLeafId } = seedPrevious();

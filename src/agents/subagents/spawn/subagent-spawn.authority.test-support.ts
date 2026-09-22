@@ -10,7 +10,9 @@ import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
 } from "../../../config/config.js";
+import { callGateway } from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
+import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
@@ -23,6 +25,7 @@ import * as privateStores from "../../../infra/private-file-store.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import {
   captureActivePluginRegistrySnapshot,
+  getActivePluginRegistry,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
@@ -40,18 +43,22 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
-import {
-  resetSubagentRegistryForTests,
-  testing as registryTesting,
-} from "../registry/subagent-registry.test-helpers.js";
+import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
+
+vi.mock("../../runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle:
+    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
+}));
+vi.mock("../../../gateway/call.js", { spy: true });
 
 export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) {
   const completed = createDeferred();
@@ -235,14 +242,14 @@ export function installSpawnAuthorityFixture() {
     resetSubagentRegistryForTests({ persist: false });
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
-    registryTesting.setDepsForTest({
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      callGateway: async (request) => {
-        if (request.method !== "agent.wait") {
-          throw new Error(`Unexpected registry RPC ${request.method}`);
-        }
-        return await new Promise<never>(() => {});
-      },
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
+      () => getActivePluginRegistry() ?? createTestRegistry([]),
+    );
+    vi.mocked(callGateway).mockImplementation(async (request) => {
+      if (request.method !== "agent.wait") {
+        throw new Error(`Unexpected registry RPC ${request.method}`);
+      }
+      return await new Promise<never>(() => {});
     });
   });
 
@@ -253,7 +260,8 @@ export function installSpawnAuthorityFixture() {
     resetTaskFlowRegistryForTests({ persist: false });
     schedulerTesting.reset();
     await cleanupSessionStateForTest({ stateDir });
-    registryTesting.setDepsForTest();
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+    vi.mocked(callGateway).mockReset();
     spawnTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -276,6 +284,18 @@ export function installSpawnAuthorityFixture() {
       getRuntimeConfig: () => cfg,
       getSessionEventSubscriberConnIds: () => new Set(),
       broadcastToConnIds: vi.fn(),
+      recoveryRuntime: {
+        waitForAgent: async () => await new Promise<never>(() => {}),
+        dispatchAgent: async () => {
+          throw new Error("Unexpected fixture recovery agent dispatch");
+        },
+        dispatchSessionMethod: async (method) => {
+          throw new Error(`Unexpected fixture recovery session method ${method}`);
+        },
+        sendRecoveryNotice: async () => {
+          throw new Error("Unexpected fixture recovery notice");
+        },
+      } satisfies GatewayRecoveryRuntime,
     });
     const admission = prepareAgentRunAdmission({
       cfg,

@@ -48,7 +48,7 @@ vi.mock("../../auto-reply/reply/message-received-hooks.js", () => ({
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: vi.fn(() => null),
   updateSessionEntry: vi.fn(async () => undefined),
-  recordSessionParticipant: vi.fn(),
+  recordSessionParticipant: vi.fn(async () => null),
 }));
 vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: vi.fn(),

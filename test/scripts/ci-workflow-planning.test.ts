@@ -180,6 +180,7 @@ function runCiManifestFixture(options: {
   bunTestRuntime?: boolean;
   bunUiTestRuntime?: boolean | "requires-ftl-flag";
   startupCorpusCoverage?: boolean;
+  startupCorpusSelection?: boolean;
   changedPlannerSource?: string | null;
   changedPlannerDependencies?: string[];
   changedPaths?: string[] | null;
@@ -315,6 +316,17 @@ function runCiManifestFixture(options: {
         path.join(scriptsDir, "ci-node-test-plan.mts"),
         `\nexport { hasCompleteStartupCorpusCoverage } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};\n`,
       );
+    }
+    if (options.startupCorpusSelection ?? options.startupCorpusCoverage) {
+      appendFileSync(
+        path.join(scriptsDir, "ci-node-test-plan.mts"),
+        `\nexport { resolveStartupCorpusTestFiles } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};\n`,
+      );
+      for (const file of startupCorpusTestFiles) {
+        const target = path.join(root, file);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, "export {};\n");
+      }
     }
     if (options.changedCoreTestSupport) {
       for (const file of [
@@ -3065,6 +3077,7 @@ describe("ci workflow guards", () => {
       );
       expect(JSON.parse(coverage.slice("dedicated-coverage:".length))).toEqual({
         includeReleaseOnlyToolingShards: false,
+        includeReleaseOnlyRuntimeTests: false,
         runnerBackend: runnerProfile,
         dedicatedContractShards: dedicated,
         dedicatedUiE2e: uiE2e,
@@ -4446,11 +4459,12 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it("runs the startup corpus once when a canonical PR admits every complete Node file", () => {
+  it("runs the selected startup corpus once when a canonical PR admits every selected Node file", () => {
     const revision = "a".repeat(40);
     const shards = createNodeTestShardBundles({
       compactMode: "pull-request",
       includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyRuntimeTests: false,
     });
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
@@ -4462,6 +4476,11 @@ describe("ci workflow guards", () => {
     });
     expect(manifest.status, manifest.output).toBe(0);
     expect(manifest.outputs.startup_corpus_node_revision).toBe(revision);
+    expect(
+      JSON.parse(
+        expectDefined(manifest.outputs.startup_corpus_test_files_json, "startup corpus inventory"),
+      ),
+    ).toEqual(["src/config/config-startup-corpus.test.ts"]);
     expect(manifest.outputs.run_checks_node_core_nondist).toBe("true");
     const step = readCiWorkflow().jobs["checks-fast-core"].steps.find(
       (entry: WorkflowStep) => entry.name === "Check startup corpus",
@@ -4486,6 +4505,28 @@ describe("ci workflow guards", () => {
 
   it.each<{ label: string } & Partial<Parameters<typeof runCiManifestFixture>[0]>>([
     { label: "missing planner capability", startupCorpusCoverage: false },
+    {
+      label: "directly edited state wrapper missing from Node coverage",
+      changedPaths: ["src/config/state-startup-corpus.part-2.test.ts"],
+      nodeTestShards: [
+        {
+          checkName: "config-corpus-only",
+          shardName: "config-corpus-only",
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          configs: [],
+          groups: [
+            {
+              shard_name: "core-runtime-config",
+              requiresDist: false,
+              runner: "ubuntu-24.04",
+              configs: ["test/vitest/vitest.runtime-config.config.ts"],
+              includePatterns: ["src/config/config-startup-corpus.test.ts"],
+            },
+          ],
+        },
+      ],
+    },
     { label: "different source tree", scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40) } },
     {
       label: "unknown source",
@@ -4555,11 +4596,12 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it("runs the startup corpus once on full canonical main pushes", () => {
-    const files = startupCorpusTestFiles;
+  it("runs the regular startup corpus once on full canonical main pushes", () => {
+    const files = ["src/config/config-startup-corpus.test.ts"];
     const groups = createNodeTestShardBundles({
       compactMode: "push",
       includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyRuntimeTests: false,
     }).flatMap((shard) => shard.groups);
     const steps: WorkflowStep[] = readCiWorkflow().jobs["checks-fast-core"].steps;
     for (const file of files) {
@@ -4591,119 +4633,210 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it.each([
-    { eventName: "pull_request", runCheck: true, frozenTarget: false, splitCorpus: true },
-    { eventName: "pull_request", runCheck: false },
-    { eventName: "push", runCheck: false },
-    { eventName: "push", ref: "refs/heads/release" },
-    { eventName: "push", repository: "fixture/openclaw" },
-    { eventName: "workflow_dispatch", releaseGate: false },
-    { eventName: "workflow_dispatch", releaseGate: true, frozenTarget: true, splitCorpus: true },
-    { eventName: "workflow_dispatch", releaseGate: true, frozenTarget: true, splitCorpus: false },
-  ] as const)("retains the startup corpus outside full canonical main: %j", (scenario) => {
-    const steps: WorkflowStep[] = readCiWorkflow().jobs["checks-fast-core"].steps;
-    const selected = steps.filter(
-      (step) =>
-        step.run?.includes("src/config/state-startup-corpus.test.ts") &&
-        (!step.if ||
-          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
-            repository: "openclaw/openclaw",
-            matrix: { task: "baseline-ratchets" },
-            runAttempt: 1,
-            ...scenario,
-          })),
+  it.each<{
+    label: string;
+    eventName: "pull_request" | "push" | "workflow_dispatch";
+    expectedFiles: readonly string[];
+    changedPaths?: readonly string[];
+    repository?: string;
+    releaseGate?: boolean;
+    frozenTarget?: boolean;
+    selectionCapability?: boolean;
+    splitCorpus?: boolean;
+  }>([
+    {
+      label: "automatic PR source change",
+      eventName: "pull_request",
+      changedPaths: ["src/config/io.ts"],
+      expectedFiles: ["src/config/config-startup-corpus.test.ts"],
+    },
+    {
+      label: "automatic PR directly edited wrappers",
+      eventName: "pull_request",
+      changedPaths: [
+        "src/config/state-startup-corpus.part-2.test.ts",
+        "src/config/state-startup-corpus.part-4.test.ts",
+      ],
+      expectedFiles: [
+        "src/config/config-startup-corpus.test.ts",
+        "src/config/state-startup-corpus.part-2.test.ts",
+        "src/config/state-startup-corpus.part-4.test.ts",
+      ],
+    },
+    {
+      label: "automatic main without Node coverage",
+      eventName: "push",
+      expectedFiles: ["src/config/config-startup-corpus.test.ts"],
+    },
+    {
+      label: "noncanonical PR",
+      eventName: "pull_request",
+      repository: "fixture/openclaw",
+      expectedFiles: startupCorpusTestFiles,
+    },
+    {
+      label: "manual Full Release Validation child",
+      eventName: "workflow_dispatch",
+      expectedFiles: startupCorpusTestFiles,
+    },
+    {
+      label: "exact-head PR release-gate substitute",
+      eventName: "workflow_dispatch",
+      releaseGate: true,
+      changedPaths: ["src/config/state-startup-corpus.part-2.test.ts"],
+      expectedFiles: [
+        "src/config/config-startup-corpus.test.ts",
+        "src/config/state-startup-corpus.part-2.test.ts",
+      ],
+    },
+    {
+      label: "frozen target with selection capability",
+      eventName: "workflow_dispatch",
+      frozenTarget: true,
+      expectedFiles: startupCorpusTestFiles,
+    },
+    {
+      label: "frozen target before selection capability",
+      eventName: "workflow_dispatch",
+      frozenTarget: true,
+      selectionCapability: false,
+      expectedFiles: [
+        "src/config/config-startup-corpus.test.ts",
+        ...stateStartupCorpusTestFiles.toSorted(),
+      ],
+    },
+    {
+      label: "frozen target before corpus split",
+      eventName: "workflow_dispatch",
+      frozenTarget: true,
+      selectionCapability: false,
+      splitCorpus: false,
+      expectedFiles: startupCorpusTestFiles,
+    },
+  ])("executes the manifest-selected startup fallback: $label", (scenario) => {
+    const repository = scenario.repository ?? "openclaw/openclaw";
+    const frozenTarget = scenario.frozenTarget ?? false;
+    const releaseGate = scenario.releaseGate ?? false;
+    const selectionCapability = scenario.selectionCapability ?? true;
+    const splitCorpus = scenario.splitCorpus ?? true;
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: scenario.eventName,
+      repository,
+      releaseGate,
+      runNode: false,
+      changedPaths: [...(scenario.changedPaths ?? ["src/config/io.ts"])],
+      startupCorpusSelection: selectionCapability,
+      scopeEnv: {
+        OPENCLAW_CI_WORKFLOW_REVISION: (frozenTarget ? "b" : "a").repeat(40),
+      },
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(manifest.outputs.startup_corpus_node_revision).toBe("");
+    expect(manifest.outputs.startup_corpus_test_files_json).toBe(
+      selectionCapability ? JSON.stringify(scenario.expectedFiles) : "",
     );
-    expect(selected).toHaveLength(1);
-    expect(selected[0]?.run).toContain("src/config/config-startup-corpus.test.ts");
-    if ("frozenTarget" in scenario) {
-      const directory = tempDirs.make("startup-corpus-command-");
-      const bin = path.join(directory, "bin");
-      const argsPath = path.join(directory, "args");
-      mkdirSync(bin);
-      if (scenario.splitCorpus) {
-        mkdirSync(path.join(directory, "test/vitest"), { recursive: true });
-        writeFileSync(path.join(directory, "test/vitest/vitest.startup-corpus-paths.mjs"), "");
-        mkdirSync(path.join(directory, "src/config"), { recursive: true });
-        for (const file of startupCorpusTestFiles) {
-          writeFileSync(path.join(directory, file), "");
-        }
+    const steps: WorkflowStep[] = readCiWorkflow().jobs["checks-fast-core"].steps;
+    const step = expectDefined(
+      steps.find((entry) => entry.name === "Check startup corpus"),
+      "startup corpus step",
+    );
+    const inventoryExpression = step.env?.OPENCLAW_CI_STARTUP_CORPUS_TEST_FILES_JSON;
+    if (typeof inventoryExpression !== "string") {
+      throw new TypeError("Startup corpus inventory must use a workflow expression");
+    }
+    const context = {
+      eventName: scenario.eventName,
+      repository,
+      releaseGate,
+      frozenTarget,
+      matrix: { task: "baseline-ratchets" },
+      runAttempt: 1,
+      preflightOutputs: manifest.outputs,
+    };
+    expect(evaluateWorkflowExpression(`\${{ ${step.if} }}`, context)).toBe(true);
+    const directory = tempDirs.make("startup-corpus-command-");
+    const bin = path.join(directory, "bin");
+    const argsPath = path.join(directory, "args");
+    mkdirSync(bin);
+    if (splitCorpus) {
+      mkdirSync(path.join(directory, "test/vitest"), { recursive: true });
+      writeFileSync(path.join(directory, "test/vitest/vitest.startup-corpus-paths.mjs"), "");
+      mkdirSync(path.join(directory, "src/config"), { recursive: true });
+      for (const file of startupCorpusTestFiles) {
+        writeFileSync(path.join(directory, file), "");
       }
-      writeExecutable(path.join(bin, "pnpm"), [
-        "#!/bin/sh",
-        '[ "$*" = "build qaRuntime" ] || exit 1',
-        "mkdir dist || exit 1",
-        "touch dist/.buildstamp",
+    }
+    writeExecutable(path.join(bin, "pnpm"), [
+      "#!/bin/sh",
+      '[ "$*" = "build qaRuntime" ] || exit 1',
+      "mkdir dist || exit 1",
+      "touch dist/.buildstamp",
+    ]);
+    writeExecutable(path.join(bin, "node"), [
+      "#!/bin/sh",
+      'test -f dist/.buildstamp || { echo "runtime not prepared" >&2; exit 1; }',
+      'if [ "$1" = "-p" ]; then exec "$STARTUP_CORPUS_NODE" "$@"; fi',
+      'label="${OPENCLAW_TEST_STARTUP_CORPUS_SHARD:-config}"',
+      'case "$label" in */*) label="${label%/*}-${label#*/}" ;; esac',
+      'printf "%s\\n" "$@" > "$STARTUP_CORPUS_ARGS.$label"',
+    ]);
+    const script = expectDefined(step.run, "startup corpus command").replace(
+      /\$\{\{[\s\S]*?\}\}/gu,
+      (expression) => String(evaluateWorkflowExpression(expression, context)),
+    );
+    const result = runWorkflowShellScript(script, {
+      cwd: directory,
+      env: {
+        ...process.env,
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        STARTUP_CORPUS_ARGS: argsPath,
+        STARTUP_CORPUS_NODE: testNodeExecPath,
+        OPENCLAW_CI_STARTUP_CORPUS_TEST_FILES_JSON: String(
+          evaluateWorkflowExpression(inventoryExpression, context),
+        ),
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const readArgs = (label: string) =>
+      readFileSync(`${argsPath}.${label.replace("/", "-")}`, "utf8")
+        .trim()
+        .split("\n");
+    const commonArgs = [
+      "scripts/run-vitest.mjs",
+      "run",
+      "--config",
+      "test/vitest/vitest.runtime-config.config.ts",
+      ...(frozenTarget
+        ? []
+        : [
+            "--reporter",
+            "verbose",
+            "--reporter",
+            "github-actions",
+            "--reporter",
+            "./scripts/lib/vitest-resource-reporter.mts",
+          ]),
+    ];
+    if (splitCorpus) {
+      expect(readArgs("config")).toEqual([
+        ...commonArgs,
+        `--maxWorkers=${Math.min(4, availableParallelism())}`,
+        ...scenario.expectedFiles,
       ]);
-      writeExecutable(path.join(bin, "node"), [
-        "#!/bin/sh",
-        'test -f dist/.buildstamp || { echo "runtime not prepared" >&2; exit 1; }',
-        'if [ "$1" = "-p" ]; then exec "$STARTUP_CORPUS_NODE" "$@"; fi',
-        'label="${OPENCLAW_TEST_STARTUP_CORPUS_SHARD:-config}"',
-        'case "$label" in */*) label="${label%/*}-${label#*/}" ;; esac',
-        'printf "%s\\n" "$@" > "$STARTUP_CORPUS_ARGS.$label"',
+      expect(readdirSync(directory).filter((file) => file.startsWith("args."))).toEqual([
+        "args.config",
       ]);
-      const script = expectDefined(selected[0]?.run, "startup corpus command").replace(
-        /\$\{\{[\s\S]*?\}\}/gu,
-        (expression) =>
-          String(
-            evaluateWorkflowExpression(expression, {
-              repository: "openclaw/openclaw",
-              runAttempt: 1,
-              ...scenario,
-            }),
-          ),
-      );
-      const result = runWorkflowShellScript(script, {
-        cwd: directory,
-        env: {
-          ...process.env,
-          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-          STARTUP_CORPUS_ARGS: argsPath,
-          STARTUP_CORPUS_NODE: testNodeExecPath,
-        },
-      });
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      const readArgs = (label: string) =>
-        readFileSync(`${argsPath}.${label.replace("/", "-")}`, "utf8")
-          .trim()
-          .split("\n");
-      const commonArgs = [
-        "scripts/run-vitest.mjs",
-        "run",
-        "--config",
-        "test/vitest/vitest.runtime-config.config.ts",
-        ...(scenario.frozenTarget
-          ? []
-          : [
-              "--reporter",
-              "verbose",
-              "--reporter",
-              "github-actions",
-              "--reporter",
-              "./scripts/lib/vitest-resource-reporter.mts",
-            ]),
-      ];
-      if (scenario.splitCorpus) {
-        expect(readArgs("config")).toEqual([
+    } else {
+      expect(readArgs("config")).toEqual([
+        ...commonArgs,
+        "src/config/config-startup-corpus.test.ts",
+      ]);
+      for (const shard of ["1/4", "2/4", "3/4", "4/4"]) {
+        expect(readArgs(shard), shard).toEqual([
           ...commonArgs,
-          `--maxWorkers=${Math.min(4, availableParallelism())}`,
-          "src/config/config-startup-corpus.test.ts",
-          ...stateStartupCorpusTestFiles.toSorted(),
+          "src/config/state-startup-corpus.test.ts",
         ]);
-        expect(readdirSync(directory).filter((file) => file.startsWith("args."))).toEqual([
-          "args.config",
-        ]);
-      } else {
-        expect(readArgs("config")).toEqual([
-          ...commonArgs,
-          "src/config/config-startup-corpus.test.ts",
-        ]);
-        for (const shard of ["1/4", "2/4", "3/4", "4/4"]) {
-          expect(readArgs(shard), shard).toEqual([
-            ...commonArgs,
-            "src/config/state-startup-corpus.test.ts",
-          ]);
-        }
       }
     }
   });
@@ -5423,14 +5556,15 @@ describe("ci workflow guards", () => {
   });
 
   it.each([
-    ["pull_request", "openclaw/openclaw", true],
-    ["pull_request", "example/openclaw", false],
-    ["push", "openclaw/openclaw", false],
-    ["push", "example/openclaw", false],
-    ["workflow_dispatch", "openclaw/openclaw", false],
+    ["pull_request", "openclaw/openclaw", true, false],
+    ["pull_request", "example/openclaw", false, false],
+    ["push", "openclaw/openclaw", false, false],
+    ["push", "example/openclaw", false, false],
+    ["workflow_dispatch", "openclaw/openclaw", false, false],
+    ["workflow_dispatch", "openclaw/openclaw", true, true],
   ] as const)(
-    "forwards release tiers and canonical PR changed paths (%s, %s)",
-    (eventName, repository, forwardsChangedPaths) => {
+    "forwards release tiers and canonical PR changed paths (%s, %s, changed paths=%s, release gate=%s)",
+    (eventName, repository, forwardsChangedPaths, releaseGate) => {
       const changedPaths = [
         "src/plugins/manifest-tool-availability.ts",
         "src/plugins/tools.optional.test.ts",
@@ -5442,6 +5576,9 @@ describe("ci workflow guards", () => {
             if (options.includeReleaseOnlyToolingShards !== false) {
               throw new Error("automatic precise plan must defer unrelated tooling");
             }
+            if (options.includeReleaseOnlyRuntimeTests !== false) {
+              throw new Error("automatic precise plan must defer release-only runtime tests");
+            }
             return null;
           };
           export const createChangedExtensionFallbackShards = () => [];
@@ -5449,6 +5586,7 @@ describe("ci workflow guards", () => {
         changedPaths,
         eventName,
         repository,
+        releaseGate,
       });
       expect(manifest.status, manifest.output).toBe(0);
       const plannerOptions = JSON.parse(
@@ -5461,6 +5599,8 @@ describe("ci workflow guards", () => {
         includeReleaseOnlyPluginShards: false,
         includeReleaseOnlyToolingShards:
           eventName === "workflow_dispatch" || repository !== "openclaw/openclaw",
+        includeReleaseOnlyRuntimeTests:
+          (eventName === "workflow_dispatch" && !releaseGate) || repository !== "openclaw/openclaw",
       });
       const rows = JSON.parse(
         expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "fallback matrix"),
@@ -7195,61 +7335,71 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it("packs flat manual Node rows below the output budget without changing their plan", () => {
-    const configs = ["test/vitest/vitest.unit-fast.config.ts"];
-    const env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
-    const includePatterns = Array.from(
-      { length: 6_000 },
-      (_, index) =>
-        `src/infra/manual-inventory/owner-${index}/workflow-contract-process-boundaries.test.ts`,
-    );
-    const manifest = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "workflow_dispatch",
-      historicalCompatibility: false,
-      releaseGate: true,
-      scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40) },
-      nodeTestShards: [
+  it.each([undefined, "changed-manual-inventory"])(
+    "packs flat manual Node rows without losing timing identity %s",
+    (timingKey) => {
+      const configs = ["test/vitest/vitest.unit-fast.config.ts"];
+      const env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
+      const includePatterns = Array.from(
+        { length: 6_000 },
+        (_, index) =>
+          `src/infra/manual-inventory/owner-${index}/workflow-contract-process-boundaries.test.ts`,
+      );
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "workflow_dispatch",
+        historicalCompatibility: false,
+        releaseGate: true,
+        scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40) },
+        nodeTestShards: [
+          {
+            checkName: "checks-node-manual-inventory",
+            configs,
+            env,
+            includePatterns,
+            requiresDist: false,
+            runner: "ubuntu-24.04",
+            shardName: "manual-inventory",
+            timing_key: timingKey,
+            timeoutMinutes: 20,
+          },
+        ],
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputChars).toBeLessThan(262_144);
+      const rows = JSON.parse(
+        expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "manual Node matrix"),
+      ).include;
+      expect(rows).toHaveLength(1);
+      const [row] = rows;
+      expect(row).toMatchObject({
+        check_name: "checks-node-manual-inventory",
+        env,
+        runner: "ubuntu-24.04",
+        shard_name: "manual-inventory",
+        timeout_minutes: 20,
+      });
+      for (const field of ["groups", "configs", "includePatterns"]) {
+        expect(row).not.toHaveProperty(field);
+      }
+      expect(
+        resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: row.groups_gzip_base64 }),
+      ).toEqual([
         {
-          checkName: "checks-node-manual-inventory",
-          configs,
-          env,
-          includePatterns,
-          requiresDist: false,
-          runner: "ubuntu-24.04",
-          shardName: "manual-inventory",
-          timeoutMinutes: 20,
+          kind: "group",
+          name: "manual-inventory",
+          timingKey: timingKey ?? "manual-inventory",
+          plan: {
+            configs,
+            env,
+            includePatterns,
+            shard_name: "manual-inventory",
+            ...(timingKey ? { timing_key: timingKey } : {}),
+          },
         },
-      ],
-    });
-    expect(manifest.status, manifest.output).toBe(0);
-    expect(manifest.outputChars).toBeLessThan(262_144);
-    const rows = JSON.parse(
-      expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "manual Node matrix"),
-    ).include;
-    expect(rows).toHaveLength(1);
-    const [row] = rows;
-    expect(row).toMatchObject({
-      check_name: "checks-node-manual-inventory",
-      env,
-      runner: "ubuntu-24.04",
-      shard_name: "manual-inventory",
-      timeout_minutes: 20,
-    });
-    for (const field of ["groups", "configs", "includePatterns"]) {
-      expect(row).not.toHaveProperty(field);
-    }
-    expect(
-      resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: row.groups_gzip_base64 }),
-    ).toEqual([
-      {
-        kind: "group",
-        name: "manual-inventory",
-        timingKey: "manual-inventory",
-        plan: { configs, env, includePatterns, shard_name: "manual-inventory" },
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 
   it.each([
     ...(["github", "hybrid", "blacksmith"] as const).map((runnerProfile) => ({

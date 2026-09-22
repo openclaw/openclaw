@@ -328,6 +328,17 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         ),
       };
     }
+    if (params.method.startsWith("sessions.groups.")) {
+      const { ensureSessionGroupCatalog } = await import("./session-group-catalog.js");
+      await ensureSessionGroupCatalog();
+      const groupProjection = getSessionRowProjection(params.context);
+      if (groupProjection) {
+        do {
+          await groupProjection.prepareMembership();
+        } while (groupProjection.needsMembershipPreparation());
+      }
+      params.expectedProfileBinding?.assertCurrent();
+    }
     const projection =
       params.method === "sessions.describe" && !isGatewayAdmin(params.client)
         ? getSessionRowProjection(params.context)

@@ -115,15 +115,15 @@ describe("Windows skills watcher paths", () => {
         // Recreate can precede the retired generation's final ready/unlink events.
         retired?.emit("ready");
         retired?.emit("all", "unlinkDir", sourceRoot);
-        const readyWatchers = [...createdWatchers];
-        for (const watcher of readyWatchers) {
+        for (const watcher of createdWatchers) {
           if (!watcher.closed) {
             watcher.emit("ready");
           }
         }
         await vi.advanceTimersByTimeAsync(250);
         expect(getSkillsSourceVersion(workspaceDir)).toBeGreaterThan(sourceVersion);
-        expect(watchForSkillRoot(sourceRoot).watcher).toBe(replacement);
+        expect(replacement.closed).toBe(true);
+        expect(watchForSkillRoot(sourceRoot).watcher.closed).toBe(false);
         refreshModule.ensureSkillsWatcher({
           workspaceDir,
           config: { skills: { load: { watch: false } } },

@@ -21,8 +21,13 @@ import {
   isPolicyTestOwnedPath,
   packNodeTestGroups,
   resolvePolicyTestTargets,
+  resolveStartupCorpusTestFiles,
 } from "../../scripts/lib/ci-node-test-plan.mts";
-import { isCiProofTestFile } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import {
+  isCiProofTestFile,
+  isReleaseOnlyRuntimeTestFile,
+  RELEASE_ONLY_RUNTIME_TEST_FILES,
+} from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { isRuntimePlacementIncludePatterns } from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { isExclusiveCiTestConfig } from "../../scripts/lib/local-check-runtime.mts";
@@ -154,6 +159,28 @@ describe("startup corpus coverage", () => {
     expect(listMatchedTestFiles(createRuntimeConfigVitestConfig({}))).toEqual(
       expect.arrayContaining(files),
     );
+  });
+  it("certifies only the selected tier and directly edited startup cells", () => {
+    const regular = "src/config/config-startup-corpus.test.ts";
+    const changed = "src/config/state-startup-corpus.part-2.test.ts";
+    const options = { includeReleaseOnlyRuntimeTests: false };
+    expect(resolveStartupCorpusTestFiles()).toEqual(files);
+    expect(resolveStartupCorpusTestFiles(options)).toEqual([regular]);
+    const selected = resolveStartupCorpusTestFiles({
+      ...options,
+      changedPaths: [changed, "src/config/state-startup-corpus.test-support.ts"],
+    });
+    expect(selected).toEqual([regular, changed]);
+    const shards = [{ requiresDist: false, groups: [{ ...group, includePatterns: selected }] }];
+    expect(hasCompleteStartupCorpusCoverage(shards, selected)).toBe(true);
+    expect(hasCompleteStartupCorpusCoverage(shards)).toBe(false);
+    expect(hasCompleteStartupCorpusCoverage(shards, [])).toBe(false);
+    expect(
+      hasCompleteStartupCorpusCoverage(
+        [{ requiresDist: false, groups: [{ ...group, includePatterns: [regular] }] }],
+        selected,
+      ),
+    ).toBe(false);
   });
   it.each<
     { label: string } & Partial<Parameters<typeof hasCompleteStartupCorpusCoverage>[0][number]>
@@ -3548,6 +3575,72 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       manual.find((shard) => shard.shardName === "agentic-gateway-server-isolated")
         ?.includePatterns,
     ).toContain("src/gateway/server.chat-recovered-output.test.ts");
+  });
+
+  it.each(["blacksmith", "github", "hybrid"])(
+    "defers exactly the runtime release inventory from automatic plans on %s",
+    (runnerBackend) => {
+      const reducedOwners = defaultShards
+        .filter(
+          (shard) =>
+            shard.shardName === "core-runtime-config" ||
+            shard.includePatterns?.some(isReleaseOnlyRuntimeTestFile),
+        )
+        .map((shard) => shard.shardName);
+      for (const compactMode of ["push", "pull-request"] as const) {
+        const before = getCommittedCompactPlan(compactMode, runnerBackend);
+        const after = createNodeTestShardBundles({
+          compactMode,
+          runnerBackend,
+          includeReleaseOnlyPluginShards: false,
+          includeReleaseOnlyRuntimeTests: false,
+          changedPaths: ["src/config/state-startup-corpus.test-support.ts"],
+        });
+        const files = (plan: CompactNodeTestShard[]) =>
+          plan.flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns ?? []));
+        const beforeFiles = files(before);
+        const afterFiles = files(after);
+        expect(beforeFiles.filter((file) => !afterFiles.includes(file)).toSorted()).toEqual(
+          [...RELEASE_ONLY_RUNTIME_TEST_FILES].toSorted(),
+        );
+        expect(afterFiles.filter((file) => !beforeFiles.includes(file))).toEqual([]);
+        expect(afterFiles).toContain("src/config/config-startup-corpus.test.ts");
+        for (const owner of reducedOwners) {
+          const owns = (group: { shard_name: string }) =>
+            group.shard_name === owner || group.shard_name.startsWith(`${owner}-hosted-`);
+          const reduced = after.flatMap((shard) => shard.groups).filter(owns);
+          expect(reduced.length, owner).toBeGreaterThan(0);
+          for (const group of reduced) {
+            const timingKey = expectDefined(group.timing_key, "reduced runtime timing identity");
+            expect(parseCompactSplitTimingKey(timingKey)?.parentShardName ?? timingKey).toBe(
+              `changed-${owner}`,
+            );
+          }
+        }
+      }
+    },
+  );
+
+  it("keeps noncompact reduced runtime bundles separate from release timing history", () => {
+    const full = createNodeTestShardBundles();
+    const reduced = createNodeTestShardBundles({ includeReleaseOnlyRuntimeTests: false });
+    for (const config of [
+      "test/vitest/vitest.runtime-config.config.ts",
+      "test/vitest/vitest.infra.config.ts",
+      "test/vitest/vitest.unit-src.config.ts",
+    ]) {
+      expect(
+        full.filter((shard) => shard.configs.includes(config)).some((shard) => shard.timing_key),
+      ).toBe(false);
+      const owners = reduced.filter((shard) => shard.configs.includes(config) && shard.timing_key);
+      expect(owners.length, config).toBeGreaterThan(0);
+      for (const owner of owners) {
+        const key = expectDefined(owner.timing_key, "reduced bundle timing identity");
+        expect(parseCompactSplitTimingKey(key)?.parentShardName ?? key).toBe(
+          `changed-${owner.shardName}`,
+        );
+      }
+    }
   });
 
   it("preserves runtime preparation and core-only ownership in full and compact plans", () => {

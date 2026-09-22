@@ -67,6 +67,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
+  assertAgentDatabaseTerminalOpenAllowed,
   startAgentDatabaseOpenTiming,
   closeCachedOpenClawAgentDatabase,
   closeMaintenanceAgentDatabase,
@@ -268,10 +269,7 @@ function* openOpenClawAgentDatabaseSteps(
   quarantineOrphanedSqliteSidecars(pathname);
   // Latched paths are quarantined; every fresh open fails fast here until
   // doctor repairs the file and clears the latch plus the persisted row.
-  const terminalFailure = cache.terminal.get(pathname);
-  if (terminalFailure) {
-    throw terminalFailure;
-  }
+  assertAgentDatabaseTerminalOpenAllowed(pathname);
   const persistedFailure = readOpenClawDatabaseQuarantineFailure("agent", pathname, {
     env: databaseOptions.env,
   });

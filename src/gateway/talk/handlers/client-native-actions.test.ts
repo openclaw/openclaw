@@ -21,10 +21,12 @@ import {
 } from "../../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../../agents/sessions/session-manager.js";
 import {
+  loadExactSessionEntry,
   loadTranscriptEventsSync,
   readSessionTranscriptMessageEvents,
 } from "../../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../../config/sessions/session-transcript-reconcile.js";
 import { onInternalSessionTranscriptUpdate } from "../../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
@@ -37,10 +39,11 @@ import {
   registerClientVoiceConsultRun,
   resolveClientVoiceRunBinding,
 } from "../../../talk/client-voice-session.js";
+import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.js";
 import { projectChatDisplayMessages } from "../../chat-display-projection.js";
 import { createTranscriptUpdateBroadcastHandler } from "../../server-session-events.js";
 import { createSessionRowProjection } from "../../session-row-projection.js";
-import { readSessionPreviewItemsFromTranscript } from "../../session-transcript-preview.js";
+import { readSessionPreviewItemsFromTranscriptAsync } from "../../session-transcript-preview.js";
 import { readSessionMessagesAsync } from "../../session-transcript-readers.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import {
@@ -370,10 +373,28 @@ describe("native Talk action ownership through public plugin registration", () =
         append(`excluded sentinel ${index}`, { display: false, excludeFromContext: true });
       }
       const raw = rawTranscriptRows();
-      const display = readSessionPreviewItemsFromTranscript(scope, 16, 800);
+      const display = await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800);
       expect.soft(display.map((item) => item.text)).toEqual(["ordinary", "display only"]);
-      const context = readSessionPreviewItemsFromTranscript(scope, 16, 800, "model-context");
-      expect.soft(context.map((item) => item.text)).toEqual(["ordinary", "context only"]);
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: scope.agentId,
+        path: scope.storePath,
+      });
+      const sessionEntry = loadExactSessionEntry(scope)?.entry;
+      expect(sessionEntry?.sessionId).toBe(SESSION_ID);
+      await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
+      const sql = observeMainThreadSql();
+      try {
+        const context = await readSessionPreviewItemsFromTranscriptAsync(
+          { ...scope, sessionEntry },
+          16,
+          800,
+          "model-context",
+        );
+        expect(context.map((item) => item.text)).toEqual(["ordinary", "context only"]);
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
       await connectNativeSession(fixture);
       expect(nativeBackgroundItems(await nativeCallSession())).toEqual([
         { role: "user", text: "ordinary" },
@@ -386,11 +407,11 @@ describe("native Talk action ownership through public plugin registration", () =
       append("post-reset excluded", { display: false, excludeFromContext: true });
       const resetRaw = rawTranscriptRows();
       expect(
-        readSessionPreviewItemsFromTranscript(scope, 16, 800, "model-context").map(
+        (await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800, "model-context")).map(
           (item) => item.text,
         ),
       ).toEqual(["reset-kept"]);
-      expect(readSessionPreviewItemsFromTranscript(scope, 16, 800)).toEqual([]);
+      expect(await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800)).toEqual([]);
       await connectNativeSession(fixture);
       expect(nativeBackgroundItems(await nativeCallSession())).toEqual([
         { role: "user", text: "reset-kept" },
@@ -399,7 +420,12 @@ describe("native Talk action ownership through public plugin registration", () =
       for (let index = 0; index < 20; index++) {
         append(`${index}:` + "x".repeat(30));
       }
-      const bounded = readSessionPreviewItemsFromTranscript(scope, 3, 20, "model-context");
+      const bounded = await readSessionPreviewItemsFromTranscriptAsync(
+        scope,
+        3,
+        20,
+        "model-context",
+      );
       expect(bounded).toEqual(
         [17, 18, 19].map((index) => ({ role: "user", text: `${index}:` + "x".repeat(14) + "..." })),
       );
@@ -607,9 +633,11 @@ describe("native Talk action ownership through public plugin registration", () =
 
   it("consumes a startup control with a visible refusal before any backend publishes", async () => {
     const release = createDeferredCore();
+    const started = createDeferredCore();
     let signal: AbortSignal | undefined;
     upstream.runEmbeddedAgent.mockImplementationOnce(async (params) => {
       signal = params.abortSignal;
+      started.resolve();
       await release.promise;
       return await withRegisteredNativeEmbeddedRun(params, () => ({
         payloads: [{ text: "Original task completed normally." }],
@@ -620,7 +648,9 @@ describe("native Talk action ownership through public plugin registration", () =
       const { socket } = await connectNativeSession(fixture);
       try {
         socket.serverEvent(nativeDelegation("original-task", "Keep working."));
-        await vi.waitFor(() => expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce());
+        await started.promise;
+        expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
+        expect(ACTIVE_EMBEDDED_RUNS.has(SESSION_ID)).toBe(false);
         const before = socket.sent.length;
         socket.serverEvent(nativeDelegation("startup-control", "use the release branch instead"));
         await vi.waitFor(() =>

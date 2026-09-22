@@ -3,11 +3,11 @@ import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveSessionStorePathCore as resolveStorePath } from "../../config/sessions.js";
 import {
   patchSessionEntryCore,
-  recordSessionParticipant,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -35,7 +35,8 @@ afterEach(() => {
 });
 
 test("projects recap eligibility from current sharing authority, including capped shared viewers", async () => {
-  using _ = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+  const now = Date.now();
+  using _ = vi.spyOn(Date, "now").mockReturnValue(now);
   const ownerId = ensureProfileForEmail("recap-reader@example.test").id;
   setUserProfileRole(ownerId, "view");
   const client = identifiedClient(ownerId);
@@ -50,7 +51,7 @@ test("projects recap eligibility from current sharing authority, including cappe
       { agentId: "main", sessionKey: `agent:main:recap-${name}`, storePath },
       {
         sessionId: `recap-${name}`,
-        updatedAt: 1,
+        updatedAt: now,
         visibility,
         createdActor: { type: "human", source: "profile", id: creator },
       },

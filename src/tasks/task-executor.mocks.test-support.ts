@@ -15,7 +15,7 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("./task-registry-delivery-runtime.js", () => ({
   sendMessage: hoisted.sendMessageMock,
-  resolveTaskControlUiSessionUrl: () => undefined,
+  prepareTaskControlUiSessionUrl: async () => () => undefined,
 }));
 
 vi.mock("./task-registry-control.runtime.js", () => ({

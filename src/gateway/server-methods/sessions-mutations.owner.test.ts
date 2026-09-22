@@ -19,7 +19,7 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -151,7 +151,7 @@ describe("sessions.patch", () => {
           });
           expect(saved.details).toEqual({ ok: true, sessionKey, defaultPresentation: "expanded" });
           const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-          expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+          expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
           expect(loadSessionEntry(scope)).toMatchObject({
             boardFace: "dashboard",
             boardPresentation: "expanded",

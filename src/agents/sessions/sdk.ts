@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { resolveThinkingDefaultForModel } from "../../auto-reply/thinking.js";
 import { createSessionEntryWithTranscript } from "../../config/sessions/session-accessor.js";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withSessionMetadataPublication,
@@ -295,12 +296,7 @@ async function createAgentSessionImpl(
     const current = sessionManager.getSessionTarget();
     if (
       sessionManager.getSessionId() !== initialSessionId ||
-      (initialTarget
-        ? !current ||
-          (["agentId", "sessionId", "sessionKey", "storePath"] as const).some(
-            (key) => current[key] !== initialTarget[key],
-          )
-        : current !== undefined)
+      !sameSessionTranscriptTargetBinding(initialTarget, current)
     ) {
       throw new SessionTranscriptWriterClaimReboundError();
     }

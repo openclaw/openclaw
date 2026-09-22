@@ -489,12 +489,13 @@ describe("test-projects args", () => {
 
     const firstEnv = specs[0]?.env;
     expect(firstEnv?.KEEP_ME).toBe("1");
-    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
-      "/repo/.cache/vitest/0-test-vitest-vitest.gateway.config.ts",
-    );
-    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
-      "/repo/.cache/vitest/1-test-vitest-vitest.gateway-server.config.ts",
-    );
+    const paths = specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH);
+    expect(new Set(paths).size).toBe(2);
+    for (const cachePath of paths) {
+      expect(cachePath?.replaceAll("\\", "/")).toMatch(
+        /^\/repo\/\.cache\/vitest\/slots\/[a-f\d]+\/0$/u,
+      );
+    }
   });
 
   it("routes plugin targets to the plugins config", () => {

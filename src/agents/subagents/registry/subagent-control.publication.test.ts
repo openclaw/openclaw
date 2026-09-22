@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  persistSubagentRunsToDiskOrThrow,
+  useSubagentControlFixture,
+} from "./subagent-control.test-support.js";
 /** A cancellation result cannot publish a predecessor's task outcome after admitted reactivation. */
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -19,10 +25,7 @@ import { getTaskRegistryStore } from "../../../tasks/task-registry.store.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import * as killRuntime from "./subagent-control-kill-runtime.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
-import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
 import {
   markSubagentRunTerminated,
   registerSubagentRun,
@@ -33,7 +36,6 @@ import {
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
-import { testing } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
 const rootKey = "agent:main:subagent:publication-root";
@@ -95,16 +97,12 @@ it.each(["canonical", "managed"] as const)(
     const capture = createDeferred<string>();
     const captureEntered = createDeferred();
     const wait = createDeferred<AgentWaitResult>();
-    testing.setDepsForTest({
-      ...subagentRegistryDeps,
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
-      runSubagentAnnounceFlow: async () => "delivered",
-      captureSubagentCompletionReply: () => {
-        captureEntered.resolve();
-        return capture.promise;
-      },
+    fixture.announce.mockResolvedValue("delivered");
+    fixture.capture.mockImplementation(() => {
+      captureEntered.resolve();
+      return capture.promise;
     });
-    vi.spyOn(subagentRegistryDeps, "callGateway").mockImplementation(async (request) => {
+    fixture.gateway.mockImplementation(async (request) => {
       expect(request.method).toBe("agent.wait");
       return await wait.promise;
     });
@@ -249,14 +247,10 @@ it.each([
 ])(
   "fences task publication (replace=%s, priorChildKill=%s, completeDuringDrain=%s, handoff=%s, provisional=%s)",
   async (replace, priorChildKill, completeDuringDrain, handoff, provisional) => {
-    testing.setDepsForTest({
-      ...subagentRegistryDeps,
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
-      runSubagentAnnounceFlow: async () => "delivered",
-    });
+    fixture.announce.mockResolvedValue("delivered");
     const previousWait = createDeferred<AgentWaitResult>();
     const nextWait = createDeferred<AgentWaitResult>();
-    vi.spyOn(subagentRegistryDeps, "callGateway").mockImplementation(async (request) => {
+    fixture.gateway.mockImplementation(async (request) => {
       expect(request.method).toBe("agent.wait");
       const runId = (request.params as { runId: string }).runId;
       expect(["publication-b0", "publication-b1"]).toContain(runId);
