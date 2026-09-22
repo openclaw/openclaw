@@ -496,9 +496,18 @@ async function main() {
           checks.singlePageLimit = true;
           await closePlaywrightBrowserConnection({ cdpUrl });
           const replacement = await request("POST", "/tabs/open", { url: fixtureUrl.href });
+          assert(typeof replacement.targetId === "string" && replacement.targetId);
           assert.notEqual(replacement.targetId, targetId);
-          const stale = await dispatch("POST", "/act", { kind: "click", ref: "e1", targetId });
-          assert.notEqual(stale.status, 200);
+          const navigated = await request("POST", "/navigate", {
+            targetId: replacement.targetId,
+            url: fixtureUrl.href,
+          });
+          assert.equal(navigated.targetId, replacement.targetId);
+          const stale = await dispatch("POST", "/navigate", { targetId, url: fixtureUrl.href });
+          assert.equal(stale.status, 404, JSON.stringify(stale));
+          assert(stale.body && typeof stale.body === "object" && "error" in stale.body);
+          assert(typeof stale.body.error === "string");
+          assert.match(stale.body.error, /^tab not found(?::|$)/);
           checks.staleTargetRejected = true;
         }
         const sorted = tasks.map((item) => item.durationMs).toSorted((a, b) => a - b);
