@@ -34,6 +34,9 @@ describe("Firecrawl search result selection", () => {
     { data: { results: [first] } },
     { data: { data: [first] } },
     { data: { web: [first] } },
+    { data: { news: [first] } },
+    { data: { images: [first] } },
+    { data: { web: [], news: [first] } },
     { web: { results: [first] } },
     { data: [first], results: [second] },
     { results: [first], data: { results: [second] } },
@@ -43,6 +46,15 @@ describe("Firecrawl search result selection", () => {
     { data: false, results: "invalid", web: { results: [first] } },
   ])("selects the first supported result array: %j", async (payload) => {
     expect(await search(payload)).toMatchObject({ count: 1, results: [{ url: first.url }] });
+  });
+
+  it("combines populated Firecrawl source arrays", async () => {
+    const result = await search({ data: { web: [first], news: [second] } });
+
+    expect(result).toMatchObject({
+      count: 2,
+      results: [{ url: first.url }, { url: second.url }],
+    });
   });
 
   it.each([
