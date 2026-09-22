@@ -106,6 +106,13 @@ async function fixture(
           assertCurrent,
           onGranted,
         ),
+      "tasks.updateNotificationDelivery": (input) =>
+        originalCreate(
+          context,
+          { type: "tasks.updateNotificationDelivery", input },
+          assertCurrent,
+          onGranted,
+        ),
       "tasks.createRecord": (input) =>
         originalCreate(context, { type: "tasks.createRecord", input }, assertCurrent, onGranted),
       "tasks.settleUnstarted": (input) =>

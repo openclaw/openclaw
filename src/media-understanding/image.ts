@@ -539,7 +539,7 @@ async function describeImagesWithModelInternal(
       };
       const task: Promise<AssistantMessage> = trackAsyncWork(() => {
         if (!providerStreamFn) {
-          return complete(requestModel, context, streamOptions);
+          return complete(requestModel, context, streamOptions, assertResourcesOpen);
         }
         const stream = providerStreamFn(requestModel, context, streamOptions);
         // Acquire consumption before yielding so retirement cannot strand the returned stream.
