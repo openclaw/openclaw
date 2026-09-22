@@ -42,9 +42,7 @@ describe("native dynamics launch contract", () => {
       ...base,
       dynamics: { boundary: "isolated" },
     });
-    expect(first).toEqual(
-      prepareDynamicsSpawn({ ...base, dynamics: { boundary: "isolated" } }),
-    );
+    expect(first).toEqual(prepareDynamicsSpawn({ ...base, dynamics: { boundary: "isolated" } }));
     expect(first.task).not.toBe(
       prepareDynamicsSpawn({ ...base, dynamics: { boundary: "summary-only" } }).task,
     );
