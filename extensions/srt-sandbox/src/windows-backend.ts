@@ -18,6 +18,8 @@
 //
 // Additive and plugin-confined: it does not touch the macOS (S1/S3) or Linux
 // (S5) code paths, which keep using SrtSandboxBackend.
+import { rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import {
   grantWindowsAcl,
   installWindowsSandboxAsync,
@@ -36,7 +38,11 @@ import type { ResolvedSrtPluginConfig } from "./config.js";
 import { createSrtFsBridge } from "./fs-bridge.js";
 import { PinOwnerClient } from "./pin-owner-client.js";
 import { resolveWritableRoots, type SrtScopePolicyInput } from "./srt-runtime-config.js";
-import { buildWindowsPinOwnerInnerArgs } from "./windows-pin-owner-source.js";
+import {
+  buildWindowsPinOwnerInnerArgs,
+  PIN_OWNER_POWERSHELL,
+  WINDOWS_PIN_OWNER_SCRIPT_NAME,
+} from "./windows-pin-owner-source.js";
 import { WindowsScopeReaper } from "./windows-reaper.js";
 import {
   buildWindowsExecSpec,
@@ -73,6 +79,7 @@ export class WindowsSrtSandboxBackend {
   private sandboxUserSid: string | undefined;
   private pinOwnerClient: PinOwnerClient | undefined;
   private fsBridge: ReturnType<typeof createSrtFsBridge> | undefined;
+  private pinOwnerScriptPath: string | undefined;
 
   constructor(
     private readonly params: CreateSandboxBackendParams,
@@ -182,12 +189,29 @@ export class WindowsSrtSandboxBackend {
     return { stdout: result.stdout, stderr: result.stderr, code: result.code };
   }
 
+  /**
+   * Stage the pin-owner PowerShell to a file the scope account can read, inside
+   * a granted writable root, so it can be launched with `powershell -File`
+   * (the argv stays small — see buildWindowsPinOwnerInnerArgs). Written with a
+   * UTF-8 BOM so `-File` decodes the Unicode content unambiguously. Idempotent.
+   */
+  private stagePinOwnerScript(): string {
+    if (this.pinOwnerScriptPath) {
+      return this.pinOwnerScriptPath;
+    }
+    const scriptPath = path.join(this.params.workspaceDir, WINDOWS_PIN_OWNER_SCRIPT_NAME);
+    // Leading UTF-8 BOM so PowerShell's `-File` decodes the Unicode content.
+    writeFileSync(scriptPath, "\uFEFF" + PIN_OWNER_POWERSHELL, { encoding: "utf8" });
+    this.pinOwnerScriptPath = scriptPath;
+    return scriptPath;
+  }
+
   /** Spawn the NtCreateFile pin owner INSIDE the sandbox as the scope account. */
   private spawnPinOwner() {
-    const inner = buildWindowsPinOwnerInnerArgs(); // [powershell, ...flags, -EncodedCommand, <b64>]
-    const encoded = inner.at(-1)!;
+    const scriptPath = this.stagePinOwnerScript();
+    const inner = buildWindowsPinOwnerInnerArgs(scriptPath); // [powershell, ...flags, -File, <scriptPath>]
     const { argv, env } = buildWindowsExecSpec({
-      command: encoded,
+      command: scriptPath,
       cwd: this.params.workspaceDir,
       allowWrite: this.writableRoots,
       srtWin: this.srtWin,
@@ -202,6 +226,14 @@ export class WindowsSrtSandboxBackend {
     this.pinOwnerClient?.dispose();
     this.pinOwnerClient = undefined;
     this.reaper.dispose();
+    if (this.pinOwnerScriptPath) {
+      try {
+        rmSync(this.pinOwnerScriptPath, { force: true });
+      } catch {
+        // Best-effort cleanup of the staged pin-owner script.
+      }
+      this.pinOwnerScriptPath = undefined;
+    }
     // Release this scope's additive ACL grants (refcounted by holderPid).
     if (this.sandboxUserSid) {
       try {

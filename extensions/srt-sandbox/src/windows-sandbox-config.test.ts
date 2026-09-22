@@ -47,13 +47,17 @@ describe("embedded Windows program sources", () => {
     expect(PIN_OWNER_POWERSHELL).toContain("NtSetInformationFile");
   });
 
-  it("buildWindowsPinOwnerInnerArgs round-trips the source through -EncodedCommand", () => {
-    const argv = buildWindowsPinOwnerInnerArgs();
-    expect(argv[0]).toBe("powershell.exe");
-    expect(argv).toContain("-EncodedCommand");
-    const encoded = argv.at(-1)!;
-    const decoded = Buffer.from(encoded, "base64").toString("utf16le");
-    expect(decoded).toBe(PIN_OWNER_POWERSHELL);
+  it("buildWindowsPinOwnerInnerArgs launches a staged script via -File (short argv)", () => {
+    // The pin-owner program is ~18 KB; base64 of its UTF-16LE form is ~50 KB,
+    // over CreateProcessW's 32 767-char limit (srt-win: argv_too_long). It must
+    // be launched from a staged file, not -EncodedCommand.
+    const argv = buildWindowsPinOwnerInnerArgs("C:\\ws\\.srt-sandbox-pin-owner.ps1");
+    expect(argv[0]).toBe("powershell");
+    expect(argv).not.toContain("-EncodedCommand");
+    expect(argv).toContain("-File");
+    expect(argv.at(-1)).toBe("C:\\ws\\.srt-sandbox-pin-owner.ps1");
+    // The whole launch argv stays well under the command-line limit.
+    expect(argv.join(" ").length).toBeLessThan(1000);
   });
 
   it("worker owns a KILL_ON_JOB_CLOSE Job Object and watches the parent (AC-S6-4)", () => {

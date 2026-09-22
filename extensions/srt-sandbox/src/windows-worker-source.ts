@@ -18,7 +18,14 @@
 //
 // Verified on real Windows 11 ARM64: exec-as-scope-account, reap-on-worker-crash,
 // and reap-on-gateway-crash (parent-watch → KILL_ON_JOB_CLOSE).
-export const WINDOWS_WORKER_POWERSHELL = String.raw`
+//
+// NB: this is a PLAIN template literal, not String.raw. The body is escaped for
+// a cooked template so the runtime string carries SINGLE backslashes — required
+// for Quote-Arg's `[char]` compares (`$a[$i] -eq '\'`) and its whitespace regex.
+// A String.raw wrapper would leave the backslashes doubled and pass a two-char
+// string where PowerShell expects a `System.Char`. Pinned by
+// windows-source-roundtrip.test.ts.
+export const WINDOWS_WORKER_POWERSHELL = `
 # SRT Windows per-scope worker (design v8 §5, AC-S6-4/AC-S6-6): the plugin-owned
 # worker that owns a Job Object with KILL_ON_JOB_CLOSE. Every \`srt-win exec\` tree
 # it spawns is a job member (inherited at CreateProcess), so when the worker exits

@@ -23,7 +23,17 @@
 // Verified on real Windows 11 ARM64: NtCreateFile live-handle escape resistance
 // (real-dir swap, junction swap, removed-target fail-closed), rename, full
 // protocol parity, no leaked handles.
-export const PIN_OWNER_POWERSHELL = String.raw`
+//
+// NB: this is a PLAIN template literal, not String.raw. The program text below
+// is escaped for a cooked template (`\\` = one backslash, `` \` `` = one
+// backtick), so the runtime string carries SINGLE backslashes — the exact form
+// PowerShell needs for NT paths (`\??\`), the `/`→`\` normalizer, and the
+// CommandLineToArgvW quoter. An earlier revision wrapped the identical
+// (double-escaped) body in String.raw, which leaves the backslashes DOUBLED at
+// runtime and breaks NtCreateFile path resolution (STATUS_OBJECT_NAME_INVALID)
+// and Quote-Arg's `[char]` compares. windows-source-roundtrip.test.ts pins the
+// runtime form so this cannot regress.
+export const PIN_OWNER_POWERSHELL = `
 # SRT Windows pin owner (design v8 §4, AC-S6-2) — NtCreateFile live-handle pin.
 #
 # Protocol-compatible with the POSIX pin owner / PinOwnerClient (resolve, mutate,
@@ -385,15 +395,32 @@ while ($true) {
 
 `;
 
+/** Filename the pin-owner program is staged under, inside a scope-readable dir. */
+export const WINDOWS_PIN_OWNER_SCRIPT_NAME = ".srt-sandbox-pin-owner.ps1";
+
 /**
  * Build the inner argv that \`srt-win exec\` runs to launch the persistent
- * Windows pin owner. The PowerShell program is passed as a UTF-16LE base64
- * \`-EncodedCommand\` so no script file has to be staged in the sandbox and no
- * quoting survives the two-hop launch. The caller wraps this with
- * wrapCommandWithSandboxWindows so the owner runs as the scope account under the
- * WFP fence and NTFS ACLs; its stdin/stdout become the RPC channel.
+ * Windows pin owner from a STAGED script file (written by the caller; see
+ * WindowsSrtSandboxBackend.spawnPinOwner).
+ *
+ * The program is launched with \`powershell -File <path>\`, NOT
+ * \`-EncodedCommand\`: the base64 of the ~18 KB UTF-16LE program is ~50 KB, which
+ * blows past CreateProcessW's 32 767-char command-line limit — srt-win rejects
+ * it as \`argv_too_long\` and a direct Node spawn returns ENAMETOOLONG. A
+ * \`-File\` path keeps the launch argv small and constant. The caller wraps this
+ * with wrapCommandWithSandboxWindows so the owner still runs as the scope
+ * account under the WFP fence and NTFS ACLs; its stdin/stdout are the RPC
+ * channel. \`scriptPath\` must live in a location the scope account can read
+ * (a granted writable root).
  */
-export function buildWindowsPinOwnerInnerArgs(): string[] {
-  const encoded = Buffer.from(PIN_OWNER_POWERSHELL, "utf16le").toString("base64");
-  return ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded];
+export function buildWindowsPinOwnerInnerArgs(scriptPath: string): string[] {
+  return [
+    "powershell",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    scriptPath,
+  ];
 }
