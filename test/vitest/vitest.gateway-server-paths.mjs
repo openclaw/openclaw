@@ -278,6 +278,7 @@ export const gatewayMethodsIsolatedTestFiles = [
   "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
   "src/gateway/server-methods/transcripts.test.ts",
   "src/gateway/server-methods/users-preferences.test.ts",
+  "src/gateway/server-methods/users-role.worker.test.ts",
   "src/gateway/server-methods/usage.test.ts",
   "src/gateway/server-methods/usage.sessions-usage.test.ts",
 ];
