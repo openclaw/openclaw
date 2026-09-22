@@ -245,7 +245,7 @@ describe("native Codex tool response fidelity", () => {
             ),
           )
           .find((item) => item.type === "commandExecution" && item.id === callId),
-        "native command execution",
+        `native command execution (native tool output: ${JSON.stringify(output)})`,
       );
       // Completion aggregates use a late streaming subscriber and can be null.
       // Check the independently buffered response against the next request below.

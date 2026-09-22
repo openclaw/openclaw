@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
@@ -9,7 +8,6 @@ import {
   bindCodexInferenceThread,
 } from "./inference-routing.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
-import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   isCodexPluginThreadBindingStale,
@@ -38,12 +36,10 @@ import {
   prepareCodexThreadResume,
   withCodexThreadLifecycleBinding,
 } from "./thread-lifecycle-adoption.js";
+import { prepareCodexThreadDynamicCatalog } from "./thread-lifecycle-catalog.js";
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import { resumeExistingCodexThread, startFreshCodexThread } from "./thread-lifecycle-io.js";
-import {
-  prepareCodexThreadLifecyclePreflight,
-  resolveCodexThreadAgentDir,
-} from "./thread-lifecycle-preflight.js";
+import { prepareCodexThreadLifecyclePreflight } from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
@@ -65,25 +61,7 @@ export async function startOrResumeThread(
     const params: CodexStartOrResumeThreadParams = { ...input, assertCurrent: assert };
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
     let binding = saved;
-    if (hasCodexNativeToolCatalog(binding)) {
-      // A resumed native catalog is immutable data. Run eligibility only changes
-      // the bridge's available executors, never this thread's inherited history.
-      const nativeCatalog = await loadCodexNativeToolCatalog({
-        client: params.client,
-        binding,
-        appServer: params.appServer,
-        agentDir: resolveCodexThreadAgentDir(params),
-        assertCurrent: () => {
-          params.signal?.throwIfAborted();
-          assert();
-        },
-      });
-      if (!isDeepStrictEqual(params.dynamicTools, nativeCatalog)) {
-        throw new Error(
-          "Canonical Codex declarations changed after tool preparation; retry the turn on its preserved native thread.",
-        );
-      }
-    }
+    await prepareCodexThreadDynamicCatalog(params, binding, assert);
     const preflight = await prepareCodexThreadLifecyclePreflight(params);
     const inference = await prepareCodexInferenceThreadConfig({
       ...params,

@@ -37,6 +37,7 @@ import {
   readCodexPluginConfig,
   type CodexPluginConfig,
 } from "./config.js";
+import { placeDisabledNativeShellToolsInDirectNamespace } from "./dynamic-tool-placement.js";
 import {
   filterCodexDynamicTools,
   filterCodexDynamicToolsForDisabledNativeSurface,
@@ -81,15 +82,6 @@ type CodexDynamicToolBuildEvent = Parameters<
   NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>
 >[0];
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
-const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
-  "exec",
-  "process",
-  "sandbox_exec",
-  "sandbox_process",
-  CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
-  CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
-  CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
-]);
 
 /** Keeps node filesystem and process ownership on its native exec-server. */
 function resolveCodexNodePlacementToolConstructionPlan(
@@ -155,6 +147,7 @@ type DynamicToolBuildParams = {
   >[0]["resolve"];
   cronCreatorAuthorityUnavailableReason?: OpenClawCodingToolsOptions["cronCreatorAuthorityUnavailableReason"];
   forceHeartbeatTool?: boolean;
+  /** Build the durable message declaration superset, not per-turn execution authority. */
   ignoreDisableMessageTool?: boolean;
   ignoreRuntimePlan?: boolean;
   /** Host fact resolver; injectable only for focused plugin contract tests. */
@@ -225,8 +218,15 @@ export async function buildDynamicTools(
   input: DynamicToolBuildParams,
 ): Promise<OpenClawDynamicTool[]> {
   const { params } = input;
+  // Delivery ownership can change when a native child completes. Keep the
+  // registered message declaration stable across those turns; the separately
+  // built runtime tools still enforce the actual delivery and deny policy.
   const messagePolicyParams = input.ignoreDisableMessageTool
-    ? { ...params, disableMessageTool: false }
+    ? {
+        ...params,
+        disableMessageTool: false,
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+      }
     : params;
   const toolRunContext = buildEmbeddedAttemptToolRunContext({
     ...params,
@@ -850,22 +850,6 @@ function shouldKeepOpenClawShellDynamicTools(
     input.sandbox?.enabled !== true &&
     nodePolicy.effectiveExecHost !== "node"
   );
-}
-/** Keeps replacement shell tools direct even when model metadata mandates Codex Code Mode. */
-function placeDisabledNativeShellToolsInDirectNamespace<
-  T extends { name: string; catalogMode?: string },
->(tools: T[], nativeToolSurfaceEnabled: boolean | undefined): T[] {
-  if (nativeToolSurfaceEnabled !== false) {
-    return tools;
-  }
-  for (const tool of tools) {
-    if (CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS.has(normalizeCodexDynamicToolName(tool.name))) {
-      // Runtime tools can carry non-enumerable policy metadata and prototype behavior.
-      // Preserve the prepared object identity while changing only its Codex catalog placement.
-      tool.catalogMode = "direct-only";
-    }
-  }
-  return tools;
 }
 /** Applies a normalized tool allowlist while preserving shell aliases for exec/process. */
 function filterCodexDynamicToolsForAllowlist<T extends OpenClawDynamicTool>(
