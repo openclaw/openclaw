@@ -2,7 +2,7 @@
 // events, CLI bindings, browser cleanup, and active-run shutdown.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -25,6 +25,15 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
+const pendingHookCleanups = new Set<() => Promise<void>>();
+
+afterEach(async () => {
+  // A runner timeout does not unwind the test body; settle gates before store teardown.
+  for (const cleanup of pendingHookCleanups) {
+    await cleanup();
+  }
+  pendingHookCleanups.clear();
+});
 
 type HookEventRecord = Record<string, unknown> & {
   context?: Record<string, unknown> & {
@@ -819,6 +828,18 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
     emitCommandHooks: true,
   });
   const settledWork: Promise<unknown>[] = [Promise.allSettled([creating])];
+  let cleaningUp: Promise<void> | undefined;
+  const cleanup = () => {
+    releaseHook.resolve();
+    admissionController.abort();
+    return (cleaningUp ??= (async () => {
+      await Promise.all(settledWork);
+      const lease = await admission?.catch(() => undefined);
+      lease?.release();
+      sessionHookMocks.triggerInternalHook.mockReset();
+    })());
+  };
+  pendingHookCleanups.add(cleanup);
   try {
     await Promise.race([
       hookEntered.promise,
@@ -828,6 +849,7 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
         );
       }),
     ]);
+    admissionController.signal.throwIfAborted();
     expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
 
     let admissionStarted = false;
@@ -848,12 +870,8 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
     await admission;
     expect(admissionStarted).toBe(true);
   } finally {
-    releaseHook.resolve();
-    admissionController.abort();
-    await Promise.all(settledWork);
-    const lease = await admission?.catch(() => undefined);
-    lease?.release();
-    sessionHookMocks.triggerInternalHook.mockReset();
+    await cleanup();
+    pendingHookCleanups.delete(cleanup);
   }
 });
 
