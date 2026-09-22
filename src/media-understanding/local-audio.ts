@@ -314,9 +314,11 @@ export async function inspectLocalAudioSelection(
 
   const envModel = env.WHISPER_CPP_MODEL?.trim();
   const whisperModel =
-    envModel && (await optionalPathExists(envModel))
-      ? envModel
-      : await discoverWhisperCppModel(options.listDirectory ?? listDirectoryEntries);
+    whisperCommand !== null
+      ? envModel && (await optionalPathExists(envModel))
+        ? envModel
+        : await discoverWhisperCppModel(options.listDirectory ?? listDirectoryEntries)
+      : null;
   const whisperReady = whisperCommand !== null && Boolean(whisperModel);
   const whisperBackend = whisperCommand
     ? await inspectWhisperBackend({

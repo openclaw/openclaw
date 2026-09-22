@@ -55,6 +55,12 @@ jobs:
       target_sha: ${{ steps.manifest.outputs.target_sha }}
       dockerfile_image: ${{ steps.manifest.outputs.dockerfile_image }}
     steps:
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       # The caller workflow SHA can differ during workflow_call. The job context identifies
       # this reusable workflow, so trusted harness checkouts cannot drift to candidate code.
       - name: Assert trusted workflow identity
@@ -307,6 +313,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - &trusted_workflow_subdir_identity_step
         name: Restore exact trusted workflow revision
         id: workflow
@@ -488,6 +500,12 @@ jobs:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
       - *trusted_workflow_subdir_checkout_step
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *trusted_workflow_subdir_identity_step
 
       - name: Prepare trusted selected-source Git owner
@@ -682,6 +700,12 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - *trusted_workflow_subdir_checkout_step
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *trusted_workflow_subdir_identity_step
 
       - name: Require exact trusted installer harness
@@ -856,6 +880,12 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - *trusted_workflow_subdir_checkout_step
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *trusted_workflow_subdir_identity_step
 
       - name: Set up Blacksmith Docker Builder
@@ -929,6 +959,12 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - *trusted_workflow_subdir_checkout_step
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *trusted_workflow_subdir_identity_step
 
       - name: Set up Blacksmith Docker Builder
@@ -994,6 +1030,12 @@ jobs:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
       - *trusted_workflow_subdir_checkout_step
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *trusted_workflow_subdir_identity_step
 
       - &candidate_payload_binding_step
@@ -1214,6 +1256,12 @@ jobs:
       OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
     steps:
       - *trusted_workflow_subdir_checkout_step
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *trusted_workflow_subdir_identity_step
 
       - name: Validate candidate payload artifact binding
@@ -1411,6 +1459,12 @@ jobs:
     timeout-minutes: 60
     steps:
       - *trusted_workflow_subdir_checkout_step
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
       - *trusted_workflow_subdir_identity_step
 
       - *candidate_payload_binding_step

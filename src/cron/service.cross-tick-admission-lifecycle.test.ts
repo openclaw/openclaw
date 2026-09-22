@@ -120,11 +120,17 @@ describe("cron service cross-tick admission lifecycle", () => {
     const directBStarted = createDeferred();
     const releaseDirectA = createDeferred<{ status: "ok"; summary: string }>();
     const releaseDirectB = createDeferred<{ status: "ok"; summary: string }>();
+    const pendingStarted = createDeferred();
     let pendingStartCount = 0;
     const releasePending = createDeferred<{ status: "ok"; summary: string }>();
     const state = createCronRegressionState({
       storePath: store.storePath,
       nowMs: () => t0,
+      onEvent: (event) => {
+        if (event.jobId === pending.id && event.action === "started") {
+          pendingStarted.resolve();
+        }
+      },
       runIsolatedAgentJob: vi.fn(async ({ job }: { job: CronJob }) => {
         switch (job.id) {
           case scheduledA.id:
@@ -177,7 +183,9 @@ describe("cron service cross-tick admission lifecycle", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(2);
 
       releaseDirectA.resolve({ status: "ok", summary: "direct a" });
-      await vi.waitFor(() => expect(pendingStartCount).toBe(1));
+      // The capacity wake still observes active receipts before admitting pending work.
+      await pendingStarted.promise;
+      expect(pendingStartCount).toBe(1);
       await directRunA;
       expect(getActiveGatewayRootWorkCount()).toBe(2);
 

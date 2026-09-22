@@ -238,7 +238,7 @@ describe("SessionManager persistence compatibility", () => {
       message: { role: "user", content: "question" },
     });
     const manager = SessionManager.open(scope, dir);
-    const modelChangeId = manager.appendModelChange("openai", "gpt-5.6");
+    const modelChangeId = await manager.appendModelChange("openai", "gpt-5.6");
 
     expect(manager.removeTrailingEntries((entry) => entry.id === modelChangeId)).toBe(1);
     expect(manager.getLeafId()).toBe(user.messageId);

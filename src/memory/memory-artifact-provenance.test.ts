@@ -185,29 +185,42 @@ describe("memory artifact provenance", () => {
     });
   });
 
-  it("clears only the record matching the deleted file content", async () => {
-    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
-      const address = { workspaceDir: tempRoot, relativePath: "USER.md" };
-      await recordMemoryArtifactWriteProvenance({
-        ...address,
-        contentBefore: "",
-        contentAfter: "current",
-        originClass: "agent",
-        observedAt: 1,
-      });
+  it.each(["USER.md", "users/person/USER.md"])(
+    "clears only matching deleted content: %s",
+    async (relativePath) => {
+      await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
+        const address = { workspaceDir: tempRoot, relativePath };
+        await recordMemoryArtifactWriteProvenance({
+          ...address,
+          contentBefore: "",
+          contentAfter: "current",
+          originClass: "agent",
+          observedAt: 1,
+        });
 
-      await clearMemoryArtifactProvenance({ ...address, contentBefore: "stale" });
-      await expect(readMemoryArtifactProvenance(address)).resolves.toBeDefined();
-      await clearMemoryArtifactProvenance({ ...address, contentBefore: "current" });
-      await expect(readMemoryArtifactProvenance(address)).resolves.toBeUndefined();
-    });
-  });
+        await clearMemoryArtifactProvenance({ ...address, contentBefore: "stale" });
+        await expect(readMemoryArtifactProvenance(address)).resolves.toBeDefined();
+        await clearMemoryArtifactProvenance({ ...address, contentBefore: "current" });
+        await expect(readMemoryArtifactProvenance(address)).resolves.toBeUndefined();
+      });
+    },
+  );
 
   it("accepts only host-owned memory artifact paths", () => {
     expect(normalizeMemoryArtifactRelativePath("memory/2026-08-20.md")).toBe(
       "memory/2026-08-20.md",
     );
     expect(normalizeMemoryArtifactRelativePath("MEMORY.md")).toBe("MEMORY.md");
+    expect(normalizeMemoryArtifactRelativePath("users/person/USER.md")).toBe(
+      "users/person/USER.md",
+    );
+    for (const invalid of [
+      "users/../USER.md",
+      "users/person/nested/USER.md",
+      "users/person/notes.md",
+    ]) {
+      expect(normalizeMemoryArtifactRelativePath(invalid)).toBeUndefined();
+    }
     expect(normalizeMemoryArtifactRelativePath("memory/dreaming/state.md")).toBeUndefined();
     expect(normalizeMemoryArtifactRelativePath("../memory/escape.md")).toBeUndefined();
   });

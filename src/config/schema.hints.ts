@@ -99,6 +99,8 @@ const SECTION_DOCS_URLS = {
 } as const satisfies Record<string, string>;
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
+  "plugins.entries.*.hooks.timeoutMs": "Automatic (per hook)",
+  "plugins.entries.*.hooks.timeouts.*": "Automatic (plugin or hook default)",
   "gateway.cliAgents.enabled": "Default (enabled)",
   "nodeHost.autoUpdate.enabled": "Default (enabled)",
   "tools.loopDetection.enabled": "Default (post-compaction protection only)",

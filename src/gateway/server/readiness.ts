@@ -1,6 +1,7 @@
 // Gateway readiness checker for channel health and startup sidecar state.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -20,6 +21,7 @@ type ReadinessResult = {
   uptimeMs: number;
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
+  agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
 };
 
 /** Function form used by HTTP readiness endpoints and tests. */
@@ -91,6 +93,7 @@ export function createReadinessChecker(
     channelManager: ChannelManager;
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
+    getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
     shouldSkipChannelReadiness?: () => boolean;
     cacheTtlMs?: number;
@@ -115,6 +118,19 @@ export function createReadinessChecker(
     if (startup.status === "draining") {
       return withEventLoopHealth(
         { ready: false, failing: ["gateway-draining"], uptimeMs },
+        deps.getEventLoopHealth,
+      );
+    }
+    const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
+    if (agentDatabases?.length) {
+      cachedState = null;
+      return withEventLoopHealth(
+        {
+          ready: false,
+          failing: agentDatabases.map(({ agentId }) => `agent-database:${agentId}`),
+          agentDatabases,
+          uptimeMs,
+        },
         deps.getEventLoopHealth,
       );
     }

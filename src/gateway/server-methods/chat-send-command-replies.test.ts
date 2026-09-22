@@ -1,7 +1,133 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { selectChatSendFinalReplyPayloads } from "./chat-send-command-replies.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
+import { createReplyToModeFilterForChannel } from "../../auto-reply/reply/reply-threading.js";
+import {
+  createOutboundPayloadPlan,
+  createStructuredOutboundPayloadPlan,
+} from "../../infra/outbound/payloads.js";
+import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
+import {
+  selectChatSendFinalReplyInputs,
+  readChatSendReplyPayload,
+} from "./chat-send-command-replies.js";
 
-describe("selectChatSendFinalReplyPayloads", () => {
+function selectRawReplies(params: {
+  deliveredReplies: readonly { kind: "block" | "final"; payload: ReplyPayload }[];
+  foldCommandBlocks: boolean;
+  suppressReplies: boolean;
+}) {
+  return selectChatSendFinalReplyInputs({
+    ...params,
+    deliveredReplies: params.deliveredReplies.map(({ kind, payload }) => ({
+      kind,
+      input: { kind: "raw", payload },
+    })),
+  }).map(readChatSendReplyPayload);
+}
+
+describe("selectChatSendFinalReplyInputs", () => {
+  it("keeps consumed reply policy when raw duplicate replies are folded", () => {
+    const filter = createReplyToModeFilterForChannel("first", "telegram");
+    filter({ text: "First", replyToId: "source" });
+    const later = filter({ text: "Later", replyToId: "source", replyToCurrent: true });
+    const modified = copyReplyPayloadMetadata(later, {
+      ...later,
+      replyToId: "later-target",
+      mediaUrl: "https://example.invalid/document.txt",
+    });
+    const selected = selectRawReplies({
+      deliveredReplies: [
+        { kind: "block", payload: modified },
+        { kind: "final", payload: modified },
+      ],
+      foldCommandBlocks: true,
+      suppressReplies: false,
+    });
+    const plans = createOutboundPayloadPlan(selected);
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.payload.replyToId).toBeUndefined();
+    expect(plans[0]?.payload.replyToCurrent).toBe(false);
+  });
+  it.each(["raw", "prepared"] as const)(
+    "keeps a sensitive prepared final from exposing matching %s block media",
+    (blockKind) => {
+      const blockPayload = setReplyPayloadMetadata(
+        { text: "preview", mediaUrl: "/tmp/paired.png" },
+        { assistantMessageIndex: 1 },
+      );
+      const [blockPlan, finalPlan] = createStructuredOutboundPayloadPlan([
+        blockPayload,
+        { text: "private", mediaUrl: "/tmp/paired.png", sensitiveMedia: true },
+      ]);
+      if (!blockPlan || !finalPlan) {
+        throw new Error("expected both media plans");
+      }
+      const blockInput: ReplyDispatchOperation =
+        blockKind === "raw"
+          ? { kind: "raw", payload: blockPayload }
+          : { kind: "prepared", plan: blockPlan };
+      const inputs = selectChatSendFinalReplyInputs({
+        deliveredReplies: [
+          { kind: "block", input: blockInput },
+          { kind: "final", input: { kind: "prepared", plan: finalPlan } },
+        ],
+        foldCommandBlocks: true,
+        suppressReplies: false,
+      });
+
+      expect(inputs.map((input) => readChatSendReplyPayload(input).sensitiveMedia)).toEqual([
+        true,
+        true,
+      ]);
+      expect(
+        getReplyPayloadMetadata(readChatSendReplyPayload(inputs[0]!))?.assistantMessageIndex,
+      ).toBe(1);
+      expect(blockPayload).not.toHaveProperty("sensitiveMedia");
+    },
+  );
+
+  it("keeps prepared replies from distinct writers separate when visible content matches", () => {
+    const plans = createStructuredOutboundPayloadPlan(
+      ["first-writer", "second-writer"].map((expectedWriterRunId) =>
+        setReplyPayloadMetadata(
+          { text: "done" },
+          {
+            sessionWriterDeliveryAuthority: {
+              sessionKey: "agent:main:main",
+              expectedSessionId: "session-1",
+              expectedWriterRunId,
+            },
+          },
+        ),
+      ),
+    );
+    const inputs = selectChatSendFinalReplyInputs({
+      deliveredReplies: plans.map((plan, index) => ({
+        kind: index === 0 ? "block" : "final",
+        input: { kind: "prepared", plan },
+      })),
+      foldCommandBlocks: true,
+      suppressReplies: false,
+    });
+
+    expect(inputs.map((input) => input.kind === "prepared" && input.plan)).toEqual(plans);
+    expect(
+      inputs.map(
+        (input) =>
+          getReplyPayloadMetadata(readChatSendReplyPayload(input))?.sessionWriterDeliveryAuthority
+            ?.expectedWriterRunId,
+      ),
+    ).toEqual(["first-writer", "second-writer"]);
+  });
+
   it("keeps final replies and suppresses already-persisted media replies", () => {
     const deliveredReplies = [
       { kind: "block" as const, payload: { text: "progress" } },
@@ -9,14 +135,14 @@ describe("selectChatSendFinalReplyPayloads", () => {
     ];
 
     expect(
-      selectChatSendFinalReplyPayloads({
+      selectRawReplies({
         deliveredReplies,
         foldCommandBlocks: false,
         suppressReplies: false,
       }),
     ).toEqual([{ text: "done" }]);
     expect(
-      selectChatSendFinalReplyPayloads({
+      selectRawReplies({
         deliveredReplies,
         foldCommandBlocks: true,
         suppressReplies: true,
@@ -25,31 +151,36 @@ describe("selectChatSendFinalReplyPayloads", () => {
   });
 
   it("folds duplicate command media and semantics into the block reply", () => {
-    expect(
-      selectChatSendFinalReplyPayloads({
-        deliveredReplies: [
-          {
-            kind: "block",
-            payload: {
-              text: "done",
-              mediaUrl: "file:///tmp/result.png",
-              trustedLocalMedia: true,
-            },
-          },
-          {
-            kind: "final",
-            payload: {
-              text: "done",
-              mediaUrls: ["/tmp/result.png"],
-              sensitiveMedia: true,
-              replyToId: "message-1",
-            },
-          },
-        ],
-        foldCommandBlocks: true,
-        suppressReplies: false,
-      }),
-    ).toEqual([
+    const deliveredReplies = [
+      {
+        kind: "block" as const,
+        payload: {
+          text: "done",
+          mediaUrl: "file:///tmp/result.png",
+          trustedLocalMedia: true,
+        },
+      },
+      {
+        kind: "final" as const,
+        payload: {
+          text: "done",
+          mediaUrls: ["/tmp/result.png"],
+          sensitiveMedia: true,
+          replyToId: "message-1",
+          attachments: [
+            { path: "/tmp/result.png", name: "Result chart.png", mimeType: "image/png" },
+          ],
+        },
+      },
+    ];
+    const originalReplies = structuredClone(deliveredReplies);
+    const replies = selectRawReplies({
+      deliveredReplies,
+      foldCommandBlocks: true,
+      suppressReplies: false,
+    });
+
+    expect(replies.map(({ attachments: _attachments, ...payload }) => payload)).toEqual([
       {
         text: "done",
         mediaUrl: undefined,
@@ -59,11 +190,18 @@ describe("selectChatSendFinalReplyPayloads", () => {
         replyToId: "message-1",
       },
     ]);
+    expect(replies.flatMap((payload) => collectReplyMediaEntries(payload))).toMatchObject([
+      {
+        url: "file:///tmp/result.png",
+        attachment: { name: "Result chart.png", mimeType: "image/png" },
+      },
+    ]);
+    expect(deliveredReplies).toEqual(originalReplies);
   });
 
   it("keeps unmatched final text while deduplicating its media", () => {
     expect(
-      selectChatSendFinalReplyPayloads({
+      selectRawReplies({
         deliveredReplies: [
           {
             kind: "block",
@@ -95,5 +233,48 @@ describe("selectChatSendFinalReplyPayloads", () => {
         audioAsVoice: true,
       },
     ]);
+  });
+
+  it.each([
+    { caption: "matching", blockText: "done", expectedTexts: ["done"] },
+    { caption: "different", blockText: "preview", expectedTexts: ["preview", "done"] },
+  ])("retains duplicate command image metadata with $caption captions", (testCase) => {
+    const mediaPath = path.resolve("media", "chart-01.png");
+    const mediaUrl = pathToFileURL(mediaPath).href;
+    const attachment = {
+      path: mediaPath,
+      name: "Quarterly chart.png",
+      mimeType: "image/png",
+      width: 640,
+    };
+    const deliveredReplies = [
+      {
+        kind: "block" as const,
+        payload: {
+          text: testCase.blockText,
+          mediaUrl,
+          attachments: [{ path: mediaPath, height: 480 }],
+        },
+      },
+      {
+        kind: "final" as const,
+        payload: { text: "done", mediaUrls: [mediaPath], attachments: [attachment] },
+      },
+    ];
+    const originalReplies = structuredClone(deliveredReplies);
+
+    const replies = selectRawReplies({
+      deliveredReplies,
+      foldCommandBlocks: true,
+      suppressReplies: false,
+    });
+
+    expect(replies.map((payload) => payload.text)).toEqual(testCase.expectedTexts);
+    expect(replies.flatMap((payload) => payload.mediaUrls ?? [])).toEqual([mediaUrl]);
+    expect(replies[0]).toMatchObject({
+      mediaUrls: [mediaUrl],
+      attachments: [{ ...attachment, path: mediaUrl, height: 480 }],
+    });
+    expect(deliveredReplies).toEqual(originalReplies);
   });
 });

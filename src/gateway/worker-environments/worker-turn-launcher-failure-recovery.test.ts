@@ -114,7 +114,7 @@ describe("worker turn launcher failure recovery", () => {
       ...unusedEnvironments(),
       get: () => environment,
       acquireTurnCredential: async () => credential(),
-      acknowledgeCredentialDelivery: () => true,
+      acknowledgeCredentialDelivery: async () => true,
       startTunnel: async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
@@ -362,7 +362,7 @@ describe("worker turn launcher failure recovery", () => {
 
   it("keeps an active placement when tunnel startup fails before remote handoff", async () => {
     seedActivePlacement();
-    const acknowledgeCredentialDelivery = vi.fn(() => true);
+    const acknowledgeCredentialDelivery = vi.fn(async () => true);
     const stopTunnel = vi.fn(async () => {});
     const destroy = vi.fn(async () => attachedEnvironment());
     const environments: WorkerTurnEnvironmentService = {
@@ -432,7 +432,7 @@ describe("worker turn launcher failure recovery", () => {
     const launchTurn = vi.fn(async (): Promise<SpawnResult> => {
       throw new Error("unexpected worker handoff");
     });
-    const acknowledgeCredentialDelivery = vi.fn(() => true);
+    const acknowledgeCredentialDelivery = vi.fn(async () => true);
     const startTunnel = vi.fn(async (): Promise<WorkerTunnelHandle> => ({
       environmentId: ENVIRONMENT_ID,
       ownerEpoch: OWNER_EPOCH,
@@ -579,7 +579,7 @@ describe("worker turn launcher failure recovery", () => {
     const startReconcile = vi.spyOn(placements, "startReconcile");
     const stopTunnel = vi.fn(async () => {});
     const destroy = vi.fn(async () => attachedEnvironment());
-    const acknowledgeCredentialDelivery = vi.fn(() => true);
+    const acknowledgeCredentialDelivery = vi.fn(async () => true);
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
@@ -660,7 +660,7 @@ describe("worker turn launcher failure recovery", () => {
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () => ({
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,

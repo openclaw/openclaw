@@ -1,11 +1,15 @@
 // Sandbox workspace-authority tests cover Workboard confinement attestation.
-import os from "node:os";
+import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentSandboxConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { resolveSandboxWorkspaceAuthority } from "./workspace-authority.js";
 
 const SAFE_WORKBOARD_TOOLS = ["exec", "process", "read", "write", "edit", "apply_patch"];
@@ -22,18 +26,23 @@ function configWithSandbox(sandbox: AgentSandboxConfig): OpenClawConfig {
   };
 }
 
-function createSessionStorePath(prefix: string): string {
-  return path.join(
-    os.tmpdir(),
-    `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    "agents",
-    "main",
-    "sessions",
-    "sessions.json",
-  );
-}
-
 describe("resolveSandboxWorkspaceAuthority", () => {
+  let state: OpenClawTestState;
+  beforeEach(async () => {
+    state = await createOpenClawTestState({
+      label: "sandbox-workspace-authority",
+      layout: "state-only",
+    });
+  });
+  afterEach(async () => {
+    await state.cleanup();
+  });
+
+  function createSessionStorePath(prefix: string): string {
+    const root = fs.mkdtempSync(path.join(state.root, prefix));
+    return path.join(root, "agents", "main", "sessions", "sessions.json");
+  }
+
   it.each(["docker", "Podman"])("attests a writable %s workspace", (backend) => {
     const result = resolveSandboxWorkspaceAuthority({
       config: configWithSandbox({ mode: "all", backend, workspaceAccess: "rw" }),
@@ -56,7 +65,7 @@ describe("resolveSandboxWorkspaceAuthority", () => {
 
   it("caps role-required access and rejects principal-shared worker authority", async () => {
     const sessionKey = "agent:main:guest-worker";
-    const storePath = createSessionStorePath("openclaw-required-workspace-authority");
+    const storePath = createSessionStorePath("openclaw-required-workspace-authority-");
     await replaceSessionEntry(
       { sessionKey, storePath },
       {
@@ -293,7 +302,7 @@ describe("resolveSandboxWorkspaceAuthority", () => {
 
   it("applies inherited session denies to required lifecycle tools", async () => {
     const sessionKey = "agent:main:subagent:workboard-card";
-    const storePath = createSessionStorePath("openclaw-workspace-authority");
+    const storePath = createSessionStorePath("openclaw-workspace-authority-");
     await replaceSessionEntry({ sessionKey, storePath }, {
       sessionId: "workboard-card",
       updatedAt: Date.now(),

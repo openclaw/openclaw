@@ -250,10 +250,12 @@ describe("Skill Workshop revision generation atomicity", () => {
       `injected crash at ${boundary}`,
     );
     expect(
-      listSkillProposalEvents({
-        proposalId: proposal.record.id,
-        env: testState.env,
-      }).events.map((event) => event.type),
+      (
+        await listSkillProposalEvents({
+          proposalId: proposal.record.id,
+          env: testState.env,
+        })
+      ).events.map((event) => event.type),
     ).toEqual(["created"]);
 
     await expectCompleteVersion({
@@ -269,10 +271,12 @@ describe("Skill Workshop revision generation atomicity", () => {
 
     const revised = await reviseToVersion(proposal, workspaceDir, 2);
     expect(
-      listSkillProposalEvents({
-        proposalId: proposal.record.id,
-        env: testState.env,
-      }).events.map((event) => event.type),
+      (
+        await listSkillProposalEvents({
+          proposalId: proposal.record.id,
+          env: testState.env,
+        })
+      ).events.map((event) => event.type),
     ).toEqual(["created", "revised"]);
     await expectCompleteVersion({
       proposal: revised,
@@ -287,10 +291,12 @@ describe("Skill Workshop revision generation atomicity", () => {
 
     const revised = await reviseToVersion(proposal, workspaceDir, 2);
     expect(
-      listSkillProposalEvents({
-        proposalId: proposal.record.id,
-        env: testState.env,
-      }).events.map((event) => event.type),
+      (
+        await listSkillProposalEvents({
+          proposalId: proposal.record.id,
+          env: testState.env,
+        })
+      ).events.map((event) => event.type),
     ).toEqual(["created", "revised"]);
 
     await expectCompleteVersion({

@@ -1,9 +1,15 @@
 // Twitch tests cover access control plugin behavior.
-import { describe, expect, it } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { beforeEach, describe, expect, it } from "vitest";
 import { checkTwitchAccessControl } from "./access-control.js";
+import { setTwitchRuntime } from "./runtime.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 describe("checkTwitchAccessControl", () => {
+  beforeEach(() => {
+    setTwitchRuntime(createPluginRuntimeMock());
+  });
+
   const mockAccount: TwitchAccountConfig = {
     username: "testbot",
     accessToken: "test",

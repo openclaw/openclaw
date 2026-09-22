@@ -128,6 +128,85 @@ const configResponse = {
 };
 
 suite.define(() => {
+  it.each(["profile", "agent"] as const)(
+    "keeps native GitHub status compact in %s Settings without changing setup scope",
+    async (surface) => {
+      await suite.withPage(pageOptions(), async ({ page }) => {
+        const native = {
+          ...systemOAuth,
+          source: "system-detected",
+          credentialKind: "native",
+          credentialState: "unavailable",
+          account: null,
+          gitAuthor: { name: null, email: null },
+          evidence: "none",
+          accessExpiresAtMs: null,
+          refreshState: "not_applicable",
+          oauthScopes: [],
+        } as const;
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+          methodResponses: {
+            "config.get": configResponse,
+            "tools.github.status": {
+              cases: [
+                {
+                  match: { selectedScope: "system" },
+                  response: {
+                    agentId: "main",
+                    selectedScope: "system",
+                    selected: { scope: "system", configured: false, identity: native },
+                    effective: native,
+                  },
+                },
+                {
+                  match: { selectedScope: "agent" },
+                  response: {
+                    agentId: "main",
+                    selectedScope: "agent",
+                    selected: { scope: "agent", configured: false, identity: null },
+                    effective: native,
+                  },
+                },
+              ],
+            },
+            "tools.catalog": { agentId: "main", profiles: [], groups: [] },
+            "tools.effective": { agentId: "main", profile: "full", groups: [], notices: [] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/profile`);
+        const profile = page.locator("#settings-profile-github-connections");
+        await expect(profile.locator('[data-github-connection="system"]')).toContainText(
+          "No credentials",
+        );
+        if (surface === "agent") {
+          await profile.getByRole("button", { name: "View agent account", exact: true }).click();
+          await expect(page).toHaveURL(/settings\/agents\/main\/tools$/);
+        }
+        const section =
+          surface === "profile"
+            ? profile
+            : page.locator(".settings-section").filter({
+                has: page.getByRole("button", { name: "Manage connections in Profile" }),
+              });
+        await expect(section.getByText("No credentials", { exact: true }).first()).toBeVisible();
+        await section.scrollIntoViewIfNeeded();
+        await capture(page, `13-native-${surface}.png`);
+        await expect(section.getByText(/OS account running the Gateway/)).toHaveCount(0);
+        if (surface === "agent") {
+          await section.getByRole("button", { name: "Manage connections in Profile" }).click();
+          await expect(page).toHaveURL(/settings\/profile#settings-profile-github-connections$/);
+        }
+        await profile.getByRole("button", { name: "Change System GitHub" }).click();
+        await expect(profile.getByText("For the system", { exact: true })).toBeVisible();
+        await expect(profile.getByRole("button", { name: "Continue with GitHub" })).toBeVisible();
+        await expect(profile.getByRole("button", { name: "Use a PAT instead" })).toBeVisible();
+        expect(await gateway.getRequests("tools.github.authorize.start")).toHaveLength(0);
+        expect(await gateway.getRequests("tools.github.configure")).toHaveLength(0);
+      });
+    },
+  );
+
   it("preserves unidentified System management and keeps agent overrides advanced and distinct", async () => {
     await suite.withPage(pageOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -161,7 +240,9 @@ suite.define(() => {
       await section.getByRole("button", { name: "Change System GitHub" }).click();
       await expect(section.getByText("For the system", { exact: true })).toBeVisible();
       await gateway.deferNext("tools.github.authorize.start");
-      await section.getByRole("button", { name: "Continue with GitHub" }).click();
+      const continueButton = section.getByRole("button", { name: "Continue with GitHub" });
+      await expect(continueButton).not.toHaveClass(/primary/);
+      await continueButton.click();
       expect((await gateway.waitForRequest("tools.github.authorize.start")).params).toEqual({
         agentId: "main",
         scope: "system",
@@ -172,6 +253,15 @@ suite.define(() => {
       await expect(
         section.getByRole("link", { name: "Open github.com/login/device" }),
       ).toHaveAttribute("href", device.verificationUri);
+      const authorizationRow = section.locator(".settings-row", {
+        hasText: "GitHub authorization",
+      });
+      await expect(
+        authorizationRow.getByRole("link", { name: "Open github.com/login/device" }),
+      ).toBeVisible();
+      await expect(
+        authorizationRow.getByRole("link", { name: "Open github.com/login/device" }),
+      ).not.toHaveClass(/primary/);
       await capture(page, "02-system-code.png");
       await assertDeviceCodeCopy(page, device.userCode);
       await capture(page, "02b-system-code-copied.png");
@@ -192,9 +282,10 @@ suite.define(() => {
         status: "success",
         githubStatus: systemStatus,
       });
-      await expect(section.getByRole("button", { name: "Continue with GitHub" })).toBeVisible();
-      await expect(section.getByText("For the system", { exact: true })).toBeVisible();
+      await expect(section.locator("[data-github-setup]")).toHaveCount(0);
+      await expect(section.getByRole("button", { name: "Continue with GitHub" })).toHaveCount(0);
       await capture(page, "04-system-connected.png");
+      await section.getByRole("button", { name: "Change System GitHub" }).click();
       await section.getByRole("button", { name: "Use a PAT instead" }).click();
       await expect(section.getByLabel("Fine-grained PAT", { exact: true })).toBeVisible();
       await expect(section.getByRole("button", { name: "Continue with GitHub" })).toHaveCount(0);
@@ -240,6 +331,9 @@ suite.define(() => {
           account: { accountId: 4, login: "second-octocat" },
         },
       ].entries()) {
+        if (index > 0) {
+          await section.getByRole("button", { name: "Change My GitHub" }).click();
+        }
         await gateway.deferNext("users.github.authorize.start");
         await section.getByRole("button", { name: "Continue with GitHub" }).click();
         expect(
@@ -267,6 +361,8 @@ suite.define(() => {
         await expect(section.locator('[data-github-connection="system"]')).toContainText(
           "@system-octocat",
         );
+        await expect(section.locator("[data-github-setup]")).toHaveCount(0);
+        await expect(section.getByRole("button", { name: "Continue with GitHub" })).toHaveCount(0);
         await capture(page, `08-personal-connected-${index}.png`);
       }
       await gateway.setMethodResponse("users.github.status", {

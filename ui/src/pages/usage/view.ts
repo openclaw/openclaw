@@ -262,17 +262,7 @@ export function renderUsage(props: UsageProps) {
     !data.error &&
     data.sessions.length === 0 &&
     (data.totals?.totalTokens ?? 0) === 0;
-  const hasMissingCost =
-    (displayTotals?.missingCostEntries ?? 0) > 0 ||
-    (displayTotals
-      ? displayTotals.totalTokens > 0 &&
-        displayTotals.totalCost === 0 &&
-        displayTotals.input +
-          displayTotals.output +
-          displayTotals.cacheRead +
-          displayTotals.cacheWrite >
-          0
-      : false);
+  const hasMissingCost = (displayTotals?.missingCostEntries ?? 0) > 0;
   const datePresets = [
     { label: t("usage.presets.today"), days: 1 },
     { label: t("usage.presets.last7d"), days: 7 },

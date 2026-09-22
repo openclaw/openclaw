@@ -11,6 +11,7 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
 import { deriveConceptTags } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
+import { previewRemDreaming } from "./dreaming-phases.js";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
@@ -549,42 +550,38 @@ describe("short-term promotion", () => {
     expect(await readRecallStoreEntries(workspaceDir)).toEqual({});
   });
 
-  it("ignores contaminated dreaming snippets when recording short-term recalls", async (workspaceDir) => {
-    await recordMemoryRecalls(workspaceDir, "action preference", [
-      memoryRecallResult(
-        "memory/2026-04-03.md",
-        1,
-        1,
-        0.92,
-        "Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+  it("excludes staged and generated REM recalls while keeping ordinary reflections", async (workspaceDir) => {
+    const ordinary = "Reflections on deployment planning: keep a verified backup before release.";
+    const snippets = [
+      [
+        "- Candidate: Default to action.",
+        "  - confidence: 0.76",
+        "  - evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1",
+        "  - recalls: 3",
+        "  - status: staged",
+      ].join("\n"),
+      previewRemDreaming({
+        entries: [
+          recallStoreEntryFixture({
+            key: "source",
+            path: "memory/2026-04-03.md",
+            conceptTags: ["deployment"],
+          }),
+        ],
+        limit: 1,
+        minPatternStrength: 0.5,
+      }).bodyLines.join("\n"),
+      ordinary,
+    ];
+    await recordMemoryRecalls(
+      workspaceDir,
+      "deployment planning",
+      snippets.map((snippet, index) =>
+        memoryRecallResult("memory/2026-04-03.md", index + 1, index + 1, 0.92, snippet),
       ),
-    ]);
-
-    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-    expect(store.version).toBe(1);
-    expect(store.entries).toEqual({});
-  });
-
-  it("ignores bullet-prefixed dreaming snippets when recording short-term recalls", async (workspaceDir) => {
-    await recordMemoryRecalls(workspaceDir, "action preference", [
-      memoryRecallResult(
-        "memory/2026-04-03.md",
-        1,
-        5,
-        0.92,
-        [
-          "- Candidate: Default to action.",
-          "  - confidence: 0.76",
-          "  - evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1",
-          "  - recalls: 3",
-          "  - status: staged",
-        ].join("\n"),
-      ),
-    ]);
-
-    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-    expect(store.version).toBe(1);
-    expect(store.entries).toEqual({});
+    );
+    const ranked = await rankAllCandidates(workspaceDir);
+    expect(ranked.map((candidate) => candidate.snippet)).toEqual([ordinary]);
   });
 
   it("ignores raw session and transcript snippets when recording short-term recalls", async (workspaceDir) => {

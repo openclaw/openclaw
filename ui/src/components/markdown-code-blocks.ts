@@ -14,9 +14,18 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import { t } from "../i18n/index.ts";
+import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
+import {
+  parseMarkdownJson,
+  renderMarkdownJsonModes,
+  renderMarkdownJsonTree,
+  type MarkdownJson,
+} from "./markdown-json.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml, isMarkdownBlockArtText } from "./markdown-text.ts";
+
+registerCodeBlocksEnglish();
 
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
@@ -102,7 +111,12 @@ export function handleMarkdownCodeBlockClick(event: Event): void {
   const code = readMarkdownCodeBlockCopyText(button);
   const attempt = (codeBlockCopyAttempts.get(button) ?? 0) + 1;
   codeBlockCopyAttempts.set(button, attempt);
-  const isCurrent = () => button.isConnected && codeBlockCopyAttempts.get(button) === attempt;
+  // Streaming retains the control while its payload changes; old content must
+  // not trigger a fallback write or claim the current control's feedback.
+  const isCurrent = () =>
+    button.isConnected &&
+    codeBlockCopyAttempts.get(button) === attempt &&
+    readMarkdownCodeBlockCopyText(button) === code;
   void copyToClipboard(code, isCurrent).then((copied) => {
     // Clipboard writes can finish out of click order; older attempts must not own feedback.
     if (!isCurrent()) {
@@ -133,6 +147,14 @@ function handleCodeBlockDisclosure(target: Element): void {
   if (target.closest(".code-block-expand")) {
     wrapper.classList.add("is-expanded");
     target.closest<HTMLButtonElement>(".code-block-expand")?.setAttribute("aria-expanded", "true");
+  }
+  const jsonMode = target.closest<HTMLButtonElement>(".code-block-json-mode");
+  if (jsonMode) {
+    wrapper.classList.toggle("is-json-raw", jsonMode.dataset.jsonMode === "raw");
+    for (const button of wrapper.querySelectorAll(".code-block-json-mode")) {
+      button.setAttribute("aria-pressed", String(button === jsonMode));
+    }
+    updateCodeBlockWidthOverflow(wrapper);
   }
   const wrapButton = target.closest<HTMLButtonElement>(".code-block-wrap");
   if (!wrapButton) {
@@ -191,20 +213,20 @@ function codeClassAttribute(lang: string, highlighted: string): string {
 
 function renderCodeBlockHeader(lang: string, actions: string): string {
   const language = escapeMarkdownHtml(lang || t("chat.codeBlock.languageFallback"));
-  return `<div class="code-block-header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${actions}</div></div>`;
+  return `<div class="code-block-header" data-markdown-key="header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${actions}</div></div>`;
 }
 
 function renderCodeBlockCopyButton(text: string): string {
   // Attribute sanitization trims plain values; encode copied whitespace with the text.
   const attrSafe = escapeMarkdownHtml(encodeCodeBlockCopyPayload(text));
-  return `<button type="button" class="code-block-copy" data-code="${attrSafe}" data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}" aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
+  return `<button type="button" class="code-block-copy" data-markdown-key="copy" data-code="${attrSafe}" data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}" aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
 }
 
 export function renderMarkdownCodeBlock(
   text: string,
   lang: string,
   env: unknown,
-  options: { blockArt?: boolean; copyText?: string; highlight?: boolean } = {},
+  options: { blockArt?: boolean; copyText?: string; highlight?: boolean; json?: MarkdownJson } = {},
 ): string {
   const blockArt = options.blockArt || isMarkdownBlockArtText(text);
   const highlight = options.highlight;
@@ -225,6 +247,11 @@ export function renderMarkdownCodeBlock(
   if (!shouldRenderCodeBlockInteraction(env)) {
     return `<div class="code-block-wrapper">${renderCodeBlockHeader(lang, copyButton)}${codeBlock}</div>`;
   }
+  const jsonSource =
+    !blockArt && highlight !== false && (!lang || lang.toLowerCase() === "json")
+      ? (options.json ?? parseMarkdownJson(text))
+      : null;
+  const tree = jsonSource ? renderMarkdownJsonTree(jsonSource) : "";
   const hiddenLineCount = ["text", "md", "markdown"].includes(lang.trim().toLowerCase())
     ? 0
     : Math.max(0, countCodeBlockLines(text) - CODE_PREVIEW_LINE_COUNT);
@@ -238,12 +265,15 @@ export function renderMarkdownCodeBlock(
     hiddenCount,
   );
   const expandButton = hiddenLineCount
-    ? `<button type="button" class="code-block-expand" aria-label="${escapeMarkdownHtml(expandLabel)}" aria-expanded="false"><span class="code-block-chevron" aria-hidden="true"></span><span>${escapeMarkdownHtml(hiddenLabel)}</span></button>`
+    ? `<button type="button" class="code-block-expand" data-markdown-key="expand" aria-label="${escapeMarkdownHtml(expandLabel)}" aria-expanded="false"><span class="code-block-chevron" aria-hidden="true"></span><span>${escapeMarkdownHtml(hiddenLabel)}</span></button>`
     : "";
   const wrapLabel = escapeMarkdownHtml(t("chat.codeBlock.enableWrap"));
-  const wrapButton = `<button type="button" class="code-block-wrap" aria-label="${wrapLabel}" title="${wrapLabel}" aria-pressed="false"><span class="code-block-wrap__enable" aria-hidden="true"></span><span class="code-block-wrap__disable" aria-hidden="true"></span></button>`;
-  const header = renderCodeBlockHeader(lang, `${wrapButton}${copyButton}`);
-  return `<div class="code-block-wrapper${hiddenLineCount ? " is-collapsible" : ""}">${header}<div class="code-block-viewport">${codeBlock}</div>${expandButton}</div>`;
+  const wrapButton = `<button type="button" class="code-block-wrap" data-markdown-key="wrap" aria-label="${wrapLabel}" title="${wrapLabel}" aria-pressed="false"><span class="code-block-wrap__enable" aria-hidden="true"></span><span class="code-block-wrap__disable" aria-hidden="true"></span></button>`;
+  const header = renderCodeBlockHeader(
+    lang,
+    `${tree ? renderMarkdownJsonModes() : ""}${wrapButton}${copyButton}`,
+  );
+  return `<div class="code-block-wrapper${tree ? " code-block-wrapper--json" : ""}${hiddenLineCount ? " is-collapsible" : ""}">${header}${tree}<div class="code-block-viewport" data-markdown-key="viewport">${codeBlock}</div>${expandButton}</div>`;
 }
 
 function countCodeBlockLines(text: string): number {

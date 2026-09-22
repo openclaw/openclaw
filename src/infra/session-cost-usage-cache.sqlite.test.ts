@@ -15,6 +15,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { migrateSessionCostUsageRollupStorage } from "./session-cost-usage-cache-migration.js";
 import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
 import {
   deleteSessionCostUsageRollupsExcept,
@@ -22,6 +23,12 @@ import {
   prepareSessionCostUsageRefreshLock,
 } from "./session-cost-usage-cache.sqlite.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import {
+  decodeUsageCostRollup,
+  encodeUsageCostRollup,
+  USAGE_COST_ROLLUP_VERSION,
+} from "./session-cost-usage-rollup-codec.js";
+import { createSessionUsageRollupData } from "./session-cost-usage-rollup.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -36,10 +43,12 @@ function encodeJson(value: string, format: "string" | "utf8") {
 
 function writeRollup(
   agentId: string,
-  params: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1],
+  params: Omit<Parameters<typeof writeSessionCostUsageRollupInDatabase>[1], "blob"> & {
+    blob?: Uint8Array;
+  },
 ) {
   return runOpenClawAgentWriteTransaction(
-    ({ db }) => writeSessionCostUsageRollupInDatabase(db, params),
+    ({ db }) => writeSessionCostUsageRollupInDatabase(db, { ...params, blob: params.blob ?? null }),
     { agentId },
     { operationLabel: "session-cost-usage.rollup.write" },
   );
@@ -61,6 +70,82 @@ afterEach(async () => {
 });
 
 describe("session cost usage SQLite cache", () => {
+  it("migrates valid old reports once while preserving newer cache rows and unrelated scopes", async () => {
+    const stateDir = tempDirs.make("openclaw-usage-cache-migrate-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const agentId = "usage-migration";
+      const { db } = openOpenClawAgentDatabase({ agentId });
+      const entry = {
+        version: USAGE_COST_ROLLUP_VERSION,
+        pricingFingerprint: "synthetic",
+        checkpoint: {
+          kind: "jsonl" as const,
+          parsedOffset: 7,
+          observedSize: 7,
+          observedMtimeMs: 10,
+          device: 1,
+          inode: 2,
+          anchorHash: "anchor",
+        },
+        scannedAt: 12,
+        parsedRecords: 1,
+        countedRecords: 0,
+        rollup: createSessionUsageRollupData(),
+      };
+      entry.rollup.untimestamped.totals.totalTokens = 17;
+      const insert = db.prepare(
+        "INSERT INTO cache_entries(scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?)",
+      );
+      for (const [key, json] of [
+        ["valid\0雪", JSON.stringify(entry)],
+        ["newer", JSON.stringify(entry)],
+        ["broken", "{"],
+        ["obsolete", JSON.stringify({ ...entry, version: 5 })],
+      ] as const) {
+        insert.run("session-cost-usage-rollup-v2", key, json, null, 123);
+      }
+      const newer = encodeUsageCostRollup({ ...entry, scannedAt: 999 });
+      insert.run("session-cost-usage-rollup-v3", "newer", newer.valueJson, newer.blob, 999);
+      insert.run("other", "valid\0雪", "unchanged", null, 1);
+      runOpenClawAgentWriteTransaction(
+        ({ db: current }) => migrateSessionCostUsageRollupStorage(current),
+        { agentId },
+      );
+      const rows = db
+        .prepare(
+          "SELECT * FROM cache_entries WHERE scope IN ('session-cost-usage-rollup-v2', 'session-cost-usage-rollup-v3', 'other') ORDER BY scope, key",
+        )
+        .all();
+      expect(rows.map((row) => [row.scope, row.key])).toEqual([
+        ["other", "valid\0雪"],
+        ["session-cost-usage-rollup-v3", "newer"],
+        ["session-cost-usage-rollup-v3", "valid\0雪"],
+      ]);
+      expect(rows[0]?.value_json).toBe("unchanged");
+      expect(rows[1]).toMatchObject({ value_json: newer.valueJson, updated_at: 999 });
+      const migrated = rows[2]!;
+      expect(migrated.updated_at).toBe(123);
+      expect(
+        decodeUsageCostRollup(
+          String(migrated.value_json),
+          "synthetic",
+          migrated.blob as Uint8Array,
+        ),
+      ).toEqual(entry);
+      runOpenClawAgentWriteTransaction(
+        ({ db: current }) => migrateSessionCostUsageRollupStorage(current),
+        { agentId },
+      );
+      expect(
+        db
+          .prepare(
+            "SELECT * FROM cache_entries WHERE scope IN ('session-cost-usage-rollup-v2', 'session-cost-usage-rollup-v3', 'other') ORDER BY scope, key",
+          )
+          .all(),
+      ).toEqual(rows);
+    });
+  });
+
   it("keeps compare-and-swap text returned to the caller bounded for large values", async () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-cas-payload-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -103,7 +188,7 @@ describe("session cost usage SQLite cache", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
       const { db } = openOpenClawAgentDatabase({ agentId });
-      const scope = "session-cost-usage-rollup-v2";
+      const scope = "session-cost-usage-rollup-v3";
       const currentJson = '{ "label": "雪🦞é", "total": 1 }';
       const nextJson = '{"label":"€🦞", "total":2}';
       const insert = db.prepare(
@@ -148,6 +233,7 @@ describe("session cost usage SQLite cache", () => {
             rollupId,
             previousValueJson: previous === null ? null : utf8Json(previous),
             valueJson: utf8Json(nextJson),
+            blob: new Uint8Array([3, 4, 5]),
             updatedAt: 2,
           }),
           label,
@@ -157,7 +243,7 @@ describe("session cost usage SQLite cache", () => {
             ? {
                 value_json: nextJson,
                 value_type: "text",
-                blob: null,
+                blob: new Uint8Array([3, 4, 5]),
                 expires_at: null,
                 updated_at: 2,
               }
@@ -299,7 +385,7 @@ describe("session cost usage SQLite cache", () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
       const { db } = openOpenClawAgentDatabase({ agentId });
-      const scope = "session-cost-usage-rollup-v2";
+      const scope = "session-cost-usage-rollup-v3";
       const insert = db.prepare(
         "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
       );
@@ -363,7 +449,7 @@ describe("session cost usage SQLite cache", () => {
         );
         for (let index = 0; index < 97; index += 1) {
           insert.run(
-            "session-cost-usage-rollup-v2",
+            "session-cost-usage-rollup-v3",
             `stale-${String(index).padStart(3, "0")}`,
             "{}",
             index,
@@ -379,7 +465,7 @@ describe("session cost usage SQLite cache", () => {
         }));
         const before = db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all();
         db.exec(`CREATE TEMP TRIGGER refuse_late_rollup_prune BEFORE DELETE ON cache_entries
-        WHEN OLD.scope = 'session-cost-usage-rollup-v2' AND OLD.key = 'stale-080'
+        WHEN OLD.scope = 'session-cost-usage-rollup-v3' AND OLD.key = 'stale-080'
         BEGIN SELECT RAISE(ABORT, 'late rollup prune refused'); END;`);
         await expect(
           deleteSessionCostUsageRollupsExcept({ agentId, liveKeys: new Set(), rows }),
@@ -396,7 +482,7 @@ describe("session cost usage SQLite cache", () => {
     },
   );
 
-  it("reads only v2 rollups and prunes retired usage cache rows by scope", async () => {
+  it("reads only v3 rollups and prunes retired usage cache rows by scope", async () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-retired-");
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -432,7 +518,7 @@ describe("session cost usage SQLite cache", () => {
       ).toEqual([
         { key: "keep", scope: "other" },
         { key: "refresh-lock", scope: "session-cost-usage" },
-        { key: "current.jsonl", scope: "session-cost-usage-rollup-v2" },
+        { key: "current.jsonl", scope: "session-cost-usage-rollup-v3" },
       ]);
     });
   });

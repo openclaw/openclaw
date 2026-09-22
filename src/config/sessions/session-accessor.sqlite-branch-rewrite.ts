@@ -9,7 +9,10 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionTranscriptContextVersion,
+  SessionTranscriptWriteScope,
+} from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
 import {
@@ -19,15 +22,13 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
-import {
-  readTranscriptContextVersionInTransaction,
-  type SessionTranscriptContextVersion,
-} from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
@@ -49,6 +50,11 @@ export function prepareTranscriptRewriteSync(
   const resolved = resolveSqliteTranscriptScope(fencedScope);
   const options = toDatabaseOptions(resolved);
   const database = openOpenClawAgentDatabase(options);
+  if (database.db.isTransaction) {
+    throw new Error(
+      "Transcript rewrite must own its commit; run it outside the active transaction",
+    );
+  }
   assertActive();
   assertOwnedTranscriptWriteCommit(fencedScope);
   const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
@@ -107,7 +113,7 @@ export function prepareTranscriptRewriteSync(
                 .onRef("event.session_id", "=", "identity.session_id")
                 .onRef("event.seq", "=", "identity.seq"),
             )
-            .select("event.event_json")
+            .select(transcriptEventJsonSql(current.db, "event").as("event_json"))
             .where("identity.session_id", "=", resolved.sessionId)
             .where("identity.event_id", "=", source.id),
         );

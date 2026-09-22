@@ -342,9 +342,14 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
 
   // The real compositor, renderer and transport expose short sends, stopped
   // streams and lifecycle resets at Telegram's stubbed network boundary.
-  it.each(["progress", "partial", "block"] as const)(
-    "replaces, clears and resumes a short card before the final reply in %s mode",
-    async (mode) => {
+  it.each([
+    { mode: "progress", finalDelivery: "dispatcher" },
+    { mode: "partial", finalDelivery: "dispatcher" },
+    { mode: "block", finalDelivery: "dispatcher" },
+    { mode: "progress", finalDelivery: "message-tool" },
+  ] as const)(
+    "replaces, clears and resumes a short card before the $finalDelivery final in $mode mode",
+    async ({ mode, finalDelivery }) => {
       vi.useFakeTimers();
       try {
         const actualDraft =
@@ -353,7 +358,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
           "./bot/delivery.replies.js",
         );
         const actualEdit = await vi.importActual<typeof import("./send-edit.js")>("./send-edit.js");
-        deliverReplies.mockImplementation(actualDelivery.deliverReplies);
+        deliverReplies.mockImplementation(actualDelivery.deliverStructuredReplies);
         editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
         let draft: TelegramDraftStream | undefined;
         createTelegramDraftStream.mockImplementation((params) => {
@@ -478,7 +483,15 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             expect(send).toHaveBeenCalledTimes(2);
 
             await replyOptions?.onAssistantMessageStart?.();
-            await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+            if (finalDelivery === "message-tool") {
+              await bot.api.sendMessage(123, "Done");
+              await replyOptions?.onObservedReplyDelivery?.();
+              await vi.advanceTimersByTimeAsync(4_000);
+              // NO_REPLY never enters the final dispatcher; retire before turn settlement.
+              expect.soft([...visible.values()]).toEqual(["Done"]);
+            } else {
+              await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+            }
             expect([...visible.values()]).toContain("Done");
             const finalMessages = [...visible.entries()];
             const sendsAfterFinal = send.mock.calls.length;
@@ -493,7 +506,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
             expect(send).toHaveBeenCalledTimes(sendsAfterFinal);
             expect(edit).toHaveBeenCalledTimes(editsAfterFinal);
             expect([...visible.entries()]).toEqual(finalMessages);
-            return { queuedFinal: true };
+            return { queuedFinal: finalDelivery === "dispatcher" };
           },
         );
 

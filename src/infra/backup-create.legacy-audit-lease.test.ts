@@ -47,7 +47,11 @@ describe("backup legacy audit capture boundary", () => {
                 });
                 expect(migrated.warnings).toEqual([]);
               }
-              return await originalSnapshot(params);
+              try {
+                return await originalSnapshot(params);
+              } finally {
+                clock.mockRestore();
+              }
             });
           try {
             const archive = await createBackupArchive({

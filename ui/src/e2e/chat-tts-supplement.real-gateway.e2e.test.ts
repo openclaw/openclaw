@@ -8,6 +8,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -24,6 +25,7 @@ type HistoryFrame = {
   type: string;
   id?: string;
   method?: string;
+  params?: { sessionKey?: string; cursor?: string };
   payload?: { deltaCursor?: string; messages?: unknown[] };
 };
 
@@ -250,19 +252,37 @@ suite.define(() => {
           await suite.withPage(
             { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
             async ({ page }) => {
-              const historyRequests = new Set<string>();
-              const history: HistoryFrame[] = [];
+              let historyConnection = 0;
+              const history: Array<{
+                connection: number;
+                frame: HistoryFrame;
+                consumedAfterResponse: boolean;
+              }> = [];
               page.on("websocket", (socket) => {
+                const connection = ++historyConnection;
+                const historyRequests = new Set<string>();
                 socket.on("framesent", ({ payload }) => {
                   const frame: HistoryFrame = JSON.parse(payload.toString());
-                  if (frame.id && ["chat.history", "chat.startup"].includes(frame.method ?? "")) {
+                  if (
+                    frame.id &&
+                    ["chat.history", "chat.startup"].includes(frame.method ?? "") &&
+                    frame.params?.sessionKey === sessionKey
+                  ) {
                     historyRequests.add(frame.id);
+                    for (const response of history) {
+                      if (
+                        response.connection === connection &&
+                        response.frame.payload?.deltaCursor === frame.params.cursor
+                      ) {
+                        response.consumedAfterResponse = true;
+                      }
+                    }
                   }
                 });
                 socket.on("framereceived", ({ payload }) => {
                   const frame: HistoryFrame = JSON.parse(payload.toString());
                   if (frame.id && historyRequests.has(frame.id) && frame.payload?.deltaCursor) {
-                    history.push(frame);
+                    history.push({ connection, frame, consumedAfterResponse: false });
                   }
                 });
               });
@@ -323,14 +343,56 @@ suite.define(() => {
                 await send(`Please give spoken answer ${index + 1}.`);
                 await answer(text).waitFor();
                 await expect.poll(() => provider.speech.length).toBe(index + 1);
-                // Keep synthesis pending until the browser has accepted the answer's history cursor.
-                await expect
-                  .poll(() =>
-                    history.some((frame) =>
-                      JSON.stringify(frame.payload?.messages ?? []).includes(text),
-                    ),
-                  )
-                  .toBe(true);
+                if (index === 1) {
+                  // The first turn covers live delivery; this turn covers speech after hydration.
+                  const previousConnection = historyConnection;
+                  await page.reload();
+                  await waitForControlUiGatewayReady(page);
+                  await expect
+                    .poll(async () => {
+                      const answerResponses = history.filter(
+                        ({ connection, frame }) =>
+                          connection > previousConnection &&
+                          JSON.stringify(frame.payload?.messages ?? []).includes(text),
+                      );
+                      if (answerResponses.length === 0) {
+                        return false;
+                      }
+                      const cursors = answerResponses.flatMap(({ frame }) =>
+                        frame.payload?.deltaCursor ? [frame.payload.deltaCursor] : [],
+                      );
+                      return page.evaluate(
+                        ({
+                          sessionKey: expectedSessionKey,
+                          text: expectedText,
+                          cursors: answerCursors,
+                          consumedAfterResponse,
+                        }) => {
+                          const state = document.querySelector<
+                            HTMLElement & { state?: ChatPageHost }
+                          >(".chat-pane-cache__pane--active")?.state;
+                          const snapshot =
+                            state?.chatMessagesBySession?.get(expectedSessionKey)?.snapshot;
+                          return (
+                            state?.sessionKey === expectedSessionKey &&
+                            !state.chatLoading &&
+                            (answerCursors.includes(snapshot?.deltaCursor ?? "") ||
+                              consumedAfterResponse) &&
+                            JSON.stringify(snapshot?.messages ?? []).includes(expectedText)
+                          );
+                        },
+                        {
+                          sessionKey,
+                          text,
+                          cursors,
+                          consumedAfterResponse: answerResponses.some(
+                            (response) => response.consumedAfterResponse,
+                          ),
+                        },
+                      );
+                    })
+                    .toBe(true);
+                }
                 provider.release(index);
                 await assertSpeech(text, index + 1);
                 await page

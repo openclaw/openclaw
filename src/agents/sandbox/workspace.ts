@@ -10,6 +10,7 @@ import type { OptionalBootstrapFileName } from "../../config/types.agent-default
 import { openRootFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveUserPath } from "../../utils.js";
+import { publishBootstrapFile } from "../workspace-bootstrap-publish.js";
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
@@ -21,7 +22,6 @@ import {
   DEFAULT_SOUL_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
-  publishBootstrapFile,
 } from "../workspace.js";
 
 const log = createSubsystemLogger("sandbox-workspace");

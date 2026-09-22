@@ -627,6 +627,7 @@ function renderSessionListToolbar(host: SidebarSessionListHost) {
         agentId: host.expandedAgentId(),
         className: "sidebar-session-toolbar__button sidebar-new-session",
         label: t("agentChip.newConversation"),
+        showShortcut: true,
         disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
         onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
       })}

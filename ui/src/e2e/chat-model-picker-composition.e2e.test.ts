@@ -1,9 +1,80 @@
 import { expect, it } from "vitest";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  captureUiProof,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it.each([
+    { width: 1280, height: 900, minimumTarget: 32 },
+    { width: 390, height: 844, minimumTarget: 44 },
+  ])(
+    "opens provider groups and searches across collapsed models at $width pixels",
+    async ({ width, height, minimumTarget }) => {
+      await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          agentModel: "openai/shared-alpha",
+          models: [
+            { id: "shared-alpha", name: "Shared Alpha", provider: "openai" },
+            { id: "shared-beta", name: "Shared Beta", provider: "anthropic" },
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
+        const trigger = picker.locator("[data-chat-model-select]");
+        const alpha = picker.locator('[data-chat-model-option="openai/shared-alpha"]');
+        const beta = picker.locator('[data-chat-model-option="anthropic/shared-beta"]');
+        const openai = picker.locator(
+          '[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]',
+        );
+        await expect
+          .poll(() => picker.locator("[data-chat-model-provider-toggle]").count())
+          .toBe(2);
+        await trigger.click();
+        await openai.click({ trial: true });
+        await expect.poll(() => alpha.isVisible()).toBe(false);
+        expect(await beta.isVisible()).toBe(false);
+        expect(await openai.getAttribute("aria-expanded")).toBe("false");
+        await expect
+          .poll(() => openai.evaluate((button) => button.getBoundingClientRect().height))
+          .toBeGreaterThanOrEqual(minimumTarget);
+        await openai.focus();
+        await page.keyboard.press("Enter");
+        await expect.poll(() => alpha.isVisible()).toBe(true);
+        expect(await beta.isVisible()).toBe(false);
+        const search = picker.locator("[data-chat-model-search]");
+        await search.fill("shared");
+        await expect.poll(() => beta.isVisible()).toBe(true);
+        expect(await openai.getAttribute("aria-expanded")).toBe("true");
+        await search.fill("shared-beta");
+        await captureUiProof(suite, page, "model-id-search", `${width}.png`);
+        expect(await beta.isVisible()).toBe(true);
+        expect(await alpha.isVisible()).toBe(false);
+        await search.fill("ANTHROPIC/SHARED-BETA");
+        expect(await beta.isVisible()).toBe(true);
+        expect(await alpha.isVisible()).toBe(false);
+        await search.press("ControlOrMeta+A");
+        await search.press("Backspace");
+        expect(await search.inputValue()).toBe("");
+        expect(await alpha.isVisible()).toBe(true);
+        expect(await beta.isVisible()).toBe(false);
+        await search.press("Escape");
+        await expect.poll(() => picker.getAttribute("open")).toBeNull();
+        await trigger.click();
+        await expect.poll(() => alpha.isVisible()).toBe(false);
+        expect(await openai.getAttribute("aria-expanded")).toBe("false");
+        await search.fill("shared");
+        await search.press("ArrowDown");
+        await search.press("Enter");
+        const patch = await gateway.waitForRequest("sessions.patch");
+        expect(patch.params).toMatchObject({ model: "anthropic/shared-beta" });
+      });
+    },
+  );
+
   for (const composition of ["active", "keyCode229", "none"] as const) {
     it.each(["Enter", "Escape", "ArrowDown", "ArrowUp"])(
       `respects ${composition} composition ownership for model-search %s`,
@@ -22,16 +93,21 @@ suite.define(() => {
           await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
           await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
           await trigger.click();
+          await page.mouse.move(0, 0);
           const search = picker.locator("[data-chat-model-search]");
           const query = key.startsWith("Arrow") ? "" : "anthropic";
+          if (key.startsWith("Arrow")) {
+            for (const toggle of await picker.locator("[data-chat-model-provider-toggle]").all()) {
+              await toggle.focus();
+              await toggle.press("Enter");
+            }
+          }
           await search.fill(query);
           await search.focus();
-          const highlighted = await search.getAttribute("aria-activedescendant");
-          expect(highlighted).toBeTruthy();
-
           // This exercises browser event ownership, not a native OS IME candidate window.
-          const prevented = await search.evaluate(
+          const { prevented, highlightedBefore, highlightedAfter } = await search.evaluate(
             (input, args) => {
+              const previousHighlight = input.getAttribute("aria-activedescendant");
               const event = new KeyboardEvent("keydown", {
                 key: args.key,
                 isComposing: args.composition === "active",
@@ -41,16 +117,22 @@ suite.define(() => {
                 composed: true,
               });
               input.dispatchEvent(event);
-              return event.defaultPrevented;
+              return {
+                prevented: event.defaultPrevented,
+                highlightedBefore: previousHighlight,
+                highlightedAfter: input.getAttribute("aria-activedescendant"),
+              };
             },
             { key, composition },
           );
+
+          expect(highlightedBefore).toBeTruthy();
 
           if (composition !== "none") {
             expect.soft(prevented).toBe(false);
             expect.soft(await picker.getAttribute("open")).not.toBeNull();
             expect.soft(await search.inputValue()).toBe(query);
-            expect.soft(await search.getAttribute("aria-activedescendant")).toBe(highlighted);
+            expect.soft(highlightedAfter).toBe(highlightedBefore);
             expect.soft(await gateway.getRequests("sessions.patch")).toEqual([]);
           } else {
             expect(prevented).toBe(true);
@@ -66,7 +148,7 @@ suite.define(() => {
                 await search.press("Escape");
                 expect(await picker.getAttribute("open")).toBeNull();
               } else {
-                expect(await search.getAttribute("aria-activedescendant")).not.toBe(highlighted);
+                expect(highlightedAfter).not.toBe(highlightedBefore);
               }
             }
           }

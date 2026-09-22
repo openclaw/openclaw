@@ -224,6 +224,50 @@ describe("native run transition selection", () => {
 });
 
 describe("worker row transition selection", () => {
+  it("publishes terminal corrections despite a clock behind the prior observation", () => {
+    const { db } = createProjectionTransactionDatabase();
+    const task: TaskRecord = {
+      ...record("first"),
+      status: "cancelled",
+      deliveryStatus: "pending",
+      endedAt: 435,
+      lastEventAt: 435,
+      error: "Subagent run killed.",
+    };
+    memory.tasks.set(task.taskId, task);
+    const onCommitted = vi.fn();
+    const input = {
+      kind: "state" as const,
+      taskId: task.taskId,
+      expectedTask: captureTaskPersistenceReceipt(task),
+      now: 300,
+      params: {
+        runId: "shared-run",
+        runtime: task.runtime,
+        status: "cancelled" as const,
+        endedAt: 200,
+        lastEventAt: 200,
+        error: "killed",
+        suppressDelivery: true,
+      },
+    };
+    const transition = () =>
+      transitionTaskRecordInDatabase(db, input, (operation) => operation(), {
+        assertCurrent() {},
+        onCommitted,
+      });
+    const receipt = transition();
+    expect(receipt).toMatchObject({
+      persisted: true,
+      deliver: false,
+      task: { deliveryStatus: "not_applicable", endedAt: 200, lastEventAt: 436 },
+    });
+    expect(onCommitted).toHaveBeenLastCalledWith(receipt);
+    expect(memory.tasks.get(task.taskId)).toEqual(receipt?.task);
+    expect(transition()).toMatchObject({ persisted: false, task: receipt?.task });
+    expect(memory.writes).toEqual([task.taskId]);
+  });
+
   it("settles an exact childless receipt despite a sibling child-session match", () => {
     const { db } = createProjectionTransactionDatabase();
     const task = record("first");

@@ -7,6 +7,7 @@ import { gitNullConfigPath } from "../infra/git-exec.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { githubPublicationUnsafeConfigArgs } from "./github-publication-base.js";
+import { isGitHubPublicationWorkflowPath } from "./github-publication-workflows.js";
 
 type GitCommandOptions = {
   cwd?: string;
@@ -83,6 +84,34 @@ export function createGitHubPublicationCommandRunner(assertCurrent?: () => void)
 // bound the attribute scan dies as an output-limit "verification" failure on
 // any real repository.
 const TREE_LISTING_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
+
+export async function hasGitHubPublicationWorkflowChanges(params: {
+  cwd: string;
+  comparisonCommit: string;
+  workspaceTree: string;
+  run: typeof runPublicationCommand;
+}): Promise<boolean> {
+  const changed = await params.run(
+    [
+      "git",
+      "diff-tree",
+      "--no-commit-id",
+      "--name-only",
+      "-r",
+      "-z",
+      "--no-renames",
+      params.comparisonCommit,
+      params.workspaceTree,
+      "--",
+      ".github/workflows",
+    ],
+    { cwd: params.cwd, maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES },
+  );
+  if (changed.code !== 0) {
+    throw new Error("GitHub publication workspace workflow changes could not be verified.");
+  }
+  return changed.stdout.toString("latin1").split("\0").some(isGitHubPublicationWorkflowPath);
+}
 
 export async function assertSafeGitPublicationWorkspace(
   cwd: string,
@@ -381,6 +410,7 @@ export function githubPublicationPushArgs(
   remote: string,
   headCommit: string,
   branch: string,
+  expectedRemoteHead: string,
 ): string[] {
   return [
     ...GITHUB_CREDENTIAL_ARGS,
@@ -388,6 +418,9 @@ export function githubPublicationPushArgs(
     `core.hooksPath=${os.devNull}`,
     "push",
     "--porcelain",
+    // The executor proves ancestry first. Pin that proof to this exact remote
+    // value (or absence); the lease never substitutes for the fast-forward check.
+    `--force-with-lease=refs/heads/${branch}:${expectedRemoteHead}`,
     "--no-follow-tags",
     "--recurse-submodules=no",
     "--",

@@ -792,6 +792,13 @@ private struct AttachmentRow: View {
     var body: some View {
         if let artifactId = self.fetchableArtifactId, let kind = self.att.mediaKind {
             switch kind {
+            case .file:
+                ChatFileAttachment(
+                    artifactId: artifactId,
+                    label: self.attachmentLabel,
+                    fileName: self.att.fileName ?? self.attachmentLabel,
+                    resolverReady: self.resolverReady,
+                    load: { try await self.loadMedia($0, .file, nil) })
             case .image:
                 ChatMediaImageAttachment(
                     artifactId: artifactId,

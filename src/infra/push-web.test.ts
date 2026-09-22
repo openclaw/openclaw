@@ -50,8 +50,8 @@ function findBoundWebPushSubscriptionByEndpoint(
   }));
 }
 
-function insertPendingApproval(id: string): void {
-  const inserted = insertOperatorApproval({
+async function insertPendingApproval(id: string): Promise<void> {
+  const inserted = await insertOperatorApproval({
     approval: {
       id,
       kind: "exec",
@@ -600,7 +600,7 @@ describe("approval delivery target persistence", () => {
 
   it("lazily persists successful targets across reopen until terminal replacement", async () => {
     const approvalId = "exec:restart-safe-push";
-    insertPendingApproval(approvalId);
+    await insertPendingApproval(approvalId);
     const first = await registerWebPushSubscription({
       endpoint: "https://push.example.com/approval-first",
       keys,
@@ -665,13 +665,15 @@ describe("approval delivery target persistence", () => {
     ]);
 
     expect(
-      resolveOperatorApproval({
-        id: approvalId,
-        decision: "deny",
-        resolver: { kind: "system", id: null },
-        nowMs: 3_000,
-        databaseOptions: { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
-      }).outcome,
+      (
+        await resolveOperatorApproval({
+          id: approvalId,
+          decision: "deny",
+          resolver: { kind: "system", id: null },
+          nowMs: 3_000,
+          databaseOptions: { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
+        })
+      ).outcome,
     ).toBe("resolved");
     expect(await listTerminalWebPushApprovalDeliveryIds({ stateDir: tmpDir })).toEqual({
       approvalIds: [approvalId],
@@ -689,7 +691,7 @@ describe("approval delivery target persistence", () => {
 
   it("prepares remaining approval targets after subscriptions are removed or rebound", async () => {
     const approvalId = "exec:changed-push-targets";
-    insertPendingApproval(approvalId);
+    await insertPendingApproval(approvalId);
     for (const deviceId of ["removed", "rebound", "unchanged"]) {
       await registerWebPushSubscription({
         endpoint: `https://push.example.com/approval-${deviceId}`,
@@ -733,7 +735,7 @@ describe("approval delivery target persistence", () => {
 
   it("cascades delivery targets when the browser subscription is removed", async () => {
     const approvalId = "exec:removed-push-target";
-    insertPendingApproval(approvalId);
+    await insertPendingApproval(approvalId);
     const subscription = await registerWebPushSubscription({
       endpoint: "https://push.example.com/approval-removed",
       keys,
@@ -769,7 +771,7 @@ describe("approval delivery target persistence", () => {
 
   it("rejects a terminal target after the endpoint is rebound to another owner", async () => {
     const approvalId = "exec:rebound-push-target";
-    insertPendingApproval(approvalId);
+    await insertPendingApproval(approvalId);
     const original = await registerWebPushSubscription({
       endpoint: "https://push.example.com/approval-rebound",
       keys,
@@ -792,13 +794,15 @@ describe("approval delivery target persistence", () => {
       }),
     ).toEqual([original.subscriptionId]);
     expect(
-      resolveOperatorApproval({
-        id: approvalId,
-        decision: "deny",
-        resolver: { kind: "system", id: null },
-        nowMs: 3_000,
-        databaseOptions: { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
-      }).outcome,
+      (
+        await resolveOperatorApproval({
+          id: approvalId,
+          decision: "deny",
+          resolver: { kind: "system", id: null },
+          nowMs: 3_000,
+          databaseOptions: { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } },
+        })
+      ).outcome,
     ).toBe("resolved");
     await closeOpenClawStateDatabaseAsync();
 

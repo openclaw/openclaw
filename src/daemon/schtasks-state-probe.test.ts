@@ -49,6 +49,8 @@ describe("Scheduled Task probe timeout", () => {
     { budget: 0, expected: 5_000 },
     { budget: -1, expected: 5_000 },
     { budget: Number.POSITIVE_INFINITY, expected: 5_000 },
+    { budget: 457.0681, expected: 457 },
+    { budget: 0.5, expected: 1 },
     { budget: 200, expected: 200 },
     { budget: 30_000, expected: 30_000 },
   ])("uses a bounded caller budget: $budget -> $expected ms", ({ budget, expected }) => {

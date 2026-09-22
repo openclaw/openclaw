@@ -20,6 +20,7 @@ private final class HealthGatewayFixture {
     let onHeldRequest = LockIsolated<(@Sendable (Request) -> Void)?>(nil)
     let holdHealth = LockIsolated(false)
     let holdPreflight = LockIsolated(true)
+    let isReachable = LockIsolated(true)
     let gateway: GatewayConnection
     let control: ControlChannel
     private let previousAccent = AppStateStore.shared.profileAccentHex
@@ -35,9 +36,11 @@ private final class HealthGatewayFixture {
         let onHeldRequest = self.onHeldRequest
         let holdHealth = self.holdHealth
         let holdPreflight = self.holdPreflight
+        let isReachable = self.isReachable
         let session = GatewayTestWebSocketSession(taskFactory: {
             let owner = revision.value == 1 ? "A" : "B"
             return GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard isReachable.value else { throw URLError(.cannotConnectToHost) }
                 guard sendIndex > 0 else { return }
                 let data: Data
                 switch message {
@@ -262,6 +265,7 @@ struct GatewayHealthOwnershipTests {
                     try await Task.sleep(for: .milliseconds(2))
                 }
                 #expect(store.snapshot?.channelLabels?["fixture"] == "Gateway A")
+                fixture.isReachable.setValue(false)
                 a.socket.emitReceiveFailure()
                 let disconnectDeadline = ContinuousClock.now + .seconds(2)
                 while store.lastError == nil, ContinuousClock.now < disconnectDeadline {
@@ -271,6 +275,7 @@ struct GatewayHealthOwnershipTests {
                 #expect(store.snapshot?.channelLabels?["fixture"] == "Gateway A")
                 fixture.revision.setValue(2)
                 #expect(store.lastError == nil)
+                fixture.isReachable.setValue(true)
                 _ = try await fixture.gateway.acquireServerLease()
                 let b = try await fixture.waitForHeld(after: a.id)
                 #expect(store.snapshot == nil)
@@ -310,6 +315,8 @@ struct GatewayHealthOwnershipTests {
                 let read = Task { await store.refresh(onDemand: onDemand) }
                 refresh = read
                 let pending = try await fixture.waitForHeld(after: initial.id)
+                // Keep the outage active so a replacement hello cannot start another refresh before these assertions.
+                fixture.isReachable.setValue(false)
                 pending.socket.emitReceiveFailure()
                 await read.value
                 let disconnectDeadline = ContinuousClock.now + .seconds(2)

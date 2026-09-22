@@ -9,6 +9,7 @@ import { probePortUsage } from "../infra/ports-probe.js";
 import { UpdateDoctorError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 
 export type DoctorStaleGateway = {
   version: string;
@@ -78,6 +79,7 @@ export async function inspectStaleDoctorGateway(params: {
         env: serviceEnv,
         expectedVersion: version,
         expectedBuildId: buildId,
+        openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
         requirePluginHealth: false,
       });
   params.assertCurrent?.();

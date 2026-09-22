@@ -19,10 +19,8 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import {
-  normalizeSessionDeliveryState,
-  sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 vi.mock("../../tts/tts.runtime.js", () => ({
@@ -141,32 +139,43 @@ describe("outbound mirror route ordering", () => {
     });
   });
 
-  it("leaves the stored route untouched when a plugin intentionally suppresses delivery", async () => {
-    const transcriptScope = {
-      agentId: "main",
-      sessionKey: MAIN_SESSION_KEY,
-      sessionId: "main-session",
-      storePath,
-    };
-    const transcriptBefore = loadTranscriptEventsSync(transcriptScope);
-    handleAction.mockResolvedValue(
-      jsonResult({ status: "suppressed", reason: "cancelled_by_message_sending_hook" }),
-    );
-    const result = await runMessageAction({
-      cfg,
-      action: "send",
-      params: { channel: "testchat", to: "user:12345", message: "omitted" },
-      agentId: "main",
-      dryRun: false,
-    });
-    expect(result.payload).toEqual({
-      status: "suppressed",
-      reason: "cancelled_by_message_sending_hook",
-    });
-    expect(mainSessionOrigin()).toMatchObject({
-      provider: "discord",
-      from: "discord:operator",
-    });
-    expect(loadTranscriptEventsSync(transcriptScope)).toEqual(transcriptBefore);
-  });
+  it.each([
+    {
+      name: "suppresses delivery",
+      payload: { status: "suppressed", reason: "cancelled_by_message_sending_hook" },
+    },
+    {
+      name: "fails with an attempt ID",
+      payload: { ok: false, error: "send failed", messageId: "attempt-id" },
+    },
+    {
+      name: "returns a dry-run receipt",
+      payload: { dryRun: true, messageId: "preview-id" },
+    },
+  ])(
+    "leaves the stored route and transcript untouched when a plugin $name",
+    async ({ payload }) => {
+      const transcriptScope = {
+        agentId: "main",
+        sessionKey: MAIN_SESSION_KEY,
+        sessionId: "main-session",
+        storePath,
+      };
+      const transcriptBefore = loadTranscriptEventsSync(transcriptScope);
+      handleAction.mockResolvedValue(jsonResult(payload));
+      const result = await runMessageAction({
+        cfg,
+        action: "send",
+        params: { channel: "testchat", to: "user:12345", message: "omitted" },
+        agentId: "main",
+        dryRun: false,
+      });
+      expect(result.payload).toEqual(payload);
+      expect.soft(mainSessionOrigin()).toMatchObject({
+        provider: "discord",
+        from: "discord:operator",
+      });
+      expect(loadTranscriptEventsSync(transcriptScope)).toEqual(transcriptBefore);
+    },
+  );
 });

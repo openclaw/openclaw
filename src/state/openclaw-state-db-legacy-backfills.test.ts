@@ -289,7 +289,7 @@ describe("repairLegacySubagentRetainedResults", () => {
       "completion-run",
       JSON.stringify({
         runId: "completion-run",
-        taskRunId: "task-run",
+        taskRunId: " task-run ",
         completion: { required: true, resultText: "(no_reply)" },
         delivery: {
           status: "suspended",

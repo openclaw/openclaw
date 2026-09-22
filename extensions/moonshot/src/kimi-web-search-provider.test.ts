@@ -162,15 +162,18 @@ describe("kimi web search provider", () => {
   });
 
   it("accepts final responses backed by Kimi web search tool replay", async () => {
-    const toolArguments = JSON.stringify({
+    const toolArguments = `  ${JSON.stringify({
       query: "OpenClaw GitHub repository",
-      search_results: [{ url: "https://github.com/openclaw/openclaw" }],
+      url: " https://github.com/openclaw/openclaw ",
+      search_results: [{ url: "https://docs.openclaw.ai" }, null, { url: "https://unused.test" }],
       usage: { total_tokens: 1200 },
-    });
+    })}\n`;
+    const laterArguments = '{"url":"https://openclaw.ai"}';
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
         jsonResponse({
+          search_results: [{ url: " https://github.com/openclaw/openclaw " }],
           choices: [
             {
               finish_reason: "tool_calls",
@@ -184,6 +187,10 @@ describe("kimi web search provider", () => {
                       arguments: toolArguments,
                     },
                   },
+                  {
+                    id: "call-2",
+                    function: { name: "$web_search", arguments: laterArguments },
+                  },
                 ],
               },
             },
@@ -192,6 +199,10 @@ describe("kimi web search provider", () => {
       )
       .mockResolvedValueOnce(
         jsonResponse({
+          search_results: [
+            { url: "https://docs.openclaw.ai" },
+            { url: "https://example.com/final" },
+          ],
           choices: [
             {
               finish_reason: "stop",
@@ -207,8 +218,26 @@ describe("kimi web search provider", () => {
 
       expect(result.provider).toBe("kimi");
       expectStringFieldContains(result, "content", "OpenClaw is available on GitHub.");
-      expect(result.citations).toEqual(["https://github.com/openclaw/openclaw"]);
+      expect(result.citations).toEqual([
+        "https://github.com/openclaw/openclaw",
+        "https://docs.openclaw.ai",
+        "https://openclaw.ai",
+        "https://example.com/final",
+      ]);
       expect(result).not.toHaveProperty("error");
+      const requestBody = fetchMock.mock.calls[1]?.[1]?.body;
+      if (typeof requestBody !== "string") {
+        throw new Error("Expected replay request body");
+      }
+      expect(JSON.parse(requestBody).messages.slice(-2)).toEqual([
+        { role: "tool", tool_call_id: "call-1", name: "$web_search", content: toolArguments },
+        { role: "tool", tool_call_id: "call-2", name: "$web_search", content: laterArguments },
+      ]);
+      await expect(executeKimiSearch("kimi grounded tool replay")).resolves.toEqual({
+        ...result,
+        cached: true,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
 

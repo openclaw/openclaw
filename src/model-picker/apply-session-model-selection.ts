@@ -229,15 +229,8 @@ export async function applySessionModelSelection(
     cfg: params.cfg,
     agentId: params.agentId,
     workspaceDir: startingEntry.spawnedWorkspaceDir,
-    sessionEntry: request.profileOverride
-      ? {
-          ...startingEntry,
-          providerOverride: request.provider,
-          modelProvider: request.provider,
-          authProfileOverride: request.profileOverride,
-          authProfileOverrideSource: "user",
-        }
-      : startingEntry,
+    sessionEntry: startingEntry,
+    profileOverride: request.profileOverride,
     provider: request.provider,
     model: request.model,
     catalog: params.thinkingCatalog ?? params.modelCatalog,

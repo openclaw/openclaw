@@ -1,7 +1,8 @@
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { botNames, botOpenIds, httpServers, wsClients } from "./monitor.state.js";
 
-export function cleanupFeishuMonitorStateForTests(): void {
+export async function cleanupFeishuMonitorStateForTests(): Promise<void> {
   for (const client of wsClients.values()) {
     try {
       client.close();
@@ -22,5 +23,6 @@ export function cleanupFeishuMonitorStateForTests(): void {
   httpServers.clear();
   botOpenIds.clear();
   botNames.clear();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 }

@@ -41,7 +41,9 @@ import {
 } from "./session-catalog-list-lifetime.js";
 import {
   getSessionCatalogListOperations,
+  resolvePublishedSessionCatalogs,
   retireSessionCatalogLists,
+  sessionCatalogListKey,
   type CatalogListEnumeration,
 } from "./session-catalog-list-operations.js";
 import {
@@ -105,8 +107,6 @@ const providerCreateTargetsByConfig = new WeakMap<
 >();
 
 type CatalogListResult = { catalogs: SessionCatalog[] };
-const catalogCallerIds = new WeakMap<GatewayClient, number>();
-let nextCatalogCallerId = 0;
 
 function providerCreateTargetCache(
   config: OpenClawConfig,
@@ -175,42 +175,6 @@ export function resolveRegisteredCatalogCreateTarget(
   return resolved.ok
     ? { ok: true, target: { ...resolved.target, pluginOwnerId: registration.pluginId } }
     : resolved;
-}
-
-function sessionCatalogListKey(params: {
-  agentId: string;
-  client: GatewayClient | null;
-  request: SessionsCatalogListParams;
-  search?: string;
-  allowProcessHomeFallback: boolean;
-  visibilityKey: string;
-}): string {
-  // Providers inherit this exact caller through Gateway async scope, including node APIs.
-  // A matching profile alone cannot make another connection's enumeration reusable.
-  let callerId = params.client ? catalogCallerIds.get(params.client) : 0;
-  if (params.client && callerId === undefined) {
-    callerId = ++nextCatalogCallerId;
-    catalogCallerIds.set(params.client, callerId);
-  }
-  const cursors = params.request.cursors
-    ? Object.entries(params.request.cursors).toSorted(([left], [right]) =>
-        left.localeCompare(right),
-      )
-    : null;
-  return JSON.stringify([
-    params.agentId,
-    params.request.catalogId ?? null,
-    params.search ?? null,
-    params.request.limitPerHost ?? null,
-    params.request.hostIds ?? null,
-    cursors,
-    params.allowProcessHomeFallback,
-    params.visibilityKey,
-    callerId,
-    params.client?.connect?.scopes?.toSorted() ?? [],
-    params.client?.connect?.role ?? null,
-    params.client?.connect?.device?.id ?? null,
-  ]);
 }
 
 function providerOrRespond(
@@ -362,39 +326,48 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     // Shared provider enumeration is not permission. Each synchronous delivery gets current
     // caller facts and one canonical index, never the provider's pre-await planning snapshot.
     const projectResult = (result: CatalogListEnumeration): CatalogListResult => {
+      const catalogs = resolvePublishedSessionCatalogs(result);
       const currentConfig = context.getRuntimeConfig();
       const visibility = resolveSessionCatalogVisibility(client, currentConfig);
       const requestEntries = createSessionCatalogRequestEntrySnapshot({
         cfg: currentConfig,
         fallbackAgentId: resolvedAgent.agentId,
         projection,
-        sessionKeys: result.catalogs
+        sessionKeys: catalogs
           .flatMap((catalog) => catalog.hosts)
           .flatMap((host) => host.sessions)
           .flatMap(({ sessionKey }) => (sessionKey ? [sessionKey] : [])),
       });
       return {
-        catalogs: result.catalogs.map((catalog) => ({
-          ...catalog,
-          hosts: catalog.hosts.map((host) =>
-            filterSessionCatalogHost(
-              requestEntries.projectHostSessions(
-                host,
-                result.instances,
-                providerAudiences.get(catalog.id),
+        catalogs: catalogs.map((catalog) =>
+          Object.assign({}, catalog, {
+            hosts: catalog.hosts.map((host) =>
+              filterSessionCatalogHost(
+                requestEntries.projectHostSessions(
+                  host,
+                  result.instances,
+                  providerAudiences.get(catalog.id),
+                ),
+                visibility,
+                {
+                  audience: providerAudiences.get(catalog.id),
+                  requestEntries,
+                },
               ),
-              visibility,
-              {
-                audience: providerAudiences.get(catalog.id),
-                requestEntries,
-              },
             ),
-          ),
-        })),
+          }),
+        ),
       };
     };
     const progressId = request.progressId;
     const progressConnId = progressId && client?.connId ? client.connId : undefined;
+    const isProgressCurrent = () =>
+      progressConnId !== undefined &&
+      client?.invalidated !== true &&
+      context.isConnectionActive?.(progressConnId) !== false &&
+      (!client?.internal?.agentRuntimeIdentity ||
+        context.validateAgentRuntimeApprovalAuthority?.(client.internal.agentRuntimeIdentity) ===
+          true);
     const subscriber: CatalogListProgressSubscriber | undefined =
       progressConnId && progressId
         ? (catalog, instances) =>
@@ -409,18 +382,21 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
               { dropIfSlow: true },
             )
         : undefined;
+    const allowPartialResults = Boolean(
+      request.allowPartialResults === true &&
+      subscriber &&
+      isProgressCurrent() &&
+      !client?.connectionSignal?.aborted &&
+      !signal?.aborted &&
+      request.hostIds === undefined &&
+      request.cursors === undefined,
+    );
     const subscribe = (progress: SessionCatalogListLifetime) => {
       if (subscriber && progressConnId) {
         progress.subscribe(
           `${progressConnId}\0${progressId}`,
           subscriber,
-          () =>
-            client?.invalidated !== true &&
-            context.isConnectionActive?.(progressConnId) !== false &&
-            (!client?.internal?.agentRuntimeIdentity ||
-              context.validateAgentRuntimeApprovalAuthority?.(
-                client.internal.agentRuntimeIdentity,
-              ) === true),
+          isProgressCurrent,
           client?.connectionSignal ?? signal,
           () => (projection.needsMaterialization ? projection.ensureMaterialized() : undefined),
         );
@@ -430,6 +406,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       agentId: resolvedAgent.agentId,
       client,
       request,
+      allowPartialResults,
       search,
       allowProcessHomeFallback: allowHomeFallback,
       visibilityKey: resolveSessionCatalogVisibility(client, config).cacheKey,
@@ -482,6 +459,10 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         : undefined;
       requestEntries?.freeze();
       const instances: SessionCatalogInstances = new Map();
+      // Partial lists can publish a newer host while another provider or projection still waits.
+      const publishedHosts: CatalogListEnumeration["publishedHosts"] = allowPartialResults
+        ? new Map()
+        : undefined;
       const listNodes = createSessionCatalogRequestNodeSnapshot();
       const catalogList = await Promise.all(
         selected.map(async (provider): Promise<SessionCatalog> => {
@@ -489,16 +470,21 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           const resolution = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
           const createTarget = resolution.ok ? resolution.target : undefined;
           const onHost = (host: SessionCatalog["hosts"][number]) => {
+            if (publishedHosts) {
+              const hosts = publishedHosts.get(provider.id) ?? new Map();
+              hosts.set(host.hostId, host);
+              publishedHosts.set(provider.id, hosts);
+            }
             requestEntries?.captureHostInstances(host, instances);
             const catalog = catalogResult(provider, shareRoute, [host], undefined, createTarget);
-            // Progressive frames are an optimization. The final RPC response remains
-            // authoritative when a slow client drops an intermediate host update.
+            // The final response also reconciles these snapshots if a slow client drops a frame.
             progress.publish(catalog, instances);
           };
           try {
             const hosts = await progress.runProvider(onHost, (lifetime) => {
               const providerParams = {
                 agentId: resolvedAgent.agentId,
+                allowPartialResults,
                 allowProcessHomeFallback: allowHomeFallback,
                 search,
                 limitPerHost: request.limitPerHost,
@@ -519,7 +505,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           }
         }),
       );
-      return { catalogs: catalogList, instances };
+      return { catalogs: catalogList, instances, publishedHosts };
     })();
     const entry = { progress, result: operation };
     // Coalesce only concurrent requests; each subsequent list sees current provider rows.

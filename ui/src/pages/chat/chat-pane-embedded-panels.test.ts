@@ -5,32 +5,22 @@ import { EditorView } from "@codemirror/view";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, render, type LitElement } from "lit";
 import "./components/chat-detail-panel.ts";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../api/types.ts";
+import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
-import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
+import {
+  createReviewFixture,
+  renderPanelFixture,
+} from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
-import {
-  availableSidebarSlots,
-  sidebarPanelDefinitions,
-  sidebarPanelTemplates,
-} from "./chat-pane-embedded-panels.ts";
-import { createChatPaneRails } from "./chat-pane-rails.ts";
-import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
-  createSessionCapabilityFixture,
-} from "./chat-pane.test-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { availableSidebarSlots, sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { createPageState } from "./chat-state-page.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
 import {
@@ -40,18 +30,15 @@ import {
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
-  renderSessionWorkspaceRail,
-  retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
-import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
-import "./components/chat-sidebar-region.runtime.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   threadProps,
 } from "./components/chat-transcript.test-support.ts";
+import "./components/chat-sidebar-region.runtime.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import {
   closeSlot,
@@ -61,7 +48,6 @@ import {
   setSidebarExpanded,
   setSidebarOpen,
   type SidebarLayout,
-  type SidebarSlotId,
 } from "./sidebar-layout.ts";
 
 function discussionSlots(discussionAvailable: boolean) {
@@ -76,144 +62,6 @@ function discussionSlots(discussionAvailable: boolean) {
 afterEach(() => {
   document.body.replaceChildren();
 });
-
-async function renderPanelFixture(
-  mount: HTMLElement,
-  layout: SidebarLayout,
-  definitions: ReturnType<typeof sidebarPanelDefinitions>,
-  closePanelSlot: (slot: SidebarSlotId) => void = vi.fn(),
-) {
-  render(
-    renderSidebarRegion({
-      availableWidth: 1400,
-      availableSlots: ["detail", "workspace"],
-      callbacks: {
-        activatePanel: vi.fn(),
-        togglePanelExpanded: vi.fn(),
-        closeSlot: closePanelSlot,
-        openSlot: vi.fn(),
-        reorderPanel: vi.fn(),
-        resizePanel: vi.fn(),
-        setOpen: vi.fn(),
-      },
-      layout,
-      narrow: false,
-      panelDefinitions: definitions,
-      panelActions: {},
-      panelTemplates: sidebarPanelTemplates(definitions),
-      primary: html`<main>Chat</main>`,
-      requestUpdate: vi.fn(),
-    }),
-    mount,
-  );
-  await mount.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
-  await mount.querySelector<LitElement>("openclaw-chat-files-panel")?.updateComplete;
-  await Promise.all(
-    [...mount.querySelectorAll<LitElement>("openclaw-chat-detail-panel")].map(
-      (panel) => panel.updateComplete,
-    ),
-  );
-  await mount.querySelector("openclaw-panel-loading-skeleton")?.updateComplete;
-}
-
-function createReviewFixture(taskFields: Partial<TaskSummary> = {}) {
-  const file = createDeferred<SessionWorkspaceGetResult | null>();
-  const list = createDeferred<SessionWorkspaceListResult | null>();
-  const sessions = createSessionCapabilityFixture({
-    getFile: vi.fn(() => file.promise),
-    listFiles: vi.fn(() => list.promise),
-  });
-  const mount = document.body.appendChild(document.createElement("div"));
-  const context = { ...createInitializationContext(), sessions };
-  const state = createPageState(
-    context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    mount,
-  );
-  const history = vi.fn().mockResolvedValue({
-    messages: [{ role: "assistant", content: "The selected task transcript." }],
-  });
-  state.client = createGatewayBrowserClientFixture({
-    request: (method, params) =>
-      method === "tasks.history"
-        ? history(params)
-        : method === "tasks.list"
-          ? { tasks: [] }
-          : { artifacts: [] },
-  });
-  state.connected = true;
-  state.connectionEpoch = 1;
-  state.sessionKey = "agent:main:review-intent";
-  state.sidebarLayout = { columns: [] };
-  const task = {
-    id: "review-task",
-    taskId: "review-task",
-    runtime: "subagent",
-    status: "completed",
-    title: "Inspect the completed task",
-    prompt: "Review the synthetic result",
-    terminalSummary: "Review completed",
-    sessionKey: state.sessionKey,
-    agentId: "main",
-    createdAt: 1,
-    updatedAt: 2,
-    ...taskFields,
-  } satisfies TaskSummary;
-  const backgroundTasks = {
-    ...createBackgroundTasksProps(state, { presented: false }),
-    tasks: [task],
-    taskDetails: new Map([[task.id, task]]),
-  };
-  const preview = {
-    sessionKey: state.sessionKey,
-    root: "/synthetic/workspace",
-    file: {
-      kind: "read",
-      path: "images/preview.png",
-      name: "preview.png",
-      missing: false,
-      previewKind: "image",
-      contentEncoding: "base64",
-      mimeType: "image/png",
-      content:
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV9kAAAAASUVORK5CYII=",
-    },
-  } satisfies SessionWorkspaceGetResult;
-  const rails = () =>
-    createChatPaneRails({
-      state,
-      sidebarLayout: state.sidebarLayout,
-      presentationId: "review-intent",
-      presented: true,
-      gatewaySnapshot: { ...context.gateway.snapshot, phase: "connected" },
-      setObserverVisibility: vi.fn(),
-      updateSidebarLayout: state.updateSidebarLayout,
-    });
-  onTestFinished(async () => {
-    file.resolve(null);
-    list.resolve(null);
-    await Promise.allSettled([file.promise, list.promise]);
-    resetTaskDetail(state);
-  });
-  const renderPanels = async () => {
-    const definitions = sidebarPanelDefinitions({
-      state,
-      renderDetail: (content) =>
-        renderChatDetailSlot({
-          backgroundTasks,
-          chat: threadProps("review-intent", state.sessionKey) as ChatProps,
-          content,
-          host: state,
-          layout: state.sidebarLayout,
-        }),
-      workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state), {
-        embedded: true,
-      }),
-    } as Parameters<typeof sidebarPanelDefinitions>[0]);
-    await renderPanelFixture(mount, state.sidebarLayout, definitions, rails().closePanelSlot);
-  };
-  return { file, history, list, mount, preview, rails, renderPanels, sessions, state, task };
-}
 
 describe("chat pane embedded panels", () => {
   it("navigates an existing file tab to an explicit line without resetting its editor or draft", async () => {
@@ -367,102 +215,6 @@ describe("chat pane embedded panels", () => {
     );
     expect(restored.state.doc.toString()).toBe(savedText);
   });
-  describe("Review task selection lifetime", () => {
-    beforeEach(installTranscriptDomMocks);
-    afterEach(resetTranscriptTestDom);
-    it.each(["pending", "unavailable", "checkout retired", "file closed", "task closed"] as const)(
-      "keeps task ownership independent of file selection %s",
-      async (selection) => {
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(10_000);
-        onTestFinished(() => {
-          vi.useRealTimers();
-        });
-        const { file, history, mount, preview, rails, renderPanels, state, task } =
-          createReviewFixture({ childSessionKey: "agent:main:subagent:review-child" });
-        rails().backgroundTasks.onOpenTaskDetail?.(task);
-        await renderPanels();
-        await renderPanels();
-        expect(mount.textContent).toContain("The selected task transcript.");
-        expect(history).toHaveBeenCalledExactlyOnceWith({ taskId: task.id, limit: 100 });
-
-        if (selection !== "task closed") {
-          openSessionWorkspaceFile(state, { path: preview.file.path });
-          await renderPanels();
-          expect(mount.querySelector('[data-panel-skeleton="files"]')).not.toBeNull();
-        }
-        if (selection === "unavailable") {
-          file.reject(new Error("Preview unavailable"));
-          await expect(file.promise).rejects.toThrow("Preview unavailable");
-        } else if (selection === "checkout retired") {
-          retireSessionWorkspaceCheckout(state);
-        } else if (selection === "file closed" || selection === "task closed") {
-          mount.querySelector<HTMLButtonElement>('button[aria-label="Close Review"]')!.click();
-        }
-        await renderPanels();
-        if (selection === "unavailable") {
-          expect(mount.querySelector('[role="alert"]')?.textContent).toContain(
-            "Preview unavailable",
-          );
-        } else if (selection === "file closed" || selection === "task closed") {
-          expect(mount.querySelector('[data-panel-slot="detail"]')).toBeNull();
-        } else if (selection === "checkout retired") {
-          expect(mount.querySelector('[data-panel-skeleton="files"]')).toBeNull();
-        }
-        vi.setSystemTime(12_000);
-        handlePageGatewayEvent(state, {
-          type: "event",
-          event: "task",
-          payload: { action: "upserted", task: { ...task, updatedAt: 3 } },
-        });
-        expect(history).toHaveBeenCalledTimes(
-          selection === "task closed" || selection === "file closed" ? 1 : 2,
-        );
-        if (selection === "task closed" || selection === "file closed") {
-          expect(mount.querySelector("[data-task-detail-panel]")).toBeNull();
-        } else {
-          expect(mount.querySelector("[data-task-detail-panel]")).not.toBeNull();
-        }
-      },
-    );
-
-    it.each(["Files", "minimized"] as const)(
-      "retains the selected Review transcript while %s is presented",
-      async (presentation) => {
-        const { history, mount, rails, renderPanels, state, task } = createReviewFixture({
-          childSessionKey: "agent:main:subagent:review-child",
-        });
-        rails().backgroundTasks.onOpenTaskDetail?.(task);
-        await renderPanels();
-        await renderPanels();
-        expect(mount.textContent).toContain("The selected task transcript.");
-
-        if (presentation === "Files") {
-          state.handleOpenSidebar({
-            kind: "attachment",
-            attachmentKind: "image",
-            title: "Attachment in Files",
-            src: "/synthetic/attachment.png",
-          });
-        } else {
-          state.updateSidebarLayout(setSidebarOpen(state.sidebarLayout, false));
-        }
-        await renderPanels();
-        expect.soft(history).toHaveBeenCalledOnce();
-        expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(false);
-        if (presentation === "Files") {
-          expect(
-            mount.querySelector<HTMLImageElement>(".sidebar-attachment-preview__image")?.alt,
-          ).toBe("Attachment in Files");
-        }
-        state.updateSidebarLayout(openSlot(state.sidebarLayout, "detail"));
-        await renderPanels();
-        expect(mount.textContent).toContain("The selected task transcript.");
-        expect(history).toHaveBeenCalledExactlyOnceWith({ taskId: task.id, limit: 100 });
-      },
-    );
-  });
-
   it.each(["ready", "unavailable", "error"] as const)(
     "keeps Files pending during renewed source resolution, then shows %s",
     async (outcome) => {
@@ -639,11 +391,9 @@ describe("chat pane embedded panels", () => {
         }
         render(
           renderChatDetailSlot({
-            backgroundTasks: createBackgroundTasksProps(state, { presented: false }),
             chat,
             content: content!,
             host: state,
-            layout: state.sidebarLayout,
           }),
           mount,
         );
@@ -662,34 +412,6 @@ describe("chat pane embedded panels", () => {
       }
     },
   );
-
-  it("keeps a newer task selection visible when a pending file preview completes", async () => {
-    const { file, mount, preview, rails, renderPanels, state, task } = createReviewFixture();
-    const taskContent = { kind: "task" as const, taskId: task.id };
-    state.handleOpenSidebar(taskContent);
-    await renderPanels();
-    expect(mount.querySelector("[data-task-detail-panel] .sidebar-title")?.textContent).toBe(
-      task.title,
-    );
-
-    openSessionWorkspaceFile(state, { path: preview.file.path });
-    await renderPanels();
-    expect(mount.querySelector('[data-panel-skeleton="files"]')).not.toBeNull();
-    rails().backgroundTasks.onOpenTaskDetail?.(task);
-    await renderPanels();
-    expect
-      .soft(mount.querySelector("[data-task-detail-panel] .sidebar-title")?.textContent)
-      .toBe(task.title);
-    expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(true);
-
-    file.resolve(preview);
-    await file.promise;
-    await renderPanels();
-    expect(mount.querySelector("[data-task-detail-panel] .sidebar-title")?.textContent).toBe(
-      task.title,
-    );
-    expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(true);
-  });
 
   it("keeps Files closed when a pending file preview completes", async () => {
     const { file, mount, preview, renderPanels, state } = createReviewFixture();

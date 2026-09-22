@@ -116,7 +116,7 @@ function harness() {
     environments: {
       get: () => environment,
       acquireTurnCredential: async () => credential(),
-      acknowledgeCredentialDelivery: () => true,
+      acknowledgeCredentialDelivery: async () => true,
       startTunnel: async () => tunnel,
       stopTunnel: async () => {},
       destroy: async () => environment,

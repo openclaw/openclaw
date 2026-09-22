@@ -34,6 +34,17 @@ export const WORKSPACE_BOOTSTRAP_FILENAMES = [
   DEFAULT_MEMORY_FILENAME,
 ] as const;
 
+export type WorkspaceBootstrapFileName = (typeof WORKSPACE_BOOTSTRAP_FILENAMES)[number];
+
+export type WorkspaceBootstrapFile = {
+  name: WorkspaceBootstrapFileName;
+  path: string;
+  content?: string;
+  missing: boolean;
+  /** Set only by the authenticated personal USER loader, never inferred from a path. */
+  personalUser?: true;
+};
+
 export function hasGlobPattern(pattern: string): boolean {
   // Keep square brackets literal here; workspace paths commonly contain them.
   return /[?*{}]/u.test(pattern);

@@ -38,11 +38,15 @@ it("keeps documentation distinct and removes the catalog promotion sections", ()
   ).not.toBeNull();
 });
 
-it("links the publisher handle and only badges authoritative publisher status", () => {
+it("omits absent publishers and only badges authoritative publisher status", () => {
   const result = createDiscoveryDetail();
   result.plugin.catalog.official = true;
   result.detail.author = { handle: "acme", displayName: "Acme" };
   const container = document.createElement("div");
+  render(renderPluginPublisher(undefined), container);
+  expect(container.children).toHaveLength(0);
+  render(renderPluginPublisher(undefined, "Local publisher"), container);
+  expect(container.querySelector("strong")?.textContent).toBe("Local publisher");
   render(renderPluginPublisher(result), container);
   expect(container.querySelector('a[href="https://clawhub.ai/acme"]')).not.toBeNull();
   expect(container.querySelector("img")).toBeNull();

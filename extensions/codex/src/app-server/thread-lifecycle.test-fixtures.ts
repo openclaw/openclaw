@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { expect, onTestFinished, vi } from "vitest";
@@ -368,6 +370,29 @@ export function threadStartResult(threadId = "thread-1"): Record<string, unknown
 
 export function threadResumeResult(threadId = "thread-existing"): Record<string, unknown> {
   return threadStartResult(threadId);
+}
+
+export async function writeNativeCatalogFixture(
+  rolloutPath: string,
+  threadId: string,
+  dynamicTools: unknown,
+) {
+  await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+  await fs.writeFile(
+    rolloutPath,
+    `${JSON.stringify({ type: "session_meta", payload: { id: threadId, dynamic_tools: dynamicTools } })}\n`,
+  );
+}
+
+export function disabledMcpServerStatus(name: string) {
+  return {
+    name,
+    serverInfo: null,
+    tools: {},
+    resources: [],
+    resourceTemplates: [],
+    authStatus: "unsupported",
+  };
 }
 
 export function createAppServerOptions(): CodexAppServerRuntimeOptions {

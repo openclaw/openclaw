@@ -1,7 +1,8 @@
-// Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+// Discord provider module implements model/runtime integration.
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
   createRuntimeConfigReader,
@@ -140,9 +141,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId, {
     fallbackLimit: 2000,
   });
-  const historyLimit = Math.max(
-    0,
-    opts.historyLimit ?? discordCfg.historyLimit ?? cfg.messages?.groupChat?.historyLimit ?? 20,
+  const historyLimit = resolvePromptHistoryLimit(
+    opts.historyLimit ?? discordCfg.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
+    20,
   );
   const replyToMode = opts.replyToMode ?? discordCfg.replyToMode ?? "off";
   const dmEnabled = dmConfig?.enabled ?? true;

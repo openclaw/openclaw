@@ -1,7 +1,6 @@
 // Shared Zod leaves for bundled channel messaging configuration.
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { NativeExecApprovalEnableModeSchema } from "./zod-schema.approvals.js";
-import "./zod-schema.channels-config.js";
 import {
   ChannelHealthMonitorSchema,
   ChannelHeartbeatVisibilitySchema,
@@ -19,7 +18,7 @@ import {
   ReplyToModeSchema,
   TextChunkModeSchema,
 } from "./zod-schema.core.js";
-export { ChannelBotLoopProtectionSchema } from "./zod-schema.channels-config.js";
+export { ChannelBotLoopProtectionSchema } from "./zod-schema.channel-bot-loop.js";
 
 export const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
 export const ChannelStreamingPreviewSchema = z
@@ -134,6 +133,9 @@ function createCommonChannelAccountShape<
   };
 }
 
+/** Canonical optional account contract shared by bundled messaging channels. */
+export const CommonChannelAccountSchema = z.object(createCommonChannelAccountShape({})).strict();
+
 type CommonChannelAccountShape = ReturnType<typeof createCommonChannelAccountShape>;
 type CommonChannelAccountField = keyof CommonChannelAccountShape;
 
@@ -184,10 +186,19 @@ export const ChannelDangerouslyAllowNameMatchingSchema = z.boolean().optional();
 export const ChannelSendReadReceiptsSchema = z.boolean().optional();
 
 /** Build the shared allowBots leaf without widening boolean-only channels. */
-export function buildChannelAllowBotsSchema(options?: { allowMentions?: boolean }) {
-  return options?.allowMentions
+type ChannelAllowBotsSchema<TAllowMentions extends boolean | undefined> =
+  TAllowMentions extends true
+    ? z.ZodOptional<z.ZodUnion<readonly [z.ZodBoolean, z.ZodLiteral<"mentions">]>>
+    : z.ZodOptional<z.ZodBoolean>;
+
+export function buildChannelAllowBotsSchema<
+  const TAllowMentions extends boolean | undefined = undefined,
+>(options?: { allowMentions?: TAllowMentions }): ChannelAllowBotsSchema<TAllowMentions> {
+  const schema = options?.allowMentions
     ? z.union([z.boolean(), z.literal("mentions")]).optional()
     : z.boolean().optional();
+  // SAFETY: the runtime branch and conditional return type share the allowMentions discriminator.
+  return schema as ChannelAllowBotsSchema<TAllowMentions>;
 }
 
 /** Build native exec-approval routing with channel-specific approver ids and extras. */
@@ -208,15 +219,36 @@ export function buildChannelExecApprovalsSchema<T extends ZodRawShape = Record<n
     .optional();
 }
 
+type StringEnumValues = readonly [string, string, ...string[]];
+
 type ChannelReactionShapeOptions = {
-  notificationModes?: readonly [string, string, ...string[]];
-  reactionLevels?: readonly [string, string, ...string[]];
+  notificationModes?: StringEnumValues;
+  reactionLevels?: StringEnumValues;
   reactionAllowlist?: boolean;
   ackReaction?: ZodTypeAny;
 };
 
+type EnumSchema<TValues extends StringEnumValues> = z.ZodEnum<{
+  [TValue in TValues[number]]: TValue;
+}>;
+
+type EnumShape<TValues, TKey extends string> = TValues extends StringEnumValues
+  ? { [TResultKey in TKey]: z.ZodOptional<EnumSchema<TValues>> }
+  : Record<never, never>;
+type ChannelReactionShape<TOptions extends ChannelReactionShapeOptions> = ZodRawShape &
+  EnumShape<TOptions["notificationModes"], "reactionNotifications"> &
+  EnumShape<TOptions["reactionLevels"], "reactionLevel"> &
+  (TOptions["reactionAllowlist"] extends true
+    ? { reactionAllowlist: z.ZodOptional<z.ZodArray<z.ZodUnion<[z.ZodString, z.ZodNumber]>>> }
+    : Record<never, never>) &
+  (TOptions["ackReaction"] extends ZodTypeAny
+    ? { ackReaction: TOptions["ackReaction"] }
+    : Record<never, never>);
+
 /** Build the repeated reaction leaves while retaining each channel's exact enum. */
-export function buildChannelReactionShape(options: ChannelReactionShapeOptions) {
+export function buildChannelReactionShape<const TOptions extends ChannelReactionShapeOptions>(
+  options: TOptions,
+): ChannelReactionShape<TOptions> {
   return {
     ...(options.notificationModes
       ? { reactionNotifications: z.enum(options.notificationModes).optional() }
@@ -228,5 +260,6 @@ export function buildChannelReactionShape(options: ChannelReactionShapeOptions) 
       : {}),
     ...(options.reactionLevels ? { reactionLevel: z.enum(options.reactionLevels).optional() } : {}),
     ...(options.ackReaction ? { ackReaction: options.ackReaction } : {}),
-  };
+    // SAFETY: each conditional property is emitted only when its matching option is present.
+  } as ChannelReactionShape<TOptions>;
 }

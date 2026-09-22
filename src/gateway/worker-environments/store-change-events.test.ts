@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -33,17 +34,17 @@ it.each(["reopening the store", "reconciling an unchanged host"] as const)(
       const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
       onTestFinished(() => clock.mockRestore());
       const database = openOpenClawStateDatabase();
-      const store = createWorkerEnvironmentStore({ database, now: () => 1_000 });
+      const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
       const environmentId = "worker-unchanged";
-      store.createIntent({
+      await store.createIntent({
         environmentId,
         providerId: "fake-provider",
         profileId: "test-profile",
         profileSnapshot: { settings: {}, lifetime: { idleMinutes: 10 } },
         provisionOperationId: `provision:${environmentId}`,
       });
-      store.transition({ environmentId, from: "requested", to: "provisioning" });
-      store.transition({
+      await store.transition({ environmentId, from: "requested", to: "provisioning" });
+      await store.transition({
         environmentId,
         from: "provisioning",
         to: "bootstrapping",
@@ -67,9 +68,9 @@ it.each(["reopening the store", "reconciling an unchanged host"] as const)(
       const before = projection.materializedCount;
       const environment = store.get(environmentId);
       if (operation === "reopening the store") {
-        createWorkerEnvironmentStore({ database, now: () => 1_000 });
+        await createWorkerEnvironmentStore({ database, now: () => 1_000 });
       } else {
-        store.reconcileSharedHost({
+        await store.reconcileSharedHost({
           environmentId,
           state: "bootstrapping",
           leaseId: "lease-unchanged",
@@ -89,7 +90,8 @@ it.each(["reopening the store", "reconciling an unchanged host"] as const)(
 describe("worker store session change publications", () => {
   let database: OpenClawStateDatabase;
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     }),
@@ -100,42 +102,42 @@ describe("worker store session change publications", () => {
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   });
 
-  it("publishes committed environment changes and discards rolled-back writes", () => {
-    const store = createWorkerEnvironmentStore({ database, now: () => 1_000 });
+  it("publishes committed environment changes and discards rolled-back writes", async () => {
+    const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     const transactions: boolean[] = [];
+    const committedStates: unknown[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => {
       if ("all" in change && change.scope === "worker-environments") {
         transactions.push(database.db.isTransaction);
+        committedStates.push(
+          database.db
+            .prepare("SELECT state FROM worker_environments WHERE environment_id = ?")
+            .get("worker-1"),
+        );
       }
     });
     try {
-      runOpenClawStateWriteTransaction(
-        () => {
-          store.createIntent({
-            environmentId: "worker-1",
-            providerId: "fake-provider",
-            profileId: "test-profile",
-            profileSnapshot: { settings: { region: "test" }, lifetime: { idleMinutes: 10 } },
-            provisionOperationId: "provision:worker-1",
-          });
-          expect(transactions).toEqual([]);
-        },
-        { database },
-      );
+      await store.createIntent({
+        environmentId: "worker-1",
+        providerId: "fake-provider",
+        profileId: "test-profile",
+        profileSnapshot: { settings: { region: "test" }, lifetime: { idleMinutes: 10 } },
+        provisionOperationId: "provision:worker-1",
+      });
       expect(transactions).toEqual([false]);
-      expect(() =>
-        runOpenClawStateWriteTransaction(
-          () => {
-            store.recordError({ environmentId: "worker-1", state: "requested", error: "rollback" });
-            throw new Error("rollback environment");
-          },
-          { database },
-        ),
-      ).toThrow("rollback environment");
+      database.db.exec(`CREATE TRIGGER reject_environment_error
+        AFTER UPDATE OF last_error ON worker_environments
+        BEGIN SELECT RAISE(ABORT, 'rollback environment'); END`);
+      await expect(
+        store.recordError({ environmentId: "worker-1", state: "requested", error: "rollback" }),
+      ).rejects.toThrow("rollback environment");
+      database.db.exec("DROP TRIGGER reject_environment_error");
       expect(transactions).toEqual([false]);
-      store.transition({ environmentId: "worker-1", from: "requested", to: "failed" });
-      expect(store.pruneTerminalEnvironments({ nowMs: 8 * DAY_MS })).toBe(1);
+      expect(store.get("worker-1")?.lastError).toBeNull();
+      await store.transition({ environmentId: "worker-1", from: "requested", to: "failed" });
+      expect(await store.pruneTerminalEnvironments({ nowMs: 8 * DAY_MS })).toBe(1);
       expect(transactions).toEqual([false, false, false]);
+      expect(committedStates).toEqual([{ state: "requested" }, { state: "failed" }, undefined]);
     } finally {
       unsubscribe();
     }

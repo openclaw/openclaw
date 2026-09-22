@@ -1,3 +1,4 @@
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
 import type {
   TranscriptStartRequest,
@@ -7,7 +8,6 @@ import type {
 } from "../transcripts/provider-types.js";
 import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
 import { MeetingSessionDurableTranscripts } from "./session-durable-transcripts.js";
-import { MeetingSessionJoinLock } from "./session-join-lock.js";
 import type {
   MeetingBrowserSessionView,
   MeetingSessionRuntimeHandles,
@@ -133,7 +133,7 @@ export class MeetingSessionRuntime<
   readonly #sessions = new Map<string, TSession>();
   readonly #sessionLeaves = new Map<string, Promise<MeetingSessionLeaveResult<TSession>>>();
   readonly #sessionCleanup = new MeetingSessionCleanupTracker();
-  readonly #meetingLock = new MeetingSessionJoinLock();
+  readonly #meetingLock = new KeyedAsyncQueue();
   readonly #sessionStops = new Map<string, () => Promise<void>>();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
   readonly #sessionHealth = new Map<string, () => Partial<THealth>>();
@@ -211,6 +211,10 @@ export class MeetingSessionRuntime<
     return await this.#durableTranscripts.startSource(request);
   }
 
+  reconcileTranscriptPolicy(enabled: boolean): Promise<void> {
+    return this.#durableTranscripts.reconcilePolicy(enabled);
+  }
+
   async stopTranscriptSource(request: TranscriptStopRequest): Promise<TranscriptsStopResult> {
     return await this.#durableTranscripts.stopSource(request);
   }
@@ -229,7 +233,7 @@ export class MeetingSessionRuntime<
     const resolved = this.options.resolveJoin(request);
     // Session publication follows async transport setup. Serialize every transport so
     // concurrent identical joins cannot both create an external participant.
-    return await this.#meetingLock.run(
+    return await this.#meetingLock.enqueue(
       this.#meetingKey(resolved.transport, resolved.url),
       async () => await this.#joinUnlocked(request, resolved),
     );
@@ -245,7 +249,7 @@ export class MeetingSessionRuntime<
     }
     // The meeting lock fences joins and leaves before terminal transcript work;
     // #sessionLeaves then coalesces retries owned by the same session.
-    return await this.#meetingLock.run(
+    return await this.#meetingLock.enqueue(
       this.#meetingKey(session.transport, session.url),
       async () => await this.#leaveUnlocked(sessionId, options),
     );

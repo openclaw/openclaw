@@ -301,7 +301,7 @@ function hiddenSessionCatalogPages(owner: SessionCatalogDataOwner) {
       return [];
     }
     const hostIds = catalog.hosts
-      .filter((host) => host.nextCursor && !host.error)
+      .filter((host) => host.nextCursor && !host.pending && !host.error)
       .map((host) => host.hostId);
     return hostIds.length > 0 ? [{ catalogId: catalog.id, hostIds }] : [];
   });

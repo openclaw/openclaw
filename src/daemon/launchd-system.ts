@@ -13,7 +13,10 @@ import {
   type LaunchctlResult,
 } from "./launchd-exec.js";
 import { decodeLaunchdPlistMetadata } from "./launchd-plist.js";
-import type { ServiceInspectionReason } from "./service-inspection-error.js";
+import {
+  ServiceOwnershipRefusalError,
+  type ServiceInspectionReason,
+} from "./service-inspection-error.js";
 
 const SYSTEM_LAUNCH_DAEMON_DIR = "/Library/LaunchDaemons";
 
@@ -252,11 +255,11 @@ function formatSystemLaunchDaemonOwnershipError(ownership: SystemLaunchDaemonCon
   ].join("\n");
 }
 
-class SystemLaunchDaemonOwnershipError extends Error {
+class SystemLaunchDaemonOwnershipError extends ServiceOwnershipRefusalError {
   readonly code = "SYSTEM_LAUNCH_DAEMON_OWNERSHIP";
 
   constructor(readonly ownership: SystemLaunchDaemonConflict) {
-    super(formatSystemLaunchDaemonOwnershipError(ownership));
+    super("launchd-system-owned", formatSystemLaunchDaemonOwnershipError(ownership));
     this.name = "SystemLaunchDaemonOwnershipError";
   }
 }

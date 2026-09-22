@@ -1,64 +1,14 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
+import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.types.js";
 
-export type CliCommandPluginLoadPolicy =
-  | "never"
-  | "always"
-  | "text-only"
-  | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
-type CliConfigGuardMode = "run" | "skip" | "validate" | "when-suppressed";
-type CliConfigGuardPolicy =
-  | CliConfigGuardMode
-  | ((ctx: { argv: string[]; commandPath: string[] }) => CliConfigGuardMode);
-export type CliPluginRegistryScope =
-  | "all"
-  | "channels"
-  | "configured-channels"
-  | "memory"
-  | "sandbox-backends"
-  | "sandbox-management";
-export type CliNetworkProxyPolicy = "default" | "bypass";
-type CliNetworkProxyPolicyResolver =
-  | CliNetworkProxyPolicy
-  | ((ctx: { argv: string[]; commandPath: string[] }) => CliNetworkProxyPolicy);
-type CliRoutedCommandId =
-  | "health"
-  | "status"
-  | "gateway-health"
-  | "gateway-status"
-  | "sessions"
-  | "agents-list"
-  | "config-get"
-  | "config-unset"
-  | "models-list"
-  | "models-status"
-  | "tasks-list"
-  | "tasks-audit"
-  | "channels-list"
-  | "channels-status"
-  | "plugins-list";
-
-export type CliCommandPathPolicy = {
-  configGuard: CliConfigGuardPolicy;
-  stateStoreGuard: "run" | "skip";
-  loadPlugins: CliCommandPluginLoadPolicy;
-  pluginRegistry: {
-    scope: CliPluginRegistryScope;
-  };
-  ownsProtocolStdout: boolean;
-  hideBanner: boolean;
-  ensureCliPath: boolean;
-  networkProxy: CliNetworkProxyPolicyResolver;
-};
-
-export type CliCommandCatalogEntry = {
-  commandPath: readonly string[];
-  exact?: boolean;
-  policy?: Partial<CliCommandPathPolicy>;
-  route?: {
-    id: CliRoutedCommandId;
-  };
-};
+export type {
+  CliCommandPluginLoadPolicy,
+  CliPluginRegistryScope,
+  CliNetworkProxyPolicy,
+  CliCommandPathPolicy,
+  CliCommandCatalogEntry,
+} from "./command-catalog.types.js";
 
 function hasCliOption(argv: readonly string[], name: string): boolean {
   for (const arg of argv.slice(2)) {
@@ -447,7 +397,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   {
     commandPath: ["worktrees"],
-    policy: { loadPlugins: "never", networkProxy: "bypass" },
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
   },
   {
     commandPath: ["fleet"],
@@ -498,9 +448,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { ownsProtocolStdout: true },
   },
   {
+    commandPath: ["browser", "extension"],
+    // Desktop browser helpers validate config without Gateway Doctor or state migrations.
+    policy: { configGuard: "validate", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["browser", "extension", "native-host"],
     exact: true,
-    policy: { hideBanner: true, ownsProtocolStdout: true, networkProxy: "bypass" },
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
   },
   {
     commandPath: ["node"],

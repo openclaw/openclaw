@@ -210,14 +210,20 @@ describe("OpenClaw shell deleted-session recovery", () => {
       const request = vi.fn(async (method: string) =>
         method === "sessions.delete" ? response.promise : sessionsResult([listed], 2),
       );
-      const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      const { gateway, emitEvent } = createGatewayHarness({
+        request,
+      } as unknown as GatewayBrowserClient);
       const sessions = createTestSessionCapability(gateway);
       await sessions.refresh({ force: true });
       if (previouslyDeleted) {
-        sessions.reconcileChanged({
-          sessionKey: deletedKey,
-          sessionId: "predecessor",
-          reason: "delete",
+        emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
+            sessionKey: deletedKey,
+            sessionId: "predecessor",
+            reason: "delete",
+          },
         });
         listed = replacement;
         await sessions.refresh({ force: true });
@@ -254,14 +260,12 @@ describe("OpenClaw shell deleted-session recovery", () => {
   );
 
   it.each(
-    (["subscription", "reconcile"] as const).flatMap((delivery) =>
-      [false, true].flatMap((priorLocalDelete) =>
-        [false, true].map((identified) => ({ delivery, priorLocalDelete, identified })),
-      ),
+    [false, true].flatMap((priorLocalDelete) =>
+      [false, true].map((identified) => ({ priorLocalDelete, identified })),
     ),
   )(
-    "preserves recreated B on delayed A delete ($delivery, local: $priorLocalDelete, identity: $identified)",
-    async ({ delivery, priorLocalDelete, identified }) => {
+    "preserves recreated B on delayed A delete (local: $priorLocalDelete, identity: $identified)",
+    async ({ priorLocalDelete, identified }) => {
       const h = createSessionDeletionHarness();
       const storage = createStorageMock();
       vi.stubGlobal("sessionStorage", storage);
@@ -316,11 +320,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
           reason: "delete",
           ...(identified ? { sessionId: h.alpha.sessionId } : {}),
         };
-        if (delivery === "subscription") {
-          h.emitEvent({ type: "event", event: "sessions.changed", payload });
-        } else {
-          h.sessions.reconcileChanged(payload);
-        }
+        h.emitEvent({ type: "event", event: "sessions.changed", payload });
         await import("../lib/chat/composer-draft-retirement.runtime.ts");
         expect.soft(h.sessions.state.result?.sessions).toEqual([replacement, h.sibling]);
         expect.soft(shell.activeSessionKey).toBe(h.alpha.key);
@@ -332,11 +332,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         // The same delivery path must still retire B when B itself is confirmed deleted.
         h.setRows([h.sibling]);
         const currentDelete = { ...payload, sessionId: replacement.sessionId };
-        if (delivery === "subscription") {
-          h.emitEvent({ type: "event", event: "sessions.changed", payload: currentDelete });
-        } else {
-          h.sessions.reconcileChanged(currentDelete);
-        }
+        h.emitEvent({ type: "event", event: "sessions.changed", payload: currentDelete });
         const target = storageTargetForGateway(gatewayUrl);
         const scopeKey = storedChatOutboxScopeKey({ sessionKey: h.alpha.key, agentId: "main" });
         const retired = h.sessions.state.deletedSessions.find(({ key }) => key === h.alpha.key)!;

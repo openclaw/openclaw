@@ -49,7 +49,25 @@ failed chunk may have been delivered, so inspect the thread before retrying.
 
     - `channels.discord.historyLimit` default `20`
     - fallback: `messages.groupChat.historyLimit`
-    - `0` disables
+    - `0` disables automatic guild/thread history reads, not explicit message reads or reply context.
+
+    Admitted guild turns fetch their recent window from Discord, including after
+    Gateway restart. Thread turns use the exact thread channel, not its parent.
+    Unmentioned messages in mention-gated rooms remain quiet. Current and batched
+    source messages, later messages, and rows before the active session boundary
+    are excluded. Sender visibility and bot policy still apply; filtering can
+    yield fewer messages than the configured limit.
+
+    Discord owns the history: fresh reads reflect its current message content,
+    deletions, permissions, and availability. No separate durable message archive
+    is created. If automatic recovery fails, OpenClaw logs the omission and
+    continues the addressed turn. Historical attachments without reusable local
+    media are marked unavailable instead of restoring stale media.
+    Recovery does not rewrite prior agent transcripts.
+
+    The existing `message(action="read")` tool keeps native pagination and exact
+    message lookup. Older reads remain available after restart or `/new`, subject
+    to Discord's **Read Message History** permission and current access rules.
 
     DM history controls:
 

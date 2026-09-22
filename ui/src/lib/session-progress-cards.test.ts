@@ -9,6 +9,7 @@ import {
   stubGatewayStoreTestGlobals,
 } from "../app/gateway-store.test-support.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { setAvatarGatewayOrigin } from "./identity-avatar-context.ts";
 import { sessionProgressCardsForGateway } from "./session-progress-cards.ts";
 
@@ -24,6 +25,7 @@ function createGateway(mainSessionKey?: string, mainKey = "main") {
     methods: ["progressCard.get", "progressCard.put"],
   };
   let onEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
+  let onSnapshot: Parameters<ApplicationGateway["subscribe"]>[0] | undefined;
   const gateway = {
     snapshot: {
       client: { request },
@@ -33,7 +35,12 @@ function createGateway(mainSessionKey?: string, mainKey = "main") {
         snapshot: { sessionDefaults: { mainSessionKey, mainKey, defaultAgentId: "main" } },
       },
     },
-    subscribe: () => () => undefined,
+    subscribe: (listener: NonNullable<typeof onSnapshot>) => {
+      onSnapshot = listener;
+      return () => {
+        onSnapshot = undefined;
+      };
+    },
     subscribeEvents: (listener: NonNullable<typeof onEvent>) => {
       onEvent = listener;
       return () => {
@@ -45,6 +52,8 @@ function createGateway(mainSessionKey?: string, mainKey = "main") {
     gateway,
     request,
     features,
+    snapshotChanged: () => onSnapshot?.(gateway.snapshot),
+    emit: (event: Parameters<NonNullable<typeof onEvent>>[0]) => onEvent?.(event),
     emitChange: (changedSessionKey: string, revision: number | null) =>
       onEvent?.({
         type: "event",
@@ -53,6 +62,353 @@ function createGateway(mainSessionKey?: string, mainKey = "main") {
       }),
   };
 }
+
+describe("session progress card refresh", () => {
+  it.each([false, true])(
+    "waits for a higher authoritative revision (event first: %s)",
+    async (eventFirst) => {
+      const { gateway, request, emitChange } = createGateway();
+      const target = { sessionKey };
+      let card = createProgressCard(1);
+      const acceptance = createDeferred<{ runId: string; status: "accepted"; revision: number }>();
+      request.mockImplementation(async (method) =>
+        method === "progressCard.refresh" ? acceptance.promise : { card },
+      );
+      const store = sessionProgressCardsForGateway(gateway);
+      const owner = {};
+      store.watch(owner, [target]);
+      onTestFinished(() => store.unwatch(owner));
+      const original = (await store.load(target))!;
+      store.refresh(target, original);
+      store.refresh(target, original);
+      expect(request.mock.calls.filter(([method]) => method === "progressCard.refresh")).toEqual([
+        ["progressCard.refresh", { sessionKey, idempotencyKey: expect.any(String) }],
+      ]);
+      expect(store.get(target)).toBe(original);
+      expect(store.getRefreshState(target)).toBe("pending");
+      emitChange(sessionKey, 1);
+      await store.load(target);
+      expect(store.getRefreshState(target)).toBe("pending");
+      if (!eventFirst) {
+        acceptance.resolve({ runId: "refresh-run", status: "accepted", revision: 1 });
+        await acceptance.promise;
+        await Promise.resolve();
+        expect(store.getRefreshState(target)).toBe("pending");
+      }
+      card = { ...card, revision: 2, updatedAt: 2, markdown: "Confirmed new progress" };
+      emitChange(sessionKey, 2);
+      await store.load(target);
+      if (eventFirst) {
+        expect(store.getRefreshState(target)).toBe("pending");
+        acceptance.resolve({ runId: "refresh-run", status: "accepted", revision: 1 });
+      }
+      await vi.waitFor(() => expect(store.getRefreshState(target)).toBe("updated"));
+      expect(store.get(target)).toEqual(card);
+      expect(request.mock.calls.every(([method]) => method.startsWith("progressCard."))).toBe(true);
+    },
+  );
+
+  it("keeps prior content on failure, coalesces pending calls, and retries the same intent", async () => {
+    const { gateway, request, emitChange } = createGateway();
+    const target = { sessionKey };
+    let card = createProgressCard(1);
+    let fail = true;
+    request.mockImplementation(async (method) => {
+      if (method === "progressCard.refresh") {
+        if (fail) {
+          throw new Error("Admission unavailable");
+        }
+        return { runId: "retry-run", status: "accepted", revision: 1 };
+      }
+      return { card };
+    });
+    const store = sessionProgressCardsForGateway(gateway);
+    const owner = {};
+    store.watch(owner, [target]);
+    onTestFinished(() => store.unwatch(owner));
+    const original = (await store.load(target))!;
+    store.refresh(target, original);
+    await vi.waitFor(() => expect(store.getRefreshState(target)).toBe("failed"));
+    expect(store.get(target)).toBe(original);
+    expect(store.getError(target)).toBeUndefined();
+    fail = false;
+    store.refresh(target, original);
+    store.refresh(target, original);
+    const calls = request.mock.calls.filter(([method]) => method === "progressCard.refresh");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual(calls[0]);
+    await Promise.resolve();
+    card = { ...card, revision: 2, updatedAt: 2 };
+    emitChange(sessionKey, 2);
+    await store.load(target);
+    expect(store.getRefreshState(target)).toBe("updated");
+  });
+
+  it("starts a new intent only after the Gateway confirms completion without an update", async () => {
+    vi.useFakeTimers();
+    const { gateway, request, emitChange } = createGateway();
+    const target = { sessionKey };
+    let card = createProgressCard(1);
+    request.mockImplementation(async (method) =>
+      method === "progressCard.refresh"
+        ? { runId: "refresh-run", status: "accepted", revision: 1 }
+        : { card },
+    );
+    const store = sessionProgressCardsForGateway(gateway);
+    const owner = {};
+    store.watch(owner, [target]);
+    onTestFinished(() => {
+      store.unwatch(owner);
+      vi.useRealTimers();
+    });
+    store.refresh(target, (await store.load(target))!);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(store.getRefreshState(target)).toBe("timeout");
+    request.mockRejectedValueOnce(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Refresh completed without updating the card",
+        details: { code: "PROGRESS_CARD_REFRESH_TERMINAL" },
+      }),
+    );
+    store.refresh(target, store.get(target)!);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getRefreshState(target)).toBe("failed");
+    expect(store.get(target)).toEqual(card);
+    store.refresh(target, store.get(target)!);
+    const calls = request.mock.calls.filter(([method]) => method === "progressCard.refresh");
+    expect(calls).toHaveLength(3);
+    expect(calls[1]).toEqual(calls[0]);
+    expect(calls[2]?.[1].idempotencyKey).not.toBe(calls[0]?.[1].idempotencyKey);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getRefreshState(target)).toBe("pending");
+    card = { ...card, revision: 2, updatedAt: 2 };
+    emitChange(sessionKey, 2);
+    await store.load(target);
+    expect(store.getRefreshState(target)).toBe("updated");
+  });
+
+  it.each(["failed read", "missed event"])(
+    "retries an authoritative read after a %s without duplicating refresh intent",
+    async (missedUpdate) => {
+      vi.useFakeTimers();
+      const { gateway, request, emitChange } = createGateway();
+      const target = { sessionKey };
+      let card = createProgressCard(1);
+      const acceptance = { runId: "refresh-run", status: "accepted", revision: 1 };
+      request.mockImplementation(async (method) =>
+        method === "progressCard.refresh" ? acceptance : { card },
+      );
+      const store = sessionProgressCardsForGateway(gateway);
+      const owner = {};
+      store.watch(owner, [target]);
+      onTestFinished(() => {
+        store.unwatch(owner);
+        vi.useRealTimers();
+      });
+      const original = (await store.load(target))!;
+      store.refresh(target, original);
+      card = { ...card, revision: 2, updatedAt: 2, markdown: "Saved new progress" };
+      if (missedUpdate === "failed read") {
+        const failure = new Error("Changed-event read unavailable");
+        request.mockRejectedValueOnce(failure);
+        emitChange(sessionKey, 2);
+        await expect(store.load(target)).rejects.toBe(failure);
+        expect(store.getError(target)).toBe("unavailable");
+      }
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(store.getRefreshState(target)).toBe("timeout");
+      expect(store.get(target)).toBe(original);
+      const retryRead = createDeferred<{ card: typeof card }>();
+      request.mockImplementation((method) =>
+        method === "progressCard.refresh" ? Promise.resolve(acceptance) : retryRead.promise,
+      );
+      const previousReads = request.mock.calls.filter(([method]) => method === "progressCard.get");
+      store.refresh(target, original);
+      store.refresh(target, original);
+      const calls = request.mock.calls.filter(([method]) => method === "progressCard.refresh");
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toEqual(calls[0]);
+      expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(
+        previousReads.length + 1,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.get(target)).toBe(original);
+      expect(store.getRefreshState(target)).toBe("pending");
+      retryRead.reject(new Error("Retry read unavailable"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.get(target)).toBe(original);
+      expect(store.getError(target)).toBe("unavailable");
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(store.getRefreshState(target)).toBe("timeout");
+      request.mockImplementation(async (method) =>
+        method === "progressCard.refresh" ? acceptance : { card },
+      );
+      store.refresh(target, original);
+      await vi.advanceTimersByTimeAsync(0);
+      const retries = request.mock.calls.filter(([method]) => method === "progressCard.refresh");
+      expect(retries).toHaveLength(3);
+      expect(retries[2]).toEqual(retries[0]);
+      expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(
+        previousReads.length + 2,
+      );
+      expect(store.get(target)).toEqual(card);
+      expect(store.getRefreshState(target)).toBe("updated");
+      expect(store.getError(target)).toBeUndefined();
+    },
+  );
+
+  it("confirms a revision that arrived before an uncertain request is retried", async () => {
+    const { gateway, request, emitChange } = createGateway();
+    const target = { sessionKey };
+    let card = createProgressCard(1);
+    const acceptance = createDeferred<{ runId: string; status: "accepted"; revision: number }>();
+    request.mockImplementation(async (method) =>
+      method === "progressCard.refresh" ? acceptance.promise : { card },
+    );
+    const store = sessionProgressCardsForGateway(gateway);
+    const owner = {};
+    store.watch(owner, [target]);
+    onTestFinished(() => store.unwatch(owner));
+    store.refresh(target, (await store.load(target))!);
+    card = { ...card, revision: 2, updatedAt: 2 };
+    emitChange(sessionKey, 2);
+    await store.load(target);
+    acceptance.reject(new Error("Reply lost after acceptance"));
+    await vi.waitFor(() => expect(store.getRefreshState(target)).toBe("failed"));
+    request.mockResolvedValueOnce({ runId: "original-run", status: "accepted", revision: 1 });
+    store.refresh(target, store.get(target)!);
+    await vi.waitFor(() => expect(store.getRefreshState(target)).toBe("updated"));
+    const calls = request.mock.calls.filter(([method]) => method === "progressCard.refresh");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual(calls[0]);
+  });
+
+  it("bounds waiting without cancelling work and accepts a late confirmed revision", async () => {
+    vi.useFakeTimers();
+    const { gateway, request, emitChange } = createGateway();
+    const target = { sessionKey };
+    let card = createProgressCard(1);
+    request.mockImplementation(async (method) =>
+      method === "progressCard.refresh"
+        ? { runId: "slow-run", status: "accepted", revision: 1 }
+        : { card },
+    );
+    const store = sessionProgressCardsForGateway(gateway);
+    const owner = {};
+    store.watch(owner, [target]);
+    onTestFinished(() => {
+      store.unwatch(owner);
+      vi.useRealTimers();
+    });
+    const original = (await store.load(target))!;
+    store.refresh(target, original);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(store.getRefreshState(target)).toBe("timeout");
+    expect(store.get(target)).toBe(original);
+    card = { ...card, revision: 2, updatedAt: 2 };
+    emitChange(sessionKey, 2);
+    await store.load(target);
+    expect(store.getRefreshState(target)).toBe("updated");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "progressCard.get",
+      "progressCard.refresh",
+      "progressCard.get",
+    ]);
+  });
+
+  it.each(["reconnect", "replace", "reset", "detach"])(
+    "retires stale retry reads and acceptance after %s",
+    async (transition) => {
+      vi.useFakeTimers();
+      const { gateway, request, emitChange, snapshotChanged, emit } = createGateway();
+      const target = { sessionKey };
+      let card = createProgressCard(1);
+      const acceptance = createDeferred<{ runId: string; status: "accepted"; revision: number }>();
+      const retryRead = createDeferred<{ card: typeof card }>();
+      request.mockImplementation(async (method) =>
+        method === "progressCard.refresh"
+          ? { runId: "old-run", status: "accepted", revision: 1 }
+          : { card },
+      );
+      const store = sessionProgressCardsForGateway(gateway);
+      const owner = {};
+      store.watch(owner, [target]);
+      onTestFinished(() => {
+        store.unwatch(owner);
+        vi.useRealTimers();
+      });
+      store.refresh(target, (await store.load(target))!);
+      await vi.advanceTimersByTimeAsync(120_000);
+      request.mockReturnValueOnce(acceptance.promise).mockReturnValueOnce(retryRead.promise);
+      store.refresh(target, store.get(target)!);
+      const interruptedRead = store.load(target);
+      if (transition === "reset") {
+        emit(
+          createGatewayEvent("sessions.changed", { key: sessionKey, sessionKey, reason: "reset" }),
+        );
+      } else if (transition === "detach") {
+        store.unwatch(owner);
+        store.watch(owner, [target]);
+      } else {
+        if (transition === "replace") {
+          gateway.snapshot.client = createTestGatewayClient(request);
+        } else {
+          gateway.snapshot.phase = "reconnecting";
+          snapshotChanged();
+          gateway.snapshot.phase = "connected";
+        }
+        snapshotChanged();
+      }
+      await store.load(target);
+      acceptance.resolve({ runId: "old-run", status: "accepted", revision: 1 });
+      retryRead.resolve({
+        card: { ...card, revision: 2, markdown: "Retired connection progress" },
+      });
+      await expect(interruptedRead).resolves.toBeNull();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.get(target)).toEqual(card);
+      card = { ...card, revision: 2, updatedAt: 2 };
+      emitChange(sessionKey, 2);
+      await store.load(target);
+      expect(store.getRefreshState(target)).toBeUndefined();
+    },
+  );
+
+  it("keeps refresh outcomes with their captured session and agent", async () => {
+    const { gateway, request, emitChange } = createGateway();
+    const main = { sessionKey: "global", agentId: "main" };
+    const research = { sessionKey: "global", agentId: "research" };
+    let revision = 1;
+    request.mockImplementation(async (method, params) =>
+      method === "progressCard.refresh"
+        ? { runId: "research-run", status: "accepted", revision: 1 }
+        : {
+            card: {
+              ...createProgressCard(1),
+              sessionKey: `agent:${params.agentId}:global`,
+              revision: params.agentId === "research" ? revision : 1,
+            },
+          },
+    );
+    const store = sessionProgressCardsForGateway(gateway);
+    const owner = {};
+    store.watch(owner, [research, main]);
+    onTestFinished(() => store.unwatch(owner));
+    const original = (await store.load(research))!;
+    await store.load(main);
+    store.refresh(research, original);
+    expect(request).toHaveBeenLastCalledWith("progressCard.refresh", {
+      ...research,
+      idempotencyKey: expect.any(String),
+    });
+    revision = 2;
+    emitChange("agent:research:global", 2);
+    await Promise.all([store.load(research), store.load(main)]);
+    expect(store.getRefreshState(research)).toBe("updated");
+    expect(store.getRefreshState(main)).toBeUndefined();
+  });
+});
 
 describe("session progress card Gateway response boundary", () => {
   it.each([

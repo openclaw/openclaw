@@ -48,6 +48,16 @@ Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
 
+Commands that receive `senderIsOwner` also receive the host's optional
+`assertOwnerCurrent` callback when admitted as an owner. Capture that callback
+before awaiting preparation and pass it to the mutation owner's current-authority
+check. A boolean owner snapshot does not authorize a later write after the
+linked profile is demoted, unlinked, or reassigned. The callback is bound to the
+original identity and command invocation; retaining it cannot start new work
+after the handler returns. Already accepted operations still finish their
+settlement and cleanup. Ordinary authorized read commands and explicit Gateway
+scope checks retain their existing behavior.
+
 Commands may also declare a bounded client presentation action for parsed no-argument
 invocations:
 

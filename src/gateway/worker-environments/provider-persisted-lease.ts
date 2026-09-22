@@ -19,7 +19,7 @@ export async function retireMismatchedWorkerLease(
     return false;
   }
 
-  const requested = store.requestDestroy({
+  const requested = await store.requestDestroy({
     environmentId: record.environmentId,
     state: record.state,
     terminalState: "failed",
