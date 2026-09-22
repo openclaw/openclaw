@@ -86,6 +86,27 @@ describe("live terminal continuity with pending collaborators", () => {
     );
     expect(after.findIndex((item) => item.kind === "agent-run-frame")).toBeLessThan(peer);
   });
+  it("keeps queued custody after persisted history that postdates its acceptance", () => {
+    // A handoff accepted while the session was busy, then overtaken by later
+    // transcript rows, must still render after everything already persisted.
+    const stale = {
+      ...pending,
+      acceptedAt: 5,
+      message: { ...pending.message, timestamp: 5 },
+    };
+    const items = project(
+      props({ pendingInputs: [stale], stream: null, runId: null, runWorking: false }),
+    );
+    const lastHistory = items.findLastIndex(
+      (item) =>
+        item.kind === "group" && item.messages.some((message) => message.key.includes("active")),
+    );
+    const custody = items.findIndex(
+      (item) =>
+        item.kind === "group" && item.messages.some((message) => message.key.includes("peer")),
+    );
+    expect(custody).toBeGreaterThan(lastHistory);
+  });
   it("already attributes a streaming reply to the same participant as its terminal", () => {
     const before = project(props());
     const frame = before.find((item) => item.kind === "agent-run-frame");

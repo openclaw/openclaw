@@ -337,7 +337,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     props.workerSetupPending,
     props.messageRecovery,
   );
-  const projections: ChatProjection[] = pendingInputItems.map((item) => ({ item }));
+  // Custody is not in the transcript yet, so it floors after every persisted
+  // row; acceptance time only orders custody rows among themselves.
+  const custodyFloor = items.at(-1)?.key;
+  const projections: ChatProjection[] = pendingInputItems.map((item) => ({
+    item,
+    ...(custodyFloor ? { bounds: { afterKey: custodyFloor } } : {}),
+  }));
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
     projections.push({
