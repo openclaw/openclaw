@@ -26,6 +26,7 @@ function createResolvedMattermostAccount(accountId: string): ResolvedMattermostA
     botTokenSource: "config",
     baseUrlSource: "config",
     streamingMode: "partial",
+    progressFinalDelivery: "in-place",
     config: {},
   };
 }
