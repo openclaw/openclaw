@@ -45,8 +45,13 @@ read-only behavior: `users.github.*` requires `operator.read` plus the exact
 authenticated durable profile. That person can connect, poll, cancel,
 reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
-and per-agent GitHub changes remain `operator.admin`. Publication remains
-`operator.write` plus current session authorization. See
+and per-agent GitHub changes remain `operator.admin`.
+
+With `operator.sessions.write`, a requester can publish ordinary changes from
+sessions they created through the shared GitHub account. Workflow definition
+changes require the original requester's current full `operator.write`
+authority. Personal publication also requires `operator.write`. Every publication
+still requires current session authorization. See
 [GitHub connections](/concepts/user-model#github-connections).
 
 Unknown future `operator.*` scopes require an exact match unless the caller

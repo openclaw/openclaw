@@ -154,6 +154,7 @@ jobs:
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
       strict_control_ui_i18n: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.strict_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
+      ui_test_runtime_policy: ${{ steps.manifest.outputs.ui_test_runtime_policy }}
       run_control_ui_performance: ${{ steps.manifest.outputs.run_control_ui_performance }}
       run_ui_e2e: ${{ steps.manifest.outputs.run_ui_e2e }}
       ui_e2e_matrix: ${{ steps.manifest.outputs.ui_e2e_matrix }}
@@ -1795,6 +1796,16 @@ jobs:
                 ? "dual"
                 : "node"
             : "node";
+          const uiTestRuntimePolicy = !compatibilityTarget && testRuntimePolicy?.ciTestShardRequiresBun({
+            configs: ["ui/vitest.config.ts"],
+            vitestArgs: [
+              "--maxWorkers", "3",
+              "--reporter=verbose",
+              "--reporter=github-actions",
+              "--reporter=./scripts/lib/vitest-resource-reporter.mts",
+              ...(frozenTarget ? [] : ["--shard=1/3"]),
+            ],
+          }, testRuntimeMode) ? testRuntimeMode : "node";
           const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
           const knownToolingConfigs = new Set([
             goToolingConfig,
@@ -1968,6 +1979,7 @@ jobs:
             run_format_check: runFormatCheck,
             run_control_ui_i18n: runControlUiI18n,
             run_ui_tests: runUiTests,
+            ui_test_runtime_policy: uiTestRuntimePolicy,
             run_control_ui_performance: runControlUiPerformance,
             run_ui_e2e: runUiE2e,
             ui_e2e_matrix: createMatrix(Array.from({ length: uiE2eJobCount }, (_, index) => {
@@ -2855,6 +2867,10 @@ jobs:
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           restore-test-caches: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 'true' || 'false' }}
 
+      - name: Setup pinned Bun test runtime
+        if: needs.preflight.outputs.ui_test_runtime_policy == 'bun-compatible' || needs.preflight.outputs.ui_test_runtime_policy == 'dual'
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+
       - &cache_playwright_chromium
         name: Cache Playwright Chromium
         if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.compatibility_target != 'true'
@@ -2888,6 +2904,7 @@ jobs:
 
       - name: Test Control UI
         env:
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ needs.preflight.outputs.ui_test_runtime_policy }}
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: ${{ github.workspace }}/.artifacts/control-ui-e2e-timeouts/ui-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: '["ui/vitest.config.ts"]'
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
@@ -3395,25 +3412,42 @@ jobs:
             exit 1
           fi
           # Frozen targets before the file split retain their complete legacy matrix.
+          cores="$(node -p 'require("node:os").availableParallelism()')"
+          # Worker compilation also uses CPU: reserve four cores per invocation.
+          # The 4-vCPU ratchets label can deliver only two usable CPUs.
+          concurrency=$((cores / 4))
+          if (( concurrency < 1 )); then concurrency=1; fi
+          if (( concurrency > 5 )); then concurrency=5; fi
+          echo "[corpus:resources] logicalCpuCount=$cores admitted runs=$concurrency"
           pids=()
           labels=()
-          run_startup_corpus src/config/config-startup-corpus.test.ts &
-          pids+=("$!")
-          labels+=("config corpus")
-          for shard in {1..4}; do
-            OPENCLAW_TEST_STARTUP_CORPUS_SHARD="${shard}/4" \
-              run_startup_corpus src/config/state-startup-corpus.test.ts &
+          result=0
+          wait_corpus_batch() {
+            for index in "${!pids[@]}"; do
+              if ! wait "${pids[$index]}"; then
+                echo "::error::${labels[$index]} failed"
+                result=1
+              fi
+            done
+            pids=()
+            labels=()
+          }
+          for shard in {0..4}; do
+            if (( shard == 0 )); then
+              run_startup_corpus src/config/config-startup-corpus.test.ts &
+              labels+=("config corpus")
+            else
+              OPENCLAW_TEST_STARTUP_CORPUS_SHARD="${shard}/4" \
+                run_startup_corpus src/config/state-startup-corpus.test.ts &
+              labels+=("state corpus ${shard}/4")
+            fi
             pids+=("$!")
-            labels+=("state corpus ${shard}/4")
-          done
-          status=0
-          for index in "${!pids[@]}"; do
-            if ! wait "${pids[$index]}"; then
-              echo "::error::${labels[$index]} failed"
-              status=1
+            if (( ${#pids[@]} == concurrency )); then
+              wait_corpus_batch
             fi
           done
-          exit "$status"
+          wait_corpus_batch
+          exit "$result"
 
   qa-smoke-ci-profile:
     permissions:
@@ -5466,6 +5500,7 @@ jobs:
     timeout-minutes: 150
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+      IOS_CI_PHASE: ${{ matrix.phase }}
     steps:
       - *platform_checkout_step
 
@@ -5565,9 +5600,29 @@ jobs:
             echo "Swift lint wrappers are absent; skipping iOS lint for this frozen target."
           fi
 
+      - name: Prepare iOS simulator
+        if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
+        run: |
+          set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
+          simulator_id="$(prepare_ios_test_simulator)"
+          echo "IOS_SIMULATOR_ID=$simulator_id" >> "$GITHUB_ENV"
+          if [[ "$IOS_CI_PHASE" == "smoke" ]]; then
+            # Apply to the embedded Watch build and the later XCTest build too.
+            smoke_settings="$RUNNER_TEMP/openclaw-ios-smoke.xcconfig"
+            printf 'ARCHS = %s\nCOMPILER_INDEX_STORE_ENABLE = NO\n' "$(uname -m)" > "$smoke_settings"
+            echo "XCODE_XCCONFIG_FILE=$smoke_settings" >> "$GITHUB_ENV"
+          fi
+
       - name: Build iOS app
         if: matrix.phase == 'smoke' || matrix.phase == 'tests'
-        run: pnpm ios:build
+        run: |
+          set -euo pipefail
+          if [[ "$IOS_CI_PHASE" == "smoke" && "$HISTORICAL_TARGET" != "true" ]]; then
+            # Full manual validation retains the universal simulator build.
+            export IOS_DEST="platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}"
+          fi
+          pnpm ios:build
 
       # Debug's incremental compilation can miss actor-isolation diagnostics
       # that Swift's optimized whole-module Release build enforces.
@@ -5587,36 +5642,42 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      # Full pairing/share UI proof stays in full-manual validation; fast regressions join smoke below.
+      - name: Prove native managed document download and export
+        id: ios_attachment_tests
+        if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
+        env:
+          BASELINE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: /bin/bash scripts/test-ios-chat-attachments.sh "$BASELINE_SHA"
+
       - name: Run focused iOS voice cleanup simulator tests
         id: ios_voice_cleanup_tests
         if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
-          simulator_id="$(
-            xcrun simctl list devices available --json | node --input-type=module -e '
-              const chunks = [];
-              for await (const chunk of process.stdin) chunks.push(chunk);
-              const runtimes = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
-              const simulator = Object.values(runtimes)
-                .flat()
-                .find((device) => device.isAvailable && device.name.startsWith("iPhone"));
-              if (!simulator) throw new Error("No available iPhone simulator for voice cleanup tests");
-              process.stdout.write(simulator.udid);
-            '
-          )"
           mkdir -p apps/ios/build/LifecycleTestResults
+          diagnostic_collection=on-failure
+          if [[ "$IOS_CI_PHASE" == "smoke" ]]; then
+            # Xcode 27's verbose simulator diagnostics can stall for 600s after passing tests.
+            # Keep xcresult/log evidence here and verbose diagnostics in full manual validation.
+            diagnostic_collection=never
+          fi
           run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.log xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
             -configuration Debug \
-            -destination "platform=iOS Simulator,id=${simulator_id}" \
+            -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}" \
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.xcresult \
             -parallel-testing-enabled NO \
+            -collect-test-diagnostics "$diagnostic_collection" \
             -only-testing:OpenClawTests/TalkRealtimeVoiceSessionCleanupTests \
             -only-testing:OpenClawTests/TalkRealtimeConsultCancellationTests \
             -only-testing:OpenClawTests/TalkRealtimeTranscriptWriteQueueTests \
             -only-testing:OpenClawTests/TalkModeManagerTests \
+            -only-testing:OpenClawTests/ManagedDocumentEnvelopeTests \
+            -only-testing:OpenClawTests/IOSMediaArtifactLoaderTests \
+            -only-testing:OpenClawTests/OpenClawTypographyTests \
             test
 
       # App compilation and screenshots do not execute approval or notification
@@ -5627,28 +5688,13 @@ jobs:
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
-          simulator_id="$(
-            xcrun simctl list devices available --json | node --input-type=module -e '
-              const chunks = [];
-              for await (const chunk of process.stdin) chunks.push(chunk);
-              const runtimes = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
-              const simulator = Object.values(runtimes)
-                .flat()
-                .find((device) => device.isAvailable && device.name.startsWith("iPhone"));
-              if (!simulator) {
-                console.error("No available iPhone simulator for iOS lifecycle tests");
-                process.exit(1);
-              }
-              process.stdout.write(simulator.udid);
-            '
-          )"
           result_bundle="apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult"
           mkdir -p "apps/ios/build/LifecycleTestResults"
           run_apple_command_logged "${result_bundle%.xcresult}.log" xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
             -configuration Debug \
-            -destination "platform=iOS Simulator,id=${simulator_id}" \
+            -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}" \
             -resultBundlePath "$result_bundle" \
             -parallel-testing-enabled NO \
             -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests \
@@ -5669,7 +5715,7 @@ jobs:
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClawUITests \
             -configuration Debug \
-            -destination "platform=iOS Simulator,id=${simulator_id}" \
+            -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_ID:?}" \
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.xcresult \
             -parallel-testing-enabled NO \
             -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
@@ -5738,13 +5784,15 @@ jobs:
             test-without-building
 
       - name: Upload iOS lifecycle simulator evidence
-        if: ${{ always() && ((steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped') || (steps.ios_voice_cleanup_tests.outcome != '' && steps.ios_voice_cleanup_tests.outcome != 'skipped')) }}
+        if: ${{ always() && ((steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped') || (steps.ios_voice_cleanup_tests.outcome != '' && steps.ios_voice_cleanup_tests.outcome != 'skipped') || (steps.ios_attachment_tests.outcome != '' && steps.ios_attachment_tests.outcome != 'skipped')) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-lifecycle-tests-${{ needs.preflight.outputs.checkout_revision }}
           path: |
             apps/ios/build/LifecycleTestResults/*.xcresult
             apps/ios/build/LifecycleTestResults/*.log
+            apps/ios/build/LifecycleTestResults/Attachment-*
+            apps/ios/build/LifecycleTestResults/attachments-*
           if-no-files-found: warn
           retention-days: 14
 

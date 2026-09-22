@@ -51,6 +51,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { replaceFileAtomicSync } from "./replace-file.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
+import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
@@ -135,6 +136,7 @@ async function migrateAgentDatabase(params: {
       transformContent: transformMediaArchiveContent,
     });
   try {
+    configureSqliteMaintenanceCache(database);
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     enableNodeSqliteKyselyStatementCache(database);
     let metadata = assertOpenClawAgentDatabaseOwner(database, {

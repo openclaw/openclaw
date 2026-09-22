@@ -1396,7 +1396,7 @@ export default class {
             "infra/sqlite-readonly-location.worker": "src/infra/sqlite-readonly-location.worker.ts",
             "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
           };
-          export const legacyFinalizerBuildSources = ["src/infra/runtime-process-entrypoints.ts"];
+          export const preservedModuleBuildSources = ["src/infra/runtime-process-entrypoints.ts"];
           `,
         );
         const databasePath = path.join(fixture, "probe.sqlite");

@@ -2608,7 +2608,10 @@ export function createVitestCacheWarmGroups(profile: "full" | "hybrid-hosted" = 
     configs: ["ui/vitest.config.ts"],
     env: { OPENCLAW_VITEST_MAX_WORKERS: "1" },
     includePatterns: [
-      "ui/src/components/app-sidebar.test.ts",
+      "ui/src/components/app-sidebar.catalog.test.ts",
+      "ui/src/components/app-sidebar.interactions.test.ts",
+      "ui/src/components/app-sidebar.people.test.ts",
+      "ui/src/components/app-sidebar.sessions.test.ts",
       "ui/src/pages/chat/chat-view.test.ts",
       "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
       "ui/src/pages/usage/metrics.node.test.ts",

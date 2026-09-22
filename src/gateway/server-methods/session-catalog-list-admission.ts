@@ -63,8 +63,11 @@ export class SessionCatalogListAdmission {
     timing?: SessionCatalogListTiming,
   ): Promise<T> {
     signal?.throwIfAborted();
-    if (!this.canStart(providerId) && this.queue.length >= this.maxQueued) {
-      throw new SessionCatalogListBusyError(this.activeProviders.size, this.queue.length);
+    if (!this.canStart(providerId)) {
+      const queued = this.queue.filter((entry) => entry.providerId === providerId).length;
+      if (queued >= this.maxQueued) {
+        throw new SessionCatalogListBusyError(this.activeProviders.has(providerId) ? 1 : 0, queued);
+      }
     }
     // Even an immediate first step may later resume from another caller's drain.
     const runInAsyncContext = AsyncLocalStorage.snapshot();

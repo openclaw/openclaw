@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi, type TestContext } from "vitest";
+import { expect, vi, type TestContext } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createTestApprovalFixture } from "../exec-approval-manager.test-support.js";
+import { createPreparedTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { createChatRunState } from "../server-chat-state.js";
 import {
   waitForApprovalAccepted,
@@ -239,11 +239,11 @@ export async function waitExecApproval(params: {
   });
 }
 
-export function createExecApprovalFixture(
+export async function createExecApprovalFixture(
   testContext: TestContext,
   opts?: { config?: OpenClawConfig },
 ) {
-  const fixture = createTestApprovalFixture(testContext);
+  const fixture = await createPreparedTestApprovalManager(testContext);
   const { manager } = fixture;
   const handlers = createExecApprovalHandlers(manager);
   const broadcasts: Array<{ event: string; payload: unknown }> = [];
@@ -257,6 +257,23 @@ export function createExecApprovalFixture(
     chatRunState: createChatRunState(),
   };
   return { ...fixture, handlers, broadcasts, respond, context };
+}
+
+export async function expectRejectedExecApprovalRequest(
+  testContext: TestContext,
+  params: Record<string, unknown>,
+  message: string,
+) {
+  const fixture = await createExecApprovalFixture(testContext);
+  return await fixture.run(async () => {
+    const { handlers, respond, context } = fixture;
+    await requestExecApproval({ handlers, respond, context, params });
+    const call = expectDefined(respond.mock.calls[0], "expected rejected exec approval response");
+    expect(call[0]).toBe(false);
+    expect(call[1]).toBeUndefined();
+    expect(call[2]).toBeTypeOf("object");
+    expect(call[2]).toMatchObject({ message });
+  });
 }
 
 export function getRequestedExecApprovalPayload(
@@ -284,7 +301,7 @@ export function getRequestedExecApprovalPayload(
   };
 }
 
-type RequestedExecApproval = ReturnType<typeof createExecApprovalFixture> &
+type RequestedExecApproval = Awaited<ReturnType<typeof createExecApprovalFixture>> &
   ReturnType<typeof getRequestedExecApprovalPayload> & { requestPromise: Promise<void> };
 
 export async function withAcceptedExecApproval(
@@ -295,7 +312,7 @@ export async function withAcceptedExecApproval(
   },
   inspect: (approval: RequestedExecApproval) => Promise<void>,
 ) {
-  const fixture = createExecApprovalFixture(testContext);
+  const fixture = await createExecApprovalFixture(testContext);
   await fixture.run(async () => {
     const { pending: requestPromise } = await waitForApprovalAccepted(fixture.respond, (respond) =>
       fixture.track(
@@ -326,7 +343,7 @@ export async function withRequestedExecApproval(
   },
   inspect: (approval: RequestedExecApproval) => Promise<void>,
 ) {
-  const fixture = createExecApprovalFixture(testContext, params.fixtureOptions);
+  const fixture = await createExecApprovalFixture(testContext, params.fixtureOptions);
   await fixture.run(async () => {
     const { pending: requestPromise } = await waitForApprovalRequested(
       fixture.context,
@@ -356,7 +373,7 @@ export async function requestExecApprovalForTest(
   request: Record<string, unknown>,
   fixtureOptions?: Parameters<typeof createExecApprovalFixture>[1],
 ) {
-  const fixture = createExecApprovalFixture(testContext, fixtureOptions);
+  const fixture = await createExecApprovalFixture(testContext, fixtureOptions);
   return await fixture.run(async () => {
     await requestExecApproval({
       handlers: fixture.handlers,
@@ -368,7 +385,7 @@ export async function requestExecApprovalForTest(
   });
 }
 
-export function createForwardingExecApprovalFixture(
+export async function createForwardingExecApprovalFixture(
   testContext: TestContext,
   opts?: {
     webPushDelivery?: {
@@ -383,7 +400,7 @@ export function createForwardingExecApprovalFixture(
     };
   },
 ) {
-  const fixture = createTestApprovalFixture(testContext);
+  const fixture = await createPreparedTestApprovalManager(testContext);
   const { manager } = fixture;
   const forwarder = {
     handleRequested: vi.fn(async () => false),

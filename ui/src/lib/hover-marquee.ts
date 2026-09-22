@@ -150,29 +150,28 @@ class HoverMarqueeDirective extends AsyncDirective {
       this.visibilityObserver = undefined;
       this.visible = true;
     }
+    const width = label.clientWidth;
+    if (width <= 0) {
+      return () => this.clearOverflow(label);
+    }
     const text = this.text!;
     const style = getComputedStyle(label);
     const padding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
-    const overflow =
-      style.whiteSpace === "nowrap" && label.clientWidth > 0
-        ? text.scrollWidth + padding - label.clientWidth
-        : 0;
+    const overflow = style.whiteSpace === "nowrap" ? text.scrollWidth + padding - width : 0;
     const clipped = overflow > (this.options.loop ? 0 : 1);
+    if (!clipped) {
+      return () => this.clearOverflow(label);
+    }
     const active =
       this.host.matches(":hover, :focus-visible") ||
       Boolean(this.host.querySelector(":focus-visible")) ||
       // Touch opens the existing identity menu; its trigger keeps revealing
       // the name while focus moves into the portaled menu.
       (this.options.loop && this.host.getAttribute("aria-expanded") === "true");
-    if (!clipped || !active || !this.visible || this.motion?.matches) {
+    if (!active || !this.visible || this.motion?.matches) {
       return () => {
         label.classList.toggle("hover-marquee--overflowing", clipped);
         this.stop();
-        if (!clipped) {
-          label.style.removeProperty("--hover-marquee-shift");
-          label.style.removeProperty("--hover-marquee-duration");
-          this.shift = 0;
-        }
       };
     }
     const fade = Number.parseFloat(style.getPropertyValue("--hover-marquee-fade-width"));
@@ -208,6 +207,14 @@ class HoverMarqueeDirective extends AsyncDirective {
       }
     };
   };
+
+  private clearOverflow(label: HTMLElement) {
+    label.classList.toggle("hover-marquee--overflowing", false);
+    this.stop();
+    label.style.removeProperty("--hover-marquee-shift");
+    label.style.removeProperty("--hover-marquee-duration");
+    this.shift = 0;
+  }
 
   private stop() {
     window.clearTimeout(this.timer);

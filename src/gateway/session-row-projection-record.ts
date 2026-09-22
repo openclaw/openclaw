@@ -72,15 +72,34 @@ export function markRelated(
     byKey: ReadonlyMap<string, Set<string>>;
   },
   dirty: Set<string>,
+  includeChildren = true,
 ) {
-  for (const id of dependents(row, indexes.byParent)) {
-    dirty.add(id);
+  if (includeChildren) {
+    for (const id of dependents(row, indexes.byParent)) {
+      dirty.add(id);
+    }
   }
   for (const parent of row.parents) {
     for (const id of indexes.byKey.get(parent) ?? []) {
       dirty.add(id);
     }
   }
+}
+
+/** Children consume parent model overrides, not its changing progress or display metadata. */
+export function changesSessionRowDependents(before: Row["storedEntry"], after: Row["storedEntry"]) {
+  return (
+    !before ||
+    !after ||
+    before.sessionId !== after.sessionId ||
+    before.lifecycleRevision !== after.lifecycleRevision ||
+    before.providerOverride !== after.providerOverride ||
+    before.modelOverride !== after.modelOverride ||
+    before.modelOverrideSource !== after.modelOverrideSource ||
+    before.modelOverrideRouteResolution !== after.modelOverrideRouteResolution ||
+    before.modelOverrideFallbackOriginProvider !== after.modelOverrideFallbackOriginProvider ||
+    before.modelOverrideFallbackOriginModel !== after.modelOverrideFallbackOriginModel
+  );
 }
 
 /** Mark resident logical owners without changing stored entries, relatives, or backfill. */
@@ -336,7 +355,7 @@ export function acquireSessionRowEntry(params: {
   context: SessionListRowContext;
   remove: (id: string) => void;
   put: (row: Row) => void;
-  markRelated: (row: Row) => void;
+  markRelated: (row: Row, includeChildren: boolean) => void;
   archive: { demote: (row: Row) => Row; forget: (id: string) => void };
 }) {
   const { row, storedEntry, cfg, context, remove, put, archive } = params;
@@ -351,8 +370,9 @@ export function acquireSessionRowEntry(params: {
     !sameParents(row.parents, parents) ||
     !Object.is(storedEntry.updatedAt, row.storedEntry?.updatedAt) ||
     !isDeepStrictEqual(storedEntry, row.storedEntry);
+  const includeChildren = changesSessionRowDependents(row.storedEntry, storedEntry);
   if (changed) {
-    params.markRelated(row);
+    params.markRelated(row, includeChildren);
   }
   const generation =
     !row.entry ||
@@ -384,7 +404,7 @@ export function acquireSessionRowEntry(params: {
     archive.forget(identity(next));
   }
   if (changed) {
-    params.markRelated(next);
+    params.markRelated(next, includeChildren);
   }
   return next;
 }

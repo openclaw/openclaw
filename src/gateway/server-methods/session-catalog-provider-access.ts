@@ -18,7 +18,7 @@ import type {
 import { SessionCatalogListAdmission } from "./session-catalog-list-admission.js";
 import { startSessionCatalogListDiagnostics } from "./session-catalog-list-diagnostics.js";
 
-const MAX_CONCURRENT_SESSION_CATALOG_LISTS = 4;
+const MAX_CONCURRENT_SESSION_CATALOG_LISTS = 16;
 const MAX_QUEUED_SESSION_CATALOG_LISTS = 32;
 const PROCESS_HOME_CATALOG_SKIP_MESSAGE =
   "external session catalog HOME fallback skipped: isolated state; configure an explicit root to enable";
@@ -37,8 +37,8 @@ export function allowProcessHomeFallback(logGateway?: {
 }
 
 // Catalog adapters may scan local databases or invoke external CLIs. Bound the
-// executing work globally and admit one step per provider so a slow source
-// cannot occupy every slot with overlapping requests.
+// executing work globally with headroom for independent providers. Each provider
+// owns one active step and its own bounded queue of waiting callers.
 const sessionCatalogListAdmission = new SessionCatalogListAdmission(
   MAX_CONCURRENT_SESSION_CATALOG_LISTS,
   MAX_QUEUED_SESSION_CATALOG_LISTS,

@@ -239,11 +239,22 @@ vi.mock("../infra/update-repair-agent.js", () => ({
 vi.mock("../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: candidateValidation,
 }));
-// Runtime generation and publication have real owner/process coverage; CLI
-// orchestration must not rebuild the checkout behind its simulated updater.
+// Runtime retention and publication have real owner/process coverage; CLI
+// orchestration must not copy or rebuild the checkout behind its simulated updater.
 vi.mock("./update-cli/update-command-runtime.js", () => ({
   completeSourceUpdateRuntime: sourceRuntimeCompletion,
 }));
+vi.mock("../infra/update-retained-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/update-retained-runtime.js")>();
+  const withRetainedUpdateRuntime: typeof actual.withRetainedUpdateRuntime = (
+    moduleUrl,
+    operation,
+  ) =>
+    actual.withRetainedUpdateRuntime(moduleUrl, () =>
+      operation(async ({ assertCurrent }) => assertCurrent()),
+    );
+  return { withRetainedUpdateRuntime };
+});
 vi.mock("../infra/update-candidate-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-candidate-state.js")>()),
   readUpdateStateSchemaVersions: stateSchemaVersions,
@@ -1140,6 +1151,18 @@ describe("update-cli", () => {
     pathExists.mockImplementation(
       async (candidate: string) =>
         candidate === path.join(root, "package.json") || candidate === serviceEntrypoint,
+    );
+  };
+
+  const useNativeScheduledTaskControl = async () => {
+    const nativeTaskControl = await vi.importActual<typeof import("../daemon/schtasks-control.js")>(
+      "../daemon/schtasks-control.js",
+    );
+    suspendScheduledTaskAutoStartForUpdate.mockImplementation(
+      nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
+    );
+    resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
+      nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
     );
   };
 
@@ -9201,15 +9224,7 @@ describe("update-cli", () => {
           OPENCLAW_WORKSPACE_DIR: target.defaultWorkspaceDir,
         },
       );
-      const nativeTaskControl = await vi.importActual<
-        typeof import("../daemon/schtasks-control.js")
-      >("../daemon/schtasks-control.js");
-      suspendScheduledTaskAutoStartForUpdate.mockImplementation(
-        nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
-      );
-      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
-        nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
-      );
+      await useNativeScheduledTaskControl();
       const configuredRunCommand = vi.mocked(runCommandWithTimeout).getMockImplementation();
       if (!configuredRunCommand) {
         throw new Error("Expected installed package command fixture");
@@ -9342,15 +9357,7 @@ describe("update-cli", () => {
         expectedVersion: "1.0.0",
         probeError: fault === "none" ? undefined : "candidate readiness failed",
       };
-      const nativeTaskControl = await vi.importActual<
-        typeof import("../daemon/schtasks-control.js")
-      >("../daemon/schtasks-control.js");
-      suspendScheduledTaskAutoStartForUpdate.mockImplementation(
-        nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
-      );
-      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
-        nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
-      );
+      await useNativeScheduledTaskControl();
       const configuredRunCommand = requireValue(
         vi.mocked(runCommandWithTimeout).getMockImplementation(),
         "native update command fixture",
@@ -9514,20 +9521,8 @@ describe("update-cli", () => {
         version: "1.0.0",
       });
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(listUpdateRuns({ limit: 1 })).toMatchObject([
-        {
-          phase: "finished",
-          status: "failed",
-          reason: "runtime-verification-failed",
-          steps: expect.arrayContaining([
-            expect.objectContaining({
-              step: "post-install-verify",
-              status: "failed",
-              detail: expect.stringContaining("interrupted lifecycle"),
-            }),
-          ]),
-        },
-      ]);
+      expect(serviceRestart).not.toHaveBeenCalled();
+      runtimeRecovery.expectInterruptedDoctorPackageRollback(listUpdateRuns({ limit: 1 }));
     } finally {
       platformSpy.mockRestore();
       processOnSpy.mockRestore();
@@ -9592,15 +9587,7 @@ describe("update-cli", () => {
     async ({ verified, compensationFails }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       mockRunningManagedGateway(["node", path.join(process.cwd(), "dist", "index.js"), "gateway"]);
-      const nativeTaskControl = await vi.importActual<
-        typeof import("../daemon/schtasks-control.js")
-      >("../daemon/schtasks-control.js");
-      suspendScheduledTaskAutoStartForUpdate.mockImplementation(
-        nativeTaskControl.suspendScheduledTaskAutoStartForUpdate,
-      );
-      resumeScheduledTaskAutoStartAfterUpdate.mockImplementation(
-        nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate,
-      );
+      await useNativeScheduledTaskControl();
       const runFixture = requireValue(
         vi.mocked(runCommandWithTimeout).getMockImplementation(),
         "managed task command fixture",
@@ -10680,6 +10667,8 @@ describe("update-cli", () => {
     expectNoSideEffects(serviceStop, prepareRestartScript, serviceRestart, runDaemonRestart);
     expect(updateGitCheckout).toHaveBeenCalledTimes(1);
     expect(mutationAdmitted).toHaveBeenCalledOnce();
+    expect(freshRestartCalls()).toHaveLength(0);
+    expect(gatewayCommandCall(otherEntrypoint, "install")).toBeUndefined();
   });
 
   it("never starts the candidate after plugin post-update invalidates config", async () => {

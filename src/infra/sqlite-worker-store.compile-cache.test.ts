@@ -87,7 +87,10 @@ describe("SQLite store worker compile cache", () => {
          enableOpenClawCompileCache({ installRoot, env: { NODE_COMPILE_CACHE: blocked } });
        } else if (testCase.owner !== "none") {
          // Positive control goes through the real OpenClaw entry enable owner.
-         enableOpenClawCompileCache({ installRoot });
+         enableOpenClawCompileCache({
+           installRoot,
+           env: { ...process.env, NODE_COMPILE_CACHE: path.join(root, "native-cache") },
+         });
        }
        assert.deepEqual({ ...process.env }, initialEnv, "enable must not mutate the environment");
        const parentDirectory = getCompileCacheDir() ?? null;
@@ -157,10 +160,8 @@ describe("SQLite store worker compile cache", () => {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: root,
-      TMP: root,
-      TEMP: root,
-      TMPDIR: root,
     };
+    // Isolate the native cache above; retain the runner-owned TSX transform cache.
     delete env.NODE_COMPILE_CACHE;
     delete env.NODE_DISABLE_COMPILE_CACHE;
     delete env.NODE_OPTIONS;

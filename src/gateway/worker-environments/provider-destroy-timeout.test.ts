@@ -28,7 +28,8 @@ describe("worker provider teardown deadlines", () => {
       const service = support.createService(
         support.createProvider({ destroy, resolveDestroyTimeoutMs }),
       );
-      vi.useFakeTimers();
+      // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       let settled = false;
       const operation = (
         entrance === "destroy"
@@ -152,7 +153,8 @@ describe("worker provider teardown deadlines", () => {
     const service = support.createService(
       support.createProvider({ destroy, resolveDestroyTimeoutMs }),
     );
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const first = service.destroy(initial.environmentId).catch((error: unknown) => error);
     let second: Promise<unknown> | undefined;
     try {

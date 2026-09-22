@@ -5,6 +5,7 @@ import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
+import { createLightpandaCdpNormalizer } from "./lightpanda-cdp.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 type CdpSocketLookup = typeof dnsLookupCb;
 // Playwright allocates positive command IDs and reserves -9999 for Browser.close.
@@ -37,6 +38,7 @@ type CdpTransportOptions = {
   lookup?: CdpSocketLookup;
   resolveWebSocketUrl?: () => Promise<string | undefined>;
   preparedTransport?: ConnectOverCDPTransport;
+  engine?: "chromium" | "lightpanda";
 };
 
 async function openCdpTransportSocket(
@@ -99,6 +101,7 @@ export async function connectOverCdpTransport(
   opts: CdpTransportOptions,
 ): Promise<Browser> {
   const wire = opts.preparedTransport ?? (await openCdpTransportSocket(connectionUrl, opts));
+  const lightpanda = opts.engine === "lightpanda" ? createLightpandaCdpNormalizer() : undefined;
   try {
     let onMessage: ((message: object) => void) | undefined;
     let onClose: ((reason?: string) => void) | undefined;
@@ -114,6 +117,7 @@ export async function connectOverCdpTransport(
         return;
       }
       transportClosed = true;
+      lightpanda?.clear();
       if (onClose) {
         onClose(reason);
         return;
@@ -132,6 +136,7 @@ export async function connectOverCdpTransport(
     };
     const closeTransportSocket = (reason = "CDP socket closed") => {
       closingReason = reason;
+      lightpanda?.clear();
       // Borrowed streams close only after the real owner acknowledges native cleanup.
       wire.close();
     };
@@ -180,7 +185,12 @@ export async function connectOverCdpTransport(
         if (closingReason || transportClosed) {
           throw new Error("CDP transport closed");
         }
-        wire.send(message);
+        try {
+          wire.send(lightpanda?.send(message) ?? message);
+        } catch (error) {
+          closeTransportSocket(formatErrorMessage(error));
+          throw error;
+        }
       },
       close: () => {
         closeTransportSocket();
@@ -215,9 +225,13 @@ export async function connectOverCdpTransport(
     Object.assign(wire, {
       onmessage: (message: object) => {
         try {
-          const parsed = asOptionalRecord(message);
-          if (!parsed) {
+          const received = asOptionalRecord(message);
+          if (!received) {
             closeTransportSocket();
+            return;
+          }
+          const parsed = lightpanda ? lightpanda.receive(received) : received;
+          if (!parsed) {
             return;
           }
           const id = parsed.id;
@@ -244,6 +258,7 @@ export async function connectOverCdpTransport(
     });
     return await getPlaywrightCore().chromium.connectOverCDP(transport, { timeout: opts.timeout });
   } catch (error) {
+    lightpanda?.clear();
     wire.close();
     throw error;
   }
