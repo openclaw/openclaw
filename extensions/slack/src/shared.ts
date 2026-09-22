@@ -51,13 +51,13 @@ export function createSlackPluginBase(params: {
     doctor: slackDoctor,
     agentPrompt: {
       inboundFormattingHints: () => ({
-        text_markup: "slack_mrkdwn",
+        text_markup: "markdown",
         rules: [
-          "Use Slack mrkdwn, not standard Markdown.",
-          "Bold uses *single asterisks*.",
-          "Links use <url|label>.",
-          "Code blocks use triple backticks without a language identifier.",
-          "Do not use markdown headings or pipe tables.",
+          "Write replies in standard Markdown; OpenClaw converts them to Slack mrkdwn.",
+          "Bold uses **double asterisks**; *single asterisks* or _underscores_ produce italics.",
+          "Links use [label](url). Keep Slack mentions as <@USER_ID>.",
+          "Use presentation table blocks for tabular data; Markdown pipe tables are not auto-promoted.",
+          "Only raw Block Kit or presentation text fields use Slack mrkdwn directly: *bold*, _italic_, ~strike~, and <url|label> links. Avoid Markdown headings or pipe tables in those fields.",
         ],
       }),
       messageToolHints: () => [
