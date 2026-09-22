@@ -11,8 +11,14 @@ import {
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { clearRuntimeConfigSnapshot } from "../../config/io.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { readTranscriptStorageRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import {
+  resolveSqliteReadScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
@@ -92,9 +98,14 @@ export async function setupWorkerTurnLauncherTest(): Promise<void> {
     sessionKey: SESSION_KEY,
     storePath: path.join(root, "sessions.json"),
   };
-  await upsertSessionEntryCore(sessionTarget, {
+  const entry = {
     sessionId: SESSION_ID,
     updatedAt: Date.now(),
+  };
+  // Placement fixtures do not own the automatic retention scheduler.
+  await patchSessionEntryCore(sessionTarget, () => entry, {
+    fallbackEntry: entry,
+    skipMaintenance: true,
   });
   SessionManager.open(sessionTarget);
   sessionFile = SESSION_KEY;
@@ -158,6 +169,13 @@ export function createWorkerSessionTurnPlacementProvider(
 
 export function openSessionManager(): SessionManager {
   return SessionManager.open(sessionTarget);
+}
+
+export function readWorkerTurnTranscriptStorageRows() {
+  const transcriptDatabase = openOpenClawAgentDatabase(
+    toDatabaseOptions(resolveSqliteReadScope(sessionTarget)),
+  );
+  return readTranscriptStorageRows(transcriptDatabase, sessionTarget.sessionId);
 }
 
 export async function dispatchInitialWorkerPlacement(params: {

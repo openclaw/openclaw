@@ -3067,7 +3067,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const textareaNode = node as HTMLTextAreaElement;
         textareaNode.style.height = `${textareaNode.scrollHeight}px`;
       });
-      await page.waitForTimeout(220);
+      await page.locator(".context-ring").evaluate(finishElementAnimations);
 
       const layout = await page.evaluate(() => {
         const rectFor = (selector: string) => {

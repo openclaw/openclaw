@@ -9,8 +9,8 @@ import type {
 import {
   deliverAgentHarnessUserInputPrompt,
   type AgentHarnessUserInputPromptOptions,
-  type AgentHarnessUserInputQuestion,
 } from "./user-input-bridge.js";
+import type { AgentHarnessUserInputQuestion } from "./user-input-types.js";
 
 const QUESTION_BATCH_SIZE = 3;
 const STATUS_TEXT_LIMIT = 1_024;

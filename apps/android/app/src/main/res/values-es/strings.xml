@@ -1419,7 +1419,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"El chat requiere atención"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw recopila y envía los nombres, los ID de paquete y el estado de las aplicaciones visibles en este teléfono cuando el Gateway de OpenClaw vinculado los solicita. Esto permite que tu asistente responda preguntas y realice acciones mediante las aplicaciones instaladas."</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway no conectado"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sin resultado"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Política"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Reemplaza a %1$s — última actualización: %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Se agotó el tiempo de espera al confirmar el mensaje enviado; actualiza para comprobar la entrega."</string>

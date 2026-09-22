@@ -525,8 +525,19 @@ for the entire file; stale keys cannot change the discovered test inventory.
 
 With an authenticated `gh` CLI, run `pnpm ci:timings:refit` to regenerate the file.
 Each invocation freezes one UTC upper bound and a lower bound seven days earlier.
-Every run-list page uses both bounds. Returned run timestamps and successful job
-timestamps outside that window fail validation.
+Every run-list page uses both bounds. Returned run creation timestamps outside
+that window fail validation. Before downloading logs for a run, the collector
+validates all captured attempts' job metadata. Successful jobs with missing
+completion, invalid provenance, stale starts, reversed chronology, or completion
+after the metadata observation time still fail validation.
+
+A run created inside the window can finish after its frozen upper bound while
+earlier cohorts are being collected. When otherwise valid successful jobs end
+after that cutoff, scheduled sampling skips the entire run, reports its ID and
+cutoff, and seeks a replacement without consuming the sample quota. It never
+downloads that cohort's logs or drops only the late jobs into an apparently
+complete inventory. Explicit `--tooling-run` requests instead fail with the run
+ID and cutoff; neither path moves the window.
 
 The refit seeks up to five completed `ci.yml` push runs on `main` with a success
 or failure conclusion and parsed compact measurements from successful jobs.

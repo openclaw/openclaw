@@ -1419,7 +1419,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Chatten behöver åtgärdas"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw samlar in och skickar namn, paket-ID:n och status för appar som är synliga på den här telefonen när din parkopplade OpenClaw Gateway begär dem. Det gör att din assistent kan svara på frågor och utföra åtgärder med installerade appar."</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway inte ansluten"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inget resultat"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Policy"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ersätter %1$s — senast uppdaterad %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidsgränsen för att bekräfta det skickade meddelandet överskreds; uppdatera för att kontrollera leveransen."</string>

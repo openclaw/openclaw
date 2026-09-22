@@ -1419,7 +1419,6 @@
     <string name="native_c59472391c91f836" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Czat wymaga uwagi"</string>
     <string name="native_c5d9a28072f41611" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw gromadzi i wysyła nazwy, identyfikatory pakietów oraz status aplikacji widocznych na tym telefonie, gdy poprosi o nie sparowany Gateway OpenClaw. Dzięki temu asystent może odpowiadać na pytania i wykonywać działania przy użyciu zainstalowanych aplikacji."</string>
     <string name="native_c5dc22cbcdaf52ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway nie jest połączony"</string>
-    <string name="native_c6008b5b55ecb54f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Brak wyniku"</string>
     <string name="native_c611981fab983bc6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zasada"</string>
     <string name="native_c61517e91eeb21b4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zastępuje %1$s — ostatnia aktualizacja: %2$s"</string>
     <string name="native_c6370c19005b2fc0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Upłynął limit czasu potwierdzania wysłanej wiadomości; odśwież, aby sprawdzić dostarczenie."</string>

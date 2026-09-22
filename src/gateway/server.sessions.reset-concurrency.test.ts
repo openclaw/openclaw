@@ -245,6 +245,7 @@ test("sessions.reset fences an old same-id baseline completion with a fresh capt
   captureMocks.capture.mockReturnValueOnce(capture.promise);
   const oldEntry = loadSessionEntry({ sessionKey, storePath }) as InternalSessionEntry;
   const oldCompletion = ensureSessionDiffBaseline({
+    agentId: "main",
     cwd: "/workspace",
     entry: oldEntry,
     isNewSession: false,

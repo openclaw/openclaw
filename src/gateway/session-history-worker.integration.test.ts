@@ -227,7 +227,7 @@ it("reads a new branch and reset interval after earlier worker pages settle", as
       const scope = { ...target, sessionEntry: entry };
       const limits = { cursor, maxBytes: 1_000_000, maxEvents: 200 };
       const golden = readTranscriptDisplayDelta(scope, limits);
-      const delta = await readSessionHistoryPageInWorker({
+      const { delta } = await readSessionHistoryPageInWorker({
         kind: "delta",
         params: { target: scope, limits },
       });
