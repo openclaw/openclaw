@@ -1,5 +1,6 @@
 import http from "node:http";
 import net from "node:net";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { mockIpv4OnlyLocalhostLookup } from "../../test/helpers/loopback-dns.js";
@@ -165,7 +166,6 @@ describe("node worker portal stream command", () => {
     let attached = false;
     let closed = false;
     const frames: unknown[] = [];
-    // Allocate the Gateway first so it cannot reuse the released target port.
     const gatewayUrl = await listenGateway((ws) => {
       attached = true;
       ws.on("message", (data) => frames.push(data));
@@ -173,34 +173,65 @@ describe("node worker portal stream command", () => {
         closed = true;
       });
     });
-    const unavailable = net.createServer();
-    await new Promise<void>((resolve) => {
-      unavailable.listen(0, "127.0.0.1", resolve);
-    });
-    const address = unavailable.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected unavailable portal test address");
-    }
+    const reservedTarget = net.createServer();
     await new Promise<void>((resolve, reject) => {
-      unavailable.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
+      reservedTarget.once("error", reject);
+      reservedTarget.listen(0, "127.0.0.1", () => {
+        reservedTarget.off("error", reject);
         resolve();
       });
     });
+    const address = reservedTarget.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected reserved portal test address");
+    }
+    cleanups.push(
+      async () =>
+        await new Promise<void>((resolve) => {
+          reservedTarget.close(() => resolve());
+        }),
+    );
+    let refusedTargets = 0;
+    // Preserve each caller's native socket through Reflect.apply below.
+    // oxlint-disable-next-line typescript/unbound-method
+    const originalConnect = net.Socket.prototype.connect;
+    // A released port can be reclaimed by another test before this connection.
+    const connect = vi.spyOn(net.Socket.prototype, "connect").mockImplementation(function (
+      this: net.Socket,
+      ...args: unknown[]
+    ) {
+      const normalized = Array.isArray(args[0]) ? args[0] : args;
+      const options = isRecord(normalized[0]) ? normalized[0] : undefined;
+      const host = options?.host ?? normalized[1];
+      const port = Number(options?.port ?? normalized[0]);
+      if (
+        port === address.port &&
+        (host === "localhost" || host === "127.0.0.1" || host === "::1")
+      ) {
+        refusedTargets++;
+        queueMicrotask(() =>
+          this.destroy(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })),
+        );
+        return this;
+      }
+      return Reflect.apply(originalConnect, this, args);
+    });
 
-    await expect(
-      invokeNodeWorkerPortalStream({
-        paramsJSON: portalCommand(address.port),
-        gatewayUrl,
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toMatchObject({ code: "ECONNREFUSED" });
+    try {
+      await expect(
+        invokeNodeWorkerPortalStream({
+          paramsJSON: portalCommand(address.port),
+          gatewayUrl,
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toMatchObject({ code: "ECONNREFUSED" });
 
-    expect(attached).toBe(true);
-    await vi.waitFor(() => expect(closed).toBe(true));
-    expect(frames).toEqual([]);
+      expect(refusedTargets).toBe(1);
+      expect(attached).toBe(true);
+      await vi.waitFor(() => expect(closed).toBe(true));
+      expect(frames).toEqual([]);
+    } finally {
+      connect.mockRestore();
+    }
   });
 });

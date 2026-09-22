@@ -121,8 +121,7 @@ function fixture() {
   return { root, stateDir, configPath, config };
 }
 
-async function bootstrap() {
-  const commandPath = ["node", "worker"];
+async function bootstrap(commandPath = ["node", "worker"]) {
   const error = vi.fn();
   await ensureCliExecutionBootstrap({
     commandPath,
@@ -160,6 +159,27 @@ function readGatewayState() {
 }
 
 describe("private node worker bootstrap", () => {
+  it.each(["install", "status", "pair", "setup"])(
+    "preserves independently owned Gateway state during browser extension %s bootstrap",
+    async (subcommand) => {
+      const { stateDir, configPath, config } = fixture();
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      seedMacNodeWorkerProofState(databasePath);
+      const databaseBefore = fs.readFileSync(databasePath);
+      const configBefore = fs.readFileSync(configPath);
+      const artifactsBefore = fs.readdirSync(path.dirname(databasePath)).toSorted();
+
+      await bootstrap(["browser", "extension", subcommand]);
+
+      expect(getRuntimeConfig().channels?.["fixture-channel"]).toEqual(
+        config.channels["fixture-channel"],
+      );
+      expect(fs.readFileSync(databasePath)).toEqual(databaseBefore);
+      expect(fs.readFileSync(configPath)).toEqual(configBefore);
+      expect(fs.readdirSync(path.dirname(databasePath)).toSorted()).toEqual(artifactsBefore);
+    },
+  );
+
   it.each(["unknown", "metadata", "lease", "future", "corrupt"])(
     "does not adopt %s state as native bootstrap",
     async (shape) => {

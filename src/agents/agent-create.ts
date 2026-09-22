@@ -83,6 +83,7 @@ type ConfigCommitReceipt = {
 type CreateAgentParams = {
   name?: string;
   role?: string;
+  purpose?: string;
   entry?: CreateAgentEntry;
   /** Internal authorization for onboarding to materialize the sole implicit `main` agent. */
   bootstrapMain?: boolean;
@@ -465,6 +466,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             dir: workspaceDir,
             beforePersistentApply: params.beforePersistentApply,
             ensureBootstrapFiles: !skipBootstrap,
+            purpose: params.purpose,
             ...(template
               ? {
                   templates: params.entry?.identity

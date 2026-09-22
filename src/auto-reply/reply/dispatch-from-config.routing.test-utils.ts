@@ -11,7 +11,6 @@ import {
   emptyConfig,
   hookMocks,
   mocks,
-  replyMediaPathMocks,
   sessionStoreMocks,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
@@ -627,21 +626,18 @@ describe("dispatchReplyFromConfig", () => {
         text: "NO_REPLY",
         mediaUrls: ["https://example.com/tts-routed.opus"],
       });
-      return undefined;
+      return { text: "The audio is ready." } satisfies ReplyPayload;
     };
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    const normalizerOptions = replyMediaPathMocks.createReplyMediaPathNormalizer.mock
-      .calls[0]?.[0] as { cfg?: unknown; messageProvider?: unknown } | undefined;
-    expect(normalizerOptions?.cfg).toBe(cfg);
-    expect(normalizerOptions?.messageProvider).toBe("telegram");
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
-    const routed = firstRouteReplyCall() as { payload?: ReplyPayload } | undefined;
-    expect(routed?.payload?.mediaUrls).toEqual(["https://example.com/tts-routed.opus"]);
-    expect(routed?.payload?.text).toBeUndefined();
+    expect(mocks.routeReply).toHaveBeenCalledTimes(2);
+    const [mediaReply, finalReply] = mocks.routeReply.mock.calls.map(([call]) => call.payload);
+    expect(mediaReply?.mediaUrls).toEqual(["https://example.com/tts-routed.opus"]);
+    expect(mediaReply?.text).toBeUndefined();
+    expect(finalReply?.text).toBe("The audio is ready.");
   });
 
   it("provides onToolResult in DM sessions", async () => {

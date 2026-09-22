@@ -138,8 +138,8 @@ async function dispatch(
   }
 }
 
-afterEach(() => {
-  resetCodeModeTestState();
+afterEach(async () => {
+  await resetCodeModeTestState();
   clearEmbeddedSessionPromptStates([sessionId]);
 });
 

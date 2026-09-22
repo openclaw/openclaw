@@ -15,7 +15,7 @@ title: "macOS signing"
 - Reads `SIGN_IDENTITY` from the environment (e.g. `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"`, or a Developer ID Application cert). Without it, `codesign-mac-app.sh` auto-selects an identity. The order is Developer ID Application, Apple Distribution, Apple Development, then the first valid codesigning identity found.
 - `SIGN_IDENTITY` also accepts a certificate SHA-1 hash to distinguish certificates with the same common name.
 - `CODESIGN_TIMESTAMP=auto` (default) enables trusted timestamps for Developer ID Application signatures selected by name or certificate hash. Set `on`/`off` to force either way.
-- Stamps Info.plist with `OpenClawBuildTimestamp` (ISO8601 UTC) and `OpenClawGitCommit`. The commit value is the full 40-character hexadecimal commit, or `unknown` for local builds when it is unavailable. The standard About panel can then show the build timestamp and git commit.
+- Stamps Info.plist with `OpenClawBuildTimestamp` (ISO8601 UTC) and `OpenClawGitCommit`. The commit value is the full 40-character hexadecimal commit, or `unknown` for local builds when it is unavailable. The native **About** tab shows the build timestamp and git commit.
 - Audits native-signature format and Team IDs after signing. Metadata failures, non-native signatures, missing Team IDs, and mismatched Team IDs fail by default. `SKIP_TEAM_ID_CHECK=1` skips only the Team ID comparison. Native-signature format checks still run.
 - Signs the private worker's native code before sealing the app. JIT memory entitlements go only to the worker's `bin/node` and to Claude Agent SDK `claude` executables. For the `claude` executables, this applies only when an explicitly bundled plugin includes them. The signer plain-signs other native helpers and libraries. Those signatures retain library validation and require the app's signing identity. The bundled Anthropic plugin uses the separately installed Claude Code executable. Packaging verifies each requested architecture's native capabilities and worker readiness in temporary state before and after signing.
 
@@ -38,13 +38,21 @@ SIGN_IDENTITY="-" scripts/package-mac-app.sh                                    
 DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh                          # dev-only Sparkle Team ID mismatch workaround
 ```
 
+Worker packaging honors the existing `OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS`,
+`OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS`, and
+`OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS` budgets. Each defaults to five
+minutes; set a positive integer in milliseconds when packaging needs more time.
+These budgets pass through the worker's isolated environment without exposing
+operator credentials or state. The tarball-check budget covers the whole check,
+including extraction and validation.
+
 ### Ad-hoc signing note
 
 `SIGN_IDENTITY="-"` disables the Hardened Runtime (`--options runtime`). This prevents crashes when the app loads embedded frameworks (like Sparkle) that do not share the same Team ID. Ad-hoc signatures also break TCC permission persistence. See [macOS permissions](/platforms/mac/permissions) for recovery steps.
 
 ## Build metadata for About
 
-Choose **About OpenClaw** to open the standard macOS About panel. It shows the app version and build, with the build timestamp and git commit from Info.plist in its credits. The panel shows missing or invalid timestamp and commit values as unavailable. Re-run the packager after code changes to refresh these values. App update controls live under **Dashboard → Settings → Updates → This Mac**.
+Choose **About OpenClaw** to select **About** in the native Connection window. It shows the app version and build number, build date, and shortened git commit from Info.plist, even without a Gateway connection. Hover over the commit or date for the full value, or choose **Copy Build Info** to copy all build metadata. Missing or invalid timestamp and commit values appear as unavailable. Re-run the packager after code changes to refresh these values. App update controls live under **Dashboard → Settings → Updates → This Mac**.
 
 ## Related
 

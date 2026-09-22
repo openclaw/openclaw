@@ -3,15 +3,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerLiveTrajectoryTarget } from "./live-event-projection.js";
 import { resolveWorkerSessionTarget } from "./session-target.js";
 
-export type LiveEventTarget = WorkerLiveTrajectoryTarget;
-
 export type WorkerLiveSessionBinding = Readonly<{
   environmentId: string;
   runEpoch: number;
   sessionId: string;
 }>;
 
-export type BoundLiveSession = WorkerLiveSessionBinding & { target: LiveEventTarget };
+export type BoundLiveSession = WorkerLiveSessionBinding & { target: WorkerLiveTrajectoryTarget };
 
 export function isValidLiveSessionBinding(binding: WorkerLiveSessionBinding): boolean {
   return (
@@ -22,39 +20,26 @@ export function isValidLiveSessionBinding(binding: WorkerLiveSessionBinding): bo
   );
 }
 
-function resolveLiveEventTarget(
-  config: OpenClawConfig,
-  sessionId: string,
-): LiveEventTarget | undefined {
-  const target = resolveWorkerSessionTarget(config, sessionId);
-  if (!target) {
-    return undefined;
-  }
-  return {
-    ...(target.agentId ? { agentId: target.agentId } : {}),
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-  };
-}
-
-function prepareBoundLiveSession(
-  config: OpenClawConfig,
-  binding: WorkerLiveSessionBinding,
-): BoundLiveSession | undefined {
-  if (!isValidLiveSessionBinding(binding)) {
-    return undefined;
-  }
-  const target = resolveLiveEventTarget(config, binding.sessionId);
-  return target ? { ...binding, target } : undefined;
-}
-
 export function prepareBoundLiveSessionSafely(
   config: OpenClawConfig,
   binding: WorkerLiveSessionBinding,
 ): BoundLiveSession | undefined {
   try {
-    return prepareBoundLiveSession(config, binding);
+    if (!isValidLiveSessionBinding(binding)) {
+      return undefined;
+    }
+    const target = resolveWorkerSessionTarget(config, binding.sessionId);
+    return target
+      ? {
+          ...binding,
+          target: {
+            ...(target.agentId ? { agentId: target.agentId } : {}),
+            sessionId: target.sessionId,
+            sessionKey: target.sessionKey,
+            storePath: target.storePath,
+          },
+        }
+      : undefined;
   } catch {
     return undefined;
   }

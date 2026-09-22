@@ -7,7 +7,6 @@ import {
   createBackgroundTasksProps,
   refreshBackgroundTasks,
 } from "./components/chat-background-tasks.ts";
-import { openTaskDetailId } from "./components/chat-detail-slot.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import {
@@ -98,10 +97,32 @@ export function createChatPaneRails(params: {
       ? () => togglePanelSlot("desktop")
       : undefined,
   };
+  // The persisted Tasks panel owns selection. List/detail navigation changes
+  // only that identity while keeping the visible panel's geometry and focus.
+  const showTasks = (taskId?: string) => {
+    const current = state.sidebarLayout;
+    const next = isSidebarSlotVisible(current, "tasks")
+      ? structuredClone(current)
+      : openSlot(current, "tasks");
+    const panel = next.columns
+      .flatMap((column) => column.panels)
+      .find((entry) => entry.slot === "tasks");
+    if (panel) {
+      if (taskId) {
+        panel.taskId = taskId;
+      } else {
+        delete panel.taskId;
+      }
+    }
+    params.updateSidebarLayout(next);
+  };
   const backgroundTasksBase = createBackgroundTasksProps(state, {
     narrowLayout: false,
-    openTaskId: openTaskDetailId(state.sidebarContent, sidebarLayout),
-    onOpenTaskDetail: (task) => state.handleOpenSidebar({ kind: "task", taskId: task.id }),
+    selectedTaskId: sidebarLayout.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.slot === "tasks")?.taskId,
+    onOpenTaskDetail: (task) => showTasks(task.id),
+    onOpenTaskList: () => showTasks(),
     presented: params.presented,
   });
   const backgroundTasks = {

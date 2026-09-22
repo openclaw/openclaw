@@ -3,7 +3,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
   claimAgentRunContext,
@@ -74,6 +77,25 @@ it.each(["running", "queued", "capacity-wait"] as const)(
           subagentRuns.commitOwnership(entry);
         }
       }
+      const retainedRunIds: string[] = [];
+      if (state === "running") {
+        for (let index = 0; index < 2_048; index++) {
+          const entry = createSubagentRunRecord({
+            runId: `retained-history-${index}`,
+            childSessionKey: `agent:main:subagent:retained-${index}`,
+            requesterSessionKey: "agent:main:unrelated-parent",
+            createdAt: endedAt - 1_000,
+            startedAt: endedAt - 1_000,
+            endedAt,
+            outcome: { status: "ok" },
+            completion: { required: false },
+            delivery: { status: "not_required" },
+          });
+          subagentRuns.set(entry.runId, entry);
+          subagentRuns.commitOwnership(entry);
+          retainedRunIds.push(entry.runId);
+        }
+      }
       const projection = await createSessionRowProjection({ cfg });
       const connection = createGatewayConnectionState({ bootId: "follow-up", cfg });
       const runId = "follow-up";
@@ -104,6 +126,27 @@ it.each(["running", "queued", "capacity-wait"] as const)(
           hasActiveSubagentRun: true,
           childSessions: [child],
         });
+        if (retainedRunIds.length) {
+          const history = projection.state.rowContext.subagentRuns.latestRunsByChildSessionKey;
+          const iterate = history[Symbol.iterator].bind(history);
+          let visited = 0;
+          const historyIterator = vi
+            .spyOn(history, Symbol.iterator)
+            .mockImplementation(function* () {
+              for (const entry of iterate()) {
+                visited++;
+                yield entry;
+              }
+              return undefined;
+            });
+          replaceSessionEntrySync(
+            { agentId: "main", sessionKey: movedParent },
+            { sessionId: movedParent, updatedAt: endedAt + 1, label: "Unrelated update" },
+          );
+          expect((await list()).sessions[0]?.hasActiveSubagentRun).toBe(true);
+          expect(visited).toBeLessThan(16);
+          historyIterator.mockRestore();
+        }
         const presentation = prepareProjectedSessionPresentation(
           projection,
           undefined,
@@ -154,6 +197,9 @@ it.each(["running", "queued", "capacity-wait"] as const)(
         connection.mentionInbox.dispose();
         for (const key of [child, grandchild]) {
           subagentRuns.delete(`original:${key}`);
+        }
+        for (const retainedRunId of retainedRunIds) {
+          subagentRuns.delete(retainedRunId);
         }
       }
     });
@@ -360,7 +406,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
   });
 });
 
-it("checks selected profile identity from current resident facts without following the requested ID through a merge", async () => {
+it("preserves selected account across role changes but rejects a changed merge identity without SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const source = ensureProfileForEmail("source@expected-profile.test");
     const target = ensureProfileForEmail("target@expected-profile.test");
@@ -368,7 +414,15 @@ it("checks selected profile identity from current resident facts without followi
     prepareGatewayRecipientProfile(client);
     const release = retainUserProfileCatalog();
     try {
-      const binding = createExpectedProfileBinding(source.id, client)!;
+      const binding = (await createExpectedProfileBinding(source.id, client))!;
+      const targetBinding = (await createExpectedProfileBinding(
+        target.id,
+        sharingPolicyClient({ user: target.id }),
+      ))!;
+      binding.markInvoked();
+      setUserProfileRole(source.id, "admin");
+      setUserProfileRole(source.id, "member");
+      linkEmail("extra@expected-profile.test", source.id);
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
       binding.assertCurrent();
       const response = vi.fn();
@@ -376,10 +430,13 @@ it("checks selected profile identity from current resident facts without followi
       expect(response).toHaveBeenCalledWith(true, { session: null });
       expect(prepares).not.toHaveBeenCalled();
       prepares.mockRestore();
+      // Moving the last alias triggers the source profile's canonical merge.
+      linkEmail("extra@expected-profile.test", target.id);
       linkEmail("source@expected-profile.test", target.id);
       prepareGatewayRecipientProfile(client);
       const afterMerge = vi.spyOn(DatabaseSync.prototype, "prepare");
       expect(() => binding.assertCurrent()).toThrow(ExpectedProfileMismatchError);
+      expect(() => targetBinding.assertCurrent()).not.toThrow();
       expect(readUserProfileIdentity(source.id)?.profileId).toBe(target.id);
       expect(afterMerge).not.toHaveBeenCalled();
     } finally {

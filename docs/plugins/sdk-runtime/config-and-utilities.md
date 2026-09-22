@@ -26,6 +26,12 @@ Persist changes with `api.runtime.config.mutateConfigFile(...)` or `api.runtime.
 
 The mutation helpers return `afterWrite` plus a typed `followUp` summary so callers can log or test whether they requested a restart. The gateway still owns when that restart actually happens.
 
+Owner-authorized commands pass their captured `ctx.assertOwnerCurrent` as
+`writeOptions.assertCurrent`. The config writer rechecks it after asynchronous
+preparation and before publication, then completes settlement of an accepted
+write. Do not replace it with an earlier `senderIsOwner` boolean or check it only
+after the mutation returns.
+
 Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
 `replaceConfigFile(...)` for runtime config access and writes.
 
@@ -89,6 +95,11 @@ session reservation or temporary output, await `withCommandProcessScope` from th
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
 
+For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
+the same subpath. It reuses the current Node executable and resolves a real Node
+binary when the host runs under Bun, skipping Bun's `node` shim. An unavailable
+Node runtime returns `undefined`; the caller reports the missing requirement.
+
 Interactive process adapters can use `spawnTerminalPty` from the same subpath.
 It owns platform-specific terminal creation, including the Node helper on Bun.
 Pass the caller's construction signal and current-authority check through its
@@ -105,6 +116,35 @@ dispose dependent files only after closure is acknowledged. The optional
 It may return `void` or `Promise<void>`; observer throws and rejections do not
 replace the termination error or release custody, and closure does not wait for
 the observer.
+
+`prepareWorker()` can return `temporaryDirectory` for disposable scratch files
+and an optional asynchronous `releaseResources()` callback for producer-owned
+resources. Both remain retained until Worker exit is confirmed; cleanup also
+runs if construction fails before a Worker exists. When both are supplied,
+the pool attempts temporary-directory removal first, then calls
+`releaseResources()` even if that removal fails. Cleanup failures become warnings.
+Resource cleanup itself does not hold execution capacity after Worker exit;
+pending input preparation can still retain it as described below. `close()`
+joins the cleanup callback before it completes. A failed termination runs neither
+cleanup step; retry `close()` on the same pool to confirm exit and release them.
+
+Cancellation can reject `run()` before an asynchronous input factory settles.
+The pool retains its inputs and capacity until preparation and required worker
+retirement both finish, then invokes `onInputConsumed`. When cancellation's initial
+retirement succeeds, the native execution receipt precedes result rejection. A
+failed stop can reject earlier while retaining native custody and the pending
+receipt for retry.
+
+Input factories must settle independently of the same pool’s `close()`: awaiting
+closure inside a pending factory creates a cycle because closure joins that
+factory. Cancel any awaited work owned by the factory before awaiting `close()`,
+then await closure before disposing resources the factory still captures. The
+`run()` signal cancels the task; it does not interrupt arbitrary work awaited by
+the factory.
+
+Handle errors from `close()` even when `run()` already rejected. For canceled
+pending preparation, input and execution-receipt callback failures are reported
+by `close()`; admission remains held until closure observes the cleanup failure.
 
 When launching an isolated Gateway child that your plugin owns, remove
 `SUPERVISOR_HINT_ENV_VARS` from its environment after applying caller overrides.
@@ -256,3 +296,12 @@ function diagnosticsEnabled() {
 Recheck the gates when emitting a delayed summary. Keep fields bounded and
 content-free, and preserve the operation's result if the diagnostic sink fails.
 This predicate does not enable or authorize [audit identity collection](/gateway/audit).
+
+`onInternalDiagnosticEvent(listener, interest?)` filters events before copying
+their payload for the listener. `include` and `exclude` apply to every event;
+the optional `includeTrusted` list further restricts only events marked trusted
+by the dispatcher. Omitting it preserves existing behavior, and an empty list
+accepts only untrusted events that pass `include`/`exclude`. Event payload fields
+cannot override the dispatcher's trust metadata. Accepted events retain their
+individual frozen copies; this filter does not change diagnostic collection or
+queue behavior.

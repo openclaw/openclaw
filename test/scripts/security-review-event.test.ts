@@ -37,13 +37,13 @@ function recordedPullRequest(number: number) {
   };
 }
 
-type Reply = { body: unknown; status?: number };
+type Reply = { body: unknown; status?: number; headers?: Record<string, string> };
 type Options = {
   eventName?: string;
   event?: Record<string, unknown>;
   run?: Record<string, unknown>;
   pullRequest?: Record<string, unknown>;
-  responses?: Record<string, Reply>;
+  responses?: Record<string, Reply | Reply[]>;
 };
 
 function evaluate(options: Options = {}) {
@@ -72,6 +72,8 @@ function evaluate(options: Options = {}) {
   writeFileSync(
     preload,
     `import { appendFileSync, existsSync } from "node:fs";
+import { installGuardClock } from ${JSON.stringify(resolve("test/fixtures/github-guard-clock.mjs"))};
+installGuardClock(${JSON.stringify(traceFile)});
 const responses = ${JSON.stringify(responses)};
 globalThis.fetch = async (url, options = {}) => {
   const parsed = new URL(url);
@@ -81,13 +83,14 @@ globalThis.fetch = async (url, options = {}) => {
     hadOutput: existsSync(${JSON.stringify(outputFile)}),
   }) + "\\n");
   if (parsed.origin !== "https://api.github.com") throw new Error("Unexpected API origin");
-  const reply = responses[path] ?? (
+  const route = responses[path] ?? (
     options.method === "POST" && path.startsWith(${JSON.stringify(`${prefix}/statuses/`)})
       ? { body: {} }
       : undefined
   );
+  const reply = Array.isArray(route) ? (route.length > 1 ? route.shift() : route[0]) : route;
   if (!reply) throw new Error("Unexpected API request: " + path);
-  return new Response(JSON.stringify(reply.body), {status: reply.status ?? 200});
+  return new Response(JSON.stringify(reply.body), {status: reply.status ?? 200, headers: reply.headers});
 };
 `,
   );
@@ -115,6 +118,7 @@ globalThis.fetch = async (url, options = {}) => {
           (line) =>
             JSON.parse(line) as {
               path: string;
+              delay?: number;
               method: string;
               body?: { context: string; state: string; description: string; target_url: string };
               hadOutput: boolean;
@@ -129,12 +133,63 @@ globalThis.fetch = async (url, options = {}) => {
         ? (JSON.parse(result.stdout) as { include: { pr: number; head: string }[] })
         : undefined,
     output: existsSync(outputFile) ? readFileSync(outputFile, "utf8") : "",
+    waits: trace.filter(({ method }) => method === "WAIT").map(({ delay }) => delay!),
     requests: trace.map(({ path, method }) => ({ path, method })),
     published: trace.filter(({ method }) => method === "POST"),
   };
 }
 
 describe("automatic security review event resolution", () => {
+  it("automatically resolves the current PR after a rate-limited lookup", () => {
+    const result = evaluate({
+      eventName: "pull_request_target",
+      event: { action: "opened", pull_request: { number: 42 } },
+      responses: {
+        [`${prefix}/pulls/42`]: [
+          {
+            body: { message: "API rate limit exceeded for installation" },
+            status: 403,
+            headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1767315600" },
+          },
+          { body: pullRequest },
+        ],
+      },
+    });
+    expect(result.status, result.error).toBe(0);
+    expect(result.waits).toHaveLength(1);
+    expect(result.waits[0]).toBeGreaterThanOrEqual(3_600_000);
+    expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
+    expect(result.published).toHaveLength(1);
+    expect(result.requests.map(({ method }) => method)).toEqual(["GET", "WAIT", "GET", "POST"]);
+  });
+
+  it("resolves the fresh head after a failed pending status before scheduling review", () => {
+    const nextHead = "b".repeat(40);
+    const result = evaluate({
+      eventName: "pull_request_target",
+      event: { action: "opened", pull_request: { number: 42 } },
+      responses: {
+        [`${prefix}/pulls/42`]: [
+          { body: pullRequest },
+          { body: { ...pullRequest, head: { ...pullRequest.head, sha: nextHead } } },
+        ],
+        [`${prefix}/statuses/${head}`]: { status: 500, body: { message: "Server error" } },
+      },
+    });
+    expect(result.status, result.error).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    expect(result.matrix).toEqual({ include: [{ pr: 42, head: nextHead }] });
+    expect(result.published.map(({ path }) => path)).toEqual([
+      `${prefix}/statuses/${head}`,
+      `${prefix}/statuses/${nextHead}`,
+    ]);
+    expect(result.published.every(({ hadOutput }) => !hadOutput)).toBe(true);
+    expect(result.published.at(-1)?.body?.state).toBe("pending");
+    expect(result.output).toBe(
+      `matrix={"include":[{"pr":42,"head":"${nextHead}"}]}\nhas-prs=true\n`,
+    );
+  });
+
   it.each(["pull_request_target", "issue_comment"])(
     "resolves %s through current PR metadata",
     (eventName) => {
@@ -181,6 +236,7 @@ describe("automatic security review event resolution", () => {
       },
     });
     expect(result).toMatchObject({ status: 1, output: "" });
+    expect(result.waits).toEqual([]);
     expect(result.published).toHaveLength(1);
     expect(result.published[0]?.hadOutput).toBe(false);
   });

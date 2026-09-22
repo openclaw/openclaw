@@ -182,11 +182,10 @@ enum ChatThinkingSliderPresentation {
         effectiveLevelID: String,
         options: [OpenClawChatThinkingLevelOption]) -> String
     {
-        if selectionID == OpenClawChatViewModel.inheritedThinkingSelectionID {
-            let label = options.first { $0.id == effectiveLevelID }?.label ?? effectiveLevelID
-            return "Default (\(label.capitalized))"
-        }
-        return (options.first { $0.id == selectionID }?.label ?? selectionID).capitalized
+        let resolvedID = selectionID == OpenClawChatViewModel.inheritedThinkingSelectionID
+            ? effectiveLevelID
+            : selectionID
+        return (options.first { $0.id == resolvedID }?.label ?? resolvedID).capitalized
     }
 }
 

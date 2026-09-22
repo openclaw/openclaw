@@ -9,9 +9,10 @@ import {
 } from "./openclaw-state-db.js";
 import {
   listUserProfilesSync,
-  readUserProfileIdentity,
-  retainUserProfileCatalog,
-} from "./user-profile-list.js";
+  readUserProfileEmailBindings,
+} from "./user-profile-identity.read.js";
+import { readUserProfileIdentity, retainUserProfileCatalog } from "./user-profile-list.js";
+import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
@@ -49,6 +50,100 @@ function createLegacyProfileDatabase(options: ReturnType<typeof stateOptions>) {
   `);
   return database;
 }
+
+function createLegacyEmailDatabase(options: ReturnType<typeof stateOptions>) {
+  const database = createLegacyProfileDatabase(options);
+  database.exec(`
+    CREATE TABLE user_profile_emails (
+      email TEXT NOT NULL PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    ) STRICT;
+    INSERT INTO user_profiles (id, created_at, updated_at)
+      VALUES ('legacy-one', 1, 2), ('legacy-two', 3, 4);
+    INSERT INTO user_profile_emails (email, profile_id, created_at)
+      VALUES ('one@example.test', 'legacy-one', 5), ('two@example.test', 'legacy-two', 6);
+  `);
+  return database;
+}
+
+function readUserProfileEmailBindingIds(
+  profileId: string,
+  options: ReturnType<typeof stateOptions>,
+): string[] {
+  ensureUserProfilesSchema(options);
+  return readUserProfileEmailBindings(openOpenClawStateDatabase(options).db, profileId)
+    .map(({ bindingId }) => {
+      if (bindingId === null) {
+        throw new Error("Test alias binding was not initialized");
+      }
+      return bindingId;
+    })
+    .toSorted();
+}
+
+describe("user profile email binding schema", () => {
+  it("initializes legacy aliases once without changing their ownership, timestamps, or version", () => {
+    const options = stateOptions();
+    const database = createLegacyEmailDatabase(options);
+    const before = database
+      .prepare("SELECT email, profile_id, created_at FROM user_profile_emails ORDER BY email")
+      .all();
+    const versionBefore = database.prepare("PRAGMA user_version").get()?.user_version;
+    const first = readUserProfileEmailBindingIds("legacy-one", options);
+    const second = readUserProfileEmailBindingIds("legacy-two", options);
+    expect(first).toEqual([expect.any(String)]);
+    expect(second).toEqual([expect.any(String)]);
+    expect(new Set([...first, ...second]).size).toBe(2);
+    expect(
+      database
+        .prepare("SELECT email, profile_id, created_at FROM user_profile_emails ORDER BY email")
+        .all(),
+    ).toEqual(before);
+    expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(versionBefore);
+    expect(database.prepare("PRAGMA table_info(user_profile_emails)").all()).toContainEqual(
+      expect.objectContaining({
+        name: "binding_id",
+        type: "TEXT",
+        notnull: 0,
+        dflt_value: null,
+        pk: 0,
+      }),
+    );
+    closeOpenClawStateDatabaseForTest();
+    expect(readUserProfileEmailBindingIds("legacy-one", options)).toEqual(first);
+    expect(readUserProfileEmailBindingIds("legacy-two", options)).toEqual(second);
+  });
+
+  it.each(["outer", "savepoint"] as const)(
+    "retries alias initialization after a %s migration rollback",
+    (scope) => {
+      const options = stateOptions();
+      const database = createLegacyEmailDatabase(options);
+      let rolledBackBindings: string[] | undefined;
+      const rollBackBindings = () =>
+        runOpenClawStateWriteTransaction(() => {
+          rolledBackBindings = readUserProfileEmailBindingIds("legacy-one", options);
+          expect(rolledBackBindings).toEqual([expect.any(String)]);
+          throw new Error("roll back alias bindings");
+        }, options);
+      if (scope === "outer") {
+        expect(rollBackBindings).toThrow("roll back alias bindings");
+      } else {
+        runOpenClawStateWriteTransaction(() => {
+          expect(rollBackBindings).toThrow("roll back alias bindings");
+          expect(tableHasColumn(database, "user_profile_emails", "binding_id")).toBe(false);
+        }, options);
+      }
+      expect(tableHasColumn(database, "user_profile_emails", "binding_id")).toBe(false);
+      const bindings = readUserProfileEmailBindingIds("legacy-one", options);
+      expect(bindings).toEqual([expect.any(String)]);
+      expect(bindings).not.toEqual(rolledBackBindings);
+      closeOpenClawStateDatabaseForTest();
+      expect(readUserProfileEmailBindingIds("legacy-one", options)).toEqual(bindings);
+    },
+  );
+});
 
 describe("user profile role schema", () => {
   it("lazily adds a downgrade-safe nullable role without changing the schema version", () => {

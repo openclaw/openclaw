@@ -58,16 +58,66 @@ callback preserves existing behavior. Set `allowProfileFallback: false` when
 the selected profile represents an account boundary that must not rotate to a
 different configured profile.
 
+## Session transcript hydration
+
+Use `await SessionManager.openAsync(target, cwd?, contextLimits?, signal?)` from
+`openclaw/plugin-sdk/agent-sessions` to load an existing SQLite transcript.
+`openBoundedAsync(target, { maxBytes, maxEvents, cwd?, onTruncated?, signal? })`
+loads the selected active branch, and `openDetachedBoundedAsync` returns the same
+selection without persistence. File-backed SQLite reads run on the history worker.
+The synchronous getters consume the prepared view without reading storage.
+
+Full reads transfer bounded chunks from one committed SQLite snapshot without
+truncating the transcript to fit the worker. The caller still holds the complete
+result in memory; use the bounded methods when the complete history is unnecessary.
+Cancellation and failed transfers leave the current view intact and join worker cleanup.
+
+`await manager.setSessionTargetAsync(target, signal?)` replaces a prepared view.
+It rejects if the manager changes while reading and leaves the current view intact
+when preparation fails. `reloadPersistedTranscriptAsync(signal?)` retains the
+manager's runtime working directory. Targets are captured before waiting, including
+relative store paths; a truncation callback cannot redirect later persistence.
+The binding also retains the resolved state directory and supervisor mode. Later
+environment changes do not redirect reloads or writes. `getSessionTarget()` returns
+a defensive copy with these storage facts, without unrelated environment values.
+
+These readers do not create a missing database or repair its schema. The session
+creation owner must prepare storage first. An existing database with an empty
+transcript retains lazy header initialization until its first append. Incognito
+SQLite remains with its process-local owner. `SessionManager.inMemory()` stays
+synchronous and does not access SQLite.
+
+The synchronous `open`, `openBounded`, `openDetachedBounded`, `setSessionTarget`,
+and `reloadPersistedTranscript` methods are deprecated plugin compatibility
+variants. Runtime code should await their asynchronous counterparts. Metadata
+appends and transcript mutations retain their own write-admission contracts.
+
 ## Bounded model context
 
 `SessionManager.openModelContext` and `openModelContextAsync` from
 `openclaw/plugin-sdk/agent-sessions` accept optional `limits: { maxBytes, maxEvents }`.
-The reader measures projected payload bytes in SQLite before loading them and
-selects a recent context with its latest compaction or reset boundary. It preserves
+Bounded reads are strict by default. The reader measures projected payload bytes
+in SQLite before loading them and selects a recent context with its latest
+compaction or reset boundary. It preserves
 tool-result ownership and rejects a limit that cannot retain the newest complete
 frame or required boundary. Stored transcripts stay unchanged. Omitting `limits`
 keeps the full selected context. Async reads retain admission, anchor, and
 cancellation checks.
+
+For a temporary model-only view, callers may explicitly add
+`toolResultOverflow: "omit"` to `limits`. If the newest atomic tool frame would
+otherwise leave no fitting context, recovery replaces only the tool-result bodies
+needed to fit with omission notices, before loading those bodies from SQLite.
+Each notice identifies the tool, call, and original projected event size. Recovery
+retains the latest historical user request and complete owned call/result frames.
+Unselected result bodies and tool-call arguments remain intact.
+
+This is a lossy model view, not a full-fidelity history API. It does not rewrite
+canonical transcripts or change evidence and fork readers. The same byte/event
+limits, required boundaries, and tool-result ownership checks still apply. Reads
+still fail if required user messages, call arguments, summaries, or event counts
+cannot fit, or result ownership is ambiguous. Omitting `toolResultOverflow`
+preserves strict bounded-read behavior.
 
 ## Scoped session visibility
 
@@ -253,6 +303,8 @@ the provider's own awaited work.
 
     For the identity-based operations listed above, an omitted `storePath` selects `session.store` from the supplied `config` when the operation accepts one, otherwise from the current runtime config snapshot. An explicit concrete `storePath` takes precedence; incognito session keys always select isolated in-memory storage. The write lock pins its selected store for callback reads, appends, and queued publication, even if runtime config changes while the callback awaits. Public identities and targets remain pathless. `readLatestAssistantTextByIdentity(...)` and `appendAssistantMirrorMessageByIdentity(...)` use the same store-selection rules.
 
+    `readLatestAssistantTextByIdentity(...)` preserves the selected assistant text's whitespace and includes optional validated `openclawDelivery` facts from that same persisted message. Recovery consumers can retain reply, voice, media, and TTS intent without reparsing removed directives. These facts do not grant delivery authority; callers still apply their current-turn and reply-policy checks.
+
     `appendSessionTranscriptMessageByIdentity(...)` is a low-level append of an already canonical message. Plugins must not synthesize media-bearing user rows with top-level `MediaPath`, `MediaPaths`, `MediaUrl`, `MediaUrls`, `MediaType`, or `MediaTypes`. Channel ingress should pass ordered facts through `MsgContext.media` and let the host own user-turn persistence. A host-prepared persisted user message carries canonical ordered facts under `message.__openclaw.media`; the generic append API does not infer or repair legacy parallel arrays.
 
     A harness that supports `sessions_yield` uses `appendSessionYieldContext(...)` after successful yield settlement to retain private resume context in the canonical session transcript. Pass the session target, `message`, and an `assertCurrent` callback that checks the current run and settlement authority. The writer checks that callback again before appending the hidden context entry. Failed or revoked settlement must not append context; public tool results and display projections must omit the private message.
@@ -266,6 +318,8 @@ Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId
     For an exact existing session, use `appendSessionTranscriptMessageByIdentityStrict(...)` for one message or `appendSessionTranscriptMessagesByIdentity(...)` for an atomic ordered batch. Both accept optional `storePath`: when omitted, the shared turn owner resolves it from the supplied `config` (or current runtime snapshot), session agent, and `env`; an explicit concrete path overrides `session.store`, while incognito keys retain their in-memory routing. Strict single append returns `kind: "result"`, `kind: "suppressed"` when message preparation declines the append, or `{ kind: "rejected", reason: "session-rebound" }` when the expected session no longer matches. A batch rejects if its session changed and inserts or idempotently replays the whole group, never a partial group.
 
     A harness host may provide `hostCapabilities.annotateCurrentUserTurn(...)` for its already-admitted current prompt. The operation accepts only `mirrorIdentity`, `upstreamUserText`, `mirrorOrigin`, and `mirrorSourceFingerprint`; the host fixes diagnostic run correlation. Call it only after native prompt acceptance and outside transcript write locks. It cannot select an anchor, replace content, or annotate history. It revalidates the live host, exact recorder, active admission, session/writer ownership, unchanged message and source fingerprint at commit, then refreshes the recorder's generation and publishes the same event ID. Identical provenance does not rewrite or publish again. Missing capability, conflicts and stale owners must remain refusals; do not substitute a generic append or infer provenance. This optional capability adds no required host-version field and does not change transcript cursor invalidation.
+
+    The host owns annotation eligibility. Hidden prompts that participate in model context can receive this capability; context-excluded prompts cannot. A harness reuses an admitted prompt's persisted message and receipt instead of appending its own copy, both at native turn start and settlement. If annotation is unavailable, leave the host row unchanged; if it disappears, do not recreate it from the native transcript.
 
     `readSessionTranscriptRawDelta(...)` returns a bounded `page`, `reset`, or `missing` result. Pass the opaque `page.cursor` into the next call. Pure appends preserve the cursor, while transcript replacement returns `reset` with a new bootstrap cursor. Pages default to 1,000 events and 1,000,000 serialized bytes; callers may request up to 10,000 events and 64 MiB. When the next event alone exceeds `maxBytes`, the page is empty and reports `requiredBytes`; retry with at least that byte limit when it is no greater than 64 MiB. Larger individual events require the complete-read API. A cursor identifies position only and never grants access to another session.
 

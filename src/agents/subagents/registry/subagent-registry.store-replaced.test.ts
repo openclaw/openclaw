@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { createGatewayRequestContext } from "../../../gateway/server-request-context.js";
 import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
 import { resetHeartbeatEventsForTest } from "../../../infra/heartbeat-events.js";
@@ -31,16 +32,16 @@ import {
   initSubagentRegistry,
   leasePendingAgentSteeringItems,
   resetSubagentRegistryForTests,
-  testing,
 } from "./subagent-registry.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+vi.mock("../../../config/config.js", { spy: true });
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-child-store-replaced-"));
   resetSubagentRegistryForTests({ persist: false });
-  testing.setDepsForTest({ getRuntimeConfig: () => ({}) });
+  vi.mocked(getRuntimeConfig).mockReturnValue({});
   publishSystemEventStoreResolver(() => "original-store");
 });
 
@@ -49,7 +50,7 @@ afterEach(() => {
   resetTaskRegistryForTests({ persist: false });
   publishSystemEventStoreResolver(undefined);
   resetHeartbeatEventsForTest();
-  testing.setDepsForTest();
+  vi.mocked(getRuntimeConfig).mockReset();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.useRealTimers();
@@ -175,12 +176,12 @@ it.each([false, true])(
   },
 );
 
-it.each(["same", "replaced", "restore", "failed", "delivered"] as const)(
+it.each(["same", "replaced", "restore", "unknown", "failed", "delivered"] as const)(
   "keeps automatic child notification disposition through store publication: %s",
   async (change) => {
     const input = change === "failed" ? failedRecords("failed", { status: "error" }) : records();
-    input.subagent.requesterStorePath = "original-store";
-    input.subagent.controllerStorePath = "original-store";
+    input.subagent.requesterStorePath = change === "unknown" ? undefined : "original-store";
+    input.subagent.controllerStorePath = change === "unknown" ? undefined : "original-store";
     input.subagent.cleanupCompletedAt = undefined;
     input.subagent.delivery = {
       status: change === "delivered" ? "delivered" : "pending",
@@ -211,11 +212,15 @@ it.each(["same", "replaced", "restore", "failed", "delivered"] as const)(
       activateSubagentRegistry(() => context);
     } else {
       publishSystemEventStoreResolver(() =>
-        change === "same" ? "original-store" : "replacement-store",
+        change === "same" || change === "unknown" ? "original-store" : "replacement-store",
       );
     }
     publishSystemEventStoreResolver(() => "original-store");
     const persisted = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
+    if (change === "unknown") {
+      expect(persisted?.requesterStorePath).toBeUndefined();
+      expect(persisted?.controllerStorePath).toBeUndefined();
+    }
     expect(persisted?.completion?.resultText).toBe("canonical result");
     const task = getTaskById(input.task.taskId);
     expect({

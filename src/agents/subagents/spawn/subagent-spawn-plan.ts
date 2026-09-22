@@ -18,8 +18,8 @@ import {
 } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
+import { prepareModelChoice } from "./subagent-spawn.runtime.js";
 
 /** Splits a provider/model ref while preserving model-only refs. */
 export function splitModelRef(ref?: string) {
@@ -99,7 +99,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   const modelOverrideSource = params.modelOverride?.trim() ? "user" : "auto";
   let choice;
   try {
-    choice = await getSubagentSpawnDeps().prepareModelChoice({
+    choice = await prepareModelChoice({
       cfg: params.cfg,
       agentId: params.targetAgentId,
       workspaceDir: params.workspaceDir,

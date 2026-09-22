@@ -8,7 +8,7 @@ export {
 
 export type OwnedNativeHookRelayParams = Parameters<typeof registerOwnedNativeHookRelay>[0];
 
-/** Bundled owners join publication and cleanup while preserving optional direct-child retention. */
+/** Bundled owners retain child policy and record execution custody after host admission. */
 export function registerNativeHookRelayForBundledRuntime(params: OwnedNativeHookRelayParams) {
   return registerOwnedNativeHookRelay(params);
 }

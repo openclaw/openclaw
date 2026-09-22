@@ -4,6 +4,7 @@ import type { AgentIdentityResult } from "../api/types.ts";
 import type { NavigationRouteId, SidebarZoneEntry } from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import type { GatewayStatus } from "../lib/gateway-status.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
@@ -32,7 +33,7 @@ export interface SidebarMenusControllerHost
   readonly basePath: string;
   readonly canPairDevice: boolean;
   readonly connected: boolean;
-  readonly offline: boolean;
+  readonly connectionStatus: GatewayStatus | null;
   readonly enabledRouteIds?: readonly NavigationRouteId[];
   readonly gatewayVersion: string | null;
   readonly onNavigate?: (
@@ -50,7 +51,6 @@ export interface SidebarMenusControllerHost
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
       SessionDataController,
-      | "approvalBadgeSnapshot"
       | "presenceInstanceId"
       | "presencePayload"
       | "sessionResultsByAgent"

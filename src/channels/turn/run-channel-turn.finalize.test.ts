@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
-  configureChannelAdmissionEvidenceCollection,
+  createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
 } from "../message-access/admission-evidence.js";
@@ -911,10 +911,11 @@ describe("channel turn finalize", () => {
   });
 
   it("degrades private channel admission evidence when routing changes the DM scope", async () => {
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({ enabled: true });
     try {
       const ctx = createCtx();
       bindTestChannelParticipantAdmissionEvidence({
+        audit,
         context: ctx,
         channelId: "test",
         participantId: "person-1",
@@ -947,7 +948,7 @@ describe("channel turn finalize", () => {
         consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(dispatched?.ctx ?? {})),
       ).toMatchObject({ ingressState: "unknown", invoker: { state: "unknown" } });
     } finally {
-      clearCollection();
+      audit.close();
     }
   });
 

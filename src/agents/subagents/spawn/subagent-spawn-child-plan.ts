@@ -154,14 +154,6 @@ export async function resolveSubagentChildPlan(params: {
       requesterInternalKey: params.requesterInternalKey,
       requesterAgentId: params.requesterAgentId,
     });
-  const inheritedFastMode =
-    params.swarmEnabled && params.request.fastMode === undefined
-      ? readRequesterFastMode({
-          cfg: params.cfg,
-          requesterInternalKey: params.requesterInternalKey,
-          requesterAgentId: params.requesterAgentId,
-        })
-      : params.request.fastMode;
   const modelPlan = await resolveSubagentModelAndThinkingPlan({
     cfg: params.cfg,
     targetAgentId: params.targetAgentId,
@@ -179,7 +171,7 @@ export async function resolveSubagentChildPlan(params: {
             requesterAgentId: params.requesterAgentId,
           }))
         : undefined,
-    fastMode: inheritedFastMode,
+    fastMode: params.request.fastMode,
     workspaceDir: spawnedWorkspaceDir,
     requiresTools: params.request.outputSchema !== undefined,
   });
@@ -194,6 +186,15 @@ export async function resolveSubagentChildPlan(params: {
     };
   }
   const { resolvedModel } = modelPlan;
+  if (params.swarmEnabled && params.request.fastMode === undefined) {
+    modelPlan.initialSessionPatch.fastMode = readRequesterFastMode({
+      cfg: params.cfg,
+      requesterInternalKey: params.requesterInternalKey,
+      requesterAgentId: params.requesterAgentId,
+      requesterModel: params.ctx.requesterModel,
+      childModel: resolvedModel,
+    });
+  }
   const resolvedLaunchModel = splitModelRef(resolvedModel);
   const launchAuthorization: SubagentLaunchAuthorization | undefined =
     params.request.model?.trim() && resolvedLaunchModel.model

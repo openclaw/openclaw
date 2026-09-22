@@ -9,7 +9,6 @@ import type {
   GatewaySessionRow,
   SessionRunStatus,
   FastMode,
-  SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
@@ -86,16 +85,10 @@ export type SessionsProps = TranscriptSearchProps & {
   selectedKeys: Set<string>;
   sessionMenu: { key: string } | null;
   expandedSessionKey: string | null;
-  checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
-  checkpointLoadingKey: string | null;
-  checkpointBusyKey: string | null;
-  checkpointErrorByKey: Record<string, string>;
   patchWriteDisabledReason?: string;
   patchAdminDisabledReason?: string;
   groupWriteDisabledReason?: string;
   deleteArchivedDisabledReason?: string;
-  checkpointBranchDisabledReason?: string;
-  checkpointRestoreDisabledReason?: string;
   deleteSelectedDisabledReason?: string;
   onFiltersChange: (next: {
     activeMinutes: string;
@@ -142,8 +135,6 @@ export type SessionsProps = TranscriptSearchProps & {
     trigger: HTMLElement | null,
   ) => void;
   onToggleDetails: (sessionKey: string) => void;
-  onBranchFromCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
-  onRestoreCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
 };
 
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
@@ -385,42 +376,6 @@ function hasActiveFilters(props: SessionsProps): boolean {
   );
 }
 
-const CHECKPOINT_REASON_LABELS = {
-  manual: "sessionsView.manual",
-  "auto-threshold": "sessionsView.autoThreshold",
-  "overflow-retry": "sessionsView.overflowRetry",
-  "timeout-retry": "sessionsView.timeoutRetry",
-} as const satisfies Record<SessionCompactionCheckpoint["reason"], string>;
-
-function formatCheckpointReason(reason: SessionCompactionCheckpoint["reason"]): string {
-  const label = CHECKPOINT_REASON_LABELS[reason];
-  return label ? t(label) : reason;
-}
-
-function formatCheckpointCount(count: number): string {
-  return count === 1
-    ? t("sessionsView.checkpoint", { count: String(count) })
-    : t("sessionsView.checkpoints", { count: String(count) });
-}
-
-function formatCheckpointDelta(checkpoint: SessionCompactionCheckpoint): string {
-  if (
-    typeof checkpoint.tokensBefore === "number" &&
-    typeof checkpoint.tokensAfter === "number" &&
-    Number.isFinite(checkpoint.tokensBefore) &&
-    Number.isFinite(checkpoint.tokensAfter)
-  ) {
-    return t("sessionsView.tokenRange", {
-      before: checkpoint.tokensBefore.toLocaleString(),
-      after: checkpoint.tokensAfter.toLocaleString(),
-    });
-  }
-  if (typeof checkpoint.tokensBefore === "number" && Number.isFinite(checkpoint.tokensBefore)) {
-    return t("sessionsView.tokensBefore", { count: checkpoint.tokensBefore.toLocaleString() });
-  }
-  return t("sessionsView.tokenDeltaUnavailable");
-}
-
 function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   if (typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs) || runtimeMs < 0) {
     return null;
@@ -433,16 +388,7 @@ function renderSessionGoalStatus(goal: GatewaySessionRow["goal"]) {
   if (!goal) {
     return nothing;
   }
-  const kind =
-    goal.status === "active"
-      ? "accent"
-      : goal.status === "complete"
-        ? "ok"
-        : goal.status === "blocked" ||
-            goal.status === "budget_limited" ||
-            goal.status === "usage_limited"
-          ? "warn"
-          : "muted";
+  const kind = goal.status === "active" || goal.status === "complete" ? "ok" : "warn";
   const detail = formatGoalDetail(goal);
   // tabindex lets keyboard users trigger the tooltip; aria-label exposes the
   // full objective detail that sighted users only get on hover.
@@ -458,15 +404,13 @@ function renderSessionGoalStatus(goal: GatewaySessionRow["goal"]) {
 function sessionDetailItems(params: {
   row: GatewaySessionRow;
   updated: string;
-  checkpointCount: number;
 }): Array<{ label: string; value: string }> {
-  const { row, updated, checkpointCount } = params;
+  const { row, updated } = params;
   const details: Array<{ label: string; value: string }> = [
     { label: t("sessionsView.key"), value: row.key },
     { label: t("sessionsView.kind"), value: resolveSessionDisplayKind(row) },
     { label: t("sessionsView.updated"), value: updated },
     { label: t("sessionsView.tokens"), value: formatSessionTokens(row) },
-    { label: t("sessionsView.compaction"), value: formatCheckpointCount(checkpointCount) },
   ];
   const add = (label: string, value: string | null | undefined) => {
     const normalized = normalizeOptionalString(value);
@@ -1204,10 +1148,6 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
 
 function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
-  const latestCheckpoint = row.latestCompactionCheckpoint;
-  const checkpointCount = row.compactionCheckpointCount ?? 0;
-  const visibleCheckpointCount = Math.max(checkpointCount, latestCheckpoint ? 1 : 0);
-  const hasCheckpoints = checkpointCount > 0 || Boolean(latestCheckpoint);
   const isExpanded = props.expandedSessionKey === row.key;
   const detailsId = `session-details-${encodeURIComponent(row.key)}`;
   const displayName = normalizeOptionalString(row.displayName) ?? null;
@@ -1394,13 +1334,6 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
               props.onToggleDetails(row.key);
             }}
           >
-            ${
-              visibleCheckpointCount > 0
-                ? html`<span class="settings-count session-compaction-count"
-                    >${visibleCheckpointCount}</span
-                  >`
-                : nothing
-            }
             ${icons.chevronDown}
           </button>
           <button
@@ -1433,8 +1366,6 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
             showDisplayName,
             kindClass,
             updated,
-            visibleCheckpointCount,
-            hasCheckpoints,
           }),
         ]
       : []),
@@ -1450,8 +1381,6 @@ function renderSessionDetailsRow(params: {
   showDisplayName: boolean;
   kindClass: string;
   updated: string;
-  visibleCheckpointCount: number;
-  hasCheckpoints: boolean;
 }) {
   const {
     row,
@@ -1462,8 +1391,6 @@ function renderSessionDetailsRow(params: {
     showDisplayName,
     kindClass,
     updated,
-    visibleCheckpointCount,
-    hasCheckpoints,
   } = params;
   const rawThinking = row.thinkingLevel ?? "";
   const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
@@ -1493,13 +1420,9 @@ function renderSessionDetailsRow(params: {
     buildSessionLevelOptions(REASONING_LEVELS),
     reasoning,
   );
-  const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
-  const checkpointError = props.checkpointErrorByKey[row.key];
-  const checkpointLabel = formatCheckpointCount(visibleCheckpointCount);
   const sessionDetails = sessionDetailItems({
     row,
     updated,
-    checkpointCount: visibleCheckpointCount,
   });
 
   return html`<tr id=${detailsId} class="session-details-row">
@@ -1588,81 +1511,6 @@ function renderSessionDetailsRow(params: {
               </div>
             `,
           )}
-        </div>
-
-        <div class="session-details-section">
-          <div class="session-details-section__header">
-            <div>
-              <div class="session-details-panel__eyebrow">
-                ${t("sessionsView.compactionHistory")}
-              </div>
-              <div class="session-details-section__title">${checkpointLabel}</div>
-            </div>
-          </div>
-          ${
-            props.checkpointLoadingKey === row.key
-              ? html`<div class="muted session-details-empty">
-                  ${t("sessionsView.loadingCheckpoints")}
-                </div>`
-              : checkpointError
-                ? html`<div class="callout danger" role="alert">${checkpointError}</div>`
-                : !hasCheckpoints || checkpointItems.length === 0
-                  ? html`<div class="muted session-details-empty">
-                      ${t("sessionsView.noCheckpoints")}
-                    </div>`
-                  : html`
-                      <div class="session-checkpoint-list">
-                        ${checkpointItems.map(
-                          (checkpoint) => html`
-                            <div class="session-checkpoint-card">
-                              <div class="session-checkpoint-card__header">
-                                <strong>
-                                  ${formatCheckpointReason(checkpoint.reason)} ·
-                                  ${formatRelativeTimestamp(checkpoint.createdAt)}
-                                </strong>
-                                <span class="muted session-checkpoint-card__delta">
-                                  ${formatCheckpointDelta(checkpoint)}
-                                </span>
-                              </div>
-                              ${
-                                checkpoint.summary
-                                  ? html`<div class="session-checkpoint-card__summary">
-                                      ${checkpoint.summary}
-                                    </div>`
-                                  : html`<div class="muted">${t("sessionsView.noSummary")}</div>`
-                              }
-                              <div class="session-checkpoint-card__actions">
-                                <button
-                                  class="btn btn--sm"
-                                  ?disabled=${
-                                    props.checkpointBusyKey === checkpoint.checkpointId ||
-                                    Boolean(props.checkpointBranchDisabledReason)
-                                  }
-                                  title=${props.checkpointBranchDisabledReason ?? nothing}
-                                  @click=${() =>
-                                    props.onBranchFromCheckpoint(row.key, checkpoint.checkpointId)}
-                                >
-                                  ${t("sessionsView.branchFromCheckpoint")}
-                                </button>
-                                <button
-                                  class="btn btn--sm"
-                                  ?disabled=${
-                                    props.checkpointBusyKey === checkpoint.checkpointId ||
-                                    Boolean(props.checkpointRestoreDisabledReason)
-                                  }
-                                  title=${props.checkpointRestoreDisabledReason ?? nothing}
-                                  @click=${() =>
-                                    props.onRestoreCheckpoint(row.key, checkpoint.checkpointId)}
-                                >
-                                  ${t("sessionsView.restoreCheckpoint")}
-                                </button>
-                              </div>
-                            </div>
-                          `,
-                        )}
-                      </div>
-                    `
-          }
         </div>
       </div>
     </td>

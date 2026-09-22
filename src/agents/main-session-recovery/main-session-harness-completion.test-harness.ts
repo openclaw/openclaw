@@ -49,6 +49,8 @@ export function registerHarnessCompletionRecoveryCases(
     "missing-source",
     "reserved-successor",
     "human-before-recovery",
+    "cancel-before-recovery",
+    "duplicate-before-recovery",
     "cancel-after-dispatch",
     "duplicate-after-dispatch",
     "cancel-before-notice-effect",
@@ -190,7 +192,7 @@ export function registerHarnessCompletionRecoveryCases(
           return;
         }
         const invalidateTask = () => {
-          if (phase === "duplicate-after-dispatch") {
+          if (phase === "duplicate-after-dispatch" || phase === "duplicate-before-recovery") {
             runtime.createRunningTaskRun({
               runId: taskRunId,
               sourceId: taskRunId,
@@ -206,6 +208,15 @@ export function registerHarnessCompletionRecoveryCases(
             markTaskTerminalById({ taskId: task.taskId, status: "cancelled", endedAt: Date.now() });
           }
         };
+        if (phase === "cancel-before-recovery" || phase === "duplicate-before-recovery") {
+          invalidateTask();
+          await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+          expect(callGateway).not.toHaveBeenCalled();
+          expect(
+            loadSessionEntry({ sessionKey, storePath: path.join(sessionsDir, "sessions.json") }),
+          ).toMatchObject({ status: "killed", abortedLastRun: false });
+          return;
+        }
         let effectCurrentAfter: boolean | undefined;
         if (phase === "cancel-after-dispatch" || phase === "duplicate-after-dispatch") {
           vi.mocked(callGateway).mockImplementationOnce(async () => {

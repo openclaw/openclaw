@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createAgentRegistry,
+  createFileSessionStore,
+  decodeAcpxRuntimeHandleState,
+} from "acpx/runtime";
+import {
   getAcpSessionManager,
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
@@ -11,15 +16,12 @@ import {
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
-import {
-  AcpxRuntime,
-  createAgentRegistry,
-  createFileSessionStore,
-  decodeAcpxRuntimeHandleState,
-} from "./runtime.js";
+import { AcpxRuntime } from "./runtime.js";
 
 const harness = "owner-fixture";
-const script = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const script = fileURLToPath(
+  new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
+);
 
 it.each(["global", "shared-project"])(
   "isolates real ACPX histories for two owners of %s across restart and controls",
@@ -125,7 +127,10 @@ it.each(["global", "shared-project"])(
           ]);
           await manager.setSessionRuntimeMode({ ...target(agentId), runtimeMode: "review" });
           await manager.setSessionConfigOption({ ...target(agentId), key: "tone", value: "brief" });
+          const beforeCancel = await store.load(handle.acpxRecordId!);
           await manager.cancelSession(target(agentId));
+          expect((await store.load(handle.acpxRecordId!))?.pid).toBe(beforeCancel?.pid);
+          expect(() => process.kill(beforeCancel!.pid!, 0)).not.toThrow();
           await manager.getSessionStatus(target(agentId));
           await manager.closeSession({ ...target(agentId), reason: "restart" });
         }

@@ -323,6 +323,8 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
       return "rate_limit";
     case "DEACTIVATED_WORKSPACE":
       return "auth_permanent";
+    case "SELECTED_AUTH_PROFILE_UNAVAILABLE":
+      return "auth";
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";

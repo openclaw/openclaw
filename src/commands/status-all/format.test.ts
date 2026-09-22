@@ -283,6 +283,27 @@ describe("status-all format", () => {
     expect(output).not.toContain("signed");
   });
 
+  it("reports startup phase without an unreachable error in text and JSON", () => {
+    const params = {
+      gatewayMode: "local" as const,
+      gatewayConnection: { url: "ws://127.0.0.1:18789" },
+      remoteUrlMissing: false,
+      gatewayReachable: false,
+      gatewayProbe: { startupPhase: "plugins", error: null },
+      gatewayProbeAuth: null,
+      gatewaySelf: null,
+    };
+    expect(getStatusOverviewRowValue("Gateway", params)).toContain(
+      "still starting (phase plugins)",
+    );
+    expect(getStatusOverviewRowValue("Gateway", params)).not.toContain("unreachable");
+    expect(buildGatewayStatusJsonPayload(params)).toMatchObject({
+      readiness: "still-starting",
+      startupPhase: "plugins",
+      error: null,
+    });
+  });
+
   it("builds shared gateway surface values for node and gateway views", () => {
     expect(
       buildStatusOverviewSurfaceRows({

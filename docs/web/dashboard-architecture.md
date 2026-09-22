@@ -496,6 +496,20 @@ The canonical table definitions, constraints, and indexes are in
 for schema versions, migration and downgrade rules, and the review checkpoint for
 material storage changes. Do not use a copied SQL sketch as the schema contract.
 
+Ordinary disk data mutations borrow the canonical per-agent SQLite worker connection.
+The Boards backend runs the existing synchronous transaction kernels and checks
+current caller authority at transaction entry and commit. Committed changes
+invalidate the host's exact session projection before the mutation returns;
+cleanup failures do not turn a completed write into a retryable failure.
+Existing-session preflight, source-handle acquisition, schema/bootstrap/migration,
+protected reads, and cold
+`hasBoard` projection remain with their existing native owners. Protected read turns
+join the same per-agent FIFO before checking the current widget and starting
+consumption. They release the queue before awaiting external consumer work, so
+queued revocation cannot be overtaken by a later protected publication. Incognito writes
+continue on their process-held connection. The worker never owns a second agent
+database actor, and this cut does not change board schemas or protocol payloads.
+
 Board existence = any rows for the `sessionKey`. Deleting a session deletes its
 board rows. `/new`/`/reset` does not touch them.
 
@@ -505,7 +519,7 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
 
 - `canvas.document.preview { html }` → unchanged caller-owned HTML and the same
   isolated sandbox connection metadata as `canvas.document.view` — `operator.read`.
-  It accepts at most 256 KiB of UTF-8 data (including empty HTML), rejects extra
+  It accepts at most 2 MiB of UTF-8 data (including empty HTML), rejects extra
   fields, and never reads or creates a stored document. It honors Canvas host
   disablement and returns no capability ticket or prompt/tool/host access. File-tab
   clients use the default SandboxHost policy with descendant frames blocked, not

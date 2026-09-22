@@ -47,6 +47,17 @@ async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
     startedAt: 1_000,
     status: "running",
     lifecycleRunId: runId,
+    goal: {
+      schemaVersion: 1,
+      id: "failure-goal",
+      objective: "Finish the requested work",
+      status: "active",
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 0,
+    },
   });
   await replaceTranscriptEvents(target, [
     { type: "session", id: target.sessionId, version: CURRENT_SESSION_VERSION },
@@ -96,6 +107,13 @@ describe("durable pre-reply run failure", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed();
       await persistGatewaySessionLifecycleEvent({ ...target, event });
+      const pausedGoal = loadSessionEntry(target)?.goal;
+      expect(pausedGoal).toMatchObject({
+        id: "failure-goal",
+        status: "paused",
+        pausedAt: 2_000,
+        lastStatusNote: `Paused after an error. Resume to continue. ${error}`,
+      });
       expect(await reports()).toMatchObject([
         {
           type: "custom_message",
@@ -116,6 +134,7 @@ describe("durable pre-reply run failure", () => {
         },
       });
       expect(await reports()).toHaveLength(1);
+      expect(loadSessionEntry(target)?.goal).toEqual(pausedGoal);
     });
   });
 
@@ -229,6 +248,10 @@ describe("durable pre-reply run failure", () => {
       expect(lastRunError).toMatch(/^Worker rejected token=/);
       expect(lastRunError).toMatch(/upload failed$/);
       expect(lastRunError?.length).toBeLessThanOrEqual(160);
+      const goal = loadSessionEntry(target)?.goal;
+      expect(goal?.status).toBe("paused");
+      expect(goal?.lastStatusNote).toContain(lastRunError);
+      expect(goal?.lastStatusNote).not.toContain(secret);
     });
   });
 

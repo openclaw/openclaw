@@ -8,7 +8,6 @@ export function createAgentsToolsVitestConfig(env?: Record<string, string | unde
     dir: owner.dir,
     env,
     exclude: owner.exclude,
-    fileParallelism: false,
     name: owner.name,
   });
 }

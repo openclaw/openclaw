@@ -14,6 +14,7 @@ import * as fsSafe from "../../infra/fs-safe.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -622,18 +623,18 @@ describe("durable credential revocation fencing through the real store", () => {
     const database = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
-    const store = createWorkerEnvironmentStore({ database, now: () => 1_000 });
+    const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     const environmentId = "worker-store-fence";
     const sessionId = "session-store-fence";
-    store.createIntent({
+    await store.createIntent({
       environmentId,
       providerId: "fake-provider",
       profileId: "test-profile",
       profileSnapshot: { settings: { region: "test" }, lifetime: { idleMinutes: 10 } },
       provisionOperationId: `provision:${environmentId}`,
     });
-    store.transition({ environmentId, from: "requested", to: "provisioning" });
-    const bootstrapping = store.transition({
+    await store.transition({ environmentId, from: "requested", to: "provisioning" });
+    const bootstrapping = await store.transition({
       environmentId,
       from: "provisioning",
       to: "bootstrapping",
@@ -649,7 +650,7 @@ describe("durable credential revocation fencing through the real store", () => {
         },
       },
     });
-    store.transition({
+    await store.transition({
       environmentId,
       from: bootstrapping.state,
       to: "ready",
@@ -667,7 +668,7 @@ describe("durable credential revocation fencing through the real store", () => {
         },
       },
     });
-    const attached = store.transition({
+    const attached = await store.transition({
       environmentId,
       from: "ready",
       to: "attached",
@@ -749,7 +750,7 @@ describe("durable credential revocation fencing through the real store", () => {
       bytes += first.value?.byteLength ?? 0;
 
       // Permanent revocation through the real store drives the fence end to end.
-      store.revokeEnvironmentCredential(environmentId, { fenceWorkspaceTransfers: true });
+      await store.revokeEnvironmentCredential(environmentId, { fenceWorkspaceTransfers: true });
 
       const drained = (async () => {
         try {
@@ -776,6 +777,7 @@ describe("durable credential revocation fencing through the real store", () => {
         server.close(() => resolve());
       });
       await service.closeAll().catch(() => undefined);
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
     }
   });

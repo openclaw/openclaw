@@ -68,7 +68,7 @@ Credentials reserved for Control UI link previews are excluded from both agent a
 
 Set an agent's display name, emoji, and avatar under **Agent settings → Overview → Identity**. The identity is stored with that agent and is shared by Control UI clients. Where the transcript shows avatars, saved and streaming assistant replies use the configured agent image or text avatar. Agents without a configured avatar omit the repeated fallback icon.
 
-In **Agent settings → Files**, unsaved edits stay with their agent when you switch file tabs or select another agent and return. Returning reads the current file from disk while preserving your edits; if the file changed elsewhere, saving keeps the existing conflict recovery choices. These drafts live only in the open Agents settings page: save before leaving the page, reloading the browser, or changing Gateway connections. An ordinary reconnect preserves them.
+In **Agent settings → Files**, an unread file stays unavailable for editing and preview until its content loads. If the initial read fails, choose **Refresh** to retry. Files already loaded and retained drafts stay editable during refresh; **Reset** becomes available once the current file content loads. Unsaved edits stay with their agent when you switch file tabs or select another agent and return. Returning reads the current file from disk while preserving your edits; if the file changed elsewhere, saving keeps the existing conflict recovery choices. These drafts live only in the open Agents settings page: save before leaving the page, reloading the browser, or changing Gateway connections. An ordinary reconnect preserves them.
 
 Elsewhere, agents without a custom image or emoji use a generated face that fills the circular avatar. Its color, eyes, mouth, and solid or pastel background come from the agent ID, so the same agent keeps the same face across reloads and clients. Renaming the agent's display name does not change its face. Generated faces are decorative and do not indicate activity or model choice.
 
@@ -135,13 +135,25 @@ Personal theme definitions are saved to your authenticated Gateway profile. Exis
 
 The Appearance panel has the built-in Claw, Knot, Dash, Absolutely, Tide, Beacon, Phosphor, CRT, Manuscript, Rosé, and Miami themes (Claw is default), plus themes contributed by enabled plugins, personal themes saved through the agent, and one browser-local tweakcn import slot. Each theme ships its own self-hosted typeface, loaded only when selected or previewed: Claw uses Instrument Sans, Knot uses Geist, Dash pairs DM Sans with Fraunces for chat prose, Absolutely pairs Space Grotesk with Lora for chat prose, Tide uses IBM Plex Sans, Rosé uses DM Sans, and Miami uses Space Grotesk. Beacon targets WCAG AAA (7:1) contrast with the Atkinson Hyperlegible Next typeface for low vision, bright sunlight, projectors, and low-quality panels. Phosphor and CRT set the entire surface, chat prose included, in JetBrains Mono — Phosphor as green-on-glass, CRT as a white-on-black console with squared corners. Manuscript is the one light-first theme: parchment and iron-gall ink with a lapis accent, set entirely in the Lora serif, with a candlelit dark mode. To import a theme, open the [tweakcn editor](https://tweakcn.com/editor/theme), choose or create a theme, click **Share**, and paste the copied link into Appearance. The importer also accepts `https://tweakcn.com/r/themes/<id>` registry URLs, editor URLs like `https://tweakcn.com/editor/theme?theme=amethyst-haze`, relative `/themes/<id>` paths, raw theme IDs, and default theme names such as `amethyst-haze`.
 
+Theme stylesheets can set `--chat-composer-corner-shape` (default `superellipse(1.5)`) to give the chat composer a different corner family, such as `scoop scoop round round`, in browsers that draw `corner-shape`; other browsers keep the circular corners.
+
+Themes can choose a neutral prompt mark instead of the lobster mascot and supply their own long-wait status vocabulary. They can also add occasional penguin or fedora visitors to the composer ledge and occasional hats on agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog. A theme without the mascot hides the resident lobster and visiting lobster strangers while ordinary ledge traffic continues under the unchanged **Lobster visits** toggle. See the [theme definition fields](/tools/theme#create-and-apply-a-personal-theme) for the portable settings and limits.
+
+Plugin themes can also bring their own SVG hats and composer visitors through [declared artwork](/plugins/manifest/surfaces#themes).
+
+Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images stay quiet behind content and follow the selected mode, including System. Plugin, personal, and imported palettes use neutral artwork. New-session and chat composers use a lightly translucent surface instead of repeating the image; navigation, menus, and reading cards retain their own surfaces. No external image requests are required. Increased contrast and forced colors hide the artwork and make composers opaque; reduced transparency also makes composers opaque.
+
 Themes imported from tweakcn are stored only in the current browser profile; they are not written to gateway config and do not sync across devices. Replacing the imported theme updates the one local slot; clearing it switches back to Claw if the imported theme was active.
+
+Selecting a **different theme** in Appearance applies its complete default look, clearing the interface and chat font overrides and selecting its own accent palette. You can customize the fonts and accent afterward. Selecting the same theme, reloading, reconnecting, receiving synced preferences, or changing light/dark mode does not reset those customizations. Language, text size, chat display, and other unrelated preferences are unchanged.
 
 The mounted UI keeps a live display-preference snapshot for its connected Gateway. Local changes and same-Gateway browser-tab edits update open composers without a reload. Selecting a different Gateway in another tab does not retarget the current tab. Credentials remain owned by the connection, separate from this display snapshot.
 
-Choose an **Accent color** preset or custom color in Appearance to override the active theme's accent. For an authenticated Gateway profile, the accent precedence is the profile's `ui.accent` preference, the gateway-wide `ui.prefs.accent` setting, the operator-configured `ui.seamColor`, and finally the active theme's default. **Restore default** clears only that profile's preference, leaving the gateway-wide settings unchanged. Connections without an authenticated profile keep the existing gateway-wide preference behavior.
+Choose an **Accent color** preset or custom color in Appearance to override the active theme's accent. For an authenticated Gateway profile, the accent precedence is the profile's `ui.accent` preference, the gateway-wide `ui.prefs.accent` setting, the operator-configured `ui.seamColor`, and finally the active theme's default. A theme selection stores the explicit `"theme"` accent preference, which uses the selected theme's complete palette in both light and dark modes instead of inheriting gateway accent or seam colors. **Restore default** clears only that profile's preference, leaving the gateway-wide settings unchanged. Connections without an authenticated profile keep the existing gateway-wide preference behavior.
 
-The **Typography** block lets you choose an **Interface** face and a separate **Chat prose** face. **Theme default** for Interface and **Match interface** for Chat prose restore the theme’s typography; Dash and Absolutely keep their own serif chat defaults. **System** uses the system sans-serif stack without loading a webfont. Code keeps its monospace stack. Opening either picker loads the self-hosted specimens on demand; startup loads only the active faces. Font overrides follow an authenticated Gateway profile, with a browser-local mirror for instant boot. Without a profile, they stay in that browser and are never written to `openclaw.json`.
+Existing unset and hex accents keep their meaning; upgrades do not migrate or reset saved preferences. Older Control UI readers that do not recognize the profile value `"theme"` fall back to inherited colors. Before downgrading to a Gateway whose `ui.prefs.accent` accepts only hex colors, remove a configured `"theme"` value or replace it with `#RRGGBB`. This adds no database schema version or preference key.
+
+The **Typography** block lets you choose an **Interface** face and a separate **Chat prose** face. **Theme default** for both Interface and Chat prose restore the theme’s typography; Dash and Absolutely keep their own serif chat defaults. **System** uses the system sans-serif stack without loading a webfont. Code keeps its monospace stack. Opening either picker loads the self-hosted specimens on demand; startup loads only the active faces. Font overrides follow an authenticated Gateway profile, with a browser-local mirror for instant boot. Without a profile, they stay in that browser and are never written to `openclaw.json`.
 
 Appearance also has a Text size setting. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
 
@@ -182,20 +194,29 @@ the Control UI. For example, a base path of `/openclaw` uses
 optional plugin is disabled.
 
 The **Plugins** hub at `/plugins` browses the catalog. Its **Skills** and
-**Workshop** tabs open the per-agent skill manager at `/skills` and Skill
+**Skill workshop** tabs open the per-agent skill manager at `/skills` and Skill
 Workshop at `/skills/workshop`. **Settings → Plugins** at `/settings/plugins`
-shows the local inventory, with search and installed/enabled filters. Select a
-plugin to open its overview.
+shows the searchable local inventory. Select a plugin to open its overview.
 
-Opening a plugin shows its description, publisher, supported capabilities, and
-full README on one overview. Select a tool to read its full description. The
-metadata rail shows available release details, categories, repository, and
+Opening a plugin shows its description, publisher when available, skills, tools,
+MCP servers, and full README on one overview. Select a tool to read its full
+description. The metadata rail shows available release details, categories, repository, and
 documentation. Security audits link to ClawHub.
 
-Installed plugins offer **Reload plugin**, **Enable** or **Disable**, **Uninstall**
-when removable, and **Settings**. Installing from a catalog overview keeps the
-same URL and changes those actions in place. **Settings** opens an addressable
-editor with plugin configuration and permissions; Back returns to the overview.
+Installed, disabled plugins put **Enable** first as the primary action, followed
+by **Ask OpenClaw**. Enabled plugins put primary **Ask OpenClaw** first, followed
+by **Disable**. Both rows then offer **Uninstall** when removable and an icon
+button for **Settings**. Uninstalled plugins put **Install** first. **Install**
+starts installation immediately and accepts the staged plugin’s declared
+capabilities without changing your hook and model permissions. Configured
+install-policy warnings still require an explicit acknowledgment. Installing from
+a catalog overview keeps the same URL. Its progress popover shows the reported
+steps and elapsed time, including runtime application. Installed actions appear
+only after the Gateway returns the final result.
+Ready new plugins become enabled; missing required configuration or an existing
+disabled choice keeps them disabled. **Settings** opens an addressable
+editor with plugin configuration and editable **Permissions** controls; Back returns
+to the overview.
 Existing `#configuration` links still open the editor. Local controls and the
 installed README remain available when optional ClawHub metadata cannot load.
 The catalog shows featured plugins and category shelves. Search queries
@@ -213,7 +234,7 @@ Copy controls. Reading a bundle requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
-**Workshop** tab shows installed skills and pending
+**Skill workshop** tab shows installed skills and pending
 [skill proposals](/tools/skill-workshop). **Learn from past conversations** opens
 a normal session with the selected agent's configured model and permitted tools.
 The agent chooses which history and skills to inspect, following the current
@@ -229,8 +250,12 @@ enabling, disabling, or removing a plugin and changing MCP servers require
 `operator.admin`; those actions stay disabled for read-only operators.
 
 Plugin-declared credential fields support masked key entry and an inline key-signup
-link. The eye reveals only the key you are entering; it never retrieves the stored
-secret. Leaving an empty input unchanged preserves its existing credential.
+link. The eye reveals the key you are entering. With no new key entered,
+administrators can choose **Show API key** to retrieve the stored literal for that
+field and current config revision. A revealed saved value is hidden again when
+the field, configuration revision, or Gateway connection changes. Secret references
+and environment values are never resolved or revealed. Leaving an empty input
+unchanged preserves its existing credential.
 
 Administrators can inspect and edit a declared credential's secret reference: its
 source (`env`, `file`, `exec`, or `store`), provider alias, and identifier. The
@@ -250,7 +275,7 @@ the ordinary schema editor.
 
 ClawHub installs run through the Gateway and keep the same trust, integrity,
 and plugin-install policy checks as other Gateway-mediated installs. Install,
-enable, disable, remove, and Reload actions wait for runtime application without
+enable, disable, and remove actions wait for runtime application without
 restarting the Gateway. Ordinary plugin config edits also apply automatically
 in the default hybrid reload mode. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
@@ -268,6 +293,12 @@ Open **Settings → Updates** (`/settings/updates`) to check the installed versi
 update policy, and active or most recent update. **Update now** opens a
 confirmation showing the target and restart impact. Choose **Update and restart**
 to start; canceling leaves the Gateway untouched.
+
+For `dev` git updates, the confirmation, sidebar, and available-update status
+show the installed → target short commit SHAs on a separate line below the commit
+count. **Compare on GitHub** opens a comparison when the tracked upstream is
+a GitHub repository; other installs show plain revisions. This distinguishes
+revisions that share a version number.
 
 After confirmation, one update view shows the ordered phases, current or last
 step details, and verification results for the service, version, plugins,
@@ -321,7 +352,7 @@ On desktop web, the expanded sidebar header places the agent identity beside the
 
 The bottom-left account footer, including the Settings sidebar, shows **Suspending…** while the Gateway prepares or drains work and **Suspended** once suspension is ready. Restart status takes precedence. During reconnect, fresh suspension reports from the Gateway keep that state visible; unexplained disconnects show **Offline**. The suspension indicator clears when the Gateway accepts work again or its last suspension report expires.
 
-Sidebar visibility belongs to the current tab and is not remembered across tabs, windows, or reloads; the sidebar's width is still remembered. A chat session opened in a new browser tab from the sidebar starts with the sidebar collapsed; direct links and bookmarks keep it visible. Press ⌘B to reveal it.
+Sidebar visibility belongs to the current tab and is not remembered across tabs, windows, or reloads; the sidebar's width is still remembered. On desktop, new tabs, direct links, bookmarks, and reloads start with the sidebar expanded. Middle-click or Cmd/Ctrl-click a session to open it in a new tab without changing the original tab. Press ⌘B on Mac or Ctrl+B on Windows/Linux to collapse or expand the sidebar in the current tab.
 
 Pending approvals also contribute an attention chip above the sidebar footer;
 select it to open the owning Approvals page.
@@ -366,6 +397,11 @@ The existing Terminal, Files, and Side chat bindings are unchanged.
 Inside the [macOS app](/platforms/macos), Settings includes a **This Mac** group
 for settings on that Mac. **This Mac** (`/settings/device`) contains app behavior,
 device capabilities, browser login import and cookie sync, and developer tools.
+**Capabilities → Desktop sharing** is enabled by default and makes this Mac's
+existing Screen Sharing service available in **Systems** after pairing approval.
+It is separate from agent **Computer Control** and **Keep computer awake**.
+Changing it reconnects this Mac automatically; it does not change the remote
+Gateway host's desktop setting or enable macOS Screen Sharing.
 **Permissions** (`/settings/device/permissions`) shows macOS permission status
 and actions, location preferences, and active computer presence.
 
@@ -390,8 +426,10 @@ Find **Labs** in the **System** section of the Settings sidebar, after **Infrast
 
 **Settings → Labs → Custom plugin UI** enables native pages, widgets, actions,
 and view replacements from user-installed plugins. It defaults to off and
-writes `gateway.controlUi.experimental.customPlugins`. Restart the Gateway and
-reload connected browser tabs after changing it.
+writes `gateway.controlUi.experimental.customPlugins`. Changes apply without
+restarting the Gateway, and connected pages refresh their plugin views
+automatically. After disabling it, reload browser tabs to clear plugin
+JavaScript that already ran.
 
 Only enable it for plugin authors you trust: native UI runs in the Control UI
 origin with the signed-in operator's Gateway authority. Native UI from enabled

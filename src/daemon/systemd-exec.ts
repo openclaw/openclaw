@@ -5,6 +5,7 @@ import { escapeRegExp } from "../shared/regexp.js";
 import { execFileUtf8, type ExecResult } from "./exec-file.js";
 import {
   ServiceInspectionError,
+  ServiceOwnershipRefusalError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv } from "./service-types.js";
@@ -61,6 +62,9 @@ export function systemdInspectionError(
 ): Error {
   if (result.inspectionReason) {
     return new ServiceInspectionError(result.inspectionReason);
+  }
+  if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+    return new ServiceInspectionError("systemd-inspection-deadline-exceeded");
   }
   if (result.termination === "error" && ["EACCES", "EPERM"].includes(result.errorCode ?? "")) {
     return new ServiceInspectionError("service-manager-access-denied");
@@ -372,15 +376,18 @@ export async function bindSystemdManagerOwner(
     managerUid >= 0xffffffff ||
     !Array.isArray(uid) ||
     uid.length !== 1 ||
-    uid[0] !== managerUid
+    !Number.isInteger(uid[0])
   ) {
     throw unavailable();
+  }
+  if (uid[0] !== managerUid) {
+    throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   return {
     destination,
     async verify() {
       if (destination !== (await readOwner())) {
-        throw unavailable();
+        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
       }
     },
   };

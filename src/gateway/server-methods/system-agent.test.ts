@@ -319,7 +319,6 @@ describe("openclaw.chat", () => {
           {
             detectInferenceBackends: async () => [],
             resolveManifestProviderAuthChoices: () => [],
-            probeLocalCommand: async (command) => ({ command, found: false }),
           },
           params?.agentId,
         ),

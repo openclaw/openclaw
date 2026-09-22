@@ -17,8 +17,6 @@ import {
   onInternalSessionTranscriptUpdate,
   readSessionTranscriptUpdateVersion,
 } from "../sessions/transcript-events.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.js";
 import {
   sendInvalidRequest,
@@ -28,6 +26,7 @@ import {
   SSE_CONTENT_TYPE,
 } from "./http-common.js";
 import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
@@ -133,13 +132,7 @@ function resolveSessionHistoryHttpClient(
 export async function handleSessionHistoryHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
-    getResolvedAuth?: () => ResolvedGatewayAuth;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-  },
+  opts: GatewayHttpRequestAuthOptions,
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const sessionKeyResolution = resolveSessionHistoryPath(url);
@@ -160,12 +153,9 @@ export async function handleSessionHistoryHttpRequest(
   // token/password bearer auth grants default operator scopes so simple API key
   // callers can read their own history without a scope header.
   const authResult = await authorizeScopedGatewayHttpRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
     operatorMethod: "chat.history",
     resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
   });
@@ -237,14 +227,14 @@ export async function handleSessionHistoryHttpRequest(
   const publishAuthorizedHistory = async (publish: () => void): Promise<boolean> => {
     const cfgLocal = getRuntimeConfig();
     const currentRequestAuth = await checkGatewayHttpRequestAuth({
+      ...opts,
       req,
       auth: opts.getResolvedAuth?.() ?? opts.auth,
       trustedProxies: cfgLocal.gateway?.trustedProxies,
       allowRealIpFallback: cfgLocal.gateway?.allowRealIpFallback,
-      rateLimiter: opts.rateLimiter,
       cfg: cfgLocal,
     });
-    if (!currentRequestAuth.ok) {
+    if (!currentRequestAuth.ok || !requestAuth.hasCurrentClientAuthority()) {
       return false;
     }
     if (

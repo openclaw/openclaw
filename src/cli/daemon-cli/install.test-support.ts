@@ -31,7 +31,6 @@ const resolveGatewayBindHostMock = vi.hoisted(() => vi.fn(async () => "127.0.0.1
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 const buildGatewayInstallPlanMock = vi.hoisted(() => vi.fn<typeof createInstallPlanFixture>());
-const parsePortMock = vi.hoisted(() => vi.fn(() => null));
 const isGatewayDaemonRuntimeMock = vi.hoisted(() => vi.fn(() => true));
 const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
 
@@ -112,7 +111,6 @@ vi.mock("../../daemon/program-args.js", () => ({
 
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
-  parsePort: parsePortMock,
   createDaemonInstallActionContext: (jsonFlag: unknown) => {
     const json = Boolean(jsonFlag);
     return {
@@ -121,6 +119,17 @@ vi.mock("./shared.js", async (importOriginal) => ({
       warnings: actionState.warnings,
       emit: (payload: DaemonActionResponse) => {
         actionState.emitted.push(payload);
+      },
+      // This fixture records plan decisions; output behavior uses the real-owner integration suite.
+      emitMessage: (payload: DaemonActionResponse) => {
+        actionState.emitted.push(payload);
+      },
+      warn: (message: string) => {
+        if (json) {
+          actionState.warnings.push(message);
+        } else {
+          defaultRuntime.log(message);
+        }
       },
       fail: (message: string, hints?: string[]) => {
         actionState.failed.push({ message, hints });
@@ -224,7 +233,6 @@ export function setupInstallTests() {
     resolveSecretRefValuesMock.mockReset();
     randomTokenMock.mockReset();
     buildGatewayInstallPlanMock.mockReset();
-    parsePortMock.mockReset();
     isGatewayDaemonRuntimeMock.mockReset();
     installDaemonServiceAndEmitMock.mockReset();
     service.isLoaded.mockReset();
@@ -255,7 +263,6 @@ export function setupInstallTests() {
     resolveSecretRefValuesMock.mockResolvedValue(new Map());
     randomTokenMock.mockReturnValue("generated-token");
     buildGatewayInstallPlanMock.mockImplementation(createInstallPlanFixture);
-    parsePortMock.mockReturnValue(null);
     isGatewayDaemonRuntimeMock.mockReturnValue(true);
     installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
     service.isLoaded.mockResolvedValue(false);

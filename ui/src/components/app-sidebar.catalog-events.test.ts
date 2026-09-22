@@ -54,7 +54,7 @@ describe("AppSidebar catalog event refresh", () => {
       request.mockClear();
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
     }
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     for (const { request, sidebar } of tabs) {
       expect(request).toHaveBeenCalledTimes(1);
       expect(sidebar.textContent).toContain("Stable catalog");
@@ -68,14 +68,14 @@ describe("AppSidebar catalog event refresh", () => {
       sessionKey: "agent:research:x",
     });
     gateway.publishEvent("sessions.catalog.changed", { agentId: "research" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(1);
     gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(1);
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -108,7 +108,7 @@ describe("AppSidebar catalog event refresh", () => {
       .mockResolvedValue(catalogPage([{ threadId: "updated", name: "Updated catalog" }]));
     const { gateway, sidebar } = await mountTab(request);
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(2);
     for (let second = 0; second < 3; second += 1) {
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
@@ -129,7 +129,7 @@ describe("AppSidebar catalog event refresh", () => {
     const { gateway, sidebar, request } = await mountTab();
     gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
     await sidebar.sessionData.refreshSessionCatalogs();
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -232,7 +232,7 @@ describe("AppSidebar catalog event refresh", () => {
         if (action === "hide") {
           visibility = "visible";
           document.dispatchEvent(new Event("visibilitychange"));
-          await vi.advanceTimersByTimeAsync(2_999);
+          await vi.advanceTimersByTimeAsync(4_999);
           expect(request).toHaveBeenCalledOnce();
           await vi.advanceTimersByTimeAsync(1);
           expect(request).toHaveBeenCalledTimes(2);
@@ -255,7 +255,7 @@ describe("AppSidebar catalog event refresh", () => {
       const context = sidebar.sessionData.context;
       context?.connectionBootstrap.setForegroundRoute(undefined);
       gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       visibility = "hidden";
       document.dispatchEvent(new Event("visibilitychange"));
       context?.connectionBootstrap.setForegroundRoute(null);
@@ -263,7 +263,7 @@ describe("AppSidebar catalog event refresh", () => {
       expect(request).toHaveBeenCalledTimes(1);
       visibility = "visible";
       document.dispatchEvent(new Event("visibilitychange"));
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
       spy.mockRestore();

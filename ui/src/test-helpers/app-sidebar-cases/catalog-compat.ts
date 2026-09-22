@@ -35,6 +35,7 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "main",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
 
       const selection = context.agentSelection.state as {
@@ -51,6 +52,7 @@ describe("AppSidebar session catalog pagination", () => {
         agentId: "research",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
     } finally {
       vi.useRealTimers();

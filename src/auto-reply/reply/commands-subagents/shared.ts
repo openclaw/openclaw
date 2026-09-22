@@ -3,9 +3,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
+import type { ControlledSubagentRunsReadContext } from "../../../agents/subagents/registry/subagent-control-scope.js";
 import type { SubagentRunRecord } from "../../../agents/subagents/registry/subagent-registry.types.js";
-import { buildSubagentRunView } from "../../../agents/subagents/registry/subagent-run-view.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -25,12 +24,12 @@ type SubagentsCommandParams = Parameters<CommandHandler>[0];
 export type SubagentsCommandContext = {
   params: SubagentsCommandParams;
   requesterKey: string;
-  runs: SubagentRunRecord[];
+  readContext: Pick<ControlledSubagentRunsReadContext, "list">;
   restTokens: string[];
 };
 
 export function resolveSubagentEntryForToken(
-  runs: SubagentRunRecord[],
+  view: ControlledSubagentRunsReadContext["list"]["view"],
   token: string | undefined,
 ): { entry: SubagentRunRecord } | { reply: CommandHandlerResult } {
   const fail = (message: string) => ({ reply: commandReply(`⚠️ ${message}`) });
@@ -38,12 +37,7 @@ export function resolveSubagentEntryForToken(
   if (!trimmed) {
     return fail("Missing subagent id.");
   }
-  const readIndex = buildSubagentRunReadIndex();
-  const { latest, active, recent } = buildSubagentRunView({
-    runs,
-    recentMinutes: RECENT_WINDOW_MINUTES,
-    countPendingDescendantRuns: (sessionKey) => readIndex.countPendingDescendantRuns(sessionKey),
-  });
+  const { latest, active, recent } = view;
   if (trimmed === "last") {
     const entry = latest[0];
     return entry ? { entry } : fail("Unknown subagent.");

@@ -12,8 +12,11 @@ import {
 } from "../gateway/worker-environments/workspace-manifest.js";
 import * as workspaceReconcile from "../gateway/worker-environments/workspace-reconcile-core.js";
 import { readActualWorkspaceManifest } from "../gateway/worker-environments/workspace-reconcile.js";
-import { runExec } from "../process/exec.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import * as processExec from "../process/exec.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import type { NodeWorkerPreparedWorkspaceBinding } from "../worker/node-workspace-prepared-protocol.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
 import { NodeWorkerPreparedWorkspaceStore } from "./node-worker-prepared-workspace-store.js";
@@ -28,8 +31,13 @@ import { listen } from "./node-worker-transfer-client.test-support.js";
 import * as workspaceCommands from "./node-worker-workspace-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 afterEach(() => vi.restoreAllMocks());
 const preparationKey = "a".repeat(64);
 const cacheKey = "c".repeat(64);
@@ -44,7 +52,7 @@ const binding: NodeWorkerPreparedWorkspaceBinding = {
   ownerEpoch: 2,
 };
 
-async function fixture(setupWrites = false) {
+async function fixture(setupWrites = false, setupPath = "source.txt") {
   const root = fs.realpathSync.native(tempDirs.make("node-prepared-workspace-"));
   const ownerRoot = path.join(
     root,
@@ -55,12 +63,16 @@ async function fixture(setupWrites = false) {
   );
   const workspaceDir = path.join(ownerRoot, "workspace");
   const homeDir = path.join(ownerRoot, "home");
+  // Match the private owner root created by project preparation, independent of host umask.
+  await fsp.mkdir(ownerRoot, { recursive: true, mode: 0o700 });
   await Promise.all([
-    fsp.mkdir(workspaceDir, { recursive: true }),
-    fsp.mkdir(homeDir, { recursive: true }),
+    fsp.mkdir(workspaceDir, { recursive: true, mode: 0o700 }),
+    fsp.mkdir(homeDir, { recursive: true, mode: 0o700 }),
   ]);
   const git = async (...args: string[]) =>
-    (await runExec("git", ["-C", workspaceDir, ...args], { timeoutMs: 10_000 })).stdout.trim();
+    (
+      await processExec.runExec("git", ["-C", workspaceDir, ...args], { timeoutMs: 10_000 })
+    ).stdout.trim();
   await git("init", "--quiet");
   await fsp.writeFile(path.join(workspaceDir, ".gitignore"), ".venv/\n");
   await fsp.writeFile(path.join(workspaceDir, "source.txt"), "prepared source\n");
@@ -97,7 +109,7 @@ async function fixture(setupWrites = false) {
     `${workspaceDir}\n${homeDir}`,
   );
   if (setupWrites) {
-    await fsp.writeFile(path.join(workspaceDir, "source.txt"), "setup changed source\n");
+    await fsp.writeFile(path.join(workspaceDir, setupPath), "setup changed source\n");
     await fsp.writeFile(path.join(workspaceDir, "setup-output.txt"), "eligible setup output\n");
   }
   const prepared = await readActualWorkspaceManifest({ root: workspaceDir, baseCommit });
@@ -251,6 +263,89 @@ describe("prepared node workspace ownership", () => {
       }
     },
   );
+
+  it("rejects checkpoint source publication when its staging parent changes", async () => {
+    const f = await fixture(true, "tracked-dir/input.txt");
+    await f.runtime.prepare(f.registration);
+    await f.runtime.prepare(binding);
+    const raw = await fsp.readFile(
+      path.join(
+        f.homeDir,
+        ".openclaw-worker",
+        "manifests",
+        `${f.registration.sourceManifestRef.slice(7)}.json`,
+      ),
+    );
+    const outside = path.join(f.root, "outside");
+    await fsp.mkdir(outside);
+    // Keep input.txt absent so exclusive creation can expose a redirected write.
+    await fsp.writeFile(path.join(outside, "sentinel.txt"), "keep outside\n");
+    const sourceRead = createDeferred();
+    const releaseSource = createDeferred();
+    const run = processExec.runCommandBuffered;
+    let sourceReads = 0;
+    vi.spyOn(processExec, "runCommandBuffered").mockImplementation(async (argv, options) => {
+      const result = await run(argv, options);
+      if (
+        options?.cwd === f.workspaceDir &&
+        argv.includes("cat-file") &&
+        argv.at(-1) === `${f.baseCommit}:tracked-dir/input.txt`
+      ) {
+        sourceReads += 1;
+        sourceRead.resolve();
+        await releaseSource.promise;
+      }
+      return result;
+    });
+    const server = createServer((req, res) => {
+      res.writeHead(req.url?.endsWith("/manifest") ? 200 : 404).end(raw);
+    });
+    const url = await listen(server);
+    const transfer = f.runtime.exec(
+      {
+        ...f.command,
+        argv: ["openclaw-internal-workspace-transfer"],
+        transfer: {
+          direction: "download",
+          token: "checkpoint-parent-replacement",
+          manifestRef: f.registration.sourceManifestRef,
+          checkpointBaseManifestRef: f.registration.sourceManifestRef,
+        },
+      },
+      undefined,
+      { url },
+    );
+    const settled = transfer.then(
+      () => "fulfilled",
+      () => "rejected",
+    );
+    try {
+      await Promise.race([sourceRead.promise, settled]);
+      expect(sourceReads).toBe(1);
+      const stagingName = (await fsp.readdir(f.ownerRoot)).find((name) =>
+        name.startsWith(".workspace.workspace-transfer-"),
+      );
+      expect(stagingName).toBeDefined();
+      const stagingParent = path.join(f.ownerRoot, stagingName!, "tracked-dir");
+      await fsp.rename(stagingParent, path.join(f.root, "retained-staging-parent"));
+      await fsp.symlink(outside, stagingParent, process.platform === "win32" ? "junction" : "dir");
+      releaseSource.resolve();
+      await settled;
+      expect(await fsp.readdir(outside)).toEqual(["sentinel.txt"]);
+      expect(await fsp.readFile(path.join(outside, "sentinel.txt"), "utf8")).toBe("keep outside\n");
+      expect(
+        await fsp.readFile(path.join(f.workspaceDir, "tracked-dir", "input.txt"), "utf8"),
+      ).toBe("setup changed source\n");
+      await expect(settled).resolves.toBe("rejected");
+    } finally {
+      releaseSource.resolve();
+      await settled;
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
 
   it.each([false, true])("serializes bind behind registration (aborted: %s)", async (aborted) => {
     const f = await fixture();
@@ -429,13 +524,13 @@ describe("prepared node workspace ownership", () => {
       retain: [],
     };
     const acquired = f.runtime.acquireManagedWorkspace(f.request);
-    await expect(f.runtime.applyRetainSnapshot(retain, () => [])).resolves.toMatchObject({
+    await expect(f.runtime.applyRetainSnapshot(retain, async () => [])).resolves.toMatchObject({
       deleted: 0,
     });
     expect((await fsp.stat(f.workspaceDir)).isDirectory()).toBe(true);
     acquired.release();
     await expect(
-      f.runtime.applyRetainSnapshot({ ...retain, sequence: 2 }, () => []),
+      f.runtime.applyRetainSnapshot({ ...retain, sequence: 2 }, async () => []),
     ).resolves.toMatchObject({ deleted: 1 });
     expect(
       new NodeWorkerPreparedWorkspaceStore({ env: f.env }).find(binding.environmentId),
@@ -478,7 +573,7 @@ describe("prepared node workspace ownership", () => {
       retain: [],
     };
     const operation = f.runtime
-      .applyRetainSnapshot(retain, () => [], controller.signal)
+      .applyRetainSnapshot(retain, async () => [], controller.signal)
       .then(
         () => undefined,
         (error: unknown) => error,
@@ -497,7 +592,7 @@ describe("prepared node workspace ownership", () => {
     const restarted = new NodeWorkerWorkspaceRuntime(f.options);
     await expect(restarted.exec(f.command)).rejects.toThrow("does not own");
     await expect(
-      restarted.applyRetainSnapshot({ ...retain, sequence: 2 }, () => []),
+      restarted.applyRetainSnapshot({ ...retain, sequence: 2 }, async () => []),
     ).resolves.toMatchObject({ deleted: 1 });
     expect(store.find(binding.environmentId)?.state).toBe("retired");
   });
@@ -538,9 +633,13 @@ describe("prepared node workspace ownership", () => {
   ] as const)("preserves unrelated setup output for %s", async (change) => {
     const f = await fixture(true);
     const gatewayRoot = path.join(f.root, "gateway");
-    await runExec("git", ["clone", "--quiet", "--no-local", f.workspaceDir, gatewayRoot], {
-      timeoutMs: 10_000,
-    });
+    await processExec.runExec(
+      "git",
+      ["clone", "--quiet", "--no-local", f.workspaceDir, gatewayRoot],
+      {
+        timeoutMs: 10_000,
+      },
+    );
     const sourceFile = path.join(gatewayRoot, "source.txt");
     if (change === "tracked edit" || change === "file replaces prepared directory") {
       await fsp.writeFile(sourceFile, "caller edit\n");
@@ -776,6 +875,12 @@ describe("prepared node workspace ownership", () => {
         );
         if (lateChange === "apply failure" || lateChange === "publication failure") {
           await expect(transfer).rejects.toThrow("workspace-transfer-failed");
+          await expect(transfer).rejects.toHaveProperty(
+            "cause.message",
+            lateChange === "publication failure"
+              ? "injected manifest publication failure"
+              : "injected failure after patch application",
+          );
           expect(await fsp.readFile(path.join(f.workspaceDir, "source.txt"), "utf8")).toBe(
             "prepared source\n",
           );

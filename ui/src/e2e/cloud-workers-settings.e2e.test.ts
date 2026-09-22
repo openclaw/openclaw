@@ -64,7 +64,7 @@ async function waitForConfigPatch(
 }
 
 suite.define(() => {
-  it("adds advanced profiles and repository defaults while distinguishing advertised state", async () => {
+  it("adds advanced profiles and repository defaults while refreshing live availability", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -75,19 +75,7 @@ suite.define(() => {
       featureMethods: ["config.patch", "environments.list"],
       methodResponses: {
         "config.get": configResponse({}, "cloud-workers-1"),
-        "environments.list": {
-          environments: [],
-          profiles: [
-            {
-              id: "build-fleet",
-              providerId: "crabbox",
-              machines: [
-                { id: "standard", label: "Standard", default: true },
-                { id: "fast", label: "Fast" },
-              ],
-            },
-          ],
-        },
+        "environments.list": { environments: [], profiles: [] },
       },
     });
 
@@ -101,6 +89,7 @@ suite.define(() => {
         "https://docs.openclaw.ai/gateway/cloud-workers",
       );
       await gateway.waitForRequest("environments.list");
+      const socketCount = await gateway.getSocketCount();
       await page.getByText("No cloud worker profiles are configured.", { exact: true }).waitFor();
 
       await page.getByRole("button", { name: "Add profile" }).click();
@@ -181,6 +170,10 @@ suite.define(() => {
           "cloud-workers-2",
         ),
       );
+      await gateway.setMethodResponse("environments.list", {
+        environments: [],
+        profiles: [{ id: "build-fleet", providerId: "crabbox" }],
+      });
       await gateway.resolveDeferred("config.patch", {
         ok: true,
         hash: "cloud-workers-2",
@@ -189,11 +182,9 @@ suite.define(() => {
 
       await page.getByText("Advertised", { exact: true }).waitFor();
       await page
-        .getByText(
-          "Gateway restart required. After the Gateway restarts, build a snapshot from the Snapshots view.",
-          { exact: true },
-        )
+        .getByText("Profile saved. Build a snapshot from the Snapshots view.", { exact: true })
         .waitFor();
+      expect(await gateway.getSocketCount()).toBe(socketCount);
 
       await page.getByRole("button", { name: "Edit" }).click();
       await expect.poll(() => machineClass.inputValue()).toBe("standard");
@@ -395,7 +386,7 @@ suite.define(() => {
           cloudWorkers: { profiles: { "build-fleet": editedFleet, pending } },
         },
       });
-      await page.getByText("Restart required", { exact: true }).waitFor();
+      await page.getByText("Unavailable", { exact: true }).waitFor();
       await page
         .locator(".settings-row")
         .filter({
@@ -438,7 +429,7 @@ suite.define(() => {
       await page.getByText("github.com/acme/app", { exact: true }).waitFor();
       await page
         .locator("openclaw-cloud-worker-repositories")
-        .getByText("Gateway restart required.", { exact: true })
+        .getByText("Saved. Changes apply without restarting the Gateway.", { exact: true })
         .waitFor();
     } finally {
       await context.close();
@@ -511,7 +502,7 @@ suite.define(() => {
         config: {},
       });
       await expect.poll(() => profileId.inputValue()).toBe("reconnect-proof");
-      await expect.poll(() => page.getByText("Gateway restart required.").count()).toBe(0);
+      await expect.poll(() => page.getByText("Profile saved.", { exact: false }).count()).toBe(0);
       await expect.poll(() => page.getByRole("alert").count()).toBe(0);
 
       await gateway.deferNext("config.patch");
@@ -551,10 +542,7 @@ suite.define(() => {
         config: { cloudWorkers: { profiles: { "reconnect-proof": savedProfile } } },
       });
       await page
-        .getByText(
-          "Gateway restart required. After the Gateway restarts, build a snapshot from the Snapshots view.",
-          { exact: true },
-        )
+        .getByText("Profile saved. Build a snapshot from the Snapshots view.", { exact: true })
         .waitFor();
       await expect.poll(() => page.getByLabel("Profile ID").count()).toBe(0);
     } finally {

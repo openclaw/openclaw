@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
+import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import type { runCommandWithTimeout, runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 
@@ -21,6 +22,7 @@ export async function createUpdateCommandTransportFixture(transport: {
   hostCwd: string;
   hostEnv: NodeJS.ProcessEnv;
   npmPrefix: string;
+  readServiceCommand?: (env?: NodeJS.ProcessEnv) => Promise<GatewayServiceCommandConfig | null>;
 }) {
   const hostPlatform = process.platform;
   const { spawn: spawnChild } =
@@ -51,7 +53,7 @@ export async function createUpdateCommandTransportFixture(transport: {
     });
     const closed = once(child, "close");
     try {
-      options.beforeInput(expectDefined(child.pid, "fixture child PID"));
+      options.beforeInput(expectDefined(child.pid, "fixture child PID"), child.spawnargs);
       const executorFlagIndex = argv.indexOf("--update-executor");
       if (executorFlagIndex !== -1 && argv[executorFlagIndex + 1] === "check") {
         // A probe must not run the install/restart effect double.
@@ -61,12 +63,47 @@ export async function createUpdateCommandTransportFixture(transport: {
             updateExecutor: "root-spawner-v1",
             targetRootBinding: true,
             definitionBackup: true,
+            retainedOwnerBinding: true,
+            originalDefinitionBinding: true,
+            originalRuntimePinBinding: true,
           }),
           stderr: "",
           signal: null,
           killed: false,
           termination: "exit" as const,
           cleanup: "normal" as const,
+        };
+      }
+      const input: unknown =
+        typeof options.input === "string" && options.input ? JSON.parse(options.input) : undefined;
+      const originalDefinition = isRecord(input) ? input.originalDefinition : undefined;
+      if (typeof originalDefinition === "string") {
+        const { fingerprintGatewayServiceDefinition } =
+          await import("../../daemon/service-rebind.js");
+        const before = await fingerprintGatewayServiceDefinition(
+          (await transport.readServiceCommand?.(options.env)) ?? null,
+        );
+        expect(before).toBe(originalDefinition);
+        const { readDaemonRuntimePinForInstall } =
+          await import("../../daemon/runtime-pin-state.js");
+        const pinRevision = () =>
+          readDaemonRuntimePinForInstall({ kind: "gateway", env: options.env ?? {} }, null, true)
+            .revision;
+        const runtimePinBefore = pinRevision();
+        expect(runtimePinBefore).toBe(isRecord(input) ? input.originalRuntimePin : undefined);
+        const result = await transport.run(argv, options);
+        // Explicit response fixtures retain malformed/missing-receipt coverage.
+        if (result.code !== 0 || result.stdout.trim()) {
+          return result;
+        }
+        const after = await fingerprintGatewayServiceDefinition(
+          (await transport.readServiceCommand?.(options.env)) ?? null,
+        );
+        return {
+          ...result,
+          stdout: JSON.stringify({
+            rebind: { before, after, runtimePinBefore, runtimePinAfter: pinRevision() },
+          }),
         };
       }
       return await transport.run(argv, options);

@@ -8,12 +8,6 @@ openclaw-chat-question-panel {
   display: block;
 }
 
-openclaw-chat-async-question {
-  display: block;
-  width: 620px;
-  max-width: 100%;
-}
-
 .chat-question-panel {
   display: grid;
   gap: 12px;
@@ -327,6 +321,23 @@ openclaw-chat-async-question {
   color: var(--text);
   font: inherit;
   outline: none;
+}
+
+.chat-question-panel textarea.chat-question-panel__textarea {
+  /* Override the shared field textarea's tall, monospace editor defaults. */
+  min-height: 24px;
+  max-height: 160px;
+  resize: none;
+  font-family: inherit;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-question-panel__input-hint {
+  margin-top: -6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
 }
 
 /*

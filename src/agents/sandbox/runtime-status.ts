@@ -20,6 +20,7 @@ import {
   sessionCreatorProfileId,
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { auditSandboxToolPolicyBlock, escapeControlCharsVisible } from "../tool-policy-audit.js";
@@ -54,11 +55,12 @@ function shouldSandboxSession(
   sessionKey: string,
   mainSessionKey: string,
   sandboxRequired: boolean,
+  sandboxMode?: SessionEntry["sandboxMode"],
 ) {
   if (sandboxRequired) {
     return true;
   }
-  if (cfg.mode === "off") {
+  if (sandboxMode === "off" || cfg.mode === "off") {
     return false;
   }
   if (cfg.mode === "all") {
@@ -99,6 +101,8 @@ type SandboxRuntimeStatusParams = {
   /** Independent execution identity used for sandbox mode and policy classification. */
   classificationSessionKey?: string;
   classificationAgentId?: string;
+  /** Trusted canonical candidate for the classification identity; null means no stored entry. */
+  preparedSessionEntry?: Pick<SessionEntry, "sandbox" | "sandboxMode" | "createdActor"> | null;
 };
 
 /** Resolves sandbox mode, effective session scope, and tool policy for a session. */
@@ -183,19 +187,22 @@ function resolveSandboxRuntimeStatusWithRead(
     sessionKey: classificationSessionKey,
   });
   // Creation owns this immutable requirement; current callers and agent mode cannot relax it.
-  const session = classificationSessionKey
-    ? readSession(
-        {
-          agentId: classificationAgentId,
-          clone: false,
-          sessionKey: comparableSessionKey,
-          storePath: resolveSessionStorePathCore(cfg?.session?.store, {
-            agentId: classificationAgentId,
-          }),
-        },
-        { readOnly: true },
-      )
-    : undefined;
+  const session =
+    params.preparedSessionEntry !== undefined
+      ? { existing: params.preparedSessionEntry ?? undefined, normalizedKey: comparableSessionKey }
+      : classificationSessionKey
+        ? readSession(
+            {
+              agentId: classificationAgentId,
+              clone: false,
+              sessionKey: comparableSessionKey,
+              storePath: resolveSessionStorePathCore(cfg?.session?.store, {
+                agentId: classificationAgentId,
+              }),
+            },
+            { readOnly: true },
+          )
+        : undefined;
   const sandboxRequired = session?.existing?.sandbox === "required";
   const profileId = sessionCreatorProfileId(session?.existing?.createdActor)?.trim();
   const isolation: SandboxRuntimeIsolation = sandboxRequired
@@ -209,7 +216,13 @@ function resolveSandboxRuntimeStatusWithRead(
       }
     : { sandboxRequired: false };
   const sandboxed = classificationSessionKey
-    ? shouldSandboxSession(sandboxCfg, comparableSessionKey, mainSessionKey, sandboxRequired)
+    ? shouldSandboxSession(
+        sandboxCfg,
+        comparableSessionKey,
+        mainSessionKey,
+        sandboxRequired,
+        session?.existing?.sandboxMode,
+      )
     : false;
   return {
     agentId,

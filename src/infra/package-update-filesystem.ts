@@ -84,12 +84,8 @@ export async function activateStagedNpmPackageRoot(
 
 export function removePackagePath(target: string, assertCurrent = () => {}): Promise<void> {
   assertCurrent();
-  return fs.rm(target, {
-    recursive: true,
-    force: true,
-    maxRetries: process.platform === "win32" ? 5 : 2,
-    retryDelay: 100,
-  });
+  // Recursive retries multiply at each directory level when Windows locks a loaded addon.
+  return fs.rm(target, { recursive: true, force: true });
 }
 
 export async function copyPackagePathEntry(

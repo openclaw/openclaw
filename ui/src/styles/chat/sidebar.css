@@ -508,11 +508,6 @@
   border-color: color-mix(in srgb, var(--border-strong) 45%, transparent);
 }
 
-.chat-tasks-rail__task--open {
-  border-color: color-mix(in srgb, var(--accent) 44%, transparent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
-}
-
 .chat-tasks-rail__task-head {
   display: flex;
   align-items: center;

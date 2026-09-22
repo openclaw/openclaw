@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
@@ -507,14 +508,46 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(runCliAgent).not.toHaveBeenCalled();
   });
 
-  it("invokes onExecutionStarted once at the dispatch boundary", async () => {
+  it("settles execution-start work before dispatching the CLI run", async () => {
     runCliAgent.mockResolvedValue(cliRunResult());
-    const onExecutionStarted = vi.fn();
-    await runEmbeddedAgentViaCliBackendIfEligible(
+    const entered = createDeferred();
+    const release = createDeferred();
+    const onExecutionStarted = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const operation = runEmbeddedAgentViaCliBackendIfEligible(
       baseRunParams({ onExecutionStarted, lifecycleGeneration: "gen-1" }),
     );
-    expect(onExecutionStarted).toHaveBeenCalledTimes(1);
+    try {
+      await entered.promise;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(runCliAgent).not.toHaveBeenCalled();
+      expect(transcriptRecorder.finalize).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await operation;
+    }
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(onExecutionStarted).toHaveBeenCalledOnce();
     expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
+  });
+
+  it("finalizes the transcript when execution-start work rejects", async () => {
+    const failure = new Error("execution-start persistence failed");
+    await expect(
+      runEmbeddedAgentViaCliBackendIfEligible(
+        baseRunParams({
+          onExecutionStarted: () => {
+            throw failure;
+          },
+        }),
+      ),
+    ).rejects.toBe(failure);
+    expect(runCliAgent).not.toHaveBeenCalled();
+    expect(transcriptRecorder.finalize).toHaveBeenCalledOnce();
   });
 
   it("retains the prepared vision capability with ordered prompt images and media", async () => {

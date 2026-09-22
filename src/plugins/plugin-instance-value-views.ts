@@ -219,6 +219,7 @@ export function createPluginValueView(
     hasToken: (token: object) => boolean;
   },
   admit: <T>(run: () => T) => T,
+  admitCallback: <T>(run: () => T) => T,
 ) {
   const wrapped = new WeakMap<object, unknown>();
   const derivedReceivers = new WeakSet<object>();
@@ -228,7 +229,7 @@ export function createPluginValueView(
     originalValues: bindings.originalValues,
     wrapped,
     wrap: (value) => wrap(value),
-    invoke: (callback) => admit(() => bindings.invoke(callback)),
+    invoke: admitCallback,
   });
   const wrapResult = <T>(result: T, callerData?: unknown[]): T => {
     const completion = resolvePluginReturnPromise(result);

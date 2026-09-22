@@ -7,10 +7,7 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SessionBranch,
-  SessionCompactionCheckpoint,
   SessionsBranchesSwitchResult,
-  SessionsCompactionBranchResult,
-  SessionsCompactionRestoreResult,
   SessionsForkResult,
   SessionsRewindResult,
   SessionWorkspaceGetResult,
@@ -29,9 +26,6 @@ import { areUiSessionKeysEquivalent, normalizeAgentId } from "./session-key.ts";
 import {
   requestSessionBranchSwitch,
   requestSessionBranches,
-  requestSessionCheckpointBranch,
-  requestSessionCheckpointRestore,
-  requestSessionCheckpoints,
   requestSessionCompact,
   requestSessionFile,
   requestSessionFilesList,
@@ -172,58 +166,6 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     return subscription;
   };
 
-  const listCheckpoints = async (
-    key: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionCompactionCheckpoint[]> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return [];
-    }
-    const result = await requestSessionCheckpoints(scope.client, key, options);
-    return host.connection.isCurrent(scope) ? (result.checkpoints ?? []) : [];
-  };
-
-  const checkpointMutation = async <T>(
-    key: string,
-    checkpointId: string,
-    options: { agentId?: string | null },
-    request: (
-      client: GatewayBrowserClient,
-      key: string,
-      checkpointId: string,
-      options: { agentId?: string | null },
-    ) => Promise<T>,
-  ): Promise<T> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      throw new Error("Session checkpoint operation requires an active Gateway connection");
-    }
-    const result = await request(scope.client, key, checkpointId, options);
-    if (!host.connection.isCurrent(scope)) {
-      throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
-    }
-    await host.reconcileMutation(options.agentId);
-    if (!host.connection.isCurrent(scope)) {
-      throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
-    }
-    return result;
-  };
-
-  const branchCheckpoint = (
-    key: string,
-    checkpointId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsCompactionBranchResult> =>
-    checkpointMutation(key, checkpointId, options, requestSessionCheckpointBranch);
-
-  const restoreCheckpoint = (
-    key: string,
-    checkpointId: string,
-    options: { agentId?: string | null } = {},
-  ): Promise<SessionsCompactionRestoreResult> =>
-    checkpointMutation(key, checkpointId, options, requestSessionCheckpointRestore);
-
   const reconcileCommittedMutation = async (
     scope: SessionConnectionScope,
     agentId?: string | null,
@@ -290,15 +232,12 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
   };
 
   return {
-    branchCheckpoint,
     compact,
     forkAtMessage,
     getFile,
     listBranches,
-    listCheckpoints,
     listFiles,
     recover,
-    restoreCheckpoint,
     rewind,
     setFile,
     subscribeMessages,

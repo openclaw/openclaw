@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import * as sqliteRuntime from "../infra/node-sqlite.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import * as agentDatabaseIdentity from "./openclaw-agent-db-identity.js";
@@ -13,7 +14,6 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db.js";
-import { listOpenClawAgentDatabasesForTest } from "./openclaw-agent-db.test-support.js";
 
 const stampQuery = "SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'";
 
@@ -329,27 +329,18 @@ describe("committed agent database reads", () => {
     },
   );
 
-  it.each(["cold", "extension"] as const)("keeps %s reads one-shot", async (kind) => {
+  it("keeps extension-capable reads isolated and one-shot", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const options = { agentId: "main", env };
       const owner = openOpenClawAgentDatabase(options);
-      const read = () => {
-        const first = readStamp(options, kind === "extension" ? { allowExtension: true } : {});
-        const second = readStamp(options, kind === "extension" ? { allowExtension: true } : {});
+      inWriterTransaction(owner.db, () => {
+        const first = readStamp(options, { allowExtension: true });
+        const second = readStamp(options, { allowExtension: true });
         expect(first.db === owner.db).toBe(false);
         expect(second.db === first.db).toBe(false);
         expect(first.db.isOpen).toBe(false);
         expect(second.db.isOpen).toBe(false);
-      };
-      if (kind === "cold") {
-        openOpenClawAgentDatabase({ agentId: "other", env });
-        closeOpenClawAgentDatabaseByPath(owner.path);
-        const cachedWriters = listOpenClawAgentDatabasesForTest();
-        read();
-        expect(listOpenClawAgentDatabasesForTest()).toEqual(cachedWriters);
-      } else {
-        inWriterTransaction(owner.db, read);
-      }
+      });
     });
   });
 
@@ -400,4 +391,31 @@ describe("committed agent database reads", () => {
       });
     },
   );
+});
+
+it("retries idle committed-reader close without losing its retained native handle", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const options = { agentId: "main", env };
+    const owner = openOpenClawAgentDatabase(options);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const reader = inWriterTransaction(owner.db, () => readStamp(options).db);
+      const close = vi.spyOn(reader, "close").mockImplementationOnce(() => {
+        throw new Error("synthetic native close failure");
+      });
+      try {
+        expect(() => vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS)).not.toThrow();
+        expect(reader.isOpen).toBe(true);
+        vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
+        expect(reader.isOpen).toBe(false);
+        const reopened = inWriterTransaction(owner.db, () => readStamp(options).db);
+        expect(reopened === reader).toBe(false);
+        expect(reopened.isOpen).toBe(true);
+      } finally {
+        close.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

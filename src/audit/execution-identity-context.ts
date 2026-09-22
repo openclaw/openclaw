@@ -1,8 +1,8 @@
 /** Immutable execution identity context storage and run-admission projection. */
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
-import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
+import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
+import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import { hasOperatorApprovalReceiptsForRunInDatabase } from "../gateway/operator-approval-store.js";
 import {
   executeSqliteQuerySync,
@@ -16,6 +16,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema.js";
@@ -190,13 +191,11 @@ function pruneExecutionIdentityContextsAfterInsert(
 }
 
 /** Delete one bounded batch during the existing audit startup/hourly maintenance tick. */
-export function pruneExpiredExecutionIdentityContexts(
-  params: {
-    now?: number;
-    database?: OpenClawStateDatabaseOptions;
-  } = {},
-): number {
-  const databaseOptions = params.database ?? {};
+export function pruneExpiredExecutionIdentityContextsInDatabase(params: {
+  now?: number;
+  database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
+}): number {
+  const databaseOptions = params.database;
   const database = openOpenClawStateDatabase(databaseOptions);
   // Maintenance must not create opt-in storage. First capture owns schema creation;
   // once the table exists, cleanup remains active even after collection is disabled.
@@ -312,9 +311,9 @@ function verifyExecutionIdentityAdmissionRetry(
 }
 
 /** Worker-owned persistence/verification for one accepted bounded queue item. */
-export function processExecutionIdentityAdmissionWork(
+export function processExecutionIdentityAdmissionWorkInDatabase(
   input: unknown,
-  options: ExecutionIdentityStoreOptions = {},
+  options: ExecutionIdentityStoreOptions & { database: OpenClawStateDatabase },
 ): ExecutionIdentityContextV1 {
   const work = parseExecutionIdentityAdmissionWork(input);
   return work.kind === "capture"

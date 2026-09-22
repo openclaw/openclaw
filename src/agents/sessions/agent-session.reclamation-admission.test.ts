@@ -41,7 +41,7 @@ vi.mock(
       >();
     return {
       ...actual,
-      withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent) =>
+      withSqliteReclamationWorker: ((options, claim, run, assertRequestCurrent, signal) =>
         actual.withSqliteReclamationWorker(
           options,
           claim,
@@ -63,6 +63,7 @@ vi.mock(
             }
           },
           assertRequestCurrent,
+          signal,
         )) satisfies typeof actual.withSqliteReclamationWorker,
     };
   },

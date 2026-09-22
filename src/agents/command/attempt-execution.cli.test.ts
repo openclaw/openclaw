@@ -30,8 +30,6 @@ import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
@@ -60,16 +58,21 @@ import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { buildConfiguredModelCatalog } from "../model-selection-shared.js";
+import { resolveReplyExpectation } from "../reply-completion.js";
 import { installSessionPlacementAdmissionProvider } from "../session-placement-admission.js";
 import { createAgentAttemptLifecycleCallbacks } from "./attempt-callbacks.js";
 import {
+  COMMAND_REPLY_EXPECTATION_CASES,
   createSubagentAnnounceHandoffOptions,
   createSubagentAnnounceSessionStore,
   SUBAGENT_ANNOUNCE_DELIVERY_CASES,
   SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES,
   type SubagentAnnounceDeliveryCase,
 } from "./attempt-execution.announce.test-support.js";
-import { createCliImageCapabilityPlugins } from "./attempt-execution.cli.test-support.js";
+import {
+  createCliImageCapabilityPlugins,
+  resetCliAttemptFixtureDatabases,
+} from "./attempt-execution.cli.test-support.js";
 import { runAgentAttempt as runAgentAttemptImpl } from "./attempt-execution.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
@@ -512,25 +515,7 @@ describe("CLI attempt execution", () => {
     cliBackendsTesting.resetDepsForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     clearSessionStoreCacheForTest();
-    for (const database of listOpenClawAgentDatabasesForTest()) {
-      if (!database.path.startsWith(`${suiteRoot}${path.sep}`)) {
-        continue;
-      }
-      runOpenClawAgentWriteTransaction(
-        (fixture) => {
-          fixture.db.exec(`
-            DELETE FROM session_transcript_fts;
-            DELETE FROM session_nodes;
-            DELETE FROM conversations;
-            DELETE FROM auth_profile_store;
-            DELETE FROM auth_profile_state;
-            DELETE FROM cache_entries;
-          `);
-        },
-        database,
-        { operationLabel: "test.attempt-execution.reset" },
-      );
-    }
+    resetCliAttemptFixtureDatabases(suiteRoot);
     await fs.rm(tmpDir, { recursive: true, force: true });
     await fs.rm(storePath, { force: true });
     homeEnvSnapshot?.restore();
@@ -570,7 +555,7 @@ describe("CLI attempt execution", () => {
     const callback = embedded.onExecutionStarted;
 
     expect(callback).toBeTypeOf("function");
-    (callback as (info?: { lifecycleGeneration?: string }) => void)({
+    await (callback as (info?: { lifecycleGeneration?: string }) => void | Promise<void>)({
       lifecycleGeneration: "next-generation",
     });
     expect(onExecutionStarted).toHaveBeenCalledTimes(1);
@@ -3868,39 +3853,29 @@ describe("CLI attempt execution", () => {
     expect(embeddedArg.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
-  it.each([
-    {
-      name: "subagent lane",
-      lane: "subagent" as const,
-      sessionKey: "agent:main:subagent:cli-empty-completion",
-      expected: true,
+  it.each(COMMAND_REPLY_EXPECTATION_CASES)(
+    "classifies $name reply obligations consistently across embedded and CLI runs",
+    async ({ name, opts, expected }) => {
+      const embedded = await runOpenClawEmbeddedAttemptForTest({ opts, runId: name });
+      expect(resolveReplyExpectation(embedded)).toBe(expected);
+      const sessionKey = `agent:main:direct:${name}`;
+      const sessionEntry = makeSessionEntry(`session-${name}`);
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli completion"));
+      await runStoredAttempt({
+        providerOverride: "claude-cli",
+        modelOverride: "opus",
+        sessionEntry,
+        sessionKey,
+        body: "complete the task",
+        runId: `run-${name}-cli-reply`,
+        opts,
+        sessionStore,
+      });
+      expect(resolveReplyExpectation(firstRunCliAgentArg())).toBe(expected);
     },
-    {
-      name: "ordinary lane",
-      lane: undefined,
-      sessionKey: "agent:main:direct:cli-empty-completion",
-      expected: false,
-    },
-  ])("allows empty CLI output only for $name runs", async ({ lane, sessionKey, expected }) => {
-    const sessionEntry = makeSessionEntry(`session-${lane ?? "ordinary"}`);
-    const sessionStore = { [sessionKey]: sessionEntry };
-    await writeSessionStoreSeed(sessionStore);
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("cli completion"));
-
-    await runStoredAttempt({
-      providerOverride: "claude-cli",
-      modelOverride: "opus",
-      sessionEntry,
-      sessionKey,
-      body: "complete the task",
-      runId: `run-${lane ?? "ordinary"}-cli-empty-completion`,
-      opts: lane ? { lane } : {},
-      sessionStore,
-    });
-
-    expect(firstRunCliAgentArg().allowEmptyAssistantReplyAsSilent).toBe(expected);
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-  });
+  );
 
   it("forwards exact cron creator authority into embedded execution", async () => {
     const runId = "embedded-cron-creator-authority";

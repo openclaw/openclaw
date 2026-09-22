@@ -1606,102 +1606,105 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
-  it("packs the bundled AI runtime with isolated workspace configuration", async () => {
-    const sourceDir = createPackageSourceFixture("openclaw-pnpm-bundled-source-");
-    const outputDir = tempDirs.make("openclaw-pnpm-bundled-output-");
-    const { packageManager, version } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
-      packageManager: string;
-      version: string;
-    };
-    const packageJson = JSON.stringify({
-      name: "openclaw",
-      version,
-      packageManager,
-      files: ["dist"],
-      dependencies: { "@openclaw/ai": "workspace:*" },
-      scripts: { prepack: 'node -e "process.exit(91)"' },
-    });
-    const workspace = "packages:\n  - packages/*\nnodeLinker: isolated\n";
-    const aiDir = path.join(sourceDir, "packages/ai");
-    const installedAi = path.join(sourceDir, "node_modules/@openclaw/ai");
-    fs.mkdirSync(path.join(sourceDir, "dist"));
-    fs.mkdirSync(path.join(aiDir, "dist"), { recursive: true });
-    fs.mkdirSync(path.dirname(installedAi), { recursive: true });
-    fs.writeFileSync(path.join(sourceDir, "package.json"), packageJson);
-    fs.writeFileSync(path.join(sourceDir, "pnpm-workspace.yaml"), workspace);
-    fs.writeFileSync(path.join(sourceDir, "dist/entry.js"), "export const worker = true;\n");
-    fs.writeFileSync(
-      path.join(aiDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/ai", version, files: ["dist"] }),
-    );
-    fs.writeFileSync(path.join(aiDir, "dist/index.js"), "export const runtime = true;\n");
-    fs.writeFileSync(path.join(aiDir, "source-only-marker"), "workspace source\n");
-    fs.symlinkSync(aiDir, installedAi, "junction");
-
-    const archiveDecoyPath = path.join(
-      outputDir,
-      process.platform === "win32" ? "tar.exe" : "decoy-bin",
-    );
-    const gzipMarkerPath = path.join(outputDir, "gzip-invoked");
-    // System tar and GNU tar's gzip child must resolve commands from the caller,
-    // not from the directory containing the archive.
-    if (process.platform === "win32") {
-      fs.copyFileSync(process.execPath, archiveDecoyPath);
-    } else {
-      fs.mkdirSync(archiveDecoyPath);
+  it.each([false, true])(
+    "packs the bundled AI runtime with isolated workspace configuration (pnpm=%s)",
+    async (pnpmPack) => {
+      const sourceDir = createPackageSourceFixture("openclaw-pnpm-bundled-source-");
+      const outputDir = tempDirs.make("openclaw-pnpm-bundled-output-");
+      const { packageManager, version } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+        packageManager: string;
+        version: string;
+      };
+      const packageJson = JSON.stringify({
+        name: "openclaw",
+        version,
+        packageManager,
+        files: ["dist"],
+        dependencies: { "@openclaw/ai": "workspace:*" },
+        scripts: { prepack: 'node -e "process.exit(91)"' },
+      });
+      const workspace = "packages:\n  - packages/*\nnodeLinker: isolated\n";
+      const aiDir = path.join(sourceDir, "packages/ai");
+      const installedAi = path.join(sourceDir, "node_modules/@openclaw/ai");
+      fs.mkdirSync(path.join(sourceDir, "dist"));
+      fs.mkdirSync(path.join(aiDir, "dist"), { recursive: true });
+      fs.mkdirSync(path.dirname(installedAi), { recursive: true });
+      fs.writeFileSync(path.join(sourceDir, "package.json"), packageJson);
+      fs.writeFileSync(path.join(sourceDir, "pnpm-workspace.yaml"), workspace);
+      fs.writeFileSync(path.join(sourceDir, "dist/entry.js"), "export const worker = true;\n");
       fs.writeFileSync(
-        path.join(archiveDecoyPath, "gzip"),
-        '#!/bin/sh\nprintf "invoked\\n" > "$OPENCLAW_TEST_GZIP_MARKER"\nexit 97\n',
-        { mode: 0o755 },
+        path.join(aiDir, "package.json"),
+        JSON.stringify({ name: "@openclaw/ai", version, files: ["dist"] }),
       );
-    }
-    const tarball = await withEnvAsync(
-      process.platform === "win32"
-        ? {}
-        : {
-            PATH: `decoy-bin${path.delimiter}${process.env.PATH ?? ""}`,
-            OPENCLAW_TEST_GZIP_MARKER: gzipMarkerPath,
-          },
-      async () => {
-        try {
-          return await packOpenClawPackageForDocker(sourceDir, outputDir, {
-            ...skipDocsMapLifecycle,
-            pnpmPack: true,
-            prepareChangelog: async () => {},
-            restoreChangelog: async () => {},
-          });
-        } finally {
-          expect.soft(fs.existsSync(gzipMarkerPath)).toBe(false);
-          fs.rmSync(archiveDecoyPath, { recursive: true });
-        }
-      },
-    );
-    const extracted = tempDirs.make("openclaw-pnpm-bundled-extracted-");
-    await tar.x({ file: tarball, cwd: extracted });
-    const packedRoot = path.join(extracted, "package");
-    expect(fs.readFileSync(path.join(packedRoot, "dist/entry.js"), "utf8")).toBe(
-      "export const worker = true;\n",
-    );
-    expect(
-      fs.readFileSync(path.join(packedRoot, "node_modules/@openclaw/ai/dist/index.js"), "utf8"),
-    ).toBe("export const runtime = true;\n");
-    expect(
-      JSON.parse(fs.readFileSync(path.join(packedRoot, "package.json"), "utf8")),
-    ).toMatchObject({
-      dependencies: { "@openclaw/ai": version },
-      bundleDependencies: ["@openclaw/ai"],
-    });
-    expect(
-      fs.existsSync(path.join(packedRoot, "node_modules/@openclaw/ai/source-only-marker")),
-    ).toBe(false);
-    expect(fs.readFileSync(path.join(sourceDir, "package.json"), "utf8")).toBe(packageJson);
-    expect(fs.readFileSync(path.join(sourceDir, "pnpm-workspace.yaml"), "utf8")).toBe(workspace);
-    expect(fs.lstatSync(installedAi).isSymbolicLink()).toBe(true);
-    expect(fs.readFileSync(path.join(installedAi, "source-only-marker"), "utf8")).toBe(
-      "workspace source\n",
-    );
-    expect(fs.readdirSync(outputDir)).toEqual([path.basename(tarball)]);
-  });
+      fs.writeFileSync(path.join(aiDir, "dist/index.js"), "export const runtime = true;\n");
+      fs.writeFileSync(path.join(aiDir, "source-only-marker"), "workspace source\n");
+      fs.symlinkSync(aiDir, installedAi, "junction");
+
+      const archiveDecoyPath = path.join(
+        outputDir,
+        process.platform === "win32" ? "tar.exe" : "decoy-bin",
+      );
+      const gzipMarkerPath = path.join(outputDir, "gzip-invoked");
+      // System tar and GNU tar's gzip child must resolve commands from the caller,
+      // not from the directory containing the archive.
+      if (process.platform === "win32") {
+        fs.copyFileSync(process.execPath, archiveDecoyPath);
+      } else {
+        fs.mkdirSync(archiveDecoyPath);
+        fs.writeFileSync(
+          path.join(archiveDecoyPath, "gzip"),
+          '#!/bin/sh\nprintf "invoked\\n" > "$OPENCLAW_TEST_GZIP_MARKER"\nexit 97\n',
+          { mode: 0o755 },
+        );
+      }
+      const tarball = await withEnvAsync(
+        process.platform === "win32"
+          ? {}
+          : {
+              PATH: `decoy-bin${path.delimiter}${process.env.PATH ?? ""}`,
+              OPENCLAW_TEST_GZIP_MARKER: gzipMarkerPath,
+            },
+        async () => {
+          try {
+            return await packOpenClawPackageForDocker(sourceDir, outputDir, {
+              ...skipDocsMapLifecycle,
+              ...(pnpmPack ? { pnpmPack: true } : {}),
+              prepareChangelog: async () => {},
+              restoreChangelog: async () => {},
+            });
+          } finally {
+            expect.soft(fs.existsSync(gzipMarkerPath)).toBe(false);
+            fs.rmSync(archiveDecoyPath, { recursive: true });
+          }
+        },
+      );
+      const extracted = tempDirs.make("openclaw-pnpm-bundled-extracted-");
+      await tar.x({ file: tarball, cwd: extracted });
+      const packedRoot = path.join(extracted, "package");
+      expect(fs.readFileSync(path.join(packedRoot, "dist/entry.js"), "utf8")).toBe(
+        "export const worker = true;\n",
+      );
+      expect(
+        fs.readFileSync(path.join(packedRoot, "node_modules/@openclaw/ai/dist/index.js"), "utf8"),
+      ).toBe("export const runtime = true;\n");
+      expect(
+        JSON.parse(fs.readFileSync(path.join(packedRoot, "package.json"), "utf8")),
+      ).toMatchObject({
+        dependencies: { "@openclaw/ai": version },
+        bundleDependencies: ["@openclaw/ai"],
+      });
+      expect(
+        fs.existsSync(path.join(packedRoot, "node_modules/@openclaw/ai/source-only-marker")),
+      ).toBe(false);
+      expect(fs.readFileSync(path.join(sourceDir, "package.json"), "utf8")).toBe(packageJson);
+      expect(fs.readFileSync(path.join(sourceDir, "pnpm-workspace.yaml"), "utf8")).toBe(workspace);
+      expect(fs.lstatSync(installedAi).isSymbolicLink()).toBe(true);
+      expect(fs.readFileSync(path.join(installedAi, "source-only-marker"), "utf8")).toBe(
+        "workspace source\n",
+      );
+      expect(fs.readdirSync(outputDir)).toEqual([path.basename(tarball)]);
+    },
+  );
 
   it("normalizes npm 12 pack metadata for renamed package artifacts", async () => {
     const sourceDir = createPackageSourceFixture("openclaw-docker-pack-source-");

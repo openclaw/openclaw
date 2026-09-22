@@ -1,6 +1,7 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Shared queue type contracts for admission, drain, and fallback handling.
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { AdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
@@ -110,7 +111,11 @@ export function isFollowupRunDeferredError(error: unknown): error is FollowupRun
 }
 
 export type FollowupRun = {
+  /** External-turn eligibility; queued execution refreshes the session-selected profile. */
+  personalBootstrapEligible?: boolean;
   prompt: string;
+  /** Original operator capability retained by this turn's queue/run lifecycle. */
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Latest session to claim without rewriting the queued run before store refresh. */
   admissionSessionId?: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
@@ -189,6 +194,7 @@ export type FollowupRun = {
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: {
+    providerReviewAcknowledgment?: import("../../../sessions/provider-review.js").ProviderReviewAcknowledgment;
     agentId: string;
     agentDir: string;
     sessionId: string;
@@ -198,6 +204,7 @@ export type FollowupRun = {
     /** Prepared source delivery ownership; a lost source must not restore host media reads. */
     mediaNormalizationOwner?: "gateway";
     clientCaps?: string[];
+    bootstrapUserProfileId?: string;
     gatewayUiCommandTarget?: GatewayUiCommandTarget;
     toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
@@ -290,15 +297,19 @@ export type FollowupRun = {
 };
 
 export function isFollowupRunAborted(
-  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "operatorAuthority">,
 ): boolean {
-  return run.abortSignal?.aborted === true || run.queueAbortSignal?.aborted === true;
+  return (
+    run.abortSignal?.aborted === true ||
+    run.queueAbortSignal?.aborted === true ||
+    run.operatorAuthority?.signal?.aborted === true
+  );
 }
 
 export function resolveFollowupAbortSignal(
-  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal">,
+  run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "operatorAuthority">,
 ): AbortSignal | undefined {
-  const signals = [run.abortSignal, run.queueAbortSignal].filter(
+  const signals = [run.abortSignal, run.queueAbortSignal, run.operatorAuthority?.signal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
   return signals.length > 1 ? AbortSignal.any(signals) : signals[0];

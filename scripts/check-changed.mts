@@ -356,7 +356,7 @@ export function shouldRunWrapperShadowingCheck(paths: string[]) {
 }
 
 export function shouldRunAppcastOwnerTest(paths: string[]) {
-  return paths.includes("appcast.xml");
+  return paths.some((changedPath) => /^appcast(?:-(?:arm64|x86_64))?\.xml$/u.test(changedPath));
 }
 
 export function shouldRunTestTempCreationReport(paths: string[]) {

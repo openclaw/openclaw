@@ -67,6 +67,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MonotonicFrameClock
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCompositionContext
@@ -273,6 +274,18 @@ class ChatComposerLayoutTest {
 
   @Test
   @Config(qualifiers = "w1000dp-h1000dp-hdpi")
+  fun attachmentButtonSharesTheInputRowAndModelStaysBelowIt() {
+    showChat()
+    val editor = composeRule.onNode(hasSetTextAction()).getUnclippedBoundsInRoot()
+    val add = composeRule.onNodeWithContentDescription(nativeString("Add attachment")).getUnclippedBoundsInRoot()
+    val model = composeRule.onNodeWithContentDescription(nativeString("Model")).getUnclippedBoundsInRoot()
+    assertTrue("Attachment button must be left of the editor", add.right <= editor.left)
+    assertTrue("Attachment button must overlap the input row vertically", add.top < editor.bottom && add.bottom > editor.top)
+    assertTrue("Model selector must remain below the editor", model.top >= editor.bottom)
+  }
+
+  @Test
+  @Config(qualifiers = "w1000dp-h1000dp-hdpi")
   fun tabletopEnforcesPixelFloorsAndUsesTranslatedPostInsetBoundsOnce() {
     val width = mutableStateOf(320.dp)
     val height = mutableStateOf(720.dp)
@@ -369,12 +382,12 @@ class ChatComposerLayoutTest {
             "The complete real text line fits at the exact floor: font=$font density=$density editor=$bounds textSize=${line.size} line=${line.getLineTop(0)}..${line.getLineBottom(0)} lower=$lowerFloor touch=$touch",
             bounds.height >= ceil(line.getLineBottom(0) - line.getLineTop(0)).toInt(),
           )
-          val caret = line.getCursorRect(editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange].end)
+          val caret = visibleCaret(editor, line)
           assertTrue("The complete caret fits at equality: $caret in $bounds", caret.top >= 0 && caret.bottom <= bounds.height && caret.left >= 0 && caret.right <= bounds.width)
           val send = chatWindowBounds(composeRule.onNodeWithContentDescription(nativeString("Send")))
           assertTrue("The full target fits at equality", send.height >= touch && send.top >= hinge.bottom && send.bottom <= offset.value.y + with(density) { height.value.roundToPx() })
         } else {
-          assertTrue("One physical pixel below a floor must use the larger safe upper pane", bounds.bottom <= hinge.top)
+          assertTrue("One physical pixel below a floor must use the larger safe upper pane: font=$font bounds=$bounds hinge=$hinge panes=$upper,$lower,$paneWidth floors=$upperFloor,$lowerFloor,$widthFloor", bounds.bottom <= hinge.top)
         }
       }
     }
@@ -1020,7 +1033,7 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun settledRunShowsSendForTextAndTalkForAnEmptyDraft() {
+  fun settledRunShowsSendForTextAndOneVoiceControlForAnEmptyDraft() {
     showChat(viewportWidth = 320.dp)
     composeRule.runOnIdle {
       controller.handleGatewayEvent(
@@ -1028,13 +1041,14 @@ class ChatComposerLayoutTest {
         """{"sessionKey":"${AndroidScreenshotFixture.mainSessionKey}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
       )
     }
-    assertComposerControlsVisible(primaryAction = "Start Talk")
+    assertComposerControlsVisible(primaryAction = null)
+    composeRule.onNodeWithContentDescription(nativeString("Start Talk")).assertDoesNotExist()
     val editor = composeRule.onNode(hasSetTextAction())
     editor.performTextReplacement("A short status update")
     assertComposerControlsVisible(primaryAction = "Send")
     composeRule.onNodeWithContentDescription(nativeString("Start Talk")).assertDoesNotExist()
     editor.performTextReplacement("")
-    assertComposerControlsVisible(primaryAction = "Start Talk")
+    assertComposerControlsVisible(primaryAction = null)
     composeRule.onNodeWithContentDescription(nativeString("Send")).assertDoesNotExist()
   }
 
@@ -1155,7 +1169,9 @@ class ChatComposerLayoutTest {
       dictation.performClick()
       composeRule.onNodeWithText(nativeString("On-device speech recognition is unavailable.")).assertIsDisplayed()
       composeRule.onNodeWithText(nativeString("Record voice note")).assertDoesNotExist()
-      dictation.assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnLongClick))
+      dictation.performSemanticsAction(SemanticsActions.OnLongClick) { action -> action() }
+      composeRule.onNodeWithText(nativeString("Record voice note")).assertDoesNotExist()
+      composeRule.onNodeWithText(nativeString("Start Talk")).assertIsDisplayed()
       editor.assertTextEquals("Draft after forgetting")
     } finally {
       ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(recognitionAvailable)
@@ -1208,6 +1224,187 @@ class ChatComposerLayoutTest {
     editor.performTextReplacement(draft)
     editor.assertTextEquals(draft)
     assertComposerControlsVisible(talkActive = true)
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun composerResizeScreenshotProof() {
+    val height = mutableStateOf(720.dp)
+    showChat(viewportWidth = 320.dp, viewportHeight = { height.value }, fontScale = { 2f }, useChatShell = true)
+    val editor = composeRule.onNode(hasSetTextAction())
+    editor.performClick().performTextReplacement("Short viewport draft")
+    applyChatImeInsets()
+    composeRule.runOnIdle { height.value = 360.dp }
+    composeRule.waitForIdle()
+    System.getenv("OPENCLAW_CHAT_WORK_PROOF_DIR")?.let { path ->
+      val folder = File(path).apply { mkdirs() }
+      val image = composeRule.onNodeWithTag("chat-viewport").captureToImage().asAndroidBitmap()
+      assertTrue(image.width >= 320 && image.height >= 360)
+      File(folder, "composer-resize.png").outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+    }
+    assertCompleteComposerLineAboveIme()
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun composerViewportPreservesManualScrollAndRevealsSelectionAfterResize() {
+    val height = mutableStateOf(720.dp)
+    val offset = mutableStateOf(IntOffset.Zero)
+    showChat(viewportWidth = 360.dp, viewportHeight = { height.value }, fontScale = { 2f }, useChatShell = true, viewportOffset = { offset.value })
+    val editor = composeRule.onNode(hasSetTextAction())
+    val draft = (1..20).joinToString("\n") { "Draft line $it" }
+    editor.performClick().performTextReplacement(draft)
+    val identity = editor.fetchSemanticsNode().id
+    val range = { editor.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange] }
+    val atEnd = range().value()
+    assertTrue("Long draft scrolls to its caret", atEnd > 0f)
+    editor.performTouchInput { swipeDown() }
+    composeRule.waitForIdle()
+    val reading = range().value()
+    assertTrue("Manual scroll moves away from the caret", reading < atEnd)
+    composeRule.runOnIdle { offset.value = IntOffset(0, 1) }
+    composeRule.waitForIdle()
+    assertEquals("Unrelated placement must not snap manual reading back", reading, range().value(), 1f)
+    editor.performSemanticsAction(SemanticsActions.SetSelection) { assertTrue(it(0, 0, false)) }
+    composeRule.waitForIdle()
+    assertEquals("Moving selection reveals the start, not the bottom", 0f, range().value(), 1f)
+    applyChatImeInsets()
+    composeRule.runOnIdle { height.value = 360.dp }
+    composeRule.waitForIdle()
+    assertCompleteComposerLineAboveIme()
+    editor.performSemanticsAction(SemanticsActions.SetSelection) { assertTrue(it(draft.length, draft.length, false)) }
+    composeRule.waitForIdle()
+    assertCompleteComposerLineAboveIme()
+    assertTrue("Moving selection reveals the final line", range().value() > 0f)
+    assertEquals(identity, editor.fetchSemanticsNode().id)
+    editor.assertTextEquals(draft).assertIsFocused()
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi")
+  fun expandedSelectionFollowsTheMovedHandleWithoutResettingManualReading() {
+    showChat(viewportWidth = 360.dp, viewportHeight = { 720.dp }, useChatShell = true)
+    val editor = composeRule.onNode(hasSetTextAction())
+    val draft = (1..20).joinToString("\n") { "Draft line $it" }
+    editor.performClick().performTextReplacement(draft)
+    val identity = editor.fetchSemanticsNode().id
+    val end = draft.length
+
+    fun select(
+      start: Int,
+      finish: Int,
+    ) {
+      editor.performSemanticsAction(SemanticsActions.SetSelection) { assertTrue(it(start, finish, false)) }
+      composeRule.waitForIdle()
+      assertEquals(TextRange(start, finish), editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+    }
+
+    fun assertVisible(offset: Int) {
+      val layouts = mutableListOf<TextLayoutResult>()
+      editor.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+      val caret = visibleCaret(editor, layouts.single(), offset)
+      val height = editor.fetchSemanticsNode().boundsInRoot.height
+      assertTrue("Moved selection offset $offset must be wholly visible: $caret in height=$height", caret.top >= 0f && caret.bottom <= height)
+    }
+
+    select(end - 4, end)
+    select(0, end)
+    captureComposerProof("editor-selection-start")
+    assertVisible(0)
+    assertEquals("Moving the start must preserve the end", end, editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange].end)
+
+    // Reading away from the chosen handle is intentional. A settings event recomposes
+    // the actual input pill without changing its text, selection, or viewport geometry.
+    editor.performTouchInput { swipeUp() }
+    composeRule.waitForIdle()
+    val reading = editor.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+    assertTrue("Manual reading must move away from the first line", reading > 0f)
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"patch","session":{"key":"${AndroidScreenshotFixture.mainSessionKey}","thinkingLevel":"high","thinkingLevels":[{"id":"high","label":"high"}]}}""",
+      )
+    }
+    composeRule.waitForIdle()
+    assertEquals("high", controller.thinkingLevel.value)
+    assertEquals("Unrelated recomposition must preserve manual reading", reading, editor.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 0f)
+    assertEquals(TextRange(0, end), editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+
+    select(0, 0)
+    assertVisible(0)
+    select(0, end)
+    assertVisible(end)
+    select(end / 2, end)
+    assertVisible(end / 2)
+    select(end / 2, 0)
+    assertVisible(0)
+    select(end, 0)
+    assertVisible(end)
+    select(end, end - 4)
+    assertVisible(end - 4)
+    assertEquals("Selection changes must keep the same editor", identity, editor.fetchSemanticsNode().id)
+    editor.assertTextEquals(draft).assertIsFocused()
+  }
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi", shadows = [ShortcutKeyCharacterMap::class])
+  fun nativePageDownMovesOneVisibleEditorPage() = assertNativeEditorPage(direction = 1, extend = false)
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi", shadows = [ShortcutKeyCharacterMap::class])
+  fun nativePageUpMovesOneVisibleEditorPage() = assertNativeEditorPage(direction = -1, extend = false)
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi", shadows = [ShortcutKeyCharacterMap::class])
+  fun nativeShiftPageDownExtendsOneVisibleEditorPage() = assertNativeEditorPage(direction = 1, extend = true)
+
+  @Test
+  @Config(qualifiers = "w800dp-h800dp-mdpi", shadows = [ShortcutKeyCharacterMap::class])
+  fun nativeShiftPageUpExtendsOneVisibleEditorPage() = assertNativeEditorPage(direction = -1, extend = true)
+
+  private fun assertNativeEditorPage(
+    direction: Int,
+    extend: Boolean,
+  ) {
+    showChat(viewportWidth = 360.dp, viewportHeight = { 720.dp }, useChatShell = true)
+    val editor = composeRule.onNode(hasSetTextAction())
+    val draft = (1..20).joinToString("\n") { "Draft line $it" }
+    editor.performClick().performTextReplacement(draft)
+    val identity = editor.fetchSemanticsNode().id
+    val layouts = mutableListOf<TextLayoutResult>()
+    editor.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+    val layout = layouts.single()
+    assertEquals(20, layout.lineCount)
+    val anchor = layout.getLineStart(10) + 4
+    editor.performSemanticsAction(SemanticsActions.SetSelection) { assertTrue(it(anchor, anchor, false)) }
+    composeRule.waitForIdle()
+    val visibleHeight = editor.fetchSemanticsNode().boundsInRoot.height
+    assertTrue("The field must be a viewport, not the whole buffer", visibleHeight < layout.size.height)
+    val cursor = layout.getCursorRect(anchor)
+    val expected = layout.getOffsetForPosition(Offset(cursor.left, cursor.top + direction * visibleHeight))
+    assertTrue("An interior page must not jump to either buffer edge", expected > 0 && expected < draft.length)
+    assertTrue("Paging must move in the requested direction", (expected - anchor) * direction > 0)
+    composeRule.runOnIdle {
+      if (extend) insetView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_SHIFT_LEFT))
+      val meta = if (extend) KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON else 0
+      val key = if (direction > 0) KeyEvent.KEYCODE_PAGE_DOWN else KeyEvent.KEYCODE_PAGE_UP
+      for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+        val event = KeyEvent(0L, 0L, action, key, 0, meta)
+        if (!insetView.dispatchKeyEventPreIme(event)) insetView.dispatchKeyEvent(event)
+      }
+      if (extend) insetView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_SHIFT_LEFT))
+    }
+    composeRule.waitForIdle()
+    captureComposerProof("editor-page-${if (direction > 0) "down" else "up"}-${if (extend) "shift" else "caret"}")
+    assertEquals(
+      "Native paging must use the visible field height=$visibleHeight rather than buffer height=${layout.size.height}",
+      if (extend) TextRange(anchor, expected) else TextRange(expected),
+      editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange],
+    )
+    val visible = visibleCaret(editor, layout)
+    assertTrue("The paged endpoint must remain visible", visible.top >= 0f && visible.bottom <= visibleHeight)
+    assertEquals(identity, editor.fetchSemanticsNode().id)
+    editor.assertTextEquals(draft).assertIsFocused()
   }
 
   @Test
@@ -1348,11 +1545,23 @@ class ChatComposerLayoutTest {
         assertCompleteComposerLineAboveIme()
       }
       assertTrue("The edited draft must still have a routable owner", controller.isCurrentComposerOwner(owner))
-      composeRule.onNodeWithContentDescription(nativeString("Send")).assertIsEnabled().performClick()
+      editor.performSemanticsAction(SemanticsActions.OnClick) { assertTrue(it()) }
+      val send =
+        composeRule
+          .onNodeWithContentDescription(nativeString("Send"))
+          .assertIsEnabled()
+          .fetchSemanticsNode()
+          .config[SemanticsActions.OnClick]
+          .action!!
+      // An IME commit and send may arrive before the next recomposition or flow collection.
+      composeRule.runOnIdle {
+        checkNotNull(insetView.onCreateInputConnection(EditorInfo())).commitText(" final", 1)
+        assertTrue(send())
+      }
       composeRule.waitUntil {
         composeRule.runOnIdle { sent.size == 1 }
       }
-      assertEquals(JsonPrimitive(edited), sent.single()["message"])
+      assertEquals(JsonPrimitive(edited.substring(0, 13) + " final" + edited.substring(13)), sent.single()["message"])
       editor.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
     }
   }
@@ -1380,6 +1589,81 @@ class ChatComposerLayoutTest {
       assertions(sent)
     } finally {
       requestField.set(controller, originalRequest)
+    }
+  }
+
+  @Test
+  @Config(shadows = [ShortcutKeyCharacterMap::class])
+  fun undoRedoPublishesCanonicalDraftBeforeSendAndRestore() {
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(stableId = AndroidScreenshotFixture.gatewayId, kind = GatewayRegistryEntryKind.MANUAL, name = "Test gateway"),
+    )
+    prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    val savedDrafts = SavedStateHandle()
+    val viewModel = showChat(useChatShell = true, savedStateHandle = savedDrafts)
+    val owner = viewModel.captureChatShareOwner()
+    val otherOwner = owner.copy(sessionKey = "agent:main:other-draft")
+    val store = viewModel.chatComposerState
+    composeRule.runOnIdle { store.textDrafts[otherOwner] = "Other conversation" }
+    val editor = composeRule.onNode(hasSetTextAction())
+    editor.performClick().performTextReplacement("Base")
+    // Move away and back so the legacy field recomposes a forced undo snapshot.
+    composeRule.runOnIdle { dispatchHardwareKey(insetView, KeyEvent.KEYCODE_DPAD_LEFT) }
+    composeRule.waitForIdle()
+    composeRule.runOnIdle { dispatchHardwareKey(insetView, KeyEvent.KEYCODE_DPAD_RIGHT) }
+    composeRule.waitForIdle()
+    editor.performTextInput(" suffix")
+    editor.assertTextEquals("Base suffix")
+
+    fun command(key: Int) {
+      insetView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_CTRL_LEFT))
+      for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+        insetView.dispatchKeyEvent(KeyEvent(0L, 0L, action, key, 0, KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON))
+      }
+      insetView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_CTRL_LEFT))
+    }
+    composeRule.runOnIdle {
+      command(KeyEvent.KEYCODE_Z)
+      assertEquals("Undo must synchronously update the canonical draft", "Base", store.textDrafts[owner])
+      val restored = ChatComposerTextDraftStore(initial = chatComposerTextDraftsFromSnapshot(savedDrafts["chat-composer-text-drafts"]))
+      assertEquals("Base", restored[owner])
+      assertEquals("Other conversation", restored[otherOwner])
+    }
+    editor.assertTextEquals("Base")
+    composeRule.runOnIdle {
+      command(KeyEvent.KEYCODE_Y)
+      assertEquals("Redo must synchronously update the canonical draft", "Base suffix", store.textDrafts[owner])
+      val restored = ChatComposerTextDraftStore(initial = chatComposerTextDraftsFromSnapshot(savedDrafts["chat-composer-text-drafts"]))
+      assertEquals("Redo must synchronously persist the draft", "Base suffix", restored[owner])
+    }
+    editor.assertTextEquals("Base suffix")
+    composeRule.runOnIdle {
+      command(KeyEvent.KEYCODE_Z)
+      val send = store.beginSend(owner)
+      assertEquals(ChatComposerSendStartResult.Started, send.result)
+      assertEquals("Base", checkNotNull(send.request).message)
+      assertEquals("Other conversation", store.textDrafts[otherOwner])
+    }
+  }
+
+  // Robolectric 4.16.1 only handles Shift in its character map. Real Android
+  // reports control characters for Ctrl+letters, allowing Compose's shortcut path.
+  @org.robolectric.annotation.Implements(android.view.KeyCharacterMap::class)
+  class ShortcutKeyCharacterMap : org.robolectric.shadows.ShadowKeyCharacterMap() {
+    companion object {
+      @JvmStatic
+      @org.robolectric.annotation.Implementation(methodName = "nativeGetCharacter")
+      fun shortcutCharacter(
+        ptr: Long,
+        keyCode: Int,
+        metaState: Int,
+      ): Char =
+        if (metaState and KeyEvent.META_CTRL_ON != 0 && keyCode in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z) {
+          (keyCode - KeyEvent.KEYCODE_A + 1).toChar()
+        } else {
+          org.robolectric.shadows.ShadowKeyCharacterMap
+            .nativeGetCharacter(ptr, keyCode, metaState)
+        }
     }
   }
 
@@ -1454,7 +1738,9 @@ class ChatComposerLayoutTest {
         editor.assertIsFocused().assertTextEquals(draft)
       }
       val attemptInput = composeRule.runOnIdle { prepareInput(insetView) }
-      composeRule.onNodeWithContentDescription(nativeString("Details")).performClick()
+      // Robolectric cannot dismiss its native magnifier when a pointer click disables the field.
+      // Open Details through accessibility; the assertions exercise real queued IME/key input.
+      composeRule.onNodeWithContentDescription(nativeString("Details")).performSemanticsAction(SemanticsActions.OnClick) { assertTrue(it()) }
       composeRule.runOnIdle { attemptInput() }
       composeRule.waitForIdle()
       composeRule.runOnIdle {
@@ -1466,7 +1752,7 @@ class ChatComposerLayoutTest {
       editor.assertTextEquals(draft)
       assertEquals("Details must retain the same editor", editorId, editor.fetchSemanticsNode().id)
       assertEquals(TextRange(draft.length), editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
-      editor.performClick()
+      editor.performSemanticsAction(SemanticsActions.OnClick) { assertTrue(it()) }
       composeRule.runOnIdle { dispatchHardwareKey(insetView, KeyEvent.KEYCODE_X) }
       editor.assertTextEquals(draft + "x")
       composeRule.runOnIdle {
@@ -1498,11 +1784,55 @@ class ChatComposerLayoutTest {
     val send = composeRule.onNodeWithContentDescription(nativeString("Send")).getUnclippedBoundsInRoot()
     assertTrue("The complete action target must remain above the real IME", send.bottom <= visibleBottom)
     val node = editor.fetchSemanticsNode()
-    val selection = node.config[SemanticsProperties.TextSelectionRange]
-    val caret = layout.getCursorRect(selection.end).translate(node.positionInRoot)
+    val caret = visibleCaret(editor, layout).translate(node.positionInRoot)
     val caretTop = with(composeRule.density) { caret.top.toDp() }
     val caretBottom = with(composeRule.density) { caret.bottom.toDp() }
     assertTrue("The whole caret must be visible inside the editor: $caret within $bounds", caretTop >= bounds.top && caretBottom <= bounds.bottom)
+  }
+
+  private fun visibleCaret(
+    editor: SemanticsNodeInteraction,
+    layout: TextLayoutResult,
+    offset: Int = editor.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange].end,
+  ): androidx.compose.ui.geometry.Rect {
+    var displacement = Offset.Zero
+    // GetTextLayoutResult is unscrolled. Measure and restore the field's actual scroll offset
+    // before comparing its cursor with viewport bounds, including wrapped drafts at large fonts.
+    // Compose omits scroll actions when the full text already fits.
+    val scroll =
+      editor.fetchSemanticsNode().config.getOrNull(SemanticsActions.ScrollByOffset)
+        ?: run {
+          // Legacy value fields expose their scrolled text through layout coordinates,
+          // not ScrollByOffset semantics. Measure actual placement without assuming
+          // the cursor is visible; this also catches resize-only scroll regressions.
+          val root = editor.fetchSemanticsNode().layoutInfo
+
+          fun textLeaf(info: androidx.compose.ui.layout.LayoutInfo): androidx.compose.ui.layout.LayoutInfo? {
+            val children =
+              info.javaClass.methods
+                .first { it.name.startsWith("getChildren$") && it.parameterCount == 0 }
+                .invoke(info) as List<*>
+            if (children.isEmpty() && info.width == layout.size.width && info.height == layout.size.height) return info
+            return children.filterIsInstance<androidx.compose.ui.layout.LayoutInfo>().firstNotNullOfOrNull(::textLeaf)
+          }
+          val leaf = checkNotNull(textLeaf(root)) { "Missing placed text layout" }
+          val origin = leaf.coordinates.localToRoot(Offset.Zero) - editor.fetchSemanticsNode().positionInRoot
+          return layout.getCursorRect(offset).translate(origin)
+        }
+    composeRule.runOnIdle {
+      val clock =
+        object : MonotonicFrameClock {
+          private var time = 0L
+
+          override suspend fun <R> withFrameNanos(onFrame: (Long) -> R): R = onFrame(time.also { time += 16_000_000L })
+        }
+      runBlocking(clock) {
+        displacement = scroll(Offset(0f, -layout.size.height.toFloat()))
+        scroll(-displacement)
+      }
+    }
+    // ScrollState places text at integer pixels; animation consumption can retain a fractional remainder.
+    return layout.getCursorRect(offset).translate(Offset(displacement.x.roundToInt().toFloat(), displacement.y.roundToInt().toFloat()))
   }
 
   @Test
@@ -2080,7 +2410,7 @@ class ChatComposerLayoutTest {
   @Config(qualifiers = "w800dp-h800dp-mdpi", instrumentedPackages = ["ai.openclaw.app.AndroidScreenshotFixture"])
   fun branchSheetRealRowSwitchesTheLiteralFixture() =
     withBranchRequests { _, calls, _ ->
-      openBranchSheet()
+      openBranchSheet(calls)
       branchRow(2).assertIsEnabled().performTouchInput {
         down(center)
         up()
@@ -2105,12 +2435,12 @@ class ChatComposerLayoutTest {
     }
 
   private fun assertBranchPanes(direction: LayoutDirection) =
-    withBranchRequests(direction = direction) { _, _, _ ->
+    withBranchRequests(direction = direction) { _, calls, _ ->
       val editor = composeRule.onNode(hasSetTextAction())
       editor.performTextReplacement("branch reading draft")
       editor.performSemanticsAction(SemanticsActions.SetSelection) { assertTrue(it(2, 7, false)) }
       val editorId = editor.fetchSemanticsNode().id
-      val dialog = openBranchSheet()
+      val dialog = openBranchSheet(calls)
       val cases =
         listOf(
           emptyList<DisplayFeature>() to Rect(0, 0, 800, 800),
@@ -2158,7 +2488,7 @@ class ChatComposerLayoutTest {
   private fun assertTerminalBranchInput(keyboard: Boolean) {
     val postHistoryListReply = BranchPostHistoryListReplyHold()
     withBranchRequests(holdPostHistoryListReply = postHistoryListReply) { _, calls, release ->
-      val old = openBranchSheet()
+      val old = openBranchSheet(calls)
       val row = branchRow(2).assertIsEnabled().assertIsDisplayed()
       val bounds = row.getUnclippedBoundsInRoot()
       val x = (bounds.left.value + bounds.right.value) / 2
@@ -2193,7 +2523,7 @@ class ChatComposerLayoutTest {
       composeRule.waitForIdle()
       assertEquals("Recovered geometry cannot authorize A's held input", 0, calls.count { it.method == "sessions.branches.switch" })
       composeRule.onNode(isDialog()).assertDoesNotExist()
-      val fresh = openBranchSheet()
+      val fresh = openBranchSheet(calls)
       assertNotSame(old.window, fresh.window)
       postHistoryListReply.armed.complete(Unit)
       branchRow(2).performTouchInput {
@@ -2259,7 +2589,7 @@ class ChatComposerLayoutTest {
             .action,
         )
       } else {
-        openBranchSheet()
+        openBranchSheet(calls)
         checkNotNull(branchRow(2).fetchSemanticsNode().config[SemanticsActions.OnClick].action)
       }
     val before = controller.selectionGeneration.value
@@ -2323,7 +2653,7 @@ class ChatComposerLayoutTest {
   @Config(qualifiers = "w800dp-h800dp-mdpi", instrumentedPackages = ["ai.openclaw.app.AndroidScreenshotFixture"])
   fun branchOpeningRejectsSavedSelectionAfterUnsafeRecovery() =
     withBranchRequests { _, calls, _ ->
-      val old = openBranchSheet()
+      val old = openBranchSheet(calls)
       val select = checkNotNull(branchRow(2).fetchSemanticsNode().config[SemanticsActions.OnClick].action)
       composeRule.mainClock.autoAdvance = false
       composeRule.runOnUiThread {
@@ -2338,7 +2668,7 @@ class ChatComposerLayoutTest {
       composeRule.waitForIdle()
       assertEquals(0, calls.count { it.method == "sessions.branches.switch" })
       composeRule.onNode(isDialog()).assertDoesNotExist()
-      val fresh = openBranchSheet()
+      val fresh = openBranchSheet(calls)
       assertTrue("Explicit reopening creates a usable branch window", fresh.isShowing)
       assertNotSame(old.window, fresh.window)
       branchRow(2).assertIsEnabled()
@@ -2350,7 +2680,7 @@ class ChatComposerLayoutTest {
     withBranchRequests { model, calls, _ ->
       composeRule.runOnIdle { runtimeScopes().value = listOf("operator.read") }
       composeRule.waitUntil { "operator.admin" !in model.operatorScopes.value }
-      val old = openBranchSheet()
+      val old = openBranchSheet(calls)
       val read = calls.single { it.method == "sessions.branches.list" }
       assertEquals(JsonPrimitive(AndroidScreenshotFixture.mainSessionKey), read.params["sessionKey"])
       assertEquals(JsonPrimitive("main"), read.params["agentId"])
@@ -2367,7 +2697,7 @@ class ChatComposerLayoutTest {
       val assertDraft = prepareBranchEligibilityDraft()
       composeRule.runOnIdle { controllerFlow<Int>("_pendingRunCount").value = 1 }
       composeRule.waitUntil { model.pendingRunCount.value == 1 }
-      val dialog = openBranchSheet()
+      val dialog = openBranchSheet(calls)
       val read = calls.single { it.method == "sessions.branches.list" }
       assertEquals(JsonPrimitive(AndroidScreenshotFixture.mainSessionKey), read.params["sessionKey"])
       assertEquals(JsonPrimitive("main"), read.params["agentId"])
@@ -2394,7 +2724,7 @@ class ChatComposerLayoutTest {
   fun branchRowsDisableUntilOutboxRestored() =
     withBranchRequests { model, calls, _ ->
       val assertDraft = prepareBranchEligibilityDraft()
-      val dialog = openBranchSheet()
+      val dialog = openBranchSheet(calls)
       assertEquals(1, calls.count { it.method == "sessions.branches.list" })
       branchList().performScrollToNode(hasText("Release plan 12"))
       branchRow(12).assertIsDisplayed().assertIsEnabled()
@@ -2425,7 +2755,7 @@ class ChatComposerLayoutTest {
   fun branchRowsRespectCanonicalOutboxScope() =
     withBranchRequests { model, calls, _ ->
       val assertDraft = prepareBranchEligibilityDraft()
-      val dialog = openBranchSheet()
+      val dialog = openBranchSheet(calls)
       branchList().performScrollToNode(hasText("Release plan 12"))
       branchRow(12).assertIsDisplayed().assertIsEnabled()
       val assertReading = captureBranchEligibilityReading(dialog)
@@ -2548,7 +2878,7 @@ class ChatComposerLayoutTest {
       val cases = listOf("admin", "loading", "active", "missing", "switching")
       for (condition in cases) {
         branchDiagnosticCase = condition
-        val dialog = openBranchSheet()
+        val dialog = openBranchSheet(calls)
         val select = checkNotNull(branchRow(2).fetchSemanticsNode().config[SemanticsActions.OnClick].action)
         val branches = controller.sessionBranches.value
         composeRule.mainClock.autoAdvance = false
@@ -2593,7 +2923,7 @@ class ChatComposerLayoutTest {
         composeRule.onNode(isDialog()).assertDoesNotExist()
       }
       branchDiagnosticCase = "eligible"
-      openBranchSheet()
+      openBranchSheet(calls)
       branchRow(2).assertIsEnabled().performClick()
       composeRule.waitUntil {
         controller.messages.value
@@ -2607,7 +2937,7 @@ class ChatComposerLayoutTest {
   @Config(qualifiers = "w800dp-h800dp-mdpi", instrumentedPackages = ["ai.openclaw.app.AndroidScreenshotFixture"])
   fun branchOpeningPreservesAdmittedSwitchAndReplacementWindow() =
     withBranchRequests(hold = "sessions.branches.switch") { _, calls, release ->
-      val old = openBranchSheet()
+      val old = openBranchSheet(calls)
       branchRow(2).performClick()
       composeRule.waitUntil { calls.any { it.method == "sessions.branches.switch" } }
       composeRule.runOnUiThread {
@@ -2618,7 +2948,7 @@ class ChatComposerLayoutTest {
       }
       composeRule.waitForIdle()
       composeRule.onNode(isDialog()).assertDoesNotExist()
-      val fresh = openBranchSheet()
+      val fresh = openBranchSheet(calls)
       assertNotSame(old.window, fresh.window)
       assertTrue("The admitted switch remains in flight while B is open", controller.sessionBranchSwitching.value)
       branchRow(2).assertIsNotEnabled()
@@ -2644,10 +2974,19 @@ class ChatComposerLayoutTest {
 
   private fun branchList() = composeRule.onNode(hasScrollAction() and hasAnyAncestor(isDialog()))
 
-  private fun openBranchSheet(): ComponentDialog {
+  private fun openBranchSheet(calls: Collection<BranchRequest>): ComponentDialog {
+    val previousJobs = calls.mapTo(mutableSetOf()) { it.job }
     composeRule.onNodeWithContentDescription(nativeString("Chat actions")).performClick()
     composeRule.onNodeWithText(nativeString("Switch branch")).assertIsEnabled().performClick()
-    composeRule.waitUntil { !controller.sessionBranchesLoading.value }
+    // Loading stays false while the opening waits for its first Room read.
+    var refresh: Job? = null
+    composeRule.waitUntil {
+      composeRule.runOnIdle {
+        refresh = refresh ?: calls.firstOrNull { it.method == "sessions.branches.list" && it.job !in previousJobs }?.job
+        refresh?.isCompleted == true && !controller.sessionBranchesLoading.value
+      }
+    }
+    assertFalse("The opening read must finish normally", checkNotNull(refresh).isCancelled)
     composeRule.onNode(isDialog()).assertExists()
     branchRow(2).assertIsDisplayed()
     return checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
@@ -2688,6 +3027,7 @@ class ChatComposerLayoutTest {
   private data class BranchRequest(
     val method: String,
     val params: JsonObject,
+    val job: Job,
   )
 
   private class BranchPostHistoryListReplyHold {
@@ -2782,9 +3122,10 @@ class ChatComposerLayoutTest {
         job.invokeOnCompletion { recordPhase(if (job.isCancelled) "job-cancelled" else "job-completed") }
       }
       if (method.startsWith("sessions.branches.")) {
-        observedJobs.add(currentCoroutineContext().job)
+        val job = currentCoroutineContext().job
+        observedJobs.add(job)
         assertEquals(AndroidScreenshotFixture.gatewayId, gateway)
-        calls.add(BranchRequest(method, Json.parseToJsonElement(checkNotNull(params)).jsonObject))
+        calls.add(BranchRequest(method, Json.parseToJsonElement(checkNotNull(params)).jsonObject, job))
         if (method == hold) {
           recordPhase("held")
           release.await()
@@ -3261,6 +3602,51 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun nativeTalkFallbackIsVisibleInTheChatScreen() {
+    val model = showChat(viewportHeight = { 720.dp }, talkActive = true)
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val service = android.content.ComponentName(app, "TestSpeechRecognitionService")
+    shadowOf(app.packageManager).apply {
+      addServiceIfNotPresent(service)
+      addIntentFilterForService(service, android.content.IntentFilter(android.speech.RecognitionService.SERVICE_INTERFACE))
+    }
+    @Suppress("UNCHECKED_CAST")
+    val manager =
+      (
+        NodeRuntime::class.java
+          .getDeclaredField("talkMode\$delegate")
+          .apply { isAccessible = true }
+          .get(runtime)
+          as Lazy<ai.openclaw.app.voice.TalkModeManager>
+      ).value
+    // Seed only the existing config cache; startup and status still belong to the real manager.
+    val config =
+      ai.openclaw.app.voice.TalkModeGatewayConfigParser.parse(
+        Json.parseToJsonElement("""{"talk":{"realtime":{"model":"gpt-live-1-codex"}}}""").jsonObject,
+      )
+    val cacheClass = Class.forName("ai.openclaw.app.voice.TalkConfigCache")
+    val cache =
+      cacheClass
+        .getDeclaredConstructor(config.javaClass, Boolean::class.javaPrimitiveType)
+        .apply { isAccessible = true }
+        .newInstance(config, true)
+
+    @Suppress("UNCHECKED_CAST")
+    val cacheOwner =
+      ai.openclaw.app.voice.TalkModeManager::class.java
+        .getDeclaredField("configCache")
+        .apply { isAccessible = true }
+        .get(manager) as java.util.concurrent.atomic.AtomicReference<Any>
+    cacheOwner.set(cache)
+    composeRule.runOnIdle { manager.setEnabled(true) }
+    composeRule.waitUntil { composeRule.runOnIdle { manager.isListening.value } }
+    captureComposerProof("native-talk-fallback")
+    composeRule.onNodeWithText("Gateway did not advertise GPT-Live relay support", substring = true).assertIsDisplayed()
+    assertEquals(manager.statusText.value, model.talkModeStatusText.value)
+    composeRule.onNodeWithText(nativeString("Talk stopped")).assertDoesNotExist()
+  }
+
+  @Test
   fun compactPickersExposeFullSettingsWithoutExpandingTheComposer() {
     showChat(viewportWidth = 320.dp, fontScale = { 1.5f }, talkActive = true)
     composeRule.runOnIdle {
@@ -3474,7 +3860,7 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun fastModeBadgeBelongsToTheGaugeGeometry() {
+  fun fastModeGaugeRetainsAccessibleStateWithoutAnOverlayBadge() {
     showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp })
     composeRule.runOnIdle {
       controller.handleGatewayEvent(
@@ -3491,18 +3877,13 @@ class ChatComposerLayoutTest {
     }
 
     composeRule.onNodeWithContentDescription(nativeString("Thinking")).assertIsDisplayed()
-    val gauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).getUnclippedBoundsInRoot()
-    val badge = composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).getUnclippedBoundsInRoot()
-    val badgeCenterX = (badge.left.value + badge.right.value) / 2f
-    val badgeCenterY = (badge.top.value + badge.bottom.value) / 2f
-    val gaugeCenterX = (gauge.left.value + gauge.right.value) / 2f
-    val gaugeCenterY = (gauge.top.value + gauge.bottom.value) / 2f
-
-    assertTrue("The Fast mode badge center must stay inside the gauge: $badge in $gauge", badgeCenterX in gauge.left.value..gauge.right.value)
-    assertTrue("The Fast mode badge center must stay inside the gauge: $badge in $gauge", badgeCenterY in gauge.top.value..gauge.bottom.value)
-    assertFalse(
-      "The Fast mode badge must not cover the needle hub: $badge over $gauge",
-      gaugeCenterX in badge.left.value..badge.right.value && gaugeCenterY in badge.top.value..badge.bottom.value,
+    composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNodeWithContentDescription(nativeString("Thinking")).assert(
+      SemanticsMatcher.expectValue(
+        SemanticsProperties.StateDescription,
+        chatThinkingChipStateDescription(true, "high", listOf(ChatThinkingLevelOption("high", "high"))),
+      ),
     )
   }
 
@@ -4060,20 +4441,19 @@ class ChatComposerLayoutTest {
     showChat(viewportHeight = { 640.dp }, restorationTester = restoration)
     composeRule.onNode(hasSetTextAction()).performTextInput("retained menu draft")
     composeRule.onNodeWithContentDescription(nativeString("Add attachment")).performClick()
-    composeRule.onNodeWithText(nativeString("Photos")).assertIsDisplayed()
-    val old =
-      WindowInspector.getGlobalWindowViews().single {
-        it.isAttachedToWindow && (it.layoutParams as? WindowManager.LayoutParams)?.type == WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL
-      }
+    composeRule.onNode(isDialog()).assertIsDisplayed()
+    composeRule.onNode(hasText(nativeString("Gallery")) and hasClickAction()).assertIsSelected()
     restoration.emulateSavedInstanceStateRestore()
     composeRule.waitForIdle()
-    assertFalse(old.isAttachedToWindow)
-    composeRule.onNode(isPopup()).assertDoesNotExist()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
     composeRule.onNode(hasSetTextAction()).assertTextEquals("retained menu draft")
     composeRule.onNodeWithContentDescription(nativeString("Add attachment")).performClick()
-    for (label in listOf("Photos", "Videos", "Files")) {
-      composeRule.onNodeWithText(nativeString(label)).assertIsDisplayed()
+    for (label in listOf("Gallery", "File", "Location")) {
+      composeRule.onNode(hasText(nativeString(label)) and hasClickAction()).assertIsDisplayed()
     }
+    composeRule.onNode(hasText(nativeString("File")) and hasClickAction()).performClick()
+    composeRule.onNodeWithText(nativeString("Files")).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Videos")).assertIsDisplayed()
   }
 
   @Test
@@ -4201,6 +4581,40 @@ class ChatComposerLayoutTest {
     composeRule.runOnIdle {
       val remaining = viewModel.chatComposerState.attachments.value[owner]
       assertTrue(remaining.isNullOrEmpty())
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun admittedLargePhotoPreviewsInComposerWithoutSending() {
+    val model = showChat(viewportHeight = { 720.dp })
+    val owner = model.captureChatShareOwner()
+    val photo = PendingAttachment("preview-photo", "synthetic-photo.jpg", "image/jpeg", syntheticLargeChatPhotoBase64())
+    val messages = model.chatMessages.value
+    val outbox = model.chatOutboxItems.value
+    composeRule.runOnIdle {
+      assertEquals(0, model.chatComposerState.addAttachments(owner, listOf(photo)))
+    }
+    composeRule.waitForIdle()
+    try {
+      composeRule.waitUntil {
+        composeRule.onAllNodesWithContentDescription("image/jpeg").fetchSemanticsNodes().isNotEmpty()
+      }
+    } finally {
+      captureComposerProof("composer-photo")
+    }
+    composeRule.onNodeWithContentDescription("image/jpeg").assertIsDisplayed().performClick()
+    composeRule.onNodeWithContentDescription(nativeString("Close image preview")).assertIsDisplayed()
+    composeRule.onNodeWithText("100%").assertIsDisplayed()
+    composeRule.onNodeWithContentDescription(nativeString("Close image preview")).performClick()
+    composeRule.onNodeWithContentDescription(nativeString("Remove attachment")).performClick()
+    composeRule.runOnIdle {
+      assertTrue(
+        model.chatComposerState.attachments.value[owner]
+          .isNullOrEmpty(),
+      )
+      assertEquals(messages, model.chatMessages.value)
+      assertEquals(outbox, model.chatOutboxItems.value)
     }
   }
 
@@ -4401,9 +4815,11 @@ class ChatComposerLayoutTest {
       composeRule
         .onNode(
           SemanticsMatcher("voice-note long press") { node ->
-            node.config.getOrNull(SemanticsActions.OnLongClick)?.label == nativeString("Record voice note")
+            node.config.getOrNull(SemanticsActions.OnLongClick)?.label == nativeString("Voice options")
           },
         ).performSemanticsAction(SemanticsActions.OnLongClick) { action -> action() }
+      composeRule.onNodeWithText(nativeString("Record voice note")).performClick()
+      composeRule.onNodeWithContentDescription(nativeString("Cancel voice note")).assertIsDisplayed()
       captureComposerProof("voice-controls-320-2.0")
       assertCompactComposerCircle(composeRule.onNodeWithContentDescription(nativeString("Cancel voice note")))
       assertCompactComposerCircle(composeRule.onNodeWithContentDescription(nativeString("Finish voice note")))
@@ -4963,6 +5379,11 @@ class ChatComposerLayoutTest {
       val geometryFailures = mutableListOf<String>()
 
       fun verifyGeometry(label: String) {
+        val transcriptWidth =
+          composeRule
+            .onNodeWithTag("chat-viewport")
+            .fetchSemanticsNode()
+            .boundsInRoot.width - with(composeRule.density) { 32.dp.toPx() }
         val reference = composeRule.onNode(hasContentDescription("You") and hasText("Summarize the release checklist.")).fetchSemanticsNode().boundsInRoot
         val actual =
           composeRule
@@ -4971,8 +5392,8 @@ class ChatComposerLayoutTest {
             .fetchSemanticsNode()
             .boundsInRoot
         val assistant = composeRule.onNode(hasContentDescription("OpenClaw") and hasText("I will keep the summary concise.")).fetchSemanticsNode().boundsInRoot
-        if (kotlin.math.abs(reference.width - actual.width) > 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
-          geometryFailures += "$label: pending user width/edge differs from confirmed user: $actual vs $reference"
+        if (actual.width > transcriptWidth * 0.78f + 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
+          geometryFailures += "$label: pending user exceeds text budget or differs from confirmed trailing edge: $actual vs $reference"
         }
         if (model.chatSelectedActiveRunPresentation.value.count > 0 && model.chatStreamingAssistantText.value == null) {
           val typing =
@@ -4981,8 +5402,8 @@ class ChatComposerLayoutTest {
               .assertIsDisplayed()
               .fetchSemanticsNode()
               .boundsInRoot
-          if (kotlin.math.abs(assistant.width - typing.width) > 1f || kotlin.math.abs(assistant.left - typing.left) > 1f) {
-            geometryFailures += "$label: typing width/edge differs from assistant: $typing vs $assistant"
+          if (typing.width > transcriptWidth + 1f || kotlin.math.abs(assistant.left - typing.left) > 1f) {
+            geometryFailures += "$label: typing exceeds assistant width or differs from its leading edge: $typing vs $assistant"
           }
         }
       }
@@ -5042,7 +5463,12 @@ class ChatComposerLayoutTest {
           ChatMessage("bubble-proof-answer", "assistant", listOf(ChatMessageContent(text = "Two reviews remain before release.")), null)
       }
       composeRule.onNodeWithText("Two reviews remain before release.", useUnmergedTree = true).assertIsDisplayed()
-      composeRule.onNodeWithContentDescription("Start Talk").assertIsDisplayed()
+      composeRule
+        .onNode(
+          SemanticsMatcher("voice options remain available") { node ->
+            node.config.getOrNull(SemanticsActions.OnLongClick)?.label == nativeString("Voice options")
+          },
+        ).assertIsDisplayed()
       capture("confirmed")
       verifyGeometry("confirmed")
       assertTrue(geometryFailures.joinToString("\n"), geometryFailures.isEmpty())
@@ -5147,8 +5573,9 @@ class ChatComposerLayoutTest {
     layoutDirection: () -> LayoutDirection = { LayoutDirection.Ltr },
     restorationTester: StateRestorationTester? = null,
     scene: AndroidScreenshotScene = AndroidScreenshotScene.Chat,
+    savedStateHandle: SavedStateHandle = SavedStateHandle(),
   ): MainViewModel {
-    val viewModel = MainViewModel(app, prefs, SavedStateHandle())
+    val viewModel = MainViewModel(app, prefs, savedStateHandle)
     viewModelStore.put("chat", viewModel)
     viewModel.enterScreenshotFixtureMode(scene)
     val setContent = restorationTester?.let { it::setContent } ?: composeRule::setContent
@@ -5241,14 +5668,14 @@ class ChatComposerLayoutTest {
     talkActive: Boolean = false,
     thinkingLabel: String = nativeString("Low"),
     modelLabel: String = "GPT-5.2",
-    primaryAction: String = "Stop",
+    primaryAction: String? = "Stop",
   ) {
     val viewport = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
     val editorNode = composeRule.onNode(hasSetTextAction()).assertIsDisplayed()
     val editor = editorNode.getUnclippedBoundsInRoot()
     assertTrue("Editor must retain a visible line: $editor inside $viewport", editor.bottom > editor.top)
     val controls =
-      (listOf(primaryAction) + if (talkActive) listOf("End Talk") else emptyList()).map { label ->
+      (listOfNotNull(primaryAction) + if (talkActive) listOf("End Talk") else emptyList()).map { label ->
         composeRule.onNodeWithContentDescription(nativeString(label)).assertIsDisplayed().assertHasClickAction()
       } +
         listOf(
@@ -5278,7 +5705,7 @@ class ChatComposerLayoutTest {
     if (composeRule.onAllNodesWithContentDescription(nativeString("Details")).fetchSemanticsNodes().isNotEmpty()) {
       controlBounds += composeRule.onNodeWithContentDescription(nativeString("Details")).assertIsDisplayed().getUnclippedBoundsInRoot()
     }
-    val primary = controlBounds.first()
+    val primary = primaryAction?.let { composeRule.onNodeWithContentDescription(nativeString(it)).getUnclippedBoundsInRoot() }
     val dictation =
       composeRule.onNode(
         SemanticsMatcher("dictation control") { node ->
@@ -5288,21 +5715,19 @@ class ChatComposerLayoutTest {
     val voice =
       if (talkActive) {
         dictation.assertDoesNotExist()
-        controlBounds[1]
+        composeRule.onNodeWithContentDescription(nativeString("End Talk")).getUnclippedBoundsInRoot()
       } else {
         dictation.assertIsDisplayed().getUnclippedBoundsInRoot().also { controlBounds += it }
       }
-    assertTrue("Voice stays before the primary action", voice.right <= primary.left)
-    controlBounds.drop(1).forEach { bounds ->
-      assertEquals(
-        "Every control, including voice, must share the action row: $bounds versus $primary",
-        (primary.top.value + primary.bottom.value) / 2,
-        (bounds.top.value + bounds.bottom.value) / 2,
-        1f,
-      )
-    }
-    controlBounds.sortedBy { it.left }.zipWithNext().forEach { (left, right) ->
-      assertTrue("Adjacent touch targets must not overlap: $left and $right", left.right <= right.left)
+    primary?.let { assertTrue("Voice stays before the primary action", voice.right <= it.left) }
+    assertTrue("Voice stays beside the editor", voice.left >= editor.right && voice.top < editor.bottom && voice.bottom > editor.top)
+    for ((index, first) in controlBounds.withIndex()) {
+      for (second in controlBounds.drop(index + 1)) {
+        assertTrue(
+          "Touch targets must not overlap: $first and $second",
+          first.right <= second.left || second.right <= first.left || first.bottom <= second.top || second.bottom <= first.top,
+        )
+      }
     }
     controlBounds.forEach { bounds ->
       val retainsTouchTarget =

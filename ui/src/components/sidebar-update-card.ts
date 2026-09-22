@@ -15,12 +15,16 @@ import {
   isUpdateActionable,
 } from "../app/update-schedule-projection.ts";
 import { t } from "../i18n/index.ts";
+import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
 import "../styles/sidebar-update-card.css";
 import { icons } from "./icons.ts";
 import { isUpdateRunAttentionVisible } from "./sidebar-attention-update.ts";
 import "./tooltip.ts";
+import { renderUpdateGitRevisions } from "./update-git-revisions.ts";
+
+registerSidebarAttentionEnglish();
 
 class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) compact = false;
@@ -485,6 +489,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
               </button>`
             : nothing
         }
+        ${actionable && !busy ? renderUpdateGitRevisions(this.updateSchedule, this.updateAvailable) : nothing}
       </div>
     `;
   }

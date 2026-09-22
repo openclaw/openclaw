@@ -123,10 +123,7 @@ function createInput(options?: {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(
-    mediaTaskStatus,
-    "buildActiveImageGenerationTaskPromptContextForSession",
-  ).mockResolvedValue(undefined);
+  vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockResolvedValue(undefined);
   resetSubagentRegistryForTests();
   hoisted.promptPressureKeys.clear();
   hoisted.reconcileToolResultPromptProjectionState.mockReset();
@@ -224,16 +221,12 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
   it("carries changed media progress without rewriting the system prompt", async () => {
     const fixture = createInput();
     fixture.input.capabilityToolNames.add("image_generate");
-    vi.mocked(
-      mediaTaskStatus.buildActiveImageGenerationTaskPromptContextForSession,
-    ).mockResolvedValue(
-      '- tool=image_generate; task=image-1; status=running; progress_json="Rendering"',
+    vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
+      '## Media Generation Tasks\n- tool=image_generate; task=image-1; status=running; progress_json="Rendering"',
     );
     const rendering = await prepareEmbeddedAttemptPromptContext(fixture.input);
-    vi.mocked(
-      mediaTaskStatus.buildActiveImageGenerationTaskPromptContextForSession,
-    ).mockResolvedValue(
-      '- tool=image_generate; task=image-1; status=running; progress_json="Encoding"',
+    vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
+      '## Media Generation Tasks\n- tool=image_generate; task=image-1; status=running; progress_json="Encoding"',
     );
     const encoding = await prepareEmbeddedAttemptPromptContext(fixture.input);
     expect(encoding.systemPromptForHook).toBe(rendering.systemPromptForHook);
@@ -252,14 +245,14 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const process = createProcessSessionFixture({ id: "exec-a", backgrounded: true });
     process.scopeKey = fixture.input.attempt.sessionKey;
     addSession(process);
-    vi.mocked(
-      mediaTaskStatus.buildActiveImageGenerationTaskPromptContextForSession,
-    ).mockResolvedValue("- tool=image_generate; task=image-1; status=running");
+    vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
+      "## Media Generation Tasks\n- tool=image_generate; task=image-1; status=running",
+    );
     const active = await prepareEmbeddedAttemptPromptContext(fixture.input);
     deleteSession("exec-a");
-    vi.mocked(
-      mediaTaskStatus.buildActiveImageGenerationTaskPromptContextForSession,
-    ).mockResolvedValue(undefined);
+    vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
+      "## Media Generation Tasks\n- tool=image_generate; none",
+    );
     const empty = await prepareEmbeddedAttemptPromptContext({
       ...fixture.input,
       appendOnlyRuntimeContext: true,

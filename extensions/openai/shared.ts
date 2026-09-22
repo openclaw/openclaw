@@ -8,9 +8,11 @@ import {
   buildFirstTemplateModel,
   findCatalogTemplate,
   matchesExactOrPrefix,
+  normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-metadata";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { classifyOpenAIBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import { resolveOpenAITransportTurnState } from "./transport-policy.js";
 
@@ -69,7 +71,11 @@ function defaultOpenAIResponsesExtraParams(
 
 type OpenAIResponsesProviderHooks = Pick<
   ProviderPlugin,
-  "buildReplayPolicy" | "prepareExtraParams" | "wrapStreamFn" | "resolveTransportTurnState"
+  | "buildReplayPolicy"
+  | "prepareExtraParams"
+  | "wrapStreamFn"
+  | "resolveTransportTurnState"
+  | "isCacheTtlEligible"
 >;
 
 const resolveOpenAIResponsesTransportTurnState: NonNullable<
@@ -92,6 +98,11 @@ export function buildOpenAIResponsesProviderHooks(options?: {
   transport?: "auto" | "sse" | "websocket" | "websocket-cached";
 }): OpenAIResponsesProviderHooks {
   return {
+    // Native OpenAI caching is automatic; custom routes must explicitly opt in.
+    isCacheTtlEligible: ({ provider, baseUrl, supportsPromptCacheKey }) =>
+      normalizeProviderId(provider) === "openai" &&
+      (supportsPromptCacheKey ??
+        (classifyOpenAIBaseUrl(baseUrl) === "platform" || isOpenAICodexBaseUrl(baseUrl))),
     buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
     wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,

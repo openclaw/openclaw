@@ -19,7 +19,7 @@ export function recordGitRollbackOutcome(params: {
     params.progress?.onRollbackOutcome?.(params.outcome);
   } catch {
     params.steps.push({
-      name: "rollback outcome recording",
+      name: "rollback-outcome-recording",
       command: "",
       cwd: params.root,
       durationMs: 0,

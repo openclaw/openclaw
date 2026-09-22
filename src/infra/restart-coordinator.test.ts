@@ -9,18 +9,18 @@ import {
   scheduleSafeGatewayRestart,
 } from "./restart-coordinator.js";
 
-const scheduleGatewaySigusr1Restart = vi.hoisted(() => vi.fn());
+const scheduleGatewayRestart = vi.hoisted(() => vi.fn());
 
 vi.mock("./restart.js", () => ({
-  scheduleGatewaySigusr1Restart: (opts: unknown) => scheduleGatewaySigusr1Restart(opts),
+  scheduleGatewayRestart: (opts: unknown) => scheduleGatewayRestart(opts),
 }));
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
-  scheduleGatewaySigusr1Restart.mockReset().mockReturnValue({
+  scheduleGatewayRestart.mockReset().mockReturnValue({
     ok: true,
     pid: 123,
-    signal: "SIGUSR1",
+    signal: "SIGUSR2",
     delayMs: 0,
     mode: "emit",
     coalesced: false,
@@ -184,10 +184,10 @@ describe("safe gateway restart coordinator", () => {
   });
 
   it("schedules one restart request and marks active work as deferred", () => {
-    scheduleGatewaySigusr1Restart.mockReturnValueOnce({
+    scheduleGatewayRestart.mockReturnValueOnce({
       ok: true,
       pid: 123,
-      signal: "SIGUSR1",
+      signal: "SIGUSR2",
       delayMs: 0,
       mode: "emit",
       coalesced: false,
@@ -207,17 +207,17 @@ describe("safe gateway restart coordinator", () => {
     });
 
     expect(result.status).toBe("deferred");
-    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
+    expect(scheduleGatewayRestart).toHaveBeenCalledWith({
       delayMs: 0,
       reason: "test.safe",
     });
   });
 
   it("surfaces coalesced restart requests", () => {
-    scheduleGatewaySigusr1Restart.mockReturnValueOnce({
+    scheduleGatewayRestart.mockReturnValueOnce({
       ok: true,
       pid: 123,
-      signal: "SIGUSR1",
+      signal: "SIGUSR2",
       delayMs: 500,
       mode: "emit",
       coalesced: true,
@@ -238,11 +238,11 @@ describe("safe gateway restart coordinator", () => {
     expect(result.status).toBe("coalesced");
   });
 
-  it("forwards skipDeferral to scheduleGatewaySigusr1Restart and marks status scheduled", () => {
-    scheduleGatewaySigusr1Restart.mockReturnValueOnce({
+  it("forwards skipDeferral to scheduleGatewayRestart and marks status scheduled", () => {
+    scheduleGatewayRestart.mockReturnValueOnce({
       ok: true,
       pid: 123,
-      signal: "SIGUSR1",
+      signal: "SIGUSR2",
       delayMs: 0,
       mode: "emit",
       coalesced: false,
@@ -264,7 +264,7 @@ describe("safe gateway restart coordinator", () => {
 
     expect(result.status).toBe("scheduled");
     expect(result.preflight.safe).toBe(false);
-    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
+    expect(scheduleGatewayRestart).toHaveBeenCalledWith({
       delayMs: 0,
       preservePendingEmitHooksOnDeferralBypass: true,
       reason: "test.skip-deferral",
@@ -273,10 +273,10 @@ describe("safe gateway restart coordinator", () => {
   });
 
   it("omits skipDeferral when not requested", () => {
-    scheduleGatewaySigusr1Restart.mockReturnValueOnce({
+    scheduleGatewayRestart.mockReturnValueOnce({
       ok: true,
       pid: 123,
-      signal: "SIGUSR1",
+      signal: "SIGUSR2",
       delayMs: 0,
       mode: "emit",
       coalesced: false,
@@ -295,7 +295,7 @@ describe("safe gateway restart coordinator", () => {
       },
     });
 
-    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
+    expect(scheduleGatewayRestart).toHaveBeenCalledWith({
       delayMs: 0,
       reason: "test.no-skip",
     });

@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
+  captureUiProof,
   createChatFlowE2eSuite,
   installMockGateway,
   waitForChatScrollIdle,
@@ -19,6 +20,7 @@ suite.define(() => {
     { name: "expanded desktop", mobile: false, expanded: true, multiline: false },
     { name: "multiline desktop", mobile: false, expanded: false, multiline: true },
     { name: "collapsed mobile", mobile: true, expanded: false, multiline: false },
+    { name: "expanded mobile", mobile: true, expanded: true, multiline: false },
     { name: "active run default mode", mobile: false, expanded: false, multiline: false },
   ])(
     "keeps task progress steady through Enter, streaming, and refresh: $name",
@@ -36,7 +38,13 @@ suite.define(() => {
         const card = page.locator(".session-progress-card--composer");
         await card.waitFor();
         await waitForChatScrollIdle(page);
-        if (!expanded) {
+        if (mobile) {
+          await captureUiProof(suite, page, "mobile-progress", "initial.png");
+        }
+        expect(await card.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
+          !mobile,
+        );
+        if (mobile ? expanded : !expanded) {
           await card.locator("summary").click();
         }
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
@@ -101,6 +109,10 @@ suite.define(() => {
               (sample) => Math.abs(sample.composerHeight - initial.composerHeight) <= 1,
             ),
           ).toBe(true);
+        }
+        expect(initial.open).toBe(expanded);
+        if (mobile) {
+          await captureUiProof(suite, page, "mobile-progress", "after-send.png");
         }
         expect(await textarea.inputValue()).toBe("");
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);

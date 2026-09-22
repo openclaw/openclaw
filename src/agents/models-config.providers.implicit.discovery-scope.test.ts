@@ -971,10 +971,11 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
     expect(providers?.["amazon-bedrock"]?.models).toMatchObject([
       { id: "vision-model", input: ["text", "image"] },
+      { id: "discovered-only" },
     ]);
   });
 
-  it("keeps explicit provider models manual without provider wildcard visibility", async () => {
+  it("merges discovered models without treating configured rows or selection policy as inventory limits", async () => {
     const explicitProvider = {
       baseUrl: "http://vllm.example/v1",
       api: "openai-completions" as const,
@@ -996,46 +997,6 @@ describe("resolveImplicitProviders startup discovery scope", () => {
           defaults: {
             models: {
               "vllm/manual-model": {},
-            },
-          },
-        },
-        models: {
-          providers: {
-            vllm: explicitProvider,
-          },
-        },
-      },
-      env: state.env,
-      explicitProviders: {
-        vllm: explicitProvider,
-      },
-    });
-
-    expect(providers?.vllm?.models.map((model) => model.id)).toEqual(["manual-model"]);
-  });
-
-  it("merges discovered self-hosted models into explicit provider models for wildcard visibility", async () => {
-    const explicitProvider = {
-      baseUrl: "http://vllm.example/v1",
-      api: "openai-completions" as const,
-      models: [createTextModel("manual-model", "Manual Model")],
-    };
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([createProvider("vllm")]);
-    mocks.runProviderCatalog.mockResolvedValue({
-      provider: {
-        baseUrl: "http://vllm.example/v1",
-        api: "openai-completions" as const,
-        models: [createTextModel("discovered-model", "Discovered Model")],
-      },
-    });
-
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {
-        agents: {
-          defaults: {
-            models: {
-              "vllm/*": {},
             },
           },
         },
