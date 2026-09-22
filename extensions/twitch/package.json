@@ -8,10 +8,10 @@
   },
   "type": "module",
   "dependencies": {
-    "@twurple/api-call": "8.1.4",
-    "@twurple/auth": "8.1.4",
-    "@twurple/chat": "8.1.4",
-    "zod": "4.6.2"
+    "@twurple/api-call": "8.2.0",
+    "@twurple/auth": "8.2.0",
+    "@twurple/chat": "8.2.0",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

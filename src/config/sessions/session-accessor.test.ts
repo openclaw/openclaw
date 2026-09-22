@@ -36,7 +36,7 @@ import type { TrajectoryEvent } from "../../trajectory/types.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryRoute,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   applySessionEntryReplacements,
@@ -90,7 +90,7 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.test-support.js";
-import { recordSessionParticipant } from "./session-accessor.sqlite-participants.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import {
   appendTranscriptEventSync,

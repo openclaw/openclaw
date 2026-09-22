@@ -227,6 +227,48 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "AWS"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Azure"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Daytona"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Google Cloud"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Hetzner"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Machine0"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/settings-sidebar.ts",
@@ -459,6 +501,20 @@
     {
       "count": 1,
       "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
+      "text": "Build runner"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
+      "text": "Duplicate runner"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
       "name": "description",
       "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
       "text": "Chat with your agent from Telegram groups and direct messages."
@@ -560,6 +616,13 @@
       "name": "text",
       "path": "ui/src/pages/profile/profile-hero.ts",
       "text": "OpenClaw"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/search/search-results.ts",
+      "text": "snippet"
     },
     {
       "count": 1,

@@ -7,7 +7,7 @@ import {
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { isJsonObject, type CodexThreadItem } from "./protocol.js";
+import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 
 export const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 export const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 10_000;
@@ -28,6 +28,10 @@ export class ToolOutputAccumulator {
   private readonly trimStateByItem = new Map<string, ToolOutputTrimState>();
   private readonly truncatedItemIds = new Set<string>();
   readonly textByItem = new Map<string, string>();
+
+  isTruncated(itemId: string): boolean {
+    return this.truncatedItemIds.has(itemId);
+  }
 
   append(
     itemId: string,
@@ -120,6 +124,26 @@ export function collectDynamicToolContentText(
       return text ? [text] : [];
     })
     .join("\n");
+}
+
+export function readCodexResponseOutput(item: JsonObject): string | undefined {
+  if (typeof item.output === "string") {
+    return item.output;
+  }
+  if (!Array.isArray(item.output)) {
+    return undefined;
+  }
+  // Preserve text-item boundaries and whitespace. Non-text payloads keep their
+  // media owner rather than bypassing display privacy as serialized plaintext.
+  return JSON.stringify(
+    item.output.map((part) =>
+      isJsonObject(part) && part.type === "input_text" && typeof part.text === "string"
+        ? { type: part.type, text: part.text }
+        : { type: isJsonObject(part) ? part.type : "unknown", omitted: true },
+    ),
+    null,
+    2,
+  );
 }
 
 function appendBoundedToolTranscriptText(

@@ -70,7 +70,9 @@ function createFixture() {
 }
 
 function answerGateway(
-  answer: (questions: GatewayQuestion[]) => Record<string, string[]>,
+  answer: (
+    questions: GatewayQuestion[],
+  ) => Record<string, string[]> | Promise<Record<string, string[]>>,
 ): GatewayRequest[] {
   const requests = new Map<string, GatewayRequest>();
   const ordered: GatewayRequest[] = [];
@@ -86,7 +88,7 @@ function answerGateway(
       if (!request) {
         throw new Error("missing question registration");
       }
-      return { status: "answered", answers: { answers: answer(request.questions) } };
+      return { status: "answered", answers: { answers: await answer(request.questions) } };
     }
     if (method === "question.resolve") {
       return { status: "cancelled" };
@@ -224,17 +226,36 @@ describe("ACP elicitation delivery", () => {
     expect(gatewayCallMock).not.toHaveBeenCalled();
   });
 
-  it("accepts an ACP form elicitation with an empty schema instead of declining it", async () => {
-    const { handler } = createFixture();
-
+  it("asks before accepting an ACP form elicitation with an empty schema", async () => {
+    let submitAnswer!: () => void;
+    const answerSubmitted = new Promise<void>((resolve) => {
+      submitAnswer = resolve;
+    });
+    const requests = answerGateway(async (questions) => {
+      await answerSubmitted;
+      return { [questions[0]!.questionId]: ["Allow"] };
+    });
+    const { delivered, handler } = createFixture();
+    const controller = new AbortController();
     const response = handler(formRequest({}), {
       requestId: "empty-form",
-      signal: new AbortController().signal,
+      signal: controller.signal,
     });
-
-    await expect(response).resolves.toEqual({
-      action: "accept",
-      content: {},
-    });
+    const settled = vi.fn();
+    void response.then(settled);
+    try {
+      await vi.waitFor(() => expect(delivered.join("\n")).toContain("ACP needs input"));
+      expect(requests).toHaveLength(1);
+      expect(settled).not.toHaveBeenCalled();
+      submitAnswer();
+      await expect(response).resolves.toEqual({
+        action: "accept",
+        content: {},
+      });
+    } finally {
+      controller.abort();
+      submitAnswer();
+      await response;
+    }
   });
 });

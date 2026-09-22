@@ -52,19 +52,25 @@ vi.mock("../infra/device-pairing.js", async () => {
   return actual;
 });
 
-vi.mock("../infra/device-pairing-store-readonly.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/device-pairing-store-readonly.js")>(
-    "../infra/device-pairing-store-readonly.js",
-  );
-  return { ...actual, listPairedDevicesReadOnly: () => listDevicePairingMock().paired };
-});
+vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-pairing-worker.js")>()),
+  withCurrentDevicePairingSnapshot: async <T>(
+    _stateDir: string | undefined,
+    prepare: (
+      paired: import("../infra/device-pairing.types.js").PairedDevice[],
+    ) => { start: () => T } | undefined,
+  ) => prepare(listDevicePairingMock().paired)?.start(),
+}));
 
 vi.mock("../infra/push-web.js", () => ({
   listBoundWebPushSubscriptions: listBoundWebPushSubscriptionsMock,
   withBoundWebPushSubscriptions: async <T>(
     stateDir: string | undefined,
-    prepare: (subscriptions: BoundWebPushSubscription[]) => { start: () => T } | undefined,
-  ) => prepare(await listBoundWebPushSubscriptionsMock(stateDir))?.start(),
+    prepare: (
+      subscriptions: BoundWebPushSubscription[],
+      assertCurrent: () => void,
+    ) => { start: () => T } | undefined | Promise<{ start: () => T } | undefined>,
+  ) => (await prepare(await listBoundWebPushSubscriptionsMock(stateDir), () => {}))?.start(),
   hasBoundWebPushSubscriptions: hasBoundWebPushSubscriptionsMock,
   prepareWebPushNotificationSender: prepareWebPushNotificationSenderMock,
 }));

@@ -8,6 +8,7 @@ read_when:
 
 ## Control UI, TUI, and extension lanes
 
+- **Browser MCP contract:** `pnpm test:e2e:browser-mcp` installs the pinned Playwright Chromium and starts the configured Chrome DevTools MCP server over stdio against disposable browser profiles. It covers native actions, refs across condition waits, frame labels, navigation-policy checks, and preservation of the patched dependency through npm/pnpm packing and offline npm installation. The path-filtered `Browser MCP contract` workflow runs this command for MCP implementation and dependency changes. To validate a candidate server build, set `OPENCLAW_BROWSER_MCP_TEST_COMMAND` to its executable launcher. The launcher must forward its arguments and enable `--experimentalVision` for coordinate actions; OpenClaw supplies the endpoint and structured-content flags. Record the server source/version with that proof. These tests do not attach to a user's Chrome or require model credentials.
 - **Control UI E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane, usually against a mocked Gateway WebSocket. Four resource groups retain two execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` run first with at most two workers total; `ui-e2e-serial` and `ui-e2e-serial-standalone` then share one worker. The two bundle consumers lazily share one temporary UI bundle/preview until the invocation closes. Standalone projects own their fixture, source, or custom-build servers; selecting only standalone suites avoids the shared bundle build. Every selected project receives Chromium metadata, and new E2E files default to parallel bundled ownership. The root config retains the full discovery inventory: `ui/src/**/*.e2e.test.ts` plus the QA Lab media-transcript and OpenClaw-delegation real-Gateway suites. Shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. Some suites start isolated real Gateways; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes them. `pnpm test:e2e` includes this lane, with no additional CI jobs for resource groups. Use Testbox/Crabbox only when clean Linux/browser parity is part of the proof. In a linked worktree, `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts` avoids pnpm dependency reconciliation for a targeted local run.
 - **Control UI real-Gateway approval proof:** Check default and explicit Full Access delegation against an isolated Gateway with a mock provider. Build the runtime before running the targeted proof:
 
@@ -94,12 +95,21 @@ Pass the same owner to shared capture helpers so screenshots, reports, and video
 stay together. Distinguish stage names within an attempt. Close the browser context
 before finalizing video.
 
-With `OPENCLAW_CAPTURE_UI_PROOF=1`, the chat-loading performance real-Gateway
-suite retains `history-pagination.cpuprofile` beside its screenshots and
-`loading-evidence.json`. Pagination evidence distinguishes loaded messages from
-the pane's completed update plus two animation frames, so deferred layout work
-stays inside the rendered timing. Compare repeated runs of the same fixture and
-build mode; CPU profiling adds overhead, and individual timings can vary.
+The chat-loading performance real-Gateway suite records browser timestamps in
+`loading-evidence.json` for the history request, data publication, committed row
+model, and visual quiescence. A pane update can still display the old row model
+while scrolling, so the probe verifies that a retained row's index advances
+before checking for 50 ms without transcript mutations, resizing, or scrolling.
+It records the start and confirmation of that quiet interval separately; the
+confirmation delay is not application latency. A nonzero `lateChanges` count
+invalidates that quiescence sample.
+
+Use ordinary runs without capture for latency comparisons. With
+`OPENCLAW_CAPTURE_UI_PROOF=1`, the suite also retains screenshots, video, and
+`history-pagination.cpuprofile`. Profiling and capture add overhead, and the CPU
+profile includes profiler startup before the pagination timer begins. Compare
+repeated runs of the same fixture and build mode; keep the legacy test-driver
+wall timings separate from the browser timestamps.
 
 Successful and failed evidence is retained. Cleanup is manual: remove only exact
 directories that you own and have finished reviewing. Never recursively delete

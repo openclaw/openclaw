@@ -44,7 +44,7 @@ internal fun loadPickedMediaOrDocumentAttachment(
   val mimeType = normalizeSharedAttachmentMimeType(resolver.getType(uri))
   if (!isStageableSharedAttachmentMimeType(mimeType)) throw IllegalStateException("unsupported attachment")
   val kind = sharedAttachmentKindForMimeType(mimeType)
-  if (kind == null || kind == SharedAttachmentKind.Image) throw IllegalStateException("unsupported attachment")
+  if (kind == null) throw IllegalStateException("unsupported attachment")
   return loadSharedAttachment(resolver, SharedAttachment(uri = uri, kind = kind, mimeType = requireNotNull(mimeType)))
 }
 
@@ -215,12 +215,21 @@ internal fun loadSizedImageAttachment(
   )
 }
 
+/** Incoming inline data and locally admitted composer images have different byte contracts. */
+internal enum class Base64ImageSource(
+  val maxBase64Chars: Long,
+) {
+  Inline(CHAT_IMAGE_MAX_BASE64_CHARS.toLong()),
+  Composer(((CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES + 2) / 3) * 4),
+}
+
 /** Decodes chat image payloads into display-sized bitmaps with an LRU cache. */
 internal fun decodeBase64Bitmap(
   base64: String,
   maxDimension: Int = CHAT_DECODE_MAX_DIMENSION,
+  source: Base64ImageSource = Base64ImageSource.Inline,
 ): Bitmap? {
-  if (base64.length > CHAT_IMAGE_MAX_BASE64_CHARS) return null
+  if (base64.length > source.maxBase64Chars) return null
   val bytes = Base64.decode(base64, Base64.DEFAULT)
   return decodeImageBytes(bytes, maxDimension)
 }

@@ -35,7 +35,7 @@
 
 .palette-session-settings__title,
 .palette-session-settings__machine {
-  padding: 9px 10px 6px;
+  padding-inline: 10px;
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
@@ -44,8 +44,17 @@
   text-transform: uppercase;
 }
 
+.palette-session-settings__title {
+  padding-block: 9px 6px;
+}
+
+.palette-session-settings__machine {
+  padding-top: 4px;
+}
+
 .palette-session-settings__row,
-.palette-session-settings__remember {
+.palette-session-settings__remember,
+.palette-session-settings .agent-select .agent-select__trigger {
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) auto;
   align-items: center;
@@ -61,6 +70,7 @@
   text-align: start;
 }
 
+.palette-session-settings .agent-select .agent-select__trigger:hover:not(:disabled),
 .palette-session-settings__row:hover:not(:disabled),
 .palette-session-settings__back:hover {
   background: var(--bg-hover);
@@ -121,31 +131,14 @@
 .palette-session-settings__agent wa-dropdown {
   display: block;
   width: 100%;
-}
-
-.palette-session-settings__agent .agent-select__trigger {
-  display: grid;
-  width: 100%;
-  grid-template-columns: 26px minmax(0, 1fr) auto;
-  align-items: center;
-  column-gap: 11px;
-  min-height: 38px;
-  padding: 6px 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
+  max-width: none;
   font: inherit;
-  text-align: start;
-}
-
-.palette-session-settings__agent .agent-select__trigger:hover:not(:disabled) {
-  background: var(--bg-hover);
 }
 
 .palette-session-settings__agent .agent-select__avatar {
-  width: 26px;
-  height: 26px;
+  justify-self: center;
+  width: 20px;
+  height: 20px;
 }
 
 .palette-session-settings__worktree {
@@ -251,6 +244,10 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
+}
+
+.palette-session-settings__choices > section + section {
+  margin-top: 12px;
 }
 
 .palette-session-settings__error {

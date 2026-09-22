@@ -27,9 +27,20 @@ without `release_gate`. Complete campaigns (`rerun_group=all`) retain QA Smoke's
 full scenario profile, Control UI performance, and the Docker seed
 `published-upgrade-survivor` lane independently of changed paths. The survivor
 uses `legacy-operator-state` with `auto-auth`, so the published driver must update
-the running managed Gateway. This exact combination remains covered after
-ordinary PR/main runs adopt owner-path gates. Hosted manual CI splits QA Smoke
-into six parts; normal hybrid first attempts use four parts with the same coverage.
+the running managed Gateway. This exact combination remains covered when
+main uses owner-path gates and PRs omit Docker seed and QA Smoke. Hosted manual
+CI splits QA Smoke into six parts; normal hybrid first attempts use four parts
+with the same coverage.
+
+For targets with [test runtime selection](/ci/pipeline#test-runtime-selection),
+`normal_ci` retains the complete Node test inventory and also runs each admitted
+Bun-compatible selection on Bun. Both results are required; they share existing
+jobs and execute sequentially within each worker slot. Older targets without this
+capability retain Node-only testing.
+This includes the Control UI config when the target's runtime owner admits it;
+the targeted CSS-tokenizer optimizer workaround applies to its Bun pass, which excludes two
+GC-sensitive files retained in the full Node pass. An older unit-only runtime
+owner retains the UI's Node pass.
 
 Package Acceptance separately retains expanded published-upgrade scenarios:
 current unpublished candidates include native operator state, and stable/full

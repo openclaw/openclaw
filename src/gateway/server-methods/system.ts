@@ -23,10 +23,8 @@ import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.defaul
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import { resolveSystemMainSessionTarget } from "../../config/sessions.js";
 import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
-import {
-  loadOrCreateProcessDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../../infra/device-identity.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
@@ -142,8 +140,8 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
 
 /** Gateway handlers for identity, host information, heartbeat toggles, and presence events. */
 export const systemHandlers: GatewayRequestHandlers = {
-  "gateway.identity.get": ({ respond }) => {
-    const identity = loadOrCreateProcessDeviceIdentity();
+  "gateway.identity.get": async ({ respond }) => {
+    const identity = await loadOrCreateProcessDeviceIdentityAsync();
     respond(
       true,
       {

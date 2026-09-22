@@ -95,7 +95,12 @@ export const UpdateRunRecordSchema = z.object({
       .max(UPDATE_RUN_DRIVER_LIMIT - 1)
       .optional(),
     requester: z
-      .object({ channel: text.optional(), accountId: text.optional(), senderId: text.optional() })
+      .object({
+        channel: text.optional(),
+        accountId: text.optional(),
+        senderId: text.optional(),
+        authorizationSource: text.optional(),
+      })
       .optional(),
     sessionKey: text.optional(),
     deliveryContext: z

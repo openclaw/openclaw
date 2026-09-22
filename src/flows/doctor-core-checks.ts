@@ -48,7 +48,7 @@ import {
   createRuntimeToolSchemaCheck,
 } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
-import { copyHealthCheck } from "./health-check-adapter.js";
+import { copyHealthCheck, securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type {
   HealthCheck,
@@ -148,7 +148,7 @@ async function collectLocalAudioAccelerationFindingsWithRuntime(): Promise<
 async function collectGatewayHealthFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  const runtime = await import("../commands/doctor-gateway-health.js");
   return runtime.collectGatewayHealthFindings(ctx);
 }
 
@@ -775,19 +775,6 @@ function createSecurityCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
       const findings = await deps.collectSecurityWarnings(ctx.cfg, ctx.env);
       return findings.map(securityAuditFindingToHealthFinding);
     },
-  };
-}
-
-export function securityAuditFindingToHealthFinding(finding: SecurityAuditFinding): HealthFinding {
-  const detailLines = finding.detail.split("\n");
-  const firstDetail = detailLines.shift() ?? "";
-  const fixHint = [...detailLines, ...(finding.remediation?.split("\n") ?? [])].join("\n");
-  return {
-    checkId: "core/doctor/security",
-    severity:
-      finding.severity === "critical" ? "error" : finding.severity === "warn" ? "warning" : "info",
-    message: `${finding.title}${firstDetail ? `: ${firstDetail}` : ""}`,
-    ...(fixHint ? { fixHint } : {}),
   };
 }
 

@@ -87,7 +87,10 @@ it.each(["keep", "close", "replace"] as const)(
         retirement === "keep" ? [["PRAGMA incremental_vacuum(512);"]] : [],
       );
       if (retirement === "keep") {
-        expect(checkpointCalls()).toEqual([["PRAGMA wal_checkpoint(PASSIVE);"]]);
+        expect(checkpointCalls()).toEqual([
+          ["PRAGMA wal_checkpoint(PASSIVE);"],
+          ["PRAGMA wal_checkpoint(PASSIVE);"],
+        ]);
         const reclaimed = before - freePages();
         expect(reclaimed).toBeGreaterThan(0);
         expect(reclaimed).toBeLessThanOrEqual(512);
@@ -196,6 +199,9 @@ it.each([
     const root = tempDirs.make("openclaw-worker-wal-admission-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       const initialized = openOpenClawAgentDatabase({ agentId: "main" });
+      initialized.db.exec(`INSERT INTO cache_entries(scope, key, blob, updated_at)
+        VALUES ('wal-proof', 'pages', zeroblob(4194304), 1);
+        DELETE FROM cache_entries WHERE scope = 'wal-proof';`);
       const options = {
         agentId: "main",
         path: initialized.path,

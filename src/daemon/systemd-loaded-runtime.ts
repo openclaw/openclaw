@@ -3,6 +3,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  ServiceInspectionError,
+  ServiceOwnershipRefusalError,
+} from "./service-inspection-error.js";
+import {
   createServiceRuntimeInspectionFailure,
   type GatewayServiceRuntime,
 } from "./service-runtime.js";
@@ -51,12 +55,15 @@ export async function readLoadedSystemdServiceRuntime(
         : (inspection?.assertReadCurrent ?? inspection?.assertCurrent);
     assertCurrent?.();
     const remaining = deadline - performance.now();
-    if (remaining <= 0 || remainingQueries <= 0) {
+    if (remaining <= 0) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    }
+    if (remainingQueries <= 0) {
       throw unavailable();
     }
     if (binding) {
       if (scope === "system" || binding.unit !== unitName) {
-        throw unavailable();
+        throw new ServiceOwnershipRefusalError("systemd-manager-changed");
       }
       remainingQueries--;
       const values = await binding.query(args, signatures, deadline, inspection);
@@ -65,7 +72,7 @@ export async function readLoadedSystemdServiceRuntime(
       }
       assertCurrent?.();
       if (performance.now() >= deadline) {
-        throw unavailable();
+        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
       }
       return values;
     }
@@ -76,7 +83,10 @@ export async function readLoadedSystemdServiceRuntime(
         ? await execBusctlSystem(queryArgs, callTimeout)
         : await execBusctlUser(env, queryArgs, callTimeout, assertCurrent);
     assertCurrent?.();
-    if (result.code !== 0 || result.termination !== "exit" || performance.now() >= deadline) {
+    if (performance.now() >= deadline) {
+      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+    }
+    if (result.code !== 0 || result.termination !== "exit") {
       throw systemdInspectionError(result, unavailable().message, scope);
     }
     const values = result.stdout
@@ -132,7 +142,7 @@ export async function readLoadedSystemdServiceRuntime(
       (scope === "system" && managerUid !== 0) ||
       (inspection && managerUid !== inspection.managerUid)
     ) {
-      throw unavailable();
+      throw new ServiceOwnershipRefusalError("systemd-manager-changed");
     }
     const [unit] = await query(
       [
@@ -227,6 +237,9 @@ export async function readLoadedSystemdServiceRuntime(
     // Same manager identity alone does not exclude unit restart/state changes.
     // Compare native transition generations as well as state to reject ABA observations.
     const after = await readUnit();
+    if (owner !== (await readOwner())) {
+      throw new ServiceOwnershipRefusalError("systemd-manager-changed");
+    }
     if (
       !isDeepStrictEqual(before, after) ||
       optionalCounter(entered) === undefined ||
@@ -241,8 +254,7 @@ export async function readLoadedSystemdServiceRuntime(
       !isUint32(pid) ||
       !isInt32(exitStatus) ||
       !isInt32(exitCode) ||
-      typeof killMode !== "string" ||
-      owner !== (await readOwner())
+      typeof killMode !== "string"
     ) {
       throw unavailable();
     }

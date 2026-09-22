@@ -21,6 +21,7 @@ import {
   type CommandSubprocess,
 } from "./spawn-broker/execa-client.js";
 import type { CommandSpawnOptions } from "./spawn-broker/execa-types.js";
+import { recordChildProcessSpawn } from "./spawn-utils.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
@@ -345,6 +346,7 @@ export function spawnCommandWithInvocation<
           remoteOptions,
         )
       : execa(invocation.command, invocation.args, commandOptions);
+  recordChildProcessSpawn(invocation.command, child.nodeChildProcess);
   if (scope) {
     retainCommandProcess(scope, child);
   }

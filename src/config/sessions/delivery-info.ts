@@ -6,10 +6,8 @@ import {
 } from "../../gateway/session-store-key.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { requiresFoldedSessionKeyAliasProof } from "../../sessions/session-key-utils.js";
-import {
-  deliveryContextFromSession,
-  hasDeliveryTargetFields,
-} from "../../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import { hasDeliveryTargetFields } from "../../utils/delivery-context.shared.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";

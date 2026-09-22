@@ -42,6 +42,7 @@ export type CloseTab = (tab: {
 }) => Promise<void>;
 
 type CleanupParams = {
+  isCurrent?: () => boolean;
   closeTab?: CloseTab;
   closeDurableTab?: (
     tab: DurableTab,
@@ -63,6 +64,7 @@ export type RegistryModule = {
       now?: number;
       idleMs?: number;
       maxTabsPerSession?: number;
+      ordinaryCleanup?: boolean;
       sessionFilter?: (sessionKey: string) => boolean;
     },
   ): Promise<number>;

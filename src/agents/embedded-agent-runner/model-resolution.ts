@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import type { ModelFallbackRouteResolution } from "../model-fallback.types.js";
 import {
@@ -25,58 +26,63 @@ export async function resolveTieredModel(params: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   staticCatalogOwnsTransport?: boolean;
 }): Promise<{ provider: string; resolution: ModelResolution }> {
-  const providers =
-    params.fallbackProvider && params.fallbackProvider !== params.provider
-      ? [params.provider, params.fallbackProvider]
-      : [params.provider];
-  const resolveCandidates = async (options: Parameters<typeof resolveModelAsync>[4]) => {
-    const modelOptions: Parameters<typeof resolveModelAsync>[4] = {
-      ...options,
-      abortSignal: params.abortSignal,
-      assertCurrent: params.assertCurrent,
-      workspaceDir: params.workspaceDir,
-      authProfileId: params.authProfileId,
-      authProfileMode: params.authProfileMode,
-      modelIdSource: params.requestedRouteResolution === "resolved" ? "selected" : "input",
-    };
-    let firstFailure: { provider: string; resolution: ModelResolution } | undefined;
-    for (const provider of providers) {
-      const resolution = await resolveModelAsync(
-        provider,
-        params.modelId,
-        params.agentDir,
-        params.config,
-        modelOptions,
-      );
-      if (resolution.model) {
-        return { provider: resolution.logicalRef.provider, resolution };
+  const result = await withSqliteReadOnlyWorkerScope(async () => {
+    const providers =
+      params.fallbackProvider && params.fallbackProvider !== params.provider
+        ? [params.provider, params.fallbackProvider]
+        : [params.provider];
+    const resolveCandidates = async (options: Parameters<typeof resolveModelAsync>[4]) => {
+      const modelOptions: Parameters<typeof resolveModelAsync>[4] = {
+        ...options,
+        abortSignal: params.abortSignal,
+        assertCurrent: params.assertCurrent,
+        workspaceDir: params.workspaceDir,
+        authProfileId: params.authProfileId,
+        authProfileMode: params.authProfileMode,
+        modelIdSource: params.requestedRouteResolution === "resolved" ? "selected" : "input",
+      };
+      let firstFailure: { provider: string; resolution: ModelResolution } | undefined;
+      for (const provider of providers) {
+        const resolution = await resolveModelAsync(
+          provider,
+          params.modelId,
+          params.agentDir,
+          params.config,
+          modelOptions,
+        );
+        if (resolution.model) {
+          return { provider: resolution.logicalRef.provider, resolution };
+        }
+        firstFailure ??= { provider, resolution };
       }
-      firstFailure ??= { provider, resolution };
+      return firstFailure!;
+    };
+    const firstTier = await resolveCandidates({
+      skipAgentDiscovery: true,
+      allowBundledStaticCatalogFallback: params.staticCatalogOwnsTransport,
+      preferBundledStaticCatalogTransport: params.staticCatalogOwnsTransport,
+      preparedModelRuntime: params.preparedModelRuntime,
+    });
+    if (firstTier.resolution.model || params.staticCatalogOwnsTransport) {
+      return firstTier;
     }
-    return firstFailure!;
-  };
-  const firstTier = await resolveCandidates({
-    skipAgentDiscovery: true,
-    allowBundledStaticCatalogFallback: params.staticCatalogOwnsTransport,
-    preferBundledStaticCatalogTransport: params.staticCatalogOwnsTransport,
-    preparedModelRuntime: params.preparedModelRuntime,
+    const config = params.config ?? {};
+    const preparedModelRuntime =
+      params.preparedModelRuntime ??
+      (await prepareModelRuntimeSnapshot({
+        config,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+      }));
+    // The prepared tier owns the final failure; an earlier discovery miss lacks
+    // the route metadata needed to explain a provider-declared retirement.
+    return await resolveCandidates({
+      ...preparedModelRuntime.createStores(),
+      allowBundledStaticCatalogFallback: true,
+      preparedModelRuntime,
+    });
   });
-  if (firstTier.resolution.model || params.staticCatalogOwnsTransport) {
-    return firstTier;
-  }
-  const config = params.config ?? {};
-  const preparedModelRuntime =
-    params.preparedModelRuntime ??
-    (await prepareModelRuntimeSnapshot({
-      config,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-    }));
-  // The prepared tier owns the final failure; an earlier discovery miss lacks
-  // the route metadata needed to explain a provider-declared retirement.
-  return await resolveCandidates({
-    ...preparedModelRuntime.createStores(),
-    allowBundledStaticCatalogFallback: true,
-    preparedModelRuntime,
-  });
+  params.abortSignal?.throwIfAborted();
+  params.assertCurrent?.();
+  return result;
 }

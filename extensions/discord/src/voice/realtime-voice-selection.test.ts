@@ -314,7 +314,7 @@ defineDiscordVoiceTests(
         import("./realtime-player.js"),
       ]);
       const { entry, manager } = await createJoinedAgentProxyFixture();
-      const player = new DiscordRealtimePlayer(entry.player);
+      const player = new DiscordRealtimePlayer(entry.audio);
       const answer = createDeferred<string>();
       const cancellation = new AbortController();
       const context = { senderIsOwner: true, speakerLabel: "Owner" };

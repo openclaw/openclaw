@@ -79,6 +79,8 @@ export function createSkillsWatcherMock() {
     createdWatchers.push(watcher);
     return watcher;
   });
+  const nativeWatchMock = (watchRoot: string, ignored: WatchOptions["ignored"]) =>
+    watchMock(watchRoot, { depth: 0, followSymlinks: false, usePolling: false, ignored });
   function watchForSkillRoot(root: string) {
     // Existing roots have their own recursive watcher. Missing roots share a
     // shallow ancestor whose public traversal filter admits the logical path.
@@ -107,5 +109,5 @@ export function createSkillsWatcherMock() {
     return { watchRoot, options, watcher: createdWatchers[index]! };
   }
 
-  return { createdWatchers, watchMock, watchForSkillRoot };
+  return { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot };
 }

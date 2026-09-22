@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openMeetingWithBrowser, recoverMeetingBrowserTab } from "./browser-controller.js";
 import { isMeetingBrowserTransientNavigationError } from "./browser-navigation-errors.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("meeting browser navigation errors", () => {
   it.each([
@@ -16,11 +20,12 @@ describe("meeting browser navigation errors", () => {
 });
 
 describe("meeting browser join readiness", () => {
-  it("retries a platform-owned transient in-call status", async () => {
+  it("retries a platform-owned transient in-call status across a wall-clock jump", async () => {
+    vi.useFakeTimers();
     const adoptionAttempts: boolean[] = [];
     const captionCaptureAttempts: boolean[] = [];
     let evaluationAttempts = 0;
-    const result = await openMeetingWithBrowser({
+    const joining = openMeetingWithBrowser({
       adapter: {
         browserLabel: "Test meeting",
         urls: {
@@ -75,6 +80,9 @@ describe("meeting browser join readiness", () => {
         }
         if (request.path === "/act") {
           evaluationAttempts += 1;
+          if (evaluationAttempts === 1) {
+            vi.setSystemTime(Date.now() + 60_000);
+          }
         }
         return {};
       },
@@ -93,6 +101,8 @@ describe("meeting browser join readiness", () => {
         url: "https://meet.test/meeting",
       },
     });
+    await vi.advanceTimersByTimeAsync(750);
+    const result = await joining;
 
     expect(evaluationAttempts).toBe(2);
     expect(adoptionAttempts).toEqual([true, false]);
@@ -105,11 +115,12 @@ describe("meeting browser join readiness", () => {
 });
 
 describe("meeting browser recovery", () => {
-  it("retries status inspection when auto-join navigation destroys the page context", async () => {
+  it("keeps navigation recovery within its budget across a wall-clock rollback", async () => {
+    vi.useFakeTimers();
     const adoptionAttempts: boolean[] = [];
     let evaluationAttempts = 0;
     const evaluationTimeouts: number[] = [];
-    const result = await recoverMeetingBrowserTab({
+    const recovering = recoverMeetingBrowserTab({
       adapter: {
         browserLabel: "Test meeting",
         urls: {
@@ -156,6 +167,7 @@ describe("meeting browser recovery", () => {
           evaluationAttempts += 1;
           evaluationTimeouts.push(request.timeoutMs);
           if (evaluationAttempts === 1) {
+            vi.setSystemTime(Date.now() - 60_000);
             throw new Error("page.evaluate: Execution context was destroyed because of navigation");
           }
         }
@@ -177,6 +189,8 @@ describe("meeting browser recovery", () => {
       trackedMeetingUrl: "https://meet.test/meeting",
       trackedTargetId: "target-1",
     });
+    await vi.advanceTimersByTimeAsync(250);
+    const result = await recovering;
 
     expect(evaluationAttempts).toBe(2);
     expect(adoptionAttempts).toEqual([true, false]);

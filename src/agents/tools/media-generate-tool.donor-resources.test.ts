@@ -242,8 +242,10 @@ module.exports = { id: '${id}', register(api) {
               isCurrent: () => true,
               withRefreshStatus: (value) => value,
               readFullModelCatalog: () => catalog.modelCatalog,
+              readPublishedModelCatalog: () => catalog.modelCatalog,
               readPublishedModels: () => undefined,
               loadFullModelCatalog: async () => catalog.modelCatalog,
+              loadNativeModelCatalog: async () => catalog.modelCatalog,
               loadAuth: async () => {
                 throw new Error("No model auth in this fixture");
               },

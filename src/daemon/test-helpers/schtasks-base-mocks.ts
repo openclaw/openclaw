@@ -12,7 +12,14 @@ import {
 vi.mock("../schtasks-exec.js", () => ({
   execSchtasks: async (argv: string[]) => {
     schtasksCalls.push(argv);
-    return schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    const response = schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    return argv[0] === "/Query" && argv.includes("/XML") && response.code === 0 && !response.stdout
+      ? {
+          ...response,
+          stdout:
+            "<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>gateway.cmd</Command></Exec></Actions></Task>",
+        }
+      : response;
   },
 }));
 

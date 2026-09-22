@@ -42,6 +42,15 @@ export function openMatrixCredentialsAsyncStore(env: NodeJS.ProcessEnv = process
   );
 }
 
+export function captureMatrixCredentialsEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // Resolve selectors before awaiting reads; spreading Windows process.env loses its lookup semantics.
+  return {
+    ...env,
+    OPENCLAW_STATE_DIR: getMatrixRuntime().state.resolveStateDir(env),
+    OPENCLAW_SUPERVISOR_MODE: env.OPENCLAW_SUPERVISOR_MODE,
+  };
+}
+
 export async function loadMatrixCredentialsAsync(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,

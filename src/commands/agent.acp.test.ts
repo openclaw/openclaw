@@ -1,7 +1,6 @@
 // Agent ACP tests cover ACP runtime integration, embedded agent dispatch, and agent command behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
@@ -12,6 +11,7 @@ import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal
 import * as configIoModule from "../config/io.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
@@ -148,7 +148,11 @@ const getAcpSessionManagerSpy = vi.spyOn(acpManagerModule, "getAcpSessionManager
 const runtime = createThrowingTestRuntime();
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "openclaw-agent-acp-" });
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-agent-acp-",
+    // The ACP/runtime fixtures already own plugin selection.
+    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+  });
 }
 
 function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig {

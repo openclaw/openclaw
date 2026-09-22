@@ -489,9 +489,10 @@ export function createReadToolDefinition(
                 ? "[Current model does not support images. The image will be omitted from this request.]"
                 : undefined;
             if (mimeType) {
-              const base64 = buffer.toString("base64");
+              // Backends may reuse their Buffer while image preparation awaits processing.
+              const imageBytes = Buffer.from(buffer);
               const processed = await processImage(
-                { type: "image", data: base64, mimeType },
+                { data: imageBytes, mimeType },
                 { autoResizeImages },
               );
               if (!processed.ok) {

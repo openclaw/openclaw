@@ -4,7 +4,7 @@ import type {
   ModelChoice,
   ModelsListParams,
   ModelsListResult,
-} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+} from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { modelKey } from "../../agents/model-ref-shared.js";

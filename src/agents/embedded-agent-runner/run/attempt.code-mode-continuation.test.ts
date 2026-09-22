@@ -74,7 +74,7 @@ describe("runEmbeddedAttempt Code Mode recovery boundary", () => {
   });
 
   afterEach(async () => {
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
     await cleanupTempPaths(tempPaths);
   });
 

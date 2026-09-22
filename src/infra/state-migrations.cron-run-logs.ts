@@ -204,7 +204,7 @@ export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLog
       insert.run({
         task_id: taskId,
         source_id: entry.jobId,
-        child_session_key: entry.sessionKey ?? null,
+        child_session_key: entry.sessionKey?.trim() || null,
         run_id: taskId,
         task: entry.jobId,
         status,

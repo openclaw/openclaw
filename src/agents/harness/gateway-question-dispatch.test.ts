@@ -16,6 +16,7 @@ import {
 } from "../tools/ask-user-tool.js";
 import {
   QuestionAnswerUnconfirmedError,
+  QuestionDispatchUnsupportedError,
   resolveAgentQuestionGatewayCall,
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
@@ -38,6 +39,12 @@ const questions = [
   { id: "answer", header: "Answer", question: "Continue?", isOther: true, options: [] },
 ];
 const protocolQuestions = questions.map(({ id, ...question }) => ({ ...question, questionId: id }));
+const askUserQuestion = {
+  id: "answer",
+  header: "Answer",
+  question: "Continue?",
+  options: [{ label: "Continue" }, { label: "Stop" }],
+};
 
 async function withEmbeddedBroker(
   embedded: boolean,
@@ -83,17 +90,28 @@ function startQuestion(
     return { run, showPrompt: () => delivered.promise };
   }
   const toolCallId = "source-dispatch-test";
-  const question = { ...questions[0]!, options: [{ label: "Continue" }, { label: "Stop" }] };
   const reservation = reserveAskUserPromptDelivery({
     sessionKey,
     toolCallId,
-    questions: [{ ...question, questionId: "answer" }],
+    questions: [
+      {
+        questionId: askUserQuestion.id,
+        header: askUserQuestion.header,
+        question: askUserQuestion.question,
+        options: askUserQuestion.options,
+        isOther: true,
+      },
+    ],
   });
   if (!reservation) {
     throw new Error("expected prompt reservation");
   }
   const run = createAskUserTool({ sessionKey, gatewayCall })
-    .execute(toolCallId, { questions: [question], timeoutSeconds: 60 }, fixture.backingRun.signal)
+    .execute(
+      toolCallId,
+      { questions: [askUserQuestion], timeoutSeconds: 60 },
+      fixture.backingRun.signal,
+    )
     .then((result) => result.details);
   return {
     run,
@@ -192,7 +210,7 @@ describe("question dispatch ownership", () => {
         }
       });
       const run = createAskUserTool({ sessionKey }).execute("local-question", {
-        questions: [{ ...questions[0], options: [{ label: "Continue" }, { label: "Stop" }] }],
+        questions: [askUserQuestion],
       });
       try {
         await requested.promise;
@@ -443,6 +461,9 @@ describe("question dispatch ownership", () => {
           const result = await outcome;
           if (mode === "legacy-source" || mode === "v2-closed") {
             expect(result).toBeInstanceOf(Error);
+            if (mode === "legacy-source") {
+              expect(result).toBeInstanceOf(QuestionDispatchUnsupportedError);
+            }
             expect(fixture.requests.filter((frame) => frame.method === "question.resolve")).toEqual(
               [],
             );

@@ -26,16 +26,8 @@ const RETAINED_STEP_NAMES = [
   "reconcile:abandoned",
   "reconcile:superseded",
   "reconcile:acknowledged",
+  "reconcile:settle",
 ];
-const JSON_FIELDS = [
-  "origin",
-  "target",
-  "before",
-  "after",
-  "steps",
-  "verification",
-  "repair",
-] as const;
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
   redactPaths?: readonly string[];
@@ -78,7 +70,9 @@ function boundedJson(input: unknown, maxBytes = JSON_BYTES): string {
       } else {
         // Recovery details are the durable backup receipt, not optional diagnostics.
         const compacted = value.map((item) =>
-          isRecord(item) && item.step !== "task-delivery-recovery"
+          isRecord(item) &&
+          item.step !== "task-delivery-recovery" &&
+          !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
             ? { ...item, detail: undefined, failureFacts: undefined }
             : item,
         );
@@ -195,23 +189,4 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
     finished_at_ms: record.finishedAtMs,
     downtime_ms: record.downtimeMs,
   };
-}
-
-export function decodeRun(row: UpdateRuns): UpdateRunRecord {
-  const metadata = Object.fromEntries(
-    JSON_FIELDS.map((field) => [field, JSON.parse(row[`${field}_json`])]),
-  );
-  return UpdateRunRecordSchema.parse({
-    ...metadata,
-    runId: row.run_id,
-    createdAtMs: row.created_at_ms,
-    updatedAtMs: row.updated_at_ms,
-    trigger: row.trigger,
-    phase: row.phase,
-    status: row.status,
-    reason: row.reason,
-    confirmedAtMs: row.confirmed_at_ms,
-    finishedAtMs: row.finished_at_ms,
-    downtimeMs: row.downtime_ms,
-  });
 }

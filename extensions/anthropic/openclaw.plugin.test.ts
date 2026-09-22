@@ -52,11 +52,13 @@ const selectableContextWindowMetadata = {
 };
 
 describe("Anthropic plugin manifest", () => {
-  it("flags every static Anthropic API model as code-mode preferred", () => {
+  it("keeps Haiku opt-in while preferring Code Mode for the other API models", () => {
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
     expect(models.length).toBeGreaterThan(0);
     for (const model of models) {
-      expect(model.compat?.codeMode, model.id).toBe("preferred");
+      expect(model.compat?.codeMode, model.id).toBe(
+        model.id === "claude-haiku-4-5" ? "capable" : "preferred",
+      );
     }
   });
 
@@ -156,7 +158,7 @@ describe("Anthropic plugin manifest", () => {
       },
       contextWindow: 200000,
       maxTokens: 64000,
-      compat: { codeMode: "preferred" },
+      compat: { codeMode: "capable" },
     });
     expect(models.find((model) => model.id === "claude-haiku-4-5-20251001")).toBeUndefined();
   });

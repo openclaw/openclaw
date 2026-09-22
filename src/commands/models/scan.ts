@@ -1,5 +1,5 @@
 /** OpenRouter free-model scanner and fallback updater for model commands. */
-import { cancel, multiselect as clackMultiselect } from "@clack/prompts";
+import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
 import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import {
   parseStrictFiniteNumber,
@@ -25,7 +25,7 @@ const CTX_PAD = 8;
 const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
   clackMultiselect(styleSelectParams(params));
 
-function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
+function guardPromptCancel<T>(value: T | typeof CANCEL_SYMBOL, runtime: RuntimeEnv): T {
   if (typeof value === "symbol") {
     cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
     runtime.exit(0);

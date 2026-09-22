@@ -60,3 +60,16 @@ export {
   structuredOrphanLeaf,
   textOrphanLeaf,
 } from "./test-helpers/agents/transcript-repair-runtime-contract.js";
+
+export { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
+export { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscribe.js";
+export {
+  createAssistant,
+  createAssistantResultStream,
+  createTestSession,
+  registerAgentSessionLoopTestLifecycle,
+  streamMocks,
+} from "../agents/sessions/agent-session-loop-correctness.test-support.js";
+export { createReadToolDefinition } from "../agents/sessions/tools/read.js";
+export { createSubscribedSessionHarness } from "../agents/embedded-agent-subscribe.e2e-harness.js";
+export { createAssistantOutput } from "../../packages/ai/src/transports/assistant-output.js";

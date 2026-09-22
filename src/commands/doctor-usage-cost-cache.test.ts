@@ -4,6 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  decodeUsageCostRollup,
+  encodeUsageCostRollup,
+  USAGE_COST_ROLLUP_SCOPE,
+  USAGE_COST_ROLLUP_VERSION,
+} from "../infra/session-cost-usage-rollup-codec.js";
+import { createSessionUsageRollupData } from "../infra/session-cost-usage-rollup.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -109,16 +116,43 @@ describe("legacy usage-cost cache cleanup", () => {
       const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
       const firstDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
       const databases = [firstDatabase, openOpenClawAgentDatabase({ agentId: "worker", env })];
+      const rollup = createSessionUsageRollupData();
+      rollup.untimestamped.totals.totalTokens = 17;
+      const current = encodeUsageCostRollup({
+        version: USAGE_COST_ROLLUP_VERSION,
+        pricingFingerprint: "synthetic",
+        checkpoint: {
+          kind: "jsonl",
+          parsedOffset: 7,
+          observedSize: 7,
+          observedMtimeMs: 1,
+          device: 1,
+          inode: 2,
+          anchorHash: "anchor",
+        },
+        scannedAt: 1,
+        parsedRecords: 1,
+        countedRecords: 0,
+        rollup,
+      });
       for (const database of databases) {
         const insert = database.db.prepare(
           "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, 1)",
         );
         insert.run("session-cost-usage-rollup-v1", "retired", '{"pricingFingerprint":"large"}');
-        insert.run("session-cost-usage-rollup-v2", "current", "{}");
+        insert.run("session-cost-usage-rollup-v2", "retired-v2", "{}");
+        database.db
+          .prepare(
+            "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, 'current', ?, ?, NULL, 1)",
+          )
+          .run(USAGE_COST_ROLLUP_SCOPE, current.valueJson, current.blob);
         insert.run("session-cost-usage", "cache", "{}");
         insert.run("session-cost-usage", "refresh-lock", "{}");
         insert.run("other", "keep", "{}");
       }
+      const before = firstDatabase.db
+        .prepare("SELECT * FROM cache_entries ORDER BY scope, key")
+        .all();
 
       if (rejectFirst) {
         firstDatabase.db.exec(`
@@ -134,8 +168,8 @@ describe("legacy usage-cost cache cleanup", () => {
           "Doctor warnings",
         );
         expect(
-          firstDatabase.db.prepare("SELECT count(*) AS count FROM cache_entries").get(),
-        ).toEqual({ count: 5 });
+          firstDatabase.db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all(),
+        ).toEqual(before);
       }
       for (const database of rejectFirst ? databases.slice(1) : databases) {
         expect(
@@ -143,8 +177,19 @@ describe("legacy usage-cost cache cleanup", () => {
         ).toEqual([
           { key: "keep", scope: "other" },
           { key: "refresh-lock", scope: "session-cost-usage" },
-          { key: "current", scope: "session-cost-usage-rollup-v2" },
+          { key: "current", scope: USAGE_COST_ROLLUP_SCOPE },
         ]);
+        const retained = database.db
+          .prepare("SELECT value_json, blob FROM cache_entries WHERE scope = ? AND key = 'current'")
+          .get(USAGE_COST_ROLLUP_SCOPE);
+        expect(retained).toEqual({ value_json: current.valueJson, blob: current.blob });
+        if (typeof retained?.value_json !== "string" || !(retained.blob instanceof Uint8Array)) {
+          throw new Error("Expected a retained current usage report");
+        }
+        expect(
+          decodeUsageCostRollup(retained.value_json, "synthetic", retained.blob)?.rollup
+            .untimestamped.totals.totalTokens,
+        ).toBe(17);
       }
     },
   );

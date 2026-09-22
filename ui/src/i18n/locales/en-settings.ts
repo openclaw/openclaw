@@ -3,6 +3,75 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  searchPage: {
+    enabled: "Web search",
+    advanced: "Advanced search settings",
+    enabledHint: "Allow agents to find up-to-date information on the web.",
+    provider: "Search provider",
+    automatic: "Automatic",
+    automaticHint:
+      "Prefer native search when supported; otherwise use a configured search provider.",
+    scopeHint:
+      "Search settings apply to all agents. Choose an agent and model to see their effective route.",
+    agent: "Agent",
+    model: "Model",
+    agentDefault: "Agent default",
+    route: "Search for this model",
+    routeKinds: {
+      native: "Native search",
+      external: "Check in chat",
+      managed: "Provider search",
+      disabled: "Off",
+      unavailable: "Unavailable",
+    },
+    loading: "Checking search configuration…",
+    offline: "Connect to the Gateway to configure search.",
+    readOnly: "An administrator can change search settings and credentials.",
+    setup: "Provider setup",
+    setupProvider: "Configure provider",
+    setupHint:
+      "Configure a provider for OpenClaw web search. External harnesses may also supply their own search tools.",
+    configured: "Configured",
+    pluginUnavailable: "Enable plugin to use",
+    pluginMissing: "Install plugin to use",
+    testInChat: "Test in chat",
+    testInChatHint:
+      "Open a new chat with this agent and model selected. Nothing is sent automatically.",
+    needsSetup: "Needs setup",
+    configuration: "Configuration",
+    credentialSources: {
+      config: "Saved credential",
+      secretRef: "Secret reference",
+      env: "Gateway environment",
+      "auth-profile": "Connected account",
+      none: "No separate API key required",
+      missing: "Credential missing",
+    },
+    health: "Search health",
+    untested: "Not tested",
+    untestedHint:
+      "Configuration alone does not verify access. Run a search to check the current route.",
+    test: "Test search",
+    testProvider: "Test {provider}",
+    testing: "Searching…",
+    query: "Search query",
+    queryPlaceholder: "What would you like to find?",
+    queryDefault: "OpenClaw documentation",
+    success: "Search succeeded",
+    failure: "Search failed",
+    duration: "{ms} ms",
+    cached: "Cached result",
+    result: "Answer",
+    sources: "Sources",
+    noResults: "The provider returned no results for this query.",
+    pluginSettings: "All provider settings",
+    pluginSettingsHint: "Open the plugin’s complete configuration and access controls.",
+    moreProviders: "Add search providers",
+    moreProvidersHint:
+      "Install a search plugin, or configure a custom endpoint with a compatible provider.",
+    docs: "Provider documentation",
+    refresh: "Refresh search status",
+  },
   connection: {
     browser: {
       title: "Browser",
@@ -149,8 +218,8 @@ const enSettings = {
       keepNone: "None (default)",
       keepOne: "Keep one",
       savePolicy: "Save retention policy",
-      policyRestart: "Policy changes take effect after the Gateway restarts.",
-      policySaved: "Retention policy saved. Restart the Gateway to apply it.",
+      policyApplies: "Policy changes apply without restarting the Gateway.",
+      policySaved: "Retention policy saved.",
       policySaveFailed: "Could not save retention policy. Refresh the config and try again.",
       buildSnapshot: "Build snapshot",
       rebuild: "Rebuild",
@@ -181,7 +250,6 @@ const enSettings = {
         "Request cleanup for this failed build and hide it from this view. The Gateway keeps the failed record until its retention window ends, so it can reappear after a reload.",
       buildDismissed: "Failed build dismissed",
       buildAge: "Age: {age}",
-      buildAfterRestart: "After the Gateway restarts, build a snapshot from the Snapshots view.",
       buildStates: {
         requested: "Requested",
         provisioning: "Provisioning",
@@ -201,8 +269,7 @@ const enSettings = {
       recoverMessage:
         "Clear this capture reservation after manual provider cleanup. Recovery preserves recorded images and allocation choices. It does not stop workers or delete provider artifacts.",
       acknowledgement: "I stopped the owning capture and worker and reconciled provider artifacts",
-      recovered:
-        "Capture reservation cleared. Restart the Gateway after reconciliation; the next eligible worker can capture again.",
+      recovered: "Capture reservation cleared. The next eligible worker can capture again.",
       recoveryChanged: "The Gateway connection changed. Refresh snapshots and try recovery again.",
       migration: "Needs migration",
       migrationHint:
@@ -217,9 +284,11 @@ const enSettings = {
     editAction: "Edit",
     deleteTitle: "Delete cloud worker profile",
     deleteConfirm:
-      "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions cannot use it after restart.",
+      "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions will no longer use it.",
     advertised: "Advertised",
-    restartRequired: "Restart required",
+    unavailable: "Unavailable",
+    profileSaved: "Profile saved. Build a snapshot from the Snapshots view.",
+    settingsSaved: "Saved. Changes apply without restarting the Gateway.",
     adminRequired: "Administrator access is required to manage cloud worker profiles.",
     catalogFailed: "Could not load advertised profiles: {error}. Check the gateway and retry.",
     providerFact: "Provider: {provider}",
@@ -272,7 +341,7 @@ const enSettings = {
       setupPlaceholder: "command -v node || install-node",
       desktop: "Desktop",
       desktopHelp:
-        "Linux only. Warm a direct or coordinator-backed AWS or Azure worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
+        "Enable Browser and Terminal access on Linux, native Windows, or prepared macOS workers. Supports direct or coordinator-backed AWS and Azure, and coordinator-backed Hetzner. Existing workers must be reprovisioned after this changes.",
       binary: "Crabbox binary",
       binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
       binaryPlaceholder: "/usr/local/bin/crabbox",
@@ -289,7 +358,8 @@ const enSettings = {
       suspendAfterHelp:
         "Reclaim an idle worker after a duration such as 45m or 2h (minimum 1m). Leave empty to keep workers running.",
       actions: "Save profile",
-      actionsHelp: "Saving updates the config; the gateway must restart before using it.",
+      actionsHelp:
+        "New workers use the saved profile. Existing workers keep their provisioning settings.",
     },
     errors: {
       title: "Profile needs attention",
@@ -480,7 +550,7 @@ const enSettings = {
       fallback: "Fallback Model",
       noFallback: "No fallback model",
       selectModel: "Select a model",
-      noModels: "Configure a provider before selecting default models.",
+      noModels: "Configure a chat provider to select a primary, utility, or fallback model.",
       discoveringMore: "Discovering more models…",
       discoverFailed: "More models could not be discovered.",
       retryDiscover: "Retry",
@@ -494,6 +564,31 @@ const enSettings = {
         "Sets the global default for new sessions. Auto starts in fast mode and returns to standard mode after the model's configured interval; On and Off keep that behavior fixed.",
       fastModeDefaultHelp:
         "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
+    },
+    installedAgents: {
+      title: "Installed agents",
+      description:
+        "Coding apps on the Gateway computer. Each app manages its own account and permissions. Enabling an app does not sign you in.",
+      status: {
+        installed: "Installed",
+        missing: "Not detected",
+        unverified: "Not verified",
+        signIn: "Sign in required",
+        discovering: "Discovering models…",
+        modelsAvailable: "Models available",
+      },
+      unverifiedHint:
+        "Check this app's custom launch command on the Gateway computer, then check again.",
+      installHint: "Install and sign in to {name} on the Gateway computer, then check again.",
+      disabledHint: "Enable this app to include its models in the picker.",
+      signInHint: "Open {name} on the Gateway computer and check its sign-in, then check again.",
+      discoveryHint:
+        "Open {name} on the Gateway computer and check its connection and sign-in, then check again.",
+      toggle: "Use {name}",
+      check: "Check again",
+      checking: "Checking…",
+      empty: "No supported coding apps are available.",
+      note: "Update installed agents from Control UI",
     },
     readOnly: {
       disconnected: "Connect to the gateway to change model settings.",
@@ -548,6 +643,11 @@ const enSettings = {
       checksDisabledAutomaticHint: "Turn on Check for updates to resume automatic updates.",
       statusTitle: "Update status",
       scheduleStatus: "Status",
+      activePhase: "Updating · {phase}",
+      currentStep: "Current step",
+      runTarget: "Update target",
+      lastProgress: "Last progress",
+      scheduledUpdate: "Automatic update",
       commits: "Commits",
       available: "Update available {target}",
       upToDate: "Up to date",
@@ -633,6 +733,8 @@ const enSettings = {
       cameraHint: "Allow the agent to capture a photo or short video via the built-in camera.",
       keepAwake: "Keep awake",
       keepAwakeHint: "Keep the screen awake while OpenClaw is active.",
+      keepAwakeComputerHint:
+        "Prevent idle sleep while OpenClaw is running. Manual sleep and locking remain available.",
       healthSummary: "Health summaries",
       healthSummaryHint: "Allow the agent to request a health summary from this device.",
       device: "Device",
@@ -647,6 +749,18 @@ const enSettings = {
       computerControlHint:
         "Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can move the pointer, click, and type without per-action confirmation. High risk.",
       computerControlProvider: "Computer Control provider",
+      desktopSharing: "Desktop sharing",
+      desktopSharingHint:
+        "View and control this Mac from Systems. Enabled by default. Requires Screen Sharing in macOS System Settings → General → Sharing. Changes briefly reconnect this Mac; a new capability may need pairing approval.",
+      desktopSharingComputerHint:
+        "View and control this computer from Systems. Enabled by default. Requires an authenticated local VNC server. Changes briefly reconnect this computer; a new capability may need pairing approval.",
+      desktopSharingStatus: "Desktop sharing status",
+      desktopSharingStates: {
+        off: "Off",
+        starting: "Starting",
+        running: "Running",
+        error: "Unavailable",
+      },
       unattendedDesktop: "Keep computer awake",
       unattendedDesktopHint:
         "Keep this Mac awake between jobs while it is connected and hosting. Manual lock and logout are still respected; OpenClaw never unlocks the Mac.",
@@ -664,18 +778,47 @@ const enSettings = {
         "Allow signed tools to drive UI automation via Peekaboo Bridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
       browser: "Browser",
       chromeExtension: "Chrome extension",
-      chromeExtensionSetup: "Set up Chrome on this Mac",
+      chromeExtensionDetected: "Installed",
+      chromeExtensionNotInstalled: "Not installed",
+      chromeExtensionUnknown: "Status unavailable",
+      chromeExtensionEnableHint:
+        "The extension is installed but not enabled. Open Chrome and approve or enable OpenClaw.",
+      chromeExtensionStatusUnsupported:
+        "Automatic installation checks require an updated Mac app. Open Chrome to check whether OpenClaw is installed and enabled.",
+      chromeExtensionStatusFailed:
+        "Could not check Chrome installation automatically. You can still run setup or refresh status. Make sure the OpenClaw app and CLI are up to date.",
+      chromeExtensionSetup: "Set up Chrome on this device",
       chromeExtensionHint:
-        "Prepare the OpenClaw extension on this Mac, then approve it in Chrome. This does not install on a remote Gateway.",
-      chromeExtensionPreparing: "Preparing Chrome…",
-      chromeExtensionPending:
-        "Native host registered and installation requested. Open Chrome and approve OpenClaw; restart Chrome if the request has not appeared. Use the Store link if you previously removed it.",
-      chromeExtensionStoreRequired:
-        "Native host registered. Add OpenClaw from the Chrome Web Store to finish setup.",
-      chromeExtensionInstalled:
-        "Native host registered and extension found. Open the extension to check its connection; installation alone does not verify a connection.",
+        "Prepare the OpenClaw extension on this device, then approve it in Chrome. This does not install on a remote Gateway.",
+      chromeExtensionPreparing: "Working on this device…",
+      chromeExtensionRefresh: "Refresh setup status",
+      chromeExtensionVerify: "Verify connection",
+      chromeExtensionTarget: "Host: {hostname} · Profile: {profile} · Relay port: {port}",
+      chromeExtensionTabsHint:
+        "A connected extension does not mean eligible tabs are available. Check tabs on this host and profile in the browser tools; an empty list is different from a disconnected extension.",
       chromeExtensionFailed:
-        "Setup could not finish. Install the OpenClaw CLI on this Mac and run openclaw browser extension install for details.",
+        "Setup could not finish. Check the OpenClaw CLI on this device with openclaw browser extension setup, then try again.",
+      chromeExtensionPhases: {
+        inspection_required: "Setup required on this device.",
+        preparing: "Preparing Chrome on this device.",
+        needs_browser_action: "Chrome needs your attention on this device.",
+        waiting_for_connection: "Connection has not been verified on this device.",
+        ready: "Extension connected on this device.",
+        blocked: "Setup is blocked on this device.",
+      },
+      chromeExtensionNextActions: {
+        none: "",
+        install: "Choose Set up Chrome on this device to prepare the native host.",
+        open_chrome:
+          "Installation requested. Open or restart Chrome on this device and approve OpenClaw.",
+        approve_extension: "Approve OpenClaw in Chrome on this device, then verify the connection.",
+        install_from_store:
+          "Add OpenClaw from the Chrome Web Store on this device, then verify the connection.",
+        check_connection: "Choose Verify connection to check this host's Chrome relay.",
+        repair_native_host: "Check the local CLI installation, then run setup again.",
+        unsupported:
+          "Automatic setup is unavailable on this host. Follow the extension documentation.",
+      },
       browserImport: "Browser logins",
       browserImportHint:
         "Copy cookies from a Chrome-family profile into an isolated managed profile.",
@@ -707,6 +850,7 @@ const enSettings = {
         limited: "Limited",
         denied: "Denied",
         notDetermined: "Not determined",
+        notGranted: "Not granted",
         unavailable: "Unavailable",
       },
       permissions: {
@@ -729,10 +873,6 @@ const enSettings = {
           hint: "Use Apple Speech; passive Voice Wake stays on-device.",
         },
         location: { title: "Location", hint: "Share location when requested by the agent." },
-        automation: {
-          title: "Automation (Terminal)",
-          hint: "Control Terminal for automation actions; other apps request access separately.",
-        },
         contacts: { title: "Contacts", hint: "Access contacts when requested by the agent." },
         calendars: {
           title: "Calendars",
@@ -750,9 +890,9 @@ const enSettings = {
       preciseLocationReadOnlyHint: "Manage precise location access in Settings.",
       preciseLocationStatuses: { enabled: "Enabled", disabled: "Disabled" },
       privacy: "Privacy",
-      activePresence: "Active computer presence",
+      activePresence: "System-wide presence detection",
       activePresenceHint:
-        "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+        "OpenClaw activity identifies this Mac without extra permissions. Enable this to also detect activity in other apps. Shares only idle duration, never keys, pointer positions, app names, or window titles. Requires Accessibility.",
     },
     deviceTalk: {
       title: "This Mac",
@@ -957,7 +1097,7 @@ const enSettings = {
     appearance: {
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
       theme: "Theme",
-      chooseTheme: "Choose a theme family.",
+      chooseTheme: "Choosing a different theme resets its fonts and accent colors.",
       themeUnavailable: "{id} is unavailable. Using Claw until the theme becomes available again.",
       typography: "Typography",
       fonts: {
@@ -986,6 +1126,7 @@ const enSettings = {
       accent: "Accent color",
       accentHint: "Choose an accent color for buttons, highlights, and other controls.",
       customAccent: "Custom color",
+      usingThemeAccent: "Using theme accent",
       usingAccent: "Using {value}",
       accents: {
         default: "Theme default",
@@ -1027,14 +1168,14 @@ const enSettings = {
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
         "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
-      collapseTaskProgress: "Collapse task progress by default",
+      collapseTaskProgress: "Collapse task progress by default on desktop",
       collapseTaskProgressHint:
-        "Start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session.",
+        "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",
     },
     sessionSources: {
       title: "Session sources",
       hint: "Choose which coding apps show their existing conversations in the sidebar.",
-      scope: "Applies to everyone on this Gateway. Changes require a Gateway restart.",
+      scope: "Applies to everyone on this Gateway without restarting it.",
       claude: "Show Claude Code sessions",
       codex: "Show Codex sessions",
       opencode: "Show OpenCode sessions",
@@ -1134,6 +1275,9 @@ const enSettings = {
         waking: "Waking memory…",
         hibernating: "Memory is hibernating",
         needsAttention: "Memory needs attention",
+        noSearchRuntime: "Host memory search is unavailable",
+        noSearchRuntimeDescription:
+          "{engine} does not provide a host memory search runtime. Other memory integrations may run independently.",
         activeDescription: "{engine} · {mode}",
         loadingDescription: "Checking this agent's memory engine and dream cycle.",
         offDescription: "Choose a memory engine in Settings to wake it up.",
@@ -1348,6 +1492,7 @@ export const registerSettingsEnglish = Object.assign(
   () => {
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;
+    en.searchPage = enSettings.searchPage;
     // Extend the shared objects: eager save/update copy and existing readers survive.
     en.cloudWorkersPage = enSettings.cloudWorkersPage;
     Object.assign(en.connection, enSettings.connection);

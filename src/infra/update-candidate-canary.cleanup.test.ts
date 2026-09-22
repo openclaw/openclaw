@@ -12,6 +12,7 @@ import {
   FakeChild,
   stubHealthyGateway,
 } from "./update-candidate-canary.test-support.js";
+import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 
 const mocks = vi.hoisted(() => ({
@@ -59,6 +60,9 @@ beforeEach(async () => {
   mocks.spawn.mockImplementation((_command: string, args: string[]) => {
     const child = new FakeChild(nextPid++);
     children.set(child.pid, child);
+    if (args.includes("--update-canary")) {
+      return child;
+    }
     completeCanaryCommand(child, args, () => ({
       pluginInventory: undefined,
       pluginErrors: false,
@@ -90,6 +94,117 @@ describe("canary teardown evidence", () => {
     mocks.port.mockResolvedValue(43_123);
     stubHealthyGateway();
   });
+
+  it.each([
+    "passed",
+    "failed",
+    "pipes",
+    "natural",
+    "unconfirmed",
+    "late",
+    "missing",
+    "malformed",
+  ] as const)(
+    "distinguishes a completed lint report (%s) from checks still running at the deadline",
+    async (report) => {
+      let now = 2_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const spawnNormally = mocks.spawn.getMockImplementation()!;
+      const signalNormally = mocks.signal.getMockImplementation()!;
+      const lintFindings = Array.from({ length: 5 }, (_, index) => ({
+        checkId: `core/config-${index}`,
+        message: `Invalid configuration ${index}.`,
+      }));
+      let lintChild: FakeChild | undefined;
+      mocks.spawn.mockImplementation((command, args: string[], options) => {
+        if (!args.includes("--lint")) {
+          return spawnNormally(command, args, options);
+        }
+        const child = new FakeChild(nextPid++);
+        lintChild = child;
+        children.set(child.pid, child);
+        queueMicrotask(() => {
+          child.stderr.write("└  Doctor complete.\n");
+          child.stdout.write(
+            report === "missing" || report === "late"
+              ? ""
+              : JSON.stringify(
+                  report === "malformed"
+                    ? { ok: true }
+                    : {
+                        ok: report !== "failed",
+                        checksRun: 1,
+                        findings: report === "failed" ? lintFindings : [],
+                      },
+                ),
+          );
+          if (report === "pipes") {
+            child.emit("exit", 0, null);
+          }
+        });
+        now += 899;
+        return child;
+      });
+      mocks.signal.mockImplementation((pid, signal, options) => {
+        if (lintChild && pid === lintChild.pid) {
+          if (report === "late") {
+            lintChild.stdout.write(JSON.stringify({ ok: true, checksRun: 1, findings: [] }));
+          }
+          if (report === "unconfirmed") {
+            now += 101;
+            options.onComplete?.();
+            return;
+          }
+          lintChild.emit(
+            "exit",
+            report === "natural" ? 0 : null,
+            report === "natural" ? null : "SIGTERM",
+          );
+        }
+        signalNormally(pid, signal, options);
+      });
+      try {
+        const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
+        const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
+        expect(step.termination).toBe("timeout");
+        const completed = ["passed", "failed", "pipes", "natural", "unconfirmed"].includes(report);
+        const rendered = renderUpdateRunReport(
+          updateRunReportInputFromResult({ ...result, mode: "git", root }),
+        );
+        if (completed) {
+          const message = `Update lint exit phase timed out after 0ms (899ms total); checks completed; ${report === "pipes" ? "output pipes stayed open" : "process did not exit"}. Continuing with recorded check results.`;
+          expect(step.warnings).toEqual([message]);
+          expect(rendered.markdown).toContain(message);
+          if (report === "failed") {
+            expect(result).toMatchObject({ status: "error", phase: "lint" });
+            expect(step.failureFacts?.map((fact) => fact.message)).toEqual(
+              lintFindings.map((finding) => finding.message),
+            );
+          } else {
+            expect(result).toMatchObject({ status: "ok", phase: "readiness" });
+            expect(step.failureFacts).toBeUndefined();
+          }
+        } else {
+          expect(result).toMatchObject({
+            status: "error",
+            phase: "lint",
+            reason: "candidate-checks-timeout",
+          });
+          expect(step.failureFacts).toEqual([
+            {
+              check: "lint",
+              code: "candidate-checks-timeout",
+              message: "Update lint checks phase timed out (899ms)",
+            },
+          ]);
+          expect(rendered.markdown).toContain("checks phase");
+          expect(JSON.stringify(result)).not.toContain("exit phase");
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   it.each(["close", "term-callback", "kill-callback", "error", "cancelled"] as const)(
     "reports incomplete %s evidence without changing validation outcomes",
@@ -153,8 +268,8 @@ describe("canary teardown evidence", () => {
           signal: controller.signal,
           onStep,
         });
-        const name = duringDoctor ? "Checking data migrations" : "Checking Gateway startup";
-        const cleanup = result.steps.find((step) => step.name === `${name} cleanup`);
+        const name = duringDoctor ? "candidate-doctor" : "candidate-gateway-startup";
+        const cleanup = result.steps.find((step) => step.name === `${name}-cleanup`);
         expect(cleanup).toMatchObject({
           exitCode: null,
           advisory: {
@@ -247,7 +362,7 @@ describe("canary teardown evidence", () => {
     try {
       termComplete = await term.promise;
       expect(onStep).toHaveBeenCalledWith(
-        expect.objectContaining({ name: "Checking Gateway startup", exitCode: 0 }),
+        expect.objectContaining({ name: "candidate-gateway-startup", exitCode: 0 }),
       );
       gateway!.emit("close", 0);
       await Promise.resolve();

@@ -179,9 +179,17 @@ it.runIf(process.platform !== "win32").for([
         expect(result.code, result.stderr + result.stdout).toBe(0);
         if (controlled) {
           const receipts = controlled.read();
-          expect(receipts).toHaveLength(shared ? 1 : 2);
-          expect(new Set(receipts.map(({ pid }) => pid)).size).toBe(receipts.length);
           console.log("Controlled compiler receipts", JSON.stringify(receipts));
+          expect(receipts).toHaveLength(shared ? 1 : 2);
+          expect(
+            new Set(receipts.map(({ pid, processStartTime }) => `${pid}:${processStartTime}`)).size,
+          ).toBe(receipts.length);
+          for (const receipt of receipts) {
+            expect(receipt).toMatchObject({
+              processStartTime: expect.any(Number),
+              isMainThread: true,
+            });
+          }
         }
         const observations = fixture.read();
         const borrowerCount = parallelism === 1 ? 3 : 2;

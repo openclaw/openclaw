@@ -122,7 +122,7 @@ function readPublicationWorktreeOwner(
     worktree.branch !== entry.worktree.branch ||
     worktree.repoRoot !== entry.worktree.repoRoot
   ) {
-    throw new Error("GitHub publication session worktree owner changed.");
+    throw new GitHubPublicationSessionChangedError();
   }
   if (
     expected &&

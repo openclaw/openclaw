@@ -1,6 +1,9 @@
 // Native hook relay CLI tests cover relay command registration and runtime delegation.
 import { PassThrough, Readable, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
 import { runNativeHookRelayCli, runNativeHookRelayCliFromArgv } from "./native-hook-relay-cli.js";
 
 function createReadableTextStream(text: string): NodeJS.ReadableStream {
@@ -18,6 +21,10 @@ function createWritableTextBuffer(): NodeJS.WritableStream & { text: () => strin
   return Object.assign(stream, {
     text: () => Buffer.concat(chunks).toString("utf8"),
   });
+}
+
+async function rejectMissingBridge(): Promise<never> {
+  throw new Error("native hook relay bridge not found");
 }
 
 describe("native hook relay CLI", () => {
@@ -114,6 +121,7 @@ describe("native hook relay CLI", () => {
         ),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -160,6 +168,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -426,11 +435,17 @@ describe("native hook relay CLI", () => {
     const invokeBridge = vi.fn(async () => {
       throw new Error("bridge unavailable");
     });
-    const callGateway = vi.fn(async () => await new Promise<never>(() => {}));
+    const gatewayEntered = createDeferred<CallGatewayOptions>();
+    const gatewayResponse = createDeferred<NativeHookRelayProcessResponse>();
+    const callGateway = vi.fn((options: CallGatewayOptions) => {
+      gatewayEntered.resolve(options);
+      return gatewayResponse.promise;
+    });
     const stdout = createWritableTextBuffer();
     const stderr = createWritableTextBuffer();
 
-    const exitCode = await runNativeHookRelayCli(
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const pending = runNativeHookRelayCli(
       {
         provider: "codex",
         relayId: "relay-1",
@@ -447,15 +462,37 @@ describe("native hook relay CLI", () => {
       },
     );
 
-    expect(exitCode).toBe(0);
-    expect(stdout.text()).toBe("");
-    expect(stderr.text()).toContain("native hook relay timed out");
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
+    try {
+      const request = await Promise.race([
+        gatewayEntered.promise,
+        pending.then(() => {
+          throw new Error("Relay finished before gateway fallback");
+        }),
+      ]);
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(request).toMatchObject({
         method: "nativeHook.invoke",
+        timeoutMs: 25,
         signal: expect.any(AbortSignal),
-      }),
-    );
+      });
+      await vi.advanceTimersByTimeAsync(24);
+      expect(request.signal?.aborted).toBe(false);
+      expect(stderr.text()).toBe("");
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toBe(0);
+      expect(request.signal?.aborted).toBe(true);
+      expect(stdout.text()).toBe("");
+      expect(stderr.text()).toContain("native hook relay timed out");
+    } finally {
+      gatewayResponse.resolve({ stdout: "", stderr: "", exitCode: 0 });
+      try {
+        await vi.runAllTimersAsync();
+        await pending;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
   }, 1_000);
 
   it.each([-60_000, 60_000])("keeps a timely response after wall-clock shift %s", async (shift) => {
@@ -607,6 +644,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -641,6 +679,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -668,6 +707,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -697,6 +737,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -724,6 +765,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );

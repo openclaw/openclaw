@@ -89,6 +89,7 @@ export function jsonError(res: BrowserResponse, status: number, message: string)
 export function jsonBrowserError(res: BrowserResponse, error: BrowserErrorResponse) {
   res.status(error.status).json({
     error: error.message,
+    ...(error.code ? { code: error.code } : {}),
     ...("reason" in error ? { reason: error.reason } : {}),
     ...("details" in error ? { details: error.details } : {}),
   });

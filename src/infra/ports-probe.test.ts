@@ -113,6 +113,55 @@ describe("tryListenOnPort", () => {
 });
 
 describe("probePortUsage", () => {
+  it("does not open a listener after cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("settle deadline expired");
+    controller.abort(reason);
+    const bind = vi.spyOn(net, "createServer");
+    try {
+      await expect(probePortUsage(0, ["127.0.0.1"], controller.signal)).rejects.toBe(reason);
+      expect(bind).not.toHaveBeenCalled();
+    } finally {
+      bind.mockRestore();
+    }
+  });
+
+  it("cancels a bind before TCP confirmation or another host probe", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const controller = new AbortController();
+    const close = vi.spyOn(net.Server.prototype, "close").mockImplementation(function (
+      this: net.Server,
+      callback?: (error?: Error) => void,
+    ) {
+      close.mockRestore();
+      return this.close((error?: Error) => {
+        entered.resolve();
+        void release.promise.then(() => callback?.(error));
+      });
+    });
+    const connect = vi.spyOn(net, "connect");
+    const bind = vi.spyOn(net, "createServer");
+    try {
+      const result = probePortUsage(0, ["127.0.0.1", "127.0.0.2"], controller.signal).catch(
+        (error: unknown) => error,
+      );
+      const first = await Promise.race([entered.promise.then(() => "closing"), result]);
+      expect(first).toBe("closing");
+      const reason = new Error("settle deadline expired");
+      controller.abort(reason);
+      release.resolve();
+      expect(await result).toBe(reason);
+      expect(connect).not.toHaveBeenCalled();
+      expect(bind).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      close.mockRestore();
+      connect.mockRestore();
+      bind.mockRestore();
+    }
+  });
+
   it("reports an IPv4-only loopback listener as busy", async ({ skip }) => {
     await withListeningServer(skip, async (address) => {
       await expect(probePortUsage(address.port)).resolves.toBe("busy");

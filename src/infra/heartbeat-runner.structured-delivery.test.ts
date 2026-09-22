@@ -20,7 +20,7 @@ import {
 import { addTestHook } from "../plugins/hooks.test-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import * as heartbeatOutcomeStore from "./heartbeat-outcome-store.js";
@@ -39,9 +39,9 @@ installHeartbeatRunnerTestRuntime();
 describe("runHeartbeatOnce structured heartbeat delivery", () => {
   const TELEGRAM_GROUP = "-1001234567890";
 
-  afterEach(() => {
+  afterEach(async () => {
     resetGlobalHookRunner();
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     vi.unstubAllEnvs();
     resetHeartbeatEventsForTest();
     resetSystemEventsForTest();
@@ -288,7 +288,7 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
           });
           expect.soft(isRetryableHeartbeatSkipReason("channel-not-ready")).toBe(true);
         }
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync();
         const stored = await heartbeatOutcomeStore.claimHeartbeatOutcomeForRun({
           agentId: "main",
           sessionKey,
@@ -304,7 +304,7 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
         expect(stored?.summary).toContain("Build needs credentials.");
         expect(stored?.responseReason).toContain(reason);
         expect(stored?.responseReason).toContain("notify:true");
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync();
       });
     },
   );

@@ -40,6 +40,7 @@ export function prepareAgentFacts(
   const rawConfiguredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
     input.config,
     input.agentId,
+    input.readOnly ? input.runtimePluginSelections : undefined,
   );
   return {
     input,

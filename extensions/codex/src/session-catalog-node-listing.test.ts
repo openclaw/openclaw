@@ -445,7 +445,6 @@ describe("Codex supervision catalog", () => {
           commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
         },
         query: { limitPerHost: 40 },
-        adoptedSessions: new Map(),
         terminalCapabilities: { canStartTerminal: true, canOpenTerminalCodex: true },
       });
 

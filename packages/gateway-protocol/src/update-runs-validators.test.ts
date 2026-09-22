@@ -316,6 +316,17 @@ describe("update run wire contract", () => {
     };
     expect(validateUpdateRunResult({ ...outcome, runId: run.runId })).toBe(true);
     expect(validateUpdateRunResult(outcome)).toBe(false);
+    const acknowledged = {
+      ...outcome,
+      runId: run.runId,
+      ackDelivered: true,
+      ackQueued: true,
+      acknowledgement: "Updating OpenClaw.",
+    };
+    expect(validateUpdateRunResult(acknowledged)).toBe(true);
+    for (const invalid of [{ ackQueued: "true" }, { acknowledgement: false }]) {
+      expect(validateUpdateRunResult({ ...acknowledged, ...invalid })).toBe(false);
+    }
     const change = { runId: run.runId, phase: "verifying", status: "running", updatedAtMs: 250 };
     expect(validateUpdateRunChangedEvent(change)).toBe(true);
     expect(validateUpdateRunChangedEvent({ ...change, phase: "complete" })).toBe(false);

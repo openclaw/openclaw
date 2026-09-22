@@ -24,9 +24,13 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     configureFsSafeNative({ mode: "off" });
   });
   afterEach(async () => {
-    await drainGlobalSingletonLifecycleState();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
+    try {
+      await drainGlobalSingletonLifecycleState();
+    } finally {
+      configureFsSafeNative({ mode: undefined });
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("clones and reads provenance with the host's native helper still off", async () => {

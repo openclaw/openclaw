@@ -14,7 +14,11 @@ import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
-import { isExactSemverVersion, resolveNpmJsonEntries } from "./npm-registry-spec.js";
+import {
+  isExactSemverVersion,
+  parseRegistryNpmSpec,
+  resolveNpmJsonEntries,
+} from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -121,6 +125,11 @@ function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
     return value;
   }
   const entries = value.filter((entry) => isRecord(entry) && !Array.isArray(entry));
+  if (entries.length === 1 && parseRegistryNpmSpec(spec)?.selectorKind === "tag") {
+    // npm resolves literal tags before ranges; npm 12 wraps that single result.
+    // Rechecking a semver-like tag against its spelling would reject a valid tag target.
+    return entries[0];
+  }
   const selector = resolveNpmSpecVersionSelector(spec);
   const range = selector ? validSemverRange(selector) : null;
   if (range) {
@@ -144,8 +153,8 @@ function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
 }
 
 function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResolution | null {
-  // npm output varies by version, selector, and field projection. npm orders
-  // view arrays ascending, so non-semver selectors intentionally use the last entry.
+  // npm output varies by version, selector, and field projection. Multi-version
+  // arrays follow publication order; selection above handles ranges and literal tags.
   const entry = selectNpmViewMetadataEntry(value, spec);
   if (!isRecord(entry) || Array.isArray(entry)) {
     return null;

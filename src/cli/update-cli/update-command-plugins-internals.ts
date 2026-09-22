@@ -3,7 +3,7 @@ import {
   normalizeUpdateFailureFacts,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { PluginPayloadSmokeFailure } from "../../plugins/payload-verification.js";
 import type { PluginUpdateOutcome } from "../../plugins/update.js";
 import { formatCliCommand } from "../command-format.js";

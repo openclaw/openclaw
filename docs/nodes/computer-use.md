@@ -117,7 +117,7 @@ The CUA descriptor advertises window, element, and browser targets; background a
 
 CUA desktop input uses the foreground desktop route. `deliveryMode` selects a route only for window-targeted input; switching it on a desktop action does not change how that action is delivered. Desktop results preserve native effect and escalation evidence, identify their desktop scope, and indicate when a requested delivery mode is not applicable. An acknowledged input is not proof that the application responded: verify the intended visible change before repeating it.
 
-The pinned CUA driver supports key taps, not sustained keyboard holds. Its Linux `left_mouse_down` and `left_mouse_up` actions require a background window pixel target with `windowRef` and a current image-bearing `observationId`; desktop and element targets do not support those holds. Use only actions exposed by the selected node. For interactive applications, first verify that movement, activation, or another intended control changes the observed state before attempting a longer task.
+The pinned CUA driver supports key taps, not sustained keyboard holds. Linux X11 key taps include a short press interval so applications that poll key state can observe them. Its Linux `left_mouse_down` and `left_mouse_up` actions require a background window pixel target with `windowRef` and a current image-bearing `observationId`; desktop and element targets do not support those holds. Use only actions exposed by the selected node. For interactive applications, first verify that movement, activation, or another intended control changes the observed state before attempting a longer task.
 
 #### Browser profiles
 

@@ -52,8 +52,17 @@ export function createPopupMessageHandler({
     }
   };
 
-  async function applyPairing({ pairing, pairingString, accessMode, source = "manual" }) {
+  async function applyPairing({
+    pairing,
+    pairingString,
+    accessMode,
+    source = "manual",
+    isCurrent = () => true,
+  }) {
     await requireAutomationAllowed();
+    if (!isCurrent()) {
+      return { ok: false };
+    }
     const parsed = pairing ?? parsePairingString(pairingString);
     if (!parsed) {
       return { ok: false, error: "Invalid pairing string." };
@@ -64,16 +73,36 @@ export function createPopupMessageHandler({
     if (source === "manual") {
       await onManualPairing();
     }
+    if (!isCurrent()) {
+      return { ok: false };
+    }
     const generation = ++pairingGeneration;
+    const pairingIsCurrent = () => generation === pairingGeneration && isCurrent();
+    const assertCurrent = () => {
+      assertPairingCurrent(generation);
+      if (!isCurrent()) {
+        throw new Error("Automatic pairing was canceled.");
+      }
+    };
     suspendRelayConnections();
     closeRelaySocket();
     await accessReady;
+    if (!isCurrent()) {
+      return { ok: false };
+    }
     assertPairingCurrent(generation);
-    await runAccessMutation(async () => {
+    return await runAccessMutation(async () => {
+      if (!isCurrent()) {
+        return { ok: false };
+      }
       assertPairingCurrent(generation);
       if (source === "native" && (await getConfig()).relayUrl) {
-        return;
+        return { ok: false, existing: true };
       }
+      if (!isCurrent()) {
+        return { ok: false };
+      }
+      assertPairingCurrent(generation);
       suspendRelayConnections();
       closeRelaySocket();
       const normalizedMode =
@@ -85,27 +114,35 @@ export function createPopupMessageHandler({
       }
       try {
         await pairingConfigStore.save(parsed, nearestGroupColor(), normalizedMode);
-        assertPairingCurrent(generation);
+        assertCurrent();
         await reconcileAccessMode(normalizedMode, { transitioning: downgrading });
-        assertPairingCurrent(generation);
+        assertCurrent();
         policy.setEnabled(true);
+        resetRelayState();
+        resumeRelayConnections();
+        await connectRelay(pairingIsCurrent);
+        if (!pairingIsCurrent()) {
+          closeRelaySocket();
+          setBadge("off");
+          assertCurrent();
+        }
       } catch (error) {
         if (downgrading) {
           policy.endTransition();
         }
+        if (source === "native" && !isCurrent()) {
+          // A dispatched storage write can finish after opt-out. This serialized
+          // transaction still owns that unadopted pairing, so remove it before exit.
+          policy.setEnabled(false);
+          closeRelaySocket();
+          setBadge("off");
+          await pairingConfigStore.clear();
+          return { ok: false };
+        }
         throw error;
       }
-      resetRelayState();
-      assertPairingCurrent(generation);
-      resumeRelayConnections();
-      await connectRelay(() => generation === pairingGeneration);
-      if (generation !== pairingGeneration) {
-        closeRelaySocket();
-        setBadge("off");
-        assertPairingCurrent(generation);
-      }
+      return { ok: true };
     });
-    return { ok: true };
   }
 
   async function unpair() {

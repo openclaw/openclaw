@@ -9,6 +9,8 @@ export type AgentRunModel = { provider: string; model: string };
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
+  /** Trusted refusal fact consumed only by this run's existing terminal mutation. */
+  providerReviewTerminal?: import("../sessions/provider-review-terminal.js").ProviderReviewTerminalFact;
   /** Queued reply delivery, rather than runtime execution, owns chat completion. */
   completionSource?: "reply-dispatch";
   sessionKey?: string;

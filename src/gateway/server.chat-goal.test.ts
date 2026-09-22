@@ -26,6 +26,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { handleChatSend } from "./server-methods/chat-send-handler.js";
+import * as sessionChangeEvents from "./server-methods/session-change-event.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -466,8 +467,8 @@ describe("Goal chat admission and continuation", () => {
   it.each([
     { caseName: "the existing session is busy", entry: { status: "running" as const } },
     {
-      caseName: "the session used an external harness",
-      entry: { agentHarnessId: "test-external-runtime" },
+      caseName: "the session used the native Codex harness",
+      entry: { agentHarnessId: "codex" },
     },
     {
       caseName: "the session used an unknown harness",
@@ -480,7 +481,9 @@ describe("Goal chat admission and continuation", () => {
       false,
       undefined,
       expect.objectContaining({
-        message: expect.stringMatching(/idle|active|work/i),
+        code: "INVALID_REQUEST",
+        message:
+          "Error: Goal start or resume requires the built-in OpenClaw runtime and an idle local session with recoverable history. This action is unavailable for native Codex and other external runtimes.",
       }),
     );
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
@@ -602,7 +605,39 @@ describe("Goal chat admission and continuation", () => {
     }
   });
 
-  it("resumes through the real reply pipeline without a visible synthetic user row", async () => {
+  it("reports a completed Goal Resume as definitively rejected without dispatch", async () => {
+    const started = await rpc("chat.send", goalStart("A completed checklist"));
+    expect(started.mock.calls[0]?.[0]).toBe(true);
+    await waitForModelRun();
+    await waitForDispatchEnd();
+    await patchSessionEntryCore(scope(), (entry) => ({
+      status: "done",
+      agentHarnessId: "openclaw",
+      goal: entry.goal ? { ...entry.goal, status: "complete" } : undefined,
+    }));
+    const goal = loadSessionEntry(scope())?.goal;
+    const rejected = await rpc("sessions.goal.update", {
+      sessionKey,
+      sessionId,
+      goalId: goal?.id,
+      action: "resume",
+      operationId: "completed-resume",
+      issuedAtMs: Date.now(),
+    });
+    expect(rejected).toHaveBeenCalledWith(
+      false,
+      expect.anything(),
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        details: { code: "GOAL_OPERATION_REJECTED", reason: "invalid" },
+      }),
+      expect.anything(),
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(loadSessionEntry(scope())?.goal?.status).toBe("complete");
+  });
+
+  it("resumes once through the real reply pipeline despite failed postcommit notification", async () => {
     const objective = "Finish the release checklist";
     const profile = ensureProfileForEmail("goal-participant@example.test");
     const requestClient: GatewayClient = {
@@ -657,7 +692,21 @@ describe("Goal chat admission and continuation", () => {
       issuedAtMs: Date.now(),
     };
     modelStarted = createDeferred();
-    const resumed = await rpc("sessions.goal.update", request, undefined, requestClient);
+    const emit = sessionChangeEvents.emitSessionsChanged;
+    const notification = vi
+      .spyOn(sessionChangeEvents, "emitSessionsChanged")
+      .mockImplementation((ctx, payload, options) => {
+        emit(ctx, payload, options);
+        if (payload.reason === "goal") {
+          throw new Error("Synthetic Goal notification failure after commit");
+        }
+      });
+    let resumed: Awaited<ReturnType<typeof rpc>>;
+    try {
+      resumed = await rpc("sessions.goal.update", request, undefined, requestClient);
+    } finally {
+      notification.mockRestore();
+    }
     expect(resumed).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ status: "started", runId: "goal-resume", goalId: goal?.id }),

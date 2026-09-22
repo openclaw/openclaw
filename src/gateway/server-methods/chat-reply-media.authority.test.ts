@@ -101,9 +101,9 @@ it.each([
     const delivery = prepareWebchatReplyMediaForDisplay({
       scope,
       abortSignal: controller.signal,
-      payloads: [
-        { mediaUrls: [imageSource] },
-        { mediaUrls: [audioSource], trustedLocalMedia: true },
+      inputs: [
+        { kind: "raw", payload: { mediaUrls: [imageSource] } },
+        { kind: "raw", payload: { mediaUrls: [audioSource], trustedLocalMedia: true } },
       ],
     });
     const rejected = expect(delivery).rejects.toThrow(
@@ -151,7 +151,7 @@ it("preserves already-produced text after its turn is aborted", async () => {
   const { assistantContent } = await prepareWebchatReplyMediaForDisplay({
     scope,
     abortSignal: controller.signal,
-    payloads: [{ text: "Completed before cancellation." }],
+    inputs: [{ kind: "raw", payload: { text: "Completed before cancellation." } }],
   });
   expect(assistantContent).toEqual([{ type: "text", text: "Completed before cancellation." }]);
 });

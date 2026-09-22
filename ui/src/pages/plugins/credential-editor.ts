@@ -108,13 +108,14 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.generation++;
     this.inspection = null;
+    this.revealed = false;
     this.literal = "";
     this.reference = { source: "env", provider: "default", id: "" };
     this.referenceSubmitted = false;
     super.disconnectedCallback();
   }
 
-  private async inspect() {
+  private async inspect(reveal = false) {
     const { gateway, pluginId, baseHash, canInspect } = this.context;
     const connection = gateway.capture();
     const generation = ++this.generation;
@@ -128,7 +129,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
     try {
       const result = await connection.client.request<PluginsCredentialsInspectResult>(
         "plugins.credentials.inspect",
-        { pluginId, path: this.field.path, baseHash },
+        { pluginId, path: this.field.path, baseHash, ...(reveal ? { reveal: true } : {}) },
       );
       if (generation !== this.generation || !gateway.isCurrent(connection)) {
         return;
@@ -137,7 +138,10 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
         this.error = t("pluginsPage.credentials.stale");
         return;
       }
-      this.inspection = result.credential;
+      this.inspection =
+        result.credential.kind === "literal" && !reveal ? { kind: "literal" } : result.credential;
+      this.revealed =
+        reveal && result.credential.kind === "literal" && result.credential.value !== undefined;
       if (this.dialogOpen && result.credential.kind === "reference") {
         this.reference = { ...result.credential.ref };
       }
@@ -149,6 +153,19 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
       if (generation === this.generation && gateway.isCurrent(connection)) {
         this.loading = false;
       }
+    }
+  }
+
+  private toggleReveal() {
+    if (this.revealed) {
+      this.revealed = false;
+      if (this.inspection?.kind === "literal") {
+        this.inspection = { kind: "literal" };
+      }
+    } else if (this.literal) {
+      this.revealed = true;
+    } else {
+      void this.inspect(true);
     }
   }
 
@@ -366,7 +383,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
             </div>`
           : html`
               <div
-                class="plugin-credential__input"
+                class="plugin-credential__input settings-secret"
                 @focusout=${(event: FocusEvent) => {
                   if (
                     event.relatedTarget instanceof Element &&
@@ -386,7 +403,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
                   autocomplete="off"
                   spellcheck="false"
                   type=${this.revealed ? "text" : "password"}
-                  .value=${this.literal}
+                  .value=${this.literal || (this.revealed && credential?.kind === "literal" ? (credential.value ?? "") : "")}
                   placeholder=${configured ? t("pluginsPage.credentials.stored") : (this.descriptor.placeholder ?? "")}
                   ?disabled=${disabled}
                   @input=${(event: Event) => {
@@ -402,14 +419,12 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
                   }}
                 />
                 <button
-                  class="btn btn--icon btn--ghost"
+                  class="settings-secret__toggle"
                   type="button"
                   aria-label=${t(this.revealed ? "pluginsPage.credentials.hide" : "pluginsPage.credentials.reveal")}
                   aria-pressed=${this.revealed}
-                  ?disabled=${disabled || !this.literal}
-                  @click=${() => {
-                    this.revealed = !this.revealed;
-                  }}
+                  ?disabled=${disabled || this.loading || (!this.literal && credential?.kind !== "literal")}
+                  @click=${() => this.toggleReveal()}
                 >
                   ${this.revealed ? icons.eyeOff : icons.eye}
                 </button>

@@ -12,6 +12,8 @@ export const EXISTING_SESSION_LIMITS = {
     clickSelector: "existing-session click does not support selector targeting yet; use ref.",
     clickButtonOrModifiers:
       "existing-session click currently supports left-click only (no button overrides/modifiers).",
+    coordinateButtonOrDelay:
+      "existing-session coordinate clicks support left-click only and no delayMs; use a managed browser profile for other buttons or click delays.",
     typeSelector: "existing-session type does not support selector targeting yet; use ref.",
     typeSlowly: "existing-session type does not support slowly=true; use fill/press instead.",
     typeTimeout: "existing-session type does not support timeoutMs overrides.",
@@ -77,7 +79,9 @@ export function getExistingSessionUnsupportedMessage(action: BrowserActRequest):
       }
       return null;
     case "clickCoords":
-      return null;
+      return (action.button && action.button !== "left") || action.delayMs
+        ? EXISTING_SESSION_LIMITS.act.coordinateButtonOrDelay
+        : null;
     case "type":
       if (action.selector) {
         return EXISTING_SESSION_LIMITS.act.typeSelector;

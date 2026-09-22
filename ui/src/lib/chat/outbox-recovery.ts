@@ -118,9 +118,11 @@ export function restoreChatOutboxRecovery(
       queue: session.queue?.map((item) =>
         Object.assign({}, item, scope, {
           sendState:
-            (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed"
-              ? "unconfirmed"
-              : "failed",
+            item.sendState === "held"
+              ? "held"
+              : (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed"
+                ? "unconfirmed"
+                : "failed",
           sendError:
             item.sendError ??
             "Recovered message. Review this destination and retry only if it did not arrive.",

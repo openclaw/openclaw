@@ -6,7 +6,7 @@ import {
   nodeHostGatewaysShareOrigin,
 } from "../../node-host/gateway-cloudflare-access.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
-import { parsePort } from "../daemon-cli/shared.js";
+import { parsePort } from "../shared/parse-port.js";
 
 type NodeGatewayOptions = {
   host?: string;

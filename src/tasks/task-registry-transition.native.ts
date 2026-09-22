@@ -78,7 +78,7 @@ export function transitionTaskRecordsByRunNative(transition: TaskRunTransition):
             onCommitted(receipt) {
               publishTaskRecordUpdate(receipt.previous, receipt.task, receipt.persisted);
               if (receipt.deliver) {
-                void maybeDeliverTaskStateChangeUpdate(receipt.task.taskId, receipt.nextEvent);
+                void maybeDeliverTaskStateChangeUpdate(receipt.task, receipt.nextEvent);
                 void maybeDeliverTaskTerminalUpdate(receipt.task.taskId);
               }
             },

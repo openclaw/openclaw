@@ -31,6 +31,7 @@ export default {
   test: {
     ...config.test,
     include: [memoryTest, "src/agents/cli-runner/bundle-mcp.requester-lifecycle.test.ts"],
+    pool: "forks",
     maxWorkers: 1,
     fileParallelism: false,
     isolate: false,

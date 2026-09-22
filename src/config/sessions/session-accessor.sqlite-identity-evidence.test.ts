@@ -6,11 +6,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import {
-  readSessionIdentityEvidenceBatch,
-  recordSessionParticipant,
-  replaceSessionEntrySync,
-} from "./session-accessor.js";
+import { readSessionIdentityEvidenceBatch, replaceSessionEntrySync } from "./session-accessor.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

@@ -120,7 +120,10 @@ export function dismissRealtimeTalkError(state: ChatRealtimeState) {
   stopChatRealtimeTalk(state);
 }
 
-export function attachChatRealtimeActions(state: ChatRealtimeState) {
+export function attachChatRealtimeActions(
+  state: ChatRealtimeState,
+  canStart: () => boolean = () => true,
+) {
   let conversationGeneration = 0;
   const talkStatusIsError = () => state.realtimeTalkStatus === "error";
   const persistCameraPreference = (enabled: boolean) => {
@@ -188,6 +191,9 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     voiceChange?: TalkVoiceChangeEvent,
   ): Promise<RealtimeTalkSession | undefined> => {
     state.realtimeTalkUseSystemDefault = null;
+    if (!canStart()) {
+      return undefined;
+    }
     if (!state.client || !state.connected) {
       state.lastError = "Gateway not connected";
       state.chatError = state.lastError;
@@ -225,7 +231,8 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
         state.realtimeTalkVoiceController !== previousController ||
         state.client !== client ||
         state.sessionKey !== sessionKey ||
-        !state.connected
+        !state.connected ||
+        !canStart()
       ) {
         return undefined;
       }

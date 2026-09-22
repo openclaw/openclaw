@@ -61,6 +61,7 @@ export type PreparedModelRuntimeBuildCandidate = Readonly<{
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   prepareInboundPluginRegistry?: boolean;
   isGenerationCurrent?: () => boolean;
+  retirementSignal: AbortSignal;
   isBuildCurrent?: () => boolean;
   onBeforeAuthCapture?: () => void;
   inspectRegistry?: boolean;
@@ -142,6 +143,7 @@ async function buildSnapshotBatch(
         catalogFacts,
         pluginGeneration,
         isCurrent: candidate.isGenerationCurrent ?? (() => false),
+        retirementSignal: candidate.retirementSignal,
         inventoryOwner: candidate.inventoryOwner ?? {},
       }),
       requestedByInput.get(candidate.input)!.config,

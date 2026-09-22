@@ -1,5 +1,7 @@
 import { isAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
+import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
+import type { CronRunRecoveryResult } from "../store/run-recovery.types.js";
 import {
   configureForeignReceiptMonitor,
   enrollForeignReceipt,
@@ -13,14 +15,8 @@ import { nextWakeAtMs } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { cancelCronRunAdmissionWaiters } from "./run-admission.js";
 import { emitInterruptedCronRun } from "./run-recovery-events.js";
-import {
-  proposeCronRunRecovery,
-  recomputeUnownedCronSchedules,
-  recoverCronRunProposal,
-  type CronRunRecoveryProposal,
-  type CronRunRecoveryResult,
-} from "./run-recovery.js";
-import { applyCronRuntimeRowsToState } from "./runtime-store.js";
+import { recoverCronRunProposals } from "./run-recovery.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import type { InterruptedStartupRun } from "./startup-run-repair.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
@@ -66,27 +62,29 @@ async function reconcileForeignRunReceipts(state: CronServiceState): Promise<voi
     if (state.stopped) {
       return;
     }
-    for (const receipt of listForeignReceipts(state)) {
+    const proposals = listForeignReceipts(state).map((receipt): CronRunRecoveryProposal => {
       const job = state.store?.jobs.find((entry) => entry.id === receipt.jobId);
-      const proposal: CronRunRecoveryProposal = {
+      return {
         jobId: receipt.jobId,
-        ...(job?.state.queuedAtMs !== undefined ? { queuedAtMs: job.state.queuedAtMs } : {}),
-        ...(job?.state.runningAtMs !== undefined ? { runningAtMs: job.state.runningAtMs } : {}),
+        queuedAtMs: job?.state.queuedAtMs,
+        runningAtMs: job?.state.runningAtMs,
         runningReceiptId: job?.state.runningReceiptId,
         receipt,
       };
-      schedulingChanged =
-        applyRecoveryResult({
-          state,
-          proposal,
-          result: recoverCronRunProposal(state, proposal),
-          interruptedRuns,
-        }) || schedulingChanged;
-    }
-    if (schedulingChanged) {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      for (const interrupted of interruptedRuns) {
-        emitInterruptedCronRun(state, interrupted);
+    });
+    try {
+      await recoverCronRunProposals(state, proposals, {
+        onRecovery(proposal, result) {
+          schedulingChanged =
+            applyRecoveryResult({ state, proposal, result, interruptedRuns }) || schedulingChanged;
+        },
+      });
+    } finally {
+      if (schedulingChanged) {
+        await ensureLoaded(state, { forceReload: true });
+        for (const interrupted of interruptedRuns) {
+          emitInterruptedCronRun(state, interrupted);
+        }
       }
     }
   });
@@ -108,30 +106,49 @@ export async function waitForRunSettlement(
         if (signal.aborted || state.stopped || state.lifecycleGeneration !== generation) {
           return { settled: false };
         }
-        await ensureLoaded(state, { skipRecompute: true });
+        await ensureLoaded(state);
         if (signal.aborted || state.stopped || state.lifecycleGeneration !== generation) {
           return { settled: false };
         }
         const job = state.store?.jobs.find((entry) => entry.id === jobId);
-        const proposal = proposeCronRunRecovery(
-          state,
+        const proposal: CronRunRecoveryProposal = {
           jobId,
-          job?.state.queuedAtMs,
-          job?.state.runningAtMs,
-        );
-        const recovery = recoverCronRunProposal(state, proposal);
+          queuedAtMs: job?.state.queuedAtMs,
+          runningAtMs: job?.state.runningAtMs,
+        };
+        let recovery: CronRunRecoveryResult | undefined;
+        let changed = false;
         const interruptedRuns: InterruptedStartupRun[] = [];
-        const changed = applyRecoveryResult({ state, proposal, result: recovery, interruptedRuns });
-        if (changed) {
-          await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-          for (const interrupted of interruptedRuns) {
-            emitInterruptedCronRun(state, interrupted);
-          }
-          if (state.schedulerStarted) {
-            armTimer(state);
+        try {
+          await recoverCronRunProposals(state, [proposal], {
+            signal,
+            onRecovery(observed, recovered) {
+              recovery = recovered;
+              changed = applyRecoveryResult({
+                state,
+                proposal: observed,
+                result: recovered,
+                interruptedRuns,
+              });
+            },
+          });
+        } finally {
+          if (changed) {
+            await ensureLoaded(state, { forceReload: true });
+            for (const interrupted of interruptedRuns) {
+              emitInterruptedCronRun(state, interrupted);
+            }
+            if (state.schedulerStarted) {
+              armTimer(state);
+            }
           }
         }
-        if (signal.aborted || state.stopped || state.lifecycleGeneration !== generation) {
+        if (
+          !recovery ||
+          signal.aborted ||
+          state.stopped ||
+          state.lifecycleGeneration !== generation
+        ) {
           return { settled: false };
         }
         if (recovery.kind === "repaired" || !recovery.receipt) {
@@ -159,6 +176,7 @@ export async function waitForRunSettlement(
 /** Starts the cron service, atomically repairs abandoned runs, and arms scheduling. */
 export async function start(state: CronServiceState): Promise<void> {
   state.stopped = false;
+  const generation = state.lifecycleGeneration;
   stopForeignReceiptMonitor(state);
   configureForeignReceiptMonitor(state, async () => await reconcileForeignRunReceipts(state));
   if (!state.deps.cronEnabled) {
@@ -166,11 +184,11 @@ export async function start(state: CronServiceState): Promise<void> {
     return;
   }
 
-  const interruptedRuns: InterruptedStartupRun[] = [];
   const skipJobIds = new Set<string>();
   await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
-    if (state.stopped) {
+    const interruptedRuns: InterruptedStartupRun[] = [];
+    await ensureLoaded(state);
+    if (state.stopped || state.lifecycleGeneration !== generation) {
       return;
     }
     if (state.deps.legacyDefaultAgentId) {
@@ -183,46 +201,48 @@ export async function start(state: CronServiceState): Promise<void> {
           { storePath: state.deps.storePath, rewritten },
           "cron: assigned legacy jobs to the retained owner",
         );
-        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+        await ensureLoaded(state, { forceReload: true });
       }
+    }
+    if (state.stopped || state.lifecycleGeneration !== generation) {
+      return;
     }
     const proposals: CronRunRecoveryProposal[] = [];
     for (const job of state.store?.jobs ?? []) {
       job.state ??= {};
       if (typeof job.state.queuedAtMs === "number") {
-        proposals.push(proposeCronRunRecovery(state, job.id, job.state.queuedAtMs, undefined));
+        proposals.push({ jobId: job.id, queuedAtMs: job.state.queuedAtMs });
       }
       if (typeof job.state.runningAtMs === "number") {
-        proposals.push(proposeCronRunRecovery(state, job.id, undefined, job.state.runningAtMs));
+        proposals.push({ jobId: job.id, runningAtMs: job.state.runningAtMs });
       }
     }
-    for (const proposal of proposals) {
-      applyRecoveryResult({
-        state,
-        proposal,
-        result: recoverCronRunProposal(state, proposal, "startup"),
-        interruptedRuns,
-        skipJobIds,
+    try {
+      await recoverCronRunProposals(state, proposals, {
+        mode: "startup",
+        onRecovery(proposal, result) {
+          applyRecoveryResult({ state, proposal, result, interruptedRuns, skipJobIds });
+        },
       });
+    } finally {
+      if (proposals.length > 0) {
+        await ensureLoaded(state, { forceReload: true });
+      }
+      // Publish committed interruptions before a replacement can start catch-up.
+      for (const interrupted of interruptedRuns) {
+        emitInterruptedCronRun(state, interrupted);
+      }
     }
-    if (proposals.length > 0) {
-      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    if (state.stopped || state.lifecycleGeneration !== generation) {
+      return;
     }
     if (listForeignReceipts(state).length > 0) {
-      const maintenance = recomputeUnownedCronSchedules(state);
-      runPostPersistCronNotifications(state, maintenance.notifications);
-      if (maintenance.changed) {
-        applyCronRuntimeRowsToState(state, maintenance.jobs);
-      }
+      await recomputeUnownedCronSchedules(state);
     }
   });
 
-  if (state.stopped) {
+  if (state.stopped || state.lifecycleGeneration !== generation) {
     return;
-  }
-  // Publish the interrupted attempt before catch-up can finish its successor.
-  for (const interrupted of interruptedRuns) {
-    emitInterruptedCronRun(state, interrupted);
   }
   await runMissedJobs(state, {
     skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
@@ -230,14 +250,15 @@ export async function start(state: CronServiceState): Promise<void> {
   });
 
   await locked(state, async () => {
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    if (state.stopped) {
+    await ensureLoaded(state, { forceReload: true });
+    if (state.stopped || state.lifecycleGeneration !== generation) {
       return;
     }
     if (listForeignReceipts(state).length === 0) {
-      const maintenance = recomputeUnownedCronSchedules(state, { recomputeExpired: true });
-      runPostPersistCronNotifications(state, maintenance.notifications);
-      applyCronRuntimeRowsToState(state, maintenance.jobs);
+      await recomputeUnownedCronSchedules(state, { recomputeExpired: true });
+    }
+    if (state.stopped || state.lifecycleGeneration !== generation) {
+      return;
     }
     armTimer(state);
     resumeForeignReceiptMonitor(state);
