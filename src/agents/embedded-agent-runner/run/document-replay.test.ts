@@ -32,6 +32,7 @@ const model: Parameters<StreamFn>[0] = {
   name: "Synthetic",
   api: "openai-responses",
   provider: "openai",
+  baseUrl: "https://example.test",
   reasoning: false,
   input: ["text", "image"],
   contextWindow: 32768,
@@ -137,7 +138,11 @@ describe("native document replay", () => {
       });
       const history =
         route === "fork"
-          ? fork.flatMap((entry) => ("message" in entry ? [entry.message as AgentMessage] : []))
+          ? fork.flatMap((entry) =>
+              typeof entry === "object" && entry !== null && "message" in entry
+                ? [castAgentMessage(entry.message)]
+                : [],
+            )
           : [original, assistant];
       const serialized = JSON.stringify(history);
       const { agent, requests, cleanup } = fixture(workspaceDir);
@@ -178,7 +183,11 @@ describe("native document replay", () => {
         makeAgentAssistantMessage({ content: [] }),
       ]);
       expect(second[0]).toEqual(first[0]);
-      const content = first[0]?.content;
+      const projectedUser = first[0];
+      if (projectedUser?.role !== "user") {
+        throw new Error("Expected the projected user turn");
+      }
+      const content = projectedUser.content;
       expect(content).toEqual([
         { type: "text", text: "caption with <file>literal markup</file>" },
         { type: "text", text: expect.stringContaining("first document body") },
