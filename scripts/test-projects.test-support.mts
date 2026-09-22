@@ -3373,6 +3373,7 @@ export function isToolingTestOwnerPath(changedPath: string): boolean {
     : changedPath;
   const facts = getChangedPathFacts(changedPath);
   return (
+    isToolingIsolatedTestFile(changedPath) ||
     changedPath.startsWith("scripts/") ||
     changedPath.startsWith("src/scripts/") ||
     changedPath.startsWith("config/ci-") ||
@@ -4268,7 +4269,7 @@ export function buildVitestRunPlans(
   }
   const impliedToolingIsolatedTargets = !watchMode
     ? toolingIsolatedTestFiles.filter((file) =>
-        toolingTargets.some((targetArg) =>
+        classifiedTargets.some(({ targetArg }) =>
           includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
         ),
       )

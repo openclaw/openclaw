@@ -366,6 +366,7 @@ describe("CI changed Node test plan", () => {
     "defers owner-changing automatic PRs to complete tooling coverage (%s)",
     (runnerBackend) => {
       for (const changedPath of [
+        "src/cli/update-cli/update-command-legacy-finalize.test.ts",
         "test/scripts/vitest-report-owner.test.ts",
         "scripts/lib/vitest-report-owner.mts",
         "package.json",
@@ -381,16 +382,20 @@ describe("CI changed Node test plan", () => {
   );
 
   it("keeps product-only precise selections free of maintainer tooling", () => {
-    const shards = createChangedNodeTestShards(["src/infra/retry.test.ts"], {
-      includeReleaseOnlyToolingShards: false,
-    });
+    const shards = createChangedNodeTestShards(
+      [
+        "src/infra/retry.test.ts",
+        "src/cli/update-cli/update-command-legacy-finalize-entrypoint.test-support.ts",
+      ],
+      { includeReleaseOnlyToolingShards: false },
+    );
     expect(shards).not.toBeNull();
-    expect(
-      shards?.flatMap((shard) => [
-        ...(shard.targets ?? shard.includePatterns ?? []),
-        ...(shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? []),
-      ]),
-    ).toContain("src/infra/retry.test.ts");
+    const files = shards?.flatMap((shard) => [
+      ...(shard.targets ?? shard.includePatterns ?? []),
+      ...(shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? []),
+    ]);
+    expect(files).toContain("src/infra/retry.test.ts");
+    expect(files).not.toContain("src/cli/update-cli/update-command-legacy-finalize.test.ts");
     expect(
       shards?.some((shard) =>
         [...shard.configs, ...(shard.groups?.flatMap((group) => group.configs) ?? [])].some(

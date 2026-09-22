@@ -2215,6 +2215,7 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it.each([
+    "src/cli/update-cli/update-command-legacy-finalize.test.ts",
     "test/scripts/check-extension-package-tsc-boundary.test.ts",
     "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
     "test/scripts/control-ui-i18n.test.ts",
@@ -3111,6 +3112,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/vitest/vitest.unit-fast.config.ts",
         "test/vitest/vitest.cli-process.config.ts",
         "test/vitest/vitest.cli.config.ts",
+        "test/vitest/vitest.tooling-isolated.config.ts",
       ]),
     );
     const processPlan = plans.find(
@@ -3118,6 +3120,10 @@ describe("scripts/test-projects changed-target routing", () => {
     );
     expect(processPlan?.includePatterns).toContain("src/cli/help-exit.process.test.ts");
     expect(processPlan?.includePatterns).toContain("src/cli/update-dry-run-state.process.test.ts");
+    expect(
+      plans.find((plan) => plan.config === "test/vitest/vitest.tooling-isolated.config.ts")
+        ?.includePatterns,
+    ).toEqual(["src/cli/update-cli/update-command-legacy-finalize.test.ts"]);
   });
 
   it.each(["src/state", "src/state/", "src/state/**/*.test.ts"])(
