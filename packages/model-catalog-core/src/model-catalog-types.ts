@@ -59,6 +59,8 @@ export type ModelCatalogCompatConfig = {
   supportsPromptCacheKey?: boolean;
   /** Explicit per-model opt-in for HTTP continuation on a custom/proxy OpenAI-Responses-compatible endpoint. */
   supportsResponsesContinuation?: boolean;
+  /** Whether this Responses route accepts OpenAI service tiers (including priority). */
+  supportsServiceTier?: boolean;
   supportsTools?: boolean;
   /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
   codeMode?: "preferred" | "capable";

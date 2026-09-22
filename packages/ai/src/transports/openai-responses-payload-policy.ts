@@ -118,7 +118,8 @@ function readCompatPayloadBoolean(
     | "supportsInstructions"
     | "supportsPromptCacheKey"
     | "supportsResponsesContinuation"
-    | "supportsStore",
+    | "supportsStore"
+    | "supportsServiceTier",
 ): boolean | undefined {
   if (!compat || typeof compat !== "object") {
     return undefined;
@@ -170,17 +171,33 @@ function resolveOpenAIResponsesPayloadCapabilities(
     provider !== "azure-openai-responses" &&
     readCompatPayloadBoolean(model.compat, "supportsResponsesContinuation") === true;
 
+  const serviceTierSupport = readCompatPayloadBoolean(model.compat, "supportsServiceTier");
+  let explicitServiceTierOptIn = false;
+  if (
+    serviceTierSupport === true &&
+    (api === "openai-responses" || api === "openclaw-openai-responses-transport")
+  ) {
+    try {
+      const url = new URL(readStringValue(model.baseUrl) ?? "");
+      explicitServiceTierOptIn = url.protocol === "https:" || url.protocol === "http:";
+    } catch {
+      // An opt-in needs a concrete, valid Responses endpoint.
+    }
+  }
+
   return {
     allowsOpenAIServiceTier:
-      (provider === "openai" &&
-        (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
-        endpointClass === "openai-public") ||
-      (isOpenAIProvider &&
-        (api === "openai-chatgpt-responses" ||
-          api === "openclaw-openai-chatgpt-responses-transport" ||
-          api === "openai-responses" ||
-          api === "openclaw-openai-responses-transport") &&
-        endpointClass === "openai"),
+      serviceTierSupport !== false &&
+      (explicitServiceTierOptIn ||
+        (provider === "openai" &&
+          (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
+          endpointClass === "openai-public") ||
+        (isOpenAIProvider &&
+          (api === "openai-chatgpt-responses" ||
+            api === "openclaw-openai-chatgpt-responses-transport" ||
+            api === "openai-responses" ||
+            api === "openclaw-openai-responses-transport") &&
+          endpointClass === "openai")),
     allowsResponsesStore:
       supportsResponsesStoreField &&
       api !== "openai-chatgpt-responses" &&

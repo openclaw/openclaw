@@ -13,6 +13,11 @@ const request: ProviderFastModePolicyContext = {
 
 describe("OpenAI selected Fast capability", () => {
   it.each([
+    {
+      change: { baseUrl: "https://example.invalid/v1", compat: { supportsServiceTier: true } },
+      expected: true,
+    },
+    { change: { compat: { supportsServiceTier: false } }, expected: false },
     { change: {}, expected: true },
     { change: { api: "openai-completions" }, expected: false },
     { change: { baseUrl: "https://proxy.example/v1" }, expected: false },

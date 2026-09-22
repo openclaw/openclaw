@@ -213,10 +213,62 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     Codex app-server configuration. It is forwarded only by the embedded
     runtime to native OpenAI endpoints (`api.openai.com`) and native ChatGPT
     endpoints (`chatgpt.com/backend-api`). If you route either provider through
-    a proxy, OpenClaw leaves `service_tier` untouched. Configure the native
+    a proxy, OpenClaw leaves `service_tier` untouched unless the model explicitly
+    opts in as described below. Configure the native
     harness separately with `plugins.entries.codex.config.appServer.serviceTier`;
     the shared Fast-mode run control can supersede that value.
     </Warning>
+
+  </Accordion>
+
+  <a id="fast-mode-on-custom-responses-endpoints" />
+  <Accordion title="Fast mode on custom Responses endpoints">
+    For an endpoint that accepts OpenAI Responses service tiers, declare
+    `compat.supportsServiceTier: true` on the model. This enables the shared
+    Fast control on the embedded OpenClaw runtime and permits `service_tier`
+    requests without changing the provider identity or enabling other native
+    OpenAI payload features.
+
+    ```json5
+    {
+      models: {
+        providers: {
+          "custom-provider": {
+            baseUrl: "https://example.invalid/v1",
+            api: "openai-responses",
+            models: [{
+              id: "custom-model",
+              name: "Custom model",
+              compat: { supportsServiceTier: true },
+            }],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "custom-provider/custom-model": {
+              params: { fastMode: "auto" },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Fast on sends `service_tier: "priority"`; off omits the Fast-derived tier.
+    Auto uses the same run cutoff as native OpenAI Fast mode. An explicit
+    `params.serviceTier` (or `service_tier`) value of `auto`, `default`, `flex`,
+    or `priority` takes precedence and disables the shared Fast control because
+    toggling it would not change that request. A tier already supplied by the
+    transport remains authoritative.
+
+    Custom endpoints remain opted out when this capability is absent or false.
+    Only the `openai-responses` adapter with an HTTP(S) base URL can opt in;
+    Chat Completions and custom ChatGPT adapters do not gain support. This
+    setting does not configure the native Codex runtime. Enable it only when
+    your endpoint supports these tiers; billing and actual prioritization are
+    determined by that endpoint.
 
   </Accordion>
 

@@ -155,6 +155,7 @@ describe("ModelsConfigSchema", () => {
       sendSessionIdHeader: true,
       supportsEagerToolInputStreaming: true,
       supportsLongCacheRetention: true,
+      supportsServiceTier: true,
     };
     const parsed = ModelsConfigSchema.parse({
       providers: {
@@ -166,6 +167,22 @@ describe("ModelsConfigSchema", () => {
     });
 
     expect(parsed?.providers?.["my-proxy"]?.models?.[0]?.compat).toEqual(compat);
+  });
+
+  it("rejects non-boolean service-tier compatibility", () => {
+    expect(
+      ModelsConfigSchema.safeParse({
+        providers: {
+          "custom-provider": {
+            baseUrl: "https://example.invalid/v1",
+            api: "openai-responses",
+            models: [
+              { id: "custom-model", name: "Custom model", compat: { supportsServiceTier: "true" } },
+            ],
+          },
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts catalog-declared temperature compatibility", () => {
