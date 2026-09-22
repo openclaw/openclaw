@@ -16,6 +16,7 @@ import {
   type ExecAutoReviewDecision,
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
@@ -454,14 +455,18 @@ export function createModelExecAutoReviewer(params: {
       void trackOwner(async () => {
         let acquired: Awaited<ReturnType<typeof prepareModel>> | undefined;
         try {
+          // A plugin operation can retire the generation that started this turn while the
+          // turn keeps running; admit the review against the committed inventory instead.
           acquired = await work.track(() =>
-            prepareModel({
-              cfg,
-              agentId,
-              modelRef,
-              allowMissingApiKeyModes: ["aws-sdk"],
-              signal,
-            }),
+            runOutsidePluginRuntimeGenerationScope(() =>
+              prepareModel({
+                cfg,
+                agentId,
+                modelRef,
+                allowMissingApiKeyModes: ["aws-sdk"],
+                signal,
+              }),
+            ),
           );
           preparedResult.resolve(acquired);
           await finished.promise;
