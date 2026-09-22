@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import {
   buildCaptionedFinalTextFallback,
@@ -579,28 +580,27 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       },
     });
     const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
-      runWithDispatchLifecycleAdmission(
-        async () =>
-          await runWithDispatchAbortSignal(
-            getPreDispatchAbortSignal(),
-            () =>
-              hookRunner.runBeforeDispatch(
-                {
-                  messageId: state.hookState.hookContext.messageId,
-                  content: state.hookState.hookContext.content,
-                  body:
-                    state.hookState.hookContext.bodyForAgent ?? state.hookState.hookContext.body,
-                  channel: state.hookState.hookContext.channelId,
-                  sessionKey: beforeDispatchSessionKey,
-                  senderId: state.hookState.hookContext.senderId,
-                  replyToId: state.hookState.hookContext.replyToId,
-                  replyToIdFull: state.hookState.hookContext.replyToIdFull,
-                  replyToBody: state.hookState.hookContext.replyToBody,
-                  replyToSender: state.hookState.hookContext.replyToSender,
-                  replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
-                  isGroup: state.hookState.hookContext.isGroup,
-                  timestamp: state.hookState.hookContext.timestamp,
-                },
+      runWithDispatchLifecycleAdmission(async () => {
+        return await runWithDispatchAbortSignal(
+          getPreDispatchAbortSignal(),
+          () =>
+            hookRunner.runBeforeDispatch(
+              {
+                messageId: state.hookState.hookContext.messageId,
+                content: state.hookState.hookContext.content,
+                body: state.hookState.hookContext.bodyForAgent ?? state.hookState.hookContext.body,
+                channel: state.hookState.hookContext.channelId,
+                sessionKey: beforeDispatchSessionKey,
+                senderId: state.hookState.hookContext.senderId,
+                replyToId: state.hookState.hookContext.replyToId,
+                replyToIdFull: state.hookState.hookContext.replyToIdFull,
+                replyToBody: state.hookState.hookContext.replyToBody,
+                replyToSender: state.hookState.hookContext.replyToSender,
+                replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
+                isGroup: state.hookState.hookContext.isGroup,
+                timestamp: state.hookState.hookContext.timestamp,
+              },
+              withClaimingHookAdmission(
                 {
                   messageId: state.hookState.hookContext.messageId,
                   channelId: state.hookState.hookContext.channelId,
@@ -614,11 +614,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   replyToSender: state.hookState.hookContext.replyToSender,
                   replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
                 },
-                pluginSubagentRequester,
+                state.assertCurrentBindingRoute,
               ),
-            trackDispatchLifecycleWork,
-          ),
-      ),
+              pluginSubagentRequester,
+            ),
+          trackDispatchLifecycleWork,
+        );
+      }),
     );
     if (beforeDispatchResult?.handled) {
       const text = beforeDispatchResult.text;

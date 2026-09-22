@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
@@ -8,16 +8,29 @@ import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-run
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
-  loadRunOverflowCompactionHarness,
   mockedAcquireAgentRunPreparedModelRuntime,
   mockedBuildEmbeddedRunPayloads,
   mockedRunEmbeddedAttempt,
   createOverflowRunParams,
+  resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
+import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
+let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
+let registerPreparedAgentHarness: typeof import("../harness/registry.js").registerAgentHarness;
+
+beforeAll(async () => {
+  runEmbeddedAgent = await loadSharedRunIntegrationHarness();
+  ({ registerAgentHarness: registerPreparedAgentHarness } = await import("../harness/registry.js"));
+});
+
+beforeEach(() => {
+  resetSharedRunIntegrationHarnessMocks();
+});
+
 afterEach(async () => {
   await state?.cleanup();
 });
@@ -29,7 +42,6 @@ describe("plugin runtime refresh admission", () => {
     { name: "unrelated final text", media: false, unrelatedText: true, unrelatedRoute: false },
     { name: "unrelated delivery route", media: false, unrelatedText: false, unrelatedRoute: true },
   ])("preserves delivery dedupe across refresh for $name", async (scenario) => {
-    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "plugin-refresh-delivery" });
     const text = "The requested result was delivered by the original plugin generation.";
@@ -104,7 +116,6 @@ describe("plugin runtime refresh admission", () => {
   });
 
   it("reacquires generations while preserving run authority, committed work, and one terminal", async () => {
-    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
     const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
       await import("../../plugins/runtime/gateway-request-scope.js");
     const { getPluginRuntimeGenerationRegistry, withPluginRuntimeGenerationScope } =
@@ -276,7 +287,6 @@ describe("plugin runtime refresh admission", () => {
   )(
     "preserves pending $kind media and its provenance (refresh: $refresh)",
     async ({ kind, refresh }) => {
-      const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
       useOpenAIPlatformAuthFixture();
       const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
       const { getReplyPayloadMetadata } = await import("../../auto-reply/reply-payload.js");
@@ -367,7 +377,6 @@ describe("plugin runtime refresh admission", () => {
     },
   );
   it("does not readmit completed work after a provider-shaped handoff failure", async () => {
-    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "plugin-refresh-failure" });
     const runParams = createOverflowRunParams(state);
@@ -418,8 +427,6 @@ describe("plugin runtime refresh admission", () => {
   it.each([false, true])(
     "uses only producer-owned settled finalization context (present: %s)",
     async (hasContext) => {
-      const { runEmbeddedAgent, registerPreparedAgentHarness } =
-        await loadRunOverflowCompactionHarness();
       const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
       state = await createOpenClawTestState({ label: "plugin-refresh-stale-finalization" });
       const assistant = buildEmbeddedRunnerAssistant({
@@ -549,7 +556,6 @@ describe("plugin runtime refresh streaming delivery", () => {
       ownedMedia: true,
     },
   ])("retains committed delivery before successor callbacks for $name", async (scenario) => {
-    const { runEmbeddedAgent } = await loadRunOverflowCompactionHarness();
     const {
       getReplyPayloadMetadata,
       markReplyPayloadForSourceSuppressionDelivery,
