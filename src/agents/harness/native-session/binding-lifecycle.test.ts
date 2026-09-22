@@ -42,32 +42,42 @@ describe("native session binding lifecycle", () => {
     values.set(key, { value: "owner" });
     let active = true;
 
-    await expect(lifecycle.withDeletion(key, {
-      prepareLease: prepareBindingTestLease,
-      assertCurrent: () => {
-        if (!active) {
-          throw new Error("owner revoked");
-        }
-      },
-      assertRecordCurrent: () => {},
-    }, async (_record, mutation) => {
-      active = false;
-      expect(mutation.commit).toThrow("owner revoked");
-    })).rejects.toThrow("owner revoked");
+    await expect(
+      lifecycle.withDeletion(
+        key,
+        {
+          prepareLease: prepareBindingTestLease,
+          assertCurrent: () => {
+            if (!active) {
+              throw new Error("owner revoked");
+            }
+          },
+          assertRecordCurrent: () => {},
+        },
+        async (_record, mutation) => {
+          active = false;
+          expect(mutation.commit).toThrow("owner revoked");
+        },
+      ),
+    ).rejects.toThrow("owner revoked");
     expect(values.get(key)).toMatchObject({ value: "owner" });
 
     // Revocation leaves the bounded lease for expiry; the successor is an independent owner.
     const successor = { value: "successor" };
     values.set(key, successor);
-    await lifecycle.withDeletion(key, {
-      prepareLease: prepareBindingTestLease,
-      assertCurrent: () => {},
-      assertRecordCurrent: () => {},
-    }, async (_record, mutation) => {
-      mutation.commit();
-      values.set(key, successor);
-      expect(mutation.rollback).toThrow("changed before session deletion rollback");
-    });
+    await lifecycle.withDeletion(
+      key,
+      {
+        prepareLease: prepareBindingTestLease,
+        assertCurrent: () => {},
+        assertRecordCurrent: () => {},
+      },
+      async (_record, mutation) => {
+        mutation.commit();
+        values.set(key, successor);
+        expect(mutation.rollback).toThrow("changed before session deletion rollback");
+      },
+    );
     expect(values.get(key)).toEqual(successor);
   });
 
@@ -82,24 +92,41 @@ describe("native session binding lifecycle", () => {
     };
     const lifecycle = createNativeSessionBindingLifecycle(state, bindingTestOptions);
     let releaseArchive!: () => void;
-    const archiveReleased = new Promise<void>((resolve) => { releaseArchive = resolve; });
+    const archiveReleased = new Promise<void>((resolve) => {
+      releaseArchive = resolve;
+    });
     let archive!: Promise<void>;
     startArchive = () => {
       archive = lifecycle.withExclusiveMutationFence(async () => {
-        await expect(lifecycle.withMutation(() => lifecycle.transact("first", (current) => ({
-          next: { ...current, value: "updated" }, result: true,
-        })))).resolves.toBe(true);
+        await expect(
+          lifecycle.withMutation(() =>
+            lifecycle.transact("first", (current) => ({
+              next: { ...current, value: "updated" },
+              result: true,
+            })),
+          ),
+        ).resolves.toBe(true);
         await archiveReleased;
       });
     };
 
-    await expect(lifecycle.withMutation(() => lifecycle.transact("first", () => ({
-      next: { value: "before-archive" }, result: true,
-    })))).resolves.toBe(true);
+    await expect(
+      lifecycle.withMutation(() =>
+        lifecycle.transact("first", () => ({
+          next: { value: "before-archive" },
+          result: true,
+        })),
+      ),
+    ).resolves.toBe(true);
     await Promise.resolve();
-    await expect(lifecycle.withMutation(() => lifecycle.transact("late", () => ({
-      next: { value: "late" }, result: true,
-    })))).rejects.toThrow("native archive is in progress");
+    await expect(
+      lifecycle.withMutation(() =>
+        lifecycle.transact("late", () => ({
+          next: { value: "late" },
+          result: true,
+        })),
+      ),
+    ).rejects.toThrow("native archive is in progress");
     releaseArchive();
     await expect(archive).resolves.toBeUndefined();
     expect(values.get("first")).toEqual({ value: "updated" });

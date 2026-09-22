@@ -21,15 +21,20 @@ describe("native session binding leases", () => {
     let peerFinished = false;
     let peerWrite!: Promise<boolean>;
 
-    await owner.withLease(key, async () => {
-      peerWrite = peer.transact(key, () => ({ next: { value: "peer" }, result: true }))
-        .then((result) => {
-          peerFinished = true;
-          return result;
-        });
-      await Promise.resolve();
-      expect(peerFinished).toBe(false);
-    }, { prepareLease: prepareBindingTestLease });
+    await owner.withLease(
+      key,
+      async () => {
+        peerWrite = peer
+          .transact(key, () => ({ next: { value: "peer" }, result: true }))
+          .then((result) => {
+            peerFinished = true;
+            return result;
+          });
+        await Promise.resolve();
+        expect(peerFinished).toBe(false);
+      },
+      { prepareLease: prepareBindingTestLease },
+    );
     await vi.advanceTimersByTimeAsync(1_000);
     await peerWrite;
 
@@ -45,21 +50,33 @@ describe("native session binding leases", () => {
     let peerFinished = false;
     let peerWrite!: Promise<boolean>;
 
-    await owner.withLease(key, async () => {
-      peerWrite = peer.transact(key, (current) => current?.value === undefined
-        ? { next: { value: "peer" }, result: true }
-        : { result: false }).then((result) => {
-          peerFinished = true;
-          return result;
-        });
-      await Promise.resolve();
-      expect(peerFinished).toBe(false);
-      await expect(owner.transact(key, (current) => current?.value === undefined
-        ? { next: { ...current, value: "owner" }, result: true }
-        : { result: false })).resolves.toBe(true);
-      await Promise.resolve();
-      expect(peerFinished).toBe(false);
-    }, { prepareLease: prepareBindingTestLease });
+    await owner.withLease(
+      key,
+      async () => {
+        peerWrite = peer
+          .transact(key, (current) =>
+            current?.value === undefined
+              ? { next: { value: "peer" }, result: true }
+              : { result: false },
+          )
+          .then((result) => {
+            peerFinished = true;
+            return result;
+          });
+        await Promise.resolve();
+        expect(peerFinished).toBe(false);
+        await expect(
+          owner.transact(key, (current) =>
+            current?.value === undefined
+              ? { next: { ...current, value: "owner" }, result: true }
+              : { result: false },
+          ),
+        ).resolves.toBe(true);
+        await Promise.resolve();
+        expect(peerFinished).toBe(false);
+      },
+      { prepareLease: prepareBindingTestLease },
+    );
     await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(peerWrite).resolves.toBe(false);
@@ -73,12 +90,21 @@ describe("native session binding leases", () => {
     const key = "binding-rejected-owner";
     values.set(key, { value: "owner" });
 
-    await expect(owner.withLease(key, async () => {
-      throw new Error("owner failed");
-    }, { prepareLease: prepareBindingTestLease })).rejects.toThrow("owner failed");
-    await expect(peer.transact(key, (current) => ({
-      next: { ...current, value: "updated" }, result: true,
-    }))).resolves.toBe(true);
+    await expect(
+      owner.withLease(
+        key,
+        async () => {
+          throw new Error("owner failed");
+        },
+        { prepareLease: prepareBindingTestLease },
+      ),
+    ).rejects.toThrow("owner failed");
+    await expect(
+      peer.transact(key, (current) => ({
+        next: { ...current, value: "updated" },
+        result: true,
+      })),
+    ).resolves.toBe(true);
   });
 
   it("renews a live lease across a long native request", async () => {
@@ -90,18 +116,28 @@ describe("native session binding leases", () => {
     values.set(key, { value: "owner" });
     let releaseOwner!: () => void;
     let markOwnerStarted!: () => void;
-    const ownerStarted = new Promise<void>((resolve) => { markOwnerStarted = resolve; });
-    const holdOwner = new Promise<void>((resolve) => { releaseOwner = resolve; });
-    const ownerRun = owner.withLease(key, async () => {
-      markOwnerStarted();
-      await holdOwner;
-      return await owner.transact(key, (current) => ({
-        next: { ...current, value: "updated" }, result: true,
-      }));
-    }, { prepareLease: prepareBindingTestLease });
+    const ownerStarted = new Promise<void>((resolve) => {
+      markOwnerStarted = resolve;
+    });
+    const holdOwner = new Promise<void>((resolve) => {
+      releaseOwner = resolve;
+    });
+    const ownerRun = owner.withLease(
+      key,
+      async () => {
+        markOwnerStarted();
+        await holdOwner;
+        return await owner.transact(key, (current) => ({
+          next: { ...current, value: "updated" },
+          result: true,
+        }));
+      },
+      { prepareLease: prepareBindingTestLease },
+    );
     await ownerStarted;
     let peerFinished = false;
-    const peerWrite = peer.transact(key, () => ({ next: { value: "peer" }, result: true }))
+    const peerWrite = peer
+      .transact(key, () => ({ next: { value: "peer" }, result: true }))
       .then((result) => {
         peerFinished = true;
         return result;
@@ -124,15 +160,28 @@ describe("native session binding leases", () => {
     const key = "binding-stale-owner";
     values.set(key, { value: "owner" });
 
-    await expect(owner.withLease(key, async () => {
-      vi.setSystemTime(Date.now() + 66_000);
-      await peer.withLease(key, async () => {
-        await expect(peer.transact(key, (current) => ({
-          next: { ...current, value: "peer" }, result: true,
-        }))).resolves.toBe(true);
-      }, { prepareLease: prepareBindingTestLease });
-      await owner.transact(key, () => ({ next: { value: "stale" }, result: true }));
-    }, { prepareLease: prepareBindingTestLease })).rejects.toThrow("Lost binding lease");
+    await expect(
+      owner.withLease(
+        key,
+        async () => {
+          vi.setSystemTime(Date.now() + 66_000);
+          await peer.withLease(
+            key,
+            async () => {
+              await expect(
+                peer.transact(key, (current) => ({
+                  next: { ...current, value: "peer" },
+                  result: true,
+                })),
+              ).resolves.toBe(true);
+            },
+            { prepareLease: prepareBindingTestLease },
+          );
+          await owner.transact(key, () => ({ next: { value: "stale" }, result: true }));
+        },
+        { prepareLease: prepareBindingTestLease },
+      ),
+    ).rejects.toThrow("Lost binding lease");
 
     expect(values.get(key)).toEqual({ value: "peer" });
   });
@@ -145,15 +194,24 @@ describe("native session binding leases", () => {
     values.set(key, { value: "owner" });
     let releaseOwner!: () => void;
     let markOwnerStarted!: () => void;
-    const ownerStarted = new Promise<void>((resolve) => { markOwnerStarted = resolve; });
-    const holdOwner = new Promise<void>((resolve) => { releaseOwner = resolve; });
-    const ownerRun = owner.withLease(key, async () => {
-      markOwnerStarted();
-      await holdOwner;
-    }, { prepareLease: prepareBindingTestLease });
+    const ownerStarted = new Promise<void>((resolve) => {
+      markOwnerStarted = resolve;
+    });
+    const holdOwner = new Promise<void>((resolve) => {
+      releaseOwner = resolve;
+    });
+    const ownerRun = owner.withLease(
+      key,
+      async () => {
+        markOwnerStarted();
+        await holdOwner;
+      },
+      { prepareLease: prepareBindingTestLease },
+    );
     await ownerStarted;
     values.set(key, {
-      ...values.get(key), lease: { token: "peer-owner", expiresAt: Date.now() + 120_000 },
+      ...values.get(key),
+      lease: { token: "peer-owner", expiresAt: Date.now() + 120_000 },
     });
 
     await vi.advanceTimersByTimeAsync(30_000);

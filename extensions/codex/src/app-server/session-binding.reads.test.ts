@@ -1,10 +1,7 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
-import {
-  bindingStoreKey,
-  createCodexAppServerBindingStore,
-} from "./session-binding.js";
+import { bindingStoreKey, createCodexAppServerBindingStore } from "./session-binding.js";
 import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
 
 afterEach(() => {
@@ -74,5 +71,4 @@ describe("Codex app-server binding reads", () => {
     expect(result.at(-1)).toEqual(binding);
     expect(lookupMany).not.toHaveBeenCalled();
   });
-
 });
