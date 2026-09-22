@@ -419,25 +419,34 @@ export async function loadProviderScopedThinkingCatalog(params: {
   const request = { ...params, readOnly: true };
   const publishedOwner = getPreparedModelCatalogOwnerSnapshot(request);
   const owner = (await resolveReadOnlyPublishedModelCatalogOwner(request, "exact"))?.snapshot;
-  const catalog = owner
-    ? (publishedOwner ? await materializeRequestedModelCatalog(owner, true, undefined) : owner)
-        .modelCatalog
-    : { entries: [], routeVariants: [] };
-  const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
-  const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
-  const snapshot = await augmentModelCatalogWithAgentHarness({
-    cfg: params.config,
-    agentId,
-    agentDir: params.agentDir ?? resolveAgentDir(params.config, agentId),
-    workspaceDir:
-      params.workspaceDir ??
-      resolveAgentWorkspaceDir(params.config, agentId) ??
-      resolveDefaultAgentWorkspaceDir(),
-    defaultProvider: params.provider,
-    defaultModel: `${params.provider}/${params.model}`,
-    agentRuntime: params.agentRuntime,
-    snapshot: catalog,
-  });
+  let snapshot: ModelCatalogSnapshot;
+  if (owner?.loadNativeModelCatalog && params.agentRuntime && params.agentRuntime !== "openclaw") {
+    snapshot = await owner.loadNativeModelCatalog({
+      provider: params.provider,
+      modelId: params.model,
+      runtime: params.agentRuntime,
+    });
+  } else {
+    const catalog = owner
+      ? (publishedOwner ? await materializeRequestedModelCatalog(owner, true, undefined) : owner)
+          .modelCatalog
+      : { entries: [], routeVariants: [] };
+    const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
+    const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
+    snapshot = await augmentModelCatalogWithAgentHarness({
+      cfg: params.config,
+      agentId,
+      agentDir: params.agentDir ?? resolveAgentDir(params.config, agentId),
+      workspaceDir:
+        params.workspaceDir ??
+        resolveAgentWorkspaceDir(params.config, agentId) ??
+        resolveDefaultAgentWorkspaceDir(),
+      defaultProvider: params.provider,
+      defaultModel: `${params.provider}/${params.model}`,
+      agentRuntime: params.agentRuntime,
+      snapshot: catalog,
+    });
+  }
   let entries = snapshot.entries;
   if (params.agentRuntime) {
     const entry = findModelInCatalog(entries, params.provider, params.model);

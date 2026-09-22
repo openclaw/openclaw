@@ -355,6 +355,7 @@ export async function createPairedNodeWorkerHost(
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
     workerHost: {
       enabled: true as const,
+      capturedExecPolicy: true as const,
       ...(environmentSession
         ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
         : {}),

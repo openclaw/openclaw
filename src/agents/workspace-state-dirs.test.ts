@@ -130,7 +130,7 @@ describe("Gateway configured workspace readiness", () => {
         await expect(readiness).rejects.toThrow(workspace);
       }
       expect(reads.scans()).toBe(1);
-      expect(reads.handles.size).toBe(2);
+      expect(reads.handles.size).toBe(1);
     },
   );
 

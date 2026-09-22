@@ -27,6 +27,7 @@ type TestRow = {
   activeRunIds?: string[];
   status?: string;
   lastRunId?: string;
+  lastRunError?: string;
   startedAt?: number;
 };
 
@@ -740,6 +741,47 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
+  });
+
+  it("redacts a recovered session failure before showing it", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      chatStream: "working",
+      sessionsResult: makeSessionsResult([
+        {
+          key: "s1",
+          hasActiveRun: false,
+          lastRunId: "r1",
+          status: "failed",
+          lastRunError: "Provider failed: password=synthetic-secret",
+        },
+      ]),
+    });
+    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
+    expect(host.chatRunError).toEqual({
+      runId: "r1",
+      summary: "Provider failed: password=[redacted]",
+    });
+  });
+
+  it("preserves an existing full same-run diagnostic and recovery kind", () => {
+    const diagnostic = { runId: "r1", summary: "Full diagnostic", kind: "auth_refresh" as const };
+    const host = makeHost({
+      chatRunId: "r1",
+      chatStream: "working",
+      chatRunError: diagnostic,
+      sessionsResult: makeSessionsResult([
+        {
+          key: "s1",
+          hasActiveRun: false,
+          lastRunId: "r1",
+          status: "failed",
+          lastRunError: "Short",
+        },
+      ]),
+    });
+    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
+    expect(host.chatRunError).toBe(diagnostic);
   });
 
   it.each([undefined, "older-run"])(

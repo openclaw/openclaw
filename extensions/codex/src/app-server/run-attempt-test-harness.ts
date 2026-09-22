@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -45,6 +44,7 @@ import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexServerNotification, RpcRequest } from "./protocol.js";
 import {
   cleanupRunSessionOwnersForTest,
+  closeRunSessionOwnerDatabasesForTest,
   seedRunSessionOwnerForTest,
 } from "./run-attempt-session-owners.test-support.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
@@ -59,6 +59,7 @@ import {
   adaptCodexTestClientFactory,
   createCodexTestModel,
   createCodexTestToolTerminalObserver,
+  useAutoCleanupTempDirTracker,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 import { createCodexLifecycleTurnHarness } from "./thread-lifecycle.test-fixtures.js";
@@ -226,11 +227,11 @@ export function runCodexAppServerAttempt(
   return promise;
 }
 
-async function drainActiveAppServerAttemptsForTest(): Promise<void> {
+async function drainActiveAppServerAttemptsForTest(): Promise<boolean> {
   vi.useRealTimers();
   const attempts = [...activeAppServerAttemptsForTest];
   if (attempts.length === 0) {
-    return;
+    return true;
   }
   for (const attempt of attempts) {
     attempt.abortController?.abort("test_cleanup");
@@ -251,16 +252,23 @@ async function drainActiveAppServerAttemptsForTest(): Promise<void> {
       }).catch(() => undefined),
     ];
   });
-  const drainResult = await Promise.race([
-    Promise.allSettled([...attempts.map((attempt) => attempt.promise), ...sessionDrains]).then(
-      () => "settled" as const,
-    ),
-    new Promise<"timeout">((resolve) => {
-      setTimeout(() => resolve("timeout"), 5_000);
-    }),
-  ]);
-  if (drainResult === "settled") {
-    activeAppServerAttemptsForTest.clear();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const drainResult = await Promise.race([
+      Promise.allSettled([...attempts.map((attempt) => attempt.promise), ...sessionDrains]).then(
+        () => "settled" as const,
+      ),
+      new Promise<"timeout">((resolve) => {
+        timeout = setTimeout(() => resolve("timeout"), 5_000);
+      }),
+    ]);
+    if (drainResult === "settled") {
+      activeAppServerAttemptsForTest.clear();
+      return true;
+    }
+    return false;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -403,6 +411,20 @@ export { mockClientRuntimeMethods, turnStartResult } from "./codex-app-server.te
 export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
   const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
   return createThreadStartResult(threadId, cwd);
+}
+
+export function createThreadStartRequest(threadId = "thread-1") {
+  const responses: Record<string, unknown> = {
+    "configRequirements/read": { requirements: null },
+    "config/read": { config: {}, origins: {}, layers: [] },
+    "thread/start": threadStartResult(threadId),
+  };
+  return vi.fn(async (method: string, _params?: unknown) => {
+    if (!Object.hasOwn(responses, method)) {
+      throw new Error(`unexpected method: ${method}`);
+    }
+    return responses[method];
+  });
 }
 
 export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
@@ -631,7 +653,15 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
 }
 
 export function setupRunAttemptTestHooks(): void {
-  afterAll(drainSessionDiskBudgetWorkers);
+  // Keep unique test roots alive while the suite reuses native database workers.
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterAll(async () => {
+      await cleanupRunSessionOwnersForTest();
+      await closeRunSessionOwnerDatabasesForTest();
+      await drainSessionDiskBudgetWorkers();
+      cleanup();
+    }),
+  );
 
   beforeEach(async () => {
     // Direct runtime tests supply the plugin root normally owned by loader registration.
@@ -653,14 +683,14 @@ export function setupRunAttemptTestHooks(): void {
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
-    tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-codex-run-"));
+    tempDir = tempDirs.make("openclaw-codex-run-", resolvePreferredOpenClawTmpDir());
     // createParams models an ordinary durable session; seeded native bindings
     // must have the same authoritative core owner as a real resumed conversation.
     await seedRunSessionOwnerForTest("session-1", "agent:main:session-1");
   });
 
   afterEach(async () => {
-    await drainActiveAppServerAttemptsForTest();
+    const drained = await drainActiveAppServerAttemptsForTest();
     for (const close of activeHarnessHostClosuresForTest) {
       close();
     }
@@ -669,11 +699,12 @@ export function setupRunAttemptTestHooks(): void {
     await nativeHookRelayTesting.clearNativeHookRelaysForTests();
     vi.restoreAllMocks();
     vi.useRealTimers();
-    // Registry retirement can access session storage, so join it before closing databases.
+    // Registry retirement can access session storage, so join it before deleting test rows.
     const registry = getActivePluginRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
     const pluginCleanup = registry ? await disposePluginRegistryInstances(registry) : undefined;
-    await cleanupRunSessionOwnersForTest();
+    // A run beyond the drain deadline still needs the original database revocation fence.
+    await cleanupRunSessionOwnersForTest({ closeDatabases: !drained });
     resetCodexAppServerClientFactoryForTest();
     setManagedCodexPluginRoot(undefined);
     clearRuntimeAuthProfileStoreSnapshots();
@@ -687,7 +718,6 @@ export function setupRunAttemptTestHooks(): void {
     defaultCodexAppInventoryCache.clear();
     defaultCodexPluginMetadataCache.clear();
     vi.unstubAllEnvs();
-    await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     if (pluginCleanup) {
       expect(pluginCleanup.failures).toEqual([]);
     }

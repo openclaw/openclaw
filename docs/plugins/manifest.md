@@ -82,6 +82,7 @@ The anchors from the single-page version still resolve here.
 [Manifest capability fields](/plugins/manifest/capabilities) — Manifest capability ownership, tool availability metadata, and activation planning.
 
 - <a id="contracts-reference"></a>[`contracts`](/plugins/manifest/capabilities#contracts-reference)
+- [`decisionModels`](/plugins/manifest/capabilities#decision-models-reference)
 - <a id="tool-metadata-reference"></a>[`toolMetadata`](/plugins/manifest/capabilities#tool-metadata-reference)
 - <a id="activation-reference"></a>[`activation`](/plugins/manifest/capabilities#activation-reference)
 

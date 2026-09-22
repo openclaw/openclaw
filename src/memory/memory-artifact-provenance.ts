@@ -60,7 +60,10 @@ export function normalizeMemoryArtifactRelativePath(relativePath: string): strin
   ) {
     return undefined;
   }
-  if (["MEMORY.md", "memory.md", "USER.md"].includes(normalized)) {
+  if (
+    ["MEMORY.md", "memory.md", "USER.md"].includes(normalized) ||
+    /^users\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\/USER\.md$/.test(normalized)
+  ) {
     return normalized;
   }
   if (!normalized.startsWith("memory/") || !normalized.endsWith(".md")) {

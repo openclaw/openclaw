@@ -44,7 +44,10 @@ import {
   readRegistryEntry,
   updateRegistry,
 } from "../agents/sandbox/registry.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { migrateLegacySandboxRegistryFiles } from "./doctor-sandbox-legacy-registry.js";
 
@@ -60,6 +63,7 @@ const registryTargets = [
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(path.join(TEST_STATE_DIR, "state"), { recursive: true, force: true });
   await fs.rm(SANDBOX_CONTAINERS_DIR, { recursive: true, force: true });
@@ -76,6 +80,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   await fs.rm(TEST_STATE_DIR, { recursive: true, force: true });
   if (PREVIOUS_OPENCLAW_STATE_DIR === undefined) {

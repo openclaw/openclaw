@@ -206,6 +206,42 @@ describe("canonical shared-state resource drainage", () => {
     }
   });
 
+  it("retains an unregistered finalizer skipped after an ordinary drain failure", async () => {
+    const owner = openOpenClawStateDatabase({ path: databasePath() });
+    const reader = openOpenClawStateReadConnection(owner.path, owner.path);
+    const failure = new Error("ordinary resource did not settle");
+    const finalize = vi.fn(async () => {
+      reader.close();
+    });
+    const unregisterFinalizer = registerOpenClawStateDatabaseAsyncResource({
+      phase: "after-resources",
+      close: finalize,
+    });
+    const close = vi.fn<() => Promise<void>>().mockResolvedValue();
+    close.mockImplementationOnce(async () => {
+      unregisterFinalizer();
+      throw failure;
+    });
+    const unregister = registerOpenClawStateDatabaseAsyncResource({ close });
+    try {
+      await expect(closeOpenClawStateDatabaseAsync()).rejects.toBe(failure);
+      expect(finalize).not.toHaveBeenCalled();
+      expect(owner.db.isOpen).toBe(true);
+      expect(reader.database.db.isOpen).toBe(true);
+      expect(() => captureOpenClawStateDatabaseReadAdmission(owner.path)).toThrow(/closed/);
+      await closeOpenClawStateDatabaseAsync();
+      expect(close).toHaveBeenCalledTimes(2);
+      expect(finalize).toHaveBeenCalledOnce();
+      expect(reader.database.db.isOpen).toBe(false);
+      expect(owner.db.isOpen).toBe(false);
+    } finally {
+      unregister();
+      unregisterFinalizer();
+      reader.close();
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+
   it("coalesces pending closes and retains the read seal after a native close failure", async () => {
     const owner = openOpenClawStateDatabase({ path: databasePath() });
     const nativeClose = owner.db.close.bind(owner.db);

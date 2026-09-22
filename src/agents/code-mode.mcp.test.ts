@@ -35,9 +35,9 @@ describe("Code Mode MCP namespace", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("discovers MCP tools while retaining namespaced invocation", async () => {

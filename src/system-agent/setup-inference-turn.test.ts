@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -14,11 +15,13 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
+import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import {
   loadSetupInferencePluginGeneration,
   revalidateStableSetupInferenceOwner,
+  runSetupInferenceTurn,
 } from "./setup-inference-turn.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 
@@ -52,6 +55,56 @@ function embeddedRoute(): SystemAgentConfiguredRoute {
 }
 
 describe("setup inference plugin ownership", () => {
+  it("waits for the isolated probe runtime to release its plugin work", async () => {
+    const route = embeddedRoute();
+    const cleanupStarted = createDeferred();
+    const releaseCleanup = createDeferred();
+    const removeTempDir = vi.fn(async () => {});
+    const runEmbeddedAgent = vi.fn(async () => {
+      const trackOwner = captureAsyncWorkTracker();
+      void trackOwner(async () => {
+        cleanupStarted.resolve();
+        await releaseCleanup.promise;
+      });
+      return {
+        payloads: [{ text: "OK" }],
+        meta: {
+          durationMs: 1,
+          executionTrace: {
+            winnerProvider: route.provider,
+            winnerModel: route.model,
+          },
+        },
+      };
+    });
+
+    let settled = false;
+    const turn = runSetupInferenceTurn({
+      route,
+      deps: {
+        createTempDir: async () => "/tmp/openclaw-setup-inference-test",
+        removeTempDir,
+        runEmbeddedAgent,
+      },
+      requireExecutionOwner: false,
+    }).finally(() => {
+      settled = true;
+    });
+
+    await cleanupStarted.promise;
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(removeTempDir).not.toHaveBeenCalled();
+    } finally {
+      releaseCleanup.resolve();
+    }
+    await expect(turn).resolves.toMatchObject({ ok: true, text: "OK" });
+    expect(removeTempDir).toHaveBeenCalledOnce();
+  });
+
   it("loads newly installed package facts after the install lease cached their absence", async () => {
     await withOpenClawTestState(
       { label: "setup-plugin-generation", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },

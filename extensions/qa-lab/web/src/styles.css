@@ -226,11 +226,12 @@ select {
 /* --- Header --- */
 .header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 0 20px;
-  height: 52px;
+  gap: 8px 16px;
+  padding: 8px 20px;
+  min-height: 52px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   background: var(--bg-sidebar);
@@ -238,9 +239,11 @@ select {
 
 .header-left {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 14px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .header-title {
@@ -255,13 +258,24 @@ select {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.header-status .badge {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .header-right {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .header-link {
@@ -674,9 +688,11 @@ select {
   border-bottom: 1px solid var(--border);
   background: var(--bg-sidebar);
   flex-shrink: 0;
+  overflow-x: auto;
 }
 
 .tab-btn {
+  flex-shrink: 0;
   padding: 6px 14px;
   border-radius: 7px;
   font-size: 13px;
@@ -3745,6 +3761,12 @@ button.evidence-matrix-cell {
     max-height: 40vh;
     border-right: none;
     border-bottom: 1px solid var(--border);
+  }
+
+  /* Width-only collapse still occupies space in the vertical mobile layout. */
+  .app-shell--sidebar-collapsed .sidebar,
+  .app-shell--evidence-focus .sidebar {
+    display: none;
   }
 
   .results-view {

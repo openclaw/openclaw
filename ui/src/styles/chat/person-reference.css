@@ -41,7 +41,8 @@
   overflow: hidden;
   border-radius: var(--radius-full);
   background: var(--secondary);
-  vertical-align: calc(-0.125em - 1px);
+  /* Align the box, not the image/initials-dependent grid baseline. */
+  vertical-align: middle;
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;

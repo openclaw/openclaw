@@ -20,14 +20,17 @@ import {
   type VoiceSessionEntry,
 } from "./session.js";
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
-import { resolveDiscordTranscriptsCapture } from "./transcripts-source.js";
+import {
+  bindDiscordCaptureReceipts,
+  resolveDiscordTranscriptsCapture,
+} from "./transcripts-source.js";
 import {
   DiscordVoiceFollowing,
   normalizeVoiceChannelResidencies,
   type VoiceChannelResidency,
 } from "./voice-following.js";
 import { DiscordVoiceReceive } from "./voice-receive.js";
-import { destroyVoiceConnectionSafely, DiscordVoiceSessions } from "./voice-session.js";
+import { DiscordVoiceSessions } from "./voice-session.js";
 
 const logger = createSubsystemLogger("discord/voice");
 const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
@@ -120,6 +123,8 @@ export class DiscordVoiceManager {
       params.accountId,
     );
     this.receive = new DiscordVoiceReceive({
+      bindCaptureReceipts: ({ guildId, channelId }) =>
+        bindDiscordCaptureReceipts({ accountId: params.accountId, guildId, channelId }, this),
       readPolicy: this.readPolicy,
       accountId: params.accountId,
       admissionAllowFrom,
@@ -144,7 +149,7 @@ export class DiscordVoiceManager {
       client: params.client,
       deleteRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.delete(guildId),
       destroyed: () => this.destroyed,
-      destroyVoiceConnection: destroyVoiceConnectionSafely,
+      stopTransport: (guildId) => this.voiceSessions.stopTransport(guildId),
       discordConfig: params.discordConfig,
       getRecoveryAttempt: (guildId) => this.receive.daveRecoveryAttempts.get(guildId),
       getSession: (guildId) => this.sessions.get(guildId),

@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
+  findServiceOwnershipRefusal,
   ServiceInspectionError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
@@ -66,6 +67,10 @@ export function createServiceRuntimeInspectionFailure(
   error: unknown,
   timeoutMs?: number,
 ): GatewayServiceRuntime {
+  const refusal = findServiceOwnershipRefusal(error);
+  if (refusal) {
+    throw refusal;
+  }
   const rawDetail = error instanceof Error ? error.message : String(error);
   return {
     status: "unknown",

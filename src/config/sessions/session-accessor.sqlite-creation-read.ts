@@ -3,7 +3,7 @@ import {
   readSessionEntryCache,
   type SessionEntryCacheSnapshot,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { iterateSessionEntriesForListing } from "./session-accessor.sqlite-entry.js";
+import { iterateSessionEntriesForListing } from "./session-accessor.sqlite-entry-list.read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type {
   SessionAccessScope,

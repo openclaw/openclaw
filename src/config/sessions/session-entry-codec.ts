@@ -227,7 +227,7 @@ export function classifySessionFileEntry(rawEntry: unknown, sourceVersion: numbe
   return { entry, recognized: false as const };
 }
 
-export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
+export function partitionSessionFileEntries(entries: readonly unknown[]): {
   fileEntries: FileEntry[];
   opaqueEntries: Array<{ index: number; record: unknown }>;
   fileEntriesByOriginalIndex: Array<FileEntry | undefined>;
@@ -239,9 +239,9 @@ export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   const sourceVersion = header?.version ?? 1;
   let hasHeader = false;
   for (const [originalIndex, rawEntry] of entries.entries()) {
-    if (!hasHeader && sessionHeaderSchema.safeParse(rawEntry).success) {
-      fileEntries.push(rawEntry);
-      fileEntriesByOriginalIndex[originalIndex] = rawEntry;
+    if (!hasHeader && header !== undefined && rawEntry === header) {
+      fileEntries.push(header);
+      fileEntriesByOriginalIndex[originalIndex] = header;
       hasHeader = true;
       continue;
     }

@@ -1807,6 +1807,8 @@
                     "group": "Meetings and calls",
                     "pages": [
                       "plugins/meeting-plugins",
+                      "plugins/facetime",
+                      "plugins/facetime-recovery",
                       "plugins/google-meet",
                       {
                         "group": "Google Meet",
@@ -1839,7 +1841,9 @@
                       "plugins/apple-fm",
                       "plugins/llama-cpp",
                       "plugins/memory-lancedb",
-                      "plugins/memory-wiki"
+                      "plugins/memory-wiki",
+                      "plugins/onnx",
+                      "plugins/typesafe"
                     ]
                   },
                   {
@@ -2020,6 +2024,7 @@
                         "group": "Code Mode",
                         "pages": [
                           "tools/code-mode/quickstart",
+                          "tools/code-mode/executors",
                           "tools/code-mode/configuration",
                           "tools/code-mode/tool-surface",
                           "tools/code-mode/guest-api",
@@ -2190,6 +2195,7 @@
                 "group": "Concepts and configuration",
                 "pages": [
                   "concepts/models",
+                  "concepts/decision-models",
                   "concepts/model-providers",
                   {
                     "group": "Model providers",

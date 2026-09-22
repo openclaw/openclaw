@@ -1,9 +1,29 @@
 // Emits session lifecycle hooks for channel plugins and agent runtimes.
+import type { SessionFreshness } from "../../config/sessions/reset.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type {
   PluginHookSessionEndEvent,
   PluginHookSessionEndReason,
   PluginHookSessionStartEvent,
 } from "../../plugins/hook-types.js";
+
+type ReplySessionEndReason = Extract<
+  PluginHookSessionEndReason,
+  "new" | "reset" | "idle" | "daily" | "unknown"
+>;
+
+export function resolveExplicitSessionEndReason(
+  matchedResetTriggerLower?: string,
+): Extract<ReplySessionEndReason, "new" | "reset"> {
+  return matchedResetTriggerLower === "/reset" ? "reset" : "new";
+}
+
+export function resolveStaleSessionEndReason(params: {
+  entry: SessionEntry | undefined;
+  freshness?: SessionFreshness;
+}): ReplySessionEndReason | undefined {
+  return params.entry ? params.freshness?.staleReason : undefined;
+}
 
 /** Session identity attached to plugin session hook payloads. */
 type SessionHookContext = {

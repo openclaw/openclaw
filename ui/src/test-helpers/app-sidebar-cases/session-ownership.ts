@@ -403,7 +403,20 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
     await expectSort(sidebar, "people", peopleOrder);
 
-    gateway.publish({ hello: null });
+    result.owners = undefined;
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+    menu = await openOwnerMenu(sidebar);
+    expect(menu.querySelector('[value="sort:people"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(visibleSessionKeys(sidebar)).toEqual(peopleOrder);
+    menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
+    await sidebar.updateComplete;
+
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-bob", label: "Bob" },
+    ];
+    harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
     menu = await openOwnerMenu(sidebar);
     expect(menu.querySelector('[value="sort:people"]')?.getAttribute("aria-checked")).toBe("true");
@@ -505,7 +518,8 @@ describe("AppSidebar session ownership", () => {
         ?.getAttribute("aria-label"),
     ).toBe("Show only Zoe");
 
-    gateway.publish({ hello: null });
+    result.owners = undefined;
+    harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
     expect(ownerSections()).toHaveLength(2);
     menu = await openOwnerMenu(sidebar);
@@ -514,6 +528,14 @@ describe("AppSidebar session ownership", () => {
     );
     menu.dispatchEvent(new Event("wa-after-hide", { bubbles: true }));
     await sidebar.updateComplete;
+
+    result.owners = [
+      { type: "human", id: "profile-ada", label: "Ada" },
+      { type: "human", id: "profile-zoe", label: "Zoe" },
+    ];
+    harness.publishList({ result, agentId: "main" });
+    await sidebar.updateComplete;
+    expect(ownerSections()).toHaveLength(2);
 
     gateway.publish({ hello: sessionSharingHello(true) });
     result.owners = [{ type: "human", id: "profile-zoe", label: "Zoe" }];

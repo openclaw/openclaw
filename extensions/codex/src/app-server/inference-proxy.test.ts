@@ -136,7 +136,10 @@ describe("private inference HTTP relay", () => {
       let forwarded: unknown;
       transport.fetch.mockImplementation(async (args) => {
         args.beforeRequest();
-        const bytes = zstd ? zstdDecompressSync(args.init.body) : args.init.body;
+        const wire = Buffer.from(await new Response(args.init.body).arrayBuffer());
+        expect(args.init.headers["content-length"]).toBe(String(wire.length));
+        expect(args.init.duplex).toBe("half");
+        const bytes = zstd ? zstdDecompressSync(wire) : wire;
         forwarded = JSON.parse(bytes.toString());
         expect(args.url).toBe("https://api.openai.com/v1/responses");
         expect(args.init.headers.authorization).toBe("Bearer synthetic-native-auth");

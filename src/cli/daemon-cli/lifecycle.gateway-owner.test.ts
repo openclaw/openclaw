@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import {
   lifecycleTestRuntime,
+  lifecycleRuntimeLogs,
   resetLifecycleRuntimeLogs,
   resetLifecycleServiceMocks,
   service,
@@ -78,7 +79,9 @@ vi.mock("./lifecycle-audit.js", () => ({
 }));
 vi.mock("../../infra/restart-intent.js", async (original) => ({
   ...(await original<typeof import("../../infra/restart-intent.js")>()),
+  prepareGatewayRestartIntentLegacyProcess: async () => undefined,
   writeGatewayRestartIntentSync: () => true,
+  writeGatewayServiceRestartIntentSync: () => true,
   clearGatewayRestartIntentSync: vi.fn(),
 }));
 
@@ -141,5 +144,63 @@ it.each([false, true])(
     expect(service.restart).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();
     expect(mocks.waitForGatewayHealthyListener).toHaveBeenCalled();
+  },
+);
+
+it.each([false, true])(
+  "reports the recovered foreground owner once after health (json=%s)",
+  async (json) => {
+    const { runDaemonRestart } = await import("./lifecycle.js");
+    await expect(runDaemonRestart({ json })).resolves.toBe(true);
+    const message = "Gateway restart request sent to foreground process on port 18789: 9472.";
+    expect(lifecycleRuntimeLogs).toEqual(
+      json
+        ? [
+            JSON.stringify(
+              {
+                action: "restart",
+                ok: true,
+                result: "restarted",
+                message,
+                service: {
+                  label: "TestService",
+                  loaded: true,
+                  loadedText: "loaded",
+                  notLoadedText: "not loaded",
+                },
+              },
+              null,
+              2,
+            ),
+          ]
+        : [message],
+    );
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+    expect(mocks.callGatewayCli).toHaveBeenCalledOnce();
+    expect(mocks.waitForGatewayHealthyListener).toHaveBeenCalledTimes(2);
+    expect(mocks.waitForGatewayHealthyListener).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        port: owner.port,
+        previousLockIdentity: {
+          ownerId: owner.owner,
+          pid: owner.pid,
+          port: owner.port,
+          createdAt: "2026-09-13T02:27:25Z",
+          startTime: owner.startedAt,
+        },
+      }),
+    );
+    expect(mocks.waitForGatewayHealthyListener.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.callGatewayCli.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.callGatewayCli.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.waitForGatewayHealthyListener.mock.invocationCallOrder[1]!,
+    );
+    expect(mocks.waitForGatewayHealthyListener.mock.invocationCallOrder[1]).toBeLessThan(
+      (json ? lifecycleTestRuntime.writeJson : lifecycleTestRuntime.log).mock
+        .invocationCallOrder[0]!,
+    );
   },
 );

@@ -51,6 +51,12 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
           permission-issues: read
           permission-members: read
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+
       - name: Check PR context and evidence
         env:
           GH_APP_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}

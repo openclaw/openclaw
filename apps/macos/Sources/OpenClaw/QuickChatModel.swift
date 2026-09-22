@@ -1107,15 +1107,10 @@ extension QuickChatModel {
     }
 
     var modelControlLabel: String {
-        let automatic = String(localized: "Auto")
-        let model = QuickChatModelControlLogic.displayName(
+        QuickChatModelControlLogic.displayName(
             selectionID: self.displayedModelSelectionID,
             models: self.modelChoices,
-            automaticLabel: automatic)
-        let thinking = self.thinkingOptions.first(where: { $0.id == self.displayedThinkingLevel })?.label
-            ?? self.displayedThinkingLevel
-            ?? automatic
-        return self.speed.isEnabled ? "\(model) · \(thinking) · \(String(localized: "Fast"))" : "\(model) · \(thinking)"
+            automaticLabel: String(localized: "Session default"))
     }
 
     private func startModelCatalogEvents(id: UUID) {

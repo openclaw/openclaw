@@ -1,5 +1,6 @@
 // Slack tests cover draft stream plugin behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import { createSlackDraftStream } from "./draft-stream.js";
@@ -316,6 +317,42 @@ describe("createSlackDraftStream", () => {
     });
   });
 
+  it("does not let an old queued clear delete or stop an admitted turn", async () => {
+    const deleting = createDeferred<void>();
+    const releaseDelete = createDeferred<void>();
+    const visible = new Map<string, string>();
+    let nextId = 0;
+    const send = vi.fn<DraftSendFn>(async (_target, text) => {
+      const messageId = `message-${++nextId}`;
+      visible.set(messageId, text);
+      return slackDraftSendResult(messageId);
+    });
+    const edit = vi.fn<DraftEditFn>(async (_channel, messageId, text) => {
+      visible.set(messageId, text);
+    });
+    const remove = vi.fn<DraftRemoveFn>(async (_channel, messageId) => {
+      deleting.resolve();
+      await releaseDelete.promise;
+      visible.delete(messageId);
+    });
+    const { stream } = createDraftStreamHarness({ send, edit, remove });
+    stream.update("old preview");
+    await stream.flush();
+    const firstClear = stream.clear();
+    await deleting.promise;
+    const queuedClear = stream.clear();
+    stream.forceNewMessage();
+    stream.update("new preview");
+    await stream.flush();
+    releaseDelete.resolve();
+    await Promise.all([firstClear, queuedClear]);
+
+    stream.update("newer preview");
+    await stream.flush();
+    expect([...visible.entries()]).toEqual([["message-2", "newer preview"]]);
+    expect(stream.messageId()).toBe("message-2");
+  });
+
   it("does not drop a finalized preview after forceNewMessage", async () => {
     const { stream, remove } = createDraftStreamHarness();
 
@@ -326,16 +363,6 @@ describe("createSlackDraftStream", () => {
     stream.forceNewMessage();
     await stream.dropDetachedMessages();
 
-    expect(remove).not.toHaveBeenCalled();
-  });
-
-  it("does not issue wire calls when no detached preview exists", async () => {
-    const { stream, send, edit, remove } = createDraftStreamHarness();
-
-    await stream.dropDetachedMessages();
-
-    expect(send).not.toHaveBeenCalled();
-    expect(edit).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
   });
 
@@ -530,12 +557,14 @@ describe("createSlackDraftStream", () => {
     },
   );
 
-  it("releases human context while retrying failed and explicitly rotated previews", async () => {
+  it("preserves human context while a detached drain overlaps failed-delete retry", async () => {
     const accountId = "selective-final-cleanup";
     const visible = new Map<string, string>();
     const ids = ["100.100", "100.300", "100.500", "100.700", "100.900"];
     let nextId = 0;
     let failFirstDelete = true;
+    const retryStarted = createDeferred<void>();
+    const resumeRetry = createDeferred<void>();
     const send = vi.fn<DraftSendFn>(async (_target, text) => {
       const id = ids[nextId++]!;
       visible.set(id, text);
@@ -545,6 +574,10 @@ describe("createSlackDraftStream", () => {
       if (id === "100.100" && failFirstDelete) {
         failFirstDelete = false;
         throw new Error("temporary delete failure");
+      }
+      if (id === "100.100") {
+        retryStarted.resolve();
+        await resumeRetry.promise;
       }
       visible.delete(id);
     });
@@ -568,7 +601,11 @@ describe("createSlackDraftStream", () => {
     });
     stream.update("active preview before final");
     await stream.flush();
-    await stream.clear({ preserveHumanReplies: true });
+    const clearing = stream.clear({ preserveHumanReplies: true });
+    await retryStarted.promise;
+    const draining = stream.dropDetachedMessages();
+    resumeRetry.resolve();
+    await Promise.all([clearing, draining]);
 
     expect([...visible.values()]).toEqual(["human conversation context"]);
     expect(remove.mock.calls.filter(([, id]) => id === "100.100")).toHaveLength(2);

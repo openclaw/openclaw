@@ -11,7 +11,6 @@ import {
 } from "../test/vitest/vitest.database-worker-core-paths.mjs";
 import { databaseWorkerExtensionTestFiles } from "../test/vitest/vitest.extension-database-workers-paths.mjs";
 import { collectVitestExcludePatterns } from "../test/vitest/vitest.pattern-file.ts";
-import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   createExtensionTestProcessTargetChunks,
   listExtensionTestFilesForRoots,
@@ -29,6 +28,8 @@ import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { isDirectScriptRun, runVitestBatch } from "./lib/vitest-batch-runner.mts";
 import type { VitestBatchRunParams } from "./lib/vitest-batch-runner.mts";
 import { prepareVitestRuntime } from "./lib/vitest-build-prerequisites.mts";
+import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
+import { resolveExplicitVitestMode } from "./lib/vitest-cli-mode.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { createVitestReportOwner, type VitestReportOutcome } from "./lib/vitest-report-owner.mts";
 import { resolveVitestRuntimeCliSelections } from "./lib/vitest-runtime-selection.mts";
@@ -87,36 +88,24 @@ export function resolveExtensionBatchParallelism(groupCount: number, env = proce
   return Math.min(Math.max(1, override), Math.max(1, groupCount));
 }
 
-function sanitizeCacheSegment(value: string) {
-  return (
-    value
-      .replace(/[^a-zA-Z0-9._-]+/gu, "-")
-      .replace(/^-+|-+$/gu, "")
-      .slice(0, 180) || "default"
-  );
-}
-
 function createGroupEnv({
   baseEnv,
   group,
-  groupIndex,
-  useDedicatedCache,
+  watchMode,
 }: {
   baseEnv: NodeJS.ProcessEnv;
   group: ExtensionTestPlanGroup;
-  groupIndex: number;
-  useDedicatedCache: boolean;
+  watchMode: boolean;
 }) {
-  if (!useDedicatedCache || baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
+  if (watchMode || baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
     return baseEnv;
   }
 
   return {
     ...baseEnv,
-    [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(
-      resolveVitestFsModuleCacheRoot(),
-      "extension-batch",
-      sanitizeCacheSegment(`${groupIndex}-${group.config}`),
+    [FS_MODULE_CACHE_PATH_ENV_KEY]: resolveVitestCacheSlotPath(
+      resolveVitestCacheRoot(baseEnv),
+      group.config,
     ),
   };
 }
@@ -180,11 +169,9 @@ function resolveGroupTargets(group: ExtensionTestPlanGroup, exactExcludePaths: S
 
 function preparePlanGroup(
   group: ExtensionTestPlanGroup,
-  groupIndex: number,
   env: NodeJS.ProcessEnv,
   vitestArgs: string[],
   exactExcludePaths: Set<string>,
-  useDedicatedCache: boolean,
 ) {
   const targets = resolveGroupTargets(group, exactExcludePaths);
   const targetChunks =
@@ -200,7 +187,11 @@ function preparePlanGroup(
     invocations: targetChunks.map<VitestBatchRunParams & { env: NodeJS.ProcessEnv }>((chunk) => ({
       args: relativizeExtensionVitestArgs(vitestArgs),
       config: group.config,
-      env: createGroupEnv({ baseEnv: env, group, groupIndex, useDedicatedCache }),
+      env: createGroupEnv({
+        baseEnv: env,
+        group,
+        watchMode: resolveExplicitVitestMode(["run", ...vitestArgs]) === "watch",
+      }),
       targets: chunk.map((target) => relativizeExtensionVitestPath(target)),
     })),
   };
@@ -244,7 +235,11 @@ function combineSinglePluginGroups(
                   (target) => !targets.some((root) => target.startsWith(`${root}/`)),
                 ),
                 env: {
-                  ...env,
+                  ...createGroupEnv({
+                    baseEnv: env,
+                    group: { ...owner.group, config },
+                    watchMode: resolveExplicitVitestMode(["run", ...vitestArgs]) === "watch",
+                  }),
                   [DATABASE_WORKER_WATCH_OWNER_ENV_KEY]: owner.group.config,
                   [DATABASE_WORKER_WATCH_TESTS_ENV_KEY]: JSON.stringify(worker.group.roots),
                 },
@@ -304,15 +299,14 @@ export async function runExtensionBatchPlan(
   const runGroup = params.runGroup ?? runVitestBatch;
   const parallelism = resolveExtensionBatchParallelism(batchPlan.planGroups.length, env);
   const orderedGroups = orderPlanGroups(batchPlan.planGroups, parallelism);
-  const useDedicatedCache = parallelism > 1;
   const allowEmptyAfterExclude = params.allowEmptyAfterExclude ?? false;
 
   if (parallelism > 1) {
     console.log(`[test-extension-batch] Running up to ${parallelism} config groups in parallel`);
   }
 
-  const leafGroups = orderedGroups.map((group, index) =>
-    preparePlanGroup(group, index, env, vitestArgs, exactExcludePaths, useDedicatedCache),
+  const leafGroups = orderedGroups.map((group) =>
+    preparePlanGroup(group, env, vitestArgs, exactExcludePaths),
   );
   const leafInvocations = leafGroups.flatMap((group) => group.invocations);
   const cwd = path.resolve(import.meta.dirname, "..");

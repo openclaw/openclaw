@@ -360,12 +360,14 @@ describe("desktop proof identity and public evidence", () => {
     if (!address || typeof address === "string") {
       throw new Error("missing fixture address");
     }
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    // Reserve the upstream port until the tap binds so it cannot connect back to itself.
     const tap = await observeDesktopEndpointPackets(address.port, new AbortController().signal);
     const clients: net.Socket[] = [];
     try {
+      expect(tap.port).not.toBe(address.port);
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
       for (let index = 0; index < 10; index++) {
         const client = net.connect({ host: "127.0.0.1", port: tap.port });
         client.on("error", () => {});

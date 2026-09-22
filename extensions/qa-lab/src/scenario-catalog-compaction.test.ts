@@ -137,7 +137,6 @@ describe("qa compaction scenario catalog", () => {
     const writeTranscriptToolCallIdExpr = readSetExpression("writeTranscriptToolCallId");
     const continuationChainExpr = readSetExpression("continuationChain");
     const compactionSummaryRequestsExpr = readSetExpression("compactionSummaryRequests");
-    const overflowCheckpointsExpr = readSetExpression("overflowCheckpoints");
     const continuationAssertIndex = actionIndex((action) =>
       readFlowAssertExpression(action).includes("continuationChain.valid === true"),
     );
@@ -152,7 +151,7 @@ describe("qa compaction scenario catalog", () => {
     );
     const terminalEvidenceAssertIndex = actionIndex((action) =>
       readFlowAssertExpression(action).includes(
-        "terminalContinuations[0].providerVariant === 'openai'",
+        "terminalContinuations[0].codeModeExecSurface === 'native'",
       ),
     );
     const outboundWaitIndex = actionIndex(
@@ -162,14 +161,13 @@ describe("qa compaction scenario catalog", () => {
     );
     const stableCellIdAssertExpr = readAssertExpression("continuationChain.waits.length === 0");
     const terminalEvidenceAssertExpr = readAssertExpression(
-      "terminalContinuations[0].providerVariant === 'openai'",
+      "terminalContinuations[0].codeModeExecSurface === 'native'",
     );
     const compactionSummaryAssertExpr = readAssertExpression("compactionSummaryRequests.some");
     const noQualityRetryAssertExpr = readAssertExpression("Previous summary failed quality checks");
     const compactionSnapshotAssertExpr = readAssertExpression(
       "Number.isInteger(sessionEntry?.compactionCount)",
     );
-    const overflowCheckpointAssertExpr = readAssertExpression("overflowCheckpoints.length === 1");
     const knownGap =
       "known-harness-gap compaction-retry-mutating-tool: provider-error recovery does not invoke Codex native compaction; native token-threshold compaction needs a separate scenario.";
 
@@ -226,7 +224,6 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain('"call":"qaImport","args":["./errors.js"],"saveAs":"qaErrors"');
     expect(flow).toContain("new qaErrors.QaSuiteScenarioSkipError");
     expect(flow).toContain("seedQaSessionTranscript");
-    expect(flow).toContain("sessions.compaction.branch");
     expect(flow).toContain("env.runtimeId");
     expect(scenario.execution.retryCount).toBe(0);
     expect(flow).not.toContain('"transcriptToolName":"write"');
@@ -320,16 +317,16 @@ describe("qa compaction scenario catalog", () => {
       "new Set(continuationChain.waits.map((request) => request.plannedToolArgs.cell_id)).size === 1",
     );
     expect(terminalEvidenceAssertExpr).toContain("writeWireToolName !== 'exec'");
-    const openAiEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
-      "terminalContinuations[0].providerVariant === 'openai'",
+    const nativeEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
+      "terminalContinuations[0].codeModeExecSurface === 'native'",
     );
-    const anthropicEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
-      "terminalContinuations[0].providerVariant === 'anthropic'",
+    const guestEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
+      "terminalContinuations[0].codeModeExecSurface === 'guest'",
     );
     const unknownProviderFailClosedIndex = terminalEvidenceAssertExpr.lastIndexOf(": false");
-    expect(openAiEvidenceIndex).toBeGreaterThanOrEqual(0);
+    expect(nativeEvidenceIndex).toBeGreaterThanOrEqual(0);
     expect(terminalEvidenceAssertExpr).toContain("startsWith('Script completed\\n')");
-    expect(anthropicEvidenceIndex).toBeGreaterThan(openAiEvidenceIndex);
+    expect(guestEvidenceIndex).toBeGreaterThan(nativeEvidenceIndex);
     expect(terminalEvidenceAssertExpr).toContain(
       "JSON.parse(String(terminalContinuations[0].toolOutput ?? ''))",
     );
@@ -337,7 +334,7 @@ describe("qa compaction scenario catalog", () => {
     expect(terminalEvidenceAssertExpr).toContain("typeof parsed === 'object'");
     expect(terminalEvidenceAssertExpr).toContain("!Array.isArray(parsed)");
     expect(terminalEvidenceAssertExpr).toContain("parsed.status === 'completed'");
-    expect(unknownProviderFailClosedIndex).toBeGreaterThan(anthropicEvidenceIndex);
+    expect(unknownProviderFailClosedIndex).toBeGreaterThan(guestEvidenceIndex);
     expect(continuationAssertIndex).toBeGreaterThanOrEqual(0);
     expect(terminalAssertIndex).toBeGreaterThan(continuationAssertIndex);
     expect(distinctCallIdsAssertIndex).toBeGreaterThan(terminalAssertIndex);
@@ -366,8 +363,6 @@ describe("qa compaction scenario catalog", () => {
     );
     expect(compactionSnapshotAssertExpr).not.toContain("compactionCount === 1");
     expect(flow).not.toContain("sessionEntry?.compactionCount === 1");
-    expect(overflowCheckpointsExpr).toContain("checkpoint.reason === 'overflow-retry'");
-    expect(overflowCheckpointAssertExpr).toContain("overflowCheckpoints.length === 1");
     expect(flow).not.toContain("compactionSummaryRequests.length === 1");
     expect(flow).toContain(
       "writeRequest.rawByteLength < config.overflowThresholdBytes && writeRequest.rawByteLength < overflowRequest.rawByteLength",
@@ -376,9 +371,8 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain("index === 10 ? config.bulkyMarker + ' ' : ''");
     expect(flow).toContain("post-marker historical user block");
     expect(flow).not.toContain("index === 12 ? config.bulkyMarker + ' ' : ''");
-    expect(flow).toContain("{ role: 'assistant', text: config.checkpointMarker");
+    expect(flow).toContain("{ role: 'assistant', text: config.historyMarker");
     expect(flow).not.toContain("{ role: 'assistant', text: config.bulkyMarker");
-    expect(flow).toContain("branchSummary.finalText === config.checkpointMarker");
     expect(flow).toContain('"set":"requestEvidence"');
     expect(flow).toContain("durable: String(request.allInputText ?? '')");
     expect(flow).toContain("bulky: String(request.allInputText ?? '')");

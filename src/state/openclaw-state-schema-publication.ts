@@ -19,7 +19,7 @@ export type StateSchemaPublicationBlocker = {
 };
 
 /** Only the 2026.9.2 release line reopens the ledger without the transaction fence. */
-function isUnfencedUpdateDriver(version: unknown): boolean {
+export function isUnfencedUpdateDriver(version: unknown): boolean {
   const parsed = typeof version === "string" ? parseSemver(version) : null;
   return parsed !== null && `${parsed.major}.${parsed.minor}.${parsed.patch}` === "2026.9.2";
 }

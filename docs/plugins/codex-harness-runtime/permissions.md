@@ -45,6 +45,11 @@ characters. String length, `email`, `uri`, `date`, and
 accepted response is returned. Optional fields, required fields, and valid
 defaults retain their schema meaning.
 
+Forms with no fields show the original request message with **Allow** and
+**Decline** choices. OpenClaw returns an empty content object only after an
+explicit Allow answer. Declining or cancelling the prompt never confirms the
+request, and late answers cannot confirm a request whose turn has ended.
+
 `openai/form` also supports a single-select `openai/imagePicker` field with up
 to four bounded item IDs and titles. OpenClaw uses only those IDs and titles; it
 does not fetch or render item images. An unknown extended field type produces a

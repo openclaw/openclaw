@@ -12,6 +12,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 export type ChatHistoryResult = {
@@ -71,6 +72,7 @@ export type ChatHistoryResponse =
 export type ChatHistoryObservation = {
   owner: ChatHistorySessions;
   reconcile: ReturnType<ChatHistorySessions["captureReconcile"]>;
+  run?: ChatHistoryRunObservation;
 };
 
 export type ObservedChatHistoryResult = ChatHistoryResult & {

@@ -4,7 +4,7 @@ import type { SessionTombstoneSweepResult } from "./cleanup-tombstones.js";
 import type {
   SessionDiskBudgetSweepResult,
   SessionUnreferencedArtifactSweepResult,
-} from "./disk-budget.js";
+} from "./disk-budget.types.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionStoreTarget } from "./targets.js";

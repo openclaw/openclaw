@@ -197,9 +197,14 @@ hide results from healthy hosts.
 All queries of the same local home share one resident index. Initial native
 hydration uses the existing source failure backoff; completed rows remain in
 memory and in the reconstructible SQLite snapshot. Normal list requests never
-restart discovery after a TTL. Paired nodes retain their separate eight-second
-foreground response deadline; upgrade their catalog reader to obtain resident
-listing on those hosts too.
+restart discovery after a TTL. Progressive sidebar lists reuse the last published
+paired-node page for the same query and refresh it in the background. A node
+without a matching page gets up to 250 ms to answer; after that its host is marked
+pending, preserving visible rows until the existing host update event arrives.
+Node disconnects, reconnects, configuration changes, and newer publications
+invalidate retained pages. Older refreshes cannot replace a newer publication.
+One-shot lists, host-specific lookups, and pagination still await fresh node data
+under the existing eight-second response deadline.
 
 The sidebar hides the Codex group when it has no visible sessions, including
 when discovery fails. Normal discovery refreshes continue, so the group appears

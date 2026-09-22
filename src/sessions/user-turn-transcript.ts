@@ -242,6 +242,7 @@ export function createUserTurnTranscriptRecorder(
     const metadata = { ...candidate["__openclaw"] };
     if (candidate.content !== replacementText) {
       delete metadata.humanMentions;
+      delete metadata.workContext;
     }
     const next = { ...candidate, content: replacementText };
     delete next["__openclaw"];
@@ -555,6 +556,7 @@ export function createUserTurnTranscriptRecorder(
             ...options,
             requestFingerprint: params.pendingInputRequestFingerprint,
             trackCompletion: params.trackInputCompletion,
+            replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
             message: candidate,
             config,
             prepareMessageAfterIdempotencyCheck: (next) =>

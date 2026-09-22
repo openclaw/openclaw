@@ -568,8 +568,7 @@ async function assertCodexHarnessTranscriptModelIdentity(params: {
 }
 
 async function writeLiveGatewayConfig(params: {
-  codexApprovalPolicy?: "untrusted";
-  codexApprovalsReviewer?: "user";
+  requireCodexFileApprovals?: boolean;
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
   compactionMode: CodexCompactionStressMode;
@@ -605,9 +604,9 @@ async function writeLiveGatewayConfig(params: {
                 ? { command: params.nativeSupervision.command, homeScope: "user" as const }
                 : {}),
               mode: params.codexAppServerMode ?? "yolo",
-              ...(params.codexApprovalPolicy ? { approvalPolicy: params.codexApprovalPolicy } : {}),
-              ...(params.codexApprovalsReviewer
-                ? { approvalsReviewer: params.codexApprovalsReviewer }
+              // Writable roots would let on-request patches bypass the approval-cache proof.
+              ...(params.requireCodexFileApprovals
+                ? { approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: "read-only" }
                 : {}),
               ...(appServerArgs ? { args: appServerArgs } : {}),
               ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
@@ -2535,9 +2534,7 @@ describeLive("gateway live (Codex harness)", () => {
           workspace,
           codexAppServerMode:
             CODEX_HARNESS_GUARDIAN_PROBE || CODEX_HARNESS_MULTI_SESSION_PROBE ? "guardian" : "yolo",
-          ...(CODEX_HARNESS_MULTI_SESSION_PROBE
-            ? { codexApprovalPolicy: "untrusted", codexApprovalsReviewer: "user" }
-            : {}),
+          requireCodexFileApprovals: CODEX_HARNESS_MULTI_SESSION_PROBE,
           codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
           compactionMode: CODEX_HARNESS_COMPACTION_MODE,
           ...(CODEX_HARNESS_DISABLE_LOOP_RELAY ? { loopDetectionPreToolUseRelay: false } : {}),

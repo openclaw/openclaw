@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
+import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
+import {
+  isSqliteNativeOpenFailure,
+  withSqliteNativeOpen,
+} from "../infra/sqlite-error-diagnostics.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { receiveSqliteWorkerReply } from "../infra/sqlite-worker-broker-reply.js";
 import type { Job } from "../infra/sqlite-worker-broker.types.js";
@@ -8,8 +14,10 @@ import {
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
+import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
+import { DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME } from "./openclaw-quarantine-error.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
   OpenClawStateLeaseError,
@@ -41,12 +49,57 @@ function roundTrip(error: Error): Error {
 }
 
 describe("shared-state worker error transport", () => {
-  it.each([
-    [RangeError, false],
-    [RangeError, true],
-    [SkillUploadRequestError, false],
-    [SkillUploadRequestError, true],
-  ] as const)("preserves %s identity with aggregate=%s", (ErrorType, aggregate) => {
+  it("preserves MCP OAuth corruption details and parsing cause", () => {
+    const cause = new SyntaxError("Synthetic malformed JSON");
+    const error = new McpOAuthStoreCorruptionError(
+      "synthetic-store",
+      "store_json is not valid JSON",
+      {
+        cause,
+      },
+    );
+    const decoded = roundTrip(error);
+    expect(decoded).toBeInstanceOf(McpOAuthStoreCorruptionError);
+    expect(decoded).toMatchObject({ name: error.name, message: error.message });
+    expect(decoded.cause).toBeInstanceOf(Error);
+    expect(decoded.cause).toMatchObject({ name: "SyntaxError", message: cause.message });
+  });
+
+  it("preserves the attachment conflict identity used for credential recovery", () => {
+    const original = new WorkerSessionAlreadyAttachedError("session", "environment");
+    const decoded = roundTrip(original);
+    expect(decoded).toBeInstanceOf(WorkerSessionAlreadyAttachedError);
+    expect(decoded).toMatchObject({
+      message: original.message,
+      sessionId: "session",
+      environmentId: "environment",
+    });
+  });
+
+  it.each([undefined, "SQLITE_IOERR"])(
+    "preserves native-open provenance before lease dispatch (code: %s)",
+    (code) => {
+      const original = Object.assign(new Error("native open refused"), { code });
+      expect(() =>
+        withSqliteNativeOpen(() => {
+          throw original;
+        }),
+      ).toThrow(original);
+
+      const decoded = roundTrip(original);
+      expect(decoded).not.toBe(original);
+      expect(decoded).toMatchObject({ message: original.message });
+      expect("code" in decoded ? decoded.code : undefined).toBe(code);
+      expect(isSqliteNativeOpenFailure(decoded)).toBe(true);
+      expect(hydrateOpenClawStateWorkerError(decoded)).toBe(decoded);
+    },
+  );
+
+  it.each(
+    [RangeError, SyntaxError, TypeError, SkillUploadRequestError].flatMap((ErrorType) =>
+      [false, true].map((aggregate) => ({ ErrorType, name: ErrorType.name, aggregate })),
+    ),
+  )("preserves $name identity with aggregate=$aggregate", ({ ErrorType, aggregate }) => {
     const original = Object.assign(new ErrorType("Synthetic invalid request"), {
       code: "ERR_OUT_OF_RANGE",
       cause: new Error("Synthetic decoding cause"),
@@ -76,9 +129,58 @@ describe("shared-state worker error transport", () => {
   });
 
   it.each([
+    ["PLUGIN_BLOB_OPEN_FAILED", "open"],
+    ["PLUGIN_BLOB_WRITE_FAILED", "register"],
+    ["PLUGIN_BLOB_READ_FAILED", "lookup"],
+    ["PLUGIN_BLOB_CORRUPT", "entries"],
+    ["PLUGIN_BLOB_LIMIT_EXCEEDED", "register"],
+    ["PLUGIN_BLOB_INVALID_INPUT", "sweep"],
+  ] as const)("preserves Blob error identity for %s", (code, operation) => {
+    const error = new PluginBlobStoreError("Synthetic blob refusal", {
+      code,
+      operation,
+      path: "/fixture/blob.sqlite",
+      cause: Object.assign(new Error("Synthetic SQLite cause"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 1,
+      }),
+    });
+    const decoded = roundTrip(error);
+    expect(decoded).toBeInstanceOf(PluginBlobStoreError);
+    expect(decoded).toMatchObject({
+      code,
+      operation,
+      path: "/fixture/blob.sqlite",
+      cause: { message: "Synthetic SQLite cause", code: "ERR_SQLITE_ERROR", errcode: 1 },
+    });
+  });
+
+  it("retains Blob primary failure and shared references in cleanup aggregates", () => {
+    const primary = new PluginBlobStoreError("Synthetic read failure", {
+      code: "PLUGIN_BLOB_READ_FAILED",
+      operation: "lookup",
+      path: "/fixture/blob.sqlite",
+    });
+    const cleanup = new Error("Synthetic cleanup failure");
+    const combined = new AggregateError([primary, cleanup, primary], "read and cleanup", {
+      cause: primary,
+    });
+    combined.errors.push(combined);
+    const decoded = roundTrip(combined);
+    expect(decoded).toBeInstanceOf(AggregateError);
+    if (!(decoded instanceof AggregateError)) {
+      throw new Error("Expected aggregate");
+    }
+    expect(decoded.errors[0]).toBeInstanceOf(PluginBlobStoreError);
+    expect(decoded.errors[0]).toBe(decoded.errors[2]);
+    expect(decoded.cause).toBe(decoded.errors[0]);
+    expect(decoded.errors[1]).toMatchObject({ message: cleanup.message });
+    expect(decoded.errors[3]).toBe(decoded);
+  });
+
+  it.each([
     "OPENCLAW_STATE_LEASE_INVALID_INPUT",
-    "OPENCLAW_STATE_LEASE_TIMEOUT",
-    "STATE_LEASE_BUSY",
+    "OPENCLAW_STATE_LEASE_HELD",
     "OPENCLAW_STATE_LEASE_ABORTED",
     "OPENCLAW_STATE_LEASE_LOST",
     "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
@@ -440,9 +542,18 @@ describe("shared-state worker error transport", () => {
     for (const error of [
       new Error("ordinary"),
       Object.assign(new Error("range imitation"), { name: "RangeError", code: "ERR_OUT_OF_RANGE" }),
+      Object.assign(new Error("syntax imitation"), { name: "SyntaxError" }),
+      Object.assign(new Error("type imitation"), { name: "TypeError" }),
       Object.assign(new Error("upload imitation"), { name: "SkillUploadRequestError" }),
+      Object.assign(new Error("native open imitation"), { nativeOpen: true, code: "SQLITE_IOERR" }),
       imitation,
       new AggregateError([imitation], "ordinary aggregate"),
+      Object.assign(new Error("cleanup imitation"), {
+        name: DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME,
+      }),
+      Object.assign(new AggregateError([], "cleanup aggregate imitation"), {
+        name: DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME,
+      }),
       { cause: new OpenClawStateOwnershipError("nested object") },
     ]) {
       expect(encodeOpenClawStateWorkerError(error)).toBeUndefined();
@@ -485,6 +596,18 @@ describe("shared-state worker error transport", () => {
     expect(hydrateOpenClawStateWorkerError(retained, options)).not.toBe(decoded);
   });
 
+  it("does not admit a cleanup name on a non-aggregate wire node", () => {
+    const retained = new Error("ordinary transport failure");
+    retainOpenClawStateWorkerErrorPayload(retained, {
+      version: 1,
+      root: 0,
+      nodes: [
+        { type: "error", name: DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME, message: "imitation" },
+      ],
+    });
+    expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
+  });
+
   it.each([
     new SqliteCoordinatorError("admission refused", new Error("native cause")),
     ...(["gateway-lifecycle", "state-lifecycle", "state-handles"] as const).map(
@@ -519,6 +642,7 @@ describe("shared-state worker error transport", () => {
     { version: 1, root: 0, nodes: [{ ...validNode, cause: { ref: 1 } }] },
     { version: 1, root: 0, nodes: [{ ...validNode, cause: { value: {} } }] },
     { version: 1, root: 0, nodes: [{ ...validNode, code: {} }] },
+    { version: 1, root: 0, nodes: [{ ...validNode, nativeOpen: false }] },
     { version: 1, root: 0, nodes: [{ ...validNode, errcode: -1 }] },
     { version: 1, root: 0, nodes: [{ ...validNode, errcode: 0.5 }] },
     { version: 1, root: 0, nodes: [{ ...validNode, errcode: 2 ** 31 }] },
@@ -536,7 +660,7 @@ describe("shared-state worker error transport", () => {
         {
           type: "state-lease",
           leaseCode: "OPENCLAW_STATE_LEASE_LOST",
-          code: "OPENCLAW_STATE_LEASE_TIMEOUT",
+          code: "OPENCLAW_STATE_LEASE_HELD",
           name: "OpenClawStateLeaseError",
           message: "mismatched lease classification",
         },

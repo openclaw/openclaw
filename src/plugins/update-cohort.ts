@@ -3,7 +3,10 @@ import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveSourceCheckoutBundledPluginIds } from "./bundled-sources.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
-import { resolvePluginInstallOwnerMigrations } from "./install-transaction.js";
+import {
+  attachPluginInstallOwnerMigrations,
+  resolvePluginInstallOwnerMigrations,
+} from "./install-transaction.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
@@ -16,6 +19,7 @@ import {
   capturePluginPackageUpdateSnapshot,
   reconcilePluginPackageUpdateConfig,
 } from "./plugin-package-update.js";
+import { resolveOfficialPluginCohortNpmSpecs } from "./plugin-version-drift.js";
 import type { PluginChannelSyncResult } from "./update-channel.js";
 import {
   isPluginInstallRecordUpdateSource,
@@ -126,6 +130,13 @@ async function convergePluginReleaseCohortWithLease(
   });
   params.beforePersistentEffect?.();
   let config = sync.config;
+  const npmInstallSpecOverrides = params.coreVersion
+    ? resolveOfficialPluginCohortNpmSpecs({
+        gatewayVersion: params.coreVersion,
+        installRecords: config.plugins?.installs ?? {},
+        config,
+      })
+    : undefined;
   let changed = sync.changed;
   let npmChanged = false;
   let installOwners = Object.entries(config.plugins?.installs ?? {})
@@ -178,6 +189,7 @@ async function convergePluginReleaseCohortWithLease(
   if (repairedMissingPayloadIds.size > 0) {
     const repair = await updateNpmInstalledPlugins({
       config,
+      npmInstallSpecOverrides,
       pluginIds: [...repairedMissingPayloadIds],
       timeoutMs: params.timeoutMs,
       workTimeoutMs: params.workTimeoutMs,
@@ -202,6 +214,7 @@ async function convergePluginReleaseCohortWithLease(
 
   const update = await updateNpmInstalledPlugins({
     config,
+    npmInstallSpecOverrides,
     timeoutMs: params.timeoutMs,
     workTimeoutMs: params.workTimeoutMs,
     updateChannel: params.channel,
@@ -254,7 +267,7 @@ async function convergePluginReleaseCohortWithLease(
     config = reconciled.config;
   }
 
-  return {
+  const result: PluginCohortConvergenceResult = {
     config,
     changed,
     npmChanged,
@@ -280,4 +293,7 @@ async function convergePluginReleaseCohortWithLease(
       })
     ).filter((entry) => !operatorManagedIds.has(entry.pluginId)),
   };
+  return Object.keys(installOwnerMigrations).length > 0
+    ? attachPluginInstallOwnerMigrations(result, installOwnerMigrations)
+    : result;
 }

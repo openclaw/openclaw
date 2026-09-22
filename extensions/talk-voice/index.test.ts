@@ -18,9 +18,16 @@ function createHarness(initialConfig: Record<string, unknown>) {
       current: vi.fn(() => config),
       loadConfig: vi.fn(() => config),
       mutateConfigFile: vi.fn(
-        async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
+        async ({
+          mutate,
+          writeOptions,
+        }: {
+          mutate: (draft: Record<string, unknown>) => void;
+          writeOptions?: { assertCurrent?: () => void };
+        }) => {
           const draft = structuredClone(config);
           mutate(draft);
+          writeOptions?.assertCurrent?.();
           config = draft;
           return {
             path: "/tmp/openclaw.json",
@@ -87,6 +94,43 @@ describe("talk-voice plugin", () => {
   beforeEach(() => {
     gatewayMocks.callGatewayTool.mockReset();
   });
+
+  it.each([false, true])(
+    "rechecks owner authority after voice lookup (gateway admin: %s)",
+    async (gatewayAdmin) => {
+      const initialConfig = { talk: { provider: "microsoft", providers: { microsoft: {} } } };
+      const { command, runtime } = createHarness(initialConfig);
+      let current = true;
+      const ctx = {
+        ...createCommandContext(
+          "set Ava",
+          "discord",
+          gatewayAdmin ? ["operator.admin"] : undefined,
+          true,
+        ),
+        assertOwnerCurrent: () => {
+          if (!current) {
+            throw new Error("original owner revoked");
+          }
+        },
+      };
+      vi.mocked(runtime.tts.listVoices).mockImplementationOnce(async () => {
+        current = false;
+        ctx.assertOwnerCurrent = () => {};
+        return [{ id: "en-US-AvaNeural", name: "Ava" }];
+      });
+      const pending = command.handler(ctx);
+      if (gatewayAdmin) {
+        await expect(pending).resolves.toMatchObject({
+          text: expect.stringContaining("Talk voice set to Ava"),
+        });
+        expect(runtime.config.current()).not.toEqual(initialConfig);
+      } else {
+        await expect(pending).rejects.toThrow("original owner revoked");
+        expect(runtime.config.current()).toEqual(initialConfig);
+      }
+    },
+  );
 
   it.each([
     { action: "list", method: "talk.voice.get", request: {} },
@@ -320,6 +364,7 @@ describe("talk-voice plugin", () => {
 
     expect(runtime.config.mutateConfigFile).toHaveBeenCalledWith({
       afterWrite: { mode: "auto" },
+      writeOptions: { assertCurrent: undefined },
       mutate: expect.any(Function),
     });
     const updatedConfig = runtime.config.current() as { talk: Record<string, unknown> };
@@ -355,6 +400,7 @@ describe("talk-voice plugin", () => {
 
     expect(runtime.config.mutateConfigFile).toHaveBeenCalledWith({
       afterWrite: { mode: "auto" },
+      writeOptions: { assertCurrent: undefined },
       mutate: expect.any(Function),
     });
     expect(runtime.config.current()).toEqual({

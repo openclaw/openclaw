@@ -4,6 +4,7 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { normalizeUiAppearancePreference } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
@@ -142,9 +143,7 @@ export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
 export const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
 
 export function normalizeAccentColor(value: unknown): string | undefined {
-  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)
-    ? value.toLowerCase()
-    : undefined;
+  return normalizeUiAppearancePreference("ui.accent", value);
 }
 
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {

@@ -101,7 +101,7 @@ jobs:
       actions: read
       attestations: read
       contents: read
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 120
     environment: ios-beta-release
     concurrency:
@@ -212,20 +212,11 @@ jobs:
           bundle _2.6.9_ check
           test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.239.0"
 
-      - name: Select Xcode 26
+      - name: Select Xcode 27
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
-            if [[ -d "${xcode_app}/Contents/Developer" ]]; then
-              sudo xcode-select -s "${xcode_app}/Contents/Developer"
-              break
-            fi
-          done
-          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          [[ "$xcode_version" == 26.6* ]] || {
-            echo "Expected Xcode 26.6, got ${xcode_version}." >&2
-            exit 1
-          }
+          source apps/ios/build/mobile-release-ci/authority/scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain 27.0
 
       - name: Install pinned Swift build tools
         run: |

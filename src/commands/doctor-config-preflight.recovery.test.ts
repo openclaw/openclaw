@@ -83,17 +83,18 @@ it("restores the admitted backup after database readiness exceeds the lease TTL"
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     let acquired = false;
     let heartbeats = 0;
-    const acquire = checkpoint.acquireStartupMigrationLeaseWithWait;
-    vi.spyOn(checkpoint, "acquireStartupMigrationLeaseWithWait").mockImplementationOnce(
+    const acquire = checkpoint.inspectStartupMigrationCheckpointWithLease;
+    vi.spyOn(checkpoint, "inspectStartupMigrationCheckpointWithLease").mockImplementationOnce(
       async (params) => {
-        const lease = await acquire(params);
+        const inspected = await acquire(params);
+        const lease = inspected.lease!;
         const heartbeat = lease.heartbeat;
         vi.spyOn(lease, "heartbeat").mockImplementation((heartbeatParams) => {
           heartbeats++;
           heartbeat(heartbeatParams);
         });
         acquired = true;
-        return lease;
+        return inspected;
       },
     );
     const readiness = await import("../state/openclaw-database-preflight.js");
@@ -166,8 +167,8 @@ it.each(["backup", "active config"] as const)(
         { OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined },
         async () => {
           expect(await prepareGatewayRunBootstrap({ opts: {}, runtime })).toBe(true);
-          const acquire = checkpoint.acquireStartupMigrationLeaseWithWait;
-          vi.spyOn(checkpoint, "acquireStartupMigrationLeaseWithWait").mockImplementationOnce(
+          const acquire = checkpoint.inspectStartupMigrationCheckpointWithLease;
+          vi.spyOn(checkpoint, "inspectStartupMigrationCheckpointWithLease").mockImplementationOnce(
             async (params) => {
               const lease = await acquire(params);
               await fs.writeFile(kind === "backup" ? `${configPath}.bak` : configPath, replacement);
@@ -213,7 +214,7 @@ it.each(["expired", "reassigned"] as const)(
       openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
       closeOpenClawStateDatabaseForTest();
       let replacement: checkpoint.StartupMigrationLease | undefined;
-      vi.spyOn(checkpoint, "acquireStartupMigrationLeaseWithWait").mockImplementationOnce(
+      vi.spyOn(checkpoint, "inspectStartupMigrationCheckpointWithLease").mockImplementationOnce(
         async (params) => {
           const stale = checkpoint.acquireStartupMigrationLease({
             ...params,
@@ -222,7 +223,7 @@ it.each(["expired", "reassigned"] as const)(
           if (loss === "reassigned") {
             replacement = checkpoint.acquireStartupMigrationLease(params);
           }
-          return stale;
+          return { status: "stale", lease: stale };
         },
       );
       try {

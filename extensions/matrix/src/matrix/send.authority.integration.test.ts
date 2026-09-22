@@ -2,13 +2,17 @@
 import http from "node:http";
 import { resetPluginBlobStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { afterEach, describe, expect, it } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { MatrixClient } from "./sdk.js";
 import { sendMessageMatrix } from "./send.js";
 
-afterEach(() => resetPluginBlobStoreForTests());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginBlobStoreForTests();
+});
 
 describe("Matrix per-wire send authority", () => {
   for (const durable of [false, true]) {
@@ -23,9 +27,7 @@ describe("Matrix per-wire send authority", () => {
         channel: {
           text: {
             ...createPluginRuntimeMock().channel.text,
-            resolveTextChunkLimit: () => 5,
             resolveChunkMode: () => "length",
-            resolveMarkdownTableMode: () => "code",
             chunkMarkdownTextWithMode: (text, limit) => chunkTextForOutbound(text, limit),
           },
         },
@@ -85,7 +87,7 @@ describe("Matrix per-wire send authority", () => {
         });
         const send = sendMessageMatrix("!room:example.org", "AAAAA BBBBB CCCCC", {
           client,
-          cfg: {},
+          cfg: { channels: { matrix: { textChunkLimit: 5 } } },
           ...(durable
             ? {
                 deliveryQueueId: `authority-${boundary}`,

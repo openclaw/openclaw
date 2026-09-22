@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { sharedVitestConfig } from "../vitest/vitest.shared.config.js";
 import { resolveNativeFixtureShortPath } from "./native-boundary-fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -28,7 +29,7 @@ if (result.error) throw result.error;
 if (result.status !== 0) throw new Error(result.stderr);
 const namespace = os.tmpdir();
 const cache = path.join(namespace, "tsx-" + (process.geteuid?.() ?? os.userInfo().username));
-console.log(JSON.stringify({ namespace, output: result.stdout, cached: fs.existsSync(cache) && fs.readdirSync(cache).length > 0 }));
+console.log(JSON.stringify({ namespace, output: result.stdout, disabled: process.env.TSX_DISABLE_CACHE, cached: fs.existsSync(cache) && fs.readdirSync(cache).length > 0 }));
 `;
     const env = {
       PATH: process.env.PATH,
@@ -43,7 +44,7 @@ console.log(JSON.stringify({ namespace, output: result.stdout, cached: fs.exists
     };
     const { child, completion } = spawnOwnedVitestProcess({
       command: testNodeExecPath,
-      args: ["--input-type=module", "-e", script],
+      args: [...sharedVitestConfig.test.execArgv, "--input-type=module", "-e", script],
       homeMode,
       options: { env, stdio: ["ignore", "pipe", "pipe"] },
     });
@@ -61,7 +62,7 @@ console.log(JSON.stringify({ namespace, output: result.stdout, cached: fs.exists
     });
     const observed = JSON.parse(output);
     expect(observed.output).toBe("42\n");
-    expect(observed.cached).toBe(homeMode !== "tooling");
+    expect(observed.cached, JSON.stringify(observed)).toBe(homeMode !== "tooling");
     expect(path.dirname(observed.namespace)).toBe(root);
     expect(env.TSX_DISABLE_CACHE).toBe("1");
     expect(fs.existsSync(observed.namespace)).toBe(process.platform === "win32");

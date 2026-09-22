@@ -1,10 +1,12 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import pLimit from "p-limit";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { createPreparedRuntimeAuthProfileUsageReader } from "./auth-profiles/runtime-snapshots.js";
-import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
+import {
+  augmentPreparedModelCatalogWithAgentHarness,
+  isPreparedNativeModelCatalogReady,
+} from "./harness/model-catalog.js";
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -14,12 +16,9 @@ import {
   hasSamePreparedModelCatalogAuth,
   setPreparedModelFullCatalogAuth,
   type PreparedModelCatalogAuth,
-  type PreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
-import type {
-  PreparedModelRuntimeAgentFacts,
-  PreparedModelRuntimeCatalogFacts,
-} from "./prepared-model-runtime.catalog-contract.js";
+import { createPreparedModelCatalogAuthLoader } from "./prepared-model-runtime.catalog-auth.js";
+import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { createPreparedModelCatalogProjection } from "./prepared-model-runtime.catalog-projection.js";
 import {
   preparedProviderCatalogCredentials,
@@ -51,23 +50,16 @@ import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthet
 import type {
   PreparedModelCatalogInventory,
   PreparedModelCatalogRefreshOptions,
-  PreparedModelRuntimeOwner,
-  PreparedModelRuntimePluginGeneration,
+  PreparedNativeModelSelection,
 } from "./prepared-model-runtime.types.js";
 
 export const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
 const MODEL_CATALOG_FOREGROUND_WAIT_MS = 5_000;
 
-export function createFullModelCatalogAccess(params: {
-  agentFacts: PreparedModelRuntimeAgentFacts;
-  nativeConfigFingerprint: string;
-  catalogFacts: PreparedModelRuntimeCatalogFacts;
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
-  isCurrent: () => boolean;
-  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt"> &
-    Partial<Pick<PreparedModelRuntimeOwner, "provenance">>;
-}): PreparedModelRuntimeCatalogAccess {
+export function createFullModelCatalogAccess(
+  params: PreparedModelRuntimeCatalogAccessParams,
+): PreparedModelRuntimeCatalogAccess {
   const readUsage = createPreparedRuntimeAuthProfileUsageReader(
     params.agentFacts.input.agentDir,
     params.agentFacts.input.inheritedAuthDir,
@@ -83,16 +75,16 @@ export function createFullModelCatalogAccess(params: {
     params.agentFacts.input.config,
     params.agentFacts.env,
   );
-  const projectInventory = createPreparedModelCatalogProjection({ ...params, normalizeProvider });
+  const projectInventory = createPreparedModelCatalogProjection(params);
   const project = (
     catalog: ModelCatalogSnapshot,
-    source:
-      | Pick<PreparedModelCatalogInventory, "runtimeModels" | "configuredProviderModelIds">
-      | undefined = inventory,
+    runtimeModels:
+      | PreparedModelCatalogInventory["runtimeModels"]
+      | undefined = inventory?.runtimeModels,
   ) => {
-    const projected = projectInventory(catalog, currentConfiguredRuntimeModels, source);
-    publishedRuntimeModels = projected.runtimeModels;
-    return attempt.withRefreshStatus(projected.catalog);
+    const projected = projectInventory(catalog, currentConfiguredRuntimeModels);
+    publishedRuntimeModels = runtimeModels;
+    return attempt.withRefreshStatus(projected);
   };
   const inventoryKey = preparedModelInventoryKey(params.agentFacts.input);
   const nativeSource = fingerprintPreparedRuntimeFacts({
@@ -150,11 +142,6 @@ export function createFullModelCatalogAccess(params: {
           ),
           runtimeModels: new Map(
             [...previousInventory.runtimeModels].filter(([provider]) =>
-              retainedProviders.has(normalizeProvider(provider)),
-            ),
-          ),
-          configuredProviderModelIds: new Map(
-            [...previousInventory.configuredProviderModelIds].filter(([provider]) =>
               retainedProviders.has(normalizeProvider(provider)),
             ),
           ),
@@ -225,13 +212,8 @@ export function createFullModelCatalogAccess(params: {
         providers: readonly string[] | undefined;
         /** Undefined covers unscoped native selection; an empty list schedules none. */
         nativeProviders: readonly string[] | undefined;
+        nativeRuntime: string | undefined;
         promise: Promise<ModelCatalogSnapshot>;
-      }
-    | undefined;
-  let pendingAuth:
-    | {
-        key: string;
-        promise: Promise<PreparedModelRuntimeAuth>;
       }
     | undefined;
   const assertCurrent = () =>
@@ -243,6 +225,7 @@ export function createFullModelCatalogAccess(params: {
     pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
     preferBuiltPluginArtifacts: params.pluginGeneration.preferBuiltPluginArtifacts,
     isCurrent: params.isCurrent,
+    retirementSignal: params.retirementSignal,
   });
   const staticCatalog = project(params.catalogFacts.modelCatalog);
   if (!nativeCatalogAcquired) {
@@ -280,6 +263,7 @@ export function createFullModelCatalogAccess(params: {
   const acquireCatalog = async (
     options: PreparedModelCatalogRefreshOptions = {},
     acquireNative = true,
+    nativeSelection?: PreparedNativeModelSelection,
   ): Promise<ModelCatalogSnapshot> => {
     assertCurrent();
     if (
@@ -299,7 +283,7 @@ export function createFullModelCatalogAccess(params: {
         ).map(normalizeProvider),
       ),
     ];
-    const providers = requestedProviders.filter(
+    const providers = (nativeSelection ? [] : requestedProviders).filter(
       (provider) =>
         !options.changedOnly ||
         inventory?.providers.get(provider)?.source !== providerSources.get(provider) ||
@@ -326,14 +310,17 @@ export function createFullModelCatalogAccess(params: {
       const pendingNative = current.nativeProviders;
       const coversNative =
         !includeNative ||
-        pendingNative === undefined ||
-        (nativeProviders !== undefined &&
-          nativeProviders.every((provider) => pendingNative.includes(provider)));
+        ((current.nativeRuntime === undefined ||
+          current.nativeRuntime === nativeSelection?.runtime) &&
+          (pendingNative === undefined ||
+            (nativeProviders !== undefined &&
+              nativeProviders.every((provider) => pendingNative.includes(provider)))));
       if (coversNative && coversProviders) {
         return current.promise;
       }
-      await current.promise;
-      return acquireCatalog(options, acquireNative);
+      // Uncovered requests wait for settlement; the prior scope owns its failure.
+      await current.promise.catch(() => undefined);
+      return acquireCatalog(options, acquireNative, nativeSelection);
     }
     // Provider rows are only a candidate until native discovery and its paired auth settle.
     const previous = fullRefresh && includeNative ? published : undefined;
@@ -366,7 +353,6 @@ export function createFullModelCatalogAccess(params: {
             configuredRuntimeModels,
             runtimeModels,
             providerExpiries,
-            configuredProviderModelIds,
           } = await worker.loadCatalog(
             providerIds,
             (providerIds ?? providers).some((provider) =>
@@ -454,14 +440,7 @@ export function createFullModelCatalogAccess(params: {
           }
           setCatalogAuth(publication.catalog, auth);
           currentConfiguredRuntimeModels = configuredRuntimeModels;
-          const membershipSource = new Map([
-            ...(inventory?.configuredProviderModelIds ?? []),
-            ...configuredProviderModelIds,
-          ]);
-          const catalog = project(publication.catalog, {
-            runtimeModels: publication.runtimeModels,
-            configuredProviderModelIds: membershipSource,
-          });
+          const catalog = project(publication.catalog, publication.runtimeModels);
           setCatalogAuth(catalog, auth);
           assertCurrent();
           const completedProviders = new Map(providerIds ? inventory?.providers : undefined);
@@ -484,7 +463,6 @@ export function createFullModelCatalogAccess(params: {
           }
           inventory = {
             ...publication,
-            configuredProviderModelIds: membershipSource,
             key: inventoryKey,
             pluginFingerprint,
             nativeSource,
@@ -511,12 +489,13 @@ export function createFullModelCatalogAccess(params: {
         const rawInventory = inventory?.catalog ?? { entries: [], routeVariants: [] };
         const sourceAuthority = (inventory?.catalog ?? params.catalogFacts.modelCatalog)
           .authoritative;
-        let nativeDiscoveryStarted = false;
+        let nativeDiscoveryCompleted = false;
         const startupProviders = new Set(params.agentFacts.providerIds.map(normalizeProvider));
         let discoveredProviders: string[] = [];
         const nativeFailures: Array<{ error: unknown; providers?: readonly string[] }> = [];
         const rawCatalog = await augmentPreparedModelCatalogWithAgentHarness({
           input: params.agentFacts.input,
+          nativeSelection,
           snapshot: rawInventory,
           preparedSnapshot: current,
           pluginRegistry: params.pluginGeneration.pluginRegistry,
@@ -528,12 +507,14 @@ export function createFullModelCatalogAccess(params: {
             nativeFailures.push({ error, providers: failedProviderIds?.map(normalizeProvider) });
           },
           onDiscoveryStarted: (provider) => {
-            nativeDiscoveryStarted = true;
-            nativeCatalogAcquired = false;
+            if (!nativeSelection) {
+              nativeCatalogAcquired = false;
+            }
             current.authoritative = false;
             attempt.started([normalizeProvider(provider)], "native");
           },
           onDiscoveryCompleted: (rows) => {
+            nativeDiscoveryCompleted = true;
             discoveredProviders = [
               ...new Set(
                 rows
@@ -545,7 +526,7 @@ export function createFullModelCatalogAccess(params: {
         });
         assertCurrent();
         const firstNativeFailure = nativeFailures[0];
-        if (firstNativeFailure && rawCatalog === rawInventory) {
+        if (firstNativeFailure && !nativeDiscoveryCompleted) {
           failedNativeProviders = nativeFailures.flatMap(
             ({ providers: failedProviderIds }) => failedProviderIds ?? [],
           );
@@ -553,7 +534,7 @@ export function createFullModelCatalogAccess(params: {
         }
         const auth = getPreparedModelFullCatalogAuth(current) ?? currentAuth;
         const nativeAuth =
-          nativeDiscoveryStarted && discoveredProviders.length
+          nativeDiscoveryCompleted && discoveredProviders.length
             ? await worker.loadAuth({ providerIds: discoveredProviders })
             : undefined;
         assertCurrent();
@@ -579,13 +560,13 @@ export function createFullModelCatalogAccess(params: {
               }
             : {}),
         };
-        nativeCatalogAcquired ||= !options.providerIds || nativeDiscoveryStarted;
-        if (nativeDiscoveryStarted) {
+        nativeCatalogAcquired ||=
+          !nativeSelection && (!options.providerIds || nativeDiscoveryCompleted);
+        if (nativeDiscoveryCompleted) {
           setCatalogAuth(rawCatalog, catalogAuth);
           inventory = {
             catalog: mergePreparedNativeCatalog(rawCatalog, rawInventory),
             runtimeModels: inventory?.runtimeModels ?? new Map(),
-            configuredProviderModelIds: inventory?.configuredProviderModelIds ?? new Map(),
             key: inventoryKey,
             pluginFingerprint,
             nativeSource,
@@ -594,7 +575,8 @@ export function createFullModelCatalogAccess(params: {
           };
           setCatalogAuth(inventory.catalog, catalogAuth);
         }
-        const catalog = nativeDiscoveryStarted ? project(rawCatalog) : current;
+        const catalog =
+          nativeDiscoveryCompleted && rawCatalog !== rawInventory ? project(rawCatalog) : current;
         fullCatalog =
           nativeCatalogAcquired &&
           eligibleProviders.every((provider) => inventory?.providers.has(provider))
@@ -603,7 +585,7 @@ export function createFullModelCatalogAccess(params: {
         if (previous) {
           attempt.published(undefined);
         }
-        if (nativeDiscoveryStarted) {
+        if (nativeDiscoveryCompleted) {
           attempt.published(options.providerIds ? requestedProviders : undefined, "native");
         }
         for (const { error, providers: failedProviderIds } of nativeFailures) {
@@ -632,57 +614,50 @@ export function createFullModelCatalogAccess(params: {
       .finally(() => {
         pending = undefined;
       });
-    pending = { providers: fullRefresh ? undefined : providers, nativeProviders, promise };
+    pending = {
+      providers: fullRefresh ? undefined : providers,
+      nativeProviders,
+      nativeRuntime: nativeSelection?.runtime,
+      promise,
+    };
     return promise;
   };
   return {
     isCurrent: params.isCurrent,
     withRefreshStatus: attempt.withRefreshStatus,
-    loadAuth: async ({ providerIds, profileIds }) => {
-      assertCurrent();
-      const cacheKey = [providerIds, profileIds ?? []]
-        .map((ids) =>
-          [...new Set(ids)].toSorted((left, right) => left.localeCompare(right)).join("\0"),
-        )
-        .join("\0\0");
-      if (pendingAuth?.key === cacheKey) {
-        return pendingAuth.promise;
-      }
-      const promise = (async () => {
-        await using _ = {
-          [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
-        };
-        return await worker
-          .loadAuth({ providerIds, ...(profileIds?.length ? { profileIds } : {}) })
-          .then((refreshed) => {
-            const authModes = {
-              ...resolveUsableAgentCredentialModes(params.agentFacts.credentials),
-            };
-            for (const providerId of [
-              ...providerIds,
-              ...scopeSyntheticAuthProviderRefs(Object.keys(authModes), providerIds),
-            ]) {
-              delete authModes[normalizeProviderId(providerId)];
-            }
-            Object.assign(authModes, refreshed.authModes);
-            return { authStore: refreshed.authStore, authModes: Object.freeze(authModes) };
-          });
-      })().finally(() => {
-        if (pendingAuth?.promise === promise) {
-          pendingAuth = undefined;
-        }
-      });
-      pendingAuth = { key: cacheKey, promise };
-      return promise;
-    },
+    loadAuth: createPreparedModelCatalogAuthLoader({ ...params, assertCurrent, worker }),
     readFullModelCatalog: () => {
       assertCurrent();
       refreshExpiredCatalog();
       return published.catalog;
     },
+    readPublishedModelCatalog: () => {
+      assertCurrent();
+      return published.catalog;
+    },
     readPublishedModels: () => {
       assertCurrent();
       return published.runtimeModels;
+    },
+    loadNativeModelCatalog: async (selection) => {
+      assertCurrent();
+      const catalog = published.catalog ?? staticCatalog;
+      if (
+        isPreparedNativeModelCatalogReady({
+          input: params.agentFacts.input,
+          pluginGeneration: params.pluginGeneration,
+          snapshot: catalog,
+          selection,
+        })
+      ) {
+        assertCurrent();
+        return catalog;
+      }
+      return await acquireCatalog(
+        { providerIds: [selection.provider], refresh: true },
+        true,
+        selection,
+      );
     },
     loadFullModelCatalog: async (options) => {
       // Standalone commands cannot publish background discovery after their process exits.

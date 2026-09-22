@@ -10,7 +10,7 @@ import {
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import { readLaunchAgentProgramArguments } from "./launchd-runtime.js";
 import {
-  resolveLaunchAgentEnvFilePath,
+  resolveLaunchAgentEnvironmentReadOptions,
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
@@ -302,7 +302,10 @@ describe("native service command inspection", () => {
   it.each(["missing", "unreadable"])(
     "keeps %s generated environment recovery out of strict inspection",
     async (failure) => {
-      const expectedEnvFile = resolveLaunchAgentEnvFilePath(env, label);
+      const expectedEnvFile = resolveLaunchAgentEnvironmentReadOptions(
+        env,
+        label,
+      ).expectedEnvironmentFilePath;
       const recordedEnvFile = path.join(root, "other", "service-env", `${label}.env`);
       const recordedWrapper = path.join(root, "other", "service-env", `${label}-env-wrapper.sh`);
       await writeFile(expectedEnvFile, "export OPENCLAW_STATE_DIR='/recovered-state'\n");
@@ -331,7 +334,10 @@ describe("native service command inspection", () => {
   it.each(["o'brien\\cash$", "first line\r\n  second line\nthird 'quoted' \\cash$"])(
     "reads the recorded generated literal in strict mode: %j",
     async (literal) => {
-      const envFile = resolveLaunchAgentEnvFilePath(env, label);
+      const envFile = resolveLaunchAgentEnvironmentReadOptions(
+        env,
+        label,
+      ).expectedEnvironmentFilePath;
       await writeFile(
         envFile,
         `export OPENCLAW_STATE_DIR='/recorded-state'\nexport NODE_OPTIONS=''\nexport QUOTE=${quoteLaunchAgentEnvironmentValue(literal)}\n`,
@@ -360,7 +366,10 @@ describe("native service command inspection", () => {
     "export OPENCLAW_STATE_DIR=$(printf unsupported)",
     "export OPENCLAW_STATE_DIR='/partial'; echo unsupported-command",
   ])("rejects unsupported generated environment syntax: %s", async (line) => {
-    const envFile = resolveLaunchAgentEnvFilePath(env, label);
+    const envFile = resolveLaunchAgentEnvironmentReadOptions(
+      env,
+      label,
+    ).expectedEnvironmentFilePath;
     await writeFile(envFile, `export HOME='/partial-home'\n${line}\n`);
     await writeFile(
       resolveLaunchAgentPlistPath(env),

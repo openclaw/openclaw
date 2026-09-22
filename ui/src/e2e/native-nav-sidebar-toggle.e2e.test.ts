@@ -4,6 +4,7 @@
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { beforeEach, afterEach, expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
@@ -81,7 +82,9 @@ let context: BrowserContext | undefined;
 
 suite.define(() => {
   afterEach(async () => {
-    await context?.close();
+    if (context) {
+      await suite.closeBrowserContext(context);
+    }
     context = undefined;
   });
 
@@ -98,7 +101,7 @@ suite.define(() => {
     webChrome?: boolean;
     width?: number;
   }) {
-    context = await suite.browser.newContext({
+    context = await suite.newBrowserContext({
       colorScheme: options.colorScheme,
       hasTouch: options.hasTouch,
       locale: "en-US",
@@ -436,6 +439,7 @@ suite.define(() => {
 
   it("hosts navigation, search, sessions, and history in web titlebar chrome", async () => {
     const page = await openPage({
+      colorScheme: "dark",
       scenario: {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "update.run"],
         operatorScopes: ["operator.admin", "operator.read"],
@@ -504,6 +508,12 @@ suite.define(() => {
       .toContain("shell--nav-collapsed");
     await expect.poll(() => newThread.isVisible()).toBe(true);
     await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
+    await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").waitFor();
+    await page.evaluate(() => document.fonts.ready);
+    await waitForLayoutSettled(
+      page,
+      ".macos-titlebar-controls, .sidebar-attention--floating, .chat-pane-cache__pane--visible .chat-pane__crumbs",
+    );
     const toolbarBox = await toolbar.boundingBox();
     const attention = page.locator(".sidebar-attention--floating");
     const attentionBox = await attention.boundingBox();
@@ -535,12 +545,49 @@ suite.define(() => {
     for (const centerline of centerlines.slice(1)) {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
+    await page.mouse.move(600, 400);
     if (railProofDir) {
       await page.screenshot({
         animations: "disabled",
         path: path.join(railProofDir, "native-web-top-left-controls.png"),
       });
     }
+    await expect
+      .poll(() =>
+        topLeftControls.evaluateAll((buttons) =>
+          buttons.map((button) => {
+            const style = getComputedStyle(button);
+            return {
+              border: style.borderTopWidth,
+              background: style.backgroundColor,
+              shadow: style.boxShadow,
+            };
+          }),
+        ),
+      )
+      .toEqual(
+        Array.from({ length: 6 }, () => ({
+          border: "0px",
+          background: "rgba(0, 0, 0, 0)",
+          shadow: "none",
+        })),
+      );
+    const inbox = attention.locator(".sidebar-issues-button");
+    await inbox.hover();
+    expect(await inbox.evaluate((button) => getComputedStyle(button).backgroundColor)).not.toBe(
+      "rgba(0, 0, 0, 0)",
+    );
+    await newThread.focus();
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() => inbox.evaluate((button) => button.matches(":focus-visible")))
+      .toBe(true);
+    expect(await inbox.evaluate((button) => getComputedStyle(button).boxShadow)).not.toBe("none");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => page.locator("#sidebar-issues-panel").isVisible()).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => inbox.getAttribute("aria-expanded")).toBe("false");
+
     await search.click();
     await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
     await page.keyboard.press("Escape");
@@ -663,9 +710,10 @@ suite.define(() => {
     const page = await openPage({ nativeNav: false });
 
     await page.keyboard.press("ControlOrMeta+K");
-    const palette = page.locator(".cmd-palette");
-    const paletteDialog = page.locator("openclaw-modal-dialog.palette");
-    await page.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
+    // The loading dialog is replaced during handoff; measure the full palette.
+    const palette = page.locator("openclaw-command-palette .cmd-palette");
+    const paletteDialog = page.locator("openclaw-command-palette openclaw-modal-dialog.palette");
+    await palette.locator(".cmd-palette__input:not([disabled])").waitFor({ state: "visible" });
     const paletteAnimationName = await palette.evaluate(
       (element) => getComputedStyle(element).animationName,
     );
@@ -788,7 +836,7 @@ suite.define(() => {
 
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
-    await row.getByRole("button", { name: "Open session menu" }).click();
+    await row.click({ button: "right" });
     const sessionMenu = page.getByRole("menu", { name: /Actions for/ });
     await expect.poll(() => sessionMenu.isVisible()).toBe(true);
     await page.keyboard.press("Escape");

@@ -5,7 +5,12 @@ import { Socket } from "node:net";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { releasePipe } from "./pipe.js";
-import { SpawnBrokerError, type BrokerRequest, type BrokerResponse } from "./protocol.js";
+import {
+  serializeBrokerError,
+  SpawnBrokerError,
+  type BrokerRequest,
+  type BrokerResponse,
+} from "./protocol.js";
 
 type ChildMessage = Exclude<
   BrokerResponse,
@@ -102,7 +107,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
         type: "output-drained",
         id: this.requestId,
         fd,
-        error: error?.message,
+        error: error ? serializeBrokerError(error) : undefined,
       }).catch(() => {});
     };
     socket.once(fd === 0 ? "finish" : "end", () => acknowledge());

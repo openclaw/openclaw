@@ -1,7 +1,7 @@
 // Exercises CLI routing receipts at the exact post-admission dispatch boundary.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
-import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.types.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -110,14 +110,14 @@ describe("CLI model-routing receipt authority", () => {
     fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearDecisionSink?.();
     clearAdmissionSink?.();
     clearDecisionSink = undefined;
     clearAdmissionSink = undefined;
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
-    fixture.cleanup();
+    await fixture.cleanup();
   });
 
   it.each<{ kind: AuthorityLoss; producer: Producer }>([

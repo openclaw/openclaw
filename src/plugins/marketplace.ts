@@ -8,6 +8,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { writeFileWindowFully } from "../infra/file-descriptor.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
@@ -764,20 +765,6 @@ function parseMarketplaceContentLength(raw: string): number {
   return size;
 }
 
-async function writeMarketplaceChunk(
-  fileHandle: Awaited<ReturnType<typeof fs.open>>,
-  chunk: Uint8Array,
-): Promise<void> {
-  let offset = 0;
-  while (offset < chunk.length) {
-    const { bytesWritten } = await fileHandle.write(chunk, offset, chunk.length - offset);
-    if (bytesWritten <= 0) {
-      throw new Error("failed to write download chunk");
-    }
-    offset += bytesWritten;
-  }
-}
-
 async function streamMarketplaceResponseToFile(params: {
   response: Response & { body: ReadableStream<Uint8Array> };
   targetPath: string;
@@ -807,7 +794,7 @@ async function streamMarketplaceResponseToFile(params: {
         throw new Error(`download too large: ${nextTotal} bytes (limit: ${params.maxBytes} bytes)`);
       }
 
-      await writeMarketplaceChunk(fileHandle, value);
+      await writeFileWindowFully(fileHandle, value, null);
       total = nextTotal;
     }
   } catch (error) {

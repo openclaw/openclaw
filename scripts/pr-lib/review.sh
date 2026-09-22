@@ -34,8 +34,7 @@ review_claim() {
     local user_log
     user_log=".local/review-claim-user-attempt-$attempt.log"
 
-    # A relay's REST /user may identify its caller, not the local mutation writer.
-    if reviewer=$(pr_gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login 2>"$user_log"); then
+    if reviewer=$(pr_gh_writer_login 2>"$user_log"); then
       printf "%s\n" "$reviewer" >"$user_log"
       break
     elif [ "$?" -eq 75 ]; then
@@ -60,7 +59,7 @@ review_claim() {
     local claim_log
     claim_log=".local/review-claim-assignee-attempt-$attempt.log"
 
-    if pr_gh_plain pr edit "$pr" --add-assignee "$reviewer" >"$claim_log" 2>&1; then
+    if pr_gh_plain assign-reviewer "$pr" "$reviewer" >"$claim_log" 2>&1; then
       echo "review claim succeeded: @$reviewer assigned to PR #$pr"
       return 0
     elif [ "$?" -eq 75 ]; then
@@ -335,15 +334,21 @@ review_init() {
   local json pr_url
   # Metadata reads are read-only, so fetching before the side-effect marker keeps a
   # transient GitHub failure inside the lock's auto-release window.
-  json=$(pr_meta_json "$pr") || return 1
+  json=$(pr_meta_json "$pr" false) || return 1
 
   enter_worktree "$pr" true || return 1
-  write_pr_meta_files "$json"
+  if [ "$(printf '%s\n' "$json" | jq -r .baseRefOid)" != "$PR_MAIN_SHA" ]; then
+    # Cold provisioning can outlive the metadata's base. Collect a new snapshot
+    # before acquisition rather than compare files from different main states.
+    json=$(pr_meta_json "$pr" false) || return 1
+  fi
   pr_url=$(printf '%s\n' "$json" | jq -r .url)
 
   local expected_sha
   expected_sha=$(pr_view_string_field "$json" headRefOid "$pr") || return 1
-  fetch_pr_head "$pr" "$expected_sha" "refs/heads/pr-$pr" || return 1
+  fetch_pr_head "$pr" "$expected_sha" "refs/heads/pr-$pr" "$json" || return 1
+  verify_pr_metadata_identity "$pr" "$json" "$PR_HEAD_OBSERVATION" || return 1
+  write_pr_meta_files "$json"
   local mb
   mb=$(pr_git merge-base "$PR_MAIN_SHA" "refs/heads/pr-$pr")
 

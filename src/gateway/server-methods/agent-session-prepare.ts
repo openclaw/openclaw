@@ -16,7 +16,7 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   respondDeletedAgentSession,
   type RestoredCronContinuation,

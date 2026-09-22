@@ -11,12 +11,9 @@ import {
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
-  resolveNodeWorkerExecutionIssue,
   type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
-  type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
-import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
 import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
@@ -29,6 +26,8 @@ import {
 } from "./node-registry.system-run.js";
 import {
   createNodeRunnerStatePublisher,
+  waitForNodeRunnerAvailability,
+  collectNodeRunnerCatalogState,
   isNodeWorkerHostClientId,
   isNodeWorkerSupervisorProofCurrent,
   resolveNodeRunnerInventoryIssue,
@@ -585,6 +584,23 @@ export function setNodeRunnerStateChangedListener(
   state.runnerState.setListener(listener);
 }
 
+export function waitForNodeWorkerSupervisor(
+  nodeRegistry: object,
+  nodeId: string,
+  options: Parameters<typeof waitForNodeRunnerAvailability>[3],
+): Promise<void> {
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
+  if (!state) {
+    throw new Error("node registry private runtime was not initialized");
+  }
+  return waitForNodeRunnerAvailability(
+    state.runnerState,
+    state.workerSupervisorTransport,
+    nodeId,
+    options,
+  );
+}
+
 export function reconcileNodeRunnerAvailability(nodeRegistry: object, nodeId: string): void {
   const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
   if (!state) {
@@ -648,44 +664,16 @@ export function collectNodeCatalogRuntimeState(
   >,
   requireWorkerExecution = false,
 ) {
-  const sessionHostNodeIds = new Set<string>();
-  const issuesByNodeId = new Map<string, NodeRunnerInventoryIssue[]>();
-  const workerSlotsByNodeId = new Map<string, NodeWorkerCapacitySnapshot>();
-  const workerBundleByNodeId = new Map<string, NodeWorkerBundleStatus>();
   const state = NODE_REGISTRY_PRIVATE_STATES.get(registry);
-  // This synchronous projection reads one current connection per supplied snapshot row;
-  // it must not reload pairing, publish presence, or admit worker execution.
-  for (const node of connectedNodes) {
-    const current = state?.context.getNode(node.nodeId);
-    if (!state || !current || current.connId !== node.connId) {
-      continue;
-    }
-    const proof = resolveNodeWorkerSupervisorProof(current, state.runnerInventoryByConn);
-    if (proof && proof.pairingGeneration === node.pairingGeneration) {
-      sessionHostNodeIds.add(node.nodeId);
-    }
-    const issue =
-      resolveNodeRunnerInventoryIssue(current, state.runnerInventoryByConn) ??
-      (requireWorkerExecution && proof
-        ? resolveNodeWorkerExecutionIssue(proof.workerHost)
-        : undefined);
-    if (issue) {
-      issuesByNodeId.set(node.nodeId, [issue]);
-    }
-    if (proof) {
-      workerSlotsByNodeId.set(node.nodeId, { ...proof.workerHost.capacity });
-    }
-    const observation = state.bundleStatusByConn.get(node.connId);
-    if (observation) {
-      workerBundleByNodeId.set(node.nodeId, structuredClone(observation.status));
-    }
-  }
-  return {
-    sessionHostNodeIds,
-    issuesByNodeId,
-    workerSlotsByNodeId,
-    workerBundleByNodeId,
-  };
+  return collectNodeRunnerCatalogState({
+    connectedNodes,
+    requireWorkerExecution,
+    state: state && {
+      getNode: state.context.getNode,
+      runnerInventoryByConn: state.runnerInventoryByConn,
+      bundleStatusByConn: state.bundleStatusByConn,
+    },
+  });
 }
 
 export function isNodeRegistryPendingInvokeConnectionActive(params: {

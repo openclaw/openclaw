@@ -293,6 +293,9 @@ export async function loadStatusScanModuleForTest(
   vi.doMock("../gateway/probe.js", () => ({
     probeGateway: mocks.probeGateway,
   }));
+  vi.doMock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+    waitForGatewayDiagnosticReadiness: async () => undefined,
+  }));
   vi.doMock("../gateway/probe-target.js", () => ({
     resolveGatewayProbeTarget: mocks.resolveGatewayProbeTarget,
   }));
