@@ -18,6 +18,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   identifiedClient,
@@ -36,25 +37,30 @@ async function search(
   client: GatewayClient,
   params: Record<string, unknown>,
 ) {
-  await initializeSessionReadContext(context);
-  let response:
-    | { ok: boolean; payload?: SessionsSearchResult; error?: { message?: string } }
-    | undefined;
-  const respond: RespondFn = (ok, payload, error) => {
-    response = { ok, payload: payload as SessionsSearchResult, error };
-  };
-  await expectDefined(
-    sessionReadHandlers["sessions.search"],
-    "search handler",
-  )({
-    req: { type: "req", id: "search-scope-test", method: "sessions.search" },
-    params,
-    context,
-    client,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  return expectDefined(response, "search response");
+  const releaseForeground = retainSessionListForegroundWork();
+  try {
+    await initializeSessionReadContext(context);
+    let response:
+      | { ok: boolean; payload?: SessionsSearchResult; error?: { message?: string } }
+      | undefined;
+    const respond: RespondFn = (ok, payload, error) => {
+      response = { ok, payload: payload as SessionsSearchResult, error };
+    };
+    await expectDefined(
+      sessionReadHandlers["sessions.search"],
+      "search handler",
+    )({
+      req: { type: "req", id: "search-scope-test", method: "sessions.search" },
+      params,
+      context,
+      client,
+      respond,
+      isWebchatConnect: () => false,
+    });
+    return expectDefined(response, "search response");
+  } finally {
+    releaseForeground();
+  }
 }
 
 async function seed(

@@ -41,6 +41,12 @@ import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
+export type ChatHistoryRunObservation = {
+  runId: string;
+  sessionId: string;
+  isCurrent: () => boolean;
+};
+
 export type ChatRunError = {
   kind?: "auth_refresh";
   summary: string;
@@ -511,11 +517,8 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
 }
 
 function sessionKeysFor(host: RunLifecycleHost, options: ReconcileOptions): Set<string> {
-  const keys = new Set<string>();
   const primary = toSessionKey(options.sessionKey) ?? host.sessionKey;
-  if (primary) {
-    keys.add(primary);
-  }
+  const keys = new Set(primary ? [primary] : []);
   if (uiSessionRowMatchesSelectedChat(host, "global", primary)) {
     keys.add("global");
   }
@@ -716,7 +719,11 @@ export function reconcileChatRunAfterSessionStatePublication(host: RunLifecycleH
 export function reconcileChatRunFromSessionRow(
   host: RunLifecycleHost,
   row: GatewaySessionRow,
-  options: { publishRunStatus?: boolean } = {},
+  options: {
+    publishRunStatus?: boolean;
+    // Null marks history with no usable run observation.
+    historyRun?: ChatHistoryRunObservation | null;
+  } = {},
 ): boolean {
   if (!uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey, row.agentId)) {
     return false;
@@ -741,6 +748,28 @@ export function reconcileChatRunFromSessionRow(
     return false;
   }
   const runId = host.chatRunId;
+  if (runId && row.lastRunId !== runId && (row.lastRunId || options.historyRun !== undefined)) {
+    const historyRun = options.historyRun;
+    if (
+      row.hasActiveRun !== false ||
+      !historyRun ||
+      historyRun.runId !== runId ||
+      historyRun.sessionId !== row.sessionId ||
+      !historyRun.isCurrent()
+    ) {
+      return false;
+    }
+    // A fresh idle read can retire custody without identifying this run's outcome.
+    // An identity-less response still cannot retire a run that began after issuance.
+    reconcileChatRunLifecycle(host, {
+      runId,
+      clearLocalRun: true,
+      clearChatStream: true,
+      clearToolStreamForRun: true,
+      clearRunStatus: true,
+    });
+    return true;
+  }
   let errorMessage: string | undefined;
   if (runId && row.lastRunId === runId && (row.status === "failed" || row.status === "timeout")) {
     // Session publication can beat (or replace) chat.error. Show its diagnostic

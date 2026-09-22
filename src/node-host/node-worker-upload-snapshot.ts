@@ -1,38 +1,34 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
 import fsp from "node:fs/promises";
-import path from "node:path";
 import { workspaceStatIdentity } from "../gateway/worker-environments/workspace-hash-memo.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
-import { resolveOpenedFileRealPathForHandle } from "../infra/fs-safe.js";
-import { isPathInside } from "../infra/path-guards.js";
-import { tempWorkspace } from "../infra/private-temp-workspace.js";
+import { root, type Root } from "../infra/fs-safe.js";
+import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 type UploadSource = { path: string; size: number; sha256: string };
+type UploadFile = { name: string; size: number };
+type UploadSnapshot = {
+  files: UploadFile[];
+  stream(
+    file: UploadFile,
+    write: (chunk: Buffer) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<void>;
+};
 
 async function stageUploadSource(params: {
   source: UploadSource;
-  workspaceDir: string;
+  workspace: Root;
   destination: string;
   signal?: AbortSignal;
 }): Promise<void> {
-  const source = await fsp.open(
-    params.source.path,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  const destination = await fsp
-    .open(params.destination, "wx", 0o600)
-    .catch(async (error: unknown) => {
-      await source.close();
-      throw error;
-    });
+  // Manifest paths are literal, including a leading "~/" directory.
+  await using opened = await params.workspace.open(`./${params.source.path}`);
+  const source = opened.handle;
+  const destination = await fsp.open(params.destination, "wx", 0o600);
   try {
     const before = await source.stat({ bigint: true });
-    const realPath = await resolveOpenedFileRealPathForHandle(source, params.source.path);
-    if (!before.isFile() || !isPathInside(params.workspaceDir, realPath)) {
-      throw new Error("workspace changed while preparing its transfer snapshot");
-    }
     const identity = workspaceStatIdentity("worker", before);
     const hash = createHash("sha256");
     const offset = await copyFileHandle(source, destination, {
@@ -51,49 +47,52 @@ async function stageUploadSource(params: {
       throw new Error("workspace changed while preparing its transfer snapshot");
     }
   } finally {
-    await Promise.allSettled([source.close(), destination.close()]);
+    await destination.close().catch(() => undefined);
   }
 }
 
 /** Freezes changed workspace bytes before the transfer request can observe later writes. */
-export async function createNodeWorkerUploadSnapshot(params: {
-  workspaceDir: string;
-  sources: UploadSource[];
-  signal?: AbortSignal;
-}) {
-  const workspace = await tempWorkspace({
-    rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "worker-workspace-upload-",
-  });
-  try {
-    const workspaceDir = await fsp.realpath(params.workspaceDir);
-    const files: Array<{ path: string; size: number }> = [];
-    for (const [index, source] of params.sources.entries()) {
-      const stagedPath = path.join(workspace.dir, String(index));
-      await stageUploadSource({
-        source,
-        workspaceDir,
-        destination: stagedPath,
-        signal: params.signal,
+export async function withNodeWorkerUploadSnapshot<T>(
+  params: {
+    workspaceDir: string;
+    sources: UploadSource[];
+    signal?: AbortSignal;
+  },
+  upload: (snapshot: UploadSnapshot) => Promise<T>,
+): Promise<T> {
+  return await withTempWorkspace(
+    {
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "worker-workspace-upload-",
+    },
+    async (workspace) => {
+      const sourceRoot = await root(params.workspaceDir, {
+        hardlinks: "allow",
+        nonBlockingRead: true,
+        symlinks: "follow-parents-within-root",
       });
-      files.push({ path: stagedPath, size: source.size });
-    }
-    return {
-      files,
-      cleanup: async () => await workspace.cleanup(),
-      stream: async (file: (typeof files)[number], write: (chunk: Buffer) => Promise<void>) => {
-        const handle = await fsp.open(file.path, constants.O_RDONLY | constants.O_NOFOLLOW);
-        try {
-          for await (const value of handle.createReadStream({ autoClose: false })) {
+      const stagedRoot = await workspace.store.root();
+      const files: UploadFile[] = [];
+      for (const [index, source] of params.sources.entries()) {
+        const name = String(index);
+        await stageUploadSource({
+          source,
+          workspace: sourceRoot,
+          destination: workspace.path(name),
+          signal: params.signal,
+        });
+        files.push({ name, size: source.size });
+      }
+      return await upload({
+        files,
+        stream: async (file, write, signal) => {
+          signal?.throwIfAborted();
+          await using handle = (await stagedRoot.open(file.name)).handle;
+          for await (const value of handle.createReadStream({ autoClose: false, signal })) {
             await write(Buffer.isBuffer(value) ? value : Buffer.from(value));
           }
-        } finally {
-          await handle.close();
-        }
-      },
-    };
-  } catch (error) {
-    await workspace.cleanup();
-    throw error;
-  }
+        },
+      });
+    },
+  );
 }

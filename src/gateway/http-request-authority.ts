@@ -71,7 +71,7 @@ export function captureHttpRequestAuthority(
 }
 
 export function bindHttpResponseAuthority<T>(
-  auth: T & { operatorAccessAuthority?: PluginGatewayAccessAuthority },
+  auth: T & { operatorAccessAuthority?: PluginGatewayAccessAuthority | null },
   res: ServerResponse,
   hasCurrentClientAuthority: () => boolean,
 ): T & GatewayHttpResponseAuthority {

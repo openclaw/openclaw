@@ -24,6 +24,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import { createUiTestShardGroups } from "../../scripts/lib/ci-node-test-plan.mts";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { resolveRunVitestSpawnEnv } from "../../scripts/lib/vitest-process-env.mts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
@@ -5232,7 +5234,7 @@ server.listen(0, "127.0.0.1", () => {
                 "!**/node_modules/**",
                 "!.ci-harness/**",
               ]);
-              const prefix = `openclaw/openclaw-vitest-fs-v3-protected-${os}-X64-node-24.x-${generation}-`;
+              const prefix = `openclaw/openclaw-vitest-fs-v4-protected-${os}-X64-node-24.x-${generation}-`;
               expect(cacheInputs).toEqual({
                 path: "/var/tmp/openclaw-vitest-fs-cache",
                 key: `${prefix}10-2`,
@@ -5367,11 +5369,11 @@ server.listen(0, "127.0.0.1", () => {
     expect(readerStep.if).toContain("inputs.restore-test-caches == 'true'");
     expect(readerStep.if).toContain("runner.os != 'Windows'");
     expect(readerStep.if).not.toMatch(/runner\.(?:environment|labels|name)/u);
-    expect(readerStep.with.key).toContain("vitest-fs-v3-protected-");
+    expect(readerStep.with.key).toContain("vitest-fs-v4-protected-");
     expect(readerStep.with.key).toContain("github.run_id");
     expect(readerStep.with.key).toContain("github.run_attempt");
     expect(configureStep.if).toContain("inputs.restore-test-caches == 'true'");
-    expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root");
+    expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT=$cache_root");
     expect(configureStep.run).toContain(".openclaw-transform-generation");
     expect(configureStep.run).not.toContain("protected Vitest transform seed");
     expect(configureStep.env.CACHE_WRITER).toBe("0");
@@ -5561,8 +5563,8 @@ server.listen(0, "127.0.0.1", () => {
     const checkoutStep = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Checkout",
     );
-    const seedStep = warmer.jobs.warm.steps.find(
-      (step: WorkflowStep) => step.name === "Select cache seed",
+    const bunSetup = warmer.jobs.warm.steps.find(
+      (step: WorkflowStep) => step.name === "Setup pinned Bun test runtime",
     );
     const warmStep = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Warm transform and compile caches",
@@ -5653,10 +5655,10 @@ server.listen(0, "127.0.0.1", () => {
             "vitest-fs-cache": "true",
             "vitest-worker-cache": String(full),
           });
-          for (const step of [buildStep, boundaryCleanupStep, seedStep]) {
+          for (const step of [buildStep, boundaryCleanupStep]) {
             expect(evaluateWorkflowExpression(step.if, context), step.name).toBe(full);
           }
-          for (const step of [boundaryPrepareStep, warmStep]) {
+          for (const step of [boundaryPrepareStep, bunSetup, warmStep]) {
             expect(step.if, step.name).toBeUndefined();
           }
           expect(evaluateWorkflowExpression(warmAssertionStep.if, context)).toBe(true);
@@ -5666,31 +5668,27 @@ server.listen(0, "127.0.0.1", () => {
         }
       }
     }
-    for (const [platform, collector] of [
-      ["linux", "ci-run-node-test-shard"],
-      ["linux-hosted", "ci-warm-hosted-vitest-caches"],
-    ]) {
+    expect(bunSetup.uses).toBe("./.github/actions/setup-test-bun");
+    expect(warmerSteps.indexOf(bunSetup)).toBeLessThan(warmerSteps.indexOf(warmStep));
+    expect(
+      warmer.jobs.dependencies.steps.some(
+        (step: WorkflowStep) => step.uses === "./.github/actions/setup-test-bun",
+      ),
+    ).toBe(false);
+    for (const platform of ["linux", "linux-hosted"]) {
       const invocation = runWorkflowShellScript(
         `node() { printf '%s\\n' "$*"; return 23; }\n${warmStep.run}`,
         { env: { ...process.env, CACHE_WARM_PLATFORM: platform } },
       );
       expect(invocation.stdout.trim(), invocation.stderr).toBe(
-        `--import tsx scripts/${collector}.mts`,
+        "--import tsx scripts/ci-warm-vitest-caches.mts",
       );
       expect(invocation.status, invocation.stderr).toBe(23);
     }
     expect(warmer.on).not.toHaveProperty("workflow_run");
     expect(checkoutStep.with).toBeUndefined();
     expect(warmerSource).toContain('cron: "17 8 * * *"');
-    expect(seedStep.run).toContain(
-      'import { createVitestCacheWarmGroups } from "./scripts/lib/ci-node-test-plan.mts";',
-    );
-    expect(seedStep.run).toMatch(
-      /const groups = createVitestCacheWarmGroups\(\);[\s\S]*appendFileSync\(\s*process\.env\.GITHUB_ENV,[\s\S]*OPENCLAW_NODE_TEST_GROUPS_JSON=\$\{JSON\.stringify\(groups\)\}/u,
-    );
     expect(warmerSource).not.toContain("OPENCLAW_NODE_TEST_CONFIGS_JSON");
-    expect(warmerSource).toContain('"OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1"');
-    expect(seedStep.run).toContain('"OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1"');
     expect(warmStep.id).toBe("warm-caches");
     expect(warmStep["continue-on-error"]).toBe(true);
     expect(warmStep.env).toMatchObject({
@@ -5736,7 +5734,7 @@ server.listen(0, "127.0.0.1", () => {
           warmerSteps.findIndex((step) => step.name === "Warm build cache"),
         );
         expect(warmerSteps.indexOf(saveStep), saveStep.name).toBeLessThan(
-          warmerSteps.indexOf(seedStep),
+          warmerSteps.indexOf(warmStep),
         );
         expect(saveStep.if).not.toMatch(/always\(|failure\(/u);
       } else if (saveStep.name === "Save native SDK boundary cache") {
@@ -5760,7 +5758,6 @@ server.listen(0, "127.0.0.1", () => {
     // No close-time cleanup workflow is needed; Actions cache LRU/TTL expires
     // old hosted-writer and warmer generations.
     expect(existsSync(".github/workflows/pr-cache-cleanup.yml")).toBe(false);
-    expect(seedStep.if).toBe("${{ matrix.platform == 'linux' }}");
     expect(warmStep.if).toBeUndefined();
     const distSave = expectDefined(
       saveSteps.find((step) => step.name === "Save dist build cache"),
@@ -8668,11 +8665,46 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   );
 
   it.each([
-    { label: "current", frozenTarget: false, compatibilityTarget: false, shards: [1, 2, 3] },
-    { label: "frozen current", frozenTarget: true, compatibilityTarget: false, shards: [1] },
-    { label: "frozen legacy", frozenTarget: true, compatibilityTarget: true, shards: [1] },
+    {
+      label: "current",
+      frozenTarget: false,
+      compatibilityTarget: false,
+      policy: "bun-compatible",
+      runtimes: ["node", "bun"],
+      shards: [1, 2, 3],
+    },
+    {
+      label: "frozen current",
+      frozenTarget: true,
+      compatibilityTarget: false,
+      policy: "dual",
+      runtimes: ["node", "bun"],
+      shards: [1],
+    },
+    {
+      label: "frozen legacy",
+      frozenTarget: true,
+      compatibilityTarget: true,
+      policy: "node",
+      runtimes: ["node"],
+      shards: [1],
+    },
   ])("executes the $label standalone UI envelope", async (scenario) => {
     const workflow = readCiWorkflow();
+    expect(workflow.env?.BUN_JSC_useFTLJIT).toBeUndefined();
+    const ftlSteps: string[] = [];
+    for (const [name, job] of Object.entries<{
+      env?: Record<string, unknown>;
+      steps?: WorkflowStep[];
+    }>(workflow.jobs)) {
+      expect(job.env?.BUN_JSC_useFTLJIT).toBeUndefined();
+      for (const step of job.steps ?? []) {
+        if (step.env?.BUN_JSC_useFTLJIT !== undefined) {
+          ftlSteps.push(`${name}/${step.name}`);
+        }
+      }
+    }
+    expect(ftlSteps).toEqual([]);
     const ui = workflow.jobs["checks-ui"];
     const lint = ui.steps.find(
       (step: WorkflowStep) => step.name === "Lint Control UI window.open usage",
@@ -8693,10 +8725,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "retention-days": 7,
       },
     });
+    const uiGroups = createUiTestShardGroups({
+      includeReleaseOnlyTests: scenario.frozenTarget || scenario.compatibilityTarget,
+    }).ui;
     const context = {
       eventName: scenario.frozenTarget ? "workflow_dispatch" : "pull_request",
       frozenTarget: scenario.frozenTarget,
-      preflightOutputs: { compatibility_target: String(scenario.compatibilityTarget) },
+      preflightOutputs: {
+        compatibility_target: String(scenario.compatibilityTarget),
+        ui_test_runtime_policy: scenario.policy,
+        ui_test_groups_gzip_base64: encodeNodeTestGroups(uiGroups),
+      },
       repository: "openclaw/openclaw",
       runAttempt: 1,
       runnerBackend: "hybrid",
@@ -8749,6 +8788,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         ]),
       );
       expect(env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY).toBe("1");
+      expect(env.BUN_JSC_useFTLJIT).toBeUndefined();
       expect(env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR).toBe(
         `${root}/.artifacts/control-ui-e2e-timeouts/ui-shard-${shard}-attempt-1`,
       );
@@ -8781,6 +8821,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON = readFileSync(argsPath, "utf8");
         expect(JSON.parse(env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON)).toEqual(flags);
         const forwarded: string[][] = [];
+        const runtimes: Array<string | undefined> = [];
         expect(
           await runShardPlans(resolveShardPlans(env), {
             concurrency: Number(env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY),
@@ -8788,6 +8829,42 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             scratchDir: root,
             runChild: async (args, childEnv) => {
               forwarded.push(args);
+              runtimes.push(childEnv.OPENCLAW_VITEST_RUNTIME);
+              expect(childEnv.BUN_JSC_useFTLJIT).toBeUndefined();
+              if (uiGroups[0]?.includePatterns) {
+                expect(
+                  JSON.parse(readFileSync(childEnv.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
+                ).toEqual(uiGroups[0].includePatterns);
+              } else {
+                expect(childEnv.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
+              }
+              const includeFile = childEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
+              if (
+                childEnv.OPENCLAW_VITEST_RUNTIME === "bun" ||
+                scenario.policy === "bun-compatible"
+              ) {
+                expect(includeFile).toBeTruthy();
+                const included = JSON.parse(readFileSync(includeFile!, "utf8"));
+                const nodeFiles = [
+                  "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
+                  "ui/src/pages/usage/usage-page-details.test.ts",
+                ];
+                if (childEnv.OPENCLAW_VITEST_RUNTIME === "node") {
+                  expect(included.toSorted()).toEqual(nodeFiles);
+                } else {
+                  expect(included.length).toBeGreaterThan(1000);
+                  expect(included.filter((file: string) => nodeFiles.includes(file))).toEqual([]);
+                  if (uiGroups[0]?.includePatterns) {
+                    expect(included.toSorted()).toEqual(
+                      uiGroups[0].includePatterns
+                        .filter((file) => !nodeFiles.includes(file))
+                        .toSorted(),
+                    );
+                  }
+                }
+              } else {
+                expect(includeFile).toBeUndefined();
+              }
               expect(childEnv.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("1");
               expect(childEnv.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR).toBe(
                 resolveValue(test.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR),
@@ -8796,7 +8873,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             },
           }),
         ).toBe(0);
-        expect(forwarded).toEqual([["ui/vitest.config.ts", "--", ...flags]]);
+        expect(runtimes).toEqual(scenario.runtimes);
+        expect(forwarded).toEqual(
+          scenario.runtimes.map(() => ["ui/vitest.config.ts", "--", ...flags]),
+        );
       }
     }
     const calls = readFileSync(callsPath, "utf8").trim().split("\n");
@@ -9312,14 +9392,27 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(step["continue-on-error"]).not.toBe(true);
     const root = tempDirs.make("openclaw-browser-proof-report-");
     const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
-    const fullName =
-      "native host registration launches with the exact custom installation context when Chrome has no selectors";
-    const assertion = {
-      fullName: state === "wrong-name" ? "another test" : fullName,
-      status: ["skipped", "pending", "todo", "failed"].includes(state) ? state : "passed",
-    };
-    const assertions =
-      state === "absent" ? [] : state === "duplicate" ? [assertion, assertion] : [assertion];
+    const names = [
+      "does not inspect or migrate configuration before rejecting a malformed native request",
+      "rejects an unauthorized bootstrap caller before config, keys or database creation",
+      "rejects an unauthorized ensure_relay caller before config, keys or database creation",
+      'preserves invalid-config diagnostics for ordinary extension command "status"',
+      'preserves invalid-config diagnostics for ordinary extension command "setup"',
+      'preserves invalid-config diagnostics for ordinary extension command "pair"',
+      "launches launcher with the exact custom installation context when Chrome has no selectors",
+      "launches cli with the exact custom installation context when Chrome has no selectors",
+    ];
+    const assertions = names.map((name, index) => ({
+      fullName:
+        state === "wrong-name" && index === 0 ? "another test" : `native host registration ${name}`,
+      status:
+        index === 0 && ["skipped", "pending", "todo", "failed"].includes(state) ? state : "passed",
+    }));
+    if (state === "absent") {
+      assertions.pop();
+    } else if (state === "duplicate") {
+      assertions[1] = assertions[0]!;
+    }
     const report = {
       success: state !== "failed" && state !== "suite-failed",
       numFailedTestSuites: state === "suite-failed" ? 1 : 0,

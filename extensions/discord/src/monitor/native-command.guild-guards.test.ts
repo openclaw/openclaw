@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { ChannelType } from "discord-api-types/v10";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -13,6 +10,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discordPlugin } from "../channel.js";
 import type { CommandInteraction } from "../internal/discord.js";
@@ -21,7 +19,7 @@ import { createDiscordNativeCommand } from "./native-command.js";
 import { createMockCommandInteraction } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
 
-const directories: string[] = [];
+let state: OpenClawTestState;
 const userId = "100000000000000003";
 const channelId = "100000000000000001";
 const guildId = "100000000000000002";
@@ -31,9 +29,7 @@ const sessionId = "existing-channel-session";
 afterEach(async () => {
   clearRuntimeConfigSnapshot();
   setActivePluginRegistry(createTestRegistry());
-  await Promise.all(
-    directories.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+  await state.cleanup();
 });
 
 async function runNativeCommand(params: {
@@ -42,13 +38,11 @@ async function runNativeCommand(params: {
   configuredBinding?: boolean;
   label: string;
 }) {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "discord-guild-guards-"));
-  directories.push(home);
-  const storePath = path.join(home, "sessions.json");
+  const storePath = state.path("sessions.json");
   const sessionKey = `agent:main:discord:channel:${channelId}`;
   const scope = { agentId: "main", storePath, sessionKey };
   const cfg: OpenClawConfig = {
-    agents: { defaults: { workspace: home } },
+    agents: { defaults: { workspace: state.workspaceDir } },
     session: { store: storePath },
     commands: { allowFrom: { discord: [`user:${userId}`] } },
     ...(params.configuredBinding
@@ -113,7 +107,8 @@ async function runNativeCommand(params: {
 }
 
 describe("discord native command guild guards", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ label: "discord-guild-guards" });
     setDiscordRuntime(createPluginRuntimeMock());
   });
 

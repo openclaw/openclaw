@@ -23,7 +23,15 @@ const resolveUserProfileId = vi.hoisted(() => vi.fn());
 
 vi.mock("../../state/user-profile-writes.js", () => ({
   linkCanonicalUserProfileEmail: linkEmail,
-  setCanonicalUserProfileRole: setUserProfileRole,
+  setCanonicalUserProfileRole: async (
+    ...args: Parameters<
+      typeof import("../../state/user-profile-writes.js").setCanonicalUserProfileRole
+    >
+  ) => {
+    const profile = await setUserProfileRole(...args);
+    args[2]?.onCommitted?.(profile.id);
+    return profile;
+  },
 }));
 
 vi.mock("../../state/user-profiles.js", async () => {
@@ -453,6 +461,7 @@ describe("users gateway methods", () => {
     expect(validateUsersSetRoleResult(respond.mock.calls[0]?.[1])).toBe(true);
     expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, "guest", {
       assertCurrent: expect.any(Function),
+      onCommitted: expect.any(Function),
     });
     expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
     expect(invalidateOperatorRolePolicy.mock.invocationCallOrder[0]).toBeLessThan(
@@ -505,6 +514,7 @@ describe("users gateway methods", () => {
     expect(respond).toHaveBeenCalledWith(true, { profile });
     expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, null, {
       assertCurrent: expect.any(Function),
+      onCommitted: expect.any(Function),
     });
     expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
   });

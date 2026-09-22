@@ -1,6 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
+type PendingTransactionState = {
+  commit: () => void;
+  prepareObservers?: () => void;
+  rollback: (error: unknown) => void;
+};
+
 // One connection can cross native and transformed SDK module graphs mid-transaction.
 const pendingPublications = resolveGlobalSingleton(
   Symbol.for("openclaw.sqlitePostCommitPublications"),
@@ -8,8 +14,7 @@ const pendingPublications = resolveGlobalSingleton(
 );
 const pendingTransactionState = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteTransactionState"),
-  () =>
-    new WeakMap<DatabaseSync, Array<{ commit: () => void; rollback: (error: unknown) => void }>>(),
+  () => new WeakMap<DatabaseSync, PendingTransactionState[]>(),
 );
 
 /** Snapshots read within this managed transaction can still roll back. */
@@ -29,18 +34,22 @@ export function deferSqlitePostCommitPublication(db: DatabaseSync, publish: () =
 
 /**
  * Stage private transaction-local state that publishes before fallible observers.
- * Stage, rollback, and commit callbacks must not throw.
+ * Observer preparation follows every committed state update. All callbacks must not throw.
  */
 export function stageSqliteTransactionState(
   db: DatabaseSync,
-  state: { stage: () => void; rollback: (error: unknown) => void; commit: () => void },
+  state: PendingTransactionState & { stage: () => void },
 ): boolean {
   const pending = pendingTransactionState.get(db);
   if (!pending) {
     return false;
   }
   state.stage();
-  pending.push({ commit: state.commit, rollback: state.rollback });
+  pending.push({
+    commit: state.commit,
+    prepareObservers: state.prepareObservers,
+    rollback: state.rollback,
+  });
   return true;
 }
 
@@ -85,6 +94,9 @@ export function withSqlitePostCommitPublications<T>(db: DatabaseSync, transactio
   if (!nested) {
     for (const state of transactionState ?? []) {
       state.commit();
+    }
+    for (const state of transactionState ?? []) {
+      state.prepareObservers?.();
     }
     for (const publish of publications ?? []) {
       publish();

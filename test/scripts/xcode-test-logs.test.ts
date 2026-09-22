@@ -105,10 +105,30 @@ it("routes each iOS simulator test through workflow-owned log capture and retain
     if (name.includes("Apple Watch")) expect(run).toContain("-showBuildSettings -json |");
   }
 
+  const attachments = steps.find(
+    (step) => step.name === "Prove native managed document download and export",
+  );
+  expect(attachments?.run).toBe('/bin/bash scripts/test-ios-chat-attachments.sh "$BASELINE_SHA"');
+  expect(attachments?.if).toBe(
+    "matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'",
+  );
+  const smoke = steps.find((step) => step.name === "Run focused iOS voice cleanup simulator tests");
+  expect(smoke?.if).toContain("matrix.phase == 'smoke'");
+  for (const suite of [
+    "ManagedDocumentEnvelopeTests",
+    "IOSMediaArtifactLoaderTests",
+    "OpenClawTypographyTests",
+  ]) {
+    expect(smoke?.run).toContain(`-only-testing:OpenClawTests/${suite}`);
+  }
+
   const upload = steps.find((step) => step.name === "Upload iOS lifecycle simulator evidence");
   expect(upload?.if).toContain("always()");
+  expect(upload?.if).toContain("steps.ios_attachment_tests.outcome");
   expect(upload?.with?.path?.trim().split("\n")).toEqual([
     "apps/ios/build/LifecycleTestResults/*.xcresult",
     "apps/ios/build/LifecycleTestResults/*.log",
+    "apps/ios/build/LifecycleTestResults/Attachment-*",
+    "apps/ios/build/LifecycleTestResults/attachments-*",
   ]);
 });

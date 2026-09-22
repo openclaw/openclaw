@@ -4824,7 +4824,14 @@ private fun AttachmentStrip(
     val chipMaxWidth = maxWidth
     Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
       attachments.forEach { attachment ->
-        AttachmentChip(attachment = attachment, maxWidth = chipMaxWidth, onRemove = { onRemoveAttachment(attachment.id) })
+        if (attachment.mimeType.startsWith("image/")) {
+          Column(modifier = Modifier.width(minOf(160.dp, chipMaxWidth)), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            ChatBase64Image(base64 = attachment.base64, mimeType = attachment.mimeType, source = Base64ImageSource.Composer)
+            AttachmentChip(attachment = attachment, maxWidth = minOf(160.dp, chipMaxWidth), onRemove = { onRemoveAttachment(attachment.id) })
+          }
+        } else {
+          AttachmentChip(attachment = attachment, maxWidth = chipMaxWidth, onRemove = { onRemoveAttachment(attachment.id) })
+        }
       }
     }
   }

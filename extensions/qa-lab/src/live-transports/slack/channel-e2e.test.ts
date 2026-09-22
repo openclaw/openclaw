@@ -186,6 +186,26 @@ describe("Slack agent E2E ownership", () => {
   });
 
   it.each([
+    { stage: "readiness", operation: "driver auth.test" },
+    { stage: "mutation", operation: "chat.postMessage" },
+  ])("preserves only sanitized SDK failure context during $stage", async ({ stage, operation }) => {
+    const f = fixture();
+    const failure = Object.assign(new Error("Authorization: secret-fixture"), {
+      data: { error: "missing_scope", needed: "chat:write" },
+      headers: { authorization: "secret-fixture" },
+      cause: new Error("secret-fixture"),
+    });
+    const action =
+      stage === "readiness" ? f.driverClient.auth.test : f.driverClient.chat.postMessage;
+    action.mockRejectedValueOnce(failure);
+
+    await expect(f.session.driver.send({ text: "sanitized failure" })).rejects.toMatchObject({
+      message: `Slack ${operation}: missing_scope; needed=chat:write`,
+      cause: "missing_scope; needed=chat:write",
+    });
+  });
+
+  it.each([
     { terminal: "unanswered", outcome: "uncertain", reason: "response-not-captured" },
     { terminal: "error", outcome: "uncertain", reason: "transport-error" },
     { terminal: "undecodable", outcome: "uncertain", reason: "response-undecodable" },

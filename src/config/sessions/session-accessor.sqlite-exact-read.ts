@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { SessionMetadataUnavailableError } from "../../state/openclaw-agent-db-read-error.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -9,6 +8,7 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";

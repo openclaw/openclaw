@@ -48,8 +48,7 @@ describePosix("native PR main refresh boundaries", () => {
   ])("%s acquires the authenticated head despite a stale pull ref", (command) => {
     const f = fixture();
     if (command === "prepare-sync-head" || command === "merge-verify") {
-      const prepared = f.run("prepare-run");
-      expect(prepared.status, prepared.stdout + prepared.stderr).toBe(0);
+      f.seedPreparedMerge();
     }
     f.git(f.origin, "update-ref", "refs/pull/42/head", f.main);
     const result = f.run(command);
@@ -385,8 +384,7 @@ ${readFileSync(gitShim, "utf8")}
 
   it("completes supervised merge with two checkpoints and releases its exact lock after cleanup", () => {
     const f = fixture();
-    const prepare = f.run("prepare-run");
-    expect(prepare.status, prepare.stdout + prepare.stderr).toBe(0);
+    f.seedPreparedMerge();
     const before = f.events().length;
     const result = f.run("merge-run");
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -945,8 +943,7 @@ read -r release < "$OPENCLAW_TEST_FETCH_HOLD"
     "refreshes after CI and required checks with strict drift=%s",
     (strict) => {
       const f = fixture();
-      const prepare = f.run("prepare-run");
-      expect(prepare.status, prepare.stdout + prepare.stderr).toBe(0);
+      f.seedPreparedMerge();
       // This case owns the nonhosted watcher's post-wait refresh contract.
       writeFileSync(join(f.local, "gates.env"), "GATES_MODE=full\n");
       f.configure({ moveAtCi: true });
@@ -1175,7 +1172,7 @@ fi`,
 
   it("rejects a moved prepared branch without consuming CI proof", () => {
     const f = fixture();
-    expect(f.run("prepare-run").status).toBe(0);
+    f.seedPreparedMerge();
     const stamp = readFileSync(join(f.local, "prep.env"), "utf8");
     f.git(f.worktree, "update-ref", "refs/heads/pr-42-prep", f.sameTreeHead);
     const result = f.run("merge-verify");

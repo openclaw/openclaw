@@ -10,7 +10,7 @@ import {
 } from "./openclaw-state-db.js";
 import { executeUserChannelIdentityChange } from "./user-channel-identities.worker.js";
 import { listUserProfileGitHubLogins } from "./user-profile-github-identity.js";
-import { listUserProfilesSync } from "./user-profile-list.js";
+import { listUserProfilesSync } from "./user-profile-identity.read.js";
 import {
   executeUserProfileWrite,
   isUserProfileWriteCommand,

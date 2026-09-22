@@ -420,10 +420,9 @@ export async function updateGitInstall(params: {
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   channel: UpdateChannel;
-  tag: string;
   devTarget?: DevUpdateTarget;
-  beforeGitMutation?: UpdateRunnerOptions["beforeGitMutation"];
-  validateCandidate: (root: string) => Promise<void>;
+  beforeGitMutation: UpdateRunnerOptions["beforeGitMutation"];
+  validateCandidate: UpdateRunnerOptions["validateCandidate"];
   assertCurrent?: () => void;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   onConfigSnapshot?: Parameters<typeof runPackageUpdateDoctor>[0]["onConfigSnapshot"];
@@ -434,8 +433,6 @@ export async function updateGitInstall(params: {
   invocationCwd?: string;
   nodeRunner?: string;
   inspectGitTarget: UpdateRunnerOptions["inspectGitTarget"];
-  allowGatewayServiceRepair: boolean;
-  allowGatewayActivation: boolean;
 }): Promise<UpdateRunResult> {
   let updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
@@ -536,7 +533,7 @@ export async function updateGitInstall(params: {
         beforeGitMutation:
           process.platform === "freebsd"
             ? async (target) => {
-                await params.beforeGitMutation?.(target);
+                await params.beforeGitMutation(target);
                 await createFreeBsdPkgOwnershipInspection(effectiveTimeout).assertUnowned(
                   updateRoot,
                 );
@@ -552,43 +549,48 @@ export async function updateGitInstall(params: {
             }),
         publishGitCheckout,
         validateCandidate: params.validateCandidate,
-        runGitDoctor: (root) =>
-          runPackageUpdateDoctor({
-            ...params,
-            managedServiceEnv: params.getManagedServiceEnv(),
-            root,
-            timeoutMs: effectiveTimeout,
-          }),
-        prepareGitExposure: installTarget
-          ? async (candidateRoot, candidateSha, candidateEnv) => {
-              const packageName =
-                (await readPackageName(installTarget.packageRoot ?? params.root)) ??
-                DEFAULT_PACKAGE_NAME;
-              exposure = await prepareGitPackageExposure({
-                installTarget,
-                installSpec: candidateRoot,
-                packageName,
-                packageRoot: installTarget.packageRoot,
-                runCommand: runCommandWithTimeout,
-                runStep: (stepParams) =>
-                  runUpdateStep({ ...stepParams, progress: params.progress }),
-                timeoutMs: effectiveTimeout,
-                env: mergeProcessEnv([installEnv, candidateEnv]),
-                installCwd: candidateRoot,
-                expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
-                activateGitRoot: updateRoot,
-                onTransaction: params.onTransaction,
-                assertCurrent: params.assertCurrent,
-                postVerifyStep: (root: string) =>
-                  runPackageUpdateDoctor({
-                    ...params,
-                    managedServiceEnv: params.getManagedServiceEnv(),
-                    root,
-                    timeoutMs: effectiveTimeout,
-                  }),
-              });
+        ...(installTarget
+          ? {
+              prepareGitExposure: async (candidateRoot, candidateSha, candidateEnv) => {
+                const packageName =
+                  (await readPackageName(installTarget.packageRoot ?? params.root)) ??
+                  DEFAULT_PACKAGE_NAME;
+                exposure = await prepareGitPackageExposure({
+                  installTarget,
+                  installSpec: candidateRoot,
+                  packageName,
+                  packageRoot: installTarget.packageRoot,
+                  runCommand: runCommandWithTimeout,
+                  runStep: (stepParams) =>
+                    runUpdateStep({ ...stepParams, progress: params.progress }),
+                  timeoutMs: effectiveTimeout,
+                  env: mergeProcessEnv([installEnv, candidateEnv]),
+                  installCwd: candidateRoot,
+                  expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
+                  activateGitRoot: updateRoot,
+                  onTransaction: params.onTransaction,
+                  assertCurrent: params.assertCurrent,
+                  postVerifyStep: (root, results) =>
+                    runPackageUpdateDoctor({
+                      ...params,
+                      results,
+                      managedServiceEnv: params.getManagedServiceEnv(),
+                      root,
+                      timeoutMs: effectiveTimeout,
+                    }),
+                });
+              },
             }
-          : undefined,
+          : {
+              runGitDoctor: (root, results) =>
+                runPackageUpdateDoctor({
+                  ...params,
+                  results,
+                  managedServiceEnv: params.getManagedServiceEnv(),
+                  root,
+                  timeoutMs: effectiveTimeout,
+                }),
+            }),
       },
     });
   let stagedUpdateResult: UpdateRunResult | undefined;

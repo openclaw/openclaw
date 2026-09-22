@@ -21,7 +21,7 @@ import {
   readUserGitHubConnection,
   updateUserGitHubConnection,
 } from "../state/user-github-connections.js";
-import { linkEmail } from "../state/user-profiles.js";
+import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import {
   readPersonalGitHubPublication,
   requirePersonalGitHubPublicationConfirmation,
@@ -579,7 +579,7 @@ describe("personal publication authority and recovery", () => {
             );
           }
           if (race === "merge") {
-            linkEmail("alice@example.test", otherOwner);
+            await linkCanonicalUserProfileEmail("alice@example.test", otherOwner);
           }
           if (race === "session") {
             const original = mocks.loadSession.getMockImplementation()!;
@@ -997,7 +997,8 @@ describe("personal publication authority and recovery", () => {
     expect(receipt?.status).toBe("published");
     const binding = { publicationKind: "personal" as const, requestId: result.requestId };
     const originalLifecycle = readGitHubPublicationSessionLifecycle(binding);
-    expect(originalLifecycle).toEqual({ lifecycle_revision: session.read().lifecycleRevision });
+    const lifecycle_revision = session.read().lifecycleRevision;
+    expect(originalLifecycle).toEqual({ lifecycle_revision, requester_authority_json: null });
     await session.reset(placements);
     expect(readPersonalGitHubPublication(owner, { requestId: result.requestId })).toEqual(receipt);
     expect(

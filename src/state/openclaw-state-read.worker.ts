@@ -22,7 +22,17 @@ import { ExecutionDecisionCursorError } from "../audit/execution-decision-receip
 import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
 import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
+import {
+  readGitHubPublicationRequest,
+  readKnownGitHubPublicationPullRequestUrlsInDatabase,
+} from "../gateway/github-publication-store.js";
+import {
+  readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
+  readRepositoryGitHubPublicationInDatabase,
+} from "../gateway/github-repository-publication-store.js";
 import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
+import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
+import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "../gateway/worker-environments/placement-read-projection.js";
 import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
 import {
@@ -51,6 +61,7 @@ import {
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
+import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
@@ -69,7 +80,10 @@ import {
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
 import { resolveCachedGitHubIdentityInDatabase } from "./user-profile-github-identity.js";
-import { readUserProfileIdForEmail } from "./user-profile-identity.read.js";
+import {
+  readUserProfileEmailBindings,
+  readUserProfileIdForEmail,
+} from "./user-profile-identity.read.js";
 import { projectUserProfileDisplay } from "./user-profile-list.js";
 import {
   selectProfileDisplayEntries,
@@ -210,6 +224,22 @@ serveOwnedWorkerTasks(
                     type: command.type,
                     sourceAdmitted,
                     value: countMcpOAuthPrincipalsInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "sessionGroups.snapshot") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted: true,
+                    snapshot: readSessionGroupCatalogSnapshot(db),
+                  };
+                }
+                if (command.type === "sessionGroups.members") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted: true,
+                    snapshot: readSessionGroupMembership(command.cfg, input.context.environment),
                   };
                 }
                 if (command.type === "conversationBindings.inspect") {
@@ -393,6 +423,47 @@ serveOwnedWorkerTasks(
                     }),
                   };
                 }
+                if (command.type === "githubPublication.lifecycle") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    lifecycle: readGitHubPublicationSessionLifecycle(command, db),
+                  };
+                }
+                if (command.type === "githubPublication.request") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
+                  };
+                }
+                if (command.type === "githubRepository.request") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    row: readRepositoryGitHubPublicationInDatabase(db, command.requestId),
+                  };
+                }
+                if (
+                  command.type === "githubPublication.knownPullRequestUrls" ||
+                  command.type === "githubRepository.knownPullRequestUrls"
+                ) {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    urls:
+                      command.type === "githubPublication.knownPullRequestUrls"
+                        ? readKnownGitHubPublicationPullRequestUrlsInDatabase(db, command.input)
+                        : readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(
+                            db,
+                            command.input,
+                          ),
+                  };
+                }
                 if (command.type === "userProfiles.authority.resolve") {
                   const profile = runSqliteDeferredTransactionSync(db, () => {
                     const current = tableExists(db, "user_profiles")
@@ -456,15 +527,20 @@ serveOwnedWorkerTasks(
                   };
                 }
                 if (command.type === "userProfiles.reconcile") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    profile: runSqliteDeferredTransactionSync(
-                      db,
-                      () => selectProfileDisplayEntries(db, [command.profileId])[0]?.[1],
-                    ),
-                  };
+                  const facts = runSqliteDeferredTransactionSync(db, () => ({
+                    profile: selectProfileDisplayEntries(db, [command.profileId])[0]?.[1],
+                    emailBindings: readUserProfileEmailBindings(db, command.profileId),
+                  }));
+                  return { ok: true, type: command.type, sourceAdmitted, ...facts };
+                }
+                if (command.type === "userProfiles.catalog") {
+                  const facts = runSqliteDeferredTransactionSync(db, () => ({
+                    profiles: tableExists(db, "user_profiles")
+                      ? selectProfileDisplayEntries(db)
+                      : [],
+                    emailBindings: readUserProfileEmailBindings(db),
+                  }));
+                  return { ok: true, type: command.type, sourceAdmitted, ...facts };
                 }
                 if (command.type === "userProfiles.email.resolve") {
                   return {

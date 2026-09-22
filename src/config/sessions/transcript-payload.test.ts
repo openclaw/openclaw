@@ -1,10 +1,11 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { sql, type RawBuilder } from "kysely";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import {
   projectModelContextEventSql,
@@ -322,7 +323,11 @@ describe("transcript payload storage boundary", () => {
     }
   });
 
-  it("preserves first-key SQL and last-key JavaScript navigation alongside exact owner projections", () => {
+  it.each(["native", "text fallback"])("preserves exact owner projections with %s JSON", (mode) => {
+    const jsonb =
+      mode === "text fallback"
+        ? vi.spyOn(nodeSqlite, "supportsNodeSqliteJsonb").mockReturnValue(false)
+        : undefined;
     const database = openNodeSqliteDatabase(":memory:");
     try {
       createTable(database);
@@ -345,6 +350,9 @@ describe("transcript payload storage boundary", () => {
             transcriptEventNavigationSql().as("navigation"),
             transcriptEventResetNavigationSql().as("reset"),
             transcriptEventModelNavigationSql().as("model"),
+            transcriptEventModelBytesSql(sql.lit(0)).as("modelBytes"),
+            transcriptEventModelBytesSql(sql.lit(1)).as("modelWithoutCheckpointBytes"),
+            transcriptEventWithoutCustomDataBytesSql().as("withoutCustomDataBytes"),
             eb
               .fn<string>("json_extract", [transcriptEventNavigationSql(), eb.val("$.type")])
               .as("first_type"),
@@ -361,9 +369,24 @@ describe("transcript payload storage boundary", () => {
         database,
         db
           .selectFrom("transcript_events")
-          .select([
+          .select((eb) => [
             projectResetBoundaryNavigationSql(nativeFixtureEvent).as("reset"),
             projectModelContextNavigationSql(nativeFixtureEvent).as("model"),
+            eb
+              .fn<number>("octet_length", [
+                projectModelContextEventSql(nativeFixtureEvent, sql.lit(0)),
+              ])
+              .as("modelBytes"),
+            eb
+              .fn<number>("octet_length", [
+                projectModelContextEventSql(nativeFixtureEvent, sql.lit(1)),
+              ])
+              .as("modelWithoutCheckpointBytes"),
+            eb
+              .fn<number>("octet_length", [
+                eb.fn<string>("json_remove", [nativeFixtureEvent, eb.val("$.data")]),
+              ])
+              .as("withoutCustomDataBytes"),
           ])
           .where("seq", "=", 0),
       );
@@ -378,14 +401,15 @@ describe("transcript payload storage boundary", () => {
         firstKeptEntryId: "kept",
         message: { role: "toolResult" },
       });
-      expect(stored?.reset).toBe(native?.reset);
-      expect(stored?.model).toBe(native?.model);
+      expect(stored).toMatchObject(native!);
+      expect(readBody(database, 1)).toBe(original);
       expect(JSON.parse(stored!.model).message.content).toEqual([
         { type: "toolCall", id: "call", name: "read" },
       ]);
       expect(JSON.parse(stored!.model).message.providerReplay).toEqual({ type: "checkpoint" });
     } finally {
       database.close();
+      jsonb?.mockRestore();
     }
   });
 

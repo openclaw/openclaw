@@ -256,6 +256,7 @@ describe("Telegram userbot driver runtime", () => {
     fs.cpSync(path.join(process.cwd(), ".agents", "skills", "telegram-e2e-userbot"), skillPath, {
       recursive: true,
     });
+    // The selected skill imports the shared credential bootstrap at its repository-relative path.
     const bootstrapPath = path.join("extensions", "qa-lab", "src", "qa-credentials-bootstrap.ts");
     fs.mkdirSync(path.dirname(path.join(repoRoot, bootstrapPath)), { recursive: true });
     fs.copyFileSync(path.join(process.cwd(), bootstrapPath), path.join(repoRoot, bootstrapPath));

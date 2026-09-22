@@ -96,6 +96,7 @@ export async function executeMutableUpdate(
   const {
     assertCurrent: assertExecutionCurrent,
     assertBoundChildCurrent,
+    onStateHandoff,
     admitExecutor,
   } = createUpdateCommandExecutionGuards(opts, params.root);
   const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv, activationTimeoutMs?: number) => {
@@ -182,6 +183,7 @@ export async function executeMutableUpdate(
       changes: doctorConfigChanges,
       assertCurrent: assertExecutionCurrent,
       assertBoundChildCurrent,
+      onStateHandoff,
     });
   const originalRecovery = () =>
     params.installKind === "git"
@@ -567,7 +569,6 @@ export async function executeMutableUpdate(
         startedAt: params.startedAt,
         progress: params.progress,
         channel: params.channel,
-        tag: params.tag,
         devTarget: params.devTarget,
         assertCurrent: assertExecutionCurrent,
         inspectGitTarget: async (target) => {
@@ -605,16 +606,11 @@ export async function executeMutableUpdate(
             );
           }
         },
-        beforeGitMutation:
-          params.updateInstallKind === "git"
-            ? async (target) => {
-                assertReadableGitTarget(target);
-                admittedTargetSchemaVersions = target.schemaVersions;
-                await beforeActivate(gitMutationRoots ?? [params.root]);
-              }
-            : undefined,
-        allowGatewayServiceRepair: false,
-        allowGatewayActivation: false,
+        beforeGitMutation: async (target) => {
+          assertReadableGitTarget(target);
+          admittedTargetSchemaVersions = target.schemaVersions;
+          await beforeActivate(gitMutationRoots ?? [params.root]);
+        },
       });
     }
   } catch (err) {
@@ -628,7 +624,7 @@ export async function executeMutableUpdate(
       mode,
       root: params.root,
       originalRecovery,
-      run: params.opts.run,
+      run: mutationStarted ? undefined : params.opts.run,
     }));
   }
 

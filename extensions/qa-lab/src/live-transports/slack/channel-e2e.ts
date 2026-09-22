@@ -3,9 +3,10 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 import type { QaChannelE2eDriver, QaChannelE2eMessage } from "../shared/channel-e2e.types.js";
-import { createSlackE2eObservations, describeSlackFailure } from "./channel-e2e-observations.js";
+import { createSlackE2eObservations, sanitizeSlackFailure } from "./channel-e2e-observations.js";
 import type { SlackNativeWrite } from "./slack-live.capture.js";
 import type { SlackAuthIdentity, SlackQaWebClient } from "./slack-live.contracts.js";
+import { sendSlackChannelMessage } from "./slack-live.observations.js";
 
 const fileSchema = z.object({
   id: z.string().min(1),
@@ -149,13 +150,12 @@ export function createSlackChannelE2e(params: {
         if (entry.outcome === "pending") {
           entry.outcome = dispatched ? "uncertain" : "failed";
           entry.detail = dispatched
-            ? describeSlackFailure(error)
+            ? sanitizeSlackFailure(error).message
             : "not dispatched: run stopped before native action";
         }
         await persist();
         assertActive();
-        // oxlint-disable-next-line preserve-caught-error -- Slack SDK causes can contain credentials; only sanitized diagnostics may escape.
-        throw new Error(`Slack ${operation}: ${entry.detail ?? describeSlackFailure(error)}`);
+        throw sanitizeSlackFailure(error, { operation, detail: entry.detail });
       }
     })();
     pending.add(task);
@@ -180,15 +180,13 @@ export function createSlackChannelE2e(params: {
       return await mutation("chat.postMessage", "driver", ["chat:write"], async (entry) => {
         const text =
           input.mention === false ? input.text : `<@${params.sutIdentity.userId}> ${input.text}`;
-        const response = await params.driverClient.chat.postMessage({
-          channel: params.channelId,
+        const response = await sendSlackChannelMessage({
+          client: params.driverClient,
+          channelId: params.channelId,
           text,
-          thread_ts: root,
-          unfurl_links: false,
-          unfurl_media: false,
-          // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Slack Web API method, not browser postMessage; the destination is the leased channel.
+          threadTs: root,
         });
-        if (!response.ts || (response.channel && response.channel !== params.channelId)) {
+        if (response.channelId !== params.channelId) {
           throw new Error("Slack post did not return an exact leased-channel receipt");
         }
         const message: QaChannelE2eMessage = {
@@ -435,7 +433,7 @@ export function createSlackChannelE2e(params: {
         entry.outcome = outcome;
       } catch (error) {
         entry.outcome = "failed";
-        entry.detail = describeSlackFailure(error);
+        entry.detail = sanitizeSlackFailure(error).message;
         failures.push(`${operation}: ${entry.detail}`);
       }
       await persist();
@@ -540,7 +538,7 @@ export function createSlackChannelE2e(params: {
           await client.chat.delete({ channel: params.channelId, ts: receipt.message.id });
         } catch (error) {
           // files.delete may already remove the file-share message; absence is safe only for an owned receipt.
-          if (describeSlackFailure(error) !== "message_not_found") {
+          if (sanitizeSlackFailure(error).message !== "message_not_found") {
             throw error;
           }
         }

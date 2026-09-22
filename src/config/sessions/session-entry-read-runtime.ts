@@ -20,7 +20,7 @@ export async function readSessionEntriesFromStoreInWorker(input: {
   storePath: string;
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
-  projection?: "full" | "backing";
+  projection?: "full" | "backing" | "sharing";
   env?: NodeJS.ProcessEnv;
 }) {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);

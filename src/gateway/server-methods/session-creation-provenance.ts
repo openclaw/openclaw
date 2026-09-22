@@ -14,6 +14,8 @@ export type TrustedSessionCreation = {
   sandbox?: "required";
   /** Exact spawning session retained separately from the stable actor identity. */
   requesterSessionKey?: string;
+  /** Host-verified human requester; never accepted from model-authored parameters. */
+  requesterProfileId?: string;
   /** Immutable completion recipient for a spawn-owned visible session. */
   completionOwnerSessionKey?: string;
   /** Prepared parent selection; never accepted from public creation parameters. */
@@ -54,6 +56,9 @@ export function resolveOperatorSessionCreation(
       via: "spawn",
       actor: { type: "agent", id: agentRuntimeIdentity.agentId },
       requesterSessionKey: agentRuntimeIdentity.sessionKey,
+      ...(agentRuntimeIdentity.sessionSpawnContext.requesterProfileId
+        ? { requesterProfileId: agentRuntimeIdentity.sessionSpawnContext.requesterProfileId }
+        : {}),
       ...(agentRuntimeIdentity.sessionSpawnContext.completionOwnerSessionKey
         ? {
             completionOwnerSessionKey:

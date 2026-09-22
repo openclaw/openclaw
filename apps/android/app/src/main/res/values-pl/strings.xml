@@ -1317,6 +1317,7 @@
     <string name="native_b7b89bf0fd930a9f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Brak skonfigurowanych modeli"</string>
     <string name="native_b7c397f33783abec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Przed pobraniem Gateway weryfikuje tę konkretną wersję za pomocą ClawHub. Wyniki kontroli pojawią się w rezultacie instalacji. Zablokowane wersje lub niedostępna weryfikacja zabezpieczeń uniemożliwiają instalację."</string>
     <string name="native_b7e3e4aa4257b9a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wyłącz"</string>
+    <string name="native_b82c89a18faf5200" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nie udało się zatrzymać odpowiedzi. Odśwież i spróbuj ponownie."</string>
     <string name="native_b8352b44a588721c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Język aplikacji"</string>
     <string name="native_b8380b8a2317b9fb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Parowanie z Gateway"</string>
     <string name="native_b847ffdd0a1bfe55" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Działania dla zaznaczenia"</string>

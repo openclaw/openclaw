@@ -24,6 +24,51 @@ import {
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
+export const preservedActivationCases = [
+  ...(
+    [
+      { mode: "git", outcome: "healthy" },
+      { mode: "npm", outcome: "healthy" },
+      { mode: "npm", outcome: "stale retry" },
+    ] as const
+  ).map(({ mode, outcome }) => ({
+    mode,
+    outcome,
+    denial: "sealed" as const,
+    json: true,
+    phase: "initial",
+  })),
+  ...(["git", "npm", "pnpm", "bun"] as const).flatMap((mode) =>
+    (["sealed", "unknown"] as const).flatMap((denial) =>
+      (mode === "git" || mode === "npm"
+        ? ["healthy", "json denial", "stale retry", "uninspectable", "foreign"]
+        : ["healthy"]
+      ).map((outcome) => ({
+        mode,
+        denial,
+        outcome,
+        json: outcome === "json denial",
+        phase: "late",
+      })),
+    ),
+  ),
+  ...(["sealed", "unknown"] as const).flatMap((denial) =>
+    ["initial", "late"].flatMap((phase) =>
+      // Late healthy/stale-retry Git tuples are already covered above.
+      (phase === "late"
+        ? ["stale build", "missing build"]
+        : ["healthy", "stale build", "missing build", "stale retry"]
+      ).map((outcome) => ({
+        mode: "git" as const,
+        denial,
+        outcome,
+        json: false,
+        phase,
+      })),
+    ),
+  ),
+];
+
 export type InstallRootTransitionFixture = {
   root: string;
   run: NonNullable<UpdateCommandOptions["run"]>;

@@ -76,6 +76,21 @@ async function stopClients(clients: WorkerClients | undefined): Promise<void> {
   await clients.connection.stop();
 }
 
+function waitForWorkerEvent(
+  event: Promise<void>,
+  command: Promise<unknown>,
+  phase: string,
+  resultOutput?: Promise<void>,
+): Promise<void> {
+  const completed = resultOutput ? Promise.race([command, resultOutput]) : command;
+  return Promise.race([
+    event,
+    completed.then(() => {
+      throw new Error(`Worker completed before ${phase}`);
+    }),
+  ]);
+}
+
 describe("cloud worker milestone 2 fault injection", () => {
   let harness: ComposedGatewayHarness;
   const clients: WorkerClients[] = [];
@@ -135,9 +150,13 @@ describe("cloud worker milestone 2 fault injection", () => {
       loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
       const input = new PassThrough();
       const output = new PassThrough();
+      const resultOutput = createDeferred();
       let stdout = "";
       output.on("data", (chunk: Buffer) => {
         stdout += chunk.toString("utf8");
+        if (stdout.includes("\n")) {
+          resultOutput.resolve();
+        }
       });
       const lifetime = {
         signal: controller.signal,
@@ -159,7 +178,12 @@ describe("cloud worker milestone 2 fault injection", () => {
       let protectedDirectory: string | undefined;
       let turnDirectory: string | undefined;
       try {
-        await providerStarted.promise;
+        await waitForWorkerEvent(
+          providerStarted.promise,
+          command,
+          "provider start",
+          resultOutput.promise,
+        );
         environmentStateDir = process.env.OPENCLAW_STATE_DIR;
         expect(environmentStateDir).toBeDefined();
         expect(environmentStateDir).not.toBe(previousStateDir);
@@ -191,7 +215,12 @@ describe("cloud worker milestone 2 fault injection", () => {
               : doneOutcome("paid reply"),
           );
         }
-        await finishingGate.entered.promise;
+        await waitForWorkerEvent(
+          finishingGate.entered.promise,
+          command,
+          "finishing event",
+          resultOutput.promise,
+        );
         if (outcome === "cancellation") {
           expect(harness.requestParams("worker.inference.cancel")).toHaveLength(1);
         }
@@ -338,39 +367,54 @@ describe("cloud worker milestone 2 fault injection", () => {
         text: "preview reply",
       };
       let settled = false;
-      const result = runWorkerDescriptor(await harness.createDescriptor()).finally(() => {
+      const controller = new AbortController();
+      const result = runWorkerDescriptor(await harness.createDescriptor(), {
+        signal: controller.signal,
+      }).finally(() => {
         settled = true;
       });
       void result.catch(() => undefined);
 
-      await previewGate.entered.promise;
-      nextProviderDelta.resolve();
-      await providerProduced.promise;
-      await vi.waitFor(() =>
-        expect(
-          harness.requestParams("worker.live-event").filter((params) => {
-            const request = params as WorkerLiveEventParams;
-            return request.event.kind === "assistant" || request.event.kind === "thinking";
-          }),
-        ).toHaveLength(2),
-      );
-      expect(settled).toBe(false);
-      expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeNull();
+      try {
+        await waitForWorkerEvent(previewGate.entered.promise, result, "preview event");
+        nextProviderDelta.resolve();
+        await waitForWorkerEvent(providerProduced.promise, result, "provider completion");
+        await waitForWorkerEvent(
+          vi.waitFor(() =>
+            expect(
+              harness.requestParams("worker.live-event").filter((params) => {
+                const request = params as WorkerLiveEventParams;
+                return request.event.kind === "assistant" || request.event.kind === "thinking";
+              }),
+            ).toHaveLength(2),
+          ),
+          result,
+          "both preview requests",
+        );
+        expect(settled).toBe(false);
+        expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeNull();
 
-      previewGate.release.resolve();
-      await finishingGate.entered.promise;
-      expect(settled).toBe(false);
-      expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(2);
-      expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeGreaterThan(0);
-      expect(harness.placementStore.listPendingWorkspaceResults()).toMatchObject([
-        { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
-      ]);
+        previewGate.release.resolve();
+        await waitForWorkerEvent(finishingGate.entered.promise, result, "finishing event");
+        expect(settled).toBe(false);
+        expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(2);
+        expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeGreaterThan(0);
+        expect(harness.placementStore.listPendingWorkspaceResults()).toMatchObject([
+          { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
+        ]);
 
-      finishingGate.release.resolve();
-      await expect(result).resolves.toMatchObject({
-        transcriptLeafId: expect.any(String),
-        transcriptNextSeq: expect.any(Number),
-      });
+        finishingGate.release.resolve();
+        await expect(result).resolves.toMatchObject({
+          transcriptLeafId: expect.any(String),
+          transcriptNextSeq: expect.any(Number),
+        });
+      } finally {
+        nextProviderDelta.resolve();
+        previewGate.release.resolve();
+        finishingGate.release.resolve();
+        controller.abort(new Error("fixture teardown"));
+        await Promise.allSettled([result]);
+      }
     },
   );
 

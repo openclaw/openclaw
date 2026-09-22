@@ -266,6 +266,29 @@ function begin() {
   });
 }
 
+it.each([false, true])(
+  "checks same-installation policy before restoring Doctor's Gateway (repair activated=%s)",
+  async (activated) => {
+    const events: string[] = [];
+    const read = boundary.read.getMockImplementation()!;
+    boundary.repair.mockImplementation(async () => {
+      expect(boundary.release).toHaveBeenCalled();
+      events.push("repair");
+      boundary.read.mockImplementation(async (...args) => ({
+        ...(await read(...args)),
+        running: activated,
+        runtime: { status: activated ? "running" : "stopped" },
+      }));
+      return {};
+    });
+    boundary.restart.mockImplementation(async () => events.push("restart"));
+    const maintenance = await begin();
+    await maintenance!.finish({}, async (config) => config);
+    expect(events).toEqual(activated ? ["repair"] : ["repair", "restart"]);
+    expect(boundary.health).toHaveBeenCalledOnce();
+  },
+);
+
 it("does not suggest an unsafe manual stop after a reported write-custody refusal", async () => {
   const refusal = new GatewayServiceStopUnsafeError(
     "Gateway maintenance stop refused: data at risk in owner phase migration (1).",

@@ -406,7 +406,8 @@ describe("worker environment service", () => {
       sessionId: "session-device",
     });
     const sshStopCallsBeforeStart = sshStop.mock.calls.length;
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
     const starting = workerService.startTunnel({
       environmentId: environment.environmentId,
@@ -947,7 +948,8 @@ describe("worker environment service", () => {
 
   it("stops a poisoned tunnel start and returns a typed deadline error", async () => {
     await support.seedReady("worker-tunnel-timeout");
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { promise: started, resolve: signalStarted } = createDeferred();
     const { promise: pendingStart, reject: rejectStart } = createDeferred<never>();
     const tunnelManager = {

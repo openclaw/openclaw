@@ -1,16 +1,17 @@
 import { Blob as NodeBlob } from "node:buffer";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import {
-  gatewayHello,
-  loadedSidebarContent,
-  createSidebarContentRecorder,
-} from "./chat-session-workspace.test-support.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
+import { createSidebarContentRecorder } from "./chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
-import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
+import type {
+  AttachmentSidebarRuntime,
+  SidebarContent,
+  SidebarSelection,
+} from "./chat-sidebar-content-types.ts";
 
 describe("session workspace artifacts", () => {
   afterEach(() => {
@@ -29,13 +30,17 @@ describe("session workspace artifacts", () => {
     http?: boolean;
   }) {
     const handleOpenSidebar = createSidebarContentRecorder();
+    const settled = createDeferred<Exclude<SidebarSelection, { kind: "loading" }>>();
     const url = "/api/artifacts/download/connection/ticket";
+    const artifact = {
+      id: "artifact-1",
+      type: params.mimeType.startsWith("image/") ? "image" : "file",
+      mimeType: params.mimeType,
+      title: params.title ?? "Unicode artifact",
+      download: { mode: params.http ? "url" : "bytes" },
+    };
     const request = vi.fn(async (_method: string, query: { transport?: string }) => ({
-      artifact: {
-        id: "artifact-1",
-        mimeType: params.mimeType,
-        title: params.title ?? "Unicode artifact",
-      },
+      artifact,
       ...(params.http && query.transport === "http"
         ? { url }
         : { data: params.data, encoding: "base64" }),
@@ -63,12 +68,35 @@ describe("session workspace artifacts", () => {
       connected: true,
       resourceBasePath: "/mount",
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {},
+      requestUpdate: () => {
+        const content = state.sessionWorkspaceState?.previews.find(
+          (entry) => entry.id === state.sessionWorkspaceState?.activePreviewId,
+        )?.content;
+        if (content && content.kind !== "loading") {
+          settled.resolve(content);
+        }
+      },
     } as unknown as SessionWorkspaceHost;
-    return { handleOpenSidebar, request, state, fetchMock, url: `/mount${url}` };
+    return {
+      artifact,
+      handleOpenSidebar,
+      request,
+      state,
+      fetchMock,
+      url: `/mount${url}`,
+      previewSettled: settled.promise,
+      loadedContent: async (): Promise<SidebarContent> => {
+        const content = await settled.promise;
+        if (content.kind === "unavailable") {
+          throw new Error(content.message);
+        }
+        return content;
+      },
+    };
   }
 
   async function createBinaryArtifactPanel() {
@@ -81,16 +109,9 @@ describe("session workspace artifacts", () => {
       http: true,
     });
     fixture.state.connectionEpoch = 1;
-    const artifact = {
-      id: "artifact-1",
-      type: "file",
-      title: "archive.zip",
-      mimeType: "application/zip",
-      download: { mode: "url" },
-    };
     let ticket = 0;
     fixture.request.mockImplementation(async (_method, params) => ({
-      artifact,
+      artifact: fixture.artifact,
       ...(params.transport === "http"
         ? {
             url: `/api/artifacts/download/connection/ticket-${++ticket}`,
@@ -100,7 +121,7 @@ describe("session workspace artifacts", () => {
     }));
     const props = createSessionWorkspaceProps(fixture.state);
     props.onOpenArtifact("artifact-1");
-    const content = await loadedSidebarContent(fixture.state);
+    const content = await fixture.loadedContent();
     if (content.kind !== "attachment" || !content.download) {
       throw new Error("Binary artifact must expose a download action");
     }
@@ -142,7 +163,6 @@ describe("session workspace artifacts", () => {
     );
     return {
       ...fixture,
-      artifact,
       props,
       content,
       panel,
@@ -165,11 +185,9 @@ describe("session workspace artifacts", () => {
         if (httpFails) {
           throw new TypeError("HTTP media is unreachable");
         }
-        return {
-          ok: true,
-          headers: new Headers({ "Content-Disposition": 'attachment; filename="archive.zip"' }),
-          blob: async () => blob,
-        };
+        return new Response(blob, {
+          headers: { "Content-Disposition": 'attachment; filename="archive.zip"' },
+        });
       });
       vi.useFakeTimers();
       vi.setSystemTime(Date.now() + 360_000);
@@ -214,11 +232,7 @@ describe("session workspace artifacts", () => {
     "does not save a binary download after %s",
     async (retirement) => {
       const fixture = await createBinaryArtifactPanel();
-      const transfer = createDeferred<{
-        ok: boolean;
-        headers: Headers;
-        blob: () => Promise<Blob>;
-      }>();
+      const transfer = createDeferred<Response>();
       const started = createDeferred();
       fixture.fetchMock.mockImplementation(() => {
         started.resolve();
@@ -238,11 +252,11 @@ describe("session workspace artifacts", () => {
       } else {
         fixture.panel.remove();
       }
-      transfer.resolve({
-        ok: true,
-        headers: new Headers({ "Content-Disposition": 'attachment; filename="archive.zip"' }),
-        blob: async () => new Blob(["old"], { type: "application/zip" }),
-      });
+      transfer.resolve(
+        new Response(new Blob(["old"], { type: "application/zip" }), {
+          headers: { "Content-Disposition": 'attachment; filename="archive.zip"' },
+        }),
+      );
       await read.mock.results[0]?.value;
       await fixture.panel.updateComplete;
       expect(fixture.createObjectURL).not.toHaveBeenCalled();
@@ -253,7 +267,7 @@ describe("session workspace artifacts", () => {
   it.each([true, false])(
     "uses artifact titles without changing tab identity (listed: %s)",
     async (listed) => {
-      const { state, request } = createArtifactHost({
+      const { state, request, loadedContent } = createArtifactHost({
         data: "iVBORw0KGgo=",
         mimeType: "image/png",
         title: "resolved-image.png",
@@ -278,7 +292,7 @@ describe("session workspace artifacts", () => {
       props.onOpenArtifact("artifact-1");
       const preview = workspace.previews[0]!;
       expect(preview.label).toBe(listed ? "listed-image.png" : "Artifacts");
-      await loadedSidebarContent(state);
+      await loadedContent();
       expect(preview.label).toBe("resolved-image.png");
       props.onOpenArtifact("artifact-1");
       expect(workspace.previews).toEqual([preview]);
@@ -297,13 +311,13 @@ describe("session workspace artifacts", () => {
       "",
       "**literal after**",
     ].join("\n");
-    const { state } = createArtifactHost({
+    const { state, loadedContent } = createArtifactHost({
       data: btoa(String.fromCharCode(...new TextEncoder().encode(source))),
       mimeType: "text/markdown",
       title: "Source notes",
     });
     createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
-    const content = await loadedSidebarContent(state);
+    const content = await loadedContent();
     expect(content).toMatchObject({ kind: "markdown", rawText: source });
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: SidebarContent;
@@ -368,7 +382,7 @@ describe("session workspace artifacts", () => {
     "decodes UTF-8 $mimeType artifacts without corrupting visible or raw text (HTTP: $http)",
     async (testCase) => {
       const data = btoa(String.fromCharCode(...new TextEncoder().encode(testCase.content)));
-      const { state, fetchMock, url } = createArtifactHost({
+      const { state, fetchMock, url, loadedContent } = createArtifactHost({
         data,
         mimeType: testCase.mimeType,
         http: testCase.http,
@@ -376,7 +390,7 @@ describe("session workspace artifacts", () => {
 
       createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
 
-      expect(await loadedSidebarContent(state)).toEqual({
+      expect(await loadedContent()).toEqual({
         kind: "markdown",
         content: `# Unicode artifact\n\n${testCase.fence}\n${testCase.content}\n\`\`\``,
         rawText: testCase.content,
@@ -395,7 +409,7 @@ describe("session workspace artifacts", () => {
     "retains image artifact previews beyond ticket expiry (HTTP: %s)",
     async (http) => {
       const data = "iVBORw0KGgo=";
-      const { state, fetchMock, url } = createArtifactHost({
+      const { state, fetchMock, url, loadedContent } = createArtifactHost({
         data,
         mimeType: "image/png",
         title: "preview.png",
@@ -404,7 +418,7 @@ describe("session workspace artifacts", () => {
 
       createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
 
-      expect(await loadedSidebarContent(state)).toEqual({
+      expect(await loadedContent()).toEqual({
         kind: "image",
         mimeType: "image/png",
         rawText: http ? url : null,
@@ -425,7 +439,7 @@ describe("session workspace artifacts", () => {
     "reauthorizes HTML artifact bytes when the proxy returns application HTML with disposition %s",
     async (disposition) => {
       const source = "<h1>Actual artifact</h1>";
-      const { state, request, fetchMock, url } = createArtifactHost({
+      const { state, request, fetchMock, url, loadedContent } = createArtifactHost({
         data: btoa(source),
         mimeType: "text/html",
         title: "report.html",
@@ -442,7 +456,7 @@ describe("session workspace artifacts", () => {
 
       createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
 
-      expect(await loadedSidebarContent(state)).toMatchObject({
+      expect(await loadedContent()).toMatchObject({
         kind: "markdown",
         rawText: source,
       });
@@ -465,16 +479,15 @@ describe("session workspace artifacts", () => {
   );
 
   it("reports malformed base64 artifact data as a visible workspace error", async () => {
-    const { handleOpenSidebar, state } = createArtifactHost({
+    const { handleOpenSidebar, state, previewSettled } = createArtifactHost({
       data: "not-base64!",
       mimeType: "text/plain",
     });
 
     createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
 
-    await vi.waitFor(() =>
-      expect(createSessionWorkspaceProps(state).error).toMatch(/InvalidCharacterError|invalid/i),
-    );
+    await previewSettled;
+    expect(createSessionWorkspaceProps(state).error).toMatch(/InvalidCharacterError|invalid/i);
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
     expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toMatchObject({
       kind: "unavailable",

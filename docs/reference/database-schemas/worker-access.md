@@ -107,10 +107,21 @@ subsequent read. No validation cache or new restoration owner is introduced.
 The asynchronous transcript-search facade similarly moves durable FTS reads for
 all four Gateway/tool callers through the existing worker lifecycle. Each caller
 rechecks current scope and authorization after awaiting. Warm `sessions.list`
-already selects resident projection rows without host Kysely reads; its remaining
-database work is hydration, dirty/archived-row refresh, and membership. Preserve
-that projection and its identity/revision invalidation instead of replacing it
-with another per-request store scan. See the
+selects resident projection rows without host Kysely reads. Background refreshes
+prepare up to 64 dirty persistent rows in the history worker: entry metadata,
+board presence, and activity-summary watermarks share one read snapshot per
+physical store. Membership comes from the worker-maintained compact projection,
+which also retains participant display facts for per-viewer reads. The projection
+retains each store through consumption
+and rejects replies after projection or registry invalidation. Rows replaced or
+refreshed by direct reads while a reply is pending keep their newer facts; a dirty
+replacement retries under its own generation. Related rows use resident facts and
+existing invalidations to converge across batches.
+
+Startup/topology hydration, direct keyed and archived reads, process-held incognito
+stores, and optional transcript backfill remain migration debt. Preserve the
+projection and its identity/revision invalidation instead of replacing it with
+another per-request store scan. See the
 [inventory baseline](/reference/database-schemas/worker-access-inventory#profile-priority-and-current-cutover-status)
 for measurements and the next owners to migrate.
 
@@ -123,6 +134,26 @@ prepared facts, so uncertain backing state keeps the task alive for a later pass
 Synchronous operator inspection uses the same selected-row reader. An unavailable
 schema refuses the read rather than reporting missing backing sessions. Canonical
 admission, malformed-row handling, retention, and update behavior are unchanged.
+
+Shared GitHub publication prepares canonical profile identity and alias-binding
+lifetimes through the existing profile catalogue and read worker. Alias writers
+publish their committed binding facts before observers; worker creation and
+lost-reply reconciliation use the same catalogue publication owner. Final
+profile identity checks read those retained facts before and after policy callbacks,
+without a synchronous database fallback. Unsettled profile mutations keep publication
+pending until the mutation owner confirms its outcome. Store replacement invalidates the
+retained identity. Doctor alias repairs use exclusive Gateway maintenance, and
+the next Gateway prepares facts from the resulting store.
+Grant resumption reads the current assigned role and email aliases from that
+retained owner on each assertion. The requester resolves its role ceiling from
+those supplied facts through the shared role-policy owner.
+
+Session metadata and membership facts are prepared through the existing session
+worker. Their canonical writers publish committed changes before observers, and
+unknown or unavailable facts leave publication recovery pending until preparation
+succeeds. Incognito sessions retain facts from their existing in-memory writer
+lifetime. The requester evaluates these facts with the current role and profile
+aliases before and after policy callbacks.
 
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
@@ -158,3 +189,12 @@ owners; these reporting snapshots grant no execution or deletion authority.
 This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the
 [storage review checkpoint](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes).
+
+Administrative skill archive uploads use the shared-state worker for staging,
+expiry cleanup, commit, installation claims, lease renewal, and consumption. The
+host retains per-upload locks and temporary archive materialization. Installation
+completion joins accepted renewals before consuming or releasing the exact owner
+lease; database close joins the callback and its retained worker cleanup. Cleanup
+refuses a replacement physical database and cannot delete a successor's lease.
+Upload formats, expiry limits, installation permissions, and update behavior are
+unchanged.

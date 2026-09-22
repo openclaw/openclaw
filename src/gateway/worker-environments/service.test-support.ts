@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import type {
   WorkerDesktopEndpoint,
@@ -12,6 +12,7 @@ import type {
 } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
@@ -112,12 +113,14 @@ export const testState = {} as {
   config: OpenClawConfig;
   nowMs: number;
   providersEnabled: boolean;
+  reuseReadWorkers: boolean;
   prepareInstallation: WorkerEnvironmentServiceOptions["prepareInstallation"];
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
 
-export function setupWorkerEnvironmentServiceSuite() {
+export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?: boolean } = {}) {
   beforeEach(async () => {
+    testState.reuseReadWorkers = options.reuseReadWorkers === true;
     testState.root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"),
     );
@@ -155,10 +158,26 @@ export function setupWorkerEnvironmentServiceSuite() {
     // Shutdown may schedule cleanup after a test leaves fake timers installed.
     vi.useRealTimers();
     await testState.service?.stop();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeWorkerEnvironmentDatabase();
     await fs.rm(testState.root, { recursive: true, force: true });
   });
+
+  if (options.reuseReadWorkers) {
+    afterAll(async () => {
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+    });
+  }
+}
+
+async function closeWorkerEnvironmentDatabase() {
+  if (testState.reuseReadWorkers) {
+    // Close native handles and admission for this case; retain only the reader worker code.
+    await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
+  } else {
+    await closeOpenClawStateDatabaseAsync();
+  }
+  closeOpenClawStateDatabaseForTest();
 }
 
 export function getDevelopmentProfile() {
@@ -171,8 +190,7 @@ export function getDevelopmentProfile() {
 export async function reopenWorkerEnvironmentStore() {
   await testState.service?.stop();
   testState.service = undefined;
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+  await closeWorkerEnvironmentDatabase();
   testState.stateDb = openOpenClawStateDatabase({
     env: { OPENCLAW_STATE_DIR: testState.root },
   });

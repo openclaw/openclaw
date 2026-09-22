@@ -808,21 +808,23 @@ describe("scripts/test-extension.mts", () => {
     await expect(runPromise).resolves.toBe(0);
     expect(runGroup).toHaveBeenCalledTimes(3);
     const firstRunGroupParams = requireFirstMockArg<RunGroupParams>(runGroup);
-    expect(firstRunGroupParams).toEqual({
+    expect(firstRunGroupParams).toMatchObject({
       args: ["--reporter=dot"],
       config: "heavy",
       env: {
         OPENCLAW_EXTENSION_BATCH_PARALLEL: "2",
-        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
-          process.cwd(),
-          ".cache",
-          "vitest",
-          "extension-batch",
-          "0-heavy",
-        ),
       },
       targets: ["two"],
     });
+    const cachePaths = runGroup.mock.calls.map(([params]) =>
+      params.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/"),
+    );
+    expect(new Set(cachePaths).size).toBe(3);
+    expect(
+      cachePaths.every((cachePath) =>
+        /\/\.cache\/vitest\/slots\/[a-f\d]+\/0$/u.test(cachePath ?? ""),
+      ),
+    ).toBe(true);
   });
 
   it("stops admitting extension batch groups after a parallel failure", async () => {

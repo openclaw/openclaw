@@ -98,7 +98,7 @@ struct CronJobsStoreTests {
         await fixture.gateway.shutdown()
     }
 
-    @Test(arguments: ["event", "manual"])
+    @Test(.timeLimit(.minutes(1)), arguments: ["event", "manual"])
     func `replacement refresh waits for its canceled predecessor to drain`(replacement: String) async throws {
         let (lookups, entered) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         let (releases, release) = AsyncStream<Void>.makeStream()
@@ -130,7 +130,7 @@ struct CronJobsStoreTests {
         }
         do {
             store.start()
-            try await self.waitUntil { store.summary.jobs.count == 1 }
+            try await self.waitForJobCount(1, in: store)
             fixture.catalogTotal.setValue(0)
             holdNextLookup.setValue(true)
             try self.sendCronEvent(fixture, sequence: 1)
@@ -162,7 +162,7 @@ struct CronJobsStoreTests {
             try await Task.sleep(for: .milliseconds(350))
             #expect(fixture.requests.value.count { $0.method == "cron.list" } == count)
             release.finish()
-            try await self.waitUntil { store.summary.jobs.isEmpty }
+            try await self.waitForJobCount(0, in: store)
             #expect(fixture.requests.value.count { $0.method == "cron.list" } > count)
         } catch {
             await cleanup()
@@ -177,6 +177,20 @@ struct CronJobsStoreTests {
         {"type":"event","event":"cron","seq":\#(sequence),"payload":{"jobId":"shared-job","action":"finished"}}
         """#
         request.socket.emitReceiveSuccess(.string(event))
+    }
+
+    private func waitForJobCount(_ count: Int, in store: CronJobsStore) async throws {
+        while true {
+            try Task.checkCancellation()
+            let changed = AsyncTestGate()
+            let ready = withObservationTracking {
+                store.summary.jobs.count == count
+            } onChange: {
+                changed.open()
+            }
+            if ready { return }
+            await changed.wait()
+        }
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {

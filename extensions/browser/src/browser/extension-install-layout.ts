@@ -3,7 +3,11 @@ import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { inspectPathPermissions } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type { NativeWindowsContext } from "./extension-windows-contract.js";
+import type { runWindowsManagement } from "./extension-windows-management.js";
+import type { WindowsNativePlatform } from "./extension-windows-platform.js";
 
 const EXTENSION_ID_PATTERN = /^[a-p]{32}$/;
 const UNPACKED_MANIFEST_LOCATION = 4;
@@ -32,6 +36,13 @@ export type DiscoveredChromeStoreExtension = Omit<DiscoveredChromeExtension, "ex
   enabled: boolean;
   awaitingApproval: boolean;
 };
+type WindowsNativeHostDeps = {
+  platform?: WindowsNativePlatform;
+  manage?: typeof runWindowsManagement;
+  context?: NativeWindowsContext;
+  cliPath?: string;
+  executable?: string;
+};
 export type ExtensionInstallDeps = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -39,6 +50,7 @@ export type ExtensionInstallDeps = {
   homeDir?: string;
   nodePath?: string;
   nativeHostPath?: string;
+  windowsNative?: WindowsNativeHostDeps;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 };
@@ -195,7 +207,18 @@ export async function assertOwnedPath(
   if (info.isSymbolicLink() || (kind === "file" ? !info.isFile() : !info.isDirectory())) {
     throw new Error(`Unsafe ${kind} at ${target}`);
   }
-  if (process.platform !== "win32") {
+  if (process.platform === "win32") {
+    const permissions = await inspectPathPermissions(target);
+    if (
+      !permissions.ok ||
+      permissions.source !== "windows-acl" ||
+      permissions.ownerTrusted !== true ||
+      permissions.groupWritable ||
+      permissions.worldWritable
+    ) {
+      throw new Error(`Refusing unsafe Windows owner or ACL at ${target}`);
+    }
+  } else {
     const uid = process.getuid?.();
     const ownerAllowed =
       uid === undefined || info.uid === uid || (policy.allowRootOwner === true && info.uid === 0);
@@ -206,7 +229,13 @@ export async function assertOwnedPath(
       throw new Error(`Refusing group/world-writable path at ${target}`);
     }
   }
-  if ((await fs.realpath(target)) !== path.resolve(target)) {
+  const canonical = await fs.realpath(target);
+  const expected = path.resolve(target);
+  if (
+    process.platform === "win32"
+      ? canonical.toLowerCase() !== expected.toLowerCase()
+      : canonical !== expected
+  ) {
     throw new Error(`Refusing non-canonical path at ${target}`);
   }
 }

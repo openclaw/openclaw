@@ -469,6 +469,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Could not stage an attachment for sending." to R.string.native_002a6fcb30b2def4,
     "Could not start the camera." to R.string.native_5b66be89c860e983,
     "Could not start the camera. Choose a QR image from gallery or enter the setup code manually." to R.string.native_abd1b2fa48abb83a,
+    "Could not stop the response. Refresh and try again." to R.string.native_b82c89a18faf5200,
     "Could not test connection" to R.string.native_27d3187bb72ef714,
     "Could not update fast mode." to R.string.native_3d5bb79e43953d9a,
     "Could not update model." to R.string.native_9ca009adf23586a3,

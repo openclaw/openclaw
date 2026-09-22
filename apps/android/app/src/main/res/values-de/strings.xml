@@ -1317,6 +1317,7 @@
     <string name="native_b7b89bf0fd930a9f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Keine konfigurierten Modelle"</string>
     <string name="native_b7c397f33783abec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Das Gateway überprüft vor dem Download genau diese Version über ClawHub. Die Prüfungsergebnisse werden im Installationsergebnis angezeigt. Blockierte Versionen oder eine nicht verfügbare Sicherheitsüberprüfung verhindern die Installation."</string>
     <string name="native_b7e3e4aa4257b9a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Deaktivieren"</string>
+    <string name="native_b82c89a18faf5200" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Die Antwort konnte nicht gestoppt werden. Bitte aktualisieren und erneut versuchen."</string>
     <string name="native_b8352b44a588721c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"App-Sprache"</string>
     <string name="native_b8380b8a2317b9fb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway wird gekoppelt"</string>
     <string name="native_b847ffdd0a1bfe55" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Auswahlaktionen"</string>

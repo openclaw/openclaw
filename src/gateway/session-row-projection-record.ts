@@ -15,11 +15,23 @@ import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
 
+export type SessionRowStore = {
+  target: SessionStoreTarget;
+  agentId: string;
+  discoveryAgentId: string | null;
+  discoveryOrder?: number;
+  identity: string | symbol;
+  birthtime: string | undefined;
+  filename: string;
+};
+
 export type Row = {
   key: string;
   agentId: string;
   storeTarget: SessionStoreTarget;
   storedEntry?: SessionEntry;
+  /** Current committed sharing facts remain usable while display materialization is dirty. */
+  sharingEntry?: SessionEntry;
   entry?: SessionEntry;
   selection: ReturnType<typeof readSessionListSelectionFacts>;
   materialized?: ReturnType<typeof rowProjection.materializeSessionRow>;
@@ -72,15 +84,34 @@ export function markRelated(
     byKey: ReadonlyMap<string, Set<string>>;
   },
   dirty: Set<string>,
+  includeChildren = true,
 ) {
-  for (const id of dependents(row, indexes.byParent)) {
-    dirty.add(id);
+  if (includeChildren) {
+    for (const id of dependents(row, indexes.byParent)) {
+      dirty.add(id);
+    }
   }
   for (const parent of row.parents) {
     for (const id of indexes.byKey.get(parent) ?? []) {
       dirty.add(id);
     }
   }
+}
+
+/** Children consume parent model overrides, not its changing progress or display metadata. */
+export function changesSessionRowDependents(before: Row["storedEntry"], after: Row["storedEntry"]) {
+  return (
+    !before ||
+    !after ||
+    before.sessionId !== after.sessionId ||
+    before.lifecycleRevision !== after.lifecycleRevision ||
+    before.providerOverride !== after.providerOverride ||
+    before.modelOverride !== after.modelOverride ||
+    before.modelOverrideSource !== after.modelOverrideSource ||
+    before.modelOverrideRouteResolution !== after.modelOverrideRouteResolution ||
+    before.modelOverrideFallbackOriginProvider !== after.modelOverrideFallbackOriginProvider ||
+    before.modelOverrideFallbackOriginModel !== after.modelOverrideFallbackOriginModel
+  );
 }
 
 /** Mark resident logical owners without changing stored entries, relatives, or backfill. */
@@ -100,6 +131,7 @@ export function create(target: RowTarget, entry?: SessionEntry): Row {
   return {
     ...target,
     storedEntry: entry,
+    sharingEntry: entry,
     selection: readSessionListSelectionFacts(target.key, entry),
     parents: new Set(),
     membership: new Set(),
@@ -112,6 +144,7 @@ export function renewGeneration(row: Row): Row {
     ...row,
     entry: undefined,
     storedEntry: undefined,
+    sharingEntry: undefined,
     materialized: undefined,
     lastMessagePreview: undefined,
     fallbackModel: undefined,
@@ -198,6 +231,17 @@ export function present(
     row.lastMessagePreview = undefined;
   }
   return row;
+}
+
+/** The wire snapshot and lifecycle identity come from the same materialized record. */
+export function snapshot(
+  row: MaterializedRow | undefined,
+  context: SessionListRowContext,
+  options: SnapshotOptions,
+) {
+  return row
+    ? { row: present(row, context, options), lifecycleRunId: row.entry.lifecycleRunId }
+    : { row: null };
 }
 
 function updateIndex(
@@ -336,7 +380,7 @@ export function acquireSessionRowEntry(params: {
   context: SessionListRowContext;
   remove: (id: string) => void;
   put: (row: Row) => void;
-  markRelated: (row: Row) => void;
+  markRelated: (row: Row, includeChildren: boolean) => void;
   archive: { demote: (row: Row) => Row; forget: (id: string) => void };
 }) {
   const { row, storedEntry, cfg, context, remove, put, archive } = params;
@@ -351,8 +395,9 @@ export function acquireSessionRowEntry(params: {
     !sameParents(row.parents, parents) ||
     !Object.is(storedEntry.updatedAt, row.storedEntry?.updatedAt) ||
     !isDeepStrictEqual(storedEntry, row.storedEntry);
+  const includeChildren = changesSessionRowDependents(row.storedEntry, storedEntry);
   if (changed) {
-    params.markRelated(row);
+    params.markRelated(row, includeChildren);
   }
   const generation =
     !row.entry ||
@@ -364,6 +409,7 @@ export function acquireSessionRowEntry(params: {
     ...row,
     storedEntry,
     entry,
+    sharingEntry: entry,
     // Selection metadata survives archive dematerialization and refreshes with the entry.
     selection: readSessionListSelectionFacts(row.key, entry),
     parents,
@@ -384,7 +430,7 @@ export function acquireSessionRowEntry(params: {
     archive.forget(identity(next));
   }
   if (changed) {
-    params.markRelated(next);
+    params.markRelated(next, includeChildren);
   }
   return next;
 }

@@ -521,7 +521,7 @@ const CodeModeSchema = z
     z.literal("auto"),
     z
       .object({
-        /** OpenClaw Code Mode default, overridden by per-model codeMode. Default: false; "auto" engages catalog-preferred models. */
+        /** Explicit object-form activation. Omitted stays off; "auto" engages catalog-preferred models. A completely absent global codeMode setting defaults separately to auto. */
         enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
         /** Executor. Node is the default; QuickJS provides a separate WASM guest. */
         executor: z.enum(["node", "quickjs"]).optional(),

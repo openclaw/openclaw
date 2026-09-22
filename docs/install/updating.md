@@ -167,7 +167,10 @@ require registry requests.
 
 This metadata check does not reserve downloads. Plugin-only download, install,
 or load failures remain actionable warnings after an otherwise successful core
-update. The updater preserves recorded choices and retains the previous plugin
+update. Candidate rehearsal also reports a plugin source parse failure as a warning
+with the plugin ID, source path, and parser error, then continues checking other
+plugin entries. Valid ESM plugins can use `import.meta` during dependency inspection.
+The updater preserves recorded choices and retains the previous plugin
 payload where possible. Follow the reported `openclaw plugins update <id>` command for a
 failed install or update, or `openclaw doctor --fix` for a load problem. Invalid
 configuration or state, ownership errors, and failed core startup or readiness

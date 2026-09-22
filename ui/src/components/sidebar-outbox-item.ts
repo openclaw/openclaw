@@ -16,7 +16,7 @@ registerSidebarAttentionEnglish();
 export function renderSidebarOutboxItem(params: {
   entry: Extract<SidebarInboxEntry, { type: "outbox" }>;
   context: ApplicationContext;
-  onClosePanel: () => void;
+  onNavigate: ApplicationContext["navigate"];
 }) {
   const { entry, context } = params;
   const connectionRevision = context.gateway.connectionRevision;
@@ -103,8 +103,7 @@ export function renderSidebarOutboxItem(params: {
             ) {
               return;
             }
-            params.onClosePanel();
-            context.navigate("chat", target.options);
+            params.onNavigate("chat", target.options);
           }}
           >${t("attention.outbox.reviewShort")}</a
         >

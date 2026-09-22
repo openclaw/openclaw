@@ -38,6 +38,7 @@ async function write<Key extends keyof UserProfileWriteOperations>(
   type: Key,
   input: UserProfileWriteOperations[Key]["input"],
   options: ProfileWriteOptions,
+  onCommitted?: (publication: UserProfileMutationPublication) => void,
 ): Promise<UserProfileWriteOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = options.assertCurrent;
@@ -87,15 +88,21 @@ async function write<Key extends keyof UserProfileWriteOperations>(
               if (entry.published) {
                 continue;
               }
-              entry.publication.reconcile(facts.after);
-              if (facts.changes.identities.length || facts.changes.channels.length) {
-                publishUserProfileAliasChange();
-              }
-              if (facts.changes.profiles.length && isDeepStrictEqual(facts.before, facts.after)) {
+              entry.publication.reconcile(facts.after, facts.emailBindings, () => {
+                if (facts.changes.identities.length || facts.changes.channels.length) {
+                  publishUserProfileAliasChange();
+                }
+                entry.published = true;
+                entry.fence.settle(true);
+                onCommitted?.(facts);
+              });
+              if (
+                facts.changes.profiles.length &&
+                facts.emailBindings.length === 0 &&
+                isDeepStrictEqual(facts.before, facts.after)
+              ) {
                 emitUserProfilesChanged();
               }
-              entry.published = true;
-              entry.fence.settle(true);
             }
           };
           const admission = createSqliteWorkerOperationAdmission((request, grant) => {
@@ -128,6 +135,7 @@ async function write<Key extends keyof UserProfileWriteOperations>(
             const publication = retainUserProfileMutationPublication(
               context.admission.identity,
               facts.before,
+              facts.emailBindings,
             );
             const fence = fenceUserProfileMutationAuthority(context.admission, facts.changes);
             const entry = { facts, publication, fence, granted: false, published: false };
@@ -148,9 +156,11 @@ async function write<Key extends keyof UserProfileWriteOperations>(
                   (receiptsValid && settlement.kind === "completed");
                 if (!entry.published && entry.granted) {
                   if (known) {
-                    entry.publication.reconcile(entry.facts.before);
+                    entry.publication.reconcile(entry.facts.before, [], () =>
+                      entry.fence.settle(true),
+                    );
                   } else {
-                    entry.publication.invalidate();
+                    entry.publication.invalidate(() => entry.fence.settle(false));
                   }
                 }
                 entry.fence.settle(known);
@@ -172,9 +182,17 @@ async function write<Key extends keyof UserProfileWriteOperations>(
 export async function setCanonicalUserProfileRole(
   profileId: string,
   role: string | null,
-  options: ProfileWriteOptions = {},
+  options: ProfileWriteOptions & { onCommitted?: (profileId: string) => void } = {},
 ) {
-  return unwrap(await write("userProfiles.setRole", { profileId, role }, options));
+  const onCommitted = options.onCommitted;
+  return unwrap(
+    await write("userProfiles.setRole", { profileId, role }, options, (publication) => {
+      // The validated receipt names the canonical profile even when the caller used an alias.
+      for (const [id] of publication.after) {
+        onCommitted?.(id);
+      }
+    }),
+  );
 }
 export async function linkCanonicalUserProfileEmail(
   email: string,

@@ -125,6 +125,7 @@ scripts/lib/test-selector-source-facts.mts
 scripts/lib/tsdown-declaration-boundary.mts
 scripts/lib/tsx-cli-shim.mjs
 scripts/lib/vitest-build-prerequisites.mts
+scripts/lib/vitest-cache-slots.mts
 scripts/lib/vitest-cli-mode.mts
 scripts/lib/vitest-cli.mts
 scripts/lib/vitest-home-selection.mts
@@ -679,6 +680,7 @@ src/infra/replace-file.ts
 src/infra/restart-stale-pids.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
+src/infra/runtime-worker-generation.ts
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
 src/infra/sealed-runtime-registry.ts
@@ -701,6 +703,7 @@ src/infra/sqlite-handle-lifecycle.ts
 src/infra/sqlite-index-schema.ts
 src/infra/sqlite-integrity.ts
 src/infra/sqlite-live-snapshot.ts
+src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
@@ -1158,6 +1161,7 @@ src/state/openclaw-agent-db-contract.ts
 src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
 src/state/openclaw-agent-db.paths.ts
+src/state/openclaw-quarantine-error.ts
 src/state/openclaw-quarantine-store.ts
 src/state/openclaw-state-db-additive-columns.ts
 src/state/openclaw-state-db-async-lifecycle.ts
@@ -1226,11 +1230,13 @@ src/state/openclaw-state-schema-publication.ts
 src/state/openclaw-state-schema.sql
 src/state/openclaw-state-schema.ts
 src/state/openclaw-state-worker-context.ts
+src/state/openclaw-state-worker-error-identity.ts
 src/state/openclaw-state-worker-error.ts
 src/state/openclaw-state-worker-operation.ts
 src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts
+src/state/session-metadata-unavailable-error.ts
 src/state/session-watch-cursor-provenance.ts
 src/utils.ts
 src/utils/boolean.ts

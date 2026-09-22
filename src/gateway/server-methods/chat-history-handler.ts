@@ -58,7 +58,6 @@ import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   createChatHistoryByteCounter,
   createChatHistoryActivityProjection,
-  chatHistoryActivityBytes,
   replaceOversizedChatHistoryMessages,
   reportOmittedChatHistory,
   trimChatHistoryActivity,
@@ -76,7 +75,6 @@ import {
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
-import { validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { handleChatStartupRequest } from "./chat-startup-handler.js";
 import { prepareChatStartupRequester } from "./chat-startup-requester.js";
@@ -152,13 +150,17 @@ export async function handleChatHistoryRequest({
   const selectedSession = measureDiagnosticsTimelineSpanSync(
     `gateway.${method}.session_entry`,
     () =>
-      loadGatewaySessionEntryReadOnly(sessionKey, {
-        agentId: requestedAgent.agentId,
-        // Exact reads own their nested JSON; history only projects that snapshot.
-        clone: false,
-        includeStoreChildEntries: true,
-        projection: "list",
-      }),
+      loadGatewaySessionEntryReadOnly(
+        sessionKey,
+        {
+          agentId: requestedAgent.agentId,
+          // Exact reads own their nested JSON; history only projects that snapshot.
+          clone: false,
+          includeStoreChildEntries: true,
+          projection: "list",
+        },
+        requestConfig,
+      ),
     {
       config: requestConfig,
       phase: method,
@@ -172,15 +174,6 @@ export async function handleChatHistoryRequest({
     canonicalKey,
     legacyKey,
   } = selectedSession;
-  const selectedAgent = validateChatSelectedAgent({
-    cfg,
-    requestedSessionKey: sessionKey,
-    explicitAgentId: agentIdOverride,
-  });
-  if (!selectedAgent.ok) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-    return;
-  }
   const authorizeSharing = (current: typeof selectedSession) => {
     const sharing = prepareSessionSharing({ client, cfg: current.cfg });
     if (
@@ -668,7 +661,8 @@ export async function handleChatHistoryRequest({
           const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
             snapshot: inFlightRun,
             messages: delta.messages,
-            maxBytes: maxHistoryBytes - chatHistoryActivityBytes(delta.activity),
+            getMessagesBytes: () => delta.messagesBytes,
+            maxBytes: maxHistoryBytes - delta.activityBytes,
           });
           respond(true, {
             kind: "delta",

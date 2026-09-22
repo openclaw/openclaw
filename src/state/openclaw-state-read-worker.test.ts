@@ -84,6 +84,7 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
     type: "userProfiles.reconcile",
     sourceAdmitted: true,
     profile: descriptor,
+    emailBindings: [],
   });
   const closing = closeOpenClawStateDatabaseAsync();
   void closing.catch(() => {});
@@ -98,7 +99,7 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
       type: "userProfiles.reconcile",
       profileId: profile.id,
     });
-    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor);
+    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor, []);
     expect(release).toHaveBeenCalledOnce();
     expect(recovery.close).toHaveBeenCalledOnce();
     await poolStopping.promise;
@@ -134,6 +135,7 @@ it.each([false, true])(
       type: command.type,
       sourceAdmitted: true,
       profile: descriptor,
+      emailBindings: [],
     };
     const task = queueTask();
     const delivery = new Error("mutation result delivery failed");
@@ -196,7 +198,7 @@ it.each([false, true])(
       stopped.resolve();
       await closing;
     }
-    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor);
+    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor, []);
     expect(release).toHaveBeenCalledOnce();
     expect(mutation).toHaveBeenCalledOnce();
     expect(task.close).toHaveBeenCalledTimes(retryFails ? 3 : 2);
@@ -557,7 +559,7 @@ it.each([
         : type === "fleet.get"
           ? { ok: true, type, sourceAdmitted: true, cell: undefined }
           : type === "userProfiles.reconcile"
-            ? { ok: true, type, sourceAdmitted: true, profile: undefined }
+            ? { ok: true, type, sourceAdmitted: true, profile: undefined, emailBindings: [] }
             : type === "onboardingRecommendations.read"
               ? { ok: true, type, sourceAdmitted: true, record: null }
               : type === "pluginBlob.lookup"

@@ -191,6 +191,45 @@ it("preserves unexpected contents and symbolic links instead of adopting them as
   await expect(fs.lstat(linked)).resolves.toSatisfy((entry) => entry.isSymbolicLink());
 });
 
+it("classifies active scratch before inspecting a journal that can disappear", async () => {
+  const root = dirs.make("backup-scratch-active-journal-");
+  const scratch = await createBackupScratchDirectory(root);
+  const snapshot = path.join(scratch.directory, ".sqlite-snapshot-Active");
+  await fs.mkdir(snapshot);
+  const database = nodeSqlite.openNodeSqliteDatabase(path.join(snapshot, "database.sqlite"));
+  const journal = path.join(snapshot, "database.sqlite-journal");
+  const lstat = fs.lstat;
+  let inspectedJournal = false;
+  const inspect = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    if (args[0] === journal) {
+      inspectedJournal = true;
+      // A live snapshot can commit between the maintainer's readdir and lstat.
+      database.exec("COMMIT");
+    }
+    return lstat(...args);
+  });
+  try {
+    database.exec(
+      "PRAGMA journal_mode = DELETE; CREATE TABLE fixture (id INTEGER); BEGIN IMMEDIATE; INSERT INTO fixture VALUES (1);",
+    );
+    expect(fsSync.existsSync(journal)).toBe(true);
+    const report = await maintainBackupScratch({ roots: [root], repair: true, log: () => {} });
+    expect(report.warnings).toEqual([]);
+    expect(report.active).toEqual([scratch.directory]);
+    expect(report.reclaimed).toEqual([]);
+    expect(report.alreadyReclaimed).toEqual([]);
+    expect(inspectedJournal).toBe(false);
+    expect(database.isTransaction).toBe(true);
+  } finally {
+    inspect.mockRestore();
+    if (database.isTransaction) {
+      database.exec("ROLLBACK");
+    }
+    database.close();
+    await finishBackupScratch(scratch);
+  }
+});
+
 it("reclaims abandoned scratch while a live transaction protects its files", async () => {
   const root = dirs.make("backup-scratch-lifetime-");
   const abandoned = await createBackupScratchDirectory(root);

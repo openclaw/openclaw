@@ -324,18 +324,30 @@ test("sessions.patch reclaims the exact active cloud placement before archive me
     },
   );
 
-  await reclaimStarted.promise;
-  expect(reclaim).toHaveBeenCalledOnce();
-  expect(reclaim).toHaveBeenCalledWith(
-    { sessionId, sessionKey, agentId: "main" },
-    expect.any(Function),
-    expect.any(Function),
-  );
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
-  reclaimGate.resolve();
+  try {
+    await Promise.race([
+      reclaimStarted.promise,
+      archive.then((result) => {
+        expect(result).toMatchObject({ ok: true });
+        throw new Error("archive completed before worker reclaim");
+      }),
+    ]);
+    expect(reclaim).toHaveBeenCalledOnce();
+    expect(reclaim).toHaveBeenCalledWith(
+      { sessionId, sessionKey, agentId: "main" },
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+    reclaimGate.resolve();
 
-  await expect(archive).resolves.toMatchObject({ ok: true });
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+    await expect(archive).resolves.toMatchObject({ ok: true });
+    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+  } finally {
+    // Join the held request before fixture teardown closes its databases.
+    reclaimGate.resolve();
+    await archive;
+  }
 });
 
 test.each(["rejected", "unavailable"] as const)(
@@ -447,7 +459,8 @@ test.each(["active", "failed"] as const)(
     await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
     let placement = workerPlacement({ sessionId, sessionKey, state });
     const drainGate = createDeferredCore();
-    const drainStarted = vi.fn();
+    const drainEntered = createDeferredCore();
+    const drainStarted = vi.fn(() => drainEntered.resolve());
     const release = vi.fn();
     const reclaim = vi.fn();
 
@@ -466,21 +479,34 @@ test.each(["active", "failed"] as const)(
       },
     );
 
-    await vi.waitFor(() => expect(drainStarted).toHaveBeenCalledOnce());
-    placement = workerPlacement({
-      sessionId,
-      sessionKey: "agent:main:replacement-placement",
-      state: "active",
-    });
-    drainGate.resolve();
+    try {
+      await Promise.race([
+        drainEntered.promise,
+        archive.then((result) => {
+          expect(result).toMatchObject({ ok: true });
+          throw new Error("archive completed before runtime drain");
+        }),
+      ]);
+      expect(drainStarted).toHaveBeenCalledOnce();
+      placement = workerPlacement({
+        sessionId,
+        sessionKey: "agent:main:replacement-placement",
+        state: "active",
+      });
+      drainGate.resolve();
 
-    await expect(archive).resolves.toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", retryable: true },
-    });
-    expect(reclaim).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledOnce();
-    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+      await expect(archive).resolves.toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", retryable: true },
+      });
+      expect(reclaim).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+      expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+    } finally {
+      // Release and join even when a phase assertion fails, before fixture reset.
+      drainGate.resolve();
+      await archive;
+    }
   },
 );
 

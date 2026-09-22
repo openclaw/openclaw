@@ -8,10 +8,7 @@ import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-s
 import type { VectorKnnRequest, VectorKnnResponse } from "./manager-search-knn.js";
 import { resolveSnippetProjection, type SearchRowResult } from "./manager-search-shared.js";
 
-// Scan fallback vector rows in bounded batches so large chunk tables (no usable
-// vec0 index) cannot pin the main thread for multi-second windows and starve
-// channel I/O / liveness signals. Matches the session-indexing yield pattern
-// introduced in #76978 for the same class of bug. Issue #81172.
+// Bound scan batches so worker cancellation can interrupt large vectorless indexes.
 const FALLBACK_VECTOR_BATCH_SIZE = 256;
 
 function yieldToEventLoop(): Promise<void> {
@@ -33,7 +30,6 @@ function buildModelFilter(column: string, models: string[]): string {
 }
 
 export async function searchVector(params: {
-  db: DatabaseSync;
   vectorTable: string;
   providerModel: string;
   providerModelAliases?: string[];
@@ -43,28 +39,14 @@ export async function searchVector(params: {
   signal?: AbortSignal;
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
   runVectorKnn?: (request: VectorKnnRequest, signal?: AbortSignal) => Promise<VectorKnnResponse>;
-  runFallback?: () => Promise<SearchRowResult[]>;
+  runFallback: () => Promise<SearchRowResult[]>;
   sourceFilterVec: { sql: string; params: SearchSource[] };
-  sourceFilterChunks: { sql: string; params: SearchSource[] };
 }): Promise<SearchRowResult[]> {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
   }
   params.signal?.throwIfAborted();
   const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
-  const searchFallback =
-    params.runFallback ??
-    (() =>
-      searchChunksByEmbedding({
-        db: params.db,
-        providerModel: params.providerModel,
-        providerModelAliases: params.providerModelAliases,
-        sourceFilter: params.sourceFilterChunks,
-        queryVec: params.queryVec,
-        limit: params.limit,
-        snippetMaxChars: params.snippetMaxChars,
-        signal: params.signal,
-      }));
   const vectorReady = await params.ensureVectorReady(params.queryVec.length);
   params.signal?.throwIfAborted();
   if (vectorReady) {
@@ -83,7 +65,7 @@ export async function searchVector(params: {
       params.signal,
     );
     if (response.fallbackScanRequired) {
-      return await searchFallback();
+      return await params.runFallback();
     }
     return response.rows.map((row) => ({
       id: row.id,
@@ -96,7 +78,7 @@ export async function searchVector(params: {
     }));
   }
 
-  return await searchFallback();
+  return await params.runFallback();
 }
 
 export async function searchChunksByEmbedding(params: {

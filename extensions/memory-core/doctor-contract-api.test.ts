@@ -23,7 +23,6 @@ import {
 } from "./src/dreaming-state.js";
 import { bm25RankToScore, buildFtsQuery } from "./src/memory/keyword-query.js";
 import { runVectorKnnQuery } from "./src/memory/manager-search-knn.js";
-import { searchVector } from "./src/memory/manager-search-vector.js";
 import { searchKeyword } from "./src/memory/manager-search.js";
 import {
   dreamingTestState as dreamingTesting,
@@ -403,18 +402,14 @@ async function searchMigratedVectorRows(agentPath: string) {
   try {
     const loaded = await loadSqliteVecExtension({ db });
     expect(loaded.ok, loaded.error).toBe(true);
-    return await searchVector({
-      db,
+    return runVectorKnnQuery(db, {
       vectorTable: "memory_index_chunks_vec",
-      providerModel: "embed-model",
+      providerModels: ["embed-model"],
       queryVec: [1, 0, 0],
       limit: 1,
       snippetMaxChars: 200,
-      ensureVectorReady: async () => true,
-      runVectorKnn: async (request) => runVectorKnnQuery(db, request),
-      sourceFilterVec: { sql: "", params: [] },
-      sourceFilterChunks: { sql: "", params: [] },
-    });
+      sourceFilter: { sql: "", params: [] },
+    }).rows;
   } finally {
     db.close();
   }

@@ -9,15 +9,18 @@ import { afterEach, expect, it, vi } from "vitest";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  triageRuntimeNodeOptions,
+  useTriageLeaseDatabaseFixture,
+} from "./triage-lease-fixture.test-support.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "./update-managed-service-handoff-lease.js";
-import {
-  createTriageBoundary,
-  triageRuntimeNodeOptions,
-} from "./update-managed-service-triage.test-support.js";
+import { createTriageBoundary } from "./update-managed-service-triage.test-support.js";
+
+useTriageLeaseDatabaseFixture();
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
