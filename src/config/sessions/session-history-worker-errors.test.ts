@@ -43,6 +43,7 @@ const observed = vi.hoisted(() => ({
   quarantineRead: vi.fn<() => unknown>(),
   quarantineClose: vi.fn<() => void>(),
   quarantineOpen: vi.fn<() => QuarantineDatabase>(),
+  quarantinePaths: new Set<string>(),
   hydrate: vi.fn<() => unknown>(),
   rotate: vi.fn<() => Promise<void>>(),
   unregister: vi.fn<() => void>(),
@@ -108,9 +109,22 @@ vi.mock("../../state/openclaw-agent-db-readonly-scope.js", () => ({
     }
   },
 }));
-vi.mock("../../infra/node-sqlite.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/node-sqlite.js")>()),
-  openNodeSqliteDatabase: observed.quarantineOpen,
+vi.mock("../../infra/node-sqlite.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/node-sqlite.js")>();
+  return {
+    ...actual,
+    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) =>
+      observed.quarantinePaths.has(args[0])
+        ? observed.quarantineOpen()
+        : actual.openNodeSqliteDatabase(...args),
+  };
+});
+// Keep the history fixture's fake pool out of the process-wide disk-scan singleton.
+vi.mock("./disk-budget-runtime.js", () => ({
+  measureSessionPhysicalDiskUsage: () => {
+    throw new Error("Disk scans are forbidden in these pure controls");
+  },
+  drainSessionDiskBudgetWorkers: async () => {},
 }));
 vi.mock("./session-transcript-hydration.worker.js", () => ({
   streamSessionTranscriptHydration: observed.hydrate,
@@ -203,6 +217,7 @@ beforeEach(() => {
   observed.run.mockReset();
   observed.rotate.mockReset().mockResolvedValue(undefined);
   observed.unregister.mockReset();
+  observed.quarantinePaths.clear();
   observed.quarantineRead.mockReset().mockReturnValue({ user_version: 0 });
   observed.quarantineClose.mockReset();
   observed.quarantineOpen.mockReset().mockImplementation(() => {
@@ -606,7 +621,9 @@ it.each(typedFailures)(
 function hydrateThroughWorker() {
   const root = tempDirs.make("openclaw-hydration-quarantine-cleanup-");
   fs.mkdirSync(path.join(root, "state"));
-  fs.writeFileSync(path.join(root, "state", "openclaw-quarantine.sqlite"), "mock quarantine");
+  const quarantinePath = path.join(root, "state", "openclaw-quarantine.sqlite");
+  observed.quarantinePaths.add(quarantinePath);
+  fs.writeFileSync(quarantinePath, "mock quarantine");
   installWorkerTransport();
   return prepareSessionTranscriptHydration({
     agentId: "main",

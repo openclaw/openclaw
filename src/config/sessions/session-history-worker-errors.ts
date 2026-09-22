@@ -11,8 +11,8 @@ import {
   SessionTranscriptStorageUnavailableError,
 } from "./session-transcript-projection-error.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence.js";
+import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
-  SessionTranscriptWorkerReadError,
   SessionTranscriptWorkerReply,
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";

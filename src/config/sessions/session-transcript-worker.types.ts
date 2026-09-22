@@ -12,7 +12,6 @@ import type {
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type {
@@ -56,11 +55,11 @@ import type {
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
-import type { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import type {
   SessionTranscriptSearchParams,
   SessionTranscriptSearchResult,
 } from "./session-transcript-search.types.js";
+import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 type SessionTranscriptSearchWorkerInput = {
@@ -354,14 +353,6 @@ export type SessionTranscriptWorkerValues = {
     resetRecallCutoff: ReturnType<typeof readSessionEntryResetRecallCutoff>;
   };
 };
-
-export type SessionTranscriptWorkerReadError =
-  | { kind: "read-error"; message: string; payload: OpenClawStateWorkerErrorPayload }
-  | { kind: "cold"; sessionId: string }
-  | { kind: "projection"; sessionId: string }
-  | { kind: "fence"; message: string }
-  | { kind: "syntax"; message: string }
-  | { kind: "storage"; reason?: SessionTranscriptStorageUnavailableError["reason"] };
 
 type SessionTranscriptWorkerError =
   | SessionTranscriptWorkerReadError

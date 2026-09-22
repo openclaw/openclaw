@@ -4,7 +4,7 @@ import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
-import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker.types.js";
+import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type ChatHistoryPage = {
