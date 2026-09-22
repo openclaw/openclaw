@@ -17,6 +17,12 @@ suite.define(() => {
       const answer = "The workspace check is complete.";
       const notice =
         "Model Fallback: backup/model (selected primary/model; selected model unavailable)";
+      const terminalAnswer = [
+        "<relevant-memories>",
+        "Internal memory context",
+        "</relevant-memories>",
+        answer,
+      ].join("\n");
       const user = {
         role: "user",
         content: [{ type: "text", text: "Check the workspace." }],
@@ -52,7 +58,7 @@ suite.define(() => {
           role: "assistant",
           content: [
             { type: "text", text: notice, openclawStatusNotice: true },
-            { type: "text", text: answer },
+            { type: "text", text: terminalAnswer },
           ],
         },
       });

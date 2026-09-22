@@ -50,14 +50,6 @@ export function projectSessionTerminalReplyMessage(message: unknown): unknown {
   return { ...record, content, text: undefined };
 }
 
-export function readSessionTerminalReplyDisplayContent(message: unknown): {
-  text: string;
-  hasNonText: boolean;
-  usesFallbackText: boolean;
-} {
-  return readSessionMessageDisplayContent(projectSessionTerminalReplyMessage(message));
-}
-
 /** Check whether a projected message has text or another displayable block. */
 export function hasDisplayableSessionMessage(message: unknown): boolean {
   const { text, hasNonText } = readSessionMessageDisplayContent(message);
