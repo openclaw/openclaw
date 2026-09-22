@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
@@ -18,6 +19,77 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow submit gates", () => {
+  it.each(["retry", "missing", "choose-workspace"] as const)(
+    "retains a saved project after failed discovery until %s resolves the choice",
+    async (recovery) => {
+      replaceBrowserPreference("ws://gateway.example", "main", {
+        workspace: "/workspace",
+        folder: "/workspace",
+        projectId: "registered",
+      });
+      const discovery = createDeferred<ProjectsListResult>();
+      let projects = discovery.promise;
+      const { place, flow, context } = createDraftFixture({
+        methods: ["sessions.create", "projects.list", "worktrees.branches"],
+        request: (method) =>
+          method === "projects.list"
+            ? projects
+            : Promise.resolve({ repositoryStatus: "not_git", branches: [] }),
+      });
+      const read = place.browser.refreshProjects();
+      flow.setMessage("work in the saved project");
+      await flow.submit();
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      discovery.reject(new Error("Project discovery unavailable"));
+      await read;
+      place.restorePreferenceSelections();
+
+      expect(place.preferenceSelection().projectId).toBe("registered");
+      expect(flow.canSubmit()).toBe(false);
+      await flow.submit();
+      await flow.submit(undefined, true);
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+
+      if (recovery === "choose-workspace") {
+        place.applyFolder("/workspace");
+      } else {
+        projects = Promise.resolve({
+          projects:
+            recovery === "retry"
+              ? [{ id: "registered", displayName: "Registered", source: "registered" }]
+              : [],
+        });
+        await place.browser.refreshProjects();
+        place.restorePreferenceSelections();
+      }
+      expect(flow.canSubmit()).toBe(true);
+      await flow.submit();
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      const params = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+      if (recovery === "retry") {
+        expect(params).toHaveProperty("projectId", "registered");
+      } else {
+        expect(params).not.toHaveProperty("projectId");
+      }
+    },
+  );
+
+  it("does not block ordinary local submission when optional project discovery fails", async () => {
+    const { place, flow, context } = createDraftFixture({
+      methods: ["sessions.create", "projects.list"],
+      request: () => Promise.reject(new Error("Project discovery unavailable")),
+    });
+    await place.browser.refreshProjects();
+    place.restorePreferenceSelections();
+    flow.setMessage("start locally");
+    expect(flow.canSubmit()).toBe(true);
+    await flow.submit();
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]).not.toHaveProperty(
+      "projectId",
+    );
+  });
+
   it.each([
     {
       reason: "missing-auth",

@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql, type RawBuilder } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { withSqliteNativeOpen } from "./sqlite-error-diagnostics.js";
 
 export const SQLITE_STAGING_TOKEN_FILES = [
   "owner.sqlite",
@@ -58,7 +59,9 @@ export function acquireSqliteStagingToken(
   // Legacy callers may supply a parent without a token. Cooperating owners
   // create the same inode; SQLite arbitrates admission without recreating parents.
   const existingIdentity = existing ? readIdentity(location, "file") : undefined;
-  const db = openNodeSqliteDatabase(existing ? resolveExistingSqliteFileUri(location) : location);
+  const db = withSqliteNativeOpen(() =>
+    openNodeSqliteDatabase(existing ? resolveExistingSqliteFileUri(location) : location),
+  );
   let tokenIdentity: fs.BigIntStats;
   const kysely = getNodeSqliteKysely(db);
   const execute = (statement: RawBuilder<unknown>) =>

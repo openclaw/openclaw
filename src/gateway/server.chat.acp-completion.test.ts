@@ -45,7 +45,8 @@ vi.mock("../auto-reply/reply/dispatch-acp-transcript.runtime.js", async (importO
   };
 });
 
-vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", () => ({
+vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => ({
     resolveSession: ({ sessionKey }: { sessionKey: string }) => ({
       kind: "ready",
@@ -314,6 +315,7 @@ describe("Gateway ACP completion ownership", () => {
         },
       });
     });
+    const settlementObservers: Promise<unknown>[] = [];
     const frames: Array<{
       event?: string;
       payload?: {
@@ -363,6 +365,8 @@ describe("Gateway ACP completion ownership", () => {
             frame.payload?.sessionKey === sessionKey &&
             frame.payload?.reason === "agent.input.settled",
         );
+        // Keep the event waiter owned if the acceptance RPC fails before its await.
+        settlementObservers.push(Promise.allSettled([settled]));
         const accepted = await rpcReq(ws, "chat.send", sendParameters);
         expect(accepted.ok).toBe(true);
         if (scenario.rpcAbort) {
@@ -564,6 +568,7 @@ describe("Gateway ACP completion ownership", () => {
       }
     } finally {
       releaseTurn.resolve();
+      await Promise.all(settlementObservers);
       ws.off("message", capture);
     }
   });

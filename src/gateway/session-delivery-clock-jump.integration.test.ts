@@ -148,26 +148,6 @@ describe("session delivery clock-jump integration", () => {
           plugins: { slots: { memory: "none" } },
           tools: { profile: "minimal" },
         } satisfies OpenClawConfig;
-        const { id } = await enqueueClaimedSessionDelivery(
-          {
-            kind: "agentTurn",
-            sessionKey,
-            message: "Reply with the clock-jump proof marker.",
-            messageId: "image:clock-jump:agent-loop",
-            idempotencyKey: "image:clock-jump:agent-loop",
-            route: { channel: "webchat", to: sessionKey, chatType: "direct" },
-            inputProvenance: {
-              kind: "inter_session",
-              sourceChannel: "internal",
-              sourceTool: "image_generate",
-            },
-            sourceReplyDeliveryMode: "automatic",
-          },
-          60_000,
-          queueContext,
-        );
-
-        deliveryId = id;
         gateway = await startGatewayWithClient({
           cfg,
           configPath,
@@ -196,6 +176,27 @@ describe("session delivery clock-jump integration", () => {
         expect(providerRequests).toHaveLength(1);
         expect(providerRequests[0]).toContain("clock-jump readiness marker");
         await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
+        // Readiness must not consume the held claim timer that release needs to preempt.
+        const { id } = await enqueueClaimedSessionDelivery(
+          {
+            kind: "agentTurn",
+            sessionKey,
+            message: "Reply with the clock-jump proof marker.",
+            messageId: "image:clock-jump:agent-loop",
+            idempotencyKey: "image:clock-jump:agent-loop",
+            route: { channel: "webchat", to: sessionKey, chatType: "direct" },
+            inputProvenance: {
+              kind: "inter_session",
+              sourceChannel: "internal",
+              sourceTool: "image_generate",
+            },
+            sourceReplyDeliveryMode: "automatic",
+          },
+          60_000,
+          queueContext,
+        );
+
+        deliveryId = id;
         await expect
           .poll(() => scheduleSessionDelivery(id, queueContext), { timeout: 10_000, interval: 50 })
           .toBe(true);

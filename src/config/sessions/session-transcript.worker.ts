@@ -1,23 +1,17 @@
-import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   UsageCostWorkerInput,
   UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
-import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionHistoryWorkerResult } from "./session-history-types.js";
-import { sessionHistoryCleanupError } from "./session-history-worker-errors.js";
 import {
-  SessionTranscriptProjectionUnavailableError,
-  SessionTranscriptStorageUnavailableError,
-} from "./session-transcript-projection-error.js";
-import {
-  runWithSessionTranscriptReadFence,
-  SessionTranscriptReadFenceError,
-} from "./session-transcript-read-fence.js";
+  encodeSessionTranscriptWorkerError,
+  SessionHistoryDeltaPreparationError,
+  sessionHistoryCleanupError,
+} from "./session-history-worker-errors.js";
+import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerInput,
@@ -260,6 +254,25 @@ serveWorkerTasks(
           })),
         };
       }
+      if (request.kind === "session-progress-card") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { readSessionProgressCard } =
+          await import("../../session-cards/progress-card-store.js");
+        return {
+          ok: true,
+          ...(await withHistoryDatabase(request.database, () => {
+            const result = withOpenClawAgentDatabaseReadOnly(
+              (database) => readSessionProgressCard(database.db, request.sessionKey),
+              { ...request.database, env: request.env },
+            );
+            return {
+              kind: "session-progress-card" as const,
+              card: result.found ? result.value : null,
+            };
+          })),
+        };
+      }
       if (request.kind === "session-row-presence") {
         const { loadSessionEntryReadOnlyInScope } =
           await import("./session-accessor.sqlite-entry.js");
@@ -301,7 +314,7 @@ serveWorkerTasks(
               }))),
             };
           }
-          if (request.kind === "transcript-hydration") {
+          if (request.kind === "transcript-hydration" || request.kind === "current-turn-entry") {
             const { readOpenClawDatabaseQuarantineFailure } =
               await import("../../state/openclaw-quarantine-store.js");
             const quarantine = readOpenClawDatabaseQuarantineFailure(
@@ -313,6 +326,22 @@ serveWorkerTasks(
             );
             if (quarantine) {
               throw quarantine;
+            }
+            if (request.kind === "current-turn-entry") {
+              const { readSessionTranscriptCurrentTurnEntry } =
+                await import("./session-accessor.sqlite-current-turn.js");
+              return {
+                ok: true,
+                ...(await withHistoryDatabase(request.database, () =>
+                  readSessionTranscriptCurrentTurnEntry(request.target, {
+                    entryId: request.entryId,
+                    version: request.version,
+                    includeEntry: request.includeEntry,
+                    readOnly: true,
+                    resolvedScope: request.resolvedScope,
+                  }),
+                )),
+              };
             }
             const { readSessionTranscriptBoundedActiveContextCore } =
               await import("./session-accessor.sqlite-active-context.js");
@@ -380,10 +409,13 @@ serveWorkerTasks(
                     };
                   }
                   if (request.request.kind === "delta") {
+                    const { prepareSessionHistoryDelta } =
+                      await import("../../gateway/session-history-delta-visibility.js");
                     return {
                       kind: "delta",
-                      delta: options.readers.readTranscriptDisplayDelta(
-                        request.request.params.limits,
+                      ...prepareSessionHistoryDelta(
+                        options.readers.readTranscriptDisplayDelta(request.request.params.limits),
+                        options.readers.subagentCoordination,
                       ),
                     };
                   }
@@ -429,30 +461,27 @@ serveWorkerTasks(
       );
     } catch (error) {
       if (
+        error instanceof SessionHistoryDeltaPreparationError &&
+        request.kind === "history-page" &&
+        request.request.kind === "delta"
+      ) {
+        // Keep the failed-reply path: auxiliary readers may also need retirement.
+        // The host joins worker exit before consuming any partial visibility facts.
+        return {
+          ok: false,
+          error: { kind: "delta-visibility", partial: error.partial },
+        };
+      }
+      if (
         error instanceof SyntaxError &&
         request.kind === "history-page" &&
         request.request.kind === "message-lookup"
       ) {
         return { ok: false, error: { kind: "syntax", message: error.message } };
       }
-      if (error instanceof SessionTranscriptStorageUnavailableError) {
-        return { ok: false, error: { kind: "storage", reason: error.reason } };
-      }
-      if (error instanceof SessionTranscriptColdError) {
-        return { ok: false, error: { kind: "cold", sessionId: error.sessionId } };
-      }
-      if (error instanceof SessionTranscriptProjectionUnavailableError) {
-        return { ok: false, error: { kind: "projection", sessionId: error.sessionId } };
-      }
-      if (error instanceof SessionTranscriptReadFenceError) {
-        return { ok: false, error: { kind: "fence", message: error.message } };
-      }
-      const payload = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
-      if (payload) {
-        return {
-          ok: false,
-          error: { kind: "read-error", message: coerceErrorMessage(error), payload },
-        };
+      const encoded = encodeSessionTranscriptWorkerError(error);
+      if (encoded) {
+        return { ok: false, error: encoded };
       }
       throw error;
     }

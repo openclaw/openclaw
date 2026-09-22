@@ -81,6 +81,11 @@ Example:
 
 Sensitive values in `url` (userinfo) and `headers` are redacted in logs and status output. `openclaw mcp doctor` warns when sensitive-looking `headers` or `env` entries contain literal values, so operators can move those values out of committed config.
 
+If a legacy SSE message endpoint returns HTTP 404, or a stateful Streamable HTTP
+session expires, OpenClaw retires that connection and reconnects on the next
+discovery. The failed call is reported without replaying it, because a tool may
+have already changed state before the connection failed.
+
 ## OAuth workflow
 
 OAuth is for HTTP MCP servers that advertise the MCP OAuth flow. Static `Authorization` headers are ignored for a server while `auth: "oauth"` is enabled. By default, OAuth credentials are shared and operator-managed. Credentials saved by `openclaw mcp login` work with embedded MCP, CLI runners, and the local Codex app-server.

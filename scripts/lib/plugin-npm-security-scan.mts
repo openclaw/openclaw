@@ -117,11 +117,20 @@ const RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string,
 
 // The bounded async Codex version probe no longer produces this syntactic finding.
 // Keep shipped inventories intact; a new direct call must be reviewed again.
-const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
+const RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
   [...RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS].filter(
     ([key]) => key !== "@openclaw/codex:dangerous-exec:src/doctor.ts",
   ),
 );
+
+// Runtime launches added after 9.5: FaceTime starts its own staged capture
+// helper with no arguments and a sanitized env, and ONNX forks its bundled
+// worker entry from process.execPath.
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+  ...RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/facetime:dangerous-exec:src/audio-pump.ts", 1],
+  ["@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
+]);
 
 type ReviewedReleaseLayout = {
   id: string;
@@ -251,6 +260,19 @@ CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
   "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.spawn-error.test.ts",
   1,
 );
+// The stabilized startup retry race fixtures (#155612) launch two fewer
+// bounded children; the acpx fixture pipes JSON-RPC frames through its own
+// checked-in app-server stub, and the node exec proof runs process.execPath
+// with an inline script under the exec server's owned workspace. The Codex
+// launcher-failure matcher launches nothing: its `spawn(` is a regex literal.
+for (const [key, count] of [
+  ["@openclaw/acpx:dangerous-exec:test/codex-app-server.test.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/app-server/attempt-startup-retry.test.ts", 4],
+  ["@openclaw/codex:dangerous-exec:src/app-server/managed-launcher-failure.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/node-exec-server.test.ts", 1],
+] as const) {
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
+}
 
 const CURRENT_SECURITY_INVENTORY_POLICY: PluginSecurityInventoryPolicy = {
   layout: CURRENT_REVIEWED_RELEASE_LAYOUT,
@@ -330,6 +352,7 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     {
       ...CURRENT_SECURITY_INVENTORY_POLICY,
       optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
   [
@@ -337,6 +360,7 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     {
       ...CURRENT_SECURITY_INVENTORY_POLICY,
       optionalPackedFindingCounts: RELEASE_2026_9_4_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
   [
@@ -344,6 +368,7 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     {
       ...CURRENT_SECURITY_INVENTORY_POLICY,
       optionalPackedFindingCounts: RELEASE_2026_9_5_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
   ["release/2026.9.6", CURRENT_SECURITY_INVENTORY_POLICY],

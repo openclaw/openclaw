@@ -308,6 +308,20 @@ describe("openclaw attach (action)", () => {
     });
   });
 
+  it.each(["agent:ops:main", "https://gateway.example/chat/stale/movies-a1166b81"])(
+    "preserves the resolved global owner when attaching to %s",
+    async (target) => {
+      vi.mocked(callGateway).mockResolvedValueOnce({ ok: true, key: "global", agentId: "ops" });
+
+      await runAttach(target, "--print-config");
+
+      expect(gatewayCalls.find((call) => call.method === "attach.grant")?.params).toMatchObject({
+        sessionKey: "global",
+        agentId: "ops",
+      });
+    },
+  );
+
   it("rejects a non-positive --ttl before minting", async () => {
     await runAttach("--ttl", "-5", "--print-config");
     expect(exitCode).toBe(1);
