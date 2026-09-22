@@ -3291,11 +3291,17 @@ function isWorktreeClean() {
 }
 
 function needsSourceCapsule(commandArgs: string[], providerName: string) {
+  const provider = canonicalProviderName(providerName);
   return (
     commandArgs[0] === "run" &&
     !hasOption(commandArgs, "--no-sync") &&
+    !hasOption(commandArgs, "--fresh-pr") &&
     !isNativeWindowsRemoteTarget(commandArgs) &&
-    (canonicalProviderName(providerName) === "blacksmith-testbox" ||
+    (provider === "blacksmith-testbox" ||
+      // Ordinary Linux sync can omit Git; other targets retain their native bootstrap.
+      (provider === "aws" &&
+        ["", "linux", "ubuntu"].includes(effectiveTargetContext(commandArgs).target) &&
+        !hasOption(commandArgs, "--sync-only")) ||
       analyzeRemoteCommand(parseCommandInvocation(help.text, commandArgs)).changedGate)
   );
 }
@@ -3304,7 +3310,9 @@ function shouldUseFullCheckoutForRemoteSync(commandArgs: string[], providerName:
   if (commandArgs[0] !== "run") {
     return false;
   }
-  if (hasOption(commandArgs, "--no-sync")) {
+  // Native fresh-PR checkout owns the source and reads any local patch from this cwd.
+  // A local capsule or detached sparse staging checkout must not replace either input.
+  if (hasOption(commandArgs, "--no-sync") || hasOption(commandArgs, "--fresh-pr")) {
     return false;
   }
 

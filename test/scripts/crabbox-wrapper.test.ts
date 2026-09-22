@@ -72,6 +72,7 @@ const fakeRunValueOptionHelp = [
   "capture-stderr string",
   "capture-stdout string",
   "download value",
+  "fresh-pr string",
   "id string",
   "idle-timeout duration",
   "label string",
@@ -2298,6 +2299,78 @@ describe("scripts/crabbox-wrapper", () => {
     },
   );
 
+  it.each([
+    {
+      flags: ["--fresh-pr", "openclaw/openclaw#1"],
+      command: ["node", "scripts/source-fixture.mjs"],
+    },
+    {
+      flags: ["--fresh-pr=openclaw/openclaw#1", "--apply-local-patch"],
+      command: ["node", "scripts/check-changed.mjs"],
+    },
+    { flags: ["--no-sync"], command: ["node", "scripts/source-fixture.mjs"] },
+    { flags: ["--sync-only"], command: [] },
+    { flags: ["--target", "windows"], command: ["node", "scripts/source-fixture.mjs"] },
+  ])("preserves native AWS source selection for $flags", ({ flags, command }) => {
+    const { output, remoteCommand } = runSuccessfulDefaultWrapper(
+      ["run", "--provider", "aws", ...flags, "--", ...command],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+    expect(remoteCommand).not.toContain(".openclaw-crabbox-changed-gate.bundle");
+    if (flags.some((flag) => flag.startsWith("--fresh-pr")) || flags.includes("--no-sync")) {
+      expect(output.cwd).toBe(repoRoot);
+    }
+    for (const flag of flags) {
+      expect(output.args).toContain(flag);
+    }
+  });
+
+  it.each<{ source: string; args: string[]; options: WrapperOptions; capsule: boolean }>([
+    { source: "Linux alias", args: ["--target", "ubuntu"], options: {}, capsule: true },
+    {
+      source: "Linux environment",
+      args: [],
+      options: { env: { CRABBOX_TARGET: "linux" } },
+      capsule: true,
+    },
+    {
+      source: "macOS environment",
+      args: [],
+      options: { env: { CRABBOX_TARGET_OS: "darwin" } },
+      capsule: false,
+    },
+    {
+      source: "macOS config",
+      args: [],
+      options: { configJson: managedBrokerConfig("aws", { target: "osx" }) },
+      capsule: false,
+    },
+    {
+      source: "WSL2",
+      args: ["--target", "windows", "--windows-mode", "wsl2"],
+      options: {},
+      capsule: false,
+    },
+  ])(
+    "uses the effective $source target for ordinary AWS capsules",
+    ({ args, options, capsule }) => {
+      const { output, remoteCommand } = runSuccessfulDefaultWrapper(
+        ["run", "--provider", "aws", ...args, "--", "echo", "ok"],
+        options,
+      );
+      expect(remoteCommand.includes(".openclaw-crabbox-changed-gate.bundle")).toBe(capsule);
+      expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+      if (!capsule) {
+        expect(output.args.slice(-2)).toEqual(["echo", "ok"]);
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32").each(["missing", "overlapping"])(
     "rejects a %s Testbox workspace binding before running the payload",
     (binding) => {
@@ -3597,16 +3670,10 @@ esac
       "--version",
     ]);
     expect(remoteCommand).not.toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(output.args).toEqual([
-      "run",
-      "--provider",
-      "aws",
-      "--target",
-      "linux",
-      "--",
-      "pnpm",
-      "--version",
-    ]);
+    expect(output.args.slice(0, 5)).toEqual(["run", "--provider", "aws", "--target", "linux"]);
+    expect(remoteCommand).toContain(".openclaw-crabbox-changed-gate.bundle");
+    expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+    expect(remoteCommand.endsWith("; pnpm --version")).toBe(true);
   });
 
   it.each([
@@ -3712,7 +3779,7 @@ esac
 
       const result = spawnSync(
         nodeExecPath,
-        ["scripts/crabbox-wrapper.mjs", "run", "--provider", "aws", "--", "echo ok"],
+        ["scripts/crabbox-wrapper.mjs", "run", "--provider", "aws", "--no-sync", "--", "echo ok"],
         {
           cwd: repoRoot,
           encoding: "utf8",
@@ -4237,6 +4304,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
   it.skipIf(process.platform === "win32").each([
     ["aws", true, "transport"],
     ["aws", false, "transport"],
+    ["aws", false, "arbitrary"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
     ["blacksmith-testbox", false, "graph"],
@@ -4382,7 +4450,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
         );
       }
       expect(git(producer, ["rev-parse", "--is-shallow-repository"])).toBe(String(shallow));
-      const alias = provider === "aws" ? "origin/release/fixture" : "";
+      const alias = provider === "aws" && scenario !== "arbitrary" ? "origin/release/fixture" : "";
       if (alias) {
         git(producer, ["update-ref", `refs/remotes/${alias}`, base]);
       }
@@ -4398,7 +4466,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
       mkdirSync(path.dirname(fixtureWrapper), { recursive: true });
       copyFileSync(realBundledWrapperPath, fixtureWrapper);
       const sourceCommand =
-        provider === "blacksmith-testbox"
+        provider === "blacksmith-testbox" || scenario === "arbitrary"
           ? "scripts/source-fixture.mjs"
           : "scripts/check-changed.mjs";
       const special = "space ' quote ; $(touch injected) `touch injected` & |";
@@ -4550,7 +4618,7 @@ process.on("uncaughtExceptionMonitor", (error) => {
         }
         return { receiver, result };
       };
-      if (scenario !== "transport") {
+      if (scenario !== "transport" && scenario !== "arbitrary") {
         const installOwner = ".github/actions/setup-node-env/install-dependencies.sh";
         const ownerPath = path.join(repoRoot, installOwner);
         // Baseline uses the same action-owned recipe before its pure extraction.
@@ -4811,6 +4879,45 @@ process.on("uncaughtExceptionMonitor", (error) => {
                 : "source comparison ref mismatch: refs/remotes/origin/main",
             );
           }
+        }
+        return;
+      }
+      if (scenario === "arbitrary") {
+        // A raw AWS sync can have no Git seed. The actual capsule receiver must
+        // establish source identity before an ordinary command can observe it.
+        for (const [name, args] of [
+          ["node", ["node", sourceCommand, special]],
+          ["bash", ["bash", "-c", 'exec node "$1" "$2"', "fixture", sourceCommand, special]],
+        ] as const) {
+          const sent = runSender("direct", ["run", "--provider", provider, "--", ...args]);
+          const argvPath = path.join(root, `${name}-argv.json`);
+          const accepted = receive(
+            name,
+            sent.remoteCommand,
+            sent.bundle,
+            origin,
+            { TRANSPORT_FIXTURE_ARGV: argvPath },
+            false,
+          );
+          expect(accepted.result.status, failureDetail(accepted.result)).toBe(0);
+          expect(accepted.result.stdout).toBe("transport fixture reached\n");
+          expect(JSON.parse(readFileSync(argvPath, "utf8"))).toEqual([special]);
+          expect(existsSync(path.join(accepted.receiver, "injected"))).toBe(false);
+          expect(git(accepted.receiver, ["rev-parse", "HEAD^{tree}"])).toBe(
+            git(producer, ["rev-parse", "HEAD^{tree}"]),
+          );
+          expect(git(accepted.receiver, ["status", "--porcelain=v1"])).toBe("");
+          const rejected = receive(
+            `${name}-missing`,
+            sent.remoteCommand,
+            undefined,
+            origin,
+            {},
+            false,
+          );
+          expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
+          expect(rejected.result.stdout).toBe("");
+          expect(existsSync(path.join(rejected.receiver, ".git"))).toBe(false);
         }
         return;
       }
@@ -5905,13 +6012,12 @@ cp.spawnSync = (command, args, options) => {
       sparseChangedGateOptions,
     );
     const output = parseFakeCrabboxOutput(result);
-    const renderedCommand = shell
-      ? normalizeShellLineEndings(output.args.at(-1) ?? "")
-      : output.args.join("\0");
+    const renderedCommand = normalizeShellLineEndings(output.args.at(-1) ?? "");
 
     expect(result.status).toBe(0);
     expect(renderedCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
-    expect(renderedCommand).not.toContain("node -e");
+    expect(renderedCommand).toContain(".openclaw-crabbox-changed-gate.bundle");
+    expect(renderedCommand.endsWith(`; ${shell ? command.at(-1) : command.join(" ")}`)).toBe(true);
   });
 
   it.each([
@@ -5930,7 +6036,9 @@ cp.spawnSync = (command, args, options) => {
   ])("$name", ({ shellScript }) => {
     const { remoteCommand } = runSparseShell(shellScript);
 
-    expect(remoteCommand).not.toContain("node -e");
+    expect(remoteCommand).toContain(".openclaw-crabbox-changed-gate.bundle");
+    expect(remoteCommand).not.toContain("OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1");
+    expect(remoteCommand.endsWith(`; ${shellScript}`)).toBe(true);
   });
 
   it("detects JavaScript commands after hyphenated heredoc delimiters", () => {
