@@ -531,6 +531,30 @@ describe("sanitizeToolArgs", () => {
 });
 
 describe("extractToolResultText", () => {
+  it.each(["doc_token", "node_token", "obj_token", "page_token", "spreadsheet_token"])(
+    "keeps resource-keyed arrays sensitive: %s",
+    (key) => {
+      const credential = "SyntheticOpaqueCredential1234567890";
+      const text = extractToolResultText({ type: "json", [key]: [credential, [credential]] });
+      expect(text).not.toContain(credential);
+    },
+  );
+
+  it.each(["access_token", "authorization", "doc_token"])(
+    "preserves resource references without dropping the %s ancestor policy",
+    (parentKey) => {
+      const reference = "SyntheticResourceIdentifier1234567890";
+      const credential = "SyntheticOpaqueCredential1234567890";
+      const text = extractToolResultText({
+        type: "json",
+        resources: { doc_token: reference },
+        [parentKey]: [{ nested: { doc_token: credential } }],
+      });
+      expect(text).toContain(reference);
+      expect(text).not.toContain(credential);
+    },
+  );
+
   it("keeps primitive string tool results for visible output", () => {
     expect(extractToolResultText("plain result")).toBe("plain result");
   });

@@ -12,7 +12,7 @@ import {
   isPreparedModelVisibleToolText,
 } from "../logging/redact-internal.js";
 import { redactSourceInputTextWithConfig } from "../logging/redact-source.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { isSensitiveFieldKey, redactSensitiveText } from "../logging/redact.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
@@ -462,13 +462,23 @@ function redactTranscriptStructuredValue(
   modelVisibleToolResult = false,
   sourceFields?: ReadonlyMap<string, string>,
   sourceSlots?: ReadonlyMap<object, ReadonlyMap<string, string>>,
+  sensitiveAncestorKey?: string,
 ): unknown {
   if (typeof value === "string") {
     if (fieldKey) {
-      return redactTranscriptStructuredFieldValue(fieldKey, value, cfg, modelVisibleToolResult);
+      return redactTranscriptStructuredFieldValue(
+        fieldKey,
+        value,
+        cfg,
+        modelVisibleToolResult,
+        sensitiveAncestorKey,
+      );
     }
     return redactTranscriptText(value, cfg, modelVisibleToolResult);
   }
+  // Non-string sensitive fields own their descendants, including array elements.
+  const childSensitiveKey =
+    sensitiveAncestorKey ?? (fieldKey && isSensitiveFieldKey(fieldKey) ? fieldKey : undefined);
   if (Array.isArray(value)) {
     if (seen.has(value)) {
       return "[Circular]";
@@ -487,6 +497,7 @@ function redactTranscriptStructuredValue(
         modelVisibleToolResult,
         undefined,
         sourceSlots,
+        childSensitiveKey,
       );
       changed ||= next !== item;
       return next;
@@ -681,6 +692,7 @@ function redactTranscriptStructuredValue(
               ? sourceSlots?.get(source)
               : undefined,
             sourceSlots,
+            childSensitiveKey,
           );
     if (redacted === item) {
       continue;

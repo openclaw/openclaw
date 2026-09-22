@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
 import {
+  isResourceTokenFieldKey,
   redactModelVisibleSensitiveFieldValueWithConfig,
   redactModelVisibleToolPayloadTextWithConfig,
   redactSensitiveFieldValueWithConfig,
@@ -29,7 +30,18 @@ export function redactTranscriptStructuredFieldValue(
   value: string,
   cfg?: OpenClawConfig,
   modelVisibleToolResult = false,
+  sensitiveAncestorKey?: string,
 ): string {
+  // Resource references remain reusable without clearing inherited credential sensitivity.
+  if (isResourceTokenFieldKey(key)) {
+    return sensitiveAncestorKey
+      ? redactSensitiveFieldValueWithConfig(
+          sensitiveAncestorKey,
+          value,
+          resolveTranscriptLoggingConfig(cfg),
+        )
+      : redactTranscriptText(value, cfg);
+  }
   // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
   return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
     ? redactTranscriptText(value, cfg, modelVisibleToolResult)
