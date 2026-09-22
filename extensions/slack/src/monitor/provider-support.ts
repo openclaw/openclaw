@@ -521,12 +521,16 @@ function formatSlackResolvedLabel(params: {
 
 export function formatSlackChannelResolved(entry: SlackChannelResolution): string | null {
   const id = entry.id ?? entry.input;
-  return formatSlackResolvedLabel({
+  const label = formatSlackResolvedLabel({
     input: entry.input,
     id,
     name: entry.name,
     extra: entry.archived ? ["archived"] : [],
   });
+  // The all-ids allowlist short-circuit skips the name lookup, so an id that
+  // resolved to itself has no display name. Keep the id visible so the startup
+  // summary still confirms the allowlist loaded instead of silently going quiet.
+  return label ?? (entry.resolved && entry.id ? entry.id : null);
 }
 
 export function formatSlackUserResolved(entry: SlackUserResolution): string | null {
