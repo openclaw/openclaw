@@ -5,14 +5,12 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createManagedTaskFlow, getTaskFlowById } from "./task-flow-registry.js";
 import * as flowMaintenance from "./task-flow-registry.maintenance.js";
 import {
-  resetTaskRegistryMaintenanceRuntimeForTests,
-  setTaskRegistryMaintenanceRuntimeForTests,
   startTaskRegistryMaintenance,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import {
   configureTaskRegistryMaintenanceRuntimeForTest,
-  createPreparedMaintenanceRead,
+  resetTaskRegistryMaintenanceMocks,
 } from "./task-registry.maintenance.test-support.js";
 import { flushAsyncWork, withTaskRegistryTempDir } from "./task-registry.test-support.js";
 
@@ -22,7 +20,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await stopTaskRegistryMaintenance();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  resetTaskRegistryMaintenanceMocks();
   resetGatewayWorkAdmission();
   vi.useRealTimers();
 });
@@ -200,39 +198,12 @@ describe("task-registry maintenance scheduling", () => {
       };
       process.on("unhandledRejection", onUnhandledRejection);
 
-      setTaskRegistryMaintenanceRuntimeForTests({
-        listAcpSessionEntries: async () => [],
-        readAcpSessionEntry: () => ({
-          cfg: {},
-          storePath: "",
-          sessionKey: "",
-          storeSessionKey: "",
-          entry: undefined,
-          storeReadFailed: false,
-        }),
-        listSessionEntries: () => [],
-        resolveStorePath: () => "",
-        parseAgentSessionKey: () => null,
-        isCronJobActive: () => false,
-        getAgentRunContext: () => undefined,
-        hasActiveAcpTurn: () => false,
-        hasActiveTaskForChildSessionKey: () => false,
-        deleteTaskRecordById: () => false,
-        ensureTaskRegistryReady: () => {},
-        getTaskById: () => undefined,
-        getTaskRegistryMaintenanceTask: () => undefined,
-        prepareTaskRegistryRead: async () => createPreparedMaintenanceRead(),
-        getTaskRegistryMaintenanceSnapshot: () => {
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map(),
+        snapshotTasks: [],
+        listTaskRecords: () => {
           throw new Error("maintenance boom");
         },
-        listTaskRecords: () => [],
-        markTaskLostById: () => null,
-        markTaskTerminalById: () => null,
-        maybeDeliverTaskTerminalUpdate: async () => null,
-        resolveTaskForLookupToken: () => undefined,
-        setTaskCleanupAfterById: () => null,
-        isRuntimeAuthoritative: () => true,
-        listTaskRegistryRecordsByRuntimeSourceIdFromSqlite: () => [],
       });
 
       try {

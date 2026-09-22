@@ -1,8 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
+import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStore from "../store.js";
 import { loadCronStore } from "../store.js";
@@ -18,6 +18,7 @@ import {
 } from "../store/run-receipt-store.test-support.js";
 import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import { start, stop } from "./ops-lifecycle.js";
+import { observeCronTimerAdmissions } from "./run-recovery.test-support.js";
 import { createCronServiceState } from "./state.js";
 import { tryCreateCronTaskRunHandle } from "./task-runs.js";
 import { onTimer } from "./timer.test-support.js";
@@ -66,27 +67,31 @@ async function seedInterruptedBatch() {
   return { storePath, jobs, state, onEvent, runner, history };
 }
 
-it("publishes every interrupted job when restart crosses a later proposal in the batch", async () => {
+it("defers every repair when restart crosses the batch observation", async () => {
   const { storePath, jobs, state, onEvent, runner, history } = await seedInterruptedBatch();
   const entered = createDeferred();
   const release = createDeferred();
-  let proposals = 0;
-  const execute = stateWorker.executeOpenClawStateWorker;
+  let observations = 0;
+  const execute = stateRead.executeExistingOpenClawStateRead;
   const delayed = vi
-    .spyOn(stateWorker, "executeOpenClawStateWorker")
+    .spyOn(stateRead, "executeExistingOpenClawStateRead")
     .mockImplementation(async (context, command) => {
       const result = await execute(context, command);
-      if (command.type === "cron.proposeRunRecovery" && ++proposals === 2) {
+      if (command.type === "cron.observeRunRecovery" && ++observations === 1) {
         entered.resolve();
         await release.promise;
       }
       return result;
     });
-  const rootWorkBefore = getActiveGatewayRootWorkCount();
+  const unrelated = tryBeginGatewayIndependentRootWorkAdmission("test:concurrent-request");
+  expect(unrelated).not.toBeNull();
+  const admissions = observeCronTimerAdmissions(state);
   const tick = onTimer(state);
   let restarted: Promise<void> | undefined;
   try {
     await entered.promise;
+    unrelated!.release();
+    await admissions.expectActive();
     const observed = await loadCronStore(storePath);
     const beforeStop = {
       firstRunningAtMs: observed.jobs.find((job) => job.id === "first")?.state.runningAtMs ?? null,
@@ -97,6 +102,12 @@ it("publishes every interrupted job when restart crosses a later proposal in the
         .filter((event) => event.action === "finished")
         .map((event) => event.jobId),
     };
+    expect(beforeStop).toEqual({
+      firstRunningAtMs: jobs[0]!.state.runningAtMs,
+      firstReceiptActive: true,
+      firstHistory: [],
+      finishedEvents: [],
+    });
     stop(state);
     restarted = start(state);
     release.resolve();
@@ -116,8 +127,9 @@ it("publishes every interrupted job when restart crosses a later proposal in the
     expect(runner).not.toHaveBeenCalled();
     expect(state.activeTimerTicks).toBe(0);
     expect(state.queuedRunReservationsByJobId.size).toBe(0);
-    expect(getActiveGatewayRootWorkCount()).toBe(rootWorkBefore);
+    await admissions.expectReleased(1);
   } finally {
+    unrelated!.release();
     release.resolve();
     await Promise.allSettled([tick, ...(restarted ? [restarted] : [])]);
     delayed.mockRestore();
@@ -130,7 +142,7 @@ it.each([
   ["startup", start],
 ] as const)(
   "publishes committed interruptions before retiring %s held at its reload",
-  async (_, run) => {
+  async (source, run) => {
     const { storePath, jobs, state, onEvent, runner, history } = await seedInterruptedBatch();
     const entered = createDeferred();
     const release = createDeferred();
@@ -146,11 +158,14 @@ it.each([
         }
         return result;
       });
-    const rootWorkBefore = getActiveGatewayRootWorkCount();
+    const admissions = observeCronTimerAdmissions(state);
     const tick = run(state);
     let restarted: Promise<void> | undefined;
     try {
       await entered.promise;
+      if (source === "timer") {
+        await admissions.expectActive();
+      }
       const committed = await loadCronStore(storePath);
       for (const job of jobs) {
         const stored = committed.jobs.find((entry) => entry.id === job.id);
@@ -198,7 +213,7 @@ it.each([
       expect(state.runAdmission.active).toBe(0);
       expect(state.runAdmission.waiters).toEqual([]);
       expect(state.queuedRunReservationsByJobId.size).toBe(0);
-      expect(getActiveGatewayRootWorkCount()).toBe(rootWorkBefore);
+      await admissions.expectReleased(source === "timer" ? 1 : 0);
     } finally {
       release.resolve();
       await Promise.allSettled([tick, ...(restarted ? [restarted] : [])]);

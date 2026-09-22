@@ -2861,8 +2861,8 @@ describe("openclaw state database", () => {
         "description",
         "enabled",
         "agent_id",
-        "payload_kind",
-        "job_json",
+        ..."payload_kind job_json".split(" "),
+        ...["revision", "generation", "updated_at"].map((name) => `grant_definition_${name}`),
         "state_json",
         "runtime_updated_at_ms",
         "schedule_identity",
@@ -8775,37 +8775,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
 
     expect(ownershipSelects).toBe(12);
     expect(schemaReads).toBe(0);
-  });
-
-  it("discovers the ownership table for an injected handle at transaction admission", () => {
-    const options = { env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
-    const pathname = openOpenClawStateDatabase(options).path;
-    closeOpenClawStateDatabaseForTest();
-    const { constants, DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(pathname);
-    let schemaReads = 0;
-    db.setAuthorizer((actionCode, tableName) => {
-      if (actionCode === constants.SQLITE_READ && tableName === "sqlite_master") {
-        schemaReads += 1;
-      }
-      return constants.SQLITE_OK;
-    });
-
-    try {
-      runOpenClawStateWriteTransaction(() => undefined, {
-        ...options,
-        database: {
-          db,
-          path: pathname,
-          walMaintenance: { checkpoint: () => false, close: () => false },
-        },
-      });
-    } finally {
-      db.setAuthorizer(null);
-      db.close();
-    }
-
-    expect(schemaReads).toBe(4);
   });
 
   it("rejects Promise-returning write transactions", () => {

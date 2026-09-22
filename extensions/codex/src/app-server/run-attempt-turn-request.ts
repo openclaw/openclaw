@@ -15,6 +15,7 @@ import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { getCodexInferenceThread } from "./inference-routing.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
+import { prepareCodexProviderReviewContinuation } from "./provider-review-continuation.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
 import {
   emitCodexAppServerEvent,
@@ -140,9 +141,6 @@ export async function prepareCodexAttemptTurnRequest(
     );
     connection.mutable.pluginAppServer = turnAppServer;
     const references = prepareWorkspaceReferences();
-    const referencesRetained = turnState.codexTurnPromptText.includes(
-      workspaceBootstrapContext.promptContext ?? "",
-    );
     const inferenceRoute = usesSupervisionConnection
       ? undefined
       : getCodexInferenceThread(resourceState.client, resourceState.thread.threadId);
@@ -224,6 +222,17 @@ export async function prepareCodexAttemptTurnRequest(
             : file,
         );
     }
+    const continuation = await prepareCodexProviderReviewContinuation({
+      acknowledgment: params.providerReviewAcknowledgment,
+      client: resourceState.client,
+      turnStartParams,
+      provider: params.provider,
+      model: params.modelId,
+      api: runtimeParams.model.api,
+      signal: runAbortController.signal,
+      timeoutMs: params.timeoutMs,
+      assertCurrent: connection.assertCurrent,
+    });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     recordCodexTrajectoryContext(resources.trajectoryRecorder, {
       attempt: params,
@@ -258,7 +267,10 @@ export async function prepareCodexAttemptTurnRequest(
         await resourceState.client.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
-          assertCurrent: connection.assertCurrent,
+          assertCurrent: () => {
+            connection.assertCurrent();
+            continuation?.dispatch();
+          },
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
@@ -269,10 +281,11 @@ export async function prepareCodexAttemptTurnRequest(
       );
       connection.assertCurrent();
       // Fitting may drop or truncate references; only acknowledge the complete block.
-      if (referencesRetained) {
+      if (upstreamUserText.includes(workspaceBootstrapContext.promptContext ?? "")) {
         references.accepted();
       }
       throwIfTurnStartAcceptedAfterAbort();
+      await continuation?.accept(acceptedTurnId);
       return { turn: startedTurn, upstreamUserText };
     } catch (error) {
       if (acceptedTurnId || isCodexAppServerIndeterminateRequestCancellationError(error)) {
@@ -292,7 +305,15 @@ export async function prepareCodexAttemptTurnRequest(
       } else {
         await activeTurnRoute.cancelTurn();
       }
+      if (params.providerReviewAcknowledgment) {
+        // oxlint-disable-next-line preserve-caught-error -- Native RPC errors can contain the submitted steer; continuation diagnostics must stay generic.
+        throw new Error(
+          "Could not continue this chat. Review its latest status before trying again.",
+        );
+      }
       throw error;
+    } finally {
+      continuation?.dispose();
     }
   };
   if (

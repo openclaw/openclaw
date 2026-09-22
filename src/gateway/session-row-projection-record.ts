@@ -157,6 +157,18 @@ export function first(candidates: Row[], storePaths: Iterable<string>) {
   return undefined;
 }
 
+export function firstReferenced(
+  ref: string,
+  rows: ReadonlyMap<string, Row>,
+  byKey: ReadonlyMap<string, ReadonlySet<string>>,
+  storePaths: Iterable<string>,
+) {
+  return first(
+    [...(byKey.get(ref) ?? [])].flatMap((id) => rows.get(id) ?? []),
+    storePaths,
+  );
+}
+
 export function present(
   record: MaterializedRow,
   context: SessionListRowContext,

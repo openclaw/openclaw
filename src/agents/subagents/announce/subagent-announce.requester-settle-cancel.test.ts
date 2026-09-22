@@ -29,8 +29,8 @@ import {
 import { testing as registryTesting } from "../registry/subagent-registry.test-helpers.js";
 import {
   setSubagentAnnounceDeliveryDepsForTest,
-  type SubagentAnnounceDeliveryDeps,
-} from "./subagent-announce-delivery.runtime.js";
+  type SubagentAnnounceDeliveryTestDeps,
+} from "./subagent-announce-overrides.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 const fixture = useSubagentControlFixture();
@@ -101,7 +101,7 @@ it.each([
     const startedTurns: string[] = [];
     const waitBeforeExecution =
       phase === "admitted" || phase === "requester reset" || phase === "requester replacement";
-    type Dispatch = SubagentAnnounceDeliveryDeps["dispatchGatewayMethodInProcess"];
+    type Dispatch = SubagentAnnounceDeliveryTestDeps["dispatchGatewayMethodInProcess"];
     const completion = { dispatch: dispatchGatewayMethodInProcess };
     vi.spyOn(completion, "dispatch").mockResolvedValue({
       status: "ok",

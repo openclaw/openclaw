@@ -20,6 +20,8 @@
     "directory": "extensions/facetime"
   },
   "files": [
+    "assets/icon.png",
+    "assets/activity.svg",
     "doctor-contract-api.ts",
     "index.ts",
     "runtime-api.ts",

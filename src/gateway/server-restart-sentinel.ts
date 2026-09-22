@@ -524,7 +524,7 @@ async function loadRestartSentinelStartupTask(params: {
     const continuation = sessionKey ? payload.continuation : undefined;
     const session = loadSessionEntry(routedSessionKey, { env });
     const { cfg, entry, canonicalKey } = session;
-    const target = resolveUpdateRunNoticeTarget({
+    const target = await resolveUpdateRunNoticeTarget({
       cfg,
       sessionKey,
       session,

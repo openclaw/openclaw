@@ -31,7 +31,7 @@ import {
   readTaskFlowRegistrySnapshot,
   listTaskFlowViewRecordsForOwnerInDatabase,
   readTaskFlowViewRecordInDatabase,
-  updateTaskFlowRecordInDatabase,
+  updateSelectedTaskFlowRecordInDatabase,
   upsertTaskFlowRowInDatabase,
 } from "./task-flow-registry.store.kernel.js";
 import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
@@ -96,6 +96,7 @@ export function executeTaskRegistryCommand(
     return observeTaskAgentEventInDatabase(open(), command.input);
   }
   if (
+    command.type === "tasks.acknowledgeStateChange" ||
     command.type === "tasks.createRecord" ||
     command.type === "tasks.finalizeActive" ||
     command.type === "tasks.settleUnstarted" ||
@@ -190,7 +191,7 @@ export function executeTaskRegistryCommand(
               ? { applied: false, reason: "not_found" }
               : observed.syncMode !== "managed" || !observed.controllerId
                 ? { applied: false, reason: "not_managed", current: observed }
-                : updateTaskFlowRecordInDatabase(writer, command.input);
+                : updateSelectedTaskFlowRecordInDatabase(writer, observed, command.input);
           }
           deferSqlitePostCommitPublication(writer, () => {
             committed = result;

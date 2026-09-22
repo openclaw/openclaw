@@ -96,7 +96,6 @@ vi.mock("./openclaw-state-worker-context.js", () => ({
   }),
 }));
 vi.mock("../infra/state-database-coordinator.js", () => ({
-  prepareStateDatabaseCanonicalMutation: () => undefined,
   hasStateDatabaseSourceExclusion: () => false,
   acquireStateDatabaseHandleLease: mocks.forbidden,
 }));

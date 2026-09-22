@@ -24,6 +24,25 @@ local runs, Windows, explicit plugin stripes, and explicit serial selections kee
 eight-directory chunks. Explicit split-core and parallel execution selections
 remain unchanged.
 
+Oxlint's type-aware backend discovers `src/tsconfig.json` and `ui/tsconfig.json`
+separately. Both inherit the root compiler options, include shared ambient
+declarations, and follow imported dependencies. Every existing lint target and
+rule still runs, including source CommonJS test preloads. The CLI `--tsconfig`
+option controls import resolution; it does not replace these discovery projects.
+
+Current CI core-test rows combine their paired stripes into one queue of fresh
+compiler processes, with the same two-child limit. Each independent graph runs
+in incremental project mode: solution-build mode can miss an added root whose
+timestamp predates restored build information. Frozen targets keep their
+original stripe invocations. Per-graph elapsed times appear in the job log.
+
+The test-type jobs restore their own `.artifacts/tsgo-cache` state across runs.
+Cache keys separate compiler/dependency/configuration versions and CI rows;
+the compiler still validates every selected graph after a hit. Pull requests
+only restore state, while the existing trusted cache writer policy controls
+publication after successful checks. Cache-off and frozen-target runs retain
+their original behavior. Lint programs do not share these compiler caches.
+
 Oxlint keeps `eslint/no-redeclare` enabled for JavaScript. For `.ts`, `.tsx`,
 `.mts`, and `.cts`, `tsgo` owns declaration validity, including intentional
 type/value pairs with the same public name. `eslint/no-var` remains enabled

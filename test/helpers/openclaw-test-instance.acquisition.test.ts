@@ -7,13 +7,98 @@ import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-own
 import { resolveGatewayPort } from "../../src/config/paths.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { resolveGatewayUrlOverride } from "../../src/gateway/client-bootstrap.js";
+import { reserveGatewayTestListener } from "../../src/gateway/test-helpers.listener.js";
 import { captureFullEnv, withEnvAsync } from "../../src/test-utils/env.js";
+import { acquireTestPortBlock } from "../../src/test-utils/port-claims.js";
+import * as testPorts from "../../src/test-utils/ports.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 describe("createOpenClawTestInstance acquisition", () => {
+  it.each([
+    {
+      name: "child-process",
+      offsets: [0, 1],
+      acquire: async () => {
+        const instance = await createOpenClawTestInstance({ name: "initial-listener-race" });
+        return { port: instance.port, cleanup: () => instance.cleanup() };
+      },
+    },
+    {
+      name: "in-process",
+      offsets: [0, 1, 2, 3, 4],
+      acquire: async () => {
+        const reservation = await reserveGatewayTestListener();
+        return { port: reservation.port, cleanup: reservation.closeUnadopted };
+      },
+    },
+  ])(
+    "retains another $name reservation when an unclaimed listener wins the probe",
+    async (adapter) => {
+      const competitor = net.createServer((socket) => socket.destroy());
+      const exclusiveProbe = net.createServer((socket) => socket.destroy());
+      const allocate = testPorts.getDeterministicFreePortBlock;
+      let competitorPort: number | undefined;
+      let reserved: { port: number; cleanup: () => Promise<void> } | undefined;
+      const listen = (server: net.Server, port: number) =>
+        new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(port, "127.0.0.1", () => {
+            server.off("error", reject);
+            resolve();
+          });
+        });
+      const close = async (server: net.Server) => {
+        if (server.listening) {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      };
+      const allocationSpy = vi
+        .spyOn(testPorts, "getDeterministicFreePortBlock")
+        .mockImplementationOnce(async (params) => {
+          competitorPort = await allocate(params);
+          // This listener does not borrow a file claim; the real probe has already closed.
+          await listen(competitor, competitorPort);
+          return competitorPort;
+        });
+      await runQaGatewayFixture(
+        async () => {
+          reserved = await adapter.acquire();
+          expect(competitor.listening).toBe(true);
+          if (competitorPort === undefined) {
+            throw new Error("real allocator did not return a competitor port");
+          }
+          expect(reserved.port).not.toBe(competitorPort);
+          await expect(listen(exclusiveProbe, reserved.port)).rejects.toMatchObject({
+            code: "EADDRINUSE",
+          });
+          const abandoned = await acquireTestPortBlock({
+            port: competitorPort,
+            offsets: adapter.offsets,
+          });
+          await abandoned.release();
+          // An explicitly requested port remains pinned, even when its socket is occupied.
+          await expect(reserveGatewayTestListener(competitorPort)).rejects.toMatchObject({
+            code: "EADDRINUSE",
+          });
+        },
+        () => allocationSpy.mockRestore(),
+        () => close(exclusiveProbe),
+        () => reserved?.cleanup(),
+        () => close(competitor),
+        () => {
+          expect(competitor.listening).toBe(false);
+          expect(competitor.address()).toBeNull();
+          expect(exclusiveProbe.listening).toBe(false);
+        },
+      );
+    },
+  );
+
   it.skipIf(process.platform !== "linux")(
     "keeps Gateway and deferred sandbox listeners outside the kernel client-port range",
     async () => {
@@ -62,7 +147,8 @@ describe("createOpenClawTestInstance acquisition", () => {
       const lifetime = createFixtureLifetime(lifetimeRoot);
       const serverSpy = vi.spyOn(net, "createServer");
       let root: string | undefined;
-      let reservedPort: number | undefined;
+      let reservation: net.Server | undefined;
+      const reservationClosed = vi.fn();
       let acquired: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
       let settled = false;
       const mkdtemp = fs.mkdtemp;
@@ -70,10 +156,11 @@ describe("createOpenClawTestInstance acquisition", () => {
         const allocated = await mkdtemp(...args);
         if (args[0].endsWith("instance-owner-cancel-")) {
           root = await fs.realpath(allocated);
-          const address = serverSpy.mock.results
-            .find((result) => result.type === "return" && result.value.listening)
-            ?.value.address();
-          reservedPort = address && typeof address !== "string" ? address.port : undefined;
+          reservation = serverSpy.mock.results.find(
+            (result) => result.type === "return" && result.value.listening,
+          )?.value;
+          expect(reservation?.listening).toBe(true);
+          reservation?.once("close", reservationClosed);
           if (stage === "state") {
             entered.resolve();
             await released.promise;
@@ -132,6 +219,10 @@ describe("createOpenClawTestInstance acquisition", () => {
         await expect(fs.stat(root!)).resolves.toBeDefined();
         released.resolve();
         const result = await outcome;
+        // Released ports can already belong to another fixture; observe our listener.
+        expect(reservationClosed).toHaveBeenCalledOnce();
+        expect(reservation?.listening).toBe(false);
+        expect(reservation?.address()).toBeNull();
         const drained = await lifetime.cleanup().then(
           () => ({ error: undefined }),
           (error: unknown) => ({ error }),
@@ -150,20 +241,6 @@ describe("createOpenClawTestInstance acquisition", () => {
           await expect(fs.stat(root!)).rejects.toMatchObject({ code: "ENOENT" });
         }
         expect(acquired).toBeUndefined();
-        expect(reservedPort).toBeTypeOf("number");
-        const competitor = net.createServer();
-        try {
-          await new Promise<void>((resolve, reject) => {
-            competitor.once("error", reject);
-            competitor.listen(reservedPort!, "127.0.0.1", resolve);
-          });
-        } finally {
-          if (competitor.listening) {
-            await new Promise<void>((resolve, reject) => {
-              competitor.close((error) => (error ? reject(error) : resolve()));
-            });
-          }
-        }
       } finally {
         released.resolve();
         await outcome;
@@ -193,15 +270,16 @@ describe("createOpenClawTestInstance acquisition", () => {
       let writeFailure: unknown;
       const cleanupFailure = new Error("state cleanup failed");
       const serverSpy = vi.spyOn(net, "createServer");
-      let reservedPort: number | undefined;
+      let reservation: net.Server | undefined;
+      const reservationClosed = vi.fn();
       const mkdtemp = fs.mkdtemp;
       const allocationSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
         if (args[0].endsWith("instance-wrapper-failure-")) {
-          const address = serverSpy.mock.results
-            .find((result) => result.type === "return" && result.value.listening)
-            ?.value.address();
-          reservedPort = address && typeof address !== "string" ? address.port : undefined;
-          expect(reservedPort).toBeTypeOf("number");
+          reservation = serverSpy.mock.results.find(
+            (result) => result.type === "return" && result.value.listening,
+          )?.value;
+          expect(reservation?.listening).toBe(true);
+          reservation?.once("close", reservationClosed);
           if (stage === "state") {
             throw failure;
           }
@@ -258,6 +336,9 @@ describe("createOpenClawTestInstance acquisition", () => {
           state: { prefix: "instance-wrapper-failure-" },
           config,
         }).catch((error: unknown) => error);
+        expect(reservationClosed).toHaveBeenCalledOnce();
+        expect(reservation?.listening).toBe(false);
+        expect(reservation?.address()).toBeNull();
         if (stage === "write") {
           expect(writeFailure).toMatchObject({ code: "EISDIR" });
           expect(rejected).toBe(writeFailure);
@@ -274,19 +355,6 @@ describe("createOpenClawTestInstance acquisition", () => {
             await expect(fs.stat(root!)).resolves.toBeDefined();
           } else {
             await expect(fs.stat(root!)).rejects.toMatchObject({ code: "ENOENT" });
-          }
-        }
-        const competitor = net.createServer();
-        try {
-          await new Promise<void>((resolve, reject) => {
-            competitor.once("error", reject);
-            competitor.listen(reservedPort!, "127.0.0.1", resolve);
-          });
-        } finally {
-          if (competitor.listening) {
-            await new Promise<void>((resolve, reject) => {
-              competitor.close((error) => (error ? reject(error) : resolve()));
-            });
           }
         }
       } finally {

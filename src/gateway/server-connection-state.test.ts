@@ -131,7 +131,15 @@ describe("gateway connection state", () => {
     expect(state.isConnectionActive("target")).toBe(true);
     expect(reads.count).toBe(0);
 
+    const firstRequest = state.clients.retainRequest(target.client);
+    const secondRequest = state.clients.retainRequest(target.client);
     state.clients.delete(target.client);
+    expect(
+      [...state.clients.authorityClients].filter((client) => client === target.client),
+    ).toHaveLength(1);
+    firstRequest();
+    firstRequest();
+    expect([...state.clients.authorityClients]).toContain(target.client);
     reads.count = 0;
     state.broadcastToConnIds("tick", { ts: 3 }, new Set(["target"]));
 
@@ -140,6 +148,8 @@ describe("gateway connection state", () => {
     expect(state.isConnectionActive("target")).toBe(false);
     expect(reads.count).toBe(0);
 
+    secondRequest();
+    expect([...state.clients.authorityClients]).not.toContain(target.client);
     state.clients.add(target.client);
     state.clients.clear();
     reads.count = 0;

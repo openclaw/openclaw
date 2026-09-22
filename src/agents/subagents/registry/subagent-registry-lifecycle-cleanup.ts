@@ -598,6 +598,8 @@ async function completeTerminalCleanup(
         try {
           await cleanupBrowserSessions({
             sessionKeys: [entry.childSessionKey],
+            isCurrent: () =>
+              isSessionEffectsOwnerCurrent() && !context.shouldSuppressSessionEffects(entry),
             onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
           });
         } catch (error) {

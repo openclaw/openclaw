@@ -120,6 +120,8 @@ export type ToolApprovalReview = {
 
 export type ChatQueueItem = {
   id: string;
+  /** UI question associated with this input; delivery and retry stay outbox-owned. */
+  asyncQuestionItemId?: string;
   workContext?: ChatWorkContext;
   workContextUnavailable?: true;
   text: string;
@@ -156,6 +158,8 @@ export type ChatQueueItem = {
     | "sending"
     | "waiting-reconnect"
     | "unconfirmed"
+    // Provider review requires a new operator decision even if delivery has prior attempts.
+    | "held"
     | "failed";
   sendSubmittedAtMs?: number;
   sendRequestStartedAtMs?: number;

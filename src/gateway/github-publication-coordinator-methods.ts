@@ -125,7 +125,8 @@ export function createGitHubPublicationCoordinatorMethods(params: {
   ) => boolean;
   processRow: (
     initial: PublicationRow,
-    validateAuthority: () => boolean,
+    validateExecution: () => boolean,
+    assertInvocationCurrent?: () => void,
   ) => Promise<SessionGitHubPublicationResult>;
 }) {
   const { readById, requestForClaim, sameWorktree, processRow } = params;
@@ -208,10 +209,11 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         if (!row) {
           throw new Error("GitHub publication request disappeared.");
         }
-        return await processRow(row, () => {
-          input.assertCurrent?.();
-          return params.placements.validateTurnClaim(claim);
-        });
+        return await processRow(
+          row,
+          () => params.placements.validateTurnClaim(claim),
+          input.assertCurrent,
+        );
       }
       if (claim && placement?.state === "local") {
         throw new Error(
@@ -329,11 +331,14 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         },
       });
       const row = insertSessionRequest(snapshot);
-      return await processRow(row, () => {
-        input.assertCurrent?.();
-        const latest = params.placements.get(sessionId);
-        return (!latest || latest.state === "local") && !latest?.turnClaim;
-      });
+      return await processRow(
+        row,
+        () => {
+          const latest = params.placements.get(sessionId);
+          return (!latest || latest.state === "local") && !latest?.turnClaim;
+        },
+        input.assertCurrent,
+      );
     },
 
     async resumeSessionRequests(): Promise<void> {

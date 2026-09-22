@@ -5,8 +5,7 @@ import { getChildLogger } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import {
   assertSqliteWorkerActorReusable,
   captureSqliteWorkerOpen,
@@ -127,7 +126,9 @@ export class SqliteWorkerBroker {
       return Promise.reject(toErrorObject(error, "SQLite worker input could not be serialized"));
     }
     return this.inputAdmission
-      .open(snapshot.input.byteLength, () => this.openAdmitted<Operations>(snapshot, client))
+      .open(snapshot.input.byteLength + (snapshot.preparation?.byteLength ?? 0), () =>
+        this.openAdmitted<Operations>(snapshot, client),
+      )
       .catch((error: unknown) => {
         this.clients.delete(client);
         throw error;
@@ -222,11 +223,12 @@ export class SqliteWorkerBroker {
               : {}),
           ...(options.existingOnly ? { existingIdentity: key } : {}),
           input,
+          ...(options.preparation ? { preparation: options.preparation } : {}),
           ...(/\.[cm]?ts$/.test(modulePath)
             ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
             : {}),
         },
-        input.byteLength,
+        input.byteLength + (options.preparation?.byteLength ?? 0),
         {
           dispatchState: opening.openDispatch,
           assertCurrent: options.assertCurrent,
@@ -418,7 +420,7 @@ export class SqliteWorkerBroker {
     if (process.versions.bun && process.platform === "darwin") {
       ensureSqliteLibrarySelected();
     }
-    const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteStore);
+    const url = resolveRuntimeProcessEntrypointUrl("sqliteStore");
     assertCurrent?.();
     const worker = runOutsideCaller(() =>
       createCpuTrackedWorker(url, {

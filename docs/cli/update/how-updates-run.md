@@ -144,7 +144,20 @@ root. This keeps staged assets and validation independent of the old checkout.
 Doctor warnings do not block update checks or readiness after plugin updates.
 The updater retains them in the run report shown by `openclaw update status`,
 including when an intentional open channel policy requires no configuration change.
-Error findings and failed check execution still refuse the update.
+Required config, state-safety, and readiness failures still refuse the update.
+After the package is installed, a failed post-plugin Doctor process is a recorded
+warning when it has no explicit writer or migration refusal. The updater still
+validates the final config and readiness, then starts the Gateway. A child whose
+termination cannot be confirmed remains blocking because it may still write state.
+
+In the private migration rehearsal, Doctor lint defers optional core inspections
+until after activation. This includes per-agent model and tool-schema diagnostics;
+lint does not prepare their runtime metadata when those checks are deferred.
+Each omitted inspection records a warning with its check ID and a command to run
+after the update. Required migration, configuration, plugin, and Gateway readiness
+checks still run. Standalone Doctor lint and explicitly selected `--only` checks
+keep their normal scope. The candidate recognizes the private-copy markers already
+set by the published 2026.9.4 updater, so this reduces work on that first hop too.
 
 These checks do not run an agent turn or require a usable model-auth route.
 OAuth-only installations and installations without provider credentials can update.
@@ -497,6 +510,20 @@ databases, and listener. A foreground Gateway launches a fresh process only afte
 the updater settles; it does not reopen its old module graph after replacement.
 Managed services restart through their existing service manager.
 
+Chat updates retain the requester's original person-access grant while staging
+and validation run. Revoking that grant stops the pending update and leaves the
+Gateway serving; issuing a new grant does not revive the original request. Before
+parking, the Gateway must confirm that the original grant and current admin
+authority still permit the update. A missing, failed, or timed-out confirmation
+does not authorize stopping the Gateway.
+
+After parking is authorized, the native updater owns completion or recovery of
+that same update, including Doctor and restart verification. Closing the original
+Gateway's access-policy service during shutdown does not cancel this accepted
+operation. The original profile link, role, configured authority, installation
+ownership, and config-write checks still apply. A new update or triage request
+requires fresh authorization.
+
 With `OPENCLAW_NO_RESPAWN` enabled, a foreground Gateway refuses `update.run`
 before starting the updater. Stop the Gateway, run `openclaw update`, and start
 it again, or relaunch it without `OPENCLAW_NO_RESPAWN` to allow control-plane updates.
@@ -691,11 +718,19 @@ the sentinel.
   <Step title="Resolve the target">
     Selects the channel's tag or branch and fetches upstream as needed. If the resolved target SHA equals `HEAD`, finishes `skipped` with reason `already-current` before staging or stopping the service.
 
+    Dev updates fetch only the configured tracking remote for `main`, or the remote identified by an explicit tracked target. Unrelated remotes remain untouched, with a scope warning in update history; their availability cannot fail the update. When no local `main` exists, or an explicit commit or tag needs discovery, candidate remotes may be tried. Failed optional attempts are warnings, and stale refs from failed fetches cannot select a branch. A failed fetch from the configured authority still reports `fetch-failed` before activation. Fetching does not rewrite Git configuration.
+
+    Fetch behavior belongs to the updater already running. An older updater may still fail before candidate code executes. For that first hop, use Git's process-only `remote.<name>.skipFetchAll=true` override for the unrelated remote, or update through the installation's [manual method](/install/updating/update-methods); no persistent Git config change is needed.
+
     Shallow and partial source checkouts retain their installed refs, shallow boundaries, and object database during target inspection. Missing objects are fetched into the private inspection repository through the checkout's configured remotes. This behavior belongs to the installed updater; an older updater that fails with `Git target inspection clone failed` needs its checkout's missing objects fetched before retrying.
 
   </Step>
   <Step id="build-a-candidate" title="Build the update">
     Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the staged checkout first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.
+
+    Git object transfer reads its prepared pack directly from disk. Packs above 256 MiB record a size warning and continue when the installed Git object volume has room for the measured pack and index. A known shortfall reports `snapshot-capacity-insufficient` before stopping the Gateway; unknown free space remains a warning. The pack import duration is recorded with the update steps. This check is separate from state-snapshot placement and runtime build-cache exclusions.
+
+    This repair runs in the installed updater. An older updater that refuses a pack above its fixed limit cannot acquire the repair through that same failing update; update the source installation manually using the [source-checkout reference script](/install/updating/update-methods#source-checkout-servers-reference-script).
 
     The updater prepares the built runtime (`dist`, `dist-runtime`, and dependencies, including nested workspace outputs) on the destination filesystem and removes the temporary Git worktree registration before changing the live checkout. Cleanup failures remain visible in the update result. If an interruption leaves staging behind, artifact-area staging does not dirty the checkout or block the next update's clean check.
 
@@ -813,9 +848,17 @@ continues. An invalid config snapshot still returns
 `postUpdate.plugins.status: "error"`, makes the top-level update `status`
 `"error"`, and exits nonzero. Invalid state, ownership errors, failed required
 Doctor or readiness checks also remain errors. Disabled plugins are skipped unless their records are trusted official
-sync targets. A changed plugin snapshot completes fresh Doctor and, when restart
+sync targets. A changed plugin snapshot attempts fresh Doctor and, when restart
 is requested, the Gateway restart and core runtime verification described above
 before the run succeeds.
+
+Post-plugin Doctor execution failures retain their exit reason and available
+plugin diagnostics as warnings in the run record and `openclaw update status`.
+If another step later fails, the generated failure report includes a sanitized
+**Warnings** section. A throwing plugin config-repair hook preserves its input
+and reports the plugin name and repair command. The core update can succeed with
+these warnings; required state migrations, refused config writes, and unresolved
+Doctor write custody still block completion.
 
 When the updated Gateway starts, plugin loading is verify-only: startup does not run package managers or mutate dependency trees. Package-manager `update.run` restarts are handed to the CLI managed-service path, so the package swap happens outside the old Gateway process and the service health checks decide whether the update can be reported as complete.
 </Note>

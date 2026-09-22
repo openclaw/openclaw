@@ -190,6 +190,7 @@ export function isTaskMirroredFlowSyncUnchanged(prepared: PreparedTaskMirroredFl
   );
 }
 
+/** Normalization keeps payload ownership with its caller; public readers make copies. */
 export function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRecord {
   const syncMode = record.syncMode === "task_mirrored" ? "task_mirrored" : "managed";
   const controllerId =
@@ -200,17 +201,10 @@ export function normalizeRestoredFlowRecord(record: TaskFlowRecord): TaskFlowRec
     ...record,
     syncMode,
     ownerKey: assertFlowOwnerKey(record.ownerKey),
-    ...(record.requesterOrigin
-      ? { requesterOrigin: cloneStructuredValue(record.requesterOrigin)! }
-      : {}),
     ...(controllerId ? { controllerId } : {}),
     currentStep: normalizeOptionalString(record.currentStep),
     blockedTaskId: normalizeOptionalString(record.blockedTaskId),
     blockedSummary: normalizeOptionalString(record.blockedSummary),
-    ...(record.stateJson !== undefined
-      ? { stateJson: cloneStructuredValue(record.stateJson)! }
-      : {}),
-    ...(record.waitJson !== undefined ? { waitJson: cloneStructuredValue(record.waitJson)! } : {}),
     revision: Math.max(0, record.revision),
     cancelRequestedAt: record.cancelRequestedAt ?? undefined,
     endedAt: record.endedAt ?? undefined,
@@ -233,10 +227,6 @@ export function selectTaskFlowRecords(
   return selected
     .map((flow) => cloneFlowRecord(flow))
     .toSorted((left, right) => right.createdAt - left.createdAt);
-}
-
-export function snapshotFlowRecords(source: ReadonlyMap<string, TaskFlowRecord>): TaskFlowRecord[] {
-  return [...source.values()].map((record) => cloneFlowRecord(record));
 }
 
 function ensureNotifyPolicy(notifyPolicy?: TaskNotifyPolicy): TaskNotifyPolicy {

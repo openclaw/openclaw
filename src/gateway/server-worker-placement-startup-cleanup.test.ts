@@ -125,19 +125,19 @@ describe("worker placement startup cleanup ownership", () => {
       const environments = workerEnvironmentSupport.createService(
         workerEnvironmentSupport.createProvider({ provision, inspect, destroy }),
       );
-      const requestedEnvironment = workerEnvironmentSupport.testState.store.createIntent({
+      const requestedEnvironment = await workerEnvironmentSupport.testState.store.createIntent({
         environmentId,
         providerId: "fake",
         profileId: "development",
         profileSnapshot: { settings: { region: "test" } },
         provisionOperationId: "provision:startup-fenced",
       });
-      workerEnvironmentSupport.testState.store.transition({
+      await workerEnvironmentSupport.testState.store.transition({
         environmentId,
         from: requestedEnvironment.state,
         to: "provisioning",
       });
-      workerEnvironmentSupport.testState.store.requestDestroy({
+      await workerEnvironmentSupport.testState.store.requestDestroy({
         environmentId,
         state: "provisioning",
       });
@@ -226,7 +226,7 @@ describe("worker placement startup cleanup ownership", () => {
           leaseId: null,
           destroyRequestedAtMs: expect.any(Number),
         });
-        workerEnvironmentSupport.testState.store.transition({
+        await workerEnvironmentSupport.testState.store.transition({
           environmentId,
           from: "provisioning",
           to: "failed",
@@ -254,19 +254,19 @@ describe("worker placement startup cleanup ownership", () => {
     const environments = workerEnvironmentSupport.createService(
       workerEnvironmentSupport.createProvider({ provision, resolveAllocation, destroy }),
     );
-    const intent = workerEnvironmentSupport.testState.store.createIntent({
+    const intent = await workerEnvironmentSupport.testState.store.createIntent({
       environmentId,
       providerId: "fake",
       profileId: "development",
       profileSnapshot: { settings: { region: "test" } },
       provisionOperationId: operationId,
     });
-    workerEnvironmentSupport.testState.store.transition({
+    await workerEnvironmentSupport.testState.store.transition({
       environmentId,
       from: intent.state,
       to: "provisioning",
     });
-    workerEnvironmentSupport.testState.store.requestDestroy({
+    await workerEnvironmentSupport.testState.store.requestDestroy({
       environmentId,
       state: "provisioning",
     });

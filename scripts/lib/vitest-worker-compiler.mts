@@ -227,7 +227,10 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   const compileShared = async () => {
     await build(config);
     reportPhase("shared entries compiled");
-    for (const [name, source] of Object.entries(standaloneRuntimeProcessBuildEntries)) {
+    for (const [name, source] of Object.entries(entry)) {
+      if (!Object.hasOwn(standaloneRuntimeProcessBuildEntries, name)) {
+        continue;
+      }
       await build({
         ...config,
         entry: { [name]: source },

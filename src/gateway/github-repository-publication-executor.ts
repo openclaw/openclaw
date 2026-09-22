@@ -376,6 +376,7 @@ export async function executeRepositoryGitHubPublication(params: {
       // GraphQL's beforeOid is an exact lease; REST's non-force update only checks ancestry.
       const result = await runPublicationCommand(apiArgs("graphql", "POST"), {
         env: identity.env,
+        beforeRun: assertCurrent,
         input: JSON.stringify({
           query:
             "mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }",
@@ -437,6 +438,7 @@ export async function executeRepositoryGitHubPublication(params: {
         githubPublicationCreatePullRequestArgs(repository),
         {
           env: identity.env,
+          beforeRun: assertCurrent,
           input: JSON.stringify({
             title,
             body,
@@ -453,8 +455,10 @@ export async function executeRepositoryGitHubPublication(params: {
         }
       }
       execution.recordEffect("pull_request", url ? { url } : {});
-      assertCurrent();
-      url ??= await findPullRequest();
+      if (!url) {
+        assertCurrent();
+        url = await findPullRequest();
+      }
     }
     if (!url) {
       throw new Error("GitHub pull request creation was rejected.");

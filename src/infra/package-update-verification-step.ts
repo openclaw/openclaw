@@ -2,6 +2,28 @@ import { formatErrorMessage } from "./errors.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
+export function createPackageVerificationFailureStep(
+  root: string,
+  errors: string[],
+  env?: NodeJS.ProcessEnv,
+): UpdateStepResult {
+  return {
+    name: "package-verify",
+    command: `verify ${root}`,
+    cwd: root,
+    durationMs: 0,
+    exitCode: 1,
+    stderrTail: errors.join("\n"),
+    stdoutTail: null,
+    failureFacts: errors.map((message) =>
+      createUpdateFailureFact(
+        { check: "package-verify", code: "global-install-failed", message },
+        env,
+      ),
+    ),
+  };
+}
+
 function failedVerification(root: string, code: string, message: string): UpdateStepResult {
   return {
     name: "post-install-verify",

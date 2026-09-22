@@ -16,7 +16,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import {
-  clearRestartSentinel,
+  clearRestartSentinelIfRevision,
   readRestartSentinel,
   writeRestartSentinel,
   type RestartSentinelPayload,
@@ -244,7 +244,11 @@ describe("legacy restart sentinel migration", () => {
     const { env, stateDir } = useStateDir();
     await writeLegacy(stateDir, { version: 1, payload: payload(1) });
     await migrate({ env, stateDir });
-    await clearRestartSentinel(env);
+    const imported = await readRestartSentinel(env);
+    if (!imported) {
+      throw new Error("Expected the migrated restart sentinel");
+    }
+    await expect(clearRestartSentinelIfRevision(imported.revision, env)).resolves.toBe(true);
     const sourcePath = await writeLegacy(stateDir, { version: 1, payload: payload(2) });
 
     const result = await migrate({ env, stateDir });

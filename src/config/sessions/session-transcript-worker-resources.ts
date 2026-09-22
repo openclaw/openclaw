@@ -33,49 +33,14 @@ import type {
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
 import type {
-  SessionEntryListWorkerInput,
-  SessionExactEntriesWorkerInput,
-  SessionStoreTargetWorkerInput,
-  SessionTargetInventoryWorkerInput,
-  SessionIdentityEvidenceWorkerInput,
-  SessionMembersWorkerInput,
-  SessionPreviewWorkerInput,
-  SessionTitleFieldsWorkerInput,
-  SessionRowPresenceWorkerInput,
-  SessionTranscriptHistoryWorkerInput,
+  SessionHistoryWorkerInput,
   SessionTranscriptWorkerReply,
-  SessionUsageCacheWorkerInput,
-  SessionTranscriptSearchWorkerInput,
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 export const historyPages = new WorkerTaskPool<
-  | SessionTranscriptHistoryWorkerInput
-  | SessionPreviewWorkerInput
-  | SessionTitleFieldsWorkerInput
-  | SessionRowPresenceWorkerInput
-  | SessionMembersWorkerInput
-  | SessionEntryListWorkerInput
-  | SessionExactEntriesWorkerInput
-  | SessionStoreTargetWorkerInput
-  | SessionTargetInventoryWorkerInput
-  | SessionIdentityEvidenceWorkerInput
-  | SessionUsageCacheWorkerInput
-  | SessionTranscriptSearchWorkerInput,
-  SessionTranscriptWorkerReply<
-    | "history-page"
-    | "session-preview"
-    | "session-title-fields"
-    | "session-row-presence"
-    | "session-members"
-    | "session-entry-list"
-    | "session-exact-entries"
-    | "session-store-target"
-    | "session-target-inventory"
-    | "session-identity-evidence"
-    | "usage-cache"
-    | "transcript-search"
-  >
+  SessionHistoryWorkerInput,
+  SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
 >({
   workerUrl,
   workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
@@ -386,20 +351,8 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             },
             { inputBytes: JSON.stringify(request).length * 2, timeoutMs: 60_000 },
           );
-          const result = unwrapSessionTranscriptWorkerReply<
-            | "history-page"
-            | "session-preview"
-            | "session-title-fields"
-            | "session-row-presence"
-            | "session-members"
-            | "session-entry-list"
-            | "session-exact-entries"
-            | "session-store-target"
-            | "session-target-inventory"
-            | "session-identity-evidence"
-            | "usage-cache"
-            | "transcript-search"
-          >(reply);
+          const result =
+            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (
             typeof result === "boolean" ||
             Array.isArray(result) ||
@@ -426,20 +379,8 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
               timeoutMs: 60_000,
             },
           );
-          const result = unwrapSessionTranscriptWorkerReply<
-            | "history-page"
-            | "session-preview"
-            | "session-title-fields"
-            | "session-row-presence"
-            | "session-members"
-            | "session-entry-list"
-            | "session-exact-entries"
-            | "session-store-target"
-            | "session-target-inventory"
-            | "session-identity-evidence"
-            | "usage-cache"
-            | "transcript-search"
-          >(reply);
+          const result =
+            unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
           if (
             typeof result === "boolean" ||
             Array.isArray(result) ||

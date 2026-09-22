@@ -10,7 +10,7 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   readManagedGatewayServiceForUpdate,
   resolveUpdatedGatewayRestartPort,

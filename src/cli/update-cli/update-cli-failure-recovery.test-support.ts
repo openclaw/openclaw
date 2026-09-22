@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import type { readConfigFileSnapshot as ReadConfigFileSnapshot } from "../../config/config.js";
@@ -9,6 +10,7 @@ import type {
   ExitError as ExitErrorType,
 } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import type { TempHomeEnv } from "../../test-utils/temp-home.js";
 import { VERSION } from "../../version.js";
 import type { updateCommand as UpdateCommand } from "./update-command.js";
 
@@ -171,4 +173,58 @@ export function registerFailureSelectorTests({
       });
     },
   );
+}
+
+export function reportUpdateCliHomeCleanupFailure(temporary: TempHomeEnv | undefined): void {
+  // Preserve a bounded fixture inventory before outer teardown removes it.
+  try {
+    const home = temporary?.home;
+    if (home) {
+      const inspect = (name: string) => {
+        try {
+          const stat = fsSync.lstatSync(path.join(home, name));
+          return {
+            name,
+            type: stat.isSymbolicLink() ? "symlink" : stat.isDirectory() ? "directory" : "file",
+            mode: (stat.mode & 0o7777).toString(8),
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            ctimeMs: stat.ctimeMs,
+          };
+        } catch (readError) {
+          return { name, error: String(readError) };
+        }
+      };
+      const root = inspect(".");
+      const entries: ReturnType<typeof inspect>[] = [];
+      let truncated = false;
+      if (root.type === "directory") {
+        const directory = fsSync.opendirSync(home);
+        try {
+          for (let index = 0; index <= 32; index++) {
+            const entry = directory.readSync();
+            if (!entry) {
+              break;
+            }
+            if (index === 32) {
+              truncated = true;
+              break;
+            }
+            entries.push(inspect(entry.name));
+          }
+        } finally {
+          directory.closeSync();
+        }
+      }
+      console.error("Update CLI HOME cleanup failed", {
+        home,
+        capturedAt: Date.now(),
+        root,
+        entries,
+        truncated,
+      });
+    }
+  } catch {
+    // Diagnostics cannot replace the original cleanup failure.
+  }
 }

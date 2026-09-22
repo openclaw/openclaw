@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { joinClawHubPluginCatalog } from "./catalog-discovery.js";
 import {
   emptyMetadataSnapshot,
@@ -44,7 +47,7 @@ vi.mock("./recommended-tool-installs.js", () => ({
 const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
 const {
   listManagedPlugins,
-  resolveManagedPluginIconSource,
+  resolveManagedPluginIconSources,
   resolveManagedPluginActivityIconSource,
   resolveManagedSetupCatalogIconUrl,
 } = await import("./management-service.js");
@@ -57,6 +60,8 @@ function mockHostedOfficialCatalog(entries: unknown[]) {
     metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
   });
 }
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("managed plugin catalog", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -295,6 +300,17 @@ describe("managed plugin catalog", () => {
         action: matches ? "manage" : "install",
       });
       expect(entry?.local.pluginId).toBe(matches ? "diffs" : undefined);
+      const sources = await resolveManagedPluginIconSources({
+        config: {},
+        env: {},
+        pluginId: "diffs",
+      });
+      const expectedRegistry =
+        source === "npm" ? "https://clawhub.ai" : clawhubUrl?.replace(/\/+$/, "");
+      expect(sources).toEqual(
+        expectedRegistry ? [{ kind: "clawhub", baseUrl: expectedRegistry, packageName }] : [],
+      );
+      expect(local.plugins[0]?.hasIcon).toBe(expectedRegistry ? true : undefined);
     },
   );
 
@@ -463,20 +479,32 @@ describe("managed plugin catalog", () => {
   });
 
   it("keeps installed plugins uncategorized when ClawHub enrichment is unavailable", async () => {
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        enabled: true,
-        id: "community-tool",
-        name: "Community Tool",
-        origin: "global",
-        packageVersion: "1.0.0",
-        installRecord: {
-          source: "clawhub",
-          clawhubPackage: "community/tool",
-          version: "1.0.0",
-        },
-      }),
+    const packageRoot = tempDirs.make("managed-plugin-installed-");
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "@openclaw/community-tool", version: "1.0.0" }),
     );
+    const metadata = metadataSnapshot({
+      enabled: true,
+      id: "community-tool",
+      name: "Community Tool",
+      origin: "global",
+      packageVersion: "1.0.0",
+      installRecord: {
+        source: "clawhub",
+        clawhubPackage: "community/tool",
+        version: "1.0.0",
+        installPath: packageRoot,
+      },
+    });
+    expectDefined(metadata.index.plugins[0], "installed plugin").rootDir = packageRoot;
+    const manifest = expectDefined(metadata.byPluginId.get("community-tool"), "plugin manifest");
+    manifest.rootDir = packageRoot;
+    manifest.source = path.join(packageRoot, "index.ts");
+    manifest.manifestPath = path.join(packageRoot, "openclaw.plugin.json");
+    fs.writeFileSync(manifest.source, "export {};\n");
+    fs.writeFileSync(manifest.manifestPath, JSON.stringify({ id: manifest.id }));
+    mocks.metadata.mockReturnValue(metadata);
     mocks.pluginVersionCategories.mockRejectedValue(new Error("ClawHub offline"));
 
     const catalog = await listManagedPlugins({
@@ -555,7 +583,7 @@ describe("managed plugin catalog", () => {
       env,
       officialCatalog: { entries: [] },
     });
-    const resolved = await resolveManagedPluginIconSource({
+    const resolved = await resolveManagedPluginIconSources({
       config,
       env,
       pluginId: "workboard",
@@ -563,7 +591,7 @@ describe("managed plugin catalog", () => {
 
     expect(catalog.plugins[0]).toMatchObject({ id: "workboard" });
     expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
-    expect(resolved).toBeUndefined();
+    expect(resolved).toEqual([]);
     expect(mocks.metadata).toHaveBeenNthCalledWith(1, {
       config,
       env,
@@ -594,7 +622,7 @@ describe("managed plugin catalog", () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
 
     const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
-    const resolved = await resolveManagedPluginIconSource({
+    const resolved = await resolveManagedPluginIconSources({
       config: {},
       env: {},
       pluginId: "firecrawl",
@@ -603,7 +631,7 @@ describe("managed plugin catalog", () => {
     expect(catalog.plugins[0]).toMatchObject({ id: "firecrawl" });
     expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
     expect(catalog.plugins[0]).not.toHaveProperty("icon");
-    expect(resolved).toBeUndefined();
+    expect(resolved).toEqual([]);
   });
 
   it("resolves the portable package icon", async () => {
@@ -620,7 +648,7 @@ describe("managed plugin catalog", () => {
       config: {},
       env: {},
     });
-    const resolved = await resolveManagedPluginIconSource({
+    const resolved = await resolveManagedPluginIconSources({
       config: {},
       env: {},
       pluginId: "workboard",
@@ -631,7 +659,7 @@ describe("managed plugin catalog", () => {
       hasIcon: true,
       channelIds: ["workboard-chat"],
     });
-    expect(resolved).toEqual({ kind: "file", path: iconPath, rootPath: "/tmp/workboard" });
+    expect(resolved).toEqual([{ kind: "file", path: iconPath, rootPath: "/tmp/workboard" }]);
     expect(catalog.plugins[0]).not.toHaveProperty("hasActivityIcon");
     expect(catalog.plugins[0]).not.toHaveProperty("activityIconTools");
     expect(
@@ -758,13 +786,13 @@ describe("managed plugin catalog", () => {
       env: {},
       officialCatalog: { entries: [] },
     });
-    const resolved = await resolveManagedPluginIconSource({
+    const resolved = await resolveManagedPluginIconSources({
       config: {},
       env: {},
       pluginId: "workboard",
     });
 
     expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
-    expect(resolved).toBeUndefined();
+    expect(resolved).toEqual([]);
   });
 });

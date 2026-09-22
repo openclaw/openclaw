@@ -19,6 +19,7 @@ import {
   getUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -27,7 +28,12 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import {
+  createChangedPostCoreUpdateOptions,
+  createConfigValidationFailure,
+} from "./update-cli-config.test-support.js";
+import { registerFreshDoctorDiagnosticTests } from "./update-command-fresh-doctor-diagnostics.test-support.js";
+import { registerFreshDoctorOutcomeTests } from "./update-command-fresh-doctor-outcomes.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
@@ -75,29 +81,12 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
 } from "./update-command-fresh-doctor.js";
 
-const pluginUpdate: PostCorePluginUpdateResult = {
-  status: "ok",
-  changed: true,
-  sync: {
-    changed: false,
-    switchedToBundled: [],
-    switchedToNpm: [],
-    warnings: [],
-    errors: [],
-  },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
-  warnings: [],
-};
-
-const updateOptions = {
+const updateOptions = createChangedPostCoreUpdateOptions({
   root: "/opt/openclaw",
-  pluginUpdate,
-  freshDoctorRequired: true,
-  yes: true,
-  json: true,
   timeoutMs: 5_000,
-};
+});
+const pluginUpdate = updateOptions.pluginUpdate;
+pluginUpdate.npm = { changed: false, outcomes: [] };
 
 const validConfigSnapshot = {
   exists: true,
@@ -443,7 +432,10 @@ describe("post-plugin update readiness", () => {
           await fs.writeFile(configPath, '{"gateway":{"mode":"invalid"}}');
         }
         if (args.includes("validate")) {
-          throw new Error("Config invalid");
+          throw createConfigValidationFailure(
+            [{ path: "gateway.mode", message: "Invalid gateway mode" }],
+            "Config invalid",
+          );
         }
         return { stdout: "", stderr: "" };
       });
@@ -454,9 +446,92 @@ describe("post-plugin update readiness", () => {
       expect(result.pluginUpdate).toMatchObject({
         status: "error",
         reason: "post-plugin-doctor-invalid-config",
+        failureFacts: [
+          {
+            check: "config",
+            code: "candidate-config-failed",
+            affectedKey: "gateway.mode",
+            message: "Invalid gateway mode",
+          },
+        ],
       });
     });
   });
+
+  it.each([
+    {
+      name: "runtime exception",
+      stdout: JSON.stringify({ valid: false, error: "Runtime failed" }),
+    },
+    { name: "missing output", stdout: "" },
+    { name: "malformed output", stdout: "not JSON" },
+    { name: "launch", code: "ENOENT", exitCode: undefined, stdout: "" },
+    { name: "timeout", timedOut: true },
+    { name: "cancellation", isCanceled: true },
+    { name: "signal", signal: "SIGTERM", isTerminated: true },
+    { name: "output limit", isMaxBuffer: true },
+    { name: "capture failure", cause: new Error("capture failed") },
+    { name: "unsettled cleanup", cleanup: "uncertain" },
+    { name: "nested cleanup", cause: new CommandProcessCleanupError() },
+  ])("retains a config validation $name as an execution failure", async (failure) => {
+    const { cause, ...metadata } = failure;
+    mocks.runExec.mockRejectedValueOnce(
+      Object.assign(new Error("private argv must not be copied", { cause }), {
+        failed: true,
+        exitCode: 1,
+        stdout: JSON.stringify({ valid: false, issues: [{ message: "Unconfirmed issue" }] }),
+        ...metadata,
+      }),
+    );
+    vi.mocked(defaultRuntime.log).mockClear();
+    vi.mocked(defaultRuntime.error).mockClear();
+
+    const { pluginUpdate: result } = await completePostCorePluginUpdate({
+      ...updateOptions,
+      freshDoctorRequired: false,
+    });
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "post-plugin-config-validation-execution-failed",
+      warnings: [
+        expect.objectContaining({
+          message: "Config validation could not complete; refusing to restart.",
+        }),
+      ],
+      failureFacts: [
+        expect.objectContaining({ code: "post-plugin-config-validation-execution-failed" }),
+        ...(failure.stdout === "" || failure.name === "launch"
+          ? []
+          : [expect.objectContaining({ code: "command-failed" })]),
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain("private argv");
+    expect(JSON.stringify(result)).not.toContain("doctor --fix");
+    expect(mocks.runUtf8).not.toHaveBeenCalled();
+    expect(defaultRuntime.log).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("preserves a missing target entrypoint failure despite an invalid parent snapshot", async () => {
+    mocks.resolveEntrypoint.mockResolvedValue(undefined);
+    mocks.readConfig.mockResolvedValue({ ...validConfigSnapshot, valid: false });
+    const { pluginUpdate: result } = await completePostCorePluginUpdate(updateOptions);
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-execution-failed",
+      warnings: [
+        expect.objectContaining({ reason: expect.stringContaining("entrypoint not found") }),
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain("invalid-config");
+    expect(mocks.runExec).not.toHaveBeenCalled();
+    expect(mocks.runUtf8).not.toHaveBeenCalled();
+  });
+
+  registerFreshDoctorOutcomeTests(mocks, updateOptions);
+
+  registerFreshDoctorDiagnosticTests({ mocks, tempDirs, updateOptions });
 
   it("consumes nonfatal Doctor warnings before reporting successful convergence", async () => {
     const warnings = ["Optional probe timed out; recheck after restart."];
@@ -481,25 +556,30 @@ describe("post-plugin update readiness", () => {
     expect(await consumeUpdatePostInstallDoctorResult(resultPath)).toBeNull();
   });
 
-  it.each([false, true])(
-    "preserves deferred repair advisory semantics (timed out: %s)",
-    async (timedOut) => {
+  it.each([
+    { timedOut: false, captureFailed: false },
+    { timedOut: true, captureFailed: false },
+    { timedOut: false, captureFailed: true },
+  ])(
+    "preserves deferred repair advisory semantics (timed out: $timedOut, capture failed: $captureFailed)",
+    async ({ timedOut, captureFailed }) => {
       mocks.runExec.mockImplementation(async (_command, _args, options) => {
         await writeUpdatePostInstallDoctorResult({
           resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
           result: createDeferredConfiguredPluginRepairDoctorResult(["plugin repair deferred"]),
         });
-        throw Object.assign(new Error("Doctor advisory"), {
-          failed: true,
-          exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-          timedOut,
-        });
+        throw Object.assign(
+          new Error("Doctor advisory", {
+            cause: captureFailed ? new Error("output capture failed") : undefined,
+          }),
+          { failed: true, exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE, timedOut },
+        );
       });
       const run = runUpdateFinalizationDoctorInFreshProcess({
         ...updateOptions,
         phase: "pre-plugin",
       });
-      if (timedOut) {
+      if (timedOut || captureFailed) {
         await expect(run).rejects.toThrow("Doctor advisory");
       } else {
         await expect(run).resolves.toBeUndefined();
@@ -677,9 +757,7 @@ describe("post-plugin update readiness", () => {
       })}\n`,
     });
 
-    const result = await completePostCorePluginUpdate({
-      ...updateOptions,
-    });
+    const result = await completePostCorePluginUpdate(updateOptions);
 
     expect(result.pluginUpdate).toMatchObject({
       status: "error",
@@ -754,9 +832,7 @@ describe("post-plugin update readiness", () => {
   ])("fails closed on $label from the updated readiness child", async ({ stdout }) => {
     mocks.runUtf8.mockResolvedValue({ ...readinessExit, stdout });
 
-    const result = await completePostCorePluginUpdate({
-      ...updateOptions,
-    });
+    const result = await completePostCorePluginUpdate(updateOptions);
 
     expect(result.pluginUpdate).toMatchObject({
       status: "error",
@@ -839,6 +915,37 @@ describe("post-plugin update readiness", () => {
       warnings: [expect.objectContaining({ reason: "Error: Readiness executable unavailable" })],
     });
   });
+
+  it.each(["", "{unfinished"])(
+    "preserves a failed readiness child's diagnostic when stdout is %j",
+    async (stdout) => {
+      mocks.runUtf8.mockResolvedValue({
+        ...readinessExit,
+        code: 2,
+        stdout,
+        stderr:
+          "Earlier diagnostic line\n".repeat(100) +
+          "Could not load readiness plugin https://example.test/diagnostic?token=fixture-secret",
+      });
+
+      const result = await completePostCorePluginUpdate(updateOptions);
+
+      expect(result.pluginUpdate).toMatchObject({
+        status: "error",
+        reason: "post-plugin-update-readiness-execution-failed",
+      });
+      const reason = result.pluginUpdate.warnings?.[0]?.reason;
+      expect(reason).toContain("code=2");
+      expect(reason).toContain("stderr:");
+      expect(reason).toContain("Could not load readiness plugin");
+      expect(reason).toContain("token=<redacted>");
+      expect(reason).not.toContain("fixture-secret");
+      expect(reason).not.toContain("/opt/openclaw/dist/index.js");
+      expect(reason?.length).toBeLessThan(600);
+      expect(result.pluginUpdate.doctorLint?.stderrTail).toContain("token=<redacted>");
+      expect(result.pluginUpdate.doctorLint?.stderrTail).not.toContain("fixture-secret");
+    },
+  );
 
   it("returns readiness facts without publishing update history, output, or reports", async () => {
     await withTempHome(async (home) => {

@@ -4,6 +4,7 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { appendPluginInstanceCleanupFailures } from "./host-hook-cleanup-result.js";
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
 import {
   createPluginCacheArtifacts,
@@ -480,19 +481,7 @@ function beginPluginCacheRetirement(
         continue;
       }
       const { resource, result } = outcome.value;
-      for (const error of result.errors) {
-        // A registry join may have already included this same instance's outcome.
-        if (
-          !failures.some(
-            (failure) =>
-              failure.pluginId === resource.pluginId &&
-              failure.hookId === "instance" &&
-              failure.error === error,
-          )
-        ) {
-          failures.push({ pluginId: resource.pluginId, hookId: "instance", error });
-        }
-      }
+      appendPluginInstanceCleanupFailures(failures, resource.pluginId, result.errors);
     }
     return { cleanupCount: host?.cleanupCount ?? 0, failures };
   };

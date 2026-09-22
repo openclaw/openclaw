@@ -1,5 +1,5 @@
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
-import { isPortFree } from "../test-utils/ports.js";
+import { probeTestPort } from "../test-utils/ports.js";
 import { stopManagedProviderLocalServices } from "./provider-local-service.js";
 
 export function createProviderLocalServiceTestFixture() {
@@ -19,8 +19,11 @@ export function createProviderLocalServiceTestFixture() {
       await stopManagedProviderLocalServices();
       for (const ports of claims.values()) {
         for (const port of ports) {
-          if (!(await isPortFree(port))) {
-            throw new Error(`Local provider test port ${port} is still bound after cleanup`);
+          const probe = await probeTestPort(port);
+          if (!probe.free) {
+            throw new Error(`Local provider test port ${port} is still bound after cleanup`, {
+              cause: probe.error,
+            });
           }
         }
       }

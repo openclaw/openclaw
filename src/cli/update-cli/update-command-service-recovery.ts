@@ -29,7 +29,7 @@ import {
   revalidateOriginalManagedServiceRuntime,
 } from "./update-command-original-service.js";
 import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   isPackageManagerUpdateMode,
   restartRetainedUpdateGatewayService,

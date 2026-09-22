@@ -438,7 +438,8 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
             step: "gateway recovery verification",
             status: "failed",
             exitCode: 1,
-            detail: "Exit code: 1",
+            detail:
+              "Exit code: 1; Gateway did not settle; startup phase: waiting for managed service",
             failureFacts: [{ check: "settled", code: "timeout", message: expect.any(String) }],
           },
         ]);

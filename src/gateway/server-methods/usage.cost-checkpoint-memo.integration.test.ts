@@ -13,7 +13,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
-import { writeSessionCostUsageRollupInDatabase } from "../../infra/session-cost-usage-cache.kernel.js";
+import {
+  readSessionCostUsageRollupBodyInDatabase,
+  writeSessionCostUsageRollupInDatabase,
+} from "../../infra/session-cost-usage-cache.kernel.js";
 import { readSessionCostUsageRollupRows } from "../../infra/session-cost-usage-cache.test-support.js";
 import {
   prepareUsageCostWorker,
@@ -83,8 +86,8 @@ if (parentPort) {
   });
   const parse = JSON.parse;
   JSON.parse = function(text, ...args) {
-    const rollup = operation && typeof text === "string" && text.includes('"pricingFingerprint"') &&
-      text.includes('"checkpoint"') && text.includes('"rollup"');
+    const rollup = operation && typeof text === "string" && text.includes('"buckets"') &&
+      text.includes('"untimestamped"');
     if (rollup) parsedRollups++;
     return Reflect.apply(parse, this, [text, ...args]);
   };
@@ -213,7 +216,7 @@ it("refreshes registered usage.cost without decoding unchanged fresh rollups", a
   });
 });
 
-it("invalidates refresh checkpoints for current rows, inventory, pricing, targets, and worker closure", async () => {
+it("checks fresh metadata without hydrating bodies across inventory, pricing, targets, and worker closure", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const preload = state.path("observe-usage-decode.cjs");
     const observations = await observeUsageDecoding(preload, state.path("usage-decode.jsonl"));
@@ -252,14 +255,26 @@ it("invalidates refresh checkpoints for current rows, inventory, pricing, target
       const seededWorkers = [...observedWorkers];
       await closeOpenClawAgentDatabasesAsync(state.root);
       expect(seededWorkers.every((worker) => worker.threadId === -1)).toBe(true);
-      const cold = await refresh(primary, 2);
+      const cold = await refresh(primary, 0);
       expect((await refresh(primary, 0)).threadId).toBe(cold.threadId);
 
-      // The separate summary lane neither warms nor evicts the refresh lane's last target.
+      // A cold worker and target changes need only metadata to recognize freshness.
       expect((await summary(secondary)).totals.totalTokens).toBe(10);
       expect((await refresh(primary, 0)).threadId).toBe(cold.threadId);
-      expect((await refresh(secondary, 1)).threadId).toBe(cold.threadId);
-      expect((await refresh(primary, 2)).threadId).toBe(cold.threadId);
+      expect((await refresh(secondary, 0)).threadId).toBe(cold.threadId);
+      expect((await refresh(primary, 0)).threadId).toBe(cold.threadId);
+
+      await fs.appendFile(firstFile, usageLine("first-appended"));
+      await fs.appendFile(secondFile, usageLine("second-appended"));
+      expect(await refreshCostUsageCacheForAgent({ agentId: primary, config, maxFiles: 1 })).toBe(
+        "refreshed",
+      );
+      expect(
+        (await observations()).findLast((record) => record.operation === "refresh")?.parsedRollups,
+      ).toBe(1);
+      expect((await summary(primary)).cacheStatus).toMatchObject({ cachedFiles: 2, staleFiles: 1 });
+      await refresh(primary, 1);
+      expect((await summary(primary)).totals.totalTokens).toBe(40);
 
       const rewrite = (value: (text: string) => string) => {
         const row = expectDefined(
@@ -274,6 +289,7 @@ it("invalidates refresh checkpoints for current rows, inventory, pricing, target
                 rollupId: row.key,
                 previousValueJson: new TextEncoder().encode(row.valueJson),
                 valueJson: new TextEncoder().encode(valueJson),
+                blob: readSessionCostUsageRollupBodyInDatabase(db, row)?.blob ?? null,
                 updatedAt: row.updatedAt,
               }),
             { agentId: primary },
@@ -283,21 +299,21 @@ it("invalidates refresh checkpoints for current rows, inventory, pricing, target
         return { ...row, valueJson };
       };
       const whitespace = rewrite((text) => `${text}\n`);
-      await refresh(primary, 1);
+      await refresh(primary, 0);
       expect(readSessionCostUsageRollupRows(primary).find((row) => row.key === firstFile)).toEqual(
         whitespace,
       );
       const invalid = rewrite((text) => `${text.trimEnd().slice(0, -1)},"version":0}`);
-      await refresh(primary, 1);
+      await refresh(primary, 0);
       expect(
         readSessionCostUsageRollupRows(primary).find((row) => row.key === firstFile)?.valueJson,
       ).not.toBe(invalid.valueJson);
-      expect((await summary(primary)).totals.totalTokens).toBe(20);
+      expect((await summary(primary)).totals.totalTokens).toBe(40);
 
       const newFile = path.join(primaryDir, "new.jsonl");
       await fs.writeFile(newFile, usageLine("new"));
       await refresh(primary, 0);
-      expect((await summary(primary)).totals.totalTokens).toBe(30);
+      expect((await summary(primary)).totals.totalTokens).toBe(50);
       await fs.rm(secondFile);
       await refresh(primary, 0);
       expect(
@@ -305,7 +321,7 @@ it("invalidates refresh checkpoints for current rows, inventory, pricing, target
           .map((row) => row.key)
           .toSorted(),
       ).toEqual([firstFile, newFile].toSorted());
-      expect((await summary(primary)).totals.totalTokens).toBe(20);
+      expect((await summary(primary)).totals.totalTokens).toBe(30);
 
       const changedPricing: OpenClawConfig = {
         ...config,
@@ -328,16 +344,16 @@ it("invalidates refresh checkpoints for current rows, inventory, pricing, target
           },
         },
       };
-      await refresh(primary, 2, changedPricing);
       await refresh(primary, 0, changedPricing);
-      expect((await summary(primary, changedPricing)).totals.totalTokens).toBe(20);
-      await refresh(primary, 2, config);
+      await refresh(primary, 0, changedPricing);
+      expect((await summary(primary, changedPricing)).totals.totalTokens).toBe(30);
+      await refresh(primary, 0, config);
       expect((await summary(primary)).cacheStatus?.status).toBe("fresh");
     });
   });
 });
 
-it("keeps incognito rollups out of the durable checkpoint memo", async () => {
+it("checks incognito freshness without decoding report bodies or creating durable files", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const preload = state.path("observe-usage-decode.cjs");
     const observations = await observeUsageDecoding(preload, state.path("usage-decode.jsonl"));
@@ -368,7 +384,7 @@ it("keeps incognito rollups out of the durable checkpoint memo", async () => {
         storePath: databasePath,
         sessionFiles: [sessionFile],
       });
-      for (const parsedRollups of [0, 1, 1]) {
+      for (const parsedRollups of [0, 0, 0]) {
         expect(
           await runUsageCostWorker(prepared, { kind: "refresh", sessionFiles: [sessionFile] }),
         ).toMatchObject({ kind: "refresh" });

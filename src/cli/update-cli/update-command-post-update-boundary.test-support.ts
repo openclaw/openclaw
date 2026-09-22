@@ -7,7 +7,7 @@ import {
   finishSuccessfulPackageSwitch,
   managedServiceState,
 } from "./update-command-post-update.test-support.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import * as rollbackModule from "./update-command-rollback.js";
 import * as nativeCommand from "./update-command-service-command.js";
 import type { OriginalManagedServiceRuntime } from "./update-command-service-context-types.js";

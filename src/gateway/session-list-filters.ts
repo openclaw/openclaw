@@ -73,8 +73,31 @@ export type SessionListFilterParams = {
   shouldYield?: () => boolean;
 };
 
+/** The predicate and its cache key consume the same membership dependencies. */
+export function projectSessionListCandidateOptions(opts: SessionsListParams) {
+  return {
+    includeGlobal: opts.includeGlobal,
+    includeUnknown: opts.includeUnknown,
+    spawnedBy: opts.spawnedBy,
+    label: opts.label,
+    boardFace: opts.boardFace,
+    agentId: opts.agentId,
+    excludeCron: opts.excludeCron,
+    excludeSystem: opts.excludeSystem,
+    excludeSubagents: opts.excludeSubagents,
+    archived: opts.archived,
+    requireLastInteraction: opts.requireLastInteraction,
+    projectId: opts.projectId,
+    workspaceDir: opts.workspaceDir,
+    group: opts.group,
+    pinned: opts.pinned,
+  };
+}
+
 export function* filterSessionCandidateEntries(
-  params: SessionListFilterParams,
+  params: Omit<SessionListFilterParams, "opts"> & {
+    opts: ReturnType<typeof projectSessionListCandidateOptions>;
+  },
 ): SynchronousWork<SessionEntryPair[]> {
   const { opts, now, shouldYield } = params;
   let rowContext: SessionListRowContext | undefined;
@@ -257,7 +280,12 @@ export function* filterSessionEntries(
 
   const candidateEntries = params.candidatesPrepared
     ? visibleEntries
-    : yield* filterSessionCandidateEntries({ ...params, entries: visibleEntries, getRowContext });
+    : yield* filterSessionCandidateEntries({
+        ...params,
+        opts: projectSessionListCandidateOptions(opts),
+        entries: visibleEntries,
+        getRowContext,
+      });
   // Excluded rows must not participate in search or ownership resolution.
   const matchesSearch = search
     ? createSessionListSearchMatcher({
@@ -344,10 +372,15 @@ export function* filterSessionEntries(
         entry.participants?.some((participant) => participant.identity.type === "legacy") === true;
       for (const person of associated) {
         const existing = people.get(person.identity.id);
-        people.set(person.identity.id, {
-          ...person,
-          sessionCount: (existing?.sessionCount ?? 0) + 1,
-        });
+        if (existing) {
+          existing.identity = person.identity;
+          existing.label = person.label;
+          existing.avatarUrl = person.avatarUrl;
+          existing.sessionCount += 1;
+        } else {
+          // Counts belong to this request, never the cached association.
+          people.set(person.identity.id, { ...person, sessionCount: 1 });
+        }
       }
       if (opts.involvingProfileId) {
         if (!associated.some((person) => person.identity.id === selectedProfileId)) {

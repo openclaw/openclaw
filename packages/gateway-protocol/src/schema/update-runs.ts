@@ -50,6 +50,7 @@ export const UpdateRunRecordSchema = closedObject({
         channel: Type.Optional(text),
         accountId: Type.Optional(text),
         senderId: Type.Optional(text),
+        authorizationSource: Type.Optional(text),
       }),
     ),
     sessionKey: Type.Optional(text),

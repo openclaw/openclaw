@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
+vi.mock("node:net", { spy: true });
+
 const mocks = vi.hoisted(() => ({
   ensureLocalNpmShim: vi.fn(),
   ensureDevUpdateGitInstall: vi.fn(),
@@ -162,6 +164,55 @@ describe("cross-OS manual gateway lane evidence", () => {
     ["upgrade", runUpgradeLane],
     ["dev-update", runDevUpdateSuite],
   ] as const)("%s gateway port ownership", (_name, runLane) => {
+    const listeners: Array<{
+      server: ReturnType<typeof createServer>;
+      closed: ReturnType<typeof vi.fn>;
+      port?: number;
+    }> = [];
+
+    beforeEach(async () => {
+      listeners.length = 0;
+      const actual = await vi.importActual<typeof import("node:net")>("node:net");
+      vi.mocked(createServer).mockImplementation((...args) => {
+        const server = actual.createServer(...args);
+        const closed = vi.fn();
+        const listener: (typeof listeners)[number] = { server, closed };
+        server.on("close", closed);
+        server.once("listening", () => {
+          const address = server.address();
+          if (address && typeof address !== "string") {
+            listener.port = address.port;
+          }
+        });
+        listeners.push(listener);
+        return server;
+      });
+    });
+
+    afterEach(async () => {
+      try {
+        for (const { server } of listeners) {
+          if (server.listening) {
+            await new Promise<void>((resolve, reject) => {
+              server.close((error) => (error ? reject(error) : resolve()));
+            });
+          }
+        }
+      } finally {
+        // restoreAllMocks does not reset module spies' custom implementations.
+        vi.mocked(createServer).mockRestore();
+      }
+    });
+
+    function expectReservationClosed(port: number) {
+      const owners = listeners.filter((listener) => listener.port === port);
+      expect(owners).toHaveLength(1);
+      const owner = owners[0]!;
+      expect(owner.closed).toHaveBeenCalledOnce();
+      expect(owner.server.listening).toBe(false);
+      expect(owner.server.address()).toBeNull();
+    }
+
     it.each(["success", "onboard", "models-set"] as const)(
       "holds the configured port through setup and releases it after %s",
       async (outcome) => {
@@ -196,7 +247,7 @@ describe("cross-OS manual gateway lane evidence", () => {
         mocks.startGateway.mockImplementation(async ({ lane }) => {
           expect(lane.gatewayPort).toBe(port);
           phases.push("start-gateway");
-          expect(await probeBind(port)).toBe("available");
+          expectReservationClosed(port);
           return {
             child: {},
             closeLog: vi.fn(),
@@ -224,7 +275,7 @@ describe("cross-OS manual gateway lane evidence", () => {
         }
         // Failure cleanup and the spawn boundary both relinquish the same port.
         expect(port).toBeGreaterThan(0);
-        expect(await probeBind(port)).toBe("available");
+        expectReservationClosed(port);
       },
     );
   });

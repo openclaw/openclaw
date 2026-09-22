@@ -187,11 +187,16 @@ type InvokeGatewayToolParams = {
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
   signal?: AbortSignal;
+  assertInvocationCurrent?: () => void;
 };
 
 async function invokeGatewayToolWithSignal(
   params: InvokeGatewayToolParams & { signal: AbortSignal },
 ): Promise<ToolsInvokeOutcome> {
+  const assertInvocationCurrent = () => {
+    params.signal.throwIfAborted();
+    params.assertInvocationCurrent?.();
+  };
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     params.conversationReadOrigin,
   );
@@ -364,7 +369,7 @@ async function invokeGatewayToolWithSignal(
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
       surface: "http",
-      assertInvocationCurrent: () => params.signal.throwIfAborted(),
+      assertInvocationCurrent,
       disablePluginTools,
       gatewayRequestedTools,
     });
@@ -406,6 +411,7 @@ async function invokeGatewayToolWithSignal(
       action,
       args,
     });
+    assertInvocationCurrent();
     const hookResult = await runBeforeToolCallHook({
       toolName,
       params: toolArgs,
@@ -432,19 +438,18 @@ async function invokeGatewayToolWithSignal(
         },
       };
     }
-    params.signal?.throwIfAborted();
-    const executeTool = async () =>
-      await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal);
-    const result = authenticatedUserProfile
-      ? await withOperatorToolGatewayAuthority(
-          {
-            authenticatedUserProfile,
-            operatorRoleActor: params.operatorRoleActor,
-            scopes: params.operatorScopes ?? [],
-          },
-          executeTool,
-        )
-      : await executeTool();
+    const result = await withOperatorToolGatewayAuthority(
+      {
+        authenticatedUserProfile,
+        operatorRoleActor: params.operatorRoleActor,
+        scopes: client.connect.scopes ?? [],
+        assertCurrent: assertInvocationCurrent,
+      },
+      async () => {
+        assertInvocationCurrent();
+        return await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal);
+      },
+    );
     return {
       ok: true,
       status: 200,

@@ -38,6 +38,8 @@ export type UpdateStepResult = {
   advisory?: UpdateStepAdvisory;
   /** Complete owner-classified warnings when one step reports several outcomes. */
   warnings?: string[];
+  /** Owner-selected informational messages, retained separately from warnings and raw output. */
+  diagnostics?: string[];
   /** Suggested operator actions, distinct from executed update steps. */
   recoverySteps?: readonly UpdateRecoveryStep[];
   failureFacts?: UpdateFailureFact[];

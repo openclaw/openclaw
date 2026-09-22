@@ -21,6 +21,7 @@ import {
   readStoredTranscriptSummary,
   readTranscriptUtterances,
   readTranscriptSummarySnapshot,
+  readTranscriptJsonlDigest,
 } from "./store-sqlite-read.js";
 import {
   readRecentStoppedTranscriptSession,
@@ -150,6 +151,11 @@ export function executeTranscriptRead(
         return {
           ok: true,
           value: readStoredTranscriptSummary(database, command.input.params.session),
+        };
+      case "transcripts.exportDigest":
+        return {
+          ok: true,
+          value: readTranscriptJsonlDigest(database, command.input.params.session),
         };
       default:
         throw new Error("Unknown transcript SQLite command");

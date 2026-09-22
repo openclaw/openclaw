@@ -89,12 +89,14 @@ function containsModuleAccess(node: import("acorn").AnyNode): boolean {
   return false;
 }
 
-function rejectsModuleAccess(code: string): boolean {
+function rejectsModuleAccess(
+  code: string,
+  parsed: ReturnType<typeof parseCodeModeScriptSyntax>,
+): boolean {
   // Unicode escapes can spell a loader identifier without its literal name.
   if (!code.includes("import") && !code.includes("require") && !code.includes("\\u")) {
     return false;
   }
-  const parsed = parseCodeModeScriptSyntax(code);
   if (parsed.ok) {
     // The WASI guest has no host module loader. Only executable module syntax
     // belongs in this early check; ordinary guest methods are not capabilities.
@@ -105,11 +107,19 @@ function rejectsModuleAccess(code: string): boolean {
 }
 
 export function prepareSource(code: string): string {
-  if (rejectsModuleAccess(code)) {
+  const parsed = parseCodeModeScriptSyntax(code);
+  if (rejectsModuleAccess(code, parsed)) {
     throw new ToolInputError("code mode module access is disabled.");
   }
   if (isShellLikeCodeModeSource(code)) {
     throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
+  }
+  if (!parsed.ok) {
+    // Keep parser text bounded: some diagnostics include a user-sized identifier.
+    const message = parsed.message.slice(0, 240);
+    throw new ToolInputError(
+      `SyntaxError at openclaw-code-mode:user.js:${parsed.line}:${parsed.column + 1}: ${message}. No tools were dispatched; correct the JavaScript source and submit it again.`,
+    );
   }
   return code;
 }

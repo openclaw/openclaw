@@ -232,7 +232,6 @@ function createMockRuntime(overrides: Record<string, unknown> = {}) {
     runTurn: vi.fn(),
     cancel: vi.fn(),
     close: vi.fn(),
-    probeAvailability: vi.fn(async () => {}),
     isHealthy: vi.fn(() => true),
     doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
     ...overrides,
@@ -282,6 +281,7 @@ function readFirstRuntimeFactoryInput(runtimeFactory: { mock: { calls: Array<Arr
     throw new Error("Expected runtimeFactory to be called with an options object");
   }
   return input as {
+    getProbeAgent: () => string | undefined;
     pluginConfig: {
       timeoutSeconds?: number;
       probeAgent?: string;
@@ -632,7 +632,6 @@ describe("createAcpxRuntimeService", () => {
     await service.start(ctx);
 
     expect(doctor).toHaveBeenCalledOnce();
-    expect(runtime.probeAvailability).not.toHaveBeenCalled();
     expect(getAcpRuntimeBackend("acpx")?.healthy?.()).toBe(true);
 
     await service.stop?.(ctx);
@@ -664,7 +663,6 @@ describe("createAcpxRuntimeService", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(settled).toBe(true);
       expect(runtime.doctor).toHaveBeenCalledOnce();
-      expect(runtime.probeAvailability).not.toHaveBeenCalled();
       expect(getAcpRuntimeBackend("acpx")?.healthy?.()).toBe(false);
       expect(ctx.logger.warn).toHaveBeenCalledWith(
         "embedded acpx runtime setup failed: embedded acpx runtime backend startup probe timed out after 0.001s",
@@ -685,11 +683,13 @@ describe("createAcpxRuntimeService", () => {
     "resolves probe $expected and the default timeout",
     async ({ allowedAgents, probeAgent, expected }) => {
       const ctx = createServiceContext(testWorkspace.dir);
-      ctx.config = { acp: { allowedAgents } };
+      ctx.config = { acp: { allowedAgents: ["claude"] } };
+      let currentAllowedAgents: readonly string[] | undefined = allowedAgents;
       const runtime = createMockRuntime();
       const runtimeFactory = vi.fn(() => runtime as never);
       const service = createAcpxRuntimeService(ctx, {
         pluginConfig: { probeAgent },
+        getAllowedAgents: () => currentAllowedAgents,
         runtimeFactory,
       });
       try {
@@ -697,7 +697,13 @@ describe("createAcpxRuntimeService", () => {
         expect(readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig).toMatchObject({
           timeoutSeconds: 120,
         });
-        expect(readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig.probeAgent).toBe(expected);
+        const input = readFirstRuntimeFactoryInput(runtimeFactory);
+        expect(input.getProbeAgent()).toBe(expected);
+        currentAllowedAgents = ["gemini"];
+        expect(input.getProbeAgent()).toBe(probeAgent ?? "gemini");
+        currentAllowedAgents = undefined;
+        expect(input.getProbeAgent()).toBe(probeAgent);
+        expect(runtime.shutdown).not.toHaveBeenCalled();
       } finally {
         await service.stop?.(ctx);
       }

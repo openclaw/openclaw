@@ -25,7 +25,7 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
           operation({
             execute: async (command, executeOptions) => {
               const result = await scope.execute(command, executeOptions);
-              if (command.type === "userProfiles.email.ensure") {
+              if (command.type === "userProfiles.ensureEmail") {
                 delivery.afterResult?.();
               }
               return result;

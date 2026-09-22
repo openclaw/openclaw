@@ -8,7 +8,8 @@ Read-only diff viewer plugin for **OpenClaw** agents.
 openclaw plugins install @openclaw/diffs
 ```
 
-Restart the Gateway after installing or updating the plugin.
+Installation and updates apply automatically when the local Gateway is running.
+If it is stopped, changes take effect the next time it starts.
 
 It gives agents one tool, `diffs`, that can:
 

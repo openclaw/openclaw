@@ -16,7 +16,6 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -29,6 +28,7 @@ import {
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
+import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
 import { createLegacyStateMigrationStepReceipt } from "./state-migrations.messages.js";
 import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 
@@ -40,26 +40,11 @@ function createLegacyAgentDatabase(params: {
   env: NodeJS.ProcessEnv;
   path?: string;
 }): string {
-  const agentId = params.agentId ?? "main";
-  const opened = openOpenClawAgentDatabase({
-    agentId,
-    env: params.env,
-    ...(params.path ? { path: params.path } : {}),
+  return createLegacyDatabaseFixture({
+    ...params,
+    eventsBySession: {},
+    schemaVersion: PREVIOUS_VERSION,
   });
-  const databasePath = opened.path;
-  closeOpenClawAgentDatabasesForTest();
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    removeCanonicalValidationFromHistoricalAgentFixture(database);
-    database.exec(`DROP TABLE session_participants; PRAGMA user_version = ${PREVIOUS_VERSION};`);
-    database
-      .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
-      .run(PREVIOUS_VERSION);
-  } finally {
-    database.close();
-  }
-  return databasePath;
 }
 
 function readUserVersion(databasePath: string): number {

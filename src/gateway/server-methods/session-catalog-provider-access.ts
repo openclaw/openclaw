@@ -37,7 +37,8 @@ export function allowProcessHomeFallback(logGateway?: {
 }
 
 // Catalog adapters may scan local databases or invoke external CLIs. Bound the
-// executing provider work itself so adding providers cannot multiply the cap.
+// executing work globally and admit one step per provider so a slow source
+// cannot occupy every slot with overlapping requests.
 const sessionCatalogListAdmission = new SessionCatalogListAdmission(
   MAX_CONCURRENT_SESSION_CATALOG_LISTS,
   MAX_QUEUED_SESSION_CATALOG_LISTS,
@@ -104,6 +105,7 @@ async function runSessionCatalogListSteps(
   };
   try {
     return await sessionCatalogListAdmission.runSteps(
+      provider.id,
       async () => {
         assertCurrent();
         if (!operation) {
@@ -157,6 +159,7 @@ export function listSessionCatalogProvider(
         assertOwnerCurrent,
       )
     : sessionCatalogListAdmission.run(
+        provider.id,
         () => {
           params.signal?.throwIfAborted();
           diagnostics?.providerStarted();

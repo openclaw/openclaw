@@ -191,6 +191,7 @@ type MarkdownCodeRegion = {
   end: number;
   block: boolean;
   source?: MarkdownInlineSource;
+  indentedSource?: MarkdownIndentedSource;
 };
 
 type MarkdownCompletedParagraph = {
@@ -205,8 +206,18 @@ type MarkdownInlineSource = {
   offsets: number[];
 };
 
+export type MarkdownIndentedSource = {
+  value: string;
+  offsets: number[];
+  /** Source framing before the first content token, including its owning containers. */
+  context: string;
+  ownerStart: number;
+  nested: boolean;
+};
+
 type MarkdownOwnershipOptions = {
   includeSource?: boolean;
+  includeIndentedSource?: boolean;
   includeText?: boolean;
   syntax?: "commonmark" | "gfm";
 };
@@ -273,17 +284,85 @@ function captureInlineSources(text: string, sources: Map<number, MarkdownInlineS
   };
 }
 
+function captureIndentedSources(
+  text: string,
+  sources: Map<number, MarkdownIndentedSource>,
+  observeInlineLineEnding?: Handle,
+): Extension {
+  const observe: Handle = function (token) {
+    if (!this.tokenStack.some(([parent]) => parent.type === "codeIndented")) {
+      return;
+    }
+    const node = this.stack.findLast((entry) => entry.type === "code");
+    const start = node?.position?.start.offset;
+    if (start === undefined) {
+      return;
+    }
+    let source = sources.get(start);
+    if (!source) {
+      const owner = this.stack.find(
+        (entry) => entry.type === "listItem" || entry.type === "blockquote",
+      );
+      source = {
+        value: "",
+        offsets: [],
+        context: text.slice(owner?.position?.start.offset ?? start, token.start.offset),
+        ownerStart: owner?.position?.start.offset ?? start,
+        nested: owner !== undefined,
+      };
+      sources.set(start, source);
+    }
+    const value = this.sliceSerialize(token);
+    const extra = value.length - (token.end.offset - token.start.offset);
+    for (let cursor = start + source.offsets.length; cursor < token.end.offset; cursor += 1) {
+      const consumed = cursor - token.start.offset;
+      source.offsets.push(source.value.length + (consumed > 0 ? consumed + extra : 0));
+    }
+    source.value += value;
+  };
+  return {
+    enter: {
+      codeFlowValue(token) {
+        observe.call(this, token);
+        expectDefined(this.config.enter.data, "Markdown data handler").call(this, token);
+      },
+      lineEnding(token) {
+        observeInlineLineEnding?.call(this, token);
+        observe.call(this, token);
+      },
+    },
+  };
+}
+
 export function parseMarkdownOwnership(text: string, options?: MarkdownOwnershipOptions) {
+  const paragraphs: Array<{ start: number; end: number }> | undefined =
+    options?.includeIndentedSource ? [] : undefined;
   if (!text) {
-    return { regions: [], codeSpans: [], textSpans: [], retainStart: 0, completedParagraphs: [] };
+    return {
+      regions: [],
+      codeSpans: [],
+      textSpans: [],
+      retainStart: 0,
+      completedParagraphs: [],
+      ...(paragraphs ? { paragraphs } : {}),
+    };
   }
   const sources = new Map<number, MarkdownInlineSource>();
+  const indentedSources = options?.includeIndentedSource
+    ? new Map<number, MarkdownIndentedSource>()
+    : undefined;
+  const inlineSourceExtension = options?.includeSource
+    ? captureInlineSources(text, sources)
+    : undefined;
   const tables = options?.syntax !== "commonmark";
   const tree = fromMarkdown(text, {
     extensions: [DISABLE_HTML_MARKDOWN, ...(tables ? [gfmTable()] : [])],
     mdastExtensions: [
       ...(tables ? [gfmTableFromMarkdown()] : []),
-      ...(options?.includeSource ? [captureInlineSources(text, sources)] : []),
+      ...(inlineSourceExtension ? [inlineSourceExtension] : []),
+      ...(indentedSources
+        ? [captureIndentedSources(text, indentedSources, inlineSourceExtension?.enter?.lineEnding)]
+        : []),
     ],
   }) as PositionedNode;
   const completedParagraphs: MarkdownCompletedParagraph[] = [];
@@ -295,6 +374,15 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     const next = blocks[index + 1]?.position?.start;
     const blockStart = block.position?.start?.offset;
     const endLine = block.position?.end?.line;
+    const blockEnd = block.position?.end?.offset;
+    if (
+      paragraphs &&
+      block.type === "paragraph" &&
+      blockStart !== undefined &&
+      blockEnd !== undefined
+    ) {
+      paragraphs.push({ start: blockStart, end: blockEnd });
+    }
     let paragraph: MarkdownCompletedParagraph | undefined;
     if (
       block.type === "paragraph" &&
@@ -340,7 +428,23 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
             source.offsets.push(source.value.length);
           }
         }
-        regions.push({ start, end, block: node.type === "code", ...(source ? { source } : {}) });
+        const indentedSource = indentedSources?.get(start);
+        if (indentedSource) {
+          indentedSource.value = node.value ?? "";
+          while (indentedSource.offsets.length <= end - start) {
+            indentedSource.offsets.push(indentedSource.value.length);
+          }
+          indentedSource.offsets.forEach((offset, sourceIndex) => {
+            indentedSource.offsets[sourceIndex] = Math.min(offset, indentedSource.value.length);
+          });
+        }
+        regions.push({
+          start,
+          end,
+          block: node.type === "code",
+          ...(source ? { source } : {}),
+          ...(indentedSource ? { indentedSource } : {}),
+        });
       }
       for (const child of node.children?.toReversed() ?? []) {
         pending.push(child);
@@ -354,6 +458,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     textSpans,
     retainStart: tree.children?.at(-1)?.position?.start?.offset ?? text.length,
     completedParagraphs,
+    ...(paragraphs ? { paragraphs } : {}),
   };
 }
 

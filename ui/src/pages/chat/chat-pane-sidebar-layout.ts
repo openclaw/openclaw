@@ -7,6 +7,7 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
+import { t } from "../../i18n/index.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -155,6 +156,7 @@ export function sidebarRegionCallbacks(params: {
 }
 
 export function renderSidebarRegion(params: {
+  presentationId: string;
   fetchFavicon?: LinkFaviconFetcher;
   availableWidth: number;
   callbacks: SidebarRegionCallbacks;
@@ -168,6 +170,7 @@ export function renderSidebarRegion(params: {
   primary: TemplateResult;
   requestUpdate: () => void;
 }): TemplateResult {
+  const panelIdPrefix = `chat-panel-${encodeURIComponent(params.presentationId)}`;
   const panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
   const panelOpen = params.layout.open === true;
   const hasPanels = params.layout.columns.length > 0;
@@ -210,6 +213,7 @@ export function renderSidebarRegion(params: {
           ? (regionLoading ?? null)
           : null
         : html`<openclaw-chat-sidebar-region
+            .panelIdPrefix=${panelIdPrefix}
             .layout=${params.layout}
             .fetchFavicon=${params.fetchFavicon}
             .panelDefinitions=${panelDefinitions}
@@ -222,7 +226,10 @@ export function renderSidebarRegion(params: {
           ></openclaw-chat-sidebar-region>`
     }
     <div
+      id=${`${panelIdPrefix}-conversation`}
       class="sidebar-region__primary"
+      role="region"
+      aria-label=${t("chat.sidePanel.conversation")}
       data-region=${chatMain ? "main" : "side"}
       ?hidden=${!isSidebarSlotVisible(params.layout, "conversation")}
     >

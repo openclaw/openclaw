@@ -200,6 +200,7 @@ describe("models config input presence", () => {
           cost: { ...(merged ? scopedRates : emptyRates), output: 8 },
         },
         { id: "exact", input: inheritedInput, cost: merged ? rates : undefined },
+        ...(merged ? [{ id: "discovered-only", input: ["text", "image"], cost: rates }] : []),
       ];
       await withOpenClawTestState({ label: "catalog-authored-fields" }, async (state) => {
         let existingRaw = "";
@@ -396,6 +397,7 @@ describe("models config input presence", () => {
           });
           expect(JSON.parse(plan.modelsJsonContents!).providers[providerId].models).toEqual([
             { ...configuredModel, cost: expected },
+            model("discovered-only"),
           ]);
         });
         return;
@@ -437,6 +439,7 @@ describe("models config input presence", () => {
       const generated = JSON.parse(plan.contents);
       expect(generated.providers[providerId].models).toEqual([
         { ...configuredModel, cost: expected },
+        model("discovered-only"),
       ]);
     },
   );

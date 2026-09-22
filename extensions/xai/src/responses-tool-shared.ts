@@ -64,7 +64,9 @@ export function resolveXaiToolDefaultReasoningEffort(
   preferred: "none" | "low",
 ): "none" | "low" | undefined {
   // Per-model tool defaults must survive changes to the setup default.
-  return model === "grok-4.3" || model === "grok-4.6" ? preferred : undefined;
+  return model === "grok-4.3" || model === "grok-4.6" || model === "grok-4.7"
+    ? preferred
+    : undefined;
 }
 
 function buildXaiResponsesToolBody(params: {

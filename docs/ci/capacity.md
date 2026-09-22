@@ -128,7 +128,7 @@ Median rates are estimates, not elapsed-time guarantees. Before the Codex fixtur
 
 GitHub-hosted core storage/state stripes also have a 64-file admission ceiling. In [run 35477045216](https://github.com/openclaw/openclaw/actions/runs/35477045216), a 203-file serial stripe continued passing tests until the one-hour job deadline; its 196-file sibling completed in 2,867 test seconds. The compact split owner bounds each hosted prerequisite-preserving stripe independently of older timing estimates, and the existing distinct-family rule prevents reassembly in one job. Blacksmith and hybrid retain their existing measured partitioning. Every file remains covered once, with fork isolation, serial file execution, worker limits, deadlines, and the 90-row compact cap. This is a workload bound, not a measured new runtime; hosted CI must establish the resulting duration.
 
-Eligible Blacksmith and hybrid compact bins with multiple ordinary groups request the existing 32-vCPU runner with two child-process slots. Initial packing retains the 360-second aggregate budget and completes Gateway serialization, runtime placement, and worker pinning before compaction. Only jobs already admitted on the 32-class with two child-process slots are then repacked into 500-second bins. Those jobs may share capacity across logical runner classes while each child retains its original runner metadata and worker ceiling. Existing serial jobs retain their membership, ordering, estimates, and worker limits; widening their initial packing can concentrate slow Gateway work even when their final estimate remains below 360 seconds. Compatible parallel groups can fill the new budget without the ten-group cutoff retained by serial jobs. Blacksmith serial jobs retain their 200/276-second budgets; hybrid serial jobs retain 210 seconds. Exclusive jobs retain 150 seconds by default. Only complete ordinary hybrid bins of non-build CLI groups may use 250 seconds and share split siblings; every child must still fit 150 seconds. Groups above their existing serial cap stay alone. Exclusive groups, original single groups, dist descriptors and jobs with runtime preparation remain serial. Hybrid exclusive and dist bins retain their existing prerequisite sharing. The shard executor admits at most two processes only when the actual host has at least eight available CPUs and 24 GiB of memory; smaller capacity admits one. Each overlapping child keeps two Vitest workers, including a singleton left after compaction; inner project parallelism remains one. The primary `github` profile stays serial at 210 seconds. Preflight records the actual row count for each source revision; canonical inventory comparisons must preserve every original child plan and test input. Native elapsed-time, memory and cleanup evidence must establish the actual effect.
+Eligible Blacksmith and hybrid compact bins with multiple ordinary groups request the existing 32-vCPU runner with two child-process slots. Initial packing retains the 360-second aggregate budget and completes Gateway serialization, runtime placement, and worker pinning before compaction. Only jobs already admitted on the 32-class with two child-process slots are then repacked into 500-second bins. Those jobs may share capacity across logical runner classes while each child retains its original runner metadata and worker ceiling. Existing serial jobs retain their membership, ordering, estimates, and worker limits; widening their initial packing can concentrate slow Gateway work even when their final estimate remains below 360 seconds. Compatible parallel groups can fill the new budget without the ten-group cutoff retained by serial jobs. Blacksmith serial jobs retain their 200/276-second budgets; hybrid serial jobs retain 210 seconds. Exclusive jobs retain 150 seconds by default. Only complete ordinary hybrid bins of non-build CLI groups may use 250 seconds and share split siblings; every child must still fit 150 seconds. Groups above their existing serial cap stay alone. Exclusive groups, original single groups, dist descriptors and jobs with runtime preparation remain serial. Hybrid exclusive and dist bins retain their existing prerequisite sharing. The shard executor admits at most two processes only when the actual host has at least eight available CPUs and 24 GiB of memory; smaller capacity admits one. Each overlapping child keeps two Vitest workers, including a singleton left after compaction; inner project parallelism remains one. Commands files follow the measured worker allocation in serial self-hosted rows, with a two-worker fallback for hosted, constrained, frozen, or overlapping execution; the existing non-isolated fork runner retains file-boundary cleanup. The primary `github` profile stays serial at 210 seconds. Preflight records the actual row count for each source revision; canonical inventory comparisons must preserve every original child plan and test input. Native elapsed-time, memory and cleanup evidence must establish the actual effect.
 
 The `github` compact planner can place smaller ordinary groups on an already-required stronger logical runner. Each emitted job retains its strongest capacity owner, serial execution, original child processes and worker limits, the 210-second budget, and the ten-group limit. SDK and plugin runtime consumers are separated from ordinary files before packing; the SDK light project intersects shared include lists with its own inventory. Parent-derived fractional costs are rounded only at the emitted job boundary, so rounding small consumers cannot create a redundant runtime build. The shared packer can exchange groups to fill compatible capacity while rechecking complete replacements. Runtime-only hosted groups may share their strongest prerequisite within the existing 210-second serial budget; the build itself costs 160–166 seconds and is charged once per job. No-build exclusive groups keep their 150-second limit. Stranded tooling tails are sized against remaining compatible capacity before normal admission is reapplied. Exclusive, dist, oversized, and runtime-preparing bins retain their separate constraints.
 
@@ -214,11 +214,62 @@ local scheduling is unchanged.
 | 16                         | 4 / 15.42 GiB       |                                3 |                         2 |
 | 32                         | 8 / 30.95 GiB       |                                8 |                         2 |
 
-Group pins can lower these ceilings. Only the measured `agentic-gateway-core-2`
-family loses its two-worker compact pin on Blacksmith and hybrid profiles;
-GitHub-hosted planning and other timing-sensitive groups retain it. Gateway
-plans still run exclusively. When core-2 shares a serial bin, its unproven
-siblings retain their two-worker caps at group scope.
+Group pins can lower these ceilings. The `agentic-gateway-core-2`,
+`agentic-agents-embedded-base-*`, `agentic-agents-embedded-run`, and
+`agentic-agents-tools` families, commands groups, and the whole `agentic-cli`
+group use measured workers on Blacksmith and hybrid profiles, with
+`fallbackMaxWorkers: 2`. Full CLI bins request
+`blacksmith-32vcpu-ubuntu-2404` after packing and retain serial execution. The
+observed eight-CPU/30.95-GiB allocation can admit eight workers; actual CPU,
+memory, and load still determine the ceiling. The shard runner applies the
+two-worker fallback on hosted, frozen, constrained, or overlapping execution,
+intersected with any lower job or group limit. The four-CPU/15.42-GiB 16-class
+allocation receives that fallback even when the workflow ceiling is three.
+GitHub-hosted planning, `agentic-cli-process`, and other timing-sensitive groups
+retain their existing pins. Gateway plans still run exclusively; unproven
+siblings sharing its serial bin retain their two-worker group caps. The CLI
+inventory, split policies, timing weights, and admission budgets are unchanged.
+
+The `agentic-gateway-server-isolated` family, including its database-worker
+config, is capped at eight workers on Blacksmith and hybrid profiles and
+additionally requires 28 GiB total memory. Its historical 20.70 GiB peak fits
+within 75% of that floor, leaving at
+least 7.30 GiB for the runner, operating system, and variation. Smaller hosts,
+hosted retries, frozen targets, and overlapping plans retain its two-worker
+fallback; the independently planned GitHub profile is unchanged.
+
+The historical [September 20 paired probe](https://github.com/openclaw/openclaw/actions/runs/35543209292)
+at source `39b3aa10677c99af54e3bffb43cadf3bb6c89eb8` used the same eight-CPU,
+30.95 GiB, Node 24.19.0 Testbox for a fixed 2/8/8/2
+sequence, with fresh JavaScript cache paths for each round. Every round ran the
+same 114 files and passed 2,776 tests with one existing skip. Two-worker walls
+were 481.535 and 474.459 seconds; eight-worker walls were 225.123 and 225.151
+seconds, a 52.9% reduction in the midpoint. Peak summed process RSS rose from
+8.71 to 20.70 GiB, and aggregate user plus system CPU increased about 8.1%.
+No descendant processes survived a round. The remaining 14 runtime-bearing
+files also passed at eight workers, with 39 passing tests, one existing skip,
+and 14.96 GiB peak summed RSS. These measurements cover that source's 128-file
+cohort. Its inventory and shared Gateway fixtures have since changed;
+candidate-specific functional, memory, and cleanup proof must be recorded
+separately. The 52.9% result does not establish a current-source or whole-CI
+speedup. Existing two-worker timing generations stay
+as advisory floors until the normal complete-group refit replaces them.
+
+Commands splitting and packing retain the conservative two-worker retry budget.
+After placement, their predicted child seconds use the expected allocation:
+eight on uncapped serial 32-class rows and two on constrained or overlapping rows, capped
+by file count and bounded below by the longest file. Runtime preparation is not
+divided. Separate timing identities preserve direct two/eight-worker samples;
+new parallel observations are not divided as though they were serial. Live
+CPU load and memory pressure can lower the scheduler's allocation.
+
+Embedded base, attempt-runner, and tool files follow the shared scheduler's file
+parallelism. The base keeps three balanced stripes for its large harness files;
+the separate overflow-compaction and incomplete-turn configs remain serial.
+Parallel agent wall times use distinct timing keys. Until those measurements
+arrive, the planner divides legacy serial costs by two effective workers while
+retaining the largest indivisible file's cost. Fresh parallel measurements
+replace that fallback without another discount.
 
 Agents-core files share the configured worker pool, including local scheduling
 and its one-worker throttle. Compact agents-core groups retain a two-worker cap.
@@ -226,6 +277,33 @@ Their initial estimates divide serial timing history by the effective file
 workers, preserving the cost of an indivisible file. Separate parallel timing
 keys let subsequent measurements replace those estimates without being divided
 again. The file inventory and import-heavy CLI stripes remain unchanged.
+
+Tooling files use the shared worker scheduler instead of forcing one file at a
+time. Compact tooling groups retain their two-worker cap and exclusive child
+admission. Their planner estimate uses current file costs divided by the effective
+worker count, bounded below by the longest file; a single slow file cannot benefit
+from file parallelism. Historical serial group totals no longer floor those
+estimates. Docker helper fixtures retain their separate serial config, and the
+isolated tooling config keeps fresh module state without disabling file parallelism.
+Focused tooling plans defer unrelated full-suite inventory discovery and retain
+both the boundary and built TUI checks. Other precise selections and broad plans
+keep their complete canonical owners.
+
+The specialized Codex, Slack, Telegram, package-contract, and release-only plugin
+configs also inherit file scheduling from the worker ceiling. Codex, Telegram,
+package contracts, and plugins keep isolated module graphs. Slack uses file-local
+transport fixtures and the existing runner's module cleanup between files, so
+forks can reuse their prepared dependencies. Slack and the plugin runtime use
+forks for the application main-thread SQLite worker broker. Ordinary
+Telegram files share a process within each existing ten-file job envelope, while
+native Telegram database-worker files retain their one-file process lifetime.
+The plugin shard stays release-only. These changes reduce process overhead and
+allow file concurrency without expanding the job inventory or worker budgets.
+Slack and Telegram multi-file estimates conservatively discount their historical
+serial rates by 1.2 after two-worker qualification. Singleton and native-worker
+costs stay unchanged; new parallel measurements replace those serial references
+without another discount. Packing saves one Node PR row on each runner profile,
+with unchanged compact and push budgets.
 
 The [September 19 probe](https://github.com/openclaw/openclaw/actions/runs/35441442486)
 ran two predefined samples per cell on eight CPUs, 30.95 GiB, and Node 24.19.0.
@@ -334,7 +412,7 @@ Gateway boot measured 37 seconds alone and 50 seconds under contention against
 a 90-second test budget. Jobs containing these configs execute their packed
 plans serially. Plan admission retains the existing summed duration budgets
 and runner allocations; formerly parallel jobs retain
-their two-worker ceiling through the job environment, except measured core-2
+their two-worker ceiling through the job environment, except measured Gateway
 bins whose other groups retain that ceiling individually. This adds no jobs and
 leaves ordinary jobs' concurrency unchanged. The shard runner enforces the same
 config policy even when a caller requests two plans. Precise changed-test
@@ -554,6 +632,22 @@ family also retains its prior timings: distributing its new parent total by the
 existing file weights prices an indivisible child at 239 seconds, beyond its
 200-second contract. That family needs a separate file-cost refit; its assertions
 and budget remain unchanged.
+
+The September 21 isolated Gateway refresh replaces its original one-file
+30-second weight with 1,043 seconds. The unchanged refit reducer measured the
+complete child spans in the newest five successful main-push contributors within
+the frozen September 14–21 window ending at 14:07:53 UTC: `35591186572`,
+`35592313474`, `35593033375`, `35601102699`, and `35607421993`. The median is
+1,043.136 seconds across both `gateway-server-isolated` and
+`gateway-database-workers`; one child's wall is not the complete family cost.
+Two repeated inventory-specific children retain their measured 396- and
+690-second weights. Other families and profiles keep their existing measurements.
+The matching fallback covers future inventory changes without suppressing refits.
+The existing 150-second split threshold produces 12 children, including the
+separate runtime-prerequisite child. This is distinct from exclusive-bin packing:
+Gateway configs retain exclusive plan admission and their current worker policy.
+With the tooling release tier and measured tooling workers applied, broad fallback
+fits the unchanged caps: 111 hybrid, 120 GitHub, and 117 Blacksmith PR Node rows.
 
 At the inspected inventory, hybrid compact descriptors change from 29 to 51 on
 push and 53 to 75 on broad PRs; the maximum prediction remains 518 seconds for the

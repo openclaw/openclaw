@@ -5,6 +5,35 @@ REQUIRED_SWIFT_TOOLS_MINOR=3
 REQUIRED_XCODE_MAJOR=26
 REQUIRED_XCODE_MINOR=4
 
+select_xcode_toolchain() {
+  local expected_version="$1"
+  sudo xcode-select -s "/Applications/Xcode_${expected_version}.app/Contents/Developer" || return 1
+
+  local xcodebuild_version xcode_version
+  xcodebuild_version="$(xcodebuild -version)" || return 1
+  printf '%s\n' "$xcodebuild_version"
+  xcode_version="$(printf '%s\n' "$xcodebuild_version" | awk 'NR == 1 { print $2 }')"
+  if [[ "$xcode_version" != "$expected_version"* ]]; then
+    echo "error: expected Xcode ${expected_version}, got ${xcode_version}" >&2
+    return 1
+  fi
+  swift --version
+}
+
+run_apple_command_logged() {
+  local log_path="$1"
+  shift
+  mkdir -p "$(dirname "$log_path")" || return
+
+  # Simulator log forwarding can block a test's timed work when Actions stops
+  # draining its pipe. Keep both descriptors on a file until the command exits.
+  local exit_code=0
+  "$@" >"$log_path" 2>&1 || exit_code=$?
+  tail -c 8192 "$log_path" || true
+  printf '\n[apple-command] Exit %s; full log: %s\n' "$exit_code" "$log_path" || true
+  return "$exit_code"
+}
+
 require_swift_toolchain() {
   local xcodebuild_version
   if ! xcodebuild_version="$(xcrun xcodebuild -version 2>&1)"; then

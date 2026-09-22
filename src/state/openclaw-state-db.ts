@@ -12,6 +12,7 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
   StateSchemaMutationConflictError,
   withStateSchemaFence,
@@ -173,7 +174,7 @@ export function repairOpenClawStateDatabaseSchemaIfNeeded(
 /** Bootstrap fresh/native-only state canonically before startup checkpoint access. */
 export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   callback: (db: DatabaseSync) => T,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { atomic?: boolean } = {},
 ): T {
   return withOpenClawStateStartupCheckpointConnection(callback, options, ensureSchema);
 }
@@ -222,6 +223,7 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     path: pathname,
     walMaintenance: {
       checkpoint: () => false,
+      reclaimFreePages: createSqliteWalReclamationResult,
       // Cleanup can fail transiently after the database closes. Keep the
       // close contract retryable until one call finishes both responsibilities.
       close: () => connection.close(),

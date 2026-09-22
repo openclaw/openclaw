@@ -23,9 +23,16 @@ async function execute<T>(
   name: keyof PluginStateWorkerOperations,
   dispatch: (scope: Scope) => Promise<Result<T, PluginStateWorkerFailure>>,
   missing?: () => T,
-  isObservation?: (result: T) => boolean,
+  checks: { assertCurrent?: () => void; isObservation?: (result: T) => boolean } = {},
 ): Promise<T> {
-  assertActive?.();
+  const { assertCurrent, isObservation } = checks;
+  const assertAdmission = assertCurrent
+    ? () => {
+        assertActive?.();
+        assertCurrent();
+      }
+    : assertActive;
+  assertAdmission?.();
   const databasePath = resolveOpenClawStateSqlitePath(env ?? process.env);
   const description = pluginStateWorkerOperations[name];
   let dispatched = false;
@@ -48,24 +55,24 @@ async function execute<T>(
     if (missing) {
       const result = await runOpenClawStateWorkerOperation(context, operation, {
         existingOnly: true,
-        assertCurrent: assertActive,
+        assertCurrent: assertAdmission,
       });
       assertActive?.();
       return result === undefined ? missing() : result;
     }
     const createAdmission = createSqliteWorkerWriteAdmission(() => {
       context.admission.assertCurrent();
-      assertActive?.();
+      assertAdmission?.();
     }, [databasePath]);
     // Writable operations, including comparison observations, must share the
     // host lifecycle owner before dispatch so sibling maintenance cannot overtake them.
     const result = await runOpenClawStateWorkerOperation(context, operation, {
-      assertCurrent: assertActive,
+      assertCurrent: assertAdmission,
       requireStateLifecycle: true,
       createAdmission,
     });
     if (isObservation?.(result)) {
-      assertActive?.();
+      assertAdmission?.();
     }
     return result;
   } catch (error) {
@@ -79,10 +86,16 @@ async function execute<T>(
   }
 }
 
-export function registerPluginStateInWorker(params: Input<"pluginState.register">): Promise<void> {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, "pluginState.register", (scope) =>
-    scope.execute({ type: "pluginState.register", input }),
+export function registerPluginStateInWorker(
+  params: Input<"pluginState.register"> & { assertCurrent?: () => void },
+): Promise<void> {
+  const { env, assertActive, assertCurrent, ...input } = params;
+  return execute(
+    { env, assertActive },
+    "pluginState.register",
+    (scope) => scope.execute({ type: "pluginState.register", input }),
+    undefined,
+    { assertCurrent },
   );
 }
 
@@ -93,7 +106,7 @@ export function observePluginStateInWorker(params: Input<"pluginState.observe">)
     "pluginState.observe",
     (scope) => scope.execute({ type: "pluginState.observe", input }),
     undefined,
-    () => true,
+    { isObservation: () => true },
   );
 }
 
@@ -104,7 +117,7 @@ export function comparePluginStateUpdateInWorker(params: Input<"pluginState.comp
     "pluginState.compareUpdate",
     (scope) => scope.execute({ type: "pluginState.compareUpdate", input }),
     undefined,
-    (result) => result.status === "conflict",
+    { isObservation: (result) => result.status === "conflict" },
   );
 }
 
@@ -115,7 +128,7 @@ export function comparePluginStateDeleteInWorker(params: Input<"pluginState.comp
     "pluginState.compareDelete",
     (scope) => scope.execute({ type: "pluginState.compareDelete", input }),
     undefined,
-    (result) => result.status === "conflict",
+    { isObservation: (result) => result.status === "conflict" },
   );
 }
 
@@ -173,10 +186,16 @@ export function consumePluginStateInWorker(params: Input<"pluginState.consume">)
   );
 }
 
-export function deletePluginStateInWorker(params: Input<"pluginState.delete">): Promise<boolean> {
-  const { env, assertActive, ...input } = params;
-  return execute({ env, assertActive }, "pluginState.delete", (scope) =>
-    scope.execute({ type: "pluginState.delete", input }),
+export function deletePluginStateInWorker(
+  params: Input<"pluginState.delete"> & { assertCurrent?: () => void },
+): Promise<boolean> {
+  const { env, assertActive, assertCurrent, ...input } = params;
+  return execute(
+    { env, assertActive },
+    "pluginState.delete",
+    (scope) => scope.execute({ type: "pluginState.delete", input }),
+    undefined,
+    { assertCurrent },
   );
 }
 

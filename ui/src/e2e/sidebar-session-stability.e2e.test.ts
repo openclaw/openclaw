@@ -243,7 +243,7 @@ suite.define(() => {
           return { left: barBounds.left, rowHeight: rowBounds.height };
         });
         if (textScale === 100) {
-          expect(loadingGeometry.rowHeight).toBe(pointer === "coarse" ? 44 : 30);
+          expect(loadingGeometry.rowHeight).toBe(width === 390 ? 44 : 30);
         } else {
           expect(loadingGeometry.rowHeight).toBeGreaterThan(30);
         }

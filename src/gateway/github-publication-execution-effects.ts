@@ -30,7 +30,8 @@ export function createGitHubPublicationExecutionEffects<Row>(params: {
             error_code: null,
             next_action: null,
           },
-          true,
+          // This execution owns the accepted result even when its initiating action has ended.
+          false,
         );
       }
       if (result.status !== "failed") {

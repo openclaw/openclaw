@@ -8,7 +8,10 @@ import {
   isSqliteLockError,
 } from "./sqlite-error-diagnostics.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
-import { releaseSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
+import {
+  releaseSnapshotTempDirectory,
+  retireSqliteSnapshotPayload,
+} from "./sqlite-readonly-location-cleanup.js";
 import {
   createOnlineReadOnlyBackup,
   prepareSqliteReadOnlyLocationInProcess,
@@ -21,11 +24,13 @@ import {
   isSqliteSnapshotStagingMode,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
+import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
   createSqliteSnapshotStagingTokenSync,
   reclaimAbandonedSqliteSnapshots,
   reconcileSqliteSnapshotRetirement,
 } from "./sqlite-snapshot-staging.js";
+import type { SqliteStagingToken } from "./sqlite-staging-token.js";
 import { assertExistingDatabaseIdentity } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 import {
@@ -33,7 +38,7 @@ import {
   withStateDatabaseCoordinatorRuntimeDirectory,
 } from "./state-database-coordinator.js";
 
-const stagingTokens = new Map<string, (retiring?: boolean) => void>();
+const stagingTokens = new Map<string, SqliteStagingToken>();
 
 // Artifact-preserving sync requests must not open SQLite on the source. Live
 // async backups pin committed pages with a read transaction and may update SHM.
@@ -72,8 +77,13 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       if (!token) {
         throw new Error("SQLite snapshot token is not owned by this worker");
       }
-      token(true);
-      stagingTokens.delete(pathname);
+      const retirement = beginSqliteSnapshotRetirement(pathname, { token });
+      try {
+        retireSqliteSnapshotPayload(retirement);
+        stagingTokens.delete(pathname);
+      } finally {
+        retirement.release();
+      }
       return { ok: true, location: pathname };
     }
     if (mode === "reclaim") {

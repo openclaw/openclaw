@@ -21,6 +21,11 @@ const getUserProfileDisplay = vi.hoisted(() => vi.fn());
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
 
+vi.mock("../../state/user-profile-writes.js", () => ({
+  linkCanonicalUserProfileEmail: linkEmail,
+  setCanonicalUserProfileRole: setUserProfileRole,
+}));
+
 vi.mock("../../state/user-profiles.js", async () => {
   const { UserProfileNotFoundError } = await vi.importActual<
     typeof import("../../state/user-profiles-schema.js")
@@ -29,17 +34,18 @@ vi.mock("../../state/user-profiles.js", async () => {
     ensureProfileForEmail,
     getUserProfileDisplay,
     getUserProfileListItem,
-    linkEmail,
     listProfiles,
     resolveUserProfileId,
     setAvatar,
     setDisplayName,
-    setUserProfileRole,
     UserProfileNotFoundError,
   };
 });
 
-vi.mock("../operator-role-policy.js", () => ({ invalidateOperatorRolePolicy }));
+vi.mock("../operator-role-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../operator-role-policy.js")>()),
+  invalidateOperatorRolePolicy,
+}));
 
 async function runUsersHandler(
   method: keyof typeof usersHandlers,
@@ -51,7 +57,7 @@ async function runUsersHandler(
   await expectDefined(
     usersHandlers[method],
     `${method} test invariant`,
-  )({ client, context, params, respond } as never);
+  )({ client, context: { getRuntimeConfig: () => ({}), ...context }, params, respond } as never);
   return respond;
 }
 
@@ -67,7 +73,10 @@ describe("users gateway methods", () => {
     githubIdentity: null,
     hasAvatar: false,
   };
-  const adminClient = { connect: { scopes: ["operator.admin"] } };
+  const adminClient = {
+    connect: { scopes: ["operator.admin"] },
+    authenticatedUserProfile: { profileId: "gateway-owner" },
+  };
   const selfClient = {
     authenticatedUserId: "ada@example.com",
     connect: { scopes: ["operator.write"] },
@@ -323,7 +332,15 @@ describe("users gateway methods", () => {
   });
 
   it("validates and routes email links", async () => {
-    linkEmail.mockReturnValue(profile);
+    linkEmail.mockReturnValue({
+      profile,
+      display: {
+        id: profile.id,
+        displayName: profile.displayName,
+        avatarRevision: String(profile.updatedAt),
+        hasAvatar: profile.hasAvatar,
+      },
+    });
     const refreshConnectedUserProfile = vi.fn();
     const broadcast = vi.fn();
 
@@ -339,7 +356,9 @@ describe("users gateway methods", () => {
 
     expect(respond).toHaveBeenCalledWith(true, { profile });
     expect(validateUsersLinkEmailResult(respond.mock.calls[0]?.[1])).toBe(true);
-    expect(linkEmail).toHaveBeenCalledWith("ada@example.com", "profile-1");
+    expect(linkEmail).toHaveBeenCalledWith("ada@example.com", "profile-1", {
+      assertCurrent: expect.any(Function),
+    });
     expect(broadcast).toHaveBeenCalledWith("chat.metadata.changed", {}, { dropIfSlow: true });
     expect(refreshConnectedUserProfile).toHaveBeenCalledWith({
       id: profile.id,
@@ -432,7 +451,9 @@ describe("users gateway methods", () => {
 
     expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
     expect(validateUsersSetRoleResult(respond.mock.calls[0]?.[1])).toBe(true);
-    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, "guest");
+    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, "guest", {
+      assertCurrent: expect.any(Function),
+    });
     expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
     expect(invalidateOperatorRolePolicy.mock.invocationCallOrder[0]).toBeLessThan(
       respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -482,7 +503,9 @@ describe("users gateway methods", () => {
     );
 
     expect(respond).toHaveBeenCalledWith(true, { profile });
-    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, null);
+    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, null, {
+      assertCurrent: expect.any(Function),
+    });
     expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
   });
 

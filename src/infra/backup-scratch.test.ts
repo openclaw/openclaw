@@ -9,6 +9,7 @@ import {
   maintainBackupScratch,
 } from "./backup-scratch.js";
 import * as fsSafe from "./fs-safe.js";
+import * as nodeSqlite from "./node-sqlite.js";
 import * as stagingToken from "./sqlite-staging-token.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -56,6 +57,47 @@ it.each(["lstat", "boundary", "cleanup"] as const)(
   },
 );
 
+it.each(["directory", "token"] as const)(
+  "reports native token-open failure according to remaining scratch (%s removed)",
+  async (removed) => {
+    const root = dirs.make("backup-scratch-token-vanished-");
+    const { directory, release } = await createBackupScratchDirectory(root);
+    release(true);
+    const tokenPath = path.join(directory, stagingToken.SQLITE_STAGING_TOKEN_FILES[0]);
+    const tokenLocation = nodeSqlite.resolveExistingSqliteFileUri(tokenPath);
+    const open = nodeSqlite.openNodeSqliteDatabase;
+    let nativeFailure: unknown;
+    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      if (args[0] !== tokenLocation) {
+        return open(...args);
+      }
+      fsSync.rmSync(removed === "directory" ? directory : tokenPath, { recursive: true });
+      try {
+        return open(...args);
+      } catch (error) {
+        nativeFailure = error;
+        throw error;
+      }
+    });
+    const log = vi.fn();
+    const report = await maintainBackupScratch({ roots: [root], repair: true, log });
+    expect(nativeFailure).toBeInstanceOf(Error);
+    expect(report.reclaimed).toEqual([]);
+    expect(report.active).toEqual([]);
+    if (removed === "directory") {
+      expect(report.warnings).toEqual([]);
+      expect(report.alreadyReclaimed).toEqual([directory]);
+      expect(log).toHaveBeenCalledWith(`Backup scratch already reclaimed: ${directory}`);
+    } else {
+      expect(report.alreadyReclaimed).toEqual([]);
+      expect(report.warnings).toEqual([
+        expect.stringContaining(`Backup scratch preserved at ${directory}:`),
+      ]);
+      await expect(fs.stat(directory)).resolves.toBeDefined();
+    }
+  },
+);
+
 it("does not report remaining scratch as reclaimed when only a payload vanishes", async () => {
   const root = dirs.make("backup-scratch-payload-vanished-");
   const directory = path.join(root, "openclaw-backup-retired-Gone02");
@@ -84,17 +126,25 @@ it("preserves a symlink target when scratch is replaced after transaction retire
   const protectedFile = path.join(outside, "config-0");
   await fs.writeFile(protectedFile, "unrelated data");
   const release = scratch.release;
-  scratch.release = (retiring) => {
-    release(retiring);
-    if (retiring) {
-      fsSync.renameSync(scratch.directory, `${scratch.directory}.original`);
-      fsSync.symlinkSync(
-        outside,
-        scratch.directory,
-        process.platform === "win32" ? "junction" : "dir",
-      );
-    }
-  };
+  scratch.release = Object.assign(
+    (retiring?: boolean) => {
+      release(retiring);
+      if (retiring) {
+        fsSync.renameSync(scratch.directory, `${scratch.directory}.original`);
+        fsSync.symlinkSync(
+          outside,
+          scratch.directory,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+    },
+    {
+      beginRetirement: () => {
+        release.beginRetirement();
+        return scratch.release;
+      },
+    },
+  );
   await expect(finishBackupScratch(scratch, () => {})).resolves.toContain(scratch.directory);
   await expect(fs.readFile(protectedFile, "utf8")).resolves.toBe("unrelated data");
 });

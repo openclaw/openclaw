@@ -383,12 +383,149 @@ describe("chat transcript controller", () => {
     const onSettled = vi.fn();
     transcript.scrollToOffset(420, onSettled);
 
+    for (let update = 0; update < 100; update += 1) {
+      transcript.hostUpdated();
+    }
+    expect(onSettled).not.toHaveBeenCalled();
+
     for (let index = 0; index <= 60; index += 1) {
       transcript.hostUpdated();
       flushFrames();
     }
 
     expect(onSettled).toHaveBeenCalledWith({ scrollTop: 0, anchorToEnd: true });
+  });
+
+  it("applies a measurable saved offset once instead of replaying it across frames", async () => {
+    const flushFrames = stubAnimationFrames();
+    const { container, transcript } = await mountTestTranscript(
+      "single-frame-restore",
+      numberedContentRows(12),
+    );
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, value: 2000 },
+    });
+    const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        container.scrollTop = options.top ?? container.scrollTop;
+      }
+    });
+    container.scrollTo = scrollTo;
+    try {
+      transcript.scrollToOffset(420);
+      for (let frame = 0; frame < 4; frame += 1) {
+        transcript.hostUpdated();
+        flushFrames();
+      }
+
+      expect(container.scrollTop).toBe(420);
+      expect(
+        scrollTo.mock.calls.filter(
+          ([options]) => typeof options === "object" && options?.top === 420,
+        ),
+      ).toHaveLength(1);
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
+  it("waits for a temporarily truncated scroll range before applying a saved offset", async () => {
+    const flushFrames = stubAnimationFrames();
+    const { container, transcript } = await mountTestTranscript(
+      "growing-range-restore",
+      numberedContentRows(12),
+    );
+    let scrollHeight = 900;
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    });
+    const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        container.scrollTop = options.top ?? container.scrollTop;
+      }
+    });
+    container.scrollTo = scrollTo;
+    const onSettled = vi.fn();
+
+    try {
+      transcript.scrollToOffset(420, onSettled);
+      for (let update = 0; update < 20; update += 1) {
+        transcript.hostUpdated();
+      }
+      expect(onSettled).not.toHaveBeenCalled();
+      for (let frame = 0; frame < 4; frame += 1) {
+        transcript.hostUpdated();
+        flushFrames();
+      }
+      expect(
+        scrollTo.mock.calls.filter(
+          ([options]) =>
+            typeof options === "object" && (options?.top === 300 || options?.top === 420),
+        ),
+      ).toHaveLength(0);
+      expect(onSettled).not.toHaveBeenCalled();
+
+      scrollHeight = 2000;
+      transcript.hostUpdated();
+      flushFrames();
+
+      expect(container.scrollTop).toBe(420);
+      expect(
+        scrollTo.mock.calls.filter(
+          ([options]) => typeof options === "object" && options?.top === 420,
+        ),
+      ).toHaveLength(1);
+      expect(onSettled).toHaveBeenCalledWith({ scrollTop: 420, anchorToEnd: false });
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
+  it("applies a saved offset once after a shorter range stabilizes", async () => {
+    const flushFrames = stubAnimationFrames();
+    const { container, transcript } = await mountTestTranscript(
+      "stable-short-range-restore",
+      numberedContentRows(12),
+    );
+    let scrollHeight = 900;
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+    });
+    const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        container.scrollTop = options.top ?? container.scrollTop;
+      }
+    });
+    container.scrollTo = scrollTo;
+    const onSettled = vi.fn();
+
+    try {
+      transcript.scrollToOffset(420, onSettled);
+      for (let frame = 0; frame < 10; frame += 1) {
+        transcript.hostUpdated();
+        flushFrames();
+      }
+      scrollHeight = 600;
+      transcript.hostUpdated();
+      scrollHeight = 900;
+      for (let frame = 0; frame < 4; frame += 1) {
+        transcript.hostUpdated();
+        flushFrames();
+      }
+      expect(onSettled).not.toHaveBeenCalled();
+      for (let frame = 0; frame < 14; frame += 1) {
+        transcript.hostUpdated();
+        flushFrames();
+      }
+
+      expect(onSettled).toHaveBeenCalledOnce();
+      expect(onSettled).toHaveBeenCalledWith({ scrollTop: 300, anchorToEnd: true });
+    } finally {
+      transcript.hostDisconnected();
+    }
   });
 
   it.each([

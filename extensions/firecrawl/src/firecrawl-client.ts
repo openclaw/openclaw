@@ -1,6 +1,6 @@
 // Firecrawl plugin module implements firecrawl client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { parseDateStringTimestampMs, parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   ProviderHttpError,
   readProviderJsonObjectResponse,
@@ -295,6 +295,15 @@ function normalizeFirecrawlResultUrl(value: unknown): string | undefined {
   }
 }
 
+function isValidFirecrawlPublishedDate(value: string): boolean {
+  if (!FIRECRAWL_PUBLISHED_DATE_RE.test(value)) {
+    return false;
+  }
+  const calendarDate = value.slice(0, 10);
+  const timestamp = parseDateStringTimestampMs(calendarDate);
+  return timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate);
+}
+
 const optionalFirecrawlStringSchema = z.string().optional().catch(undefined);
 const firecrawlSearchMetadataSchema = z
   .object({
@@ -367,7 +376,7 @@ function resolveSearchItems(
       metadata?.publishedDate ||
       undefined;
     const published =
-      rawPublished && FIRECRAWL_PUBLISHED_DATE_RE.test(rawPublished) ? rawPublished : undefined;
+      rawPublished && isValidFirecrawlPublishedDate(rawPublished) ? rawPublished : undefined;
     items.push({
       title,
       url,

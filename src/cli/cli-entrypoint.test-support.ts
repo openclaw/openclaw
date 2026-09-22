@@ -20,6 +20,11 @@ export const cliRecoveryEntrypoints = {
     sourceWorkerName: "../commands/doctor-lint-process",
     distWorkerPath: "commands/doctor-lint-process.js",
   },
+  doctorHealth: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../extensions/memory-core/doctor-health-api",
+    distWorkerPath: "extensions/memory-core/doctor-health-api.js",
+  },
   signalExitBarrier: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "signal-exit-barrier",
@@ -29,6 +34,20 @@ export const cliRecoveryEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../process/output-drain",
     distWorkerPath: "process/output-drain.js",
+  },
+} as const;
+
+// Report producers remain hookable inside the prepared CLI graph.
+export const doctorOutputEntrypoints = {
+  maintenance: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "program/register.maintenance",
+    distWorkerPath: "legacy-finalizer/src/cli/program/register.maintenance.js",
+  },
+  oneShotExit: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "one-shot-exit",
+    distWorkerPath: "legacy-finalizer/src/cli/one-shot-exit.js",
   },
 } as const;
 

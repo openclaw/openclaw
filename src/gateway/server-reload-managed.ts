@@ -44,10 +44,7 @@ import {
   restoreCanonicalSecretRefs,
 } from "./server-reload-utils.js";
 import {
-  captureSharedGatewaySessionGenerationOwnership,
   disconnectStaleSharedGatewayAuthClients,
-  isSharedGatewaySessionGenerationOwnershipCurrent,
-  setRequiredSharedGatewaySessionGenerationIfOwned,
   type SharedGatewaySessionGenerationOwnership,
 } from "./server-shared-auth-generation.js";
 
@@ -203,9 +200,7 @@ export function startManagedGatewayConfigReloader(
       for (;;) {
         await transactionOwnership.checkpoint();
         assertCurrent();
-        const ownership = captureSharedGatewaySessionGenerationOwnership(
-          params.sharedGatewaySessionGenerationState,
-        );
+        const ownership = params.sharedGatewaySessionGenerationState.capture();
         const previousRequired = params.sharedGatewaySessionGenerationState.required;
         const prepared = await tryPrepareRuntimeSecrets(
           prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
@@ -220,10 +215,7 @@ export function startManagedGatewayConfigReloader(
         );
         await transactionOwnership.checkpoint();
         assertCurrent();
-        const generationChanged = !isSharedGatewaySessionGenerationOwnershipCurrent(
-          params.sharedGatewaySessionGenerationState,
-          ownership,
-        );
+        const generationChanged = !params.sharedGatewaySessionGenerationState.owns(ownership);
         if (!prepared || !isRuntimeSecretsPreparationCurrent(prepared) || generationChanged) {
           continue;
         }
@@ -262,8 +254,7 @@ export function startManagedGatewayConfigReloader(
       assertCurrent();
       // Claim the shared-session requirement before creating any async restart
       // emission. A rejected generation owner must never leave a live deferral.
-      requiredOwnership = setRequiredSharedGatewaySessionGenerationIfOwned(
-        params.sharedGatewaySessionGenerationState,
+      requiredOwnership = params.sharedGatewaySessionGenerationState.setRequired(
         preparationOwnership,
         previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration
           ? nextSharedGatewaySessionGeneration
@@ -299,8 +290,7 @@ export function startManagedGatewayConfigReloader(
       restartLifecycle.settle("rejected");
       transactionOwnership.rollbackRuntimeEnv();
       if (requiredOwnership) {
-        setRequiredSharedGatewaySessionGenerationIfOwned(
-          params.sharedGatewaySessionGenerationState,
+        params.sharedGatewaySessionGenerationState.setRequired(
           requiredOwnership,
           previousRequiredSharedGatewaySessionGeneration,
         );

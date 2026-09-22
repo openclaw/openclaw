@@ -5,10 +5,8 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/se
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
-import type {
-  CronRunReceiptHandle,
-  CronRunReceiptSettlementDisposition,
-} from "../store/run-receipt-store.js";
+import type { CronRunReceiptSettlementDisposition } from "../store/run-receipt-store.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,

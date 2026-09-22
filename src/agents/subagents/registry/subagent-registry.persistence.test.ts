@@ -15,7 +15,7 @@ import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
-import { resetTaskRegistryMaintenanceRuntimeForTests } from "../../../tasks/task-registry.maintenance.js";
+import { configureTaskRegistryMaintenance } from "../../../tasks/task-registry.maintenance.js";
 import {
   resetTaskFlowRegistryForTests,
   resetTaskRegistryForTests,
@@ -213,7 +213,7 @@ describe("subagent registry persistence", () => {
   }
 
   beforeEach(() => {
-    resetTaskRegistryMaintenanceRuntimeForTests();
+    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     announceSpy.mockReset();
@@ -246,7 +246,7 @@ describe("subagent registry persistence", () => {
       });
       tempStateDir = null;
     }
-    resetTaskRegistryMaintenanceRuntimeForTests();
+    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     envSnapshot.restore();
   });
 

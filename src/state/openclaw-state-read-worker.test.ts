@@ -1,134 +1,26 @@
+// Register shared pool mocks before modules that consume them.
+// oxfmt-ignore
+import { emptyReply, mock, queueTask, source, tempDirs } from "./openclaw-state-read-worker.test-harness.js";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import { createWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
 import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
-import type {
-  OwnedWorkerTask,
-  WorkerTaskInput,
-  WorkerTaskOptions,
-} from "../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
-import type {
-  OpenClawStateReadReply,
-  OpenClawStateReadRequest,
-} from "./openclaw-state-read.types.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
-
-type ReadTask = OwnedWorkerTask<OpenClawStateReadReply>;
-type RunTask = (
-  input: WorkerTaskInput<OpenClawStateReadRequest>,
-  options: WorkerTaskOptions<OpenClawStateReadRequest>,
-) => ReadTask;
-const mock = vi.hoisted(() => ({
-  create: vi.fn(),
-  runTask: vi.fn<RunTask>(),
-  closePool: vi.fn<() => Promise<void>>(),
-  closeResources: vi.fn<(key?: string) => Promise<void>>(),
-  selectSqlite:
-    vi.fn<typeof import("../infra/bun-sqlite-library.js").ensureSqliteLibrarySelected>(),
-}));
-vi.mock("../infra/bun-sqlite-library.js", () => ({
-  ensureSqliteLibrarySelected: mock.selectSqlite,
-}));
-vi.mock("../infra/worker-task-pool.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/worker-task-pool.js")>()),
-  createOwnedWorkerTaskPool: mock.create,
-}));
-
 import {
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
+import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { withOpenClawStateSettlementRead } from "./openclaw-state-settlement-read.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import { selectProfileDisplayEntries } from "./user-profiles-internal.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
-
-const taskCleanups: Array<() => void> = [];
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    for (const release of taskCleanups.splice(0)) {
-      release();
-    }
-    mock.closePool.mockReset().mockResolvedValue();
-    mock.closeResources.mockReset().mockResolvedValue();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
-beforeEach(() => {
-  mock.selectSqlite.mockReset().mockReturnValue({ source: "runtime" });
-  mock.runTask.mockReset();
-  mock.closePool.mockReset().mockResolvedValue();
-  mock.closeResources.mockReset().mockResolvedValue();
-  mock.create.mockReset().mockImplementation(() => ({
-    runTask: mock.runTask,
-    close: mock.closePool,
-    closeResources: mock.closeResources,
-  }));
-});
-
-function source(name = "source.sqlite") {
-  const root = tempDirs.make("openclaw-read-owned-task-");
-  const pathname = path.join(root, name);
-  // Only filesystem identity is real; no mocked task opens SQLite.
-  fs.writeFileSync(pathname, "mock worker source");
-  return { root, pathname, options: { path: pathname, env: { OPENCLAW_STATE_DIR: root } } };
-}
-
-function queueTask(dispatchReady: Promise<void> = Promise.resolve()) {
-  const result = createDeferredCore<OpenClawStateReadReply>();
-  const submitted = createDeferredCore<WorkerTaskOptions<OpenClawStateReadRequest>>();
-  const captured = createDeferredCore<OpenClawStateReadRequest>();
-  const close = vi.fn<ReadTask["close"]>().mockResolvedValue();
-  const handle: ReadTask = { result: result.promise, close };
-  let detach = () => {};
-  mock.runTask.mockImplementationOnce((input, options) => {
-    const signal = options.signal;
-    const abort = () => result.reject(signal?.reason);
-    signal?.addEventListener("abort", abort, { once: true });
-    detach = () => signal?.removeEventListener("abort", abort);
-    if (signal?.aborted) {
-      abort();
-    }
-    submitted.resolve(options);
-    void dispatchReady
-      .then(async () => {
-        const request = typeof input === "function" ? await input() : input;
-        captured.resolve(request);
-      })
-      .catch((error: unknown) => {
-        captured.reject(error);
-        result.reject(error);
-      });
-    return handle;
-  });
-  void captured.promise.catch(() => undefined);
-  taskCleanups.push(() => {
-    detach();
-    close.mockReset().mockResolvedValue();
-    result.reject(new Error("test task cleanup"));
-  });
-  return { result, submitted: submitted.promise, captured: captured.promise, close };
-}
-
-const emptyReply: OpenClawStateReadReply = {
-  ok: true,
-  type: "fleet.list",
-  sourceAdmitted: true,
-  cells: [],
-};
 
 it("retains the shared pool after a resource drain fails until canonical retry", async () => {
   const { options } = source();
@@ -369,7 +261,9 @@ it("reads externally created state after an absent read without allocating a wor
   task.result.resolve(emptyReply);
   expect(await executeExistingOpenClawStateRead(options, command)).toEqual(emptyReply);
   expect(mock.selectSqlite).toHaveBeenCalledOnce();
-  expect(task.close).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(task.close).toHaveBeenCalledExactlyOnceWith(
+    process.versions.bun ? { retire: true } : undefined,
+  );
   expect(mock.closePool).not.toHaveBeenCalled();
 });
 
@@ -550,7 +444,9 @@ it("releases one completed read without closing the shared pool or aborting anot
   const siblingOptions = await sibling.submitted;
   first.result.resolve(emptyReply);
   expect(await firstRead).toEqual(emptyReply);
-  expect(first.close).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(first.close).toHaveBeenCalledExactlyOnceWith(
+    process.versions.bun ? { retire: true } : undefined,
+  );
   expect(sibling.close).not.toHaveBeenCalled();
   expect(siblingOptions.signal?.aborted).toBe(false);
   expect(mock.closePool).not.toHaveBeenCalled();
@@ -558,7 +454,9 @@ it("releases one completed read without closing the shared pool or aborting anot
 
   sibling.result.resolve(emptyReply);
   expect(await siblingRead).toEqual(emptyReply);
-  expect(sibling.close).toHaveBeenCalledExactlyOnceWith(undefined);
+  expect(sibling.close).toHaveBeenCalledExactlyOnceWith(
+    process.versions.bun ? { retire: true } : undefined,
+  );
   await closeOpenClawStateDatabaseAsync();
   expect(mock.closePool).toHaveBeenCalledOnce();
 });
@@ -855,6 +753,61 @@ it.each([
     }
   },
 );
+
+it("captures cron recovery markers and charges their retained bytes before dispatch", async () => {
+  const { pathname, options } = source();
+  const context = captureOpenClawStateWorkerContext(options);
+  const location = { context, location: pathname, checkFreshAdmission: false };
+  const authority = { signal: new AbortController().signal, assertCurrent: () => {} };
+  const command = {
+    type: "cron.observeRunRecovery" as const,
+    storeKey: "租户🦞",
+    proposals: [
+      { jobId: "任务雪", queuedAtMs: 1, runningAtMs: 2 },
+      { jobId: "运行🌊", runningAtMs: 3 },
+    ],
+  };
+  const expected = structuredClone(command);
+  const transport = createOpenClawStateReadTransport(command);
+  const baseline = createOpenClawStateReadTransport({ type: "fleet.list" });
+  command.storeKey = "changed partition";
+  command.proposals[0]!.jobId = "changed before preparation";
+  command.proposals[0]!.queuedAtMs = 9;
+  const dispatch = createDeferredCore();
+  const baselineTask = queueTask(dispatch.promise);
+  const task = queueTask(dispatch.promise);
+  const baselineRead = baseline.read(location, authority);
+  const read = transport.read(location, authority);
+  try {
+    const [baseOptions, submittedOptions] = await Promise.all([
+      baselineTask.submitted,
+      task.submitted,
+    ]);
+    const expectedBytes =
+      Buffer.byteLength(expected.type) -
+      Buffer.byteLength("fleet.list") +
+      Buffer.byteLength(expected.storeKey) +
+      expected.proposals.reduce((total, entry) => total + Buffer.byteLength(entry.jobId), 24);
+    expect(submittedOptions.inputBytes).toBe(Number(baseOptions.inputBytes) + expectedBytes);
+    command.proposals.splice(0);
+    dispatch.resolve();
+    expect((await task.captured).command).toEqual(expected);
+    baselineTask.result.resolve(emptyReply);
+    task.result.resolve({
+      ok: true,
+      type: expected.type,
+      sourceAdmitted: true,
+      observation: { kind: "observed", proposals: [] },
+    });
+    await Promise.all([baselineRead, read]);
+  } finally {
+    dispatch.resolve();
+    baselineTask.result.resolve(emptyReply);
+    task.result.resolve(emptyReply);
+    await Promise.allSettled([baselineRead, read]);
+    await Promise.all([baseline.close(), transport.close()]);
+  }
+});
 
 it("captures and charges independent snapshot and schema paths before queued dispatch", async () => {
   const { root, options } = source();

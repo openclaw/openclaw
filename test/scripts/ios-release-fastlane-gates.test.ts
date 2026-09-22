@@ -1299,7 +1299,7 @@ puts JSON.generate(results)
     const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
 
     expect(workflow).toContain('IOS_SCREENSHOT_NODE_VERSION: "24.16.0"');
-    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"');
+    expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
     expect(shardJob).toContain("needs: [preflight]");

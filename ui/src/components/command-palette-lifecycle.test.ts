@@ -86,7 +86,7 @@ describe("CommandPalette lifecycle", () => {
     const list = vi.fn(async () => createSessionResult("agent:main:old", "Old chat"));
     const { palette, provider } = await mountPalette(createContext(gateway, list));
     await enterQuery(palette, "old");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(palette.textContent).toContain("Old chat");
 
@@ -106,6 +106,21 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).not.toContain("Old chat");
   });
 
+  it("keeps local filtering usable if the connection drops during typing", async () => {
+    const { gateway, setConnected } = createGateway(true);
+    const list = vi.fn(async () => null);
+    const { palette } = await mountPalette(createContext(gateway, list));
+    await enterQuery(palette, "plugins");
+    await vi.advanceTimersByTimeAsync(100);
+    setConnected(false);
+    await palette.updateComplete;
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
+    expect(list).not.toHaveBeenCalled();
+    findPaletteOption(palette, "Plugins", true)!.click();
+    expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
+  });
+
   it("retries the pending query after the gateway reconnects", async () => {
     const harness = createGateway(true);
     const stale = createDeferred<SessionsListResult | null>();
@@ -115,7 +130,7 @@ describe("CommandPalette lifecycle", () => {
       .mockResolvedValueOnce(createSessionResult("agent:main:retry", "Retry chat"));
     const { palette } = await mountPalette(createContext(harness.gateway, list));
     await enterQuery(palette, "retry");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     expect(list).toHaveBeenCalledOnce();
 
     harness.setConnected(false);
@@ -125,7 +140,7 @@ describe("CommandPalette lifecycle", () => {
 
     harness.setConnected(true);
     await palette.updateComplete;
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
 
     expect(list).toHaveBeenCalledTimes(2);
@@ -147,7 +162,7 @@ describe("CommandPalette lifecycle", () => {
       const { palette } = await mountPalette(context);
       const prompt = "needle\nSummarize the discussion and prepare a follow-up task.";
       await enterQuery(palette, prompt);
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       expect(list).not.toHaveBeenCalled();
       expect(request).not.toHaveBeenCalled();
 
@@ -161,7 +176,7 @@ describe("CommandPalette lifecycle", () => {
         harness.emit(change);
       }
       await palette.updateComplete;
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
       expect(input.value).toBe(prompt);
@@ -171,7 +186,7 @@ describe("CommandPalette lifecycle", () => {
 
       input.value = "needle";
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await palette.updateComplete;
       expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "needle" }));
       expect(request).toHaveBeenCalledWith(
@@ -195,13 +210,13 @@ describe("CommandPalette lifecycle", () => {
     );
     const { palette, provider } = await mountPalette(createContext(initial.gateway, initialList));
     await enterQuery(palette, "chat");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     expect(initialList).toHaveBeenCalledOnce();
 
     stale.resolve(createSessionResult("agent:main:stale", "Stale chat"));
     provider.setContext(createContext(replacement.gateway, replacementList));
     await palette.updateComplete;
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
 
     expect(palette.isOpen).toBe(false);
@@ -213,7 +228,7 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).not.toContain("Stale chat");
 
     await enterQuery(palette, "chat");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(replacementList).toHaveBeenCalledOnce();
     expect(palette.textContent).toContain("Fresh chat");

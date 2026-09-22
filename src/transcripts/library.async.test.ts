@@ -211,7 +211,10 @@ describe("transcript library asynchronous reads", () => {
       appends: createTranscriptCaptureAppends(() => {}),
       session: current,
       phase: "active",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading the transcript library must not stop capture");
+      },
+      releaseProvider: async () => {},
       providerId: current.source.providerId,
     });
     const first = await listTranscriptLibrary(store, {});

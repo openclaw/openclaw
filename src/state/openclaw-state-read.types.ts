@@ -1,19 +1,40 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
+import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type {
   SandboxBrowserRegistryEntry,
   SandboxRegistryEntry,
 } from "../agents/sandbox/registry.types.js";
+import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { WorkspaceStateSnapshot } from "../agents/workspace-state-store.kernel.js";
 import type {
   ExecutionIdentityInspectionQuery,
   ExecutionIdentityInspectionOutcome,
 } from "../audit/execution-identity-inspection.types.js";
+import type {
+  CronRunRecoveryReadCommand,
+  CronRunRecoveryObservation,
+} from "../cron/store/run-recovery-read.types.js";
 import type { FleetCellRecord } from "../fleet/registry.types.js";
+import type {
+  ListTerminalOperatorApprovalsInput,
+  ListTerminalOperatorApprovalsResult,
+} from "../gateway/operator-approval-store.types.js";
 import type {
   WorkerPlacementConflictBinding,
   WorkerSessionPlacementReadResult,
 } from "../gateway/worker-environments/placement-read-projection.types.js";
+import type { WorkerSessionPlacementChangeSnapshot } from "../gateway/worker-environments/placement-record.js";
+import type {
+  WorkerEnvironmentFacts,
+  WorkerEnvironmentPrunePage,
+  WorkerEnvironmentPruneReadInput,
+} from "../gateway/worker-environments/store-worker-contract.js";
+import type {
+  DevicePairingReadCommand,
+  DevicePairingReadReply,
+} from "../infra/device-pairing-read.types.js";
 import type { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import type {
   ConversationRef,
@@ -21,6 +42,7 @@ import type {
 } from "../infra/outbound/session-binding.types.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type {
+  readInterruptedUpdateCandidate,
   readUpdateRunRecord,
   readUpdateRuns,
   UpdateRunListInput,
@@ -36,7 +58,15 @@ import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-d
 import type { ConfigMachineState } from "./openclaw-state-db.generated.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
-import type { ProfileDisplayRow } from "./user-profiles.types.js";
+import type {
+  UserChannelIdentity,
+  UserChannelIdentityLink,
+  UserChannelIdentityAuthorityFacts,
+  UserChannelIdentityResult,
+  CachedGitHubIdentity,
+  UserProfileDisplay,
+  ProfileDisplayRow,
+} from "./user-profiles.types.js";
 
 export type OpenClawStateReadLocation = {
   context: OpenClawStateWorkerContext;
@@ -52,8 +82,25 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | {
+      [Kind in keyof McpOAuthReadOnlyOperations]: {
+        type: Kind;
+        input: McpOAuthReadOnlyOperations[Kind]["input"];
+      };
+    }[keyof McpOAuthReadOnlyOperations]
   | { type: "conversationBindings.inspect"; conversation: ConversationRef }
+  | DevicePairingReadCommand
+  | {
+      type: "operatorApprovals.history";
+      input: ListTerminalOperatorApprovalsInput;
+    }
   | PluginBlobReadCommand
+  | { type: "subagents.sessionList" }
+  | {
+      type: "subagents.runs";
+      scope: { kind: "session"; sessionKey: string } | { kind: "ids"; runIds: readonly string[] };
+    }
+  | CronRunRecoveryReadCommand
   | { type: "exec-approvals.read" }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
@@ -62,13 +109,21 @@ export type OpenClawStateReadCommand =
       };
     }[keyof SkillLibraryReadOnlyOperations]
   | { type: "agentDatabaseRegistry.read" }
+  | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
+  | { type: "workerEnvironments.pruneCandidates"; input: WorkerEnvironmentPruneReadInput }
   | { type: "onboardingRecommendations.read"; configKey: string }
   | { type: "userProfiles.reconcile"; profileId: string }
+  | { type: "userProfiles.channelIdentity.list"; profileId: string }
+  | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentity }
+  | { type: "userProfiles.authority.resolve"; profileId: string }
+  | { type: "userProfiles.githubIdentity.cached"; accountId: number; email: string }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "audit.run.inspect"; input: ExecutionIdentityInspectionQuery }
   | { type: "updateRuns.get"; runId: string }
   | { type: "updateRuns.list"; input: UpdateRunListInput }
+  | { type: "updateRuns.interruptedCandidate" }
   | { type: "fleet.list" }
+  | { type: "workerPlacements.changeSnapshot" }
   | { type: "fleet.get"; tenantId: string }
   | { type: "nodeHost.config" }
   | { type: "workspace.snapshot"; workspaceDir: string }
@@ -92,10 +147,25 @@ export type OpenClawStateReadRequest = {
 };
 export type OpenClawStateReadReply = (
   | {
+      [Kind in keyof McpOAuthReadOnlyOperations]: {
+        ok: true;
+        type: Kind;
+        sourceAdmitted: true;
+        value: McpOAuthReadOnlyOperations[Kind]["output"];
+      };
+    }[keyof McpOAuthReadOnlyOperations]
+  | {
       ok: true;
       type: "conversationBindings.inspect";
       sourceAdmitted: true;
       record: SessionBindingRecord | null;
+    }
+  | DevicePairingReadReply
+  | {
+      ok: true;
+      type: "operatorApprovals.history";
+      sourceAdmitted: true;
+      history: ListTerminalOperatorApprovalsResult;
     }
   | PluginBlobReadReply
   | {
@@ -114,9 +184,40 @@ export type OpenClawStateReadReply = (
     }
   | {
       ok: true;
+      type: "cron.observeRunRecovery";
+      sourceAdmitted: true;
+      observation: CronRunRecoveryObservation;
+    }
+  | {
+      ok: true;
+      type: "subagents.sessionList";
+      sourceAdmitted: true;
+      runs: Map<string, SubagentRunReadRecord>;
+    }
+  | {
+      ok: true;
+      type: "subagents.sessionList";
+      sourceAdmitted: true;
+      unavailable: { message: string; error: OpenClawStateWorkerErrorPayload | undefined };
+    }
+  | { ok: true; type: "subagents.runs"; sourceAdmitted: true; runs: Map<string, SubagentRunRecord> }
+  | {
+      ok: true;
       type: "agentDatabaseRegistry.read";
       sourceAdmitted?: true;
       result: OpenClawAgentDatabaseRegistryReadResult;
+    }
+  | {
+      ok: true;
+      type: "workerEnvironments.pruneCandidates";
+      sourceAdmitted: true;
+      page: WorkerEnvironmentPrunePage;
+    }
+  | {
+      ok: true;
+      type: "workerEnvironments.snapshot";
+      sourceAdmitted: true;
+      facts: WorkerEnvironmentFacts;
     }
   | {
       ok: true;
@@ -129,6 +230,37 @@ export type OpenClawStateReadReply = (
       type: "userProfiles.reconcile";
       sourceAdmitted: true;
       profile: ProfileDisplayRow | undefined;
+    }
+  | {
+      ok: true;
+      type: "userProfiles.channelIdentity.list";
+      sourceAdmitted: true;
+      result: UserChannelIdentityResult<UserChannelIdentityLink[]>;
+    }
+  | {
+      ok: true;
+      type: "userProfiles.channelIdentity.resolve";
+      sourceAdmitted: true;
+      linked: UserChannelIdentityAuthorityFacts | undefined;
+    }
+  | {
+      ok: true;
+      type: "userProfiles.authority.resolve";
+      sourceAdmitted: true;
+      profile:
+        | {
+            profileId: string;
+            role: string | null;
+            aliases: string[];
+            display: UserProfileDisplay;
+          }
+        | undefined;
+    }
+  | {
+      ok: true;
+      type: "userProfiles.githubIdentity.cached";
+      sourceAdmitted: true;
+      identity: CachedGitHubIdentity | undefined;
     }
   | {
       ok: true;
@@ -155,7 +287,19 @@ export type OpenClawStateReadReply = (
       sourceAdmitted: true;
       runs: ReturnType<typeof readUpdateRuns>;
     }
+  | {
+      ok: true;
+      type: "updateRuns.interruptedCandidate";
+      sourceAdmitted: true;
+      run: ReturnType<typeof readInterruptedUpdateCandidate>;
+    }
   | { ok: true; type: "fleet.list"; sourceAdmitted: true; cells: FleetCellRecord[] }
+  | {
+      ok: true;
+      type: "workerPlacements.changeSnapshot";
+      sourceAdmitted: true;
+      placements: WorkerSessionPlacementChangeSnapshot[];
+    }
   | { ok: true; type: "fleet.get"; sourceAdmitted: true; cell: FleetCellRecord | undefined }
   | {
       ok: true;
@@ -206,6 +350,10 @@ export type OpenClawStateReadOutcome =
 
 export type OpenClawStateReadPhase = "before-read" | "read" | "unobserved";
 export type OpenClawStateReadOptions = {
+  /** Reuse the caller's captured authority instead of admitting a newer lifecycle. */
+  context?: OpenClawStateWorkerContext;
+  /** Publication and authority reads must not inherit an inspection snapshot. */
+  current?: boolean;
   mapError?: (error: unknown, phase: OpenClawStateReadPhase) => unknown;
 };
 

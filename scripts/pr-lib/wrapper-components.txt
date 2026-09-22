@@ -20,6 +20,7 @@ packages/gateway-protocol/src/schema/since.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts
 packages/gateway-protocol/src/schema/worker-protocol-primitives.ts
+packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
 packages/gateway-protocol/src/update-run-vocabulary.ts
@@ -168,6 +169,7 @@ src/agents/configured-provider-model.ts
 src/agents/defaults.ts
 src/agents/glob-pattern.ts
 src/agents/internal-runtime-context.ts
+src/agents/mcp-oauth-store-error.ts
 src/agents/model-catalog-lookup.ts
 src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
@@ -223,10 +225,13 @@ src/agents/worktrees/git-worktree-operations.runtime.ts
 src/agents/worktrees/git.ts
 src/agents/worktrees/provisioned-file-inspection.ts
 src/agents/worktrees/repository-paths.ts
+src/agents/worktrees/snapshot-exact-state.ts
+src/agents/worktrees/snapshot-index-objects.ts
 src/agents/worktrees/snapshot-inventory.ts
 src/agents/worktrees/template-registry.ts
 src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
+src/auto-reply/reply/history-limit.ts
 src/auto-reply/reply/inbound-context-marker.ts
 src/auto-reply/reply/strip-inbound-meta.ts
 src/auto-reply/thinking.shared.ts
@@ -378,6 +383,7 @@ src/config/io.warnings.ts
 src/config/io.write-errors.ts
 src/config/io.write-prepare.ts
 src/config/io.write-safety.ts
+src/config/io.write-values.ts
 src/config/issue-format.ts
 src/config/json5-comments.ts
 src/config/legacy-codex-provider.ts
@@ -459,6 +465,7 @@ src/config/validation.types.ts
 src/config/value-tree.ts
 src/config/version.ts
 src/config/web-search-legacy-provider-keys.ts
+src/config/write-authority.ts
 src/config/write-lock.ts
 src/config/zod-schema.agent-defaults-base.ts
 src/config/zod-schema.agent-defaults.ts
@@ -508,6 +515,7 @@ src/gateway/control-ui-session-prs-landing.ts
 src/gateway/github-remote.ts
 src/gateway/operator-scopes.ts
 src/gateway/server-methods/workspace-fs.ts
+src/gateway/worker-environments/session-attachment.ts
 src/gateway/worker-environments/workspace-actual-manifest.ts
 src/gateway/worker-environments/workspace-hash-memo.ts
 src/gateway/worker-environments/workspace-inventory-computation.runtime.ts
@@ -561,6 +569,11 @@ src/infra/diagnostics-timeline.ts
 src/infra/directory-durability.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
+src/infra/device-identity-coordinator-paths.ts
+src/infra/device-identity-coordinator.ts
+src/infra/device-identity-process-cache.ts
+src/infra/device-identity-store.ts
+src/infra/device-identity.ts
 src/infra/dotenv-global-core.ts
 src/infra/dotenv-global.ts
 src/infra/dotenv.ts
@@ -651,6 +664,7 @@ src/infra/openclaw-exec-env.ts
 src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
 src/infra/path-case.ts
+src/infra/path-existence.ts
 src/infra/path-guards.ts
 src/infra/path-safety.ts
 src/infra/plain-object.ts
@@ -706,6 +720,7 @@ src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
 src/infra/sqlite-schema-sql.ts
 src/infra/sqlite-snapshot-policy.ts
+src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-snapshot-source.ts
 src/infra/sqlite-snapshot-staging-owner.ts
@@ -719,6 +734,7 @@ src/infra/sqlite-terminal-open-latch.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
+src/infra/sqlite-wal-reclamation.ts
 src/infra/sqlite-wal-split-brain.ts
 src/infra/sqlite-wal-write-admission.ts
 src/infra/sqlite-wal.ts
@@ -791,6 +807,7 @@ src/infra/worker-task-pool.ts
 src/infra/worker-task-server.ts
 src/infra/worker-transfer-bytes.ts
 src/infra/wsl.ts
+src/infra/zstd-codec.ts
 src/logger.ts
 src/logging/config.ts
 src/logging/console.ts
@@ -871,6 +888,7 @@ src/plugins/dev-source-root.ts
 src/plugins/discovery-availability.ts
 src/plugins/discovery-required-plugins.ts
 src/plugins/discovery.ts
+src/plugins/doctor-compatibility-migration.ts
 src/plugins/doctor-contract-artifact.ts
 src/plugins/doctor-contract-module.ts
 src/plugins/doctor-contract-registry-loader-state.ts
@@ -879,6 +897,7 @@ src/plugins/doctor-contract-relevance.ts
 src/plugins/doctor-session-route-state-owner-types.ts
 src/plugins/enable.ts
 src/plugins/hardlink-policy.ts
+src/plugins/host-hook-cleanup-result.ts
 src/plugins/host-hook-json.ts
 src/plugins/install-channel-specs.ts
 src/plugins/install-paths.ts
@@ -925,6 +944,7 @@ src/plugins/manifest-registry-build.ts
 src/plugins/manifest-registry-installed.ts
 src/plugins/manifest-registry.ts
 src/plugins/manifest-setup-normalizers.ts
+src/plugins/manifest-theme-definitions.ts
 src/plugins/manifest-themes.ts
 src/plugins/manifest.ts
 src/plugins/min-host-version.ts
@@ -1019,6 +1039,8 @@ src/plugins/runtime-state-key.ts
 src/plugins/runtime-state.ts
 src/plugins/runtime-workspace-state.ts
 src/plugins/runtime/execution-frame.ts
+src/plugins/runtime/gateway-context-binding-owner.ts
+src/plugins/runtime/gateway-context-binding.ts
 src/plugins/runtime/gateway-request-scope.ts
 src/plugins/runtime/generation-scope.ts
 src/plugins/runtime/generation-state.ts
@@ -1179,14 +1201,20 @@ src/state/openclaw-state-db-write-coordination.ts
 src/state/openclaw-state-db.paths.ts
 src/state/openclaw-state-db.ts
 src/state/openclaw-state-feature-schema.ts
+src/state/openclaw-state-lease-acquisition.ts
+src/state/openclaw-state-lease-cleanup.ts
 src/state/openclaw-state-lease-error.ts
 src/state/openclaw-state-lease-exclusion.ts
+src/state/openclaw-state-lease-heartbeat-cleanup.ts
 src/state/openclaw-state-lease-heartbeat-shared.ts
 src/state/openclaw-state-lease-heartbeat.ts
 src/state/openclaw-state-lease-heartbeat.worker.ts
+src/state/openclaw-state-lease-options.ts
+src/state/openclaw-state-lease-process-exit.ts
 src/state/openclaw-state-lease-storage.ts
 src/state/openclaw-state-lease-store.ts
 src/state/openclaw-state-lease-worker-owner.ts
+src/state/openclaw-state-lease-worker-storage.ts
 src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
 src/state/openclaw-state-ownership.ts

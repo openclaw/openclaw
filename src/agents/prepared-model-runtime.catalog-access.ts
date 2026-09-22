@@ -75,16 +75,16 @@ export function createFullModelCatalogAccess(
     params.agentFacts.input.config,
     params.agentFacts.env,
   );
-  const projectInventory = createPreparedModelCatalogProjection({ ...params, normalizeProvider });
+  const projectInventory = createPreparedModelCatalogProjection(params);
   const project = (
     catalog: ModelCatalogSnapshot,
-    source:
-      | Pick<PreparedModelCatalogInventory, "runtimeModels" | "configuredProviderModelIds">
-      | undefined = inventory,
+    runtimeModels:
+      | PreparedModelCatalogInventory["runtimeModels"]
+      | undefined = inventory?.runtimeModels,
   ) => {
-    const projected = projectInventory(catalog, currentConfiguredRuntimeModels, source);
-    publishedRuntimeModels = projected.runtimeModels;
-    return attempt.withRefreshStatus(projected.catalog);
+    const projected = projectInventory(catalog, currentConfiguredRuntimeModels);
+    publishedRuntimeModels = runtimeModels;
+    return attempt.withRefreshStatus(projected);
   };
   const inventoryKey = preparedModelInventoryKey(params.agentFacts.input);
   const nativeSource = fingerprintPreparedRuntimeFacts({
@@ -142,11 +142,6 @@ export function createFullModelCatalogAccess(
           ),
           runtimeModels: new Map(
             [...previousInventory.runtimeModels].filter(([provider]) =>
-              retainedProviders.has(normalizeProvider(provider)),
-            ),
-          ),
-          configuredProviderModelIds: new Map(
-            [...previousInventory.configuredProviderModelIds].filter(([provider]) =>
               retainedProviders.has(normalizeProvider(provider)),
             ),
           ),
@@ -358,7 +353,6 @@ export function createFullModelCatalogAccess(
             configuredRuntimeModels,
             runtimeModels,
             providerExpiries,
-            configuredProviderModelIds,
           } = await worker.loadCatalog(
             providerIds,
             (providerIds ?? providers).some((provider) =>
@@ -446,14 +440,7 @@ export function createFullModelCatalogAccess(
           }
           setCatalogAuth(publication.catalog, auth);
           currentConfiguredRuntimeModels = configuredRuntimeModels;
-          const membershipSource = new Map([
-            ...(inventory?.configuredProviderModelIds ?? []),
-            ...configuredProviderModelIds,
-          ]);
-          const catalog = project(publication.catalog, {
-            runtimeModels: publication.runtimeModels,
-            configuredProviderModelIds: membershipSource,
-          });
+          const catalog = project(publication.catalog, publication.runtimeModels);
           setCatalogAuth(catalog, auth);
           assertCurrent();
           const completedProviders = new Map(providerIds ? inventory?.providers : undefined);
@@ -476,7 +463,6 @@ export function createFullModelCatalogAccess(
           }
           inventory = {
             ...publication,
-            configuredProviderModelIds: membershipSource,
             key: inventoryKey,
             pluginFingerprint,
             nativeSource,
@@ -581,7 +567,6 @@ export function createFullModelCatalogAccess(
           inventory = {
             catalog: mergePreparedNativeCatalog(rawCatalog, rawInventory),
             runtimeModels: inventory?.runtimeModels ?? new Map(),
-            configuredProviderModelIds: inventory?.configuredProviderModelIds ?? new Map(),
             key: inventoryKey,
             pluginFingerprint,
             nativeSource,

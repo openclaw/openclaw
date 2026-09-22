@@ -74,7 +74,7 @@ function projectWorkerResult(result: CodeModeWorkerResult) {
 
 function workerExec(source: string, swarmEnabled: boolean) {
   return testing
-    .runCodeModeWorker(
+    .runCodeModeExecutor(
       {
         kind: "exec",
         source,
@@ -84,7 +84,7 @@ function workerExec(source: string, swarmEnabled: boolean) {
         namespaces: [],
         swarmEnabled,
       },
-      10_000,
+      { timeoutMs: 10_000, executor: config.executor },
     )
     .then(projectWorkerResult);
 }
@@ -94,10 +94,10 @@ function workerResume(
   settledRequests: Array<{ id: string; ok: true; value: unknown }>,
 ) {
   return testing
-    .runCodeModeWorker(
+    .runCodeModeExecutor(
       {
         kind: "resume",
-        snapshot: waiting.snapshot,
+        continuation: waiting.continuation,
         config,
         settledRequests: settledRequests.map(({ id, ok, value }) => ({
           id,
@@ -105,7 +105,7 @@ function workerResume(
           json: JSON.stringify(value),
         })),
       },
-      10_000,
+      { timeoutMs: 10_000, executor: config.executor },
     )
     .then(projectWorkerResult);
 }
@@ -230,8 +230,8 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
-  resetCodeModeTestState();
+afterEach(async () => {
+  await resetCodeModeTestState();
   vi.useRealTimers();
 });
 
@@ -848,7 +848,7 @@ describe("Code Mode swarm host bridge", () => {
   it("renews expired snapshots while agentWait remains pending", () => {
     const now = 10_000;
     testing.activeRuns.set("cm-pending-agent", {
-      owner: { close: () => undefined },
+      owner: { close: async () => undefined },
       config: { ...config, snapshotTtlSeconds: 60 },
       expiresAt: now - 1,
       agentWaitRetainUntil: now + 120_000,
@@ -871,7 +871,7 @@ describe("Code Mode swarm host bridge", () => {
     const now = 10_000;
     const cancel = vi.fn();
     testing.activeRuns.set("cm-expired-agent", {
-      owner: { close: () => undefined },
+      owner: { close: async () => undefined },
       config: { ...config, snapshotTtlSeconds: 60 },
       expiresAt: now - 1,
       agentWaitRetainUntil: now - 1,

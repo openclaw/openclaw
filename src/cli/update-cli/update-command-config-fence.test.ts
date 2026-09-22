@@ -200,13 +200,18 @@ it.each(
               updateOutcomes: [],
             }),
           );
-          vi.spyOn(postCoreConvergence, "runPostCorePluginConvergence").mockResolvedValue({
-            changes: [],
-            warnings: [],
-            installRecords: {},
-            errored: false,
-            smokeFailures: [],
-          });
+          vi.spyOn(postCoreConvergence, "runPostCorePluginConvergence").mockImplementation(
+            async ({ cfg: pluginConfig }) => ({
+              config: pluginConfig,
+              configChanges: [],
+              installedPluginIdRecovery: new Map(),
+              changes: [],
+              warnings: [],
+              installRecords: {},
+              errored: false,
+              smokeFailures: [],
+            }),
+          );
         }
         vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
           throw new Error("Unexpected post-core completion after ownership loss");

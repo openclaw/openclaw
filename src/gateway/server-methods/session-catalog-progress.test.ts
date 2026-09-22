@@ -72,6 +72,7 @@ describe("session catalog progress ownership", () => {
     const enabled = catalogLog.isEnabled.mockReset().mockReturnValue(true);
     const warn = catalogLog.warn.mockReset().mockImplementation(() => {});
     const { promise: gate, resolve: release } = createDeferredCore();
+    const started = createDeferredCore();
     const host = {
       hostId: "gateway:local",
       label: "Local",
@@ -85,6 +86,7 @@ describe("session catalog progress ownership", () => {
       const publication = late.promise.then(() => onHost?.(host));
       publications.push(publication);
       waitUntil?.(publication);
+      started.resolve();
       await gate;
       onHost?.(host);
       return [host];
@@ -116,7 +118,8 @@ describe("session catalog progress ownership", () => {
     );
 
     try {
-      await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+      await started.promise;
+      expect(list).toHaveBeenCalledOnce();
       clock = 1_500;
       release();
       await Promise.all([
@@ -126,12 +129,13 @@ describe("session catalog progress ownership", () => {
         otherParams.completion,
       ]);
 
+      expect(list).toHaveBeenCalledTimes(3);
       expect(leaderBroadcast).toHaveBeenCalledOnce();
       expect(followerBroadcast).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledTimes(3);
       for (const [message, fields] of warn.mock.calls) {
         expect(message).toBe("slow session catalog provider list");
-        expect(fields).toMatchObject({ providerElapsedMs: 1_500, returnedGatewayHostCount: 1 });
+        expect(fields).toMatchObject({ elapsedMs: 1_500, returnedGatewayHostCount: 1 });
       }
       for (const pending of [leader, follower, otherAgent, otherParams]) {
         expect(pending.respond).toHaveBeenCalledWith(true, {
@@ -223,7 +227,9 @@ describe("session catalog progress ownership", () => {
     );
     const complete = startCall("sessions.catalog.list", {}, config, client);
     try {
-      await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+      release.resolve();
+      await Promise.all([progressive.completion, complete.completion]);
+      expect(list).toHaveBeenCalledTimes(2);
     } finally {
       release.resolve();
       await Promise.allSettled([progressive.completion, complete.completion]);
@@ -345,7 +351,10 @@ describe("session catalog progress ownership", () => {
         }
         return [];
       });
-      hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
+      hoisted.activeRegistry.sessionCatalogs = [
+        { provider: provider("fixture", { list }) },
+        { provider: provider("completed") },
+      ];
       const config = {};
       const client = { connId: "requester" };
       const request = { catalogId: "fixture", search: "held" };
@@ -356,12 +365,12 @@ describe("session catalog progress ownership", () => {
         for (let index = 0; index < completedQueries; index += 1) {
           const respond = await call(
             "sessions.catalog.list",
-            { catalogId: "fixture", search: `completed-${index}` },
+            { catalogId: "completed", search: `completed-${index}` },
             config,
             client,
           );
           expect(respond).toHaveBeenCalledWith(true, {
-            catalogs: [expect.objectContaining({ id: "fixture", hosts: [] })],
+            catalogs: [expect.objectContaining({ id: "completed", hosts: [] })],
           });
         }
         pending.push(startCall("sessions.catalog.list", request, config, client));

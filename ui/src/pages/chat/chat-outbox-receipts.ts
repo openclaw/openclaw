@@ -225,6 +225,12 @@ export async function readCurrentStoredChatHistory(
       if (!isCurrent() || !(err instanceof GatewayRequestError)) {
         return "blocked";
       }
+      const current = readStoredChatOutbox(host, outbox)?.queue.find(
+        (entry) => entry.id === item.id,
+      );
+      if (!current || !sameQueuedDeliveryVersion(current, item)) {
+        return "blocked";
+      }
       const attempted =
         (item.sendAttempts ?? 0) > 0 ||
         item.sendRequestStartedAtMs !== undefined ||

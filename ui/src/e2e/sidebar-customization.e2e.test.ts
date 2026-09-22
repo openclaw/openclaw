@@ -16,6 +16,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarMoreMenu } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
@@ -494,7 +495,7 @@ suite.define(() => {
       const moreButton = sidebar.locator(".sidebar-nav__head-action");
       const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
+      await openSidebarMoreMenu(page);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       // Enabled plugin tabs render directly in the sidebar body (#111995),
       // not inside the More menu.
@@ -538,7 +539,7 @@ suite.define(() => {
         .toEqual(["Agents", "Dashboards", "Systems", "Automations", "Plugins", "Tasks"]);
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
-      await moreButton.click();
+      await openSidebarMoreMenu(page);
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("true");
       const editPersistedPinnedItems = moreMenu.getByRole("menuitem", {
         name: "Edit pinned items",

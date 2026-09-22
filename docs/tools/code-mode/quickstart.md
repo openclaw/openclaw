@@ -39,6 +39,12 @@ omitted, `false`, or an object without an explicit `enabled` value, unless an
 agent or model override enables it. Configuring limits or other Code Mode
 options does not enable it.
 
+When enabled, Code Mode defaults to Node's `node:vm` executor for trusted
+execution. Select QuickJS in the same settings panel or set
+`tools.codeMode.executor: "quickjs"` for hardened guest isolation. Read
+[Code Mode executors](/tools/code-mode/executors) before choosing: `node:vm`
+is not a security boundary.
+
 See [Automatic per-model activation](/tools/code-mode/configuration#automatic-per-model-activation) for the
 exact semantics and the shipped model list.
 
@@ -54,6 +60,7 @@ Set explicit limits for tighter bounds:
   tools: {
     codeMode: {
       enabled: true,
+      executor: "quickjs",
       timeoutMs: 10000,
       memoryLimitBytes: 67108864,
       maxOutputBytes: 65536,

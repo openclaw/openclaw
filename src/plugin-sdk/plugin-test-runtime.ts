@@ -1,11 +1,6 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
 import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
-import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
 
 type AgentHarnessHostTestAttempt = Omit<
   EmbeddedRunAttemptParams,
@@ -17,6 +12,10 @@ export async function createAgentHarnessHostCapabilitiesForTest(params: {
   attempt: AgentHarnessHostTestAttempt;
   pluginId: string;
 }) {
+  const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
+    await import("../agents/admitted-run-context.js");
+  const { createAgentHarnessHostCapabilities } =
+    await import("../agents/harness/host-capability.js");
   const admission = prepareAgentRunAdmission({
     cfg: params.attempt.config ?? {},
     facts: {
@@ -72,6 +71,7 @@ export { addTestHook } from "../plugins/hooks.test-helpers.js";
 export { createPluginRecord } from "../plugins/status.test-helpers.js";
 export { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 export { useProviderCatalogMetadata } from "./test-helpers/provider-catalog.js";
+export { useBundledProviderPolicyArtifactsForTest } from "./test-helpers/provider-policy-artifacts.test-support.js";
 export { mockPublishedModelRuntimeForTest } from "./test-helpers/published-model-runtime.js";
 export {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,

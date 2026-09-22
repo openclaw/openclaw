@@ -1,7 +1,7 @@
 // Vitest shared config wires the shared test shard.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import normalizationCorePackageJson from "../../packages/normalization-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
@@ -87,22 +87,31 @@ export function resolveSharedVitestWorkerConfig(params: {
   isCI?: boolean;
   isWindows?: boolean;
   localScheduling?: LocalVitestScheduling;
-}): Pick<LocalVitestScheduling, "fileParallelism" | "maxWorkers"> {
+}): Pick<LocalVitestScheduling, "fileParallelism" | "maxWorkers"> & {
+  pool: "forks" | "threads";
+} {
   const env = params.env ?? process.env;
   const local = params.localScheduling ?? localScheduling;
+  const windows = params.isWindows ?? isWindows;
+  // Windows concurrent thread spawns can inherit one another's temporary pipe
+  // handles. Separate processes keep those writers out of unrelated child trees.
+  const pool = windows ? "forks" : "threads";
   if (hasWorkerOverride(env)) {
     return {
+      pool,
       fileParallelism: local.fileParallelism,
       maxWorkers: local.maxWorkers,
     };
   }
   if (params.isCI ?? isCI) {
     return {
+      pool,
       fileParallelism: true,
-      maxWorkers: (params.isWindows ?? isWindows) ? 2 : 3,
+      maxWorkers: windows ? 2 : 3,
     };
   }
   return {
+    pool,
     fileParallelism: local.fileParallelism,
     maxWorkers: local.maxWorkers,
   };
@@ -492,7 +501,11 @@ export const sharedVitestConfig = {
     unstubEnvs: true,
     unstubGlobals: true,
     isolate: false,
-    pool: "threads" as const,
+    pool: workerConfig.pool,
+    // Native SDK imports need the same source loader as standalone tooling.
+    execArgv: process.versions.bun
+      ? []
+      : ["--import", pathToFileURL(resolveRepoRootPath("scripts/tsx.mjs")).href],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,

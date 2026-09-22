@@ -214,7 +214,12 @@ export async function resolveEmbeddedRunTerminal(input: {
   attemptAuthProfileStore: AuthProfileStore;
   apiKeyInfo: ResolvedProviderAuth | null;
   agentHarnessId: string;
-  settledTurnFinalizationOutcome: "not-attempted" | "answered" | "completed-empty" | "failed";
+  settledTurnFinalizationOutcome:
+    | "not-attempted"
+    | "answered"
+    | "completed-empty"
+    | "failed"
+    | "silent-fallback";
   pluginHarnessOwnsTransport: boolean;
   pluginHarnessOwnsAuthBootstrap: boolean;
   reportedModelRef: { provider: string; model: string };
@@ -253,7 +258,11 @@ export async function resolveEmbeddedRunTerminal(input: {
   // its settled side effects cascade into any ordinary retry family.
   const settledTurnFinalizationAttempted = input.settledTurnFinalizationOutcome !== "not-attempted";
   const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
-    terminalReplyExpectation: resolveReplyExpectation(runParams),
+    // The host intentionally suppressed its cron placeholder, not a required model answer.
+    terminalReplyExpectation:
+      input.settledTurnFinalizationOutcome === "silent-fallback"
+        ? "optional"
+        : resolveReplyExpectation(runParams),
     payloadCount,
     aborted: terminalAborted,
     timedOut: terminalTimedOut,

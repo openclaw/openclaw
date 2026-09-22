@@ -173,7 +173,7 @@ describe("theme tool", () => {
         id: "xenovessel",
         definition: { ...definition, avatarHat: "beanie" },
       },
-      message: "theme.avatarHat must be one of fedora",
+      message: "theme.avatarHat must be one of fedora, crown, santa, party, pumpkin",
     },
   ])("rejects invalid $args.action before dispatch", async ({ args, message }) => {
     await expect(createThemeTool().execute("invalid", args)).rejects.toThrow(message);

@@ -6,6 +6,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_FIELDS = [
@@ -52,6 +53,28 @@ export function readActiveUpdateRun(db: DatabaseSync) {
 
 export function readLatestUpdateRun(db: DatabaseSync) {
   return readUpdateRuns(db, { limit: 1 })[0];
+}
+
+/** A descriptor reserves its history for fenced recovery, even when its driver died.
+ * Presence is exclusion only: corrupt or older evidence never grants cleanup authority. */
+export function hasStoredUpdateRecovery(db: DatabaseSync, runId: string): boolean {
+  return (
+    tableExists(db, "config_machine_state") &&
+    Boolean(
+      executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "config_machine_state">>(db)
+          .selectFrom("config_machine_state")
+          .select("state_key")
+          .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + runId),
+      ),
+    )
+  );
+}
+
+export function readInterruptedUpdateCandidate(db: DatabaseSync) {
+  const run = readLatestUpdateRun(db);
+  return run && !hasStoredUpdateRecovery(db, run.runId) ? run : undefined;
 }
 
 export type UpdateRunListInput = {

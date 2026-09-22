@@ -335,6 +335,12 @@ sources. A custom agent root becomes a distinct `agent` asset only when no
 existing asset covers it; the manifest still records its agent id and root when
 another asset contains it. Missing paths are reported as skipped.
 
+A workspace can contain the state directory, including when the workspace is
+your home directory. A `covered` skip means that the enclosing asset includes
+those files. Repeated registrations of the same agent database resolve to one
+physical owner; distinct owners sharing one database still refuse the backup.
+This also applies with `--no-include-workspace`.
+
 Legacy audit raw archives, import claims, and scrub journals are excluded as raw
 files; recoverable audit sources receive sanitized backup replacements. Their
 `.quarantined-*` variants remain excluded and are retained locally without being
@@ -387,14 +393,16 @@ validating the database. These copies do not have a live-database consistency or
 deleted-data removal guarantee. Use the owning application's backup procedure
 when you need those guarantees.
 
-Hardlinks to a declared plugin SQLite database share one captured image, stored
+Hardlinks to a managed SQLite database share one captured image, stored
 as a separate regular archive entry for each name. Every hardlink must be an
-included SQLite file within declared plugin backup resources. If exactly
+included SQLite file owned by the core inventory or declared plugin backup resources. If exactly
 one name has a nonempty write-ahead log (WAL), that
 name supplies the committed data. Closed databases without a nonempty WAL remain
 supported. Multiple nonempty WALs, a nonempty rollback journal, or hardlinks
 outside the backup inventory cause an explicit refusal with no archive. Close
-the database writers cleanly and declare every hardlink in those resources before retrying.
+the database writers cleanly and include every hardlink in those resources before retrying.
+Changes to the shared database file during capture also refuse the backup, including
+a concurrent alias checkpoint that truncates its WAL before the journal checks repeat.
 Canonical OpenClaw database aliases retain their existing owner validation and
 sanitization.
 

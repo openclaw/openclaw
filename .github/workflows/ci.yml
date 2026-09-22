@@ -83,7 +83,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   IOS_SCREENSHOT_FASTLANE_VERSION: "2.239.0"
   IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
-  IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"
+  IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"
   NODE_VERSION: "24.19.0"
 
 jobs:
@@ -691,6 +691,7 @@ jobs:
               action = ".github/actions/setup-node-env/action.yml"
               node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+              platform_scripts = ("scripts/lib/swift-toolchain.sh",)
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
@@ -712,6 +713,8 @@ jobs:
                       pathspecs += evidence_scripts
                   elif kind == "preflight":
                       pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+                  if kind == "platform":
+                      pathspecs += platform_scripts
                   if kind == "linux-node":
                       pathspecs += upgrade_scripts
                   paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
@@ -722,6 +725,8 @@ jobs:
                   sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
                   if kind in ("platform", "linux-node"):
                       sparse_paths += [f"/{path}" for path in evidence_scripts]
+                  if kind == "platform":
+                      sparse_paths += [f"/{path}" for path in platform_scripts]
                   if kind == "linux-node":
                       sparse_paths += [f"/{path}" for path in upgrade_scripts]
                   # Rooted non-cone patterns keep the kind-owned workflow files exact.
@@ -1463,9 +1468,14 @@ jobs:
               }
             }
           }
-          const runNode = parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly;
+          const toolingOwnerChange =
+            eventName === "pull_request" && isCanonicalRepository && changedPaths !== null &&
+            typeof nodeTestPlan.isToolingTestOwnerPath === "function" &&
+            changedPaths.some(nodeTestPlan.isToolingTestOwnerPath);
+          const runNode =
+            (parseBoolean(process.env.OPENCLAW_CI_RUN_NODE) && !docsOnly) || toolingOwnerChange;
           const runNodeFastOnly =
-            runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
+            runNode && !toolingOwnerChange && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_ONLY);
           const runNodeFull = runNode && !runNodeFastOnly;
           // Plain PR leaves share the local consumer selector. Empty means the
           // existing full owners stay scheduled, including unsupported targets.
@@ -1669,7 +1679,9 @@ jobs:
               }
             }
             changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
+              includeReleaseOnlyToolingShards: false,
               runnerBackend: runnerProfile,
+              onFallback: (reason) => console.log(`Node test plan broad fallback: ${reason}`),
               dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
               dedicatedUiE2e: runUiE2e && !compatibilityTarget,
               dedicatedMaxLinesRatchet: checksFastCoreTasks.some(({ task }) => task === "baseline-ratchets"),
@@ -1677,6 +1689,8 @@ jobs:
             if (changedNodeTestShards === null) {
               changedExtensionFallbackShards =
                 changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
+            } else {
+              console.log(`Node test plan changed-set: ${changedNodeTestShards.filter((shard) => !shard.requiresDist).length} rows`);
             }
           }
           // Heavy packaging lanes run only when the diff touches surfaces they
@@ -1734,6 +1748,7 @@ jobs:
                   ...createNodeTestPlan({
                     includeProofTests: runProofTier,
                     includeReleaseOnlyPluginShards: false,
+                    includeReleaseOnlyToolingShards: eventName === "workflow_dispatch" || !isCanonicalRepository,
                     ...(compactPullRequest && changedPaths ? { changedPaths } : {}),
                     // Keep the legacy boolean for historical target planners;
                     // current planners use the event-specific mode.
@@ -1745,12 +1760,12 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
-          // Grouped rows list every striped test file. Current targets pack the
-          // projected runner contract; older targets retain the same projection
-          // as legacy JSON because their shard runner predates the codec.
+          // Node rows list every striped test file. Current targets pack the
+          // projected runner contract; older targets keep their flat fields or
+          // projected legacy groups because their shard runner predates the codec.
           const nodeTestGroupsCodecPath = "./scripts/lib/ci-node-test-groups-codec.mts";
           const nodeTestGroupsCodec =
-            rawNodeTestShards.some((shard) => shard.groups) &&
+            rawNodeTestShards.length > 0 &&
             existsSync(nodeTestGroupsCodecPath)
               ? await importTargetPlan(nodeTestGroupsCodecPath)
               : null;
@@ -1765,9 +1780,10 @@ jobs:
             env,
             fallbackMaxWorkers,
             includePatterns,
+            minTotalMemoryBytes,
             shard_name,
             timing_key,
-          }) => ({ configs, env, fallbackMaxWorkers, includePatterns, shard_name, timing_key });
+          }) => ({ configs, env, fallbackMaxWorkers, includePatterns, minTotalMemoryBytes, shard_name, timing_key });
           const testRuntimePolicyPath = "./scripts/lib/ci-test-runtime.mts";
           const testRuntimePolicy = existsSync(testRuntimePolicyPath)
             ? await importTargetPlan(testRuntimePolicyPath)
@@ -1789,20 +1805,29 @@ jobs:
           const nodeTestShards = rawNodeTestShards
             .toSorted((a, b) => (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0))
             .map((shard) => {
-              const groups = shard.groups?.map(projectNodeTestGroup);
+              const groups = shard.groups?.map(projectNodeTestGroup) ?? (
+                nodeTestGroupsCodec && shard.configs?.length && !shard.targets?.length
+                  ? [{
+                      configs: shard.configs,
+                      env: shard.env,
+                      includePatterns: shard.includePatterns,
+                      shard_name: shard.shardName,
+                    }]
+                  : undefined
+              );
+              const packedGroups = groups?.length && nodeTestGroupsCodec
+                ? encodeNodeTestGroups(groups)
+                : undefined;
               return {
                 check_name: shard.checkName,
-                runtime: "node",
                 test_runtime_policy: testRuntimeMode,
                 requires_bun: !shard.requiresDist && Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
-                task: "test-shard",
                 shard_name: shard.shardName,
-                groups_gzip_base64:
-                  groups && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined,
+                groups_gzip_base64: packedGroups,
                 groups: groups && !nodeTestGroupsCodec ? groups : undefined,
-                configs: shard.configs,
+                configs: packedGroups ? undefined : shard.configs,
                 env: shard.env,
-                includePatterns: shard.includePatterns,
+                includePatterns: packedGroups ? undefined : shard.includePatterns,
                 pretest_build_mode: shard.pretestBuildMode,
                 git_commits: resolveTestGitCommits(shard),
                 requires_dist: shard.requiresDist,
@@ -3077,6 +3102,7 @@ jobs:
             ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts \
+            ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts \
             ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
             ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts \
             extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts \
@@ -3277,10 +3303,10 @@ jobs:
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             coercion-helpers)
               pnpm check:coercion-helpers
@@ -3344,7 +3370,7 @@ jobs:
         # Main owns full coverage. PRs need an exact-tree coverage receipt from
         # their admitted Node plan; release gates retain their separate merge tree.
         # State cases mutate process-global config and database state. Independent
-        # files let Vitest distribute the complete matrix across four workers.
+        # files let Vitest distribute the complete matrix across up to four workers.
         if: matrix.task == 'baseline-ratchets' && !(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.preflight.outputs.run_check == 'true') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'pull_request' && needs.preflight.outputs.startup_corpus_node_revision && needs.preflight.outputs.startup_corpus_node_revision == needs.preflight.outputs.checkout_revision)
         run: |
           set -euo pipefail
@@ -3359,7 +3385,9 @@ jobs:
             fi
           }
           if [[ -f test/vitest/vitest.startup-corpus-paths.mjs ]]; then
-            run_startup_corpus --maxWorkers=4 src/config/config-startup-corpus.test.ts \
+            # Runner labels can advertise more CPUs than this process can use.
+            startup_workers="$(node -p 'Math.min(4, require("node:os").availableParallelism())')"
+            run_startup_corpus --maxWorkers="$startup_workers" src/config/config-startup-corpus.test.ts \
               src/config/state-startup-corpus*.test.ts
             exit 0
           elif [[ "${{ needs.preflight.outputs.frozen_target }}" != "true" ]]; then
@@ -3941,6 +3969,16 @@ jobs:
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
 
+      - name: Restore test-type incremental state
+        id: test-type-cache
+        if: matrix.task == 'test-types' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-${{ matrix.task }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
+
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
         if: matrix.task == 'lint'
@@ -4281,6 +4319,14 @@ jobs:
               ;;
           esac
 
+      - name: Save test-type incremental state
+        if: success() && matrix.task == 'test-types' && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && steps.test-type-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ steps.test-type-cache.outputs.cache-primary-key }}
+
   # Keep five core stripes; the runner isolates large targets into serial child processes.
   # Ordinary hybrid runs serialize the stripes across two hosted jobs.
   # GitHub, frozen and manual runs retain five jobs. All-Blacksmith keeps one lint job.
@@ -4373,7 +4419,7 @@ jobs:
           done
 
   # Pair four original core stripes; check-test-types owns the fifth and its tail.
-  # Each stripe retains fresh compiler processes and its two-child limit;
+  # Each row retains fresh compiler processes and its two-child limit;
   # all-Blacksmith mode uses one 16-vCPU test-types job for the full workload.
   check-test-types-hosted-core-shard:
     permissions:
@@ -4398,7 +4444,19 @@ jobs:
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
 
+      - name: Restore core test-type incremental state
+        id: test-type-cache
+        if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-tsgo-v1-core-${{ matrix.stripe }}-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json', 'test/tsconfig/*.json', 'scripts/run-tsgo*', 'scripts/lib/local-check-runtime.mts') }}-
+
       - name: Run hosted core test-types stripe
+        env:
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         shell: bash
         run: |
           set -euo pipefail
@@ -4408,9 +4466,24 @@ jobs:
             echo "[skip] target does not support core test-type stripes"
             exit 0
           fi
-          for stripe in "$((2 * ${{ matrix.stripe }} - 1))" "$((2 * ${{ matrix.stripe }}))"; do
-            node scripts/run-tsgo-core-test-shards.mjs --stripe "$stripe/5" --concurrency 2
-          done
+          first="$((2 * ${{ matrix.stripe }} - 1))"
+          last="$((2 * ${{ matrix.stripe }}))"
+          if [ "$FROZEN_TARGET" = "true" ]; then
+            for stripe in "$first" "$last"; do
+              node scripts/run-tsgo-core-test-shards.mjs --stripe "$stripe/5" --concurrency 2
+            done
+          else
+            # One queue fills an idle slot across the former stripe barrier.
+            node scripts/run-tsgo-core-test-shards.mjs --stripe "$first-$last/5" --concurrency 2
+          fi
+
+      - name: Save core test-type incremental state
+        if: success() && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && steps.test-type-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/tsgo-cache
+          key: ${{ steps.test-type-cache.outputs.cache-primary-key }}
 
   check-additional-shard:
     permissions:
@@ -4960,9 +5033,8 @@ jobs:
       max-parallel: 2
       matrix:
         phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
-    # Unassigned Blacksmith Mac jobs can hold both non-canceling main slots.
-    # Use the existing hosted image and budget from the first attempt.
-    runs-on: macos-26
+    # Keep hosted admission and the existing budget while validating Xcode 27.
+    runs-on: xcode-27
     timeout-minutes: 30
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -4983,6 +5055,13 @@ jobs:
           PYTHON
 
       - *platform_checkout_step
+
+      - &select_xcode_step
+        name: Select Xcode 27
+        run: |
+          set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain 27.0
 
       - name: Setup Node environment for Apple assets
         if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
@@ -5226,6 +5305,9 @@ jobs:
         if: matrix.phase == 'tests'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
+          native_test_log_dir="$RUNNER_TEMP/openclaw-native-test-logs"
+          native_test_log_id="$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
           # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
           # Remove once runner toolchains pass with swiftlang/swift-package-manager#10394.
           # Keep the release build above on the default backend.
@@ -5243,17 +5325,32 @@ jobs:
             swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
             echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
-            node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
-            node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
+            if [[ "$HISTORICAL_TARGET" == "true" ]]; then
+              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
+            else
+              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
+              # Rendered Quick Chat keeps its former XCTest process isolation from executor-changing tests.
+              run_apple_command_logged "$native_test_log_dir/default-rendered-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "QuickChatCatalogPresentationTests"
+            fi
+            run_apple_command_logged "$native_test_log_dir/named-$native_test_log_id.log" node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets predate the resource-owner script and its tests.
             # Their original suite still runs only on this disposable macOS worker.
             swift_test_args+=(--no-parallel)
-            swift test "${swift_test_args[@]}"
+            run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" swift test "${swift_test_args[@]}"
           else
             echo "Current CI targets must provide scripts/test-macos-native.mts." >&2
             exit 1
           fi
+
+      - name: Upload macOS native test logs
+        if: ${{ always() && matrix.phase == 'tests' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-native-test-logs
+          path: ${{ runner.temp }}/openclaw-native-test-logs/*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload default-profile chat menu captures
         if: ${{ always() && steps.swift-test.outputs.menu-default-artifact-path != '' }}
@@ -5261,10 +5358,10 @@ jobs:
         with:
           name: macos-chat-menu-captures-default
           path: |
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-window.png
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-menu-*.png
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-capture-status.json
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/capture-export.json
+            ${{ runner.temp }}/openclaw-menu-default-*/*-window.png
+            ${{ runner.temp }}/openclaw-menu-default-*/*-menu-*.png
+            ${{ runner.temp }}/openclaw-menu-default-*/*-capture-status.json
+            ${{ runner.temp }}/openclaw-menu-default-*/capture-export.json
           if-no-files-found: error
           retention-days: 7
 
@@ -5365,31 +5462,14 @@ jobs:
       max-parallel: 2
       matrix:
         phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && (needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || '["release","tests"]') || '["smoke"]') }}
-    # Blacksmith macOS 26 admission stalled while hosted retries completed.
-    # Start each phase on the verified hosted image instead of waiting to retry.
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 150
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *platform_checkout_step
 
-      - name: Select Xcode 26
-        run: |
-          set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
-            if [ -d "$xcode_app/Contents/Developer" ]; then
-              sudo xcode-select -s "$xcode_app/Contents/Developer"
-              break
-            fi
-          done
-          xcodebuild -version
-          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.6* ]]; then
-            echo "error: expected Xcode 26.6, got $xcode_version" >&2
-            exit 1
-          fi
-          swift --version
+      - *select_xcode_step
 
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
@@ -5512,6 +5592,7 @@ jobs:
         if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(
             xcrun simctl list devices available --json | node --input-type=module -e '
               const chunks = [];
@@ -5525,7 +5606,7 @@ jobs:
             '
           )"
           mkdir -p apps/ios/build/LifecycleTestResults
-          xcodebuild \
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.log xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
             -configuration Debug \
@@ -5545,6 +5626,7 @@ jobs:
         if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(
             xcrun simctl list devices available --json | node --input-type=module -e '
               const chunks = [];
@@ -5562,7 +5644,7 @@ jobs:
           )"
           result_bundle="apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult"
           mkdir -p "apps/ios/build/LifecycleTestResults"
-          xcodebuild \
+          run_apple_command_logged "${result_bundle%.xcresult}.log" xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
             -configuration Debug \
@@ -5583,7 +5665,7 @@ jobs:
             -only-testing:OpenClawTests/RootTabsSourceGuardTests \
             -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
             test
-          xcodebuild \
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.log xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClawUITests \
             -configuration Debug \
@@ -5597,6 +5679,7 @@ jobs:
         if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(
             xcrun simctl list devices available --json | node --input-type=module -e '
               const chunks = [];
@@ -5628,7 +5711,8 @@ jobs:
             -only-testing:OpenClawWatchTests/WatchRealtimeMediaTests
             -only-testing:OpenClawWatchTests/WatchGatewayConfigurationTests
           )
-          xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchBuild.log xcodebuild \
+            "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing
           app_path="$(
             xcodebuild "${xcodebuild_args[@]}" -showBuildSettings -json |
               node --input-type=module -e '
@@ -5648,7 +5732,8 @@ jobs:
           xcrun simctl boot "$simulator_id" 2>/dev/null || true
           xcrun simctl bootstatus "$simulator_id" -b
           xcrun simctl install "$simulator_id" "$app_path"
-          xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" \
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.log xcodebuild \
+            "${xcodebuild_args[@]}" "${test_args[@]}" \
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
             test-without-building
 
@@ -5657,7 +5742,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-lifecycle-tests-${{ needs.preflight.outputs.checkout_revision }}
-          path: apps/ios/build/LifecycleTestResults/*.xcresult
+          path: |
+            apps/ios/build/LifecycleTestResults/*.xcresult
+            apps/ios/build/LifecycleTestResults/*.log
           if-no-files-found: warn
           retention-days: 14
 
@@ -5671,7 +5758,7 @@ jobs:
     # PRs and their exact-head release-gate substitutes retain only the build smoke.
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
     # Keep capture on the same verified hosted image as the iOS build phases.
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
     env:
       BUNDLE_DEPLOYMENT: "true"
@@ -5699,22 +5786,7 @@ jobs:
           bundle _2.6.9_ check
           bundle _2.6.9_ exec fastlane --version
 
-      - name: Select Xcode 26
-        run: |
-          set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
-            if [ -d "$xcode_app/Contents/Developer" ]; then
-              sudo xcode-select -s "$xcode_app/Contents/Developer"
-              break
-            fi
-          done
-          xcodebuild -version
-          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.6* ]]; then
-            echo "error: expected Xcode 26.6, got $xcode_version" >&2
-            exit 1
-          fi
-          swift --version
+      - *select_xcode_step
 
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env

@@ -74,9 +74,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     moduleIdIncludesPackage(id, "lit-html") ||
     moduleIdIncludesPackage(id, "@lit/reactive-element")
   ) {
-    // The cache directive belongs to the deferred text-attachment renderer, not
-    // the shared startup vendor chunk. Let its consumer determine when it loads.
-    return normalized.endsWith("/directives/cache.js") ? undefined : "lit-runtime";
+    // Cache and async content directives have only deferred consumers. Keep
+    // their implementation and helpers with those consumers, outside startup.
+    return /\/directives\/(?:cache|until|private-async-helpers)\.js$/u.test(normalized)
+      ? undefined
+      : "lit-runtime";
   }
 
   if (

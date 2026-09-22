@@ -132,6 +132,7 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  preparation?: Buffer;
   expectedIdentity?: string;
   createOpenAdmission?: SqliteWorkerAdmissionFactory;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
@@ -156,7 +157,7 @@ export type SqliteWorkerAdmissionCleanup = {
 export type SqliteWorkerOpenCustody = Pick<
   PreparedSqliteWorkerOpen,
   "maintenanceScope" | "retainCleanup" | "createAdmission" | "stateDatabasePath" | "onNativeStopped"
->;
+> & { preparation?: unknown };
 export type SqliteWorkerInputPreparation = {
   assertCurrent: () => void;
   /** Transfer to a dispatch that reaches enqueue synchronously, before returning its Promise. */

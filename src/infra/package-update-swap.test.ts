@@ -8,6 +8,7 @@ import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
 } from "./package-update-swap.test-support.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -185,6 +186,9 @@ describe("launcher backup capture", () => {
       expect(result.status).toBe("failed");
       expect(result.step.stderrTail).toContain(`differing fields: ${field}`);
       expect(result.step.stderrTail).toContain(`failed copy retained at ${backup}`);
+      expect(updateRunStepsFromResultStep(result.step)[0]?.detail).toBe(
+        "Exit code: 1; Package rollback launcher backup changed: [redacted-path]",
+      );
       expect(beforeActivate).not.toHaveBeenCalled();
       expect((await fs.lstat(launcher)).ino).toBe(original.ino);
       expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(

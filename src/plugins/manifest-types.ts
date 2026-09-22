@@ -26,6 +26,8 @@ export type PluginManifestTheme = {
   name: string;
   description: string;
   source: string;
+  hats?: Record<string, string>;
+  critters?: Record<string, { source: string; title?: string; crossMs?: number }>;
 };
 
 /** Top-level plugin manifest format. */
@@ -527,6 +529,8 @@ export type PluginManifest = {
 };
 
 export type PluginManifestContracts = {
+  /** Executor ids implemented by the plugin's code-mode-executor-api artifact. */
+  codeModeExecutors?: string[];
   embeddedExtensionFactories?: string[];
   agentToolResultMiddleware?: string[];
   trustedToolPolicies?: string[];

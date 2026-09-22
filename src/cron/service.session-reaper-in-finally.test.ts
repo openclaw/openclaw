@@ -341,7 +341,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
 
     await withCronServiceStateForTest(state, async () => {
-      await ensureLoaded(state, { skipRecompute: true });
+      await ensureLoaded(state);
       const failure = new Error("cron store unavailable");
       const loadSpy = vi
         .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")

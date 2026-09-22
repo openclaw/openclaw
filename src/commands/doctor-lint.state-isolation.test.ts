@@ -13,7 +13,6 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider } from "../agents/mcp-oauth-provider.js";
 import { resolveMcpOAuthAccessToken } from "../agents/mcp-oauth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobsStorePathFromConfig, saveCronStore } from "../cron/store.js";
@@ -41,7 +40,10 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectDoctorFindings, runDoctorLintCli } from "./doctor-lint.js";
-import { snapshotDoctorLintSqliteFamily } from "./doctor-lint.test-support.js";
+import {
+  seedDoctorLintMcpToken,
+  snapshotDoctorLintSqliteFamily,
+} from "./doctor-lint.test-support.js";
 import { createAppliedLegacyProposal } from "./doctor-skill-workshop-sqlite.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -905,11 +907,7 @@ describe("doctor lint state isolation", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(configPath, "{}\n");
-    await createMcpOAuthClientProvider({ identity }).saveTokens({
-      access_token: "stored-inspection-token-not-real",
-      token_type: "Bearer",
-      expires_in: 3600,
-    });
+    await seedDoctorLintMcpToken(identity);
     const databasePath = resolveOpenClawStateSqlitePath(process.env);
     await closeOpenClawStateDatabaseByPathAsync(databasePath);
     const lock = new DatabaseSync(databasePath);

@@ -44,7 +44,10 @@ import * as stateDb from "../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { createWorkerConnection, type WorkerConnection } from "./worker-connection.js";
-import { WorkerFaultPlacementLifecycle } from "./worker-fault-placement-lifecycle.test-support.js";
+import {
+  seedFaultAttachedEnvironment,
+  WorkerFaultPlacementLifecycle,
+} from "./worker-fault-placement-lifecycle.test-support.js";
 import * as workerRpc from "./worker-rpc-clients.js";
 
 export const SESSION_ID = "fault-session";
@@ -159,8 +162,6 @@ type WorkerClientOptions = {
 export class ComposedGatewayHarness {
   readonly socketPath: string;
   readonly cfg: OpenClawConfig;
-  readonly database: stateDb.OpenClawStateDatabase;
-  readonly store: envStore.WorkerEnvironmentStore;
   readonly placementStore: placements.WorkerSessionPlacementStore;
   readonly requests: Array<{ method: string; params: unknown }> = [];
   readonly admissions: WorkerConnectionIdentity[] = [];
@@ -201,14 +202,27 @@ export class ComposedGatewayHarness {
       sessionKey: SESSION_KEY,
       storePath,
     });
-    return new ComposedGatewayHarness(root, sessionTarget);
+    const database = stateDb.openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+    });
+    const store = await envStore.createWorkerEnvironmentStore({ database });
+    await seedFaultAttachedEnvironment(store, {
+      environmentId: ENVIRONMENT_ID,
+      sessionId: SESSION_ID,
+      credential: CREDENTIAL,
+      sshEndpoint: SSH_ENDPOINT,
+      handshake: HANDSHAKE,
+      rpcSetVersion: WORKER_RPC_SET_VERSION,
+    });
+    return new ComposedGatewayHarness(root, sessionTarget, database, store);
   }
 
   private constructor(
     readonly root: string,
     readonly sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>,
+    readonly database: stateDb.OpenClawStateDatabase,
+    readonly store: envStore.WorkerEnvironmentStore,
   ) {
-    const stateDir = path.join(root, "state");
     this.socketPath = path.join(root, "gateway.sock");
     this.cfg = {
       agents: { list: [{ id: "main", default: true }] },
@@ -220,14 +234,9 @@ export class ComposedGatewayHarness {
         profiles: { development: { provider: "fake", settings: { region: "test" } } },
       },
     };
-    this.database = stateDb.openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    this.store = envStore.createWorkerEnvironmentStore({ database: this.database });
     this.placementStore = placements.createWorkerSessionPlacementStore({
       database: this.database,
     });
-    this.seedAttachedEnvironment();
     this.liveEventsValue = this.createLiveEvents(true);
     this.placementLifecycle = new WorkerFaultPlacementLifecycle({
       agentId: "main",
@@ -285,11 +294,11 @@ export class ComposedGatewayHarness {
     this.placementLifecycle.settleRun(runId);
   }
 
-  createDescriptor(params: WorkerClientOptions = {}): WorkerLaunchDescriptor {
+  async createDescriptor(params: WorkerClientOptions = {}): Promise<WorkerLaunchDescriptor> {
     const epoch = params.epoch ?? this.epoch;
     const credential = params.admissionProof ?? CREDENTIAL;
     const runId = params.runId ?? RUN_ID;
-    const claim = this.placementLifecycle.prepareRun(runId, credential);
+    const claim = await this.placementLifecycle.prepareRun(runId, credential);
     if (claim.owner.ownerEpoch !== epoch) {
       throw new Error("fault descriptor epoch does not match its exact placement claim");
     }
@@ -328,8 +337,8 @@ export class ComposedGatewayHarness {
     };
   }
 
-  createClients(params: WorkerClientOptions = {}): WorkerClients {
-    const descriptor = this.createDescriptor(params);
+  async createClients(params: WorkerClientOptions = {}): Promise<WorkerClients> {
+    const descriptor = await this.createDescriptor(params);
     const epoch = descriptor.admission.ownerEpoch;
     const connection = createWorkerConnection({
       endpoint: { kind: "unix", socketPath: this.socketPath },
@@ -371,7 +380,7 @@ export class ComposedGatewayHarness {
     this.terminateSockets();
   }
 
-  reclaimWithCredential(credential: string, runId: string): number {
+  async reclaimWithCredential(credential: string, runId: string): Promise<number> {
     const placement = this.placementStore.get(SESSION_ID);
     const staleClaim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
     if (
@@ -388,13 +397,13 @@ export class ComposedGatewayHarness {
     if (!attached || attached.state !== "attached") {
       throw new Error("fault environment is not attached");
     }
-    const idle = this.store.transition({
+    const idle = await this.store.transition({
       environmentId: ENVIRONMENT_ID,
       from: "attached",
       to: "idle",
       expectedOwnerEpoch: attached.ownerEpoch,
     });
-    const next = this.store.transition({
+    const next = await this.store.transition({
       environmentId: ENVIRONMENT_ID,
       from: "idle",
       to: "attached",
@@ -419,7 +428,7 @@ export class ComposedGatewayHarness {
     ) {
       throw new Error("replacement live-event binding failed");
     }
-    this.placementLifecycle.prepareRun(runId, credential);
+    await this.placementLifecycle.prepareRun(runId, credential);
     return next.ownerEpoch;
   }
 
@@ -474,51 +483,6 @@ export class ComposedGatewayHarness {
       rootPath: this.root,
     });
     await fs.rm(this.root, { recursive: true, force: true });
-  }
-
-  private seedAttachedEnvironment(): void {
-    let environment = this.store.createIntent({
-      environmentId: ENVIRONMENT_ID,
-      providerId: "fake",
-      profileId: "development",
-      profileSnapshot: { settings: { region: "test" } },
-      provisionOperationId: "provision:fault-environment",
-    });
-    const transitions = [
-      { to: "provisioning", patch: {} },
-      { to: "bootstrapping", patch: { leaseId: "lease-fault", sshEndpoint: SSH_ENDPOINT } },
-      {
-        to: "ready",
-        patch: {
-          bootstrapReceipt: HANDSHAKE,
-          credential: {
-            credentialHash: hashWorkerCredential([CREDENTIAL, "ready"].join("-")),
-            sessionId: null,
-            rpcSetVersion: WORKER_RPC_SET_VERSION,
-            expiresAtMs: Date.now() + 60_000,
-          },
-        },
-      },
-      {
-        to: "attached",
-        patch: {
-          attachedSessionIds: [SESSION_ID],
-          credential: {
-            credentialHash: hashWorkerCredential(CREDENTIAL),
-            sessionId: SESSION_ID,
-            rpcSetVersion: WORKER_RPC_SET_VERSION,
-            expiresAtMs: Date.now() + 60_000,
-          },
-        },
-      },
-    ] as const;
-    for (const transition of transitions) {
-      environment = this.store.transition({
-        environmentId: ENVIRONMENT_ID,
-        from: environment.state,
-        ...transition,
-      });
-    }
   }
 
   private createLiveEvents(corroborateOwner: boolean): liveEvents.WorkerLiveEventReceiver {

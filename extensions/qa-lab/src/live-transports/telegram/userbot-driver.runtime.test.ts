@@ -256,6 +256,9 @@ describe("Telegram userbot driver runtime", () => {
     fs.cpSync(path.join(process.cwd(), ".agents", "skills", "telegram-e2e-userbot"), skillPath, {
       recursive: true,
     });
+    const bootstrapPath = path.join("extensions", "qa-lab", "src", "qa-credentials-bootstrap.ts");
+    fs.mkdirSync(path.dirname(path.join(repoRoot, bootstrapPath)), { recursive: true });
+    fs.copyFileSync(path.join(process.cwd(), bootstrapPath), path.join(repoRoot, bootstrapPath));
     const runtime = await loadTelegramUserbotSkillRuntime({ repoRoot, env: {} });
 
     expect(runtime.userDriverPath).toBe(

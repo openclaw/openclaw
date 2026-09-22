@@ -1,6 +1,7 @@
 // Imported after the shared Gateway harness installs its model-boundary mocks.
 import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { ToolsInvokeResult } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareAgentCommandExecutionIdentity } from "../../agents/agent-command-execution-identity.js";
 import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.js";
@@ -30,6 +31,10 @@ import {
   closeGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "../device-revocation.js";
+import {
+  GatewayOperatorAccessDeniedError,
+  resolveGatewayOperatorAccessAuthority,
+} from "../operator-access-policy.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -118,6 +123,9 @@ describe("visitor access admitted caller", () => {
         const grants = createVisitorGrantStore(state.env);
         let previous: Grant | undefined;
         let renewal: PromiseSettledResult<ToolsInvokeResult> | undefined;
+        let revocationState:
+          | { ownerBefore: boolean; callerCurrent: boolean; ownerAfter: boolean }
+          | undefined;
         let commitGranted = false;
         const stages: string[] = [];
         let proof: Promise<void> | undefined;
@@ -198,10 +206,14 @@ describe("visitor access admitted caller", () => {
                       const createAdmission =
                         mutationAdmission.createSqliteWorkerOperationAdmission;
                       const revokeSource = () => {
-                        expect(hasAgentRunContextExecutionOwner(runId)).toBe(true);
+                        const ownerBefore = hasAgentRunContextExecutionOwner(runId);
                         invalidateGatewayDeviceRevocation(context, deviceId, "operator");
-                        expect(caller.isCurrent()).toBe(false);
-                        expect(hasAgentRunContextExecutionOwner(runId)).toBe(true);
+                        // Native admission catches callback errors; assert after settlement.
+                        revocationState = {
+                          ownerBefore,
+                          callerCurrent: caller.isCurrent(),
+                          ownerAfter: hasAgentRunContextExecutionOwner(runId),
+                        };
                       };
                       const intercept = vi
                         .spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission")
@@ -295,6 +307,11 @@ describe("visitor access admitted caller", () => {
             expect(original.expiresAt).toBeGreaterThan(original.createdAt);
             return;
           }
+          expect(revocationState).toEqual({
+            ownerBefore: true,
+            callerCurrent: false,
+            ownerAfter: false,
+          });
           expect(stages).toEqual(["transaction", "commit"]);
           const outcome = expectDefined(renewal, "renewal result missing");
           expect(outcome.status).toBe("rejected");
@@ -336,6 +353,9 @@ describe("visitor access admitted caller", () => {
       const staffId = ensureProfileForEmail("staff@example.test").id;
       setUserProfileRole(staffId, "writer");
       const staff = linkEmail("staff-alias@example.test", staffId);
+      const unassigned = getUserProfileListItem(
+        ensureProfileForEmail("existing-unassigned@example.test").id,
+      );
       const now = Date.now();
       const day = 86_400_000;
       const active = {
@@ -364,9 +384,13 @@ describe("visitor access admitted caller", () => {
         resolveGatewayContext: resolvePreviousContext,
       });
       try {
+        for (const profile of [unassigned, staff, owner]) {
+          expect(resolveGatewayOperatorAccessAuthority(profile.id, config)).toBeUndefined();
+        }
         const existing = createVisitorGrantStore(state.env);
         await existing.register(active.email, active);
         await existing.register(expired.email, expired);
+        expect(await existing.lookup(active.email)).toEqual(active);
         expect(provider.writes).toEqual([]);
       } finally {
         closeGatewayDeviceRevocation(previousContext);
@@ -393,11 +417,24 @@ describe("visitor access admitted caller", () => {
       });
       try {
         const grants = createVisitorGrantStore(state.env);
-        expect((await grants.entries()).map(({ key, value }) => ({ key, value }))).toEqual([
-          { key: active.email, value: active },
-        ]);
         expect(provider.emails()).toEqual([active.email, unmanaged]);
         expect(provider.writes).toEqual(["PUT"]);
+        const qualified = expectDefined(
+          await grants.lookup(active.email),
+          "qualified grant missing",
+        );
+        const grantId = z.uuid().parse(qualified.grantId);
+        expect((await grants.entries()).map(({ key, value }) => ({ key, value }))).toEqual([
+          { key: active.email, value: { ...active, grantId } },
+        ]);
+        expect(() =>
+          resolveGatewayOperatorAccessAuthority(unassigned.id, restrictedConfig),
+        ).toThrow(GatewayOperatorAccessDeniedError);
+        for (const profile of [staff, owner]) {
+          expect(
+            resolveGatewayOperatorAccessAuthority(profile.id, restrictedConfig),
+          ).toBeUndefined();
+        }
         const reopenedOwner = getUserProfileListItem(owner.id);
         const connection = new AbortController();
         const client: GatewayClient = {
@@ -458,11 +495,12 @@ describe("visitor access admitted caller", () => {
           expect(renewal).toContain(`Renewed @${active.githubLogin} (${active.email})`);
           expect(renewal).toContain('Gateway access: existing role "writer" retained');
           const renewed = expectDefined(await grants.lookup(active.email), "renewal missing");
-          expect(renewed).toEqual({ ...active, expiresAt: expect.any(Number) });
+          expect(renewed).toEqual({ ...active, grantId, expiresAt: expect.any(Number) });
           expect(renewed.expiresAt).toBeGreaterThan(active.expiresAt);
           expect(provider.writes).toEqual(["PUT"]);
           expect(getUserProfileListItem(staffId)).toEqual(staff);
           expect(getUserProfileListItem(owner.id)).toEqual(owner);
+          expect(getUserProfileListItem(unassigned.id)).toEqual(unassigned);
         } finally {
           caller.release();
           connection.abort();

@@ -847,7 +847,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     expect(readSecretStoreExecEnvironment({ includeSecretSentinels: true })).toEqual({});
     expect(listGitHubOAuthRecords()).toEqual([]);
     expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);
-    purgeExpiredSecretStoreEntries();
+    await purgeExpiredSecretStoreEntries();
     await cleanupRetiredManagedGitHubProfiles({ config });
     expect(await fs.readFile(path.join(dir, "hosts.yml"), "utf8")).toContain(tokens.accessToken);
     const database = openOpenClawStateDatabase();

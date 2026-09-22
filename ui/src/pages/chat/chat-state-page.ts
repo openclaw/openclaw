@@ -18,6 +18,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
+import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import {
@@ -307,7 +308,7 @@ export function createPageState(
     });
     renderLifecycle.invalidate();
   };
-  attachChatRealtimeActions(state);
+  attachChatRealtimeActions(state, () => !chatProviderReviewRow(state)?.providerReview);
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
   state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;
@@ -340,7 +341,7 @@ export function createPageState(
       renderLifecycle.invalidate();
       return;
     }
-    const outcome = removeQueuedMessage(state, id);
+    const outcome = removeQueuedMessage(state, id, { discard: true });
     if (outcome === "removed") {
       setChatError(state, null);
       void resumeStoredChatOutboxes(state);

@@ -17,7 +17,7 @@ import {
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 import type {
   OriginalManagedServiceRuntime,

@@ -3,7 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  escapeRegExp,
+  formatEnvelopeTimestamp,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildPluginBindingApprovalCustomId,
@@ -18,6 +22,7 @@ import type {
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -50,6 +55,7 @@ import {
 } from "./callback-query-answer-state.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import type { TelegramPollRegistryEntry } from "./poll-registry.js";
+import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
@@ -251,16 +257,7 @@ async function dispatchSpooledPrivateText(
 
 function installTelegramTopicStateForTest(): void {
   resetTelegramTopicNameCacheForTest();
-  const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>(
-    options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0],
-  ) => pluginStateTestRuntime.createPluginStateKeyedStoreForTests<T>("telegram", options);
-  const openSyncKeyedStore: TelegramRuntime["state"]["openSyncKeyedStore"] = <T>(
-    options: Parameters<TelegramRuntime["state"]["openSyncKeyedStore"]>[0],
-  ) => pluginStateTestRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
-  setTelegramRuntime({
-    state: { openKeyedStore, openSyncKeyedStore },
-    channel: {},
-  } as TelegramRuntime);
+  setTelegramPluginStateRuntimeForTests();
 }
 
 async function dispatchSpooledNativeStop(
@@ -614,7 +611,7 @@ describe("createTelegramBot", () => {
     });
     setTelegramRuntime({
       state: { openKeyedStore, openSyncKeyedStore },
-      channel: {},
+      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
     } as TelegramRuntime);
     let sequentialKey: string | string[] | undefined;
     sequentializeSpy.mockImplementationOnce(
@@ -669,7 +666,7 @@ describe("createTelegramBot", () => {
     });
     setTelegramRuntime({
       state: { openKeyedStore, openSyncKeyedStore },
-      channel: {},
+      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
     } as TelegramRuntime);
     createTelegramBot({ token: "tok" });
     const update = {
@@ -726,7 +723,10 @@ describe("createTelegramBot", () => {
     });
     const openKeyedStore: TelegramRuntime["state"]["openKeyedStore"] = <T>() =>
       ({ lookup }) as unknown as PluginStateKeyedStore<T>;
-    setTelegramRuntime({ state: { openKeyedStore }, channel: {} } as TelegramRuntime);
+    setTelegramRuntime({
+      state: { openKeyedStore },
+      channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
+    } as TelegramRuntime);
     createTelegramBot({ token: "tok" });
     const update = { update_id: 42, poll_answer: pollAnswer };
     const reachedHandlers = vi.fn();
@@ -3880,38 +3880,33 @@ describe("createTelegramBot", () => {
       ctx: Record<string, unknown>,
     ) => Promise<void>;
 
-    await callbackHandler({
-      update: { update_id: 222 },
-      callbackQuery: {
-        id: "cb-1",
-        data: "ping",
+    const callbackCtx = (id: string, data: string) =>
+      makeCallbackRetryContext({
+        updateId: 222,
+        id,
+        data,
+        messageId: 9001,
         from: { id: 789, username: "testuser" },
-        message: {
-          chat: { id: 123, type: "private" },
-          date: 1736380800,
-          message_id: 9001,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({}),
-    });
-    await callbackHandler({
-      update: { update_id: 222 },
-      callbackQuery: {
-        id: "cb-question-duplicate",
-        data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
-        from: { id: 789, username: "testuser" },
-        message: {
-          chat: { id: 123, type: "private" },
-          date: 1736380800,
-          message_id: 9001,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({}),
-    });
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cb-question-duplicate");
+        message: { chat: { id: 123, type: "private" } },
+      });
+    const resolveQuestion = vi
+      .spyOn(questionGatewayRuntime, "resolveOption")
+      .mockRejectedValue(new Error("Unexpected duplicate question resolution"));
+    try {
+      // Admission owns dedupe state; the duplicate handler must still acknowledge its button.
+      await runTelegramMiddlewareChain({
+        ctx: callbackCtx("cb-1", "ping"),
+        finalHandler: callbackHandler,
+      });
+      await callbackHandler(
+        callbackCtx("cb-question-duplicate", "tgq1:ask_0123456789abcdef0123456789abcdef:1"),
+      );
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cb-question-duplicate");
+      expect(resolveQuestion).not.toHaveBeenCalled();
+    } finally {
+      resolveQuestion.mockRestore();
+    }
 
     replySpy.mockClear();
 
@@ -4933,7 +4928,7 @@ describe("createTelegramBot", () => {
     resetHarnessSpies();
     loadConfig.mockReturnValue(testCase.config);
     await dispatchMessage({
-      message: testCase.message,
+      message: { message_id: 1, ...testCase.message },
       me: testCase.me,
       botRequireMention: testCase.botRequireMention,
     });
@@ -5505,18 +5500,14 @@ describe("createTelegramBot", () => {
       },
     });
 
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
+    await dispatchMessage({
       message: {
+        message_id: 1,
         chat: { id: -100123456789, type: "group", title: "Test Group" },
         from: { id: 123456789, username: "testuser" },
         text: "/status",
         date: 1736380800,
       },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
@@ -5828,18 +5819,14 @@ describe("createTelegramBot", () => {
     };
     loadConfig.mockReturnValue(config);
 
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-    await handler({
+    await dispatchMessage({
       message: {
+        message_id: 1,
         chat: { id: 123, type: "group", title: "Routing" },
         from: { id: 999, username: "ops" },
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);

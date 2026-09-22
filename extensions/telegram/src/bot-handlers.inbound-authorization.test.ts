@@ -1,17 +1,20 @@
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
+  createChannelAdmissionAudit,
   createHostChannelInboundEventContextBuilder,
+  createHostChannelIngressRuntime,
   readChannelContextAdmissionEvidence,
-  registerChannelIngressHostOwner,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
+import { setTelegramRuntime } from "./runtime.js";
 
 describe("Telegram inbound admission authorization", () => {
   it("binds a forum admission to the finalized parent and topic scope", async () => {
@@ -29,6 +32,22 @@ describe("Telegram inbound admission authorization", () => {
         },
       },
     } as OpenClawConfig;
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    const gatewayContext = {
+      channelAdmissionAudit: audit,
+      getRuntimeConfig: () => cfg,
+    } as GatewayRequestHandlerOptions["context"];
+    let live = true;
+    const owner = {
+      channelId: "telegram",
+      record: {},
+      epoch: {},
+      isLive: () => live,
+      resolveGatewayContext: () => gatewayContext,
+    };
+    const runtime = createPluginRuntimeMock();
+    runtime.channel.inbound.ingress = createHostChannelIngressRuntime(owner);
+    setTelegramRuntime(runtime);
     const params = {
       accountId: "default",
       ownerAgentId: "main",
@@ -76,9 +95,6 @@ describe("Telegram inbound admission authorization", () => {
       throw new Error("expected forum admission");
     }
 
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
-    const owner = { channelId: "telegram", record: {}, epoch: {}, isLive: () => true };
-    const clearOwner = registerChannelIngressHostOwner(owner);
     try {
       const sessionKey = "agent:main:telegram:group:forum:topic:99";
       const ingress = await gate.resolveChannelIngress({
@@ -117,8 +133,8 @@ describe("Telegram inbound admission authorization", () => {
         decisionCoverage: "enforced",
       });
     } finally {
-      clearOwner();
-      clearCollection();
+      live = false;
+      audit.close();
     }
   });
 });

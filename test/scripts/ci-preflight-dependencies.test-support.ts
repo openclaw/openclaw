@@ -57,8 +57,9 @@ registerHooks({
       OPENCLAW_CI_RUNNER_PROFILE: "github",
       OPENCLAW_CI_RUN_NODE: "true",
       OPENCLAW_CI_RUN_WINDOWS: "true",
-      // Exercise the same import closure without unrelated source-impact graph walks.
-      OPENCLAW_CI_CHANGED_PATHS_JSON: '["test/scripts/managed-child-process.test.ts"]',
+      // A product test keeps the real import guard on precise planning; tooling
+      // owners select the full maintainer plan, whose packing is covered separately.
+      OPENCLAW_CI_CHANGED_PATHS_JSON: '["src/infra/retry.test.ts"]',
     },
   });
   return {

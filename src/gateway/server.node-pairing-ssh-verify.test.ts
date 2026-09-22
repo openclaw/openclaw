@@ -6,7 +6,7 @@ import { writeConfigFile } from "../config/config.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { GatewayNodePairingConfig } from "../config/types.gateway.js";
 import * as pairingApprovals from "../infra/device-pairing-approval.js";
-import { withDevicePairingLock } from "../infra/device-pairing-state.js";
+import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
 import {
   getPairedDevice,
   listDevicePairing,

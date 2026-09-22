@@ -1653,7 +1653,7 @@ function comparisonRow() {
     workload: {
       promptSha256: "fixed-prompt",
       fixtureSha256: "fixed-fixture",
-      settings: { thinking: "off", timeoutSeconds: 120 },
+      settings: { executor: "node", thinking: "off", timeoutSeconds: 120 },
     },
     gateway: {
       upstreamCalls: 1,
@@ -1687,7 +1687,7 @@ it("includes the exact process-helper bytes in the fixed workload fingerprint", 
 });
 
 describe("fixed Gateway matrix comparisons", () => {
-  it.each(["prompt", "fixture", "thinking", "timeout"] as const)(
+  it.each(["prompt", "fixture", "thinking", "timeout", "executor"] as const)(
     "rejects a changed %s instead of comparing different workloads",
     (field) => {
       const baseline = comparisonRow();
@@ -1698,8 +1698,10 @@ describe("fixed Gateway matrix comparisons", () => {
         candidate.workload.fixtureSha256 = "changed";
       } else if (field === "thinking") {
         candidate.workload.settings.thinking = "high";
-      } else {
+      } else if (field === "timeout") {
         candidate.workload.settings.timeoutSeconds = 240;
+      } else {
+        candidate.workload.settings.executor = "quickjs";
       }
       expect(() => compareCodeModeMatrixResults([baseline], [candidate])).toThrow(
         "workload changed",

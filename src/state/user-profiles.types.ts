@@ -5,6 +5,40 @@ export const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
 
 export type UserProfileAvatarMime = (typeof USER_PROFILE_AVATAR_MIME_TYPES)[number];
 
+export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";
+
+export type UserProfileDisplay = {
+  id: string;
+  displayName: string | null;
+  avatarRevision: string;
+  hasAvatar: boolean;
+};
+
+export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
+
+export type UserChannelIdentity = { channelId: string; accountId: string; senderId: string };
+export type UserChannelIdentityLink = { profileId: string; identity: UserChannelIdentity };
+export type UserChannelIdentityAuthorityFacts = {
+  profileId: string;
+  role: string | null;
+  emails: string[];
+  loginIdentities: string[];
+};
+
+export type UserChannelIdentityResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; kind: "conflict" | "not-found" }
+  | { ok: false; kind: "owner"; code: UserProfileOwnerErrorCode };
+
+export type UserChannelIdentityWorkerOperations = {
+  "userProfiles.channelIdentity.change": {
+    input: { action: "link" | "unlink"; profileId: string; identity: UserChannelIdentity };
+    output: UserChannelIdentityResult<
+      { kind: "linked"; link: UserChannelIdentityLink } | { kind: "unlinked"; removed: boolean }
+    >;
+  };
+};
+
 export type UserProfilesDatabase = {
   user_profiles: {
     id: string;

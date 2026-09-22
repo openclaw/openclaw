@@ -7,6 +7,7 @@ import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {
   isJavaScriptModulePath,
+  resolvePluginLoaderTryNative,
   isPluginSourceModulePath,
   supportsBunRuntimeOnResolveTargets,
 } from "./native-module-require.js";
@@ -33,11 +34,7 @@ import {
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
-import {
-  preparePluginLoaderAliases,
-  isPluginSdkAliasSpecifier,
-  resolvePluginLoaderTryNative,
-} from "./sdk-alias.js";
+import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 
 // Compiled recovery shares process code identity without closing over the
 // binder's predecessor instance or source-graph state.
@@ -145,6 +142,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     pluginModulePath: params.source,
     devSourceRoot: params.devSourceRoot,
     allowedParentRoots: [artifact.boundaryRoot],
+    pluginSdkResolution: params.pluginSdkResolution,
   });
   if (!nativeHooks) {
     const capturedSource = artifact.resolve(params.source);

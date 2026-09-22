@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
+import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.ts";
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { resolveLobsterPetMode } from "./lobster-pet-contract.ts";
@@ -18,7 +18,8 @@ export type LobsterPetElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   visitsEnabled: boolean;
   residentEnabled: boolean;
-  critters: readonly ThemeCritterId[];
+  critters: readonly string[];
+  critterArtwork: ThemeArtwork["critters"];
 };
 
 export function createPet(seed: number, mode: LobsterPetMode = "idle"): LobsterPetElement {

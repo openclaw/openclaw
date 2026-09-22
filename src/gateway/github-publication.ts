@@ -274,7 +274,8 @@ export function createGitHubPublicationCoordinator(params: {
 
   const processRow = (
     initial: PublicationRow,
-    validateAuthority: () => boolean,
+    validateExecution: () => boolean,
+    assertInvocationCurrent?: () => void,
   ): Promise<SessionGitHubPublicationResult> => {
     if (initial.status === "published" || initial.status === "failed") {
       return Promise.resolve(publicationResult(initial));
@@ -290,13 +291,18 @@ export function createGitHubPublicationCoordinator(params: {
         }
         return params.placements.withWorkspaceExclusion(claimed.session_id, async (assertOwned) => {
           const lease = await acquireWorktreeRunLease(claimed.worktree_id);
+          const validateCustody = () => {
+            assertOwned();
+            return validateExecution() && ownsExecution(claimed.request_id, instanceId);
+          };
           try {
             assertOwned();
             return await executeGitHubPublication({
               initial: claimed,
+              validateCustody,
               validateAuthority: () => {
-                assertOwned();
-                return validateAuthority() && ownsExecution(claimed.request_id, instanceId);
+                assertInvocationCurrent?.();
+                return validateCustody();
               },
               projectResult: publicationResult,
               bindWorkspaceSnapshot,

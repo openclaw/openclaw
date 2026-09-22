@@ -137,7 +137,10 @@ export function createWorkerTurnRunOwner(params: {
     claim,
     sessionKey,
     signal,
-    dispose: () => clearActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile),
+    dispose: () => {
+      turn.replyOperation?.detachBackend(handle);
+      clearActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile);
+    },
   };
 }
 

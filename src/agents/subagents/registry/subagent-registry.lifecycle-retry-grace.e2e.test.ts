@@ -12,7 +12,7 @@ import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js"
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
-import { testing as subagentAnnounceTesting } from "../announce/subagent-announce.js";
+import { announceTesting as subagentAnnounceTesting } from "../announce/subagent-announce-overrides.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import {
   getAgentResultsForChildSession,
@@ -106,11 +106,6 @@ vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
 }));
 
-const loadSubagentRegistryRuntimeForTest = async () =>
-  ({
-    replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteerCore,
-  }) as unknown as typeof import("./subagent-registry-runtime.js");
-
 describe("subagent registry lifecycle error grace", () => {
   let previousFastTestEnv: string | undefined;
   let testState: OpenClawTestState;
@@ -172,7 +167,6 @@ describe("subagent registry lifecycle error grace", () => {
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig:
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
-      loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
     });
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
@@ -194,6 +188,8 @@ describe("subagent registry lifecycle error grace", () => {
         return event === undefined ? undefined : { event };
       },
       findSessionTranscriptArchiveEventReadOnly: async () => undefined,
+      readSessionMessagesAsync: async ({ sessionKey }) =>
+        chatHistoryBySessionKey.get(sessionKey ?? "") ?? [],
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig:
         loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
@@ -238,8 +234,17 @@ describe("subagent registry lifecycle error grace", () => {
       }
       await vi.advanceTimersByTimeAsync(100);
       await flushAsync();
+      await vi.dynamicImportSettled();
     }
-    throw new Error(`expected ${expectedCount} agent call(s), got ${getAgentCalls().length}`);
+    const pending = mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY).map((run) => ({
+      runId: run.runId,
+      execution: run.execution,
+      delivery: run.delivery,
+      requesterSettleWake: run.requesterSettleWake,
+    }));
+    throw new Error(
+      `expected ${expectedCount} agent call(s), got ${getAgentCalls().length}: ${JSON.stringify(pending)}`,
+    );
   };
 
   function registerCompletionRun(

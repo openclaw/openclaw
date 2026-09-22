@@ -1,4 +1,4 @@
-import type { ThemeId } from "./theme-ids.js";
+import type { ThemeId } from "./theme-ids.ts";
 export {
   BUILTIN_THEME_IDS,
   THEME_LOCAL_ID_MAX_LENGTH,
@@ -9,7 +9,7 @@ export {
   type BuiltinThemeId,
   type ThemeId,
   type ThemeMode,
-} from "./theme-ids.js";
+} from "./theme-ids.ts";
 
 /** Portable theme data shared by profile preferences, plugins, and the Control UI. */
 export type ThemeColorMode = "light" | "dark";
@@ -43,8 +43,12 @@ export type ThemeCritterId = (typeof THEME_CRITTER_IDS)[number];
 export function isThemeCritterId(value: unknown): value is ThemeCritterId {
   return THEME_CRITTER_IDS.some((id) => id === value);
 }
-export const THEME_AVATAR_HAT_IDS = ["fedora"] as const;
+export const THEME_AVATAR_HAT_IDS = ["fedora", "crown", "santa", "party", "pumpkin"] as const;
 export type ThemeAvatarHatId = (typeof THEME_AVATAR_HAT_IDS)[number];
+export function isThemeAvatarHatId(value: unknown): value is ThemeAvatarHatId {
+  return THEME_AVATAR_HAT_IDS.some((id) => id === value);
+}
+export const THEME_ARTWORK_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 export const THEME_WORKING_PHRASES_MAX = 24;
 export const THEME_WORKING_PHRASE_MAX_LENGTH = 24;
 export const MAX_THEME_DEFINITION_BYTES = 4096;
@@ -59,10 +63,14 @@ export type ThemeDefinition = {
   description: string;
   mascot?: ThemeMascot;
   workingPhrases?: string[];
-  critters?: ThemeCritterId[];
-  avatarHat?: ThemeAvatarHatId;
+  critters?: string[];
+  avatarHat?: string;
   light?: ThemePalette;
   dark?: ThemePalette;
+};
+export type ThemeArtwork = {
+  hats?: Record<string, { url: string }>;
+  critters?: Record<string, { url: string; title?: string; crossMs?: number }>;
 };
 export type ThemeDescriptor = {
   id: ThemeId;
@@ -73,27 +81,32 @@ export type ThemeDescriptor = {
   pluginId?: string;
   mascot?: ThemeMascot;
   workingPhrases?: readonly string[];
-  critters?: readonly ThemeCritterId[];
-  avatarHat?: ThemeAvatarHatId;
+  critters?: readonly string[];
+  avatarHat?: string;
+  artwork?: ThemeArtwork;
 };
 export type ThemeCatalogEntry = ThemeDescriptor & { definition?: ThemeDefinition };
 export type ThemeBranding = {
   mascot: ThemeMascot;
   workingPhrases?: readonly string[];
-  critters: readonly ThemeCritterId[];
-  avatarHat?: ThemeAvatarHatId;
+  critters: readonly string[];
+  avatarHat?: string;
+  artwork?: ThemeArtwork;
 };
 
 const DEFAULT_THEME_CRITTERS: readonly ThemeCritterId[] = [];
 
 export function resolveThemeBranding(
-  source: Pick<ThemeDescriptor, "mascot" | "workingPhrases" | "critters" | "avatarHat"> | undefined,
+  source:
+    | Pick<ThemeDescriptor, "mascot" | "workingPhrases" | "critters" | "avatarHat" | "artwork">
+    | undefined,
 ): ThemeBranding {
   return {
     mascot: source?.mascot ?? "claw",
     workingPhrases: source?.workingPhrases,
     critters: source?.critters ?? DEFAULT_THEME_CRITTERS,
     avatarHat: source?.avatarHat,
+    ...(source?.artwork ? { artwork: source.artwork } : {}),
   };
 }
 
@@ -295,8 +308,11 @@ function normalizePalette(value: unknown, mode: ThemeColorMode): ThemePalette {
 }
 
 /** Rejects executable CSS and incomplete palettes before they reach storage or a stylesheet. */
-export function normalizeThemeDefinition(value: unknown): ThemeDefinition {
-  const record = requireRecord(value, "theme");
+export function normalizeThemeDefinition(
+  input: unknown,
+  options?: { hatIds?: readonly string[]; critterIds?: readonly string[] },
+): ThemeDefinition {
+  const record = requireRecord(input, "theme");
   requireKeys(
     record,
     ["name", "description", "mascot", "workingPhrases", "critters", "avatarHat", "light", "dark"],
@@ -336,10 +352,11 @@ export function normalizeThemeDefinition(value: unknown): ThemeDefinition {
     if (!Array.isArray(record.critters) || record.critters.length > 8) {
       throw new Error("theme.critters must be an array of at most 8 entries");
     }
+    const allowedIds = [...THEME_CRITTER_IDS, ...(options?.critterIds ?? [])];
     const critters = Array.from(record.critters, (entry, index) => {
-      const critter = THEME_CRITTER_IDS.find((id) => id === entry);
+      const critter = allowedIds.find((id) => id === entry);
       if (!critter) {
-        throw new Error(`theme.critters[${index}] must be one of ${THEME_CRITTER_IDS.join(", ")}`);
+        throw new Error(`theme.critters[${index}] must be one of ${allowedIds.join(", ")}`);
       }
       return critter;
     });
@@ -349,9 +366,10 @@ export function normalizeThemeDefinition(value: unknown): ThemeDefinition {
     definition.critters = critters;
   }
   if (record.avatarHat !== undefined) {
-    const avatarHat = THEME_AVATAR_HAT_IDS.find((id) => id === record.avatarHat);
+    const allowedIds = [...THEME_AVATAR_HAT_IDS, ...(options?.hatIds ?? [])];
+    const avatarHat = allowedIds.find((id) => id === record.avatarHat);
     if (!avatarHat) {
-      throw new Error(`theme.avatarHat must be one of ${THEME_AVATAR_HAT_IDS.join(", ")}`);
+      throw new Error(`theme.avatarHat must be one of ${allowedIds.join(", ")}`);
     }
     definition.avatarHat = avatarHat;
   }

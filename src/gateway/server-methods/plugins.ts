@@ -36,6 +36,7 @@ import { readManagedPluginSkill } from "../../plugins/management-skill-read.js";
 import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
+import { validatePluginSkillPath } from "../../skills/loading/plugin-skill-bundle.js";
 import { pluginCredentialHandlers } from "./plugins.credentials.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -49,6 +50,13 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      if (params.path !== undefined) {
+        try {
+          validatePluginSkillPath(params.path);
+        } catch {
+          throw new ManagedPluginLifecycleError("Invalid plugin skill bundle path.");
+        }
+      }
       if (params.source === "installed") {
         respond(
           true,
@@ -56,6 +64,8 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             config: context.getRuntimeConfig(),
             pluginId: params.pluginId,
             skillName: params.skillName,
+            path: params.path,
+            version: params.version,
           }),
           undefined,
         );
@@ -71,6 +81,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           packageName: identity.identity,
           version: params.version,
           skillName: params.skillName,
+          path: params.path,
         }),
         undefined,
       );

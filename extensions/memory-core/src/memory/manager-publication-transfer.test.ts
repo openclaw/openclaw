@@ -1,6 +1,9 @@
 import path from "node:path";
 import { serialize } from "node:v8";
-import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  encodeMemoryEmbedding,
+  ensureMemoryIndexSchema,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import * as sqliteWorkerRuntime from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -312,7 +315,7 @@ describe("bounded memory publication transfer", () => {
         hash: "chunk-hash",
         model: "transfer-model",
         text,
-        embedding: "[0.125,-0.5,1]",
+        embedding: encodeMemoryEmbedding([0.125, -0.5, 1]),
         updated_at: 101,
       },
     ]);

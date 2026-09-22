@@ -49,6 +49,16 @@ import type { GatewayRequestContext } from "./types.js";
 
 const mocks = getAgentTestMocks();
 
+function expectMainAlias(payload: unknown, runId: string, alias: string): void {
+  expectRecordFields(payload, {
+    runId,
+    status: "accepted",
+    sessionKey: "agent:main:main",
+    sessionId: "existing-session-id",
+    sessionKeyAliases: [alias],
+  });
+}
+
 function expectReactivationFailure(respond: ReturnType<typeof vi.fn>, runId: string): void {
   expect(mocks.replaceSubagentRunAfterSteer).toHaveBeenCalledOnce();
   expect(respond).toHaveBeenCalledWith(
@@ -373,11 +383,7 @@ describe("gateway agent handler chat.abort integration", () => {
     );
     await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
     expect(context.chatAbortControllers.has(runId)).toBe(false);
-    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
-      runId,
-      sessionKey: requestedSessionKey,
-      status: "accepted",
-    });
+    expectMainAlias(context.dedupe.get(`agent:${runId}`)?.payload, runId, requestedSessionKey);
 
     const abortRespond = vi.fn();
     await handleChatAbortRequest({
@@ -545,11 +551,7 @@ describe("gateway agent handler chat.abort integration", () => {
     );
     await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
     expect(context.chatAbortControllers.has(runId)).toBe(false);
-    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
-      runId,
-      sessionKey: requestedSessionKey,
-      status: "accepted",
-    });
+    expectMainAlias(context.dedupe.get(`agent:${runId}`)?.payload, runId, requestedSessionKey);
 
     const stopRespond = vi.fn();
     await handleDirectExternalChatSend({
@@ -571,7 +573,7 @@ describe("gateway agent handler chat.abort integration", () => {
     });
     expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
       runId,
-      sessionKey: requestedSessionKey,
+      sessionKey: "agent:main:main",
       status: "timeout",
       summary: "aborted",
       stopReason: "stop",
@@ -1555,11 +1557,7 @@ describe("gateway agent handler chat.abort integration", () => {
       },
     );
     await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
-    expectRecordFields(context.dedupe.get(aliasKey)?.payload, {
-      runId,
-      sessionKey: "agent:main:telegram:direct:123",
-      status: "accepted",
-    });
+    expectMainAlias(context.dedupe.get(aliasKey)?.payload, runId, "agent:main:telegram:direct:123");
 
     const abortRespond = vi.fn();
     await handleChatAbortRequest({

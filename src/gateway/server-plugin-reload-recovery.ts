@@ -1,4 +1,5 @@
 import type { PluginRuntimeRecovery } from "../plugins/loader-types.js";
+import { PluginSourceRecoveryUnavailableError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { capturePluginRuntimeRecovery } from "../plugins/plugin-runtime-artifact-binding.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -22,7 +23,11 @@ export function createPluginReloadRecovery(
     get previousHookIds(): ReadonlySet<string> {
       return previousHookIds;
     },
+    get unavailablePluginIds(): ReadonlySet<string> {
+      return new Set([...selectedUnavailableIds].filter((id) => !previouslyUnavailableIds.has(id)));
+    },
     capture(pluginIds: ReadonlySet<string>) {
+      const warnings: string[] = [];
       for (const record of previousRegistry.plugins) {
         if (!pluginIds.has(record.id)) {
           continue;
@@ -32,11 +37,22 @@ export function createPluginReloadRecovery(
           continue;
         }
         previousHookIds.add(record.id);
-        const recovery = capturePluginRuntimeRecovery(record);
-        if (recovery) {
-          moduleRecoveries.set(record.id, recovery);
+        try {
+          const recovery = capturePluginRuntimeRecovery(record);
+          if (recovery) {
+            moduleRecoveries.set(record.id, recovery);
+          }
+        } catch (error) {
+          if (!(error instanceof PluginSourceRecoveryUnavailableError)) {
+            throw error;
+          }
+          selectedUnavailableIds.add(record.id);
+          warnings.push(
+            `Plugin ${record.id} captured source is missing. Continuing replacement; rollback cannot restore this plugin's previous code.`,
+          );
         }
       }
+      return warnings;
     },
     prepare(
       params: Omit<Parameters<typeof preparePlugins>[0], "pluginIds" | "moduleRecoveries">,

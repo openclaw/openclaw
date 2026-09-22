@@ -12,11 +12,7 @@ import {
 import type { DetachedTaskTerminalState } from "./detached-task-runtime-contract.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.test-support.js";
 import { resetTaskFlowRegistryForTests } from "./task-flow-registry.test-support.js";
-import type {
-  SubagentAdminKillResult,
-  TaskRegistryControlRuntime,
-} from "./task-registry-control.types.js";
-import type { TaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
+import type { SubagentAdminKillResult } from "./task-registry-control.types.js";
 import { createTaskRecord as createTaskRecordOrNull } from "./task-registry.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
 import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
@@ -96,14 +92,10 @@ export function createTerminalSubagentKillResult(
 
 type TaskRegistryTestApi = {
   maybeDeliverTaskStateChangeUpdate(
-    taskId: string,
+    task: TaskRecord,
     latestEvent?: TaskEventRecord,
   ): Promise<TaskRecord | null>;
   resetTaskRegistryForTests(): void;
-  resetTaskRegistryDeliveryRuntimeForTests(): void;
-  setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void;
-  resetTaskRegistryControlRuntimeForTests(): void;
-  setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void;
 };
 
 function getTestApi(): TaskRegistryTestApi {
@@ -117,10 +109,10 @@ function getTestApi(): TaskRegistryTestApi {
 }
 
 export async function maybeDeliverTaskStateChangeUpdate(
-  taskId: string,
+  task: TaskRecord,
   latestEvent?: TaskEventRecord,
 ): Promise<TaskRecord | null> {
-  return await getTestApi().maybeDeliverTaskStateChangeUpdate(taskId, latestEvent);
+  return await getTestApi().maybeDeliverTaskStateChangeUpdate(task, latestEvent);
 }
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }): void {
@@ -130,21 +122,6 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }): void {
   }
 }
 
-export function resetTaskRegistryDeliveryRuntimeForTests(): void {
-  getTestApi().resetTaskRegistryDeliveryRuntimeForTests();
-}
-
-export function setTaskRegistryDeliveryRuntimeForTests(runtime: TaskRegistryDeliveryRuntime): void {
-  getTestApi().setTaskRegistryDeliveryRuntimeForTests(runtime);
-}
-
-export function resetTaskRegistryControlRuntimeForTests(): void {
-  getTestApi().resetTaskRegistryControlRuntimeForTests();
-}
-
-export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void {
-  getTestApi().setTaskRegistryControlRuntimeForTests(runtime);
-}
 export function configureInMemoryTaskStoresForTests() {
   configureTaskRegistryRuntime({
     store: createInMemoryTaskRegistryStore(),

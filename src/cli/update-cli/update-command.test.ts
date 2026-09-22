@@ -77,7 +77,9 @@ describe("applyPostPluginConfigValidation", () => {
   } satisfies PostCorePluginUpdateResult;
 
   it("fails closed when updated plugin migrations leave config invalid", () => {
-    expect(applyPostPluginConfigValidation(pluginUpdate, false)).toMatchObject({
+    expect(
+      applyPostPluginConfigValidation(pluginUpdate, { status: "invalid", failureFacts: [] }),
+    ).toMatchObject({
       status: "error",
       reason: "post-plugin-doctor-invalid-config",
       warnings: [
@@ -95,7 +97,9 @@ describe("applyPostPluginConfigValidation", () => {
       reason: "plugin-sync-failed",
     };
 
-    expect(applyPostPluginConfigValidation(failed, false)).toBe(failed);
+    expect(applyPostPluginConfigValidation(failed, { status: "invalid", failureFacts: [] })).toBe(
+      failed,
+    );
   });
 });
 

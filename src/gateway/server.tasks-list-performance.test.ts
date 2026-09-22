@@ -300,20 +300,23 @@ describe("tasks.list Gateway performance", () => {
           let queuedWorkRan = false;
           let queuedWork: ReturnType<typeof setImmediate> | undefined;
           const queuedWorkDuringRetry: boolean[] = [];
-          const prepareRead = taskRegistryRead.prepareTaskRegistryRead;
+          const createPreparation = taskRegistryRead.createTaskRegistryReadPreparation;
           const preparation = vi
-            .spyOn(taskRegistryRead, "prepareTaskRegistryRead")
-            .mockImplementation(async () => {
-              const read = await prepareRead();
-              preparations += 1;
-              if (preparations === 2) {
-                // Preparation elapsed time must not consume the scan's work budget.
-                workMs += 100;
-                queuedWork = setImmediate(() => {
-                  queuedWorkRan = true;
-                });
-              }
-              return read;
+            .spyOn(taskRegistryRead, "createTaskRegistryReadPreparation")
+            .mockImplementation(() => {
+              const prepareRead = createPreparation();
+              return async () => {
+                const read = await prepareRead();
+                preparations += 1;
+                if (preparations === 2) {
+                  // Preparation elapsed time must not consume the scan's work budget.
+                  workMs += 100;
+                  queuedWork = setImmediate(() => {
+                    queuedWorkRan = true;
+                  });
+                }
+                return read;
+              };
             });
           accessSliceWorkMs = sliceWorkMs;
           onAccessSlice = (batch) => {

@@ -54,15 +54,19 @@ describe("placement reclaim with provider-owned node teardown", () => {
         ...support.BUNDLE_ARTIFACT,
         ...build,
       });
-      support.testState.store.createIntent({
+      await support.testState.store.createIntent({
         environmentId,
         providerId: "fake",
         profileId: REQUEST.profileId,
         profileSnapshot: { settings: { region: "test" } },
         provisionOperationId: "provision-fixture",
       });
-      support.testState.store.transition({ environmentId, from: "requested", to: "provisioning" });
-      support.testState.store.transition({
+      await support.testState.store.transition({
+        environmentId,
+        from: "requested",
+        to: "provisioning",
+      });
+      await support.testState.store.transition({
         environmentId,
         from: "provisioning",
         to: "ready",
@@ -73,7 +77,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           sharedHost: false,
         },
       });
-      const attached = support.testState.store.transition({
+      const attached = await support.testState.store.transition({
         environmentId,
         from: "ready",
         to: "attached",
@@ -352,7 +356,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
         workspacePath: support.testState.root,
       });
       const environmentId = harness.ready.environmentId;
-      const identity = support.seedAttachedIdentity(environmentId, REQUEST.sessionId);
+      const identity = await support.seedAttachedIdentity(environmentId, REQUEST.sessionId);
       const active = seedActivePlacement(placements, {
         environmentId,
         ownerEpoch: identity.ownerEpoch,

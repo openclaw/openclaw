@@ -7,14 +7,17 @@ import {
 import type { UserProfileGitHubIdentity } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
-import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { deleteUserPreference, selectUserPreferenceValues } from "./user-preferences.store.js";
+import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
+import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import { selectResolvedUserProfileMetadataById, userProfilesDb } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
+import type { CachedGitHubIdentity } from "./user-profiles.types.js";
 
 const GITHUB_PROVIDER = "github";
 const GITHUB_LOGIN_SUBJECT_PREFIX = "login:";
@@ -96,17 +99,22 @@ export function selectStoredGitHubIdentities(
   );
 }
 
-export function resolveCachedGitHubIdentity(
+export function resolveCachedGitHubIdentityInDatabase(
+  db: DatabaseSync,
   params: { accountId: number; email: string },
-  options: OpenClawStateDatabaseOptions = {},
-): { profileId: string; updatedAt: number } | undefined {
+): CachedGitHubIdentity | undefined {
   const email = params.email.trim().toLowerCase();
-  if (!email || !Number.isSafeInteger(params.accountId) || params.accountId <= 0) {
+  if (
+    !email ||
+    !Number.isSafeInteger(params.accountId) ||
+    params.accountId <= 0 ||
+    !tableExists(db, "user_profiles") ||
+    !tableExists(db, "user_profile_emails") ||
+    !tableExists(db, "user_profile_identities") ||
+    !tableHasColumn(db, "user_profile_identities", "canonical_login")
+  ) {
     return undefined;
   }
-  const database = openOpenClawStateDatabase(options);
-  ensureUserProfilesSchema(options, database);
-  const { db } = database;
   const alias = executeSqliteQueryTakeFirstSync(
     db,
     userProfilesDb(db)
@@ -231,6 +239,7 @@ export function applyVerifiedGitHubIdentity(params: {
   preserveEmailProfile?: boolean;
   createProfile: () => string;
   mergeProfiles: (sourceProfileId: string, targetProfileId: string) => void;
+  mutation?: UserProfileMutationContext;
 }): { profileId: string; changed: boolean } {
   if (!Number.isSafeInteger(params.identity.accountId) || params.identity.accountId <= 0) {
     throw new TypeError("GitHub account id must be a positive safe integer");
@@ -335,6 +344,11 @@ export function applyVerifiedGitHubIdentity(params: {
     !targetAccounts || targetAccounts.primary
       ? (targetAccounts?.primary?.accountId ?? params.identity.accountId)
       : undefined;
+  const authorityChanged =
+    currentProfileId !== targetProfileId ||
+    existing?.profile_id !== targetProfileId ||
+    existing.canonical_login !== login ||
+    aliasIdentity?.profile_id !== targetProfileId;
   if (
     currentProfileId === targetProfileId &&
     existing?.profile_id === targetProfileId &&
@@ -401,6 +415,23 @@ export function applyVerifiedGitHubIdentity(params: {
             canonical_login: null,
           }),
         ),
+    );
+  }
+  if (authorityChanged) {
+    params.mutation?.authority(
+      currentProfileId,
+      targetProfileId,
+      ...(aliasIdentity ? [aliasIdentity.profile_id] : []),
+      ...(aliasProfileId ? [aliasProfileId] : []),
+      ...(existing ? [existing.profile_id] : []),
+    );
+    publishUserProfileAuthorityChange(
+      db,
+      currentProfileId,
+      targetProfileId,
+      ...(aliasIdentity ? [aliasIdentity.profile_id] : []),
+      ...(aliasProfileId ? [aliasProfileId] : []),
+      ...(existing ? [existing.profile_id] : []),
     );
   }
   return { profileId: targetProfileId, changed: true };

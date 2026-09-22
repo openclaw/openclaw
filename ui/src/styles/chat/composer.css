@@ -307,6 +307,7 @@
 .agent-chat__capability-menu-item {
   --wa-color-text-normal: var(--text);
 
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--chat-composer-menu-row-gap);

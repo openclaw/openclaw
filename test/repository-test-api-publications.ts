@@ -47,10 +47,8 @@ const publications: Record<string, string | symbol> = {
   "src/agents/subagents/registry/subagent-registry.ts": Symbol.for(
     "openclaw.subagentRegistryTestApi",
   ),
-  "src/agents/subagents/spawn/subagent-spawn.ts": Symbol.for("openclaw.subagentSpawnTestApi"),
   "src/agents/subagents/swarm/swarm-scheduler.ts": Symbol.for("openclaw.swarmSchedulerTestApi"),
   "src/agents/tool-search.ts": Symbol.for("openclaw.toolSearchTestApi"),
-  "src/agents/tools/agent-step.ts": Symbol.for("openclaw.agentStepTestApi"),
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
   "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
   "src/agents/utils/tools-manager.ts": Symbol.for("openclaw.toolsManagerTestApi"),
@@ -102,7 +100,6 @@ const publications: Record<string, string | symbol> = {
   "src/skills/lifecycle/upload-store.ts": Symbol.for("openclaw.skillUploadStoreTestApi"),
   "src/skills/runtime/remote-skills.ts": Symbol.for("openclaw.remoteNodeSkillsTestApi"),
   "src/system-agent/agent-turn.ts": Symbol.for("openclaw.systemAgentTurnTestApi"),
-  "src/system-agent/assistant-timeout.ts": Symbol.for("openclaw.systemAgentTimeoutTestApi"),
   "src/talk/client-voice-confirmation.ts": Symbol.for("openclaw.clientVoiceConfirmationTestApi"),
   "src/talk/client-voice-session.ts": Symbol.for("openclaw.clientVoiceSessionTestApi"),
   "src/tasks/generated-media-task-activity.ts": Symbol.for(

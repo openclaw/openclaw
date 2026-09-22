@@ -1,5 +1,6 @@
 [
   "core",
+  "code-mode-executor-runtime",
   "control-ui-link-reader",
   "provider-setup",
   "sandbox",

@@ -91,7 +91,10 @@ export function buildPendingInputItems(
         input.state === "interrupted" &&
           input.runId &&
           browserInputs.some(
-            (item) => item.sendRunId === input.runId && item.sendState !== "failed",
+            (item) =>
+              item.sendRunId === input.runId &&
+              item.sendState !== "failed" &&
+              item.sendState !== "held",
           )
           ? "chat.pendingInputs.resuming"
           : input.state === "cancelled"

@@ -23,6 +23,7 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -193,14 +194,16 @@ export async function runPreparedModelCatalogWorkerRequest(
   request: PreparedModelWorkerRequest,
   prepareGeneration?: () => Promise<WorkerGeneration>,
 ): Promise<PreparedModelWorkerResult> {
+  const work = new AsyncWorkScope();
   return withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
-    runCatalogRequest(value, request, prepareGeneration),
+    work.run(() => runCatalogRequest(value, request, work, prepareGeneration)),
   );
 }
 
 async function runCatalogRequest(
   value: PreparedModelCatalogWorkerInput,
   request: PreparedModelWorkerRequest,
+  work: AsyncWorkScope,
   prepareGeneration?: () => ReturnType<typeof prepareWorkerGeneration>,
 ): Promise<PreparedModelWorkerResult> {
   const directoryOwner = value.input.agentId
@@ -389,13 +392,11 @@ async function runCatalogRequest(
         providerStaticModels: undefined,
       });
     }
-    const configuredProviderModelIds = new Map<string, readonly string[]>();
     const { value: source, providerExpiries } = await captureProviderCatalogExpiries(() =>
       prepareAgentCatalogSource(exactAgentFacts, catalogGeneration, "live", false, {
         authStore,
         providerDiscoveryProviderIds: request.providerIds,
         providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-        providerCatalogInventory: { agentId: value.input.agentId, configuredProviderModelIds },
       }),
     );
     const facts = await prepareFullCatalogFacts(
@@ -446,7 +447,6 @@ async function runCatalogRequest(
       snapshot: facts.modelCatalog,
       runtimeModels,
       providerExpiries,
-      configuredProviderModelIds,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
       providerAuthLabels: withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
@@ -470,6 +470,7 @@ async function runCatalogRequest(
       authStore,
       authModes: resolveUsableAgentCredentialModes(catalogCredentials),
     };
+    await work.drain();
     if (acquiredDiscovery) {
       const previous = prepared.discovery;
       prepared.discovery = acquiredDiscovery;
@@ -484,6 +485,9 @@ async function runCatalogRequest(
     };
   } finally {
     try {
+      // A catalog deadline can finish observing OAuth before its credential write settles.
+      // Join that admitted work before releasing its plugin generation and source context.
+      await work.drain();
       if (acquiredDiscovery && !completed) {
         if (prepared?.discovery === acquiredDiscovery) {
           prepared.discovery = undefined;

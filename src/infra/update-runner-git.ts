@@ -94,7 +94,9 @@ export async function updateGitCheckout(params: {
   let mutationPrepared = false;
   let sourceMutationStarted = false;
   let runtimePromotion: Awaited<ReturnType<typeof prepareGitRuntimePromotion>> | undefined;
-  let candidateTransfer: Awaited<ReturnType<typeof prepareGitCandidateTransfer>>;
+  let candidateTransfer:
+    | Extract<Awaited<ReturnType<typeof prepareGitCandidateTransfer>>, { status: "ok" }>
+    | undefined;
   let stateMigrationStarted = false;
   let recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
   let rollbackOutcome: NonNullable<UpdateRunResult["rollbackOutcome"]> = {
@@ -352,7 +354,7 @@ export async function updateGitCheckout(params: {
       const importCandidate = async (candidateSha: string, upstreamRef?: string) => {
         // Close the pinned pack on every exit, including admission refusal,
         // before the surrounding inspection checkout is removed.
-        await using transfer = await prepareGitCandidateTransfer({
+        const transfer = await prepareGitCandidateTransfer({
           candidateSha,
           beforeSha,
           installedRoot: gitRoot,
@@ -361,16 +363,17 @@ export async function updateGitCheckout(params: {
           step: inspectionWorkStep("git-pack-update", [], inspectionRoot),
           probeTimeoutMs: timeoutMs,
         });
-        if (!transfer) {
-          return { status: "error" as const, reason: "fetch-failed" };
+        if (!transfer || transfer.status === "error") {
+          return { status: "error" as const, reason: transfer?.reason ?? "fetch-failed" };
         }
+        await using admittedTransfer = transfer;
         const sourceChanged = await checkSourceUnchanged();
         if (sourceChanged) {
           return sourceChanged;
         }
         await prepareMutation(candidateSha, inspectionRoot, runInspectionCommand);
         candidateTransfer = transfer;
-        const imported = await transfer.importInto(
+        const imported = await admittedTransfer.importInto(
           workStep("git-import-admitted-target", [], gitRoot),
         );
         if (!imported) {
@@ -378,16 +381,16 @@ export async function updateGitCheckout(params: {
         }
         return { status: "ok" as const };
       };
-      if (
-        !(await fetchGitUpdateTarget({
-          root: inspectionRoot,
-          step: inspectionStep,
-          workStep: inspectionWorkStep,
-          name: "git-target-inspection-fetch",
-          channel,
-          steps,
-        }))
-      ) {
+      const fetched = await fetchGitUpdateTarget({
+        root: inspectionRoot,
+        step: inspectionStep,
+        workStep: inspectionWorkStep,
+        name: "git-target-inspection-fetch",
+        channel,
+        devTarget,
+        steps,
+      });
+      if (!fetched.ok) {
         return { status: "error" as const, reason: "fetch-failed" };
       }
       const inspectTarget = async (revision: string, root = inspectionRoot) => {
@@ -407,6 +410,7 @@ export async function updateGitCheckout(params: {
         workTimeoutMs: opts.timeoutMs,
         channel,
         devTarget,
+        refreshedRemotes: fetched.refreshedRemotes,
         beforeSha,
         beforeGitStaging: opts.beforeGitStaging,
         needsCheckoutMain,

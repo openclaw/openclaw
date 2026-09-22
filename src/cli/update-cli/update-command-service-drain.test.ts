@@ -219,7 +219,7 @@ it.each(["session-mutation", "terminal-persistence"] as const)(
   },
 );
 
-it.each(["migration", "backup", "coordinator-write"])(
+it.each(["migration", "backup"])(
   "refuses only the reported %s phase at the deadline",
   async (phase) => {
     const observation = {

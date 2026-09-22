@@ -13,11 +13,10 @@ import {
   type SessionTranscriptTreeNode,
 } from "./transcript-tree.js";
 
-export type SessionNavigationEntry = Pick<
-  SessionEntryBase,
-  "id" | "parentId" | "timestamp" | "appendMode"
-> &
-  (
+export type SessionNavigationEntry = Pick<SessionEntryBase, "id" | "parentId"> & {
+  timestamp?: string;
+  appendMode?: unknown;
+} & (
     | { type: "label"; targetId: string; label?: string }
     | { type: Exclude<SessionEntry["type"], "label"> }
   );
@@ -142,7 +141,7 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
   protected logicalParentsById = new Map<string, string | null>();
   protected invalidLeafControlIds = new Set<string>();
   protected labelsById = new Map<string, string>();
-  protected labelTimestampsById = new Map<string, string>();
+  protected labelTimestampsById = new Map<string, T["timestamp"]>();
   protected leafId: string | null = null;
   protected appendParentId: string | null = null;
   protected appendMode: "side" | undefined;

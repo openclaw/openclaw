@@ -7,6 +7,43 @@ import type {
 } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 
+/** Materialization reads current physical relations from the projection's existing indexes. */
+export function createSessionRowRelationReads(owner: {
+  config: () => records.Inputs["cfg"];
+  rows: ReadonlyMap<string, records.Row>;
+  byParent: ReadonlyMap<string, Set<string>>;
+  dirty: ReadonlySet<string>;
+  referenced: (reference: string) => records.Row | undefined;
+  readEntry: (row: records.Row) => records.Row["storedEntry"];
+  acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
+}) {
+  return {
+    readSourceEntry(this: void, row: records.Row, key: string) {
+      const source = owner.referenced(
+        records.parentReference(owner.config(), key, row.agentId, row.storeTarget.storePath),
+      );
+      return (
+        source &&
+        (owner.dirty.has(records.identity(source)) ? owner.readEntry(source) : source.storedEntry)
+      );
+    },
+    readChildLinks(this: void, row: records.Row) {
+      const links = [...records.dependents(row, owner.byParent)].flatMap((child) => {
+        let value = owner.rows.get(child);
+        if (value && owner.dirty.has(child)) {
+          value = owner.acquireEntry(value, owner.readEntry(value));
+        }
+        return value?.entry && [...value.parents].some((ref) => owner.referenced(ref) === row)
+          ? [{ key: value.key, entry: value.entry }]
+          : [];
+      });
+      // Keyed child refreshes reorder the parent index; presentation must stay stable.
+      links.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+      return links;
+    },
+  };
+}
+
 /** Follow the projection's physical lineage and aggregate owners without a roster scan. */
 function readSessionRowAncestors<T extends records.Row>(
   record: records.Row,

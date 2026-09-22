@@ -21,6 +21,7 @@ import {
   prepareManagedServiceTriageClockPreload,
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
+  isManagedServiceInspectionCommand,
   type ManagedServiceCommandTiming,
   type ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
@@ -29,6 +30,10 @@ import {
   createManagedServiceBoundaryParent,
   pathExists,
 } from "./update-managed-service-handoff-process.test-support.js";
+import {
+  prepareManagedServiceProfileRequester,
+  observeManagedServiceProfileRefusal,
+} from "./update-managed-service-handoff-profile.test-support.js";
 import {
   prepareManagedServiceBoundaryFiles,
   prepareManagedServiceRuntimeFixture,
@@ -58,8 +63,9 @@ export function createManagedServiceManagerBoundary({
 }) {
   return async function runManagedServiceManagerBoundary(
     kind: "systemd" | "launchd",
-    options?: ManagedServiceBoundaryOptions,
+    providedOptions?: ManagedServiceBoundaryOptions,
   ): Promise<ManagedServiceManagerBoundaryResult> {
+    let options = providedOptions;
     const { spawn } =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");
     const { startManagedServiceUpdateHandoff } =
@@ -106,6 +112,7 @@ export function createManagedServiceManagerBoundary({
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
     };
+    options = await prepareManagedServiceProfileRequester(options, env);
     const run = options?.ledger
       ? createUpdateRun(
           {
@@ -122,6 +129,7 @@ export function createManagedServiceManagerBoundary({
       recoveryModulePath,
       statePath,
       configPath: env.OPENCLAW_CONFIG_PATH,
+      validationReleasePath,
       activationGatePath,
       activationReleasePath,
       ledger: Boolean(run),
@@ -136,6 +144,7 @@ export function createManagedServiceManagerBoundary({
       await startManagedServiceUpdateHandoff({
         runId: run?.runId,
         ...(options?.beforeParkNotice ? { beforePark: async () => {} } : {}),
+        ...(options?.profileRequester ? { requesterAuthority: { assertCurrent() {} } } : {}),
         root,
         timeoutMs: options?.recoveryTimeoutMs,
         restartDrainTimeoutMs: 300_000,
@@ -457,7 +466,12 @@ export function createManagedServiceManagerBoundary({
         if (options.controlDisconnect === "transferred") {
           // Configured plugin cold loading shares the suite saturation budget. Only
           // the updater's validation signal permits revocation or activation below.
-          await waitForFile(validationStartedPath, DEFAULT_VITEST_TEST_TIMEOUT_MS);
+          await Promise.race([
+            waitForFile(validationStartedPath, DEFAULT_VITEST_TEST_TIMEOUT_MS),
+            completion.then(() => {
+              throw new Error("Managed helper exited before starting validation");
+            }),
+          ]);
           await expect(pathExists(commandsPath)).resolves.toBe(false);
           const validationClockAdvanceMs = options.validationClockAdvanceMs;
           if (validationClockAdvanceMs) {
@@ -494,9 +508,18 @@ export function createManagedServiceManagerBoundary({
             }
             if (notice) {
               await notice;
-              await expect(pathExists(commandsPath)).resolves.toBe(false);
+              const inspections = (await fs.readFile(commandsPath, "utf8").catch(() => ""))
+                .trim()
+                .split("\n")
+                .filter(Boolean);
+              expect(
+                inspections.every(isManagedServiceInspectionCommand),
+                inspections.join("\n"),
+              ).toBe(true);
               expect(parent.exitCode).toBeNull();
-              if (options.beforeParkNotice !== "stalled") {
+              if (options.beforeParkNotice === "disconnected") {
+                runningHelper.stdin?.end();
+              } else if (options.beforeParkNotice !== "stalled") {
                 runningHelper.stdin?.write(
                   options.beforeParkNotice === "rejected" ? "notice-failed\n" : "noticed\n",
                 );
@@ -531,7 +554,8 @@ export function createManagedServiceManagerBoundary({
           !options.validationResult &&
           !options.cancelDuringValidation &&
           !options.cancelAtActivation &&
-          !options.revokeWhileValidating;
+          !options.revokeWhileValidating &&
+          (!options.profileRequester || options.beforeParkNotice === "acknowledged");
         if (activated) {
           await vi.waitFor(
             async () => {
@@ -549,7 +573,10 @@ export function createManagedServiceManagerBoundary({
             parent.stdin?.end();
           }
         }
-        const code = await completion;
+        const code =
+          options.profileRequester && !activated
+            ? await observeManagedServiceProfileRefusal(completion, commandsPath)
+            : await completion;
         const helperLog = await fs.readFile(String(generated.logPath), "utf8").catch(() => "");
         expect(code, `${stderr}\n${helperLog}`).toBe(options.helperExitCode ?? 0);
         await expect(pathExists(updaterPath)).resolves.toBe(
@@ -635,6 +662,7 @@ export function createManagedServiceManagerBoundary({
           .split("\n")
           .filter(Boolean),
         parentSignal: parent.signalCode,
+        parkAdmitted: stdout.includes("park-admitted\n"),
         state: JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}")),
         sentinel: readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
         log: await fs.readFile(String(generated.logPath), "utf8"),

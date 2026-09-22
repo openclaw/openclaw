@@ -25,13 +25,8 @@ import { withTimeout } from "../../../infra/fs-safe.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
-import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
 import { findTaskByRunId } from "../../../tasks/task-registry.js";
-import {
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-} from "../../../tasks/task-registry.test-support.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -173,7 +168,6 @@ beforeEach(async () => {
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
-  setTaskRegistryControlRuntimeForTests(taskControlRuntime);
   registryTesting.setDepsForTest({
     loadAgentRuntimePluginRegistryHandle: () => undefined,
     runSubagentAnnounceFlow: async () => "delivered",
@@ -191,7 +185,6 @@ afterEach(async ({ task }) => {
   resetSubagentRegistryForTests({ persist: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
-  resetTaskRegistryControlRuntimeForTests();
   registryTesting.setDepsForTest();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
@@ -662,22 +655,24 @@ describe("recursive spawn production boundary", () => {
           expect(findTaskByRunId(childRunId)?.status).toBe("cancelled");
         }
         if (parentState === "operator-revoked") {
+          const queued = expectDefined(holdQueuedSwarmRun(childRunId), "queued collector");
           expectDefined(source, "operator source").revoke();
           try {
-            await vi.waitFor(() => {
-              const collector = subagentRuns.get(childRunId!);
-              if (collector) {
-                expect(collector.execution.status).toBe("terminal");
-                expect(collector.queuedLaunch).toBeUndefined();
-              }
-              expect(
-                loadSessionEntry({
-                  storePath: bound.storePath,
-                  sessionKey: details.childSessionKey,
-                }),
-              ).toBeUndefined();
-              expect(source?.holds ?? 0).toBe(0);
-            });
+            // Revocation removes the reservation synchronously; release joins its physical cleanup.
+            await queued.release();
+            const collector = subagentRuns.get(childRunId);
+            if (collector) {
+              expect(collector.execution.status).toBe("terminal");
+              expect(collector.queuedLaunch).toBeUndefined();
+              expect(collector.collectorLaunchCleanupPending).toBe(false);
+            }
+            expect(
+              loadSessionEntry({
+                storePath: bound.storePath,
+                sessionKey: details.childSessionKey,
+              }),
+            ).toBeUndefined();
+            expect(source?.holds ?? 0).toBe(0);
           } catch (cause) {
             throw new Error(
               `Revoked collector cleanup did not settle: ${JSON.stringify({

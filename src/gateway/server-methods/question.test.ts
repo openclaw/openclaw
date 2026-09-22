@@ -841,7 +841,11 @@ describe("question gateway methods", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         mockReferencedStoreSnapshot();
         const reload = createDeferred<{ warningCount: number }>();
-        reloadSecrets.mockReturnValue(reload.promise);
+        const reloadStarted = createDeferred();
+        reloadSecrets.mockImplementation(() => {
+          reloadStarted.resolve();
+          return reload.promise;
+        });
         const id = await requestSecretQuestion();
         const firstValue = "test-secret-committed-first";
         const pending = call("question.resolve", {
@@ -866,6 +870,12 @@ describe("question gateway methods", () => {
             readSecretStoreValue({ scope: { kind: "team" }, name: "SERVICE_API_KEY" }),
           ).toEqual({ ok: true, value: firstValue });
           expect(manager.get(id)?.status).toBe("answered");
+          await Promise.race([
+            reloadStarted.promise,
+            pending.then(() => {
+              throw new Error("question.resolve settled before runtime refresh began");
+            }),
+          ]);
           expect(reloadSecrets).toHaveBeenCalledTimes(1);
         } finally {
           reload.resolve({ warningCount: 0 });

@@ -29,6 +29,7 @@ Behavior:
 
 - Foreground runs return retained output directly and disclose when earlier output exceeded the aggregate cap.
 - When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail.
+- Launch failures return the operating-system error and release worker cleanup even when no process starts.
 - Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`.
 - With the [secret egress proxy](/gateway/secrets#secret-egress-proxy) enabled, each Gateway-hosted command retains its own proxy access across turns. Process exit, cancellation, timeout, or Gateway shutdown revokes that access and closes its connections. Use `process kill` to stop a background command and its proxy access together.
 - Returning a background session ID does not stop the process timeout. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Host and worker lifecycle limits still apply.

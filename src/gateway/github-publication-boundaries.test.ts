@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
@@ -15,6 +17,7 @@ import {
   WORKSPACE_TREE,
   commandResult,
   commands,
+  createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
   createTestGitHubPublicationRuntime as createGitHubPublicationRuntime,
   githubPublicationTestMocks,
@@ -322,6 +325,72 @@ describe("Gateway GitHub publication boundaries", () => {
 
     expect(coordinator.read(queued.requestId)).toMatchObject({ status: "published" });
   });
+
+  it.each([
+    { boundary: "update-ref", status: "failed", effects: [] },
+    { boundary: "push", status: "failed", effects: ["push"] },
+    { boundary: "pull_request", status: "published", effects: ["push", "pull_request"] },
+  ] as const)(
+    "settles accepted shared publication work when authority closes after $boundary",
+    async ({ boundary, status, effects }) => {
+      const workspace = await createRealPublicationWorkspace();
+      const database = openOpenClawStateDatabase();
+      const coordinator = createTestGitHubPublicationCoordinator({
+        placements: createWorkerSessionPlacementStore({ database }),
+      });
+      const transport = mocks.runCommand.getMockImplementation()!;
+      let current = true;
+      mocks.runCommand.mockImplementation(async (argv: string[], options) => {
+        const result = await transport(argv, options);
+        if (
+          result.code === 0 &&
+          (boundary === "pull_request"
+            ? argv.includes("POST") && argv.includes("repos/openclaw/openclaw/pulls")
+            : argv[0] === "git" && argv.includes(boundary))
+        ) {
+          current = false;
+        }
+        return result;
+      });
+      const idempotencyKey = `shared-authority-after-${boundary}`;
+      const result = await coordinator.requestForSession({
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        idempotencyKey,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Publication authority closed");
+          }
+        },
+      });
+      expect(result.status).toBe(status);
+      expect(coordinator.read(result.requestId)).toEqual(result);
+      expect(current).toBe(false);
+      await coordinator.resumeSessionRequests();
+      expect(coordinator.read(result.requestId)).toEqual(result);
+      const headCommit = await workspace.git("rev-parse", "HEAD");
+      expect(await workspace.git("show", "HEAD:artifact.txt")).toBe("accepted");
+      expect(await workspace.git("status", "--porcelain")).toBe("");
+      expect(
+        (await fs.readdir(path.join(workspace.cwd, ".git"))).filter(
+          (entry) => entry === "index.lock" || entry.startsWith("index.openclaw-"),
+        ),
+      ).toEqual([]);
+      expect(
+        database.db
+          .prepare(
+            "SELECT status, head_commit, pull_request_url FROM github_publication_requests WHERE idempotency_key = ?",
+          )
+          .get(idempotencyKey),
+      ).toEqual({
+        status,
+        head_commit: headCommit,
+        pull_request_url:
+          boundary === "pull_request" ? "https://github.com/openclaw/openclaw/pull/125200" : null,
+      });
+      expect(workspace.effects).toEqual(effects);
+    },
+  );
 
   it.each(["lookup", "fetch", "ancestry"] as const)(
     "reports unavailable without mutation when base %s verification fails",

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
@@ -12,6 +13,7 @@ import {
   insertOperatorApproval,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
+import { insertOperatorApprovalInDatabase as insertOperatorApprovalNative } from "./operator-approval-store.kernel.js";
 
 type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -64,15 +66,16 @@ const token = (runId = "run-1"): NonNullable<NewOperatorApproval["executionIdent
   executionId: "execution-1",
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("operator approval execution identity", () => {
-  it("creates the side table only for the first exact bound write", () => {
+  it("creates the side table only for the first exact bound write", async () => {
     const unbound = databaseOptions();
     expect(
-      insertOperatorApproval({ approval: approval("unbound"), databaseOptions: unbound }),
+      await insertOperatorApproval({ approval: approval("unbound"), databaseOptions: unbound }),
     ).toMatchObject({ outcome: "inserted" });
     expect(
       openOpenClawStateDatabase(unbound)
@@ -87,7 +90,9 @@ describe("operator approval execution identity", () => {
       .db.prepare("PRAGMA user_version")
       .get();
     const record = approval("bound", token());
-    expect(insertOperatorApproval({ approval: record, databaseOptions: bound })).toMatchObject({
+    expect(
+      await insertOperatorApproval({ approval: record, databaseOptions: bound }),
+    ).toMatchObject({
       outcome: "inserted",
     });
     expect(
@@ -101,7 +106,9 @@ describe("operator approval execution identity", () => {
       source_context_id: "context-1",
       source_execution_id: "execution-1",
     });
-    expect(insertOperatorApproval({ approval: record, databaseOptions: bound })).toMatchObject({
+    expect(
+      await insertOperatorApproval({ approval: record, databaseOptions: bound }),
+    ).toMatchObject({
       outcome: "existing",
     });
     expect(openOpenClawStateDatabase(bound).db.prepare("PRAGMA user_version").get()).toEqual(
@@ -109,14 +116,14 @@ describe("operator approval execution identity", () => {
     );
   });
 
-  it("never late-binds or binds a mismatched source run", () => {
+  it("never late-binds or binds a mismatched source run", async () => {
     const late = databaseOptions();
     const base = approval("late-bind");
-    expect(insertOperatorApproval({ approval: base, databaseOptions: late })).toMatchObject({
+    expect(await insertOperatorApproval({ approval: base, databaseOptions: late })).toMatchObject({
       outcome: "inserted",
     });
     expect(
-      insertOperatorApproval({
+      await insertOperatorApproval({
         approval: { ...base, executionIdentityToken: token() },
         databaseOptions: late,
       }),
@@ -124,7 +131,7 @@ describe("operator approval execution identity", () => {
 
     const mismatch = databaseOptions();
     expect(
-      insertOperatorApproval({
+      await insertOperatorApproval({
         approval: approval("mismatch", token("other-run")),
         databaseOptions: mismatch,
       }),
@@ -154,8 +161,13 @@ describe("operator approval execution identity", () => {
       END;
     `);
 
+    // The injected trigger is deliberately noncanonical; worker admission rejects it.
+    // Exercise the same native transaction directly to prove parent/child atomicity.
     expect(() =>
-      insertOperatorApproval({ approval: approval("atomic", token()), databaseOptions: options }),
+      insertOperatorApprovalNative({
+        approval: approval("atomic", token()),
+        databaseOptions: options,
+      }),
     ).toThrow("forced child failure");
     expect(
       db.prepare("SELECT approval_id FROM operator_approvals WHERE approval_id = ?").get("atomic"),
@@ -165,11 +177,15 @@ describe("operator approval execution identity", () => {
     ).toBeUndefined();
   });
 
-  it("cascades parent deletion and retains the exact child across reopen", () => {
+  it("cascades parent deletion and retains the exact child across reopen", async () => {
     const options = databaseOptions();
     expect(
-      insertOperatorApproval({ approval: approval("durable", token()), databaseOptions: options }),
+      await insertOperatorApproval({
+        approval: approval("durable", token()),
+        databaseOptions: options,
+      }),
     ).toMatchObject({ outcome: "inserted" });
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const db = openOpenClawStateDatabase(options).db;
@@ -190,11 +206,11 @@ describe("operator approval execution identity", () => {
     ).toBeUndefined();
   });
 
-  it("keeps parent decision and consume semantics independent of child/audit rows", () => {
+  it("keeps parent decision and consume semantics independent of child/audit rows", async () => {
     const options = databaseOptions();
     for (const id of ["missing-child", "corrupt-child", "deleted-audit"]) {
       expect(
-        insertOperatorApproval({ approval: approval(id, token()), databaseOptions: options }),
+        await insertOperatorApproval({ approval: approval(id, token()), databaseOptions: options }),
       ).toMatchObject({ outcome: "inserted" });
     }
     const db = openOpenClawStateDatabase(options).db;
@@ -215,7 +231,7 @@ describe("operator approval execution identity", () => {
 
     for (const id of ["missing-child", "corrupt-child", "deleted-audit"]) {
       expect(
-        resolveOperatorApproval({
+        await resolveOperatorApproval({
           id,
           decision: "allow-once",
           resolver: { kind: "device", id: "reviewer" },
@@ -226,7 +242,7 @@ describe("operator approval execution identity", () => {
         }),
       ).toMatchObject({ outcome: "resolved" });
       expect(
-        consumeOperatorApprovalAllowOnce({
+        await consumeOperatorApprovalAllowOnce({
           id,
           consumerId: "consumer",
           expectedKind: "exec",
@@ -236,7 +252,7 @@ describe("operator approval execution identity", () => {
         }),
       ).toMatchObject({ outcome: "consumed" });
       expect(
-        getOperatorApprovalDetailed({ id, nowMs: 3_000, databaseOptions: options }),
+        await getOperatorApprovalDetailed({ id, nowMs: 3_000, databaseOptions: options }),
       ).toMatchObject({
         outcome: "found",
         record: { decision: "allow-once", consumedBy: "consumer" },

@@ -41,12 +41,20 @@ suite.define(() => {
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         const trigger = pane.locator('[data-chat-permission-select="true"]');
         await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
-        const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-        await gateway.deferNext("sessions.list", rosterMatch);
+        const patchMatch = { key: session.key, permissionMode: "workspace" };
+        await gateway.deferNext("sessions.patch", patchMatch);
 
         await trigger.click();
         await pane.locator('[data-chat-permission-option="workspace"]').click();
-        await gateway.waitForRequest("sessions.patch");
+        await gateway.waitForRequest("sessions.patch", { match: patchMatch });
+        // Hydration can observe the old permission while its write is still pending.
+        await page.evaluate(async () => {
+          const app = document.querySelector("openclaw-app") as PermissionTestApp;
+          await app.runtime?.context.sessions.list({ agentId: "main" });
+        });
+        const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+        await gateway.deferNext("sessions.list", rosterMatch);
+        await gateway.resolveDeferred("sessions.patch");
         await gateway.waitForRequest("sessions.list", { after: listRequests, match: rosterMatch });
         // Swarm hydration can finish here; the parent must not appear in its own child query.
         await page.evaluate(async (key) => {
@@ -108,11 +116,12 @@ suite.define(() => {
       const trigger = pane.locator('[data-chat-permission-select="true"]');
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
       const listRequests = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-      await gateway.deferNext("sessions.patch", { permissionMode: "workspace" });
+      const patchMatch = { key: session.key, permissionMode: "workspace" };
+      await gateway.deferNext("sessions.patch", patchMatch);
 
       await trigger.click();
       await pane.locator('[data-chat-permission-option="workspace"]').click();
-      await gateway.waitForRequest("sessions.patch");
+      await gateway.waitForRequest("sessions.patch", { match: patchMatch });
       await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...session,

@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   readActiveTranscriptEntryAnchor,
@@ -28,7 +27,11 @@ import {
   copyCodeModeSourceAppendOptions,
 } from "../transcript-code-mode-source.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
-import { isIndexedSessionEntry, isSessionContextMetadataEntry } from "./session-manager-codec.js";
+import {
+  isIndexedSessionEntry,
+  isSessionContextMetadataEntry,
+  isTalkRealtimeVoiceEntry,
+} from "./session-manager-codec.js";
 import type { PreparedSessionTranscriptReload } from "./session-manager-core.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
@@ -57,21 +60,6 @@ import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 function canonicalizeSessionEntry<T extends SessionEntry>(entry: T): T {
   // oxlint-disable-next-line unicorn/prefer-structured-clone -- Match the persisted JSON/toJSON shape exactly.
   return JSON.parse(JSON.stringify(entry)) as T;
-}
-
-function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
-  if (
-    entry.type !== "message" ||
-    (entry.message.role !== "user" && entry.message.role !== "assistant")
-  ) {
-    return false;
-  }
-  const provenance: unknown = Reflect.get(entry.message, "provenance");
-  return (
-    isRecord(provenance) &&
-    provenance.kind === "realtime_voice" &&
-    provenance.sourceChannel === "talk"
-  );
 }
 
 export class SessionManagerEntries extends SessionManagerSuffixPersistence {
@@ -149,6 +137,15 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
               message: canonicalEntry.message,
               config: options?.config,
             }),
+            {
+              scope: this.persistenceTarget,
+              envelope: {
+                type: "message",
+                id: canonicalEntry.id,
+                parentId: canonicalEntry.parentId,
+                timestamp: canonicalEntry.timestamp,
+              },
+            },
           )
         : undefined;
     let persistenceResult;

@@ -148,8 +148,8 @@ export async function findGitHubPublicationPullRequest(params: {
   });
   if (found) {
     params.recordObserved(found.url);
-    params.assertCurrent();
     if (found.state === "closed") {
+      params.assertCurrent();
       throw new GitHubPublicationKnownFailure(
         "GitHub pull request was closed before publication completed.",
         {
@@ -172,6 +172,10 @@ export async function findGitHubPublicationPullRequest(params: {
       nextAction: "Check pull-request permission for the effective account, then retry.",
     });
   }
+  // A matching accepted result settles its receipt; later actions still check authority.
+  if (found) {
+    return found.url;
+  }
   params.assertCurrent();
-  return found?.url;
+  return undefined;
 }

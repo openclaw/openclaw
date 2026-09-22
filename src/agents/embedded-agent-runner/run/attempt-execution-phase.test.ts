@@ -337,7 +337,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           {
             type: "openai_responses_terminal",
             timestamp: 1,
-            details: { eventType: "response.incomplete", incompleteReason: "max_output_tokens" },
+            details: {
+              eventType: "response.incomplete",
+              stopReason: "length",
+              incompleteReason: "max_output_tokens",
+            },
           },
         ];
       }

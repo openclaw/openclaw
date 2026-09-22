@@ -20,10 +20,10 @@ import {
   completePostUpdateMaintenance,
   resumePostUpdateWindowsAutoStart,
 } from "./update-command-post-update-maintenance.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   assertUpdateCommandPackageFinalization,
   createUpdateCommandFinalizationFence,
-  UpdateCommandRecoveryPendingError,
 } from "./update-command-recovery.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {

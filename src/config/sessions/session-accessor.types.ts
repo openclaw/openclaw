@@ -547,6 +547,8 @@ export type ReplySessionInitializationCommitResult =
 export type SessionEntryPatchOptions = {
   /** Synchronous final ownership check executed inside the commit transaction. */
   assertCommitAllowed?: () => void;
+  /** Internal review owner authorization; ordinary patches preserve the current pause. */
+  providerReviewMutation?: boolean;
   /** Let this write satisfy a legacy updatedAt=0 pending reset without rotating lifecycle identity. */
   consumePendingReset?: boolean;
   /** Entry to synthesize when a patch operation is allowed to create. */

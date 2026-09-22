@@ -82,7 +82,9 @@ let context: BrowserContext | undefined;
 
 suite.define(() => {
   afterEach(async () => {
-    await context?.close();
+    if (context) {
+      await suite.closeBrowserContext(context);
+    }
     context = undefined;
   });
 
@@ -99,7 +101,7 @@ suite.define(() => {
     webChrome?: boolean;
     width?: number;
   }) {
-    context = await suite.browser.newContext({
+    context = await suite.newBrowserContext({
       colorScheme: options.colorScheme,
       hasTouch: options.hasTouch,
       locale: "en-US",

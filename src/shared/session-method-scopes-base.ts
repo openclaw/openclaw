@@ -2,6 +2,63 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "./incognito-session-key.js";
 
 export type SessionMutationOperatorScope = "operator.write" | "operator.admin";
+export type SessionOperatorScope = "operator.sessions.read" | "operator.sessions.write";
+
+const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
+  "sessions.list",
+  "sessions.subscribe",
+  "sessions.messages.subscribe",
+  "sessions.messages.unsubscribe",
+  "sessions.viewers.set",
+  "sessions.preview",
+  "sessions.describe",
+  "sessions.branches.list",
+  "sessions.get",
+  "sessions.resolve",
+  "sessions.search",
+  "sessions.files.list",
+  "sessions.files.get",
+  "sessions.setInvolvement",
+  "chat.history",
+  "chat.startup",
+  "chat.metadata",
+  "chat.message.get",
+  "session.members.list",
+  "session.members.listEvidence",
+]);
+
+const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
+  "chat.send",
+  "chat.abort",
+  "sessions.create",
+  "sessions.patch",
+  "sessions.patchMany",
+  "sessions.delete",
+  "sessions.fork",
+  "sessions.recover",
+  "sessions.send",
+  "sessions.steer",
+  "sessions.abort",
+  "sessions.goal.update",
+  "sessions.goal.clear",
+]);
+
+/** Admission only: reads retain sharing policy; mutation owners must bind the caller's own row. */
+export function resolveSessionMethodScope(
+  method: string,
+  params?: unknown,
+): SessionOperatorScope | undefined {
+  if (SESSION_READ_METHODS.has(method)) {
+    return "operator.sessions.read";
+  }
+  if (
+    SESSION_WRITE_METHODS.has(method) &&
+    resolveBaseSessionMutationRequiredScope(method, params) !== "operator.admin"
+  ) {
+    return "operator.sessions.write";
+  }
+  return undefined;
+}
 
 const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "label",

@@ -38,6 +38,7 @@ export type PersonalGitHubSessionAction = PersonalGitHubAction & {
   lifecycleRevision: string | null;
 };
 type Selection = { generation: string; account: { accountId: number; login: string } };
+type PersonalPublicationWorkspace = { assertCurrent: () => void; assertCustody: () => void };
 
 export function assertPersonalGitHubPublicationReplay(
   existing: {
@@ -170,14 +171,13 @@ export function createPersonalGitHubPublicationCoordinator(
   };
   const withWorkspace = async <T>(
     action: PersonalGitHubSessionAction,
-    run: (assertCurrent: () => void) => Promise<T>,
+    run: (workspace: PersonalPublicationWorkspace) => Promise<T>,
   ): Promise<T> => {
     action.assertCurrent();
     return await placements.withLocalWorkspaceReservation(action, async (assertReservation) => {
       const worktree = resolveGitHubPublicationWorktreeOwner(action).worktree;
       const lease = await acquireWorktreeRunLease(worktree.id, { exclusive: true });
-      const assertCurrent = () => {
-        action.assertCurrent();
+      const assertCustody = () => {
         assertReservation();
         const current = resolveGitHubPublicationWorktreeOwner({
           ...action,
@@ -196,9 +196,13 @@ export function createPersonalGitHubPublicationCoordinator(
           throw new Error(workStartError);
         }
       };
+      const assertCurrent = () => {
+        action.assertCurrent();
+        assertCustody();
+      };
       try {
         assertCurrent();
-        return await run(assertCurrent);
+        return await run({ assertCurrent, assertCustody });
       } finally {
         await lease.release();
       }
@@ -207,7 +211,7 @@ export function createPersonalGitHubPublicationCoordinator(
   const execute = async (
     action: PersonalGitHubSessionAction,
     row: PersonalGitHubPublicationRow,
-    assertWorkspace: () => void,
+    workspace: PersonalPublicationWorkspace,
   ): Promise<SessionGitHubPublicationResult> => {
     const selected = {
       generation: row.connection_generation,
@@ -216,7 +220,7 @@ export function createPersonalGitHubPublicationCoordinator(
     const bound = bindPersonalGitHubPublicationSelection(action, selected);
     const assertCurrent = () => {
       bound.assertCurrent();
-      assertWorkspace();
+      workspace.assertCurrent();
       if (
         bound.profileId !== row.identity_profile_id ||
         action.sessionId !== row.session_id ||
@@ -235,9 +239,13 @@ export function createPersonalGitHubPublicationCoordinator(
           assertCurrent();
           return execution.ownsExecution();
         },
+        validateCustody: () => {
+          workspace.assertCustody();
+          return execution.ownsExecution();
+        },
         identity: {
           prepare: async () =>
-            await preparePersonalGitHubPublicationSelection(bound, assertWorkspace),
+            await preparePersonalGitHubPublicationSelection(bound, workspace.assertCurrent),
           isCurrent: (identity) => {
             assertCurrent();
             return (
@@ -309,13 +317,16 @@ export function createPersonalGitHubPublicationCoordinator(
         idempotencyKey: input.idempotencyKey,
         hasRequest: () => Boolean(readRequest()),
       });
-      return await withWorkspace(action, async (assertWorkspace) => {
+      return await withWorkspace(action, async (workspace) => {
         const assertCurrent = () => {
-          assertWorkspace();
+          workspace.assertCurrent();
           bound.assertCurrent();
         };
         const worktree = resolveGitHubPublicationWorktreeOwner(action).worktree;
-        const identity = await preparePersonalGitHubPublicationSelection(bound, assertWorkspace);
+        const identity = await preparePersonalGitHubPublicationSelection(
+          bound,
+          workspace.assertCurrent,
+        );
         const target = await prepareGitHubPublicationTarget({ worktree, identity, assertCurrent });
         const snapshot = await captureGitHubPublicationWorkspaceSnapshot({
           cwd: worktree.path,
@@ -364,7 +375,7 @@ export function createPersonalGitHubPublicationCoordinator(
         return await execute(
           action,
           insertPersonalGitHubPublication(row, action.lifecycleRevision, assertCurrent),
-          assertWorkspace,
+          workspace,
         );
       });
     },
@@ -432,7 +443,7 @@ export function createPersonalGitHubPublicationCoordinator(
       bindPersonalGitHubPublicationSelection(action, input);
       return await withWorkspace(
         action,
-        async (assertCurrent) => await execute(action, row, assertCurrent),
+        async (workspace) => await execute(action, row, workspace),
       );
     },
   };

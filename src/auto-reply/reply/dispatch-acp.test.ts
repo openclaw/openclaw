@@ -9,6 +9,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
+import { createTestChannelIngressOwner } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AcpSessionResolution } from "../../acp/control-plane/manager.types.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
@@ -22,9 +23,8 @@ import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-i
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
-import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
-import { registerChannelIngressHostOwner } from "../../channels/message-access/ingress-host-owner.js";
-import { resolveStableChannelMessageIngress } from "../../channels/message-access/runtime.js";
+import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
+import { createHostChannelIngressRuntime } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   listSessionParticipantsReadOnly,
@@ -587,16 +587,15 @@ describe("tryDispatchAcpReplyCore", () => {
 
   it("admits ACP message turns with the original channel participant", async () => {
     const captured: unknown[] = [];
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
+    const audit = createChannelAdmissionAudit({ enabled: true });
     const clearSink = configureExecutionIdentityAdmissionSink((work) => {
       captured.push(work);
       return true;
     });
-    const owner = { channelId: "discord", record: {}, epoch: {}, isLive: () => true };
-    const clearOwner = registerChannelIngressHostOwner(owner);
+    const owner = createTestChannelIngressOwner({ audit, channelId: "discord" });
     try {
       setReadyAcpResolution();
-      const channelIngress = await resolveStableChannelMessageIngress({
+      const channelIngress = await createHostChannelIngressRuntime(owner).resolveStable({
         channelId: "discord",
         accountId: "default",
         subject: { stableId: "person-42" },
@@ -645,9 +644,8 @@ describe("tryDispatchAcpReplyCore", () => {
         },
       ]);
     } finally {
-      clearOwner();
       clearSink();
-      clearCollection();
+      audit.close();
     }
   });
 

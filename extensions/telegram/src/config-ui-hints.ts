@@ -1,7 +1,20 @@
 import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-config-ui-hints";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
+const observedGroupHistoryHint = {
+  help: "Automatic observed-message context uses a default of 50 and a maximum of 200 messages; 0 disables automatic injection. The JSON integer maximum selects the 50-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
+};
+const observedDmHistoryHint = {
+  help: "Automatic observed-DM context uses a default of 10 and a maximum of 200 messages; 0 disables that extra context. The JSON integer maximum selects the 10-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
+};
+
 export const telegramChannelConfigUiHints = {
+  historyLimit: observedGroupHistoryHint,
+  "accounts.*.historyLimit": observedGroupHistoryHint,
+  dmHistoryLimit: observedDmHistoryHint,
+  "accounts.*.dmHistoryLimit": observedDmHistoryHint,
+  "dms.*.historyLimit": observedDmHistoryHint,
+  "accounts.*.dms.*.historyLimit": observedDmHistoryHint,
   "": {
     label: "Telegram",
     help: "Telegram channel provider configuration including auth tokens, retry behavior, and message rendering controls. Use this section to tune bot behavior for Telegram-specific API semantics.",

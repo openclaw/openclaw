@@ -26,7 +26,7 @@ import {
   observeOriginalManagedServiceRuntime,
   revalidateOriginalManagedServiceRuntime,
 } from "./update-command-original-service.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { restartRetainedUpdateGatewayService } from "./update-command-service-command.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import {

@@ -61,6 +61,35 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 - [Building provider plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
 - [Decision models](/plugins/sdk-overview/capabilities#decision-models-contract-version-1) - `openclaw/plugin-sdk/decisions` and the typed decision provider contract
 
+## Code Mode executor runtime
+
+Use `openclaw/plugin-sdk/code-mode-executor-runtime` to implement the `quickjs`
+executor choice. Code Mode has two selectable IDs: `node`, owned by core, and
+`quickjs`, supplied by an executor plugin. The plugin's installation ID can
+differ from its executor ID. Declare `quickjs` in `contracts.codeModeExecutors`
+and export `codeModeExecutor` from the plugin's top-level `code-mode-executor-api`
+artifact. The host resolves this artifact only when QuickJS is selected;
+ordinary plugin registration remains lightweight.
+
+Selected bundled executors preserve core runtime availability despite global
+plugin disablement or a restrictive allowlist. Explicit owner denies and
+disabled entries still apply. External executors retain the full plugin policy.
+
+`CodeModeExecutor.execute(input, options)` receives the guest source,
+tool declarations, namespace descriptors, resource limits, and a scoped host
+bridge. Return a bounded completion or failure, or a waiting result containing
+an executor-owned `CodeModeExecutorContinuation`. Its `resume` method transfers
+custody once, `retainedBytes` reports a diagnostic size estimate, and `dispose` joins
+cleanup and keeps failed cleanup retryable. Disposing an already consumed continuation has no effect. The selected
+executor stays attached to the continuation across configuration changes.
+
+The SDK supplies the common guest controller, source preparation, result
+capture, bounded error text, and worker protocol types. Executors own their
+engine and suspended state. Core owns permissions, approvals, tool dispatch,
+settlement receipts, output delivery, expiry, and cancellation. Missing or
+disabled executors fail explicitly; the host never substitutes a less isolated
+executor.
+
 ## MCP subprocess runtime
 
 **Import:** `mcpStdioRuntime` from `openclaw/plugin-sdk/agent-harness-runtime` using dynamic `import()` when opening a connection. Its frozen object lazily loads one factory:

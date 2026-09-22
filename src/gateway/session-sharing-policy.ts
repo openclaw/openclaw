@@ -11,6 +11,7 @@ import { isSessionMember, type SessionEntry } from "../config/sessions.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   authorizeGatewaySessionCreation,
   operatorSessionCap,
@@ -22,7 +23,7 @@ import {
   isGatewayClientProfilePending,
 } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { prepareSessionCreatorProfile } from "./session-creator.js";
+import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import {
   prepareGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetsReadOnly,
@@ -333,6 +334,26 @@ export function authorizeResolvedSessionMutation(params: {
     return null;
   }
   return authorizeSessionSharingTarget({ cfg: params.cfg, client: params.client, target });
+}
+
+/** Narrow mutation admission never borrows write access from sharing or membership. */
+export function authorizeOwnSessionMutation(params: {
+  client: GatewayClient | null;
+  target: SessionSharingTarget | null;
+  /** Preserve the admitted person even if the retained client's scopes or identity change. */
+  expectedProfileId?: string;
+}): ErrorShape | null {
+  if (params.expectedProfileId === undefined) {
+    return null;
+  }
+  const actor = resolveGatewayOperatorRoleActor(params.client);
+  return actor?.kind === "operator" &&
+    actor.profileId.trim() &&
+    operatorScopeSatisfied("operator.sessions.write", params.client?.connect?.scopes ?? []) &&
+    actor.profileId === params.expectedProfileId &&
+    (!params.target || isSessionCreatorProfile(params.target.entry.createdActor, actor.profileId))
+    ? null
+    : errorShape(ErrorCodes.FORBIDDEN, "Session-scoped writes require your own session.");
 }
 
 export function authorizeSessionAgentRun(params: {

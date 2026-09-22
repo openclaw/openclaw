@@ -34,6 +34,11 @@ asynchronous planning first, then reread authoritative rows inside the admitted
 transaction. Preserve FIFO order, coordinator custody, transaction/commit grants,
 and settlement of accepted write-capable work.
 
+Worker authority requests wait for the retained host owner's grant or refusal;
+host scheduling delays do not expire that authority. The host still checks current
+authority before granting, and broker failure joins worker exit before releasing
+custody. Coordinator-lock and broker-capacity admission keep their own deadlines.
+
 ## Carry facts, publish after commit
 
 Before yielding, capture the physical store target, source/admission scope,
@@ -57,6 +62,11 @@ existing reconciliation custody: do not replay the write. Cancellation before
 dispatch can refuse work; cancellation after execution must still join its native
 settlement. Close and shutdown join accepted work and cleanup before releasing
 the store or replacing its generation.
+
+Session-reclamation retirement honors settled cleanup reported by its worker,
+including after a failed request. After an unsettled native exit, the shared-state
+cleanup worker releases the exact retained lease. Retirement joins lease deletion and cleanup
+store close, keeping those writes off the host connection used by live snapshots.
 
 ## Migrate a caller
 
@@ -104,9 +114,46 @@ with another per-request store scan. See the
 [inventory baseline](/reference/database-schemas/worker-access-inventory#profile-priority-and-current-cutover-status)
 for measurements and the next owners to migrate.
 
+Scheduled task maintenance and asynchronous task-status summaries read exact
+backing-session keys through the existing session reader worker. Each bounded
+batch returns only identity and subagent recovery facts; retained session history
+is not materialized. Recovery hooks trigger fresh backing reads before the task
+owner rechecks the current record. A concurrent session publication invalidates
+prepared facts, so uncertain backing state keeps the task alive for a later pass.
+Synchronous operator inspection uses the same selected-row reader. An unavailable
+schema refuses the read rather than reporting missing backing sessions. Canonical
+admission, malformed-row handling, retention, and update behavior are unchanged.
+
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
 through their original store/projection owner.
+
+Channel identity administration, profile role assignments, email linking, and
+HTTP/WebSocket sign-in acquisition use that writer and the existing read worker.
+Worker commit receipts publish affected profile, alias, and display facts through
+the profile owner; warm sign-in ensures avoid unnecessary write transactions.
+Channel ingress prepares exact identity and role facts in the read worker, then
+retains the profile owner's physical-store and mutation revisions. Final owner
+checks read those revisions and current configuration without querying SQLite.
+Relevant identity or role mutations revoke prior authority before publication;
+closing or replacing the store invalidates its retained authority. Display caches
+and discovery snapshots do not grant permission.
+
+Secret-store expiry runs in that worker for scheduled Gateway cleanup and
+post-mutation cleanup. The caller captures the database and expiry cutoffs before
+yielding; the worker retains the existing SQL and expiry rules and returns only
+the deleted count. Scheduled sweeps coalesce while one is active, and Gateway
+shutdown stops scheduling and joins accepted cleanup. Ordinary secret-store
+set/delete operations remain separate synchronous migration debt.
+
+Placement change reporting reads its before/after snapshots in the shared-state
+read worker using the placement store's row codec. It transfers only session
+identity, state, generation, and update time to the Gateway. The reconciliation
+coordinator reserves and admits its sweep before awaiting reporting, preserving
+dispatch ordering and request coalescing. Reporting failures preserve the original
+operation outcomes. Placement
+writes, current-authority checks, and workspace retention retain their existing
+owners; these reporting snapshots grant no execution or deletion authority.
 
 This execution cutover does not change schemas, stored bytes, retention, config,
 or update behavior. A change to those contracts follows the

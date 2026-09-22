@@ -135,6 +135,93 @@ describe("Git checkout execution", () => {
     });
   }
 
+  it.each(["origin", "upstream.with.dots", "team/upstream"])(
+    "updates from %s while an unrelated remote is unavailable",
+    async (authority) => {
+      const target = await advanceRemote();
+      if (authority !== "origin") {
+        await git(root, "remote", "rename", "origin", authority);
+      }
+      await git(root, "remote", "add", "secondary", path.join(directory, "unavailable"));
+      const config = await fs.readFile(path.join(root, ".git", "config"));
+      const result = await update();
+      expect(result).toMatchObject({ status: "ok", after: { sha: target } });
+      expect(result.steps.flatMap((step) => step.warnings ?? [])).toContain(
+        `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
+      );
+      expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+      await expectRuntime(root, target);
+    },
+  );
+
+  it("fails before activation when the authoritative remote is unavailable", async () => {
+    await advanceRemote();
+    await git(root, "remote", "add", "secondary", remote);
+    await git(root, "remote", "set-url", "origin", path.join(directory, "unavailable"));
+    const config = await fs.readFile(path.join(root, ".git", "config"));
+    const result = await update();
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(stopped).toBe(false);
+    expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(config);
+    await expectRuntime(root, beforeSha);
+  });
+
+  it.each(["exit", "timeout"] as const)(
+    "ignores stale refs after optional fetch %s failure",
+    async (failure) => {
+      const target = await advanceRemote();
+      await git(root, "remote", "add", "adead", path.join(directory, "unavailable"));
+      await git(root, "update-ref", "refs/remotes/adead/main", beforeSha);
+      await git(root, "checkout", "-b", "feature");
+      await git(root, "branch", "-D", "main");
+      const execute = runCommand;
+      if (failure === "timeout") {
+        runCommand = (argv, options) =>
+          argv.includes("fetch") && argv.includes("adead")
+            ? Promise.resolve({
+                code: null,
+                stdout: "",
+                stderr: "remote timed out",
+                killed: true,
+                termination: "timeout",
+              })
+            : execute(argv, options);
+      }
+      const result = await update();
+      expect(result).toMatchObject({ status: "ok", after: { sha: target } });
+      expect(result.steps.find((step) => step.name.endsWith(":adead"))?.advisory).toMatchObject({
+        kind: "recoverable-maintenance",
+        message: expect.stringContaining("Could not refresh optional target remote adead"),
+      });
+      expect(await git(root, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe("origin/main");
+      await expectRuntime(root, target);
+    },
+  );
+
+  it.each(["exit", "timeout", "signal"] as const)(
+    "settles optional tag discovery after %s",
+    async (termination) => {
+      const target = await advanceRemote();
+      await git(remote, "tag", "requested", target);
+      await git(root, "remote", "add", "adead", path.join(directory, "unavailable"));
+      const execute = runCommand;
+      runCommand = (argv, options) =>
+        termination !== "exit" && argv.includes("fetch") && argv.includes("adead")
+          ? Promise.resolve({
+              code: termination === "signal" ? 143 : null,
+              stdout: "",
+              stderr: "tag transport interrupted",
+              killed: true,
+              termination,
+            })
+          : execute(argv, options);
+      const result = await update({ devTarget: { mode: "detached", ref: "refs/tags/requested" } });
+      expect(result.status).toBe(termination === "signal" ? "error" : "ok");
+      expect(stopped).toBe(termination !== "signal");
+      await expectRuntime(root, termination === "signal" ? beforeSha : target);
+    },
+  );
+
   it.each(["dirty", "unreadable"] as const)(
     "refuses a %s checkout before inspection or shutdown",
     async (kind) => {
@@ -384,15 +471,17 @@ describe("Git checkout execution", () => {
     "keeps a tracked target detached (initially detached: %s)",
     async (detached) => {
       const targetSha = await advanceRemote();
+      await git(root, "remote", "rename", "origin", "upstream");
+      await git(root, "remote", "add", "origin", path.join(directory, "unavailable"));
       if (detached) {
         await git(root, "checkout", "--detach", beforeSha);
       }
       const result = await update({
-        devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: targetSha },
+        devTarget: { mode: "tracked", upstreamRef: "upstream/main", upstreamSha: targetSha },
       });
       expect(result).toMatchObject({
         status: "ok",
-        after: { sha: targetSha, upstreamRef: "origin/main" },
+        after: { sha: targetSha, upstreamRef: "upstream/main" },
       });
       expect(await git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
       await expectRuntime(root, targetSha);

@@ -1,12 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
-import { generateSecureUuid } from "../infra/secure-random.js";
+import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
+import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
+  insertUserProfile,
   requireResolvedUserProfileMetadataById,
   toUserProfile,
-  type UserProfileRow,
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import { MAX_USER_PROFILE_DISPLAY_NAME_LENGTH } from "./user-profiles.types.js";
@@ -19,34 +20,13 @@ export function normalizeProfileEmail(email: string): string {
   return normalized;
 }
 
-export function insertUserProfile(
-  db: DatabaseSync,
-  displayName: string | null,
-  now: number,
-  beforeInsert?: (profileId: string) => void,
-): UserProfileRow {
-  const row: UserProfileRow = {
-    id: generateSecureUuid(),
-    display_name: displayName,
-    avatar: null,
-    avatar_mime: null,
-    avatar_sha256: null,
-    merged_into: null,
-    created_at: now,
-    updated_at: now,
-  };
-  beforeInsert?.(row.id);
-  executeSqliteQuerySync(db, userProfilesDb(db).insertInto("user_profiles").values(row));
-  return row;
-}
-
 /** The caller owns the transaction; alias uniqueness and creation settle together. */
 export function ensureProfileForEmailInDatabase(
   db: DatabaseSync,
   email: string,
   initialDisplayName: string | null,
   now: number,
-  beforeInsert?: (profileId: string) => void,
+  mutation?: UserProfileMutationContext,
 ) {
   const kysely = userProfilesDb(db);
   const existingAlias = executeSqliteQueryTakeFirstSync(
@@ -59,7 +39,7 @@ export function ensureProfileForEmailInDatabase(
   const displayName =
     initialDisplayName ??
     truncateUtf16Safe(email.split("@", 1)[0] || email, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH);
-  const row = insertUserProfile(db, displayName, now, beforeInsert);
+  const row = insertUserProfile(db, displayName, now, mutation);
   executeSqliteQuerySync(
     db,
     kysely.insertInto("user_profile_emails").values({
@@ -68,6 +48,9 @@ export function ensureProfileForEmailInDatabase(
       created_at: now,
     }),
   );
+  mutation?.authority(row.id);
+  publishUserProfileAuthorityChange(db, row.id);
+  mutation?.publish(row.id);
   publishUserProfilesChange(db, row.id);
   return toUserProfile(row);
 }

@@ -934,7 +934,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
           changedFiles: 0,
           additions: 0,
           deletions: 0,
-          statusCheckRollup: [],
           files: [],
         }),
       );
@@ -946,7 +945,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
         'case "$*" in',
         '  "auth token") printf "token:1\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; exit 1 ;;',
         '  "browse") printf "https://github.com/fixture/fixture\\n" ;;',
-        '  "api --hostname github.com repos/fixture/fixture -H Cache-Control: max-age=0") printf \'{"full_name":"fixture/fixture","html_url":"https://github.com/fixture/fixture"}\\n\' ;;',
         '  "api user --include")',
         '    if [ "$OPENCLAW_TEST_AUTH_FAILURE" = 1 ]; then',
         '      printf "writer:1\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; exit 1',
@@ -954,10 +952,8 @@ describePosix("scripts/pr per-PR operation lock", () => {
         '    printf "writer:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS"',
         '    printf \'HTTP/2.0 200 OK\\n\\n{"login":"fixture-user"}\\n\' ;;',
         '  "api --hostname github.com repos/fixture/fixture/pulls/42 -H Cache-Control: max-age=0")',
-        '    jq \'{number,title,html_url:.url,state:(.state|ascii_downcase),draft:.isDraft,user:.author,base:{ref:.baseRefName,sha:.baseRefOid,repo:{id:123}},head:{ref:.headRefName,sha:.headRefOid,repo:{id:123,name:.headRepository.name,full_name:.headRepository.nameWithOwner,html_url:.headRepository.url,owner:.headRepositoryOwner}},body,labels,assignees,changed_files:.changedFiles,additions,deletions}\' "$OPENCLAW_TEST_PR_METADATA"; printf "pull:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
+        '    jq \'{number,title,html_url:.url,state:(.state|ascii_downcase),draft:.isDraft,user:.author,base:{ref:.baseRefName,sha:.baseRefOid,repo:{id:123,node_id:"fixture-repo",full_name:"fixture/fixture",html_url:"https://github.com/fixture/fixture"}},head:{ref:.headRefName,sha:.headRefOid,repo:{id:123,name:.headRepository.name,full_name:.headRepository.nameWithOwner,html_url:.headRepository.url,owner:.headRepositoryOwner}},body,labels,assignees,changed_files:.changedFiles,additions,deletions}\' "$OPENCLAW_TEST_PR_METADATA"; printf "pull:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
         '  "api --hostname github.com repos/fixture/fixture/pulls/42/files?per_page=100 --paginate --slurp -H Cache-Control: max-age=0") printf "[[]]\\n" ;;',
-        '  "api --hostname github.com repos/fixture/fixture/commits/"*"/check-runs?filter=latest&per_page=100 --paginate --slurp") printf \'[{"check_runs":[]}]\\n\' ;;',
-        '  "api --hostname github.com repos/fixture/fixture/commits/"*"/status?per_page=100 --paginate --slurp") printf \'[{"statuses":[]}]\\n\' ;;',
         '  *) printf "unexpected:99\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; echo "unexpected fixture gh request" >&2; exit 99 ;;',
         "esac",
       ]);
@@ -1057,7 +1053,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
             .soft(ghEvents, output)
             .toEqual(
               command === "review-init"
-                ? ["token:1", "token:1", "pull:0", "token:1", "pull:0", "token:1", "writer:1"]
+                ? ["pull:0", "token:1", "token:1", "writer:1"]
                 : ["token:1", "writer:1"],
             );
           expect.soft(controller.exitCode, output).toBe(1);
@@ -1869,7 +1865,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         `${readFileSync(mergeScript, "utf8")}\n` +
           "review_artifact_preflight() { :; }\n" +
           "validate_review_artifact_data() { :; }\n" +
-          "merge_verify() { MERGE_USE_CRABBOX_ADMIN_BYPASS=false; mark_pr_operation_side_effects_started; }\n",
+          'merge_verify() { MERGE_USE_CRABBOX_ADMIN_BYPASS=false; PR_HEAD_OBSERVATION="$MERGE_ENTRY_OBSERVATION"; mark_pr_operation_side_effects_started; }\n',
       );
       git("add", "--", ...wrapperSources);
       git("commit", "-qm", "test: native cleanup fixture");
@@ -1925,6 +1921,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         '      printf \'{"data":{"addComment":{"commentEdge":{"node":{"url":"https://example.invalid/comment"}}}}}\\n\'',
         "      exit 0",
         "    fi",
+        '    if [[ " $* " == *" --include "* ]]; then printf "HTTP/2.0 200 OK\\n\\n"; fi',
         '    state=OPEN; if grep -q "^merged$" "$OPENCLAW_TEST_LIFECYCLE"; then state=MERGED; fi',
         `    jq -cn --arg state "$state" --arg head '${preparedHead}' '{data:{repository:{id:"fixture-repo",databaseId:123,url:"https://github.com/fixture/repo",nameWithOwner:"fixture/repo",ref:{target:{oid:$head}},pullRequest:{id:"fixture-pr",number:42,url:"https://github.com/fixture/repo/pull/42",state:$state,headRefOid:$head,baseRefName:"main",isDraft:false,mergeCommit:(if $state=="MERGED" then {oid:$head} else null end),autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false,mergeable:"MERGEABLE",mergeStateStatus:"CLEAN"}}}}' ;;`,
         '  "api user --include" | "api --hostname github.com user --include")',
@@ -1933,11 +1930,13 @@ describePosix("scripts/pr per-PR operation lock", () => {
         '    git rev-parse refs/openclaw/pr-operation-locks/42 > "$OPENCLAW_TEST_OWNER"',
         '    if [ "$OPENCLAW_TEST_FAILURE" = merge ]; then echo "fixture merge failed" >&2; exit 7; fi',
         '    printf "merged\\n" >> "$OPENCLAW_TEST_LIFECYCLE" ;;',
-        '  "api --hostname github.com repos/fixture/repo/pulls/42"* | "api --hostname github.com repos/fixture/repo/pulls/43"*) printf \'{"state":"closed","merged_at":"2026-09-18T00:00:00Z","head":{"ref":""}}\\n\' ;;',
-        '  "api --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0")',
-        '    if [ ! -f "$OPENCLAW_TEST_LIFECYCLE" ] || ! grep -q "^invocation" "$OPENCLAW_TEST_LIFECYCLE"; then printf "invocation\\t%s\\n" "$PWD" >> "$OPENCLAW_TEST_LIFECYCLE"; fi',
-        `    printf '%s\\n' '{"id":123,"node_id":"fixture-repo","full_name":"fixture/repo","html_url":"https://github.com/fixture/repo"}' ;;`,
+        '  "api --hostname github.com repos/fixture/repo/pulls/42 -H Cache-Control: max-age=0" | "api --hostname github.com repos/fixture/repo/pulls/43 -H Cache-Control: max-age=0")',
+        '    state=closed; ref=""; if [ "$OPENCLAW_TEST_COMMAND" != gc ] && ! grep -q "^merged$" "$OPENCLAW_TEST_LIFECYCLE" 2>/dev/null; then state=open; ref=fixture-pr; printf "invocation\\t%s\\n" "$PWD" >> "$OPENCLAW_TEST_LIFECYCLE"; fi',
+        `    jq -cn --arg state "$state" --arg ref "$ref" --arg head '${preparedHead}' --argjson number "\${4##*/}" '{number:$number,html_url:("https://github.com/fixture/repo/pull/"+($number|tostring)),state:$state,draft:false,merged_at:(if $state=="closed" then "2026-09-18T00:00:00Z" else null end),base:{ref:"main",sha:$head,repo:{id:123,node_id:"fixture-repo",full_name:"fixture/repo",html_url:"https://github.com/fixture/repo"}},head:{ref:$ref,sha:$head,repo:{id:123,node_id:"fixture-repo",name:"repo",full_name:"fixture/repo",html_url:"https://github.com/fixture/repo",owner:{login:"fixture"}}}}' ;;`,
         `  "api --hostname github.com repos/fixture/repo/issues/42/comments?per_page=100 --paginate --slurp -H Cache-Control: max-age=0") printf '%s\\n' ${JSON.stringify(reviewComments)} ;;`,
+        '  "api --hostname github.com --method POST repos/fixture/repo/issues/42/comments "*)',
+        '    printf "comment\\n" >> "$OPENCLAW_TEST_LIFECYCLE"',
+        '    printf "https://example.invalid/comment\\n" ;;',
         '  *) echo "unexpected fixture gh call: $*" >&2; exit 99 ;;',
         "esac",
       ]);
@@ -1977,6 +1976,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
             GH_REPO: "fixture/repo",
             OPENCLAW_PR_AUTO_MERGE: "0",
             OPENCLAW_PR_MERGE_METHOD: "merge",
+            OPENCLAW_TEST_COMMAND: command,
             OPENCLAW_TEST_FAILURE: failure,
             OPENCLAW_TEST_LIFECYCLE: lifecycle,
             OPENCLAW_TEST_OWNER: ownerFile,
@@ -2459,7 +2459,8 @@ describePosix("scripts/pr per-PR operation lock", () => {
       const ownerOid = refOid(repoDir);
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
       expect(await waitForProcessId(backgroundPidFile)).toBeGreaterThan(1);
-      expect(processGroupExists(operationPgid)).toBe(false);
+      assertFixtureProcessGroupStopped(operationPgid);
+      goneProcessGroups.add(operationPgid);
       expect(refOid(repoDir)).toBe(ownerOid);
       expect(result.stderr).toContain(
         `scripts/pr lock-recover 42 ${ownerOid} --confirmed-no-running-tools`,
@@ -2483,7 +2484,8 @@ describePosix("scripts/pr per-PR operation lock", () => {
       operationPgid = await waitForProcessId(operationPgidFile);
       const ownerOid = refOid(repoDir);
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-      expect(processGroupExists(operationPgid)).toBe(false);
+      assertFixtureProcessGroupStopped(operationPgid);
+      goneProcessGroups.add(operationPgid);
       expect(result.stderr).toContain("process group remained active after wrapper exit");
       expect(result.stderr).toContain(`surviving processes in group ${operationPgid}`);
       expect(result.stderr).toMatch(/^\s+\d+ \d+ sleep$/mu);

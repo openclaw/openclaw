@@ -5,6 +5,7 @@ export const CI_PROOF_TEST_FILES = [
   "src/commands/doctor-config-preflight.refusal.process.test.ts",
   "src/gateway/server.codex-failure-recovery.test.ts",
   "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
+  "test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts",
   "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
   "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
   "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",

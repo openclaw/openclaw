@@ -13,6 +13,58 @@ read_when:
 
 OpenClaw loads `USER.md` beside `MEMORY.md` at session start. It has a separate small bootstrap budget, and edits are picked up on later turns in a long-lived session. If the file is absent, startup continues without it.
 
+## Personal USER files on a shared Gateway
+
+Keep workspace-root `USER.md` for shared defaults. To add preferences for one
+signed-in person, create `users/<canonical-profile-id>/USER.md` in the **agent
+workspace**, not the task's Git worktree. Obtain the durable profile ID from the
+Gateway's authenticated profile/People data; do not use a display name, GitHub
+login, email, or a profile ID pasted into a message. This uses existing session
+ownership and creation records; no schema or configuration change is needed.
+
+Each session selects **one personal `USER.md`**: the assigned human owner's file
+first, otherwise the authenticated human creator's file. An agent or system
+assignment does not prevent that creator fallback. For eligible external chat
+turns, OpenClaw loads the shared file first and the selected personal file second.
+The personal file supplements, rather than replaces, the shared file, overriding
+conflicting shared user preferences, not project rules or security policy. The
+workspace-root `USER.md` remains shared regardless of the workspace directory's name.
+
+Files are refreshed on later turns. Reassigning the session changes personal
+context on the next new turn, not the running turn. Another participant can steer
+under the normal permission and queue rules without switching personal context.
+Queued and collected messages from multiple people keep the session's selection;
+the current sender does not select a different file. Profile merges select the
+surviving canonical ID; move the preferences to that directory yourself. OpenClaw
+does not merge files or create a dossier.
+
+Missing files or missing qualifying human identity use shared defaults only. A
+human assignment without a profile ID does not fall back to the creator. Display
+labels, channel sender IDs, unknown-source creator IDs, and agent owners cannot
+select a personal file. Internal events and delegated tasks do not automatically
+inherit a personal profile. Subagent bootstrap still contains only its existing
+allowed project instructions. The shared local owner profile represents all
+connections using that identity, not separate people; use per-person sign-in on
+a team Gateway.
+
+Personal files use the existing guarded reads and memory provenance checks.
+Symlink aliases are not accepted. Each personal file must fit wholly within the
+4,000-character USER budget (or a lower configured per-file/remaining total
+budget); otherwise it is omitted with a warning rather than partially injected.
+Shared files retain their existing limits. Existing harness-specific bootstrap
+suppression still applies: for example, the embedded runner's
+`contextInjection: "never"` and `continuation-skip` settings, and lightweight
+bootstrap modes. Use the default `always` mode to refresh session-selected
+personal instructions on later turns.
+This selection is supported by the local embedded, generic CLI, and native Codex
+bootstrap paths. ACP agents, realtime sessions, and remote worker execution do
+not gain per-person selection from this feature.
+
+This is **prompt selection, not filesystem secrecy**. Workspace tools, trusted
+plugins, shared transcripts, and previously generated responses can expose other
+context. Reassigning the session or changing participants does not erase
+conversation history. Do not store secrets in these files.
+
 ## Gateway profile and GitHub credit
 
 Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified. The Profile header follows your live user identity, including names cleared from another browser, even when several agents are configured. Unidentified connections retain the default-agent preview.
@@ -52,6 +104,45 @@ When your authenticated profile has prompted a session before an agent run, comm
 When a session has someone to credit, its system prompt lists the exact trailers once. It tells the agent to add them to commits it makes from the session. The Codex runtime receives the same block in its developer instructions. Nothing is added when there is nobody to credit, and incognito sessions never carry credit. The Gateway publication broker applies the same credit directly in its generated commits and pull requests. When the Gateway exposes an external HTTPS session URL, pull requests end with a link to that exact team session. The trailers are not exported through the process or shell environment. Direct Git commands remain ordinary shell execution. OpenClaw does not replace `git` or install repository hooks. The agent following that system-prompt instruction is therefore the enforcement boundary.
 
 Turning **Git co-author credit** off stops attribution for future runs. It does not rewrite commits that already contain the public trailer.
+
+## Channel identity links
+
+An administrator can attest that a stable channel sender belongs to an existing Gateway profile. The link includes the channel, the configured channel account, and the sender's native ID. Display names, usernames, and `session.identityLinks` do not establish this association.
+
+All three Gateway methods require `operator.admin`:
+
+| Method                        | Parameters              | Result                                      |
+| ----------------------------- | ----------------------- | ------------------------------------------- |
+| `users.linkChannelIdentity`   | `profileId`, `identity` | The canonical profile ID and saved identity |
+| `users.listChannelIdentities` | `profileId`             | `links` for that profile                    |
+| `users.unlinkChannelIdentity` | `profileId`, `identity` | `removed`                                   |
+
+For example, the `identity` object for a Discord user is:
+
+```json
+{
+  "channelId": "discord",
+  "accountId": "team-bot",
+  "senderId": "100000000000000001"
+}
+```
+
+Use the exact configured account ID and immutable sender ID. An identical sender ID on another account is a different binding. Repeating the same link is safe. A link already owned by another profile must first be explicitly unlinked from that profile. Unlinking also checks the expected profile, so a stale request cannot remove someone else's binding. The shared **Owner** profile is not a person and cannot receive these links.
+
+Links follow explicit profile merges and the surviving profile's current role. Linking does not rename or merge people, rewrite transcript attribution, assign session ownership, or change session visibility. Permission resolution separately checks the trusted incoming sender and the linked person's current authority.
+
+Every linked sender whose current effective operator role includes `operator.admin` receives channel-owner authority automatically while any role-required person-access grant remains active. The role name does not matter, and no extra `gateway.auth.identityScopes` grant is needed. When operator roles are not configured, a matching administrative identity-scope grant supplies this authority instead. A configured nonadmin role prevents that fallback. Removing the link, demoting the person, or removing the role's administrative scope revokes inherited authority. Authority is rechecked before pending privileged actions take effect; already accepted operations finish their required cleanup. Explicit `commands.ownerAllowFrom` entries remain independent. See [Operator scopes](/gateway/operator-scopes).
+
+Managed updates retain the original person-access grant through staging and a
+required authorization check before parking the Gateway. Once parking is
+accepted, the native updater owns completion or recovery of that update while
+profile, role, and configuration checks remain current. A restarted policy service
+or renewed invitation does not authorize a new request on the original grant.
+See [Restart handoff](/cli/update/how-updates-run#restart-handoff).
+
+Channel policies and explicit command allowlists still apply, including to native commands. Cosmetic profile changes do not cancel an authorized request; changing its identity link or role requires a fresh request.
+
+These records use the existing shared-state identity table without changing its schema version. Older builds ignore the channel binding namespace; downgrading disables this recognition without converting the links into login accounts. Upgrading does not guess or backfill channel identities. Administrators can inspect and remove the links through the same methods after upgrading again.
 
 ## GitHub connections
 

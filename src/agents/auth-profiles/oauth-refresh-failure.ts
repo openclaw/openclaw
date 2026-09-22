@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeBoundedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { toErrorObject } from "../../infra/errors.js";
 /**
  * OAuth refresh failure classification and operator hints.
  * Parses provider/reason codes from refresh failures and formats safe login
@@ -36,6 +37,40 @@ export type OAuthRefreshFailurePresentation = {
   status?: number;
   summary?: string;
 };
+
+const oauthRefreshCleanupAggregates = new WeakSet<AggregateError>();
+
+export function appendOAuthRefreshCleanupErrors(
+  error: unknown,
+  cleanupErrors: readonly unknown[],
+): Error {
+  const primaryError = toErrorObject(error, "OAuth refresh failed");
+  if (cleanupErrors.length === 0) {
+    return primaryError;
+  }
+  const normalizedCleanupErrors = cleanupErrors.map((cleanupError) =>
+    toErrorObject(cleanupError, "OAuth refresh cleanup failed"),
+  );
+  const errors =
+    primaryError instanceof AggregateError && oauthRefreshCleanupAggregates.has(primaryError)
+      ? [...primaryError.errors, ...normalizedCleanupErrors]
+      : [primaryError, ...normalizedCleanupErrors];
+  const aggregate = new AggregateError(
+    errors,
+    "OAuth refresh failed and cleanup could not be completed.",
+    { cause: errors[0] },
+  );
+  oauthRefreshCleanupAggregates.add(aggregate);
+  return aggregate;
+}
+
+export function readOAuthRefreshInitiatingError(error: unknown): unknown {
+  return error instanceof AggregateError &&
+    oauthRefreshCleanupAggregates.has(error) &&
+    error.errors.length > 0
+    ? error.errors[0]
+    : error;
+}
 
 const OAUTH_REFRESH_FAILURE_ERROR_TYPE_MAX_CHARS = 100;
 const OAUTH_REFRESH_FAILURE_SUMMARY_MAX_CHARS = 500;

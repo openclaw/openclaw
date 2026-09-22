@@ -131,12 +131,29 @@ module.exports = { id: "search-fixture", register(api) {
       expect(fs.existsSync(filename)).toBe(true);
       readers.forEach((reader) => reader.release());
       const outcomes = await calls;
-      expect(outcomes.map((result) => result.status)).toEqual(
-        Array(50).fill(kind === "timed-out" ? "rejected" : "fulfilled"),
-      );
-      for (const outcome of outcomes) {
-        if (outcome.status === "rejected") {
-          expect(outcome.reason).toMatchObject({ name: "PluginInstanceUnavailableError" });
+      expect(outcomes.map((result) => result.status)).toEqual(Array(50).fill("fulfilled"));
+      for (const [index, outcome] of outcomes.entries()) {
+        if (outcome.status !== "fulfilled") {
+          throw outcome.reason;
+        }
+        if (kind === "timed-out") {
+          expect(outcome.value.details).toEqual({
+            kind: "error",
+            provider: "fixture-search",
+            error: "provider_error",
+            message: expect.stringContaining("Search failed"),
+            docs: "https://docs.openclaw.ai/tools/web",
+          });
+        } else {
+          expect(outcome.value.details).toMatchObject({
+            kind: "results",
+            provider: "fixture-search",
+            query: `query-${index}`,
+            count: 1,
+            results: [
+              { title: expect.stringContaining("search-fixture"), url: "https://example.com/" },
+            ],
+          });
         }
       }
       await retirement;
