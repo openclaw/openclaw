@@ -9,11 +9,8 @@ import {
   renderChannelPairingPrompt,
   renderChannelPairingQueue,
 } from "./view.pairing.ts";
-import {
-  createChannelsViewProps,
-  type ChannelsViewTestOverrides,
-  type ChannelsViewTestProps,
-} from "./view.test-support.ts";
+import { createChannelsViewProps, type ChannelsViewTestOverrides } from "./view.test-support.ts";
+import type { ChannelsProps } from "./view.types.ts";
 
 const request = {
   requestId: "opaque-request-id",
@@ -30,7 +27,7 @@ const request = {
   notifySupported: true,
 } as const;
 
-function createProps(overrides: ChannelsViewTestOverrides = {}): ChannelsViewTestProps {
+function createProps(overrides: ChannelsViewTestOverrides = {}): ChannelsProps {
   return createChannelsViewProps(
     null,
     {
@@ -120,7 +117,7 @@ describe("channel DM access request views", () => {
     expect(noticeContainer.querySelector(".callout")).toBeNull();
 
     const errorContainer = renderInto(
-      renderChannelPairingQueue(createProps({ pairingError: "Approval failed" })),
+      renderChannelPairingQueue(createProps({ channels: { pairingError: "Approval failed" } })),
     );
     const error = errorContainer.querySelector('[role="alert"]');
 
@@ -136,18 +133,20 @@ describe("channel DM access request views", () => {
         createProps({
           pairingChannelFilter: "whatsapp",
           pairingAccountFilter: "personal",
-          pairingSnapshot: {
-            ...base.pairingSnapshot!,
-            accounts: [
-              ...base.pairingSnapshot!.accounts,
-              {
-                channel: "telegram",
-                channelLabel: "Telegram",
-                accountId: "work",
-                accountLabel: "Work",
-                notifySupported: true,
-              },
-            ],
+          channels: {
+            pairingSnapshot: {
+              ...base.channels.pairingSnapshot!,
+              accounts: [
+                ...base.channels.pairingSnapshot!.accounts,
+                {
+                  channel: "telegram",
+                  channelLabel: "Telegram",
+                  accountId: "work",
+                  accountLabel: "Work",
+                  notifySupported: true,
+                },
+              ],
+            },
           },
           onPairingFilterChange,
         }),
@@ -174,10 +173,12 @@ describe("channel DM access request views", () => {
       senderId: "987654321",
     };
     const props = createProps({
-      pairingBusyRequestId: request.requestId,
-      pairingSnapshot: {
-        ...createProps().pairingSnapshot!,
-        requests: [request, secondRequest],
+      channels: {
+        pairingBusyRequestId: request.requestId,
+        pairingSnapshot: {
+          ...createProps().channels.pairingSnapshot!,
+          requests: [request, secondRequest],
+        },
       },
     });
     const container = renderInto(renderChannelPairingQueue(props));
