@@ -199,9 +199,9 @@ export function formatDeferredPluginMigration(
     isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
     isTruthyEnvValue(env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE);
   const next = updating
-    ? `Let the current update or repair finish. If this warning remains afterward, run "${pending.command}"${retry}.`
-    : `Run "${pending.command}"${retry}.`;
-  return `Plugin "${pending.pluginId}" state migration is pending: ${pending.reason} State and legacy config inputs are preserved. ${next}`;
+    ? `Let the current update or repair finish. If this warning remains afterward, run "${pending.command}"${retry} to retry the upgrade.`
+    : `Run "${pending.command}"${retry} to retry the upgrade.`;
+  return `Plugin "${pending.pluginId}" data/settings upgrade is unfinished: ${pending.reason} Your existing data and settings have been kept. ${next}`;
 }
 
 /** Only the migration owner can resolve a pending record after its work completes. */

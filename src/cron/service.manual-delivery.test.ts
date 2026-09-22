@@ -49,7 +49,7 @@ describe("manual cron delivery occurrence", () => {
           };
           await state.writeConfig(cfg);
           const events: CronEvent[] = [];
-          const finished = createDeferred();
+          const finished = createDeferred<CronEvent>();
           const cron = new CronService({
             storePath: state.path("cron", "jobs.json"),
             cronEnabled: false,
@@ -61,7 +61,7 @@ describe("manual cron delivery occurrence", () => {
             onEvent: (event) => {
               events.push(event);
               if (event.action === "finished") {
-                finished.resolve();
+                finished.resolve(event);
               }
             },
             runIsolatedAgentJob: async ({ job, abortSignal }) => {
@@ -128,7 +128,7 @@ describe("manual cron delivery occurrence", () => {
                 ok: true,
                 enqueued: true,
               });
-              await finished.promise;
+              expect(await finished.promise).toMatchObject({ jobId: job.id });
               await cron.status();
             } else {
               await expect(cron.run(job.id, mode)).resolves.toMatchObject({ ok: true, ran: true });

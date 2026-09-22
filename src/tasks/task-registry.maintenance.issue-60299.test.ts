@@ -9,11 +9,13 @@ import {
   getTaskRegistryMaintenanceDiagnostics,
   previewTaskRegistryMaintenance,
   reconcileInspectableTasks,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
-import { createTaskRegistryMaintenanceHarness } from "./task-registry.maintenance.test-support.js";
+import {
+  createTaskRegistryMaintenanceHarness,
+  resetTaskRegistryMaintenanceMocks,
+} from "./task-registry.maintenance.test-support.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -44,7 +46,7 @@ function makeStaleTask(overrides: Partial<TaskRecord>): TaskRecord {
 
 afterEach(async () => {
   await stopTaskRegistryMaintenance();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  resetTaskRegistryMaintenanceMocks();
   resetDetachedTaskLifecycleRuntimeForTests();
 });
 

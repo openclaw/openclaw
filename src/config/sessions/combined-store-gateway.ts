@@ -17,6 +17,7 @@ import {
   assertAgentDatabaseAdmitted,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
+import { createRetainedAgentDatabaseMatcher } from "../../state/agent-deletion-discovery.js";
 import {
   listOpenClawRegisteredAgentDatabases,
   listOpenIncognitoAgentDatabases,
@@ -46,6 +47,7 @@ import {
   listKnownSessionStoreAgentIds,
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
+  resolveConfiguredAgentDatabaseTargets,
   type SessionStoreTarget,
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
@@ -489,8 +491,14 @@ export function resolveGatewaySessionStoreTargets(
     resolved = { ...resolved, durableTargets, physicalTargets };
   }
   const diagnostics = [...resolved.diagnostics];
-  const admitted = (target: SessionStoreTarget): boolean => {
+  const isRetained = createRetainedAgentDatabaseMatcher(process.env, () =>
+    resolveConfiguredAgentDatabaseTargets(cfg, { env: process.env }),
+  );
+  const admitted = (target: SessionStoreTarget, durable = false): boolean => {
     const physical = resolved.physicalTargets.get(storeTargetKey(target));
+    if (durable && isRetained(physical?.storePath ?? target.storePath, target.agentId)) {
+      return false;
+    }
     const refusal =
       readAgentDatabaseAdmissionRefusal(target.agentId) ??
       (physical && readAgentDatabaseAdmissionRefusal(physical.agentId));
@@ -504,8 +512,8 @@ export function resolveGatewaySessionStoreTargets(
     return false;
   };
   // Cached topology stays complete; each boot's admission is applied when consumed.
-  const durableTargets = resolved.durableTargets.filter(admitted);
-  const incognitoTargets = resolved.incognitoTargets.filter(admitted);
+  const durableTargets = resolved.durableTargets.filter((target) => admitted(target, true));
+  const incognitoTargets = resolved.incognitoTargets.filter((target) => admitted(target));
   if (
     durableTargets.length === resolved.durableTargets.length &&
     incognitoTargets.length === resolved.incognitoTargets.length

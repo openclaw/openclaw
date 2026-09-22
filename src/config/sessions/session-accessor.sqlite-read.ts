@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -46,9 +47,13 @@ import {
   readRestoredSessionTranscript,
 } from "./session-cold-storage-read.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
-import { projectResetBoundaryNavigationSql } from "./session-model-context-projection.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { projectAssistantTranscriptText } from "./transcript-assistant-delivery.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventNavigationSql,
+  transcriptEventResetNavigationSql,
+} from "./transcript-payload.js";
 
 export type SqliteTranscriptSnapshotRow = {
   eventJson: string;
@@ -225,7 +230,7 @@ export function readTranscriptHeaderFromDatabase(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select("event_json")
+        .select(transcriptEventJsonSql(database.db).as("event_json"))
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc")
         .limit(1),
@@ -251,7 +256,7 @@ export function loadTranscriptTailEventsSync(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select("event_json")
+        .select(transcriptEventJsonSql(database.db).as("event_json"))
         .where("session_id", "=", resolved.sessionId)
         .orderBy("seq", "desc")
         .limit(limit),
@@ -273,7 +278,7 @@ export function loadTranscriptEventRowsAfterSeqSync(
     const db = getSessionKysely(database.db);
     let query = db
       .selectFrom("transcript_events")
-      .select(["event_json", "seq"])
+      .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
       .where("session_id", "=", resolved.sessionId)
       .where("seq", ">", afterSeq);
     if (throughSeq !== undefined) {
@@ -299,7 +304,7 @@ export function readTranscriptEventAtSeqSync(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select(["event_json", "seq"])
+        .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
         .where("session_id", "=", resolved.sessionId)
         .where("seq", "=", seq),
     );
@@ -329,22 +334,23 @@ export function loadTranscriptEventsFromDatabase(
         database.db,
         db
           .selectFrom("transcript_events")
-          .select("event_json")
+          .select(["event_json", "event_utf8_bytes"])
           .where("session_id", "=", sessionId)
           .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!))
           .as("events"),
         Math.floor(maxEventBytes),
         "Trajectory transcript store",
+        { hasExactUtf8Bytes: true },
       );
     }
     const rows = iterateSqliteQuerySync(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select((eb) => [
+        .select([
           options.projection === "reset-boundary"
-            ? projectResetBoundaryNavigationSql(eb.ref("event_json")).as("event_json")
-            : "event_json",
+            ? transcriptEventResetNavigationSql().as("event_json")
+            : transcriptEventJsonSql(database.db).as("event_json"),
         ])
         .where("session_id", "=", sessionId)
         .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!))
@@ -366,7 +372,7 @@ export function readTranscriptSnapshot(
   };
 }
 
-/** Reads transcript rows without decoding payloads for snapshot comparison. */
+/** Reads canonical transcript text without parsing JSON for snapshot comparison. */
 export function readTranscriptEventRows(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
@@ -378,7 +384,7 @@ export function readTranscriptEventRows(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select(["event_json", "seq"])
+        .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
         .where("session_id", "=", sessionId)
         .$if(options.afterSeq !== undefined, (query) => query.where("seq", ">", options.afterSeq!))
         .orderBy("seq", "asc"),
@@ -401,7 +407,7 @@ export function readTranscriptStorageRows(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select(["created_at", "event_json", "seq"])
+        .select(["created_at", transcriptEventJsonSql(database.db).as("event_json"), "seq"])
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     ).rows;
@@ -490,7 +496,7 @@ export function loadLatestAssistantText(
           .innerJoin("transcript_event_identities as ti", (join) =>
             join.onRef("ti.session_id", "=", "te.session_id").onRef("ti.seq", "=", "te.seq"),
           )
-          .select("te.event_json as event_json")
+          .select(transcriptEventJsonSql(database.db, "te").as("event_json"))
           .where("te.session_id", "=", resolved.sessionId)
           .where("ti.event_type", "=", "message")
           .$if(beforeEventSeq !== undefined, (query) => query.where("ti.seq", "<", beforeEventSeq!))
@@ -582,7 +588,7 @@ export async function hasSessionTranscriptMessage(
           database.db,
           db
             .selectFrom("transcript_events")
-            .select("event_json")
+            .select(transcriptEventNavigationSql().as("event_json"))
             .where("session_id", "=", resolved.sessionId)
             .where("seq", "not in", classified)
             .orderBy("seq", "desc"),
@@ -626,7 +632,7 @@ export function findTranscriptEventInDatabase(
       database.db,
       db
         .selectFrom("transcript_events")
-        .select(["event_json"])
+        .select(transcriptEventJsonSql(database.db).as("event_json"))
         .where("session_id", "=", sessionId)
         .orderBy("seq", "desc"),
     );
@@ -669,4 +675,19 @@ export function readTranscriptEventId(event: TranscriptEvent): string | undefine
   }
   const id = (event as { id?: unknown }).id;
   return typeof id === "string" && id.trim() ? id : undefined;
+}
+
+export function readEventTimestamp(event: unknown): number | undefined {
+  if (!isRecord(event)) {
+    return undefined;
+  }
+  const value = event.timestamp;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }

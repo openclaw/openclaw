@@ -30,7 +30,7 @@ export async function withSqliteSessionPageReclamation<T>(
       ),
     );
   }
-  return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent }) => {
+  return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent, signal }) => {
     const retained = await runExclusiveSqliteSessionWrite(
       options,
       async () => {
@@ -103,6 +103,7 @@ export async function withSqliteSessionPageReclamation<T>(
             }),
           ),
         assertCurrent,
+        signal,
       );
     } finally {
       claim.release();

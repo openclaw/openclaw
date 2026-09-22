@@ -1,6 +1,4 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { SKILL_LIBRARY_MAX_SELECTIONS } from "../../packages/gateway-protocol/src/schema/skill-library.js";
 import {
   countMcpOAuthPrincipalsInDatabase,
   listMcpOAuthStoreKeysInDatabase,
@@ -14,33 +12,54 @@ import {
   readSandboxRegistryInDatabase,
   readSandboxRuntimeIdsInDatabase,
 } from "../agents/sandbox/registry.kernel.js";
+import {
+  loadSubagentRunsByRunIdsFromSqlite,
+  loadSubagentRunsForSessionFromSqlite,
+  loadSubagentSessionListRunsFromSqlite,
+} from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
 import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
 import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
+import {
+  readGitHubPublicationRequest,
+  readKnownGitHubPublicationPullRequestUrlsInDatabase,
+} from "../gateway/github-publication-store.js";
+import {
+  readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
+  readRepositoryGitHubPublicationInDatabase,
+} from "../gateway/github-repository-publication-store.js";
 import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "../gateway/worker-environments/placement-read-projection.js";
 import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
-import { hasWorkerEnvironmentSessionAttachment } from "../gateway/worker-environments/session-attachment-store.js";
+import {
+  readWorkerEnvironmentFacts,
+  readWorkerEnvironmentPrunePage,
+} from "../gateway/worker-environments/store-row-codec.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
-import { readUpdateRunRecord, readUpdateRuns } from "../infra/update-run-read.kernel.js";
+import {
+  readInterruptedUpdateCandidate,
+  readUpdateRunRecord,
+  readUpdateRuns,
+} from "../infra/update-run-read.kernel.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import {
   pluginBlobLookupInDatabase,
   pluginBlobEntriesInDatabase,
 } from "../plugin-state/plugin-blob-store.sqlite.js";
-import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-contract.js";
 import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
+import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
@@ -50,127 +69,25 @@ import {
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import type {
-  OpenClawStateReadReply,
-  OpenClawStateReadRequest,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
+import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
-import { readUserProfileIdForEmail } from "./user-profile-identity.read.js";
-import { selectProfileDisplayEntries } from "./user-profiles-internal.js";
-
-function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
-  if (!isRecord(input) || !isRecord(input.context) || !isRecord(input.command)) {
-    return false;
-  }
-  const { environment, coordinatorRuntime } = input.context;
-  return (
-    typeof input.databasePath === "string" &&
-    typeof input.location === "string" &&
-    typeof input.checkFreshAdmission === "boolean" &&
-    (input.expectedIdentity === undefined || typeof input.expectedIdentity === "string") &&
-    (input.snapshotRoot === undefined || typeof input.snapshotRoot === "string") &&
-    (input.context.existingSchemaPath === undefined ||
-      typeof input.context.existingSchemaPath === "string") &&
-    isRecord(environment) &&
-    typeof environment.OPENCLAW_STATE_DIR === "string" &&
-    (environment.OPENCLAW_SUPERVISOR_MODE === undefined ||
-      environment.OPENCLAW_SUPERVISOR_MODE === "external") &&
-    isRecord(coordinatorRuntime) &&
-    typeof coordinatorRuntime.directory === "string" &&
-    typeof coordinatorRuntime.keepAlive === "boolean" &&
-    ((input.command.type === "mcpOAuth.statuses" &&
-      Array.isArray(input.command.input) &&
-      input.command.input.every((key) => typeof key === "string")) ||
-      ((input.command.type === "mcpOAuth.readOnly" ||
-        input.command.type === "mcpOAuth.keys" ||
-        input.command.type === "mcpOAuth.pending" ||
-        input.command.type === "mcpOAuth.countPrincipals") &&
-        typeof input.command.input === "string") ||
-      isPluginBlobReadCommand(input.command) ||
-      (input.command.type === "conversationBindings.inspect" &&
-        isRecord(input.command.conversation) &&
-        typeof input.command.conversation.channel === "string" &&
-        typeof input.command.conversation.accountId === "string" &&
-        typeof input.command.conversation.conversationId === "string" &&
-        (input.command.conversation.parentConversationId === undefined ||
-          typeof input.command.conversation.parentConversationId === "string")) ||
-      (input.command.type === "cron.observeRunRecovery" &&
-        typeof input.command.storeKey === "string" &&
-        Array.isArray(input.command.proposals) &&
-        input.command.proposals.every(
-          (proposal: unknown) =>
-            isRecord(proposal) &&
-            typeof proposal.jobId === "string" &&
-            (proposal.queuedAtMs === undefined || typeof proposal.queuedAtMs === "number") &&
-            (proposal.runningAtMs === undefined || typeof proposal.runningAtMs === "number"),
-        )) ||
-      (input.command.type === "devicePairing.list" && typeof input.command.nowMs === "number") ||
-      (input.command.type === "devicePairing.lookup" &&
-        typeof input.command.deviceId === "string") ||
-      (input.command.type === "devicePairing.pending" &&
-        typeof input.command.requestId === "string" &&
-        typeof input.command.nowMs === "number") ||
-      (input.command.type === "devicePairing.bootstrapContext" &&
-        isRecord(input.command.input) &&
-        typeof input.command.input.token === "string" &&
-        typeof input.command.input.deviceId === "string" &&
-        typeof input.command.input.publicKey === "string" &&
-        typeof input.command.input.nowMs === "number") ||
-      input.command.type === "admit" ||
-      input.command.type === "exec-approvals.read" ||
-      ((input.command.type === "skills.library.descriptions" ||
-        input.command.type === "skills.library.manifests") &&
-        Array.isArray(input.command.input) &&
-        input.command.input.length <= SKILL_LIBRARY_MAX_SELECTIONS &&
-        input.command.input.every(
-          (pin) =>
-            isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
-        )) ||
-      input.command.type === "agentDatabaseRegistry.read" ||
-      (input.command.type === "userProfiles.reconcile" &&
-        typeof input.command.profileId === "string") ||
-      (input.command.type === "userProfiles.email.resolve" &&
-        typeof input.command.email === "string") ||
-      (input.command.type === "audit.run.inspect" &&
-        isRecord(input.command.input) &&
-        typeof input.command.input.now === "number" &&
-        (typeof input.command.input.runId === "string" ||
-          typeof input.command.input.executionId === "string")) ||
-      (input.command.type === "workspace.snapshot" &&
-        typeof input.command.workspaceDir === "string") ||
-      (input.command.type === "workerEnvironments.hasSessionAttachment" &&
-        typeof input.command.environmentId === "string") ||
-      (input.command.type === "updateRuns.get" && typeof input.command.runId === "string") ||
-      (input.command.type === "updateRuns.list" &&
-        isRecord(input.command.input) &&
-        (input.command.input.limit === undefined ||
-          typeof input.command.input.limit === "number") &&
-        (input.command.input.active === undefined ||
-          typeof input.command.input.active === "boolean") &&
-        (input.command.input.reason === undefined ||
-          typeof input.command.input.reason === "string") &&
-        (input.command.input.includeRunId === undefined ||
-          typeof input.command.input.includeRunId === "string")) ||
-      input.command.type === "fleet.list" ||
-      (input.command.type === "operatorApprovals.history" && isRecord(input.command.input)) ||
-      input.command.type === "nodeHost.config" ||
-      (input.command.type === "onboardingRecommendations.read" &&
-        typeof input.command.configKey === "string") ||
-      input.command.type === "sandboxRegistry.list" ||
-      input.command.type === "sandboxRegistry.browsers" ||
-      (input.command.type === "sandboxRegistry.get" &&
-        typeof input.command.containerName === "string") ||
-      (input.command.type === "sandboxRegistry.runtimeIds" &&
-        typeof input.command.backendId === "string" &&
-        typeof input.command.scopeKey === "string") ||
-      (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
-      input.command.type === "workerPlacements.changeSnapshot" ||
-      (input.command.type === "workers.placementProjection" &&
-        Array.isArray(input.command.sessionIds) &&
-        input.command.sessionIds.every((id) => typeof id === "string") &&
-        Array.isArray(input.command.conflictBindings)))
-  );
-}
+import {
+  listUserChannelIdentitiesInDatabase,
+  resolveUserChannelIdentityInDatabase,
+} from "./user-channel-identities.js";
+import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
+import { resolveCachedGitHubIdentityInDatabase } from "./user-profile-github-identity.js";
+import {
+  readUserProfileEmailBindings,
+  readUserProfileIdForEmail,
+} from "./user-profile-identity.read.js";
+import { projectUserProfileDisplay } from "./user-profile-list.js";
+import {
+  selectProfileDisplayEntries,
+  selectResolvedUserProfileMetadataById,
+  userProfilesDb,
+} from "./user-profiles-internal.js";
 
 serveOwnedWorkerTasks(
   (input): OpenClawStateReadReply => {
@@ -222,9 +139,51 @@ serveOwnedWorkerTasks(
                     : { status: "unavailable" },
               };
             }
+            if (command.type === "subagents.sessionList") {
+              const result = readOpenClawStateReadOnlyLocation(
+                ({ db }) => {
+                  sourceAdmitted = true;
+                  return loadSubagentSessionListRunsFromSqlite(undefined, { db });
+                },
+                input.databasePath,
+                input.location,
+                undefined,
+                input.expectedIdentity,
+                input.snapshotRoot,
+                true,
+              );
+              if (result.status === "unavailable" && sourceAdmitted !== true) {
+                throw result.error;
+              }
+              return result.status === "available"
+                ? { ok: true, type: command.type, sourceAdmitted: true, runs: result.value }
+                : {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted: true,
+                    unavailable: {
+                      message: String(result.error),
+                      error: encodeOpenClawStateWorkerError(result.error, {
+                        includeOrdinary: true,
+                      }),
+                    },
+                  };
+            }
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "subagents.runs") {
+                  const rows =
+                    command.scope.kind === "session"
+                      ? loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db })
+                      : loadSubagentRunsByRunIdsFromSqlite(command.scope.runIds, { db });
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    runs: new Map(rows.map((entry) => [entry.runId, entry])),
+                  };
+                }
                 if (command.type === "mcpOAuth.statuses") {
                   return {
                     ok: true,
@@ -334,12 +293,38 @@ serveOwnedWorkerTasks(
                     runs: readUpdateRuns(db, command.input),
                   };
                 }
+                if (command.type === "updateRuns.interruptedCandidate") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    run: readInterruptedUpdateCandidate(db),
+                  };
+                }
                 if (command.type === "exec-approvals.read") {
                   return {
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
                     row: readExecApprovalsConfigRow(db),
+                  };
+                }
+                if (command.type === "workerEnvironments.snapshot") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    facts: runSqliteDeferredTransactionSync(db, () =>
+                      readWorkerEnvironmentFacts(db, command.ids),
+                    ),
+                  };
+                }
+                if (command.type === "workerEnvironments.pruneCandidates") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    page: readWorkerEnvironmentPrunePage(db, command.input),
                   };
                 }
                 if (command.type === "skills.library.descriptions") {
@@ -420,24 +405,124 @@ serveOwnedWorkerTasks(
                     }),
                   };
                 }
-                if (command.type === "workerEnvironments.hasSessionAttachment") {
+                if (command.type === "githubPublication.lifecycle") {
                   return {
                     ok: true,
                     type: command.type,
                     sourceAdmitted,
-                    attached: hasWorkerEnvironmentSessionAttachment(db, command.environmentId),
+                    lifecycle: readGitHubPublicationSessionLifecycle(command, db),
+                  };
+                }
+                if (command.type === "githubPublication.request") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
+                  };
+                }
+                if (command.type === "githubRepository.request") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    row: readRepositoryGitHubPublicationInDatabase(db, command.requestId),
+                  };
+                }
+                if (
+                  command.type === "githubPublication.knownPullRequestUrls" ||
+                  command.type === "githubRepository.knownPullRequestUrls"
+                ) {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    urls:
+                      command.type === "githubPublication.knownPullRequestUrls"
+                        ? readKnownGitHubPublicationPullRequestUrlsInDatabase(db, command.input)
+                        : readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(
+                            db,
+                            command.input,
+                          ),
+                  };
+                }
+                if (command.type === "userProfiles.authority.resolve") {
+                  const profile = runSqliteDeferredTransactionSync(db, () => {
+                    const current = tableExists(db, "user_profiles")
+                      ? selectResolvedUserProfileMetadataById(db, command.profileId)
+                      : undefined;
+                    if (!current) {
+                      return undefined;
+                    }
+                    const display = selectProfileDisplayEntries(db, [current.id])[0]?.[1];
+                    if (!display) {
+                      return undefined;
+                    }
+                    const aliases = executeSqliteQuerySync(
+                      db,
+                      userProfilesDb(db)
+                        .selectFrom("user_profiles")
+                        .select("id")
+                        .where("merged_into", "=", current.id)
+                        .orderBy("id", "asc"),
+                    ).rows;
+                    return {
+                      profileId: current.id,
+                      role: current.role ?? null,
+                      aliases: [current.id, ...aliases.map((alias) => alias.id)],
+                      display: projectUserProfileDisplay(display),
+                    };
+                  });
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    profile,
+                  };
+                }
+                if (command.type === "userProfiles.githubIdentity.cached") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    identity: runSqliteDeferredTransactionSync(db, () =>
+                      resolveCachedGitHubIdentityInDatabase(db, command),
+                    ),
+                  };
+                }
+                if (command.type === "userProfiles.channelIdentity.list") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    result: readUserChannelIdentityResult(() =>
+                      listUserChannelIdentitiesInDatabase(db, command.profileId),
+                    ),
+                  };
+                }
+                if (command.type === "userProfiles.channelIdentity.resolve") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    linked: resolveUserChannelIdentityInDatabase(db, command.identity),
                   };
                 }
                 if (command.type === "userProfiles.reconcile") {
-                  return {
-                    ok: true,
-                    type: command.type,
-                    sourceAdmitted,
-                    profile: runSqliteDeferredTransactionSync(
-                      db,
-                      () => selectProfileDisplayEntries(db, [command.profileId])[0]?.[1],
-                    ),
-                  };
+                  const facts = runSqliteDeferredTransactionSync(db, () => ({
+                    profile: selectProfileDisplayEntries(db, [command.profileId])[0]?.[1],
+                    emailBindings: readUserProfileEmailBindings(db, command.profileId),
+                  }));
+                  return { ok: true, type: command.type, sourceAdmitted, ...facts };
+                }
+                if (command.type === "userProfiles.catalog") {
+                  const facts = runSqliteDeferredTransactionSync(db, () => ({
+                    profiles: tableExists(db, "user_profiles")
+                      ? selectProfileDisplayEntries(db)
+                      : [],
+                    emailBindings: readUserProfileEmailBindings(db),
+                  }));
+                  return { ok: true, type: command.type, sourceAdmitted, ...facts };
                 }
                 if (command.type === "userProfiles.email.resolve") {
                   return {

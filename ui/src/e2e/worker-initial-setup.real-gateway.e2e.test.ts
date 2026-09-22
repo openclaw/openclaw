@@ -228,7 +228,7 @@ suite.define(() => {
               };
             },
             acquireTurnCredential: async () => ({ ...credential(), sessionId }),
-            acknowledgeCredentialDelivery: () => true,
+            acknowledgeCredentialDelivery: async () => true,
             startTunnel: async () => tunnel,
           },
           resolveWorkspace: async () => ({ kind: "local", path: workspace }),

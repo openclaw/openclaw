@@ -3,7 +3,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
-import { mcpProviderCatalogEntrypoint } from "../plugins/loader-sdk-bridge-artifacts.test-support.js";
+import {
+  mcpPluginToolsServeEntrypoint,
+  mcpProviderCatalogEntrypoint,
+} from "../plugins/loader-sdk-bridge-artifacts.test-support.js";
 
 const lifetime = createFixtureLifetime();
 const repository = fileURLToPath(new URL("../../", import.meta.url));
@@ -12,7 +15,10 @@ const runner = fileURLToPath(
 );
 let sdkHost: string | undefined;
 beforeAll(() => {
-  sdkHost = createCompiledSdkHost([mcpProviderCatalogEntrypoint], lifetime.createTempDir);
+  sdkHost = createCompiledSdkHost(
+    [mcpProviderCatalogEntrypoint, mcpPluginToolsServeEntrypoint],
+    lifetime.createTempDir,
+  );
 });
 afterAll(() => lifetime.cleanup());
 

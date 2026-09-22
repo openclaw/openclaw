@@ -193,6 +193,7 @@ describe("production lint suppressions", () => {
         "extensions/browser/src/node-host/invoke-browser.ts|typescript/no-unnecessary-type-parameters|1",
         // Keep an explicit removal marker beside the temporary Bun Worker preload workaround.
         "extensions/codex/session-history-worker-runtime.ts|no-warning-comments|1",
+        "extensions/codex/src/app-server/run-attempt-turn-request.ts|preserve-caught-error|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
         "extensions/discord/src/outbound-adapter.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",

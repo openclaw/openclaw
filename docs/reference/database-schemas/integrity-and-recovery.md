@@ -337,6 +337,15 @@ at most 32,768 forward filesystem observations. Simplify unusually long paths if
 those limits are exceeded. Incomplete probe cleanup never becomes a cached
 path-identity result.
 
+### A mount probe times out while opening a local database
+
+On macOS, native filesystem inspection can confirm APFS after mount enumeration
+times out. For a canonical database directory, OpenClaw then keeps WAL enabled
+instead of attempting a rollback-mode transition that conflicts with other open
+connections. Unknown filesystems, failed native inspection, and aliased paths
+retain the conservative rollback policy. The existing rules for network and
+cross-VM filesystems, including the refusal to write through SSHFS, still apply.
+
 ### A legacy Workshop index prevents shared-state reads
 
 The `legacy-workshop-review-index` error requires `openclaw doctor --fix`.

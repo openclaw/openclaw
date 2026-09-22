@@ -1,49 +1,32 @@
-import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
+import {
+  createGatewayRestartDeadline,
+  GatewayRestartDeadlineError,
+} from "../cli/daemon-cli/restart-health-deadline.js";
+import { INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  inspectUpdateRepairDriverAdmission,
-  recordedUpdateRunDrivers,
-} from "./update-run-activity.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { inspectUpdateRepairDriverAdmission } from "./update-run-activity.js";
 import type { UpdateRunLedgerOptions } from "./update-run-codec.js";
-import { inspectUpdateRunDriver } from "./update-run-driver.js";
+import type { InterruptedUpdateGatewayObservation } from "./update-run-interruption-health.js";
 import {
-  readActiveUpdateRun,
-  readLatestUpdateRun,
-  readUpdateRunRecord,
-} from "./update-run-read.kernel.js";
-import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
-import { hasStoredUpdateRecovery } from "./update-run-recovery-store.js";
+  canSettleInterruptedUpdate,
+  installedUpdateCandidateSchema as candidateSchema,
+  readInstalledUpdateCandidate,
+} from "./update-run-interruption-store.js";
+import {
+  readInterruptedUpdateCandidateAsync,
+  persistInterruptedUpdateObservationAsync,
+} from "./update-run-interruption-worker.js";
+import { hasStoredUpdateRecovery, readUpdateRunRecord } from "./update-run-read.kernel.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
-import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import { persistRun, updateRunLedgerSchema, upsertStep } from "./update-run-write.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
+export { readInstalledUpdateCandidate } from "./update-run-interruption-store.js";
 
 const CANDIDATE_STEP = "finalize:installed-candidate";
-const candidateSchema = z.object({
-  version: z.string().trim().min(1).max(1024),
-  buildId: z.string().trim().min(1).max(96),
-});
-export type InstalledUpdateCandidate = z.infer<typeof candidateSchema>;
-
-export function readInstalledUpdateCandidate(
-  run: UpdateRunRecord,
-): InstalledUpdateCandidate | undefined {
-  const receipt = run.steps.find(
-    (step) => step.step === CANDIDATE_STEP && step.status === "completed",
-  );
-  if (!receipt?.detail) {
-    return undefined;
-  }
-  try {
-    const parsed = candidateSchema.safeParse(JSON.parse(receipt.detail));
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /** Shipped parents can terminate the post-core child as soon as its result appears. */
 export function recordPostCoreUpdateEvidence(
@@ -94,37 +77,6 @@ export function recordPostCoreUpdateEvidence(
   );
 }
 
-function canSettleInterruptedUpdate(run: UpdateRunRecord): boolean {
-  const abandoned = run.status === "failed" && run.reason === "abandoned";
-  if (!(run.status === "running" && run.phase === "verifying" && !run.reason) && !abandoned) {
-    return false;
-  }
-  const drivers = recordedUpdateRunDrivers(run);
-  return (
-    drivers.length > 0 &&
-    drivers.every((driver) => inspectUpdateRunDriver(driver) === "dead") &&
-    run.repair.length === 0 &&
-    run.steps.some(
-      (step) => step.step === "post-update verification" && step.status === "completed",
-    ) &&
-    run.steps.some((step) => step.step === "restarting" && step.status === "completed") &&
-    !run.steps.some(
-      (step) =>
-        step.step === "driver:identity-unavailable" ||
-        step.step === "reconcile:acknowledged" ||
-        step.step === "package rollback" ||
-        step.step === "previous generation restoration" ||
-        (step.status === "failed" &&
-          !(
-            abandoned &&
-            (step.step === "reconcile:abandoned" ||
-              (step.step === "verifying" && !step.detail && !step.failureFacts?.length))
-          )),
-    ) &&
-    readInstalledUpdateCandidate(run) !== undefined
-  );
-}
-
 /** Correct only a proven interrupted completion; all other terminal outcomes remain immutable. */
 export async function reconcileInterruptedUpdateRuns(
   input: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
@@ -133,55 +85,109 @@ export async function reconcileInterruptedUpdateRuns(
   const options = { env, path: resolveOpenClawStateSqlitePath(env) };
   // A later invocation may have installed the same build. Never attribute its
   // serving result to an older occurrence merely because the versions agree.
-  const expected = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
-    const run = readLatestUpdateRun(db);
-    return run && !hasStoredUpdateRecovery(db, run.runId) ? run : undefined;
-  }, options);
+  const expected = await readInterruptedUpdateCandidateAsync(options);
   const candidate = expected ? readInstalledUpdateCandidate(expected) : undefined;
   if (!expected || !candidate || !canSettleInterruptedUpdate(expected)) {
     return [];
   }
-  const { observeInterruptedUpdateGateway } = await import("./update-run-interruption-health.js");
-  const verification = await observeInterruptedUpdateGateway(candidate, { ...input, env });
-  input.signal?.throwIfAborted();
-  if (!verification) {
-    return [];
-  }
-  return runExistingOpenClawStateWriteTransaction(
-    ({ db }) => {
-      input.signal?.throwIfAborted();
-      const current = readLatestUpdateRun(db);
-      const active = readActiveUpdateRun(db);
-      if (
-        !current ||
-        !isDeepStrictEqual(current, expected) ||
-        !canSettleInterruptedUpdate(current) ||
-        (active && active.runId !== current.runId) ||
-        hasStoredUpdateRecovery(db, current.runId)
-      ) {
-        return [];
-      }
-      if (current.status === "failed") {
-        current.status = "running";
-        current.phase = "verifying";
-        current.finishedAtMs = null;
-        for (const step of current.steps) {
-          if (step.step === "reconcile:abandoned") {
-            step.status = "completed";
-          }
-        }
-      }
-      recordUpdateRunVerificationRecord(current, verification);
-      upsertStep(current, {
-        step: "warning:finalize:interrupted-completion",
-        status: "completed",
-        endedAtMs: Date.now(),
-        detail: `Updater exited before recording completion; installed and serving candidate build ${candidate.buildId} verified.`,
-      });
-      finishUpdateRunRecord(current, { status: "succeeded", after: candidate });
-      return [persistRun(db, current, options)];
-    },
-    options,
-    { schemaSql: updateRunLedgerSchema, operationLabel: "update.run" },
+  const managed = expected.steps.some(
+    (step) => step.step === "restarting" && step.status === "completed",
   );
+  let observation: InterruptedUpdateGatewayObservation = {
+    outcome: "skipped-unmanaged",
+    elapsedMs: 0,
+    phase: "ownership",
+  };
+  let cleanup: Promise<"confirmed" | "unknown"> | undefined;
+  if (managed) {
+    const deadline = createGatewayRestartDeadline({
+      timeoutMs: INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS,
+      signal: input.signal,
+    });
+    try {
+      observation = await deadline.run(async () => {
+        const { observeInterruptedUpdateGateway } = await deadline.read(
+          "setup:health-module",
+          () => import("./update-run-interruption-health.js"),
+        );
+        return await observeInterruptedUpdateGateway(candidate, { ...input, env, deadline });
+      });
+    } catch (error) {
+      input.signal?.throwIfAborted();
+      observation = {
+        outcome: hasCommandProcessCleanupError(error)
+          ? "cleanup-unknown"
+          : error instanceof GatewayRestartDeadlineError
+            ? "timed-out"
+            : "unverified",
+        elapsedMs: Math.round(deadline.elapsedMs()),
+        phase: deadline.expiredPhase ?? deadline.phase,
+      };
+    } finally {
+      cleanup = deadline.cleanup;
+      observation.cleanup = deadline.cleanupStatus;
+      observation.timeout = deadline.timeout;
+      deadline.dispose();
+    }
+  }
+  input.signal?.throwIfAborted();
+  const context = captureOpenClawStateWorkerContext(options);
+  const record = async (
+    captured: UpdateRunRecord,
+    observed: InterruptedUpdateGatewayObservation,
+  ) => {
+    const detail =
+      `Interrupted update settle probe: ${observed.outcome} after ${observed.elapsedMs} ms during ${observed.phase}.` +
+      (observed.waitOutcome ? ` Health wait: ${observed.waitOutcome}.` : "") +
+      (observed.timeout
+        ? ` Deadline timed-out after ${observed.timeout.elapsedMs} ms during ${observed.timeout.phase}.`
+        : "") +
+      (observed.cleanup === "unknown"
+        ? " Command cleanup failed: could not confirm that owned work stopped; cleanup outcome unknown. Check openclaw update status before recovery."
+        : observed.cleanup === "pending"
+          ? " Command cleanup is still pending; cleanup outcome unknown. Completion is not verified."
+          : observed.verification
+            ? " Installed and serving candidate verified."
+            : managed
+              ? " Continuing without verified completion; will retry. Check openclaw update status."
+              : " No completed managed-service restart was recorded; probing skipped.");
+    const result = await persistInterruptedUpdateObservationAsync(
+      context,
+      {
+        expected: captured,
+        detail,
+        verification: observed.verification,
+        cleanup: observed.cleanup,
+      },
+      input.signal,
+    );
+    if (result?.accepted || observed.cleanup === "unknown") {
+      console.warn(`[openclaw] ${detail}`);
+    }
+    return result;
+  };
+  const recorded = record(expected, observation);
+  if (observation.cleanup === "pending" && cleanup) {
+    // Preserve late custody facts without extending the operator-visible observation deadline.
+    void cleanup
+      .then(async (outcome) => {
+        const initial = await recorded;
+        if (!initial?.accepted || !initial.run) {
+          return;
+        }
+        await record(initial.run, {
+          ...observation,
+          outcome: outcome === "unknown" ? "cleanup-unknown" : observation.outcome,
+          cleanup: outcome,
+          verification: undefined,
+        });
+      })
+      .catch(() => {
+        console.warn(
+          "[openclaw] Command cleanup outcome unknown; interrupted update cleanup could not be recorded. Check openclaw update status before recovery.",
+        );
+      });
+  }
+  const result = await recorded;
+  return result?.accepted && result.run && observation.verification ? [result.run] : [];
 }

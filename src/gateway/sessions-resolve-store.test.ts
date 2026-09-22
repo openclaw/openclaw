@@ -10,8 +10,12 @@ import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js"
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -44,7 +48,9 @@ const resolveSessionKeyFromResolveParams = async (
 describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   const freshUpdatedAt = () => Date.now();
 
-  function closeSessionSqliteDatabasesForTest(): void {
+  async function closeSessionSqliteDatabasesForTest(): Promise<void> {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
   }
@@ -61,7 +67,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           (await pending).dispose();
         }
         projections.clear();
-        closeSessionSqliteDatabasesForTest();
+        await closeSessionSqliteDatabasesForTest();
       }
     });
   }
@@ -75,8 +81,8 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     }
   }
 
-  afterEach(() => {
-    closeSessionSqliteDatabasesForTest();
+  afterEach(async () => {
+    await closeSessionSqliteDatabasesForTest();
   });
 
   it("resolves configured default-agent main sessions by sessionId and label", async () => {

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { SqliteWorkerCommand, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import {
   runWithSqliteWorkerStateContext,
   type SqliteWorkerStateContext,
@@ -34,11 +34,10 @@ vi.mock("./openclaw-state-worker-store.js", () => ({
     context: SqliteWorkerStateContext,
   ) => {
     runWithSqliteWorkerStateContext(context, () => inspectRepairPolicy("open", databasePath));
-    const store = {
-      async execute(command: SqliteWorkerCommand<OpenClawStateWorkerCleanupOperations>) {
-        if (command.type !== "agentDatabases.releaseExitedLease") {
-          throw new Error(`Unexpected agent database cleanup command: ${command.type}`);
-        }
+    const store: SqliteWorkerStore<
+      Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
+    > = {
+      async execute(command) {
         inspectRepairPolicy("cleanup", command.input.sharedStatePath);
       },
       close: edge.close,
@@ -48,8 +47,14 @@ vi.mock("./openclaw-state-worker-store.js", () => ({
 }));
 vi.mock("../infra/sqlite-worker-store.js", () => ({
   runSqliteWorkerStoreOperation: async (
-    store: SqliteWorkerStore<OpenClawStateWorkerCleanupOperations>,
-    operation: (scope: SqliteWorkerStore<OpenClawStateWorkerCleanupOperations>) => Promise<void>,
+    store: SqliteWorkerStore<
+      Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
+    >,
+    operation: (
+      scope: SqliteWorkerStore<
+        Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
+      >,
+    ) => Promise<void>,
     context: SqliteWorkerStateContext,
   ) => runWithSqliteWorkerStateContext(context, () => operation(store)),
 }));

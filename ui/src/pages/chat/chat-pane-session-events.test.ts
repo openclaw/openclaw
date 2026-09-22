@@ -27,11 +27,52 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
+import { RealtimeTalkSession } from "./talk/session.ts";
 
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 describe("mounted pane session event ownership", () => {
+  it("retires Talk on a provider pause and prevents it from starting again", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:provider-pause",
+      agentId: "main",
+      sessionId: "provider-pause",
+      kind: "direct",
+      updatedAt: 1,
+    };
+    const { sessions, mount, emitGatewayEvent } = createMountedPanes([row]);
+    await sessions.refresh({ agentId: "main", force: true });
+    const pane = mount(row.key);
+    await refreshPane(pane);
+    const client = pane.state.client;
+    if (!client) {
+      throw new Error("Expected connected pane");
+    }
+    const talk = new RealtimeTalkSession(client, row.key);
+    const stop = vi.spyOn(talk, "stop").mockResolvedValue(undefined);
+    pane.state.realtimeTalkSession = talk;
+    pane.state.realtimeTalkActive = true;
+    emitGatewayEvent("sessions.changed", {
+      sessionKey: row.key,
+      agentId: "main",
+      session: {
+        ...row,
+        updatedAt: 2,
+        providerReview: {
+          id: "provider-review",
+          runId: "stopped-run",
+          canContinue: false,
+        },
+      },
+    });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(pane.state.realtimeTalkSession).toBeNull();
+    expect(pane.state.realtimeTalkActive).toBe(false);
+    await pane.state.toggleRealtimeTalk();
+    expect(pane.state.realtimeTalkSession).toBeNull();
+  });
+
   it("publishes one shared event and applies its message to every mounted pane", async () => {
     const row: GatewaySessionRow = {
       key: "agent:main:shared",

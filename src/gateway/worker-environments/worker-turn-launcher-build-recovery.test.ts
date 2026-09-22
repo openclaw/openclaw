@@ -136,7 +136,7 @@ function createBuildRecoveryHarness(
       }
       return credential();
     },
-    acknowledgeCredentialDelivery: vi.fn(() => true),
+    acknowledgeCredentialDelivery: vi.fn(async () => true),
     startTunnel: async () => {
       if (rejection !== "handoff" && rejection !== "launch" && (!replaced || options.repeated)) {
         if (rejection === "disconnected") {

@@ -7,6 +7,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { createGatewayRequestContext } from "./server-request-context.js";
+import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 
 type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
@@ -93,7 +94,10 @@ export function makeContextParams(
         invalidateSessionsForDevice: vi.fn(),
         disconnectSessionsForDevice: vi.fn(),
       },
-      sharedGatewaySessionGenerationState: {} as never,
+      sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: null,
+      }),
       resolveSharedGatewaySessionGenerationForRuntimeSnapshot: vi.fn(() => undefined),
       nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
       nodeDesktopService: undefined,

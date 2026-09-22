@@ -564,12 +564,6 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
   const observing = mode === "observe" || mode === "observe-admission";
   const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
   const snapshot = beginRead(repo, pr, observing);
-  if (observing && snapshot.record.state === "open") {
-    requireRestSupport(
-      ["clean", "unknown"].includes(snapshot.record.mergeable_state),
-      "merge projection requires GraphQL admission",
-    );
-  }
   const checks =
     mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
       ? requiredChecks(repo, snapshot)
@@ -582,6 +576,14 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
     snapshot.policy.requiredChecks = checks;
   }
   const current = finishRead(repo, pr, snapshot, mode === "observe");
+  if (observing && current.state === "open") {
+    // REST can still be calculating after GraphQL is ready. Select the alternate
+    // reader before retaining intent; mutation dispatch never changes transports.
+    requireRestSupport(
+      current.mergeable === true && current.mergeable_state === "clean",
+      "merge projection requires GraphQL admission",
+    );
+  }
   let result;
   if (mode === "checks") {
     result = checks;

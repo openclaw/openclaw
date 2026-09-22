@@ -47,11 +47,11 @@ function write(file: string, value: unknown) {
 }
 
 function capture(f: ReturnType<typeof fixture>) {
-  const result = spawnSync(node, [observer, "capture", f.artifacts, "update-candidate", "1"], {
-    env: f.env,
-    encoding: "utf8",
-    timeout: 10_000,
-  });
+  const result = spawnSync(
+    node,
+    [observer, "capture", f.artifacts, "update-candidate", "1", "", f.artifacts],
+    { env: f.env, encoding: "utf8", timeout: 10_000 },
+  );
   expect(result.status, result.stderr).toBe(0);
   const output = path.join(f.root, "public");
   publishDiagnostics(f.artifacts, output, redactSensitiveText);
@@ -84,7 +84,14 @@ it("publishes redacted baseline and candidate agent-turn failures", () => {
   }
 });
 
-it("retains Doctor IPC refusal facts before the parent consumes its file and log prefix", () => {
+it.each([
+  { name: "truncated Doctor output", opaqueCopies: 1, omission: "truncated at a complete line" },
+  {
+    name: "an oversized opaque plugin field",
+    opaqueCopies: 8192,
+    omission: "input exceeds cap; omitted whole",
+  },
+])("retains Doctor and plugin assertion failures with $name", ({ opaqueCopies, omission }) => {
   const f = fixture();
   write(path.join(f.root, "package.json"), {
     name: "openclaw",
@@ -117,8 +124,95 @@ it("retains Doctor IPC refusal facts before the parent consumes its file and log
   });
   expect(child.status, child.stderr).toBe(1);
   fs.unlinkSync(resultPath);
-  write(path.join(f.artifacts, "update.json"), { padding: "prior step\n".repeat(3000), steps: [] });
+  const updateFile = path.join(f.artifacts, "update.json");
+  fs.writeFileSync(
+    updateFile,
+    JSON.stringify(
+      {
+        status: "ok",
+        after: { version: "2026.9.5" },
+        steps: [
+          { name: "openclaw doctor", exitCode: 0, stdoutTail: "Doctor output\n".repeat(3000) },
+        ],
+        postUpdate: {
+          plugins: {
+            status: "warning",
+            changed: true,
+            sync: {
+              changed: true,
+              switchedToBundled: [],
+              switchedToNpm: [],
+              warnings: [],
+              errors: [`plugin sync failure token=${secret}`],
+            },
+            npm: {
+              changed: true,
+              outcomes: [
+                {
+                  pluginId: "discord",
+                  status: "error",
+                  code: "fixture-repair",
+                  message: `token=${secret}`,
+                },
+                { pluginId: "discord", status: "updated", nextVersion: "2026.9.5" },
+              ],
+            },
+            integrityDrifts: [{ pluginId: "discord", action: "kept", spec: `token=${secret}` }],
+            privateBody: privateBody.repeat(opaqueCopies),
+          },
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  const checked = spawnSync(
+    node,
+    [
+      path.resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs"),
+      "assert-successful-update-json",
+      updateFile,
+      "2026.9.5",
+      f.artifacts,
+    ],
+    { env: f.env, encoding: "utf8", timeout: 10_000 },
+  );
+  expect(checked.status).toBe(1);
+  expect(checked.stderr).toContain("successful update failed plugin convergence");
+  const receipt = fs.readFileSync(
+    path.join(f.artifacts, "diagnostics/successful-update-check.json"),
+    "utf8",
+  );
+  expect(Buffer.byteLength(receipt)).toBeLessThan(256 * 1024);
+  expect(receipt).not.toContain(privateBody);
+  expect(JSON.parse(receipt)).toMatchObject({
+    availability: "captured",
+    outcome: "failed",
+    plugins: { status: "warning" },
+  });
   const report = capture(f);
+  expect(report.omissions["update.json"]).toContain(omission);
+  if (opaqueCopies > 1) {
+    expect(report.logs["update.json"]).toBeNull();
+  } else {
+    expect(report.logs["update.json"]).not.toContain("postUpdate");
+  }
+  expect(report.successfulUpdateCheck).toMatchObject({
+    availability: "captured",
+    outcome: "failed",
+    message: "successful update failed plugin convergence",
+    plugins: {
+      status: "warning",
+      sync: { errors: [expect.stringContaining("plugin sync failure")] },
+      npm: {
+        outcomes: [
+          { pluginId: "discord", status: "error", code: "fixture-repair" },
+          { pluginId: "discord", status: "updated", nextVersion: "2026.9.5" },
+        ],
+      },
+      integrityDrifts: [{ pluginId: "discord", action: "kept" }],
+    },
+  });
   expect(report.migration.doctor).toMatchObject({
     availability: "captured",
     processes: [

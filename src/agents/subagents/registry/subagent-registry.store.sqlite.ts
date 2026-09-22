@@ -45,6 +45,7 @@ type SubagentRunReadSqliteRow = Pick<
   | "created_at"
 > & {
   model: string | null;
+  task_run_id: string | null;
   swarm_run_id: string | null;
   run_timeout_seconds: number | null;
   execution_status: SubagentRunRecord["execution"]["status"];
@@ -120,7 +121,7 @@ function subagentControllerFilter(controllerSessionKeys: readonly string[]) {
 
 function readSubagentRegistryRows(
   scope?: SubagentRegistryReadScope,
-  database = openOpenClawStateDatabase(),
+  database: Pick<OpenClawStateDatabase, "db"> = openOpenClawStateDatabase(),
   projection: "full" | "maintenance" = "full",
 ): SubagentRunSqliteRow[] {
   const { db } = database;
@@ -254,6 +255,7 @@ function readSubagentSessionListRows(
         "controller_store_path",
         "created_at",
         subagentPayloadJsonValue<string | null>("$.swarmRunId").as("swarm_run_id"),
+        subagentPayloadJsonValue<string | null>("$.taskRunId").as("task_run_id"),
         subagentPayloadJsonValue<string | null>("$.model").as("model"),
         subagentPayloadJsonValue<number | null>("$.collect").as("collect"),
         subagentPayloadJsonValue<string | null>("$.groupId").as("group_id"),
@@ -313,6 +315,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
   return Object.fromEntries(
     Object.entries({
       runId,
+      taskRunId: row.task_run_id ?? undefined,
       swarmRunId: row.swarm_run_id || undefined,
       childSessionKey,
       controllerSessionKey: row.controller_session_key?.trim() || undefined,
@@ -352,7 +355,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
 
 function loadScopedSubagentRuns(
   scope: SubagentRegistryReadScope,
-  database?: OpenClawStateDatabase,
+  database?: Pick<OpenClawStateDatabase, "db">,
 ): SubagentRunRecord[] {
   const normalizedScope =
     scope.kind === "runs" ? scope : { ...scope, sessionKey: scope.sessionKey.trim() };
@@ -377,8 +380,11 @@ export function loadSubagentRunsForControllerFromSqlite(
 }
 
 /** Loads all generations readable by one requester or controller session. */
-export function loadSubagentRunsForSessionFromSqlite(sessionKey: string): SubagentRunRecord[] {
-  return loadScopedSubagentRuns({ kind: "session", sessionKey });
+export function loadSubagentRunsForSessionFromSqlite(
+  sessionKey: string,
+  database?: Pick<OpenClawStateDatabase, "db">,
+): SubagentRunRecord[] {
+  return loadScopedSubagentRuns({ kind: "session", sessionKey }, database);
 }
 
 /** Loads all persisted generations for one child session through its existing index. */
@@ -390,8 +396,11 @@ export function loadSubagentRunsForChildSessionFromSqlite(
 }
 
 /** Hydrates exact physical rows selected by the shared registry read projection. */
-export function loadSubagentRunsByRunIdsFromSqlite(runIds: readonly string[]): SubagentRunRecord[] {
-  return loadScopedSubagentRuns({ kind: "runs", runIds });
+export function loadSubagentRunsByRunIdsFromSqlite(
+  runIds: readonly string[],
+  database?: Pick<OpenClawStateDatabase, "db">,
+): SubagentRunRecord[] {
+  return loadScopedSubagentRuns({ kind: "runs", runIds }, database);
 }
 
 /** Loads the canonical subagent registry from shared SQLite state. */

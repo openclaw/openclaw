@@ -60,6 +60,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   env: NodeJS.ProcessEnv;
   options: DoctorSessionSqliteOptions;
   targets: readonly SessionStoreTarget[];
+  historicalArchiveStores?: ReadonlySet<string>;
   validateTarget: SessionSqliteRecoverTargetValidator;
 }): Promise<DoctorSessionSqliteReport> {
   const trustedTargets = resolveRecoverTargets(params.targets, params.env);
@@ -81,7 +82,8 @@ export async function recoverDoctorSessionSqliteTargets(params: {
             sqlitePath: target.sqlitePath,
             env: params.env,
           }) ||
-          readActiveSqliteTranscriptFiles(target).length > 0
+          readActiveSqliteTranscriptFiles(target).length > 0 ||
+          params.historicalArchiveStores?.has(target.storePath)
         ) {
           retainedReports.push(await params.validateTarget(target));
         }
@@ -107,7 +109,13 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     trustedTargets,
   });
   const targetReports: DoctorSessionSqliteTargetReport[] = [];
-  for (const manifestTarget of failedRun.targets) {
+  const recoveryTargets = trustedTargets.filter(
+    (target) =>
+      failedRun.targets.some(
+        (failed) => failed.agentId === target.agentId && failed.storePath === target.storePath,
+      ) || params.historicalArchiveStores?.has(target.storePath),
+  );
+  for (const manifestTarget of recoveryTargets) {
     targetReports.push(
       await params.validateTarget({
         agentId: manifestTarget.agentId,

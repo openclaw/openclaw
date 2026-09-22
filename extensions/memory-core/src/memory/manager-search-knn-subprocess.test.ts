@@ -15,7 +15,7 @@ import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import type { VectorKnnRequest } from "./manager-search-knn.js";
-import { searchVector } from "./manager-search.js";
+import { searchVector } from "./manager-search-vector.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 import { vectorToBlob } from "./vector-blob.js";
 
@@ -435,9 +435,19 @@ describe("memory vector KNN subprocess boundary", () => {
           return false;
         }),
     );
+    const settled = vi.fn();
+    for (const result of results) {
+      void result.then(settled, settled);
+    }
     try {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       controller.abort(new Error("terminal cleanup test"));
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledTimes(2);
       await Promise.all(rejected);
+      vi.useRealTimers();
       killMocks.forEach((mock) => expect(mock).toHaveBeenCalledTimes(1));
       const queuedController = new AbortController();
       const queued = runVectorKnnInSubprocess({
@@ -453,6 +463,7 @@ describe("memory vector KNN subprocess boundary", () => {
       queuedController.abort(new Error("queued KNN deadline"));
       await queuedRejection;
     } finally {
+      vi.useRealTimers();
       killMocks.forEach((mock) => mock.mockRestore());
       realKills.forEach((kill) => kill("SIGKILL"));
       await Promise.all(closed);

@@ -1,9 +1,12 @@
+import { performance } from "node:perf_hooks";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { readCommittedSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { resolveSessionKeyBySessionId } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -14,6 +17,7 @@ import {
 } from "../state/openclaw-agent-db.paths.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
+import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -25,9 +29,61 @@ import {
 } from "./session-utils-store-lookup.js";
 
 /** One synchronous refresh slice shares agent policy; each later slice starts fresh. */
-export function createSessionRowMaterializationBatch(): typeof readResidentSessionRow {
+function createSessionRowMaterializationBatch(): typeof readResidentSessionRow {
   const activitySummaryEnabledByAgent = new Map<string, boolean>();
   return (params) => readResidentSessionRow(params, activitySummaryEnabledByAgent);
+}
+
+/** Keyed and worker-prepared refreshes share the same bounded materialization slice. */
+export function refreshSessionRowMaterializations(owner: {
+  ids: readonly string[];
+  prepared?: ReadonlyMap<string, SessionRowDatabaseFacts>;
+  rows: ReadonlyMap<string, records.Row>;
+  dirty: Set<string>;
+  prepare: () => records.Inputs["cfg"];
+  revision: () => number;
+  acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
+  materialize: (
+    row: records.Row,
+    agentIds: Set<string>,
+    read: typeof readResidentSessionRow,
+    facts?: SessionRowDatabaseFacts,
+  ) => boolean;
+  forgetBackfill: (id: string) => void;
+}) {
+  const started = performance.now();
+  const cfg = owner.prepare();
+  const configuredAgentIds = new Set(listAgentIds(cfg));
+  const readRow = createSessionRowMaterializationBatch();
+  for (const [offset, id] of owner.ids.entries()) {
+    if (offset > 0 && performance.now() - started >= 12) {
+      break;
+    }
+    const current = owner.rows.get(id),
+      revision = owner.revision();
+    const databaseFacts = owner.prepared?.get(id);
+    const row =
+      current &&
+      owner.acquireEntry(
+        databaseFacts ? { ...current, hasBoard: databaseFacts.hasBoard } : current,
+        owner.prepared ? databaseFacts?.entry : readSessionRowEntry(current),
+      );
+    if (row && isColdArchivedSessionRow(row)) {
+      owner.dirty.delete(id);
+      owner.forgetBackfill(id);
+      continue;
+    }
+    if (
+      row &&
+      owner.materialize(row, configuredAgentIds, readRow, databaseFacts) &&
+      owner.revision() === revision
+    ) {
+      owner.dirty.delete(id);
+    }
+    if (owner.revision() !== revision) {
+      break;
+    }
+  }
 }
 
 /** Resident rows consume committed metadata; optional transcript work has a separate budget. */
@@ -43,6 +99,7 @@ export function readResidentSessionRow(
     placementFactsReader?: Parameters<typeof readSessionRowFacts>[0]["placementFactsReader"];
     links: SessionChildLink[];
     readSourceEntry: (key: string) => records.Row["storedEntry"];
+    databaseFacts?: SessionRowDatabaseFacts;
   },
   activitySummaryEnabledByAgent?: Map<string, boolean>,
 ) {
@@ -106,6 +163,7 @@ export function readResidentSessionRow(
     context: params.gatewayContext,
     placementFactsReader: params.placementFactsReader,
     activitySummaryEnabled,
+    databaseFacts: params.databaseFacts,
   });
   return {
     materialized,
@@ -113,9 +171,10 @@ export function readResidentSessionRow(
     facts,
     hasBoard: facts.hasBoard,
     membership: new Set(
-      listSessionMembers({ ...row.storeTarget, sessionKey: row.key }).map(
-        (member) => member.identityId,
-      ),
+      params.databaseFacts?.memberIdentityIds ??
+        listSessionMembers({ ...row.storeTarget, sessionKey: row.key }).map(
+          (member) => member.identityId,
+        ),
     ),
   };
 }

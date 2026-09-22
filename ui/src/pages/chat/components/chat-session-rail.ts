@@ -560,7 +560,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       return nothing;
     }
     const digest = visibleDigest(input);
-    const placeholder = pending ? t("chat.rail.askPending") : t("chat.rail.askPlaceholder");
+    const placeholder = t("chat.rail.askPlaceholder");
     if (mode === "pill") {
       return html`
         <div class="chat-session-rail chat-session-rail--pill" aria-live="polite">
@@ -703,7 +703,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
                 }
                 .value=${this.companion.draft}
                 placeholder=${placeholder}
-                ?disabled=${!this.connected || pending}
+                ?disabled=${!this.connected}
                 @keydown=${this.composer.handleKeydown}
                 @input=${this.composer.handleInput}
                 ${ref(this.composer.ref)}

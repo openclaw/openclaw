@@ -42,6 +42,7 @@ export type CloseTab = (tab: {
 }) => Promise<void>;
 
 type CleanupParams = {
+  isCurrent?: () => boolean;
   closeTab?: CloseTab;
   closeDurableTab?: (
     tab: DurableTab,

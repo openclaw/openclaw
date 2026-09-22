@@ -86,10 +86,14 @@ plans retain the complete files and all assertions. This explicit inventory
 does not exclude E2E-named package-contract tests or the ordinary mixed TUI
 suite when targeted directly.
 
-`test/scripts/ci-workflow-guards.test.ts` checks proof-tier selection for PR,
-main-push, ordinary manual, and PR-fallback events. Its Docker scheduler guard
+`test/scripts/ci-workflow-planning.test.ts` checks proof-tier selection for PR,
+main-push, ordinary manual, and PR-fallback events. The Docker scheduler guard in
+`test/scripts/ci-workflow-guards.test.ts`
 asserts that the selected `docker_seed_lanes` inventory reaches
 `pnpm test:docker:all` through `OPENCLAW_DOCKER_ALL_LANES`, and its release-child
 guard verifies that `normal_ci` dispatches `ci.yml` against the exact target.
+`test/scripts/ci-workflow-evidence.test.ts` owns QA protocol, evidence-reader,
+and maturity handoff checks. Fast CI-routing and cache warming include all three
+files; YAML action-pinning checks retain their original guard owner.
 The Node planner tests separately assert that main retains the complete Doctor
 refusal and Codex recovery files while PR and PR-fallback plans omit them.

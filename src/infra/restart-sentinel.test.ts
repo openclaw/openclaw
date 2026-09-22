@@ -53,7 +53,6 @@ import {
   writeRestartSentinelRowIfRevisionSync,
 } from "./restart-sentinel-store.js";
 import {
-  clearRestartSentinel,
   clearRestartSentinelIfRevision,
   finalizeUpdateRestartSentinelRunningVersion,
   formatDoctorNonInteractiveHint,
@@ -209,8 +208,8 @@ describe("restart sentinel", () => {
 
       await expect(hasRestartSentinel()).resolves.toBe(false);
       await expect(readRestartSentinel()).resolves.toBeNull();
-      await writeRestartSentinel({ kind: "restart", status: "ok", ts: 2 });
-      await clearRestartSentinel();
+      const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 2 });
+      await expect(clearRestartSentinelIfRevision(written.revision)).resolves.toBe(true);
       await expect(fs.readFile(legacyPath, "utf-8")).resolves.toBe(legacyContents);
     });
   });
@@ -352,14 +351,14 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("upgrades pre-floor rows before unconditional and guarded clears", async () => {
+  it("upgrades pre-floor rows only when the captured revision still exists", async () => {
     await withRestartSentinelStateDir(async () => {
       const now = vi.spyOn(Date, "now").mockReturnValue(1000);
       try {
         const first = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
         deleteSentinelRevisionFloor();
         expect(readSentinelRevisionFloor()).toBeUndefined();
-        await expect(clearRestartSentinel()).resolves.toBe(true);
+        await expect(clearRestartSentinelIfRevision(first.revision)).resolves.toBe(true);
 
         await expect(readRestartSentinel()).resolves.toBeNull();
         await expect(hasRestartSentinel()).resolves.toBe(false);
@@ -381,7 +380,7 @@ describe("restart sentinel", () => {
 
         await expect(clearRestartSentinelIfRevision(third.revision)).resolves.toBe(true);
         deleteSentinelRevisionFloor();
-        await expect(clearRestartSentinel()).resolves.toBe(false);
+        await expect(clearRestartSentinelIfRevision(third.revision)).resolves.toBe(false);
         expect(readSentinelRevisionFloor()).toBeUndefined();
       } finally {
         now.mockRestore();
@@ -673,13 +672,16 @@ describe("restart sentinel", () => {
           },
         });
 
-        await finalizeUpdateRestartSentinelRunningVersion(
+        const finalized = await finalizeUpdateRestartSentinelRunningVersion(
           "actual-version",
           process.env,
           "bbbbbbbb1234",
           installRoot,
         );
-        await clearRestartSentinel();
+        if (!finalized) {
+          throw new Error("Expected a finalized update sentinel");
+        }
+        await expect(clearRestartSentinelIfRevision(finalized.revision)).resolves.toBe(true);
 
         await expect(readVerifiedGitUpdateReceipt()).resolves.toEqual({
           root: await fs.realpath(installRoot),
@@ -828,14 +830,16 @@ describe("restart sentinel", () => {
 });
 
 describe("restart sentinel error visibility", () => {
-  it("throws when clearRestartSentinel cannot durably delete the row", async () => {
+  it("throws when revision-owned cleanup cannot durably delete the row", async () => {
     await withRestartSentinelStateDir(async () => {
       const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
       mockThrowWrite.mockImplementationOnce(() => {
         throw new Error("SQLITE_IOERR: disk I/O error");
       });
 
-      await expect(clearRestartSentinel()).rejects.toThrow("SQLITE_IOERR: disk I/O error");
+      await expect(clearRestartSentinelIfRevision(written.revision)).rejects.toThrow(
+        "SQLITE_IOERR: disk I/O error",
+      );
       expect(mockWarn).not.toHaveBeenCalled();
       await expect(readRestartSentinel()).resolves.toEqual(written);
     });

@@ -128,14 +128,14 @@ describe("cloud bootstrap plugin generations", () => {
             if (managerResult?.type !== "return" || transferResult?.type !== "return") {
               throw new Error("Gateway managers were not created");
             }
-            startup.store.createIntent({
+            await startup.store.createIntent({
               environmentId,
               providerId: "fake-provider",
               profileId: "test-profile",
               profileSnapshot: { executionMode: "remote-exec", settings: {} },
               provisionOperationId: `provision:${environmentId}`,
             });
-            const record = startup.store.transition({
+            const record = await startup.store.transition({
               environmentId,
               from: "requested",
               to: "provisioning",
@@ -301,14 +301,14 @@ describe("cloud bootstrap plugin generations", () => {
       }
       const manager = enrollmentResult.value;
       const begin = async (id: string) => {
-        startup.store.createIntent({
+        await startup.store.createIntent({
           environmentId: id,
           providerId: "fake-provider",
           profileId: "test-profile",
           profileSnapshot: { executionMode: "remote-exec", settings: {} },
           provisionOperationId: `provision:${id}`,
         });
-        const record = startup.store.transition({
+        const record = await startup.store.transition({
           environmentId: id,
           from: "requested",
           to: "provisioning",

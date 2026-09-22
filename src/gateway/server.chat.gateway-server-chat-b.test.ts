@@ -655,7 +655,7 @@ async function fetchHistoryMessages(
       ...(typeof params?.maxChars === "number" ? { maxChars: params.maxChars } : {}),
     }),
   );
-  expect(historyRes.ok).toBe(true);
+  expect(historyRes.ok, JSON.stringify(historyRes.error)).toBe(true);
   return historyRes.payload?.messages ?? [];
 }
 
@@ -5779,7 +5779,7 @@ describe("gateway server chat", () => {
           totalMessages?: number;
           completeSnapshot?: boolean;
         }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
-        expect(history.ok).toBe(true);
+        expect(history.ok, JSON.stringify(history.error)).toBe(true);
         const messages = history.payload?.messages ?? [];
         expect(messages).toHaveLength(107);
         const userMessage = expectDefined(messages[0], "oldest imported user message") as {
@@ -5870,7 +5870,7 @@ describe("gateway server chat", () => {
             };
           }>;
         }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
-        expect(history.ok).toBe(true);
+        expect(history.ok, JSON.stringify(history.error)).toBe(true);
         const assistantMessages = (history.payload?.messages ?? []).filter(
           (message) => message.role === "assistant",
         );

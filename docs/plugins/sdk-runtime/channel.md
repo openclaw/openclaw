@@ -30,7 +30,7 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
     | `debounce` | Inbound message debouncing. |
     | `commands` | Command authorization and text-command gating. |
     | `outbound` | Load a channel's outbound adapter. |
-    | `inbound` | Build inbound event context and run the shared inbound-event/reply kernel. |
+    | `inbound` | Resolve ingress with the host-bound `ingress` helpers, build inbound event context, and run the shared inbound-event/reply kernel. |
     | `threadBindings` | Adjust idle-timeout/max-age for bound session threads. |
     | `runtimeContexts` | Register, read, and watch process-local per-channel/account/capability context. |
 

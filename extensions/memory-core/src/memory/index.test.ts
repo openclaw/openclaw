@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  encodeMemoryEmbedding,
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_CHUNKING_VERSION,
@@ -20,6 +21,7 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
+import { writeMemoryIndexArchiveTranscript } from "./index-archive.test-support.js";
 import {
   createManagerIndexFixture,
   type ManagerIndexFixture,
@@ -561,7 +563,7 @@ describe("memory index", () => {
       db.prepare(
         `INSERT INTO memory_index_chunks
          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, ?, 'memory', 1, 3, ?, 'fts-only', ?, '[]', ?)`,
+         VALUES (?, ?, 'memory', 1, 3, ?, 'fts-only', ?, x'', ?)`,
       ).run(
         "legacy-curated-chunk",
         "MEMORY.md",
@@ -583,7 +585,7 @@ describe("memory index", () => {
          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
          VALUES (
            'stale-default-media', 'memory/default-diagram.png', 'memory', 1, 1,
-           'stale-default-media', 'fts-only', 'Image file: memory/default-diagram.png', '[]', ?
+           'stale-default-media', 'fts-only', 'Image file: memory/default-diagram.png', x'', ?
          )`,
       ).run(Date.now());
       db.prepare(
@@ -827,10 +829,10 @@ describe("memory index", () => {
         }
       ).db
         .prepare("SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?")
-        .get("%2026-01-13.md", "memory") as { embedding: string } | undefined;
+        .get("%2026-01-13.md", "memory") as { embedding: Uint8Array } | undefined;
 
       expect(betaRow).toBeDefined();
-      expect(JSON.parse(betaRow?.embedding ?? "[]")).toEqual([0, 1, 0, 0]);
+      expect(betaRow?.embedding).toEqual(encodeMemoryEmbedding([0, 1, 0, 0]));
     } finally {
       await manager.close?.();
     }
@@ -1953,28 +1955,10 @@ describe("memory index", () => {
   });
 
   it("keeps provider cutover vector search paused during targeted session sync", async () => {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "session-targeted-cutover.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session-targeted-cutover",
-          timestamp: "2026-04-07T15:24:04.113Z",
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: [{ type: "text", text: "Targeted cutover marker." }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+    const sessionFile = await writeMemoryIndexArchiveTranscript({
+      sessionId: "session-targeted-cutover",
+      text: "Targeted cutover marker.",
+    });
 
     const oldCfg = createCfg({
       sources: ["memory", "sessions"],
@@ -2014,27 +1998,10 @@ describe("memory index", () => {
   });
 
   it("preserves memory dirty events raised during session identity reindex", async () => {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sessionsDir, "session-dirty-during-reindex.jsonl"),
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session-dirty-during-reindex",
-          timestamp: "2026-04-07T15:24:04.113Z",
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: [{ type: "text", text: "Dirty during session marker." }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+    await writeMemoryIndexArchiveTranscript({
+      sessionId: "session-dirty-during-reindex",
+      text: "Dirty during session marker.",
+    });
 
     const oldCfg = createCfg({
       sources: ["memory", "sessions"],
@@ -2271,10 +2238,12 @@ describe("memory index", () => {
       const db = Reflect.get(diagnostic, "db") as DatabaseSync;
       db.prepare(`INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
-        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', '[0,1]', 2, 1)`).run();
+        VALUES ('previous-provider', 'previous-model', 'previous-key', 'retained', ?, 2, 1)`).run(
+        encodeMemoryEmbedding([0, 1]),
+      );
       expect(diagnostic.status().storage).toMatchObject({
         embeddingCacheEntries: 1,
-        embeddingCacheBytes: 5,
+        embeddingCacheBytes: 16,
       });
       const storedBytes = db
         .prepare(

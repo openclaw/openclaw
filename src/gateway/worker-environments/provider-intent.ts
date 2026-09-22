@@ -458,6 +458,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     }
     const { environmentId, provisionOperationId } = deriveEnvironmentIntent(idempotencyKey);
     return withLock(environmentId, async () => {
+      await store.ready();
       signal?.throwIfAborted();
       if (options.isStopping()) {
         throw serviceError("invalid_state", "Worker environment service is stopping");
@@ -560,13 +561,19 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       }
       const { provider } = current;
       const { providerId, profileSnapshot } = admitted;
-      const intent = store.createIntent({
-        environmentId,
-        providerId,
-        profileId: normalizedProfileId,
-        profileSnapshot,
-        provisionOperationId,
-      });
+      const intent = await store.createIntent(
+        {
+          environmentId,
+          providerId,
+          profileId: normalizedProfileId,
+          profileSnapshot,
+          provisionOperationId,
+        },
+        () => {
+          signal?.throwIfAborted();
+          assertPreparedIntentCurrent(profileId, admitted);
+        },
+      );
       return resumeProvision(intent, provider, signal);
     });
   };

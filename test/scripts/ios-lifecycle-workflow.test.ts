@@ -173,6 +173,9 @@ describe.skipIf(process.platform === "win32")("iOS voice cleanup workflow", () =
       "-only-testing:OpenClawTests/TalkRealtimeConsultCancellationTests",
       "-only-testing:OpenClawTests/TalkRealtimeTranscriptWriteQueueTests",
       "-only-testing:OpenClawTests/TalkModeManagerTests",
+      "-only-testing:OpenClawTests/ManagedDocumentEnvelopeTests",
+      "-only-testing:OpenClawTests/IOSMediaArtifactLoaderTests",
+      "-only-testing:OpenClawTests/OpenClawTypographyTests",
     ]);
     expect(build.args).toEqual(expect.arrayContaining(["-configuration", "Debug", "test"]));
     expect(build.args.some((arg) => arg.startsWith("CODE_SIGN"))).toBe(false);

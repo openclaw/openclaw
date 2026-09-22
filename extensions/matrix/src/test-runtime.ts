@@ -5,6 +5,7 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   OpenAsyncKeyedStoreOptions,
@@ -49,6 +50,21 @@ type MatrixTestRuntimeOptions = {
   channel?: Partial<PluginRuntime["channel"]>;
   stateDir?: string;
 };
+
+type MatrixNoticeCall = [roomId: string, payload: { body?: string }];
+type MatrixNoticeSendMock = { mock: { calls: MatrixNoticeCall[] } };
+
+export function getSentNoticeBody(sendMessage: MatrixNoticeSendMock, index = 0): string {
+  return getSentNoticeBodyFromCall(sendMessage.mock.calls[index]);
+}
+
+export function getSentNoticeBodyFromCall(call: MatrixNoticeCall | undefined): string {
+  return call?.[1].body ?? "";
+}
+
+export function getSentNoticeBodies(sendMessage: MatrixNoticeSendMock): string[] {
+  return sendMessage.mock.calls.map(getSentNoticeBodyFromCall);
+}
 
 type MatrixRuntimeStub = {
   config: Pick<PluginRuntime["config"], "current" | "mutateConfigFile" | "replaceConfigFile">;
@@ -154,6 +170,7 @@ export function installMatrixMonitorTestRuntime(
     cfg: options.cfg,
     stateDir: options.stateDir,
     channel: {
+      inbound: createPluginRuntimeMock().channel.inbound,
       mentions: {
         buildMentionRegexes: () => [],
         matchesMentionPatterns:

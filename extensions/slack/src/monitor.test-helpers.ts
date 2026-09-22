@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 // Slack helper module supports monitor helpers behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -320,6 +321,7 @@ export async function resetSlackTestState(
   lastSlackTestStateDir = stateDir;
   process.env.OPENCLAW_STATE_DIR = stateDir;
   setSlackRuntime({
+    channel: createPluginRuntimeMock().channel,
     state: {
       openChannelIngressQueue: (
         options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,

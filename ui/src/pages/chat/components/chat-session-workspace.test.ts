@@ -6,7 +6,6 @@ import {
   createSessionCapabilityFixture,
 } from "../chat-pane.test-support.ts";
 import {
-  gatewayHello,
   loadedSidebarContent,
   createSidebarContentRecorder,
 } from "./chat-session-workspace.test-support.ts";
@@ -202,7 +201,7 @@ describe("session workspace state", () => {
       connected: true,
       connectionEpoch: 1,
       handleOpenSidebar: vi.fn(),
-      hello: gatewayHello(["sessions.diff"]),
+      hello: gatewayHelloForMethods(["sessions.diff"]),
       agentsList: { agents: [] },
       requestUpdate: vi.fn(),
       sessionKey: "agent:main:current",
@@ -293,7 +292,7 @@ describe("session workspace state", () => {
       connected: true,
       connectionEpoch: 1,
       handleOpenSidebar: vi.fn(),
-      hello: gatewayHello(["sessions.diff"]),
+      hello: gatewayHelloForMethods(["sessions.diff"]),
       agentsList: { agents: [] },
       requestUpdate: vi.fn(),
       sessionKey: "agent:main:current",
@@ -425,7 +424,7 @@ describe("openSessionWorkspaceFile", () => {
       client,
       connected,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: existingContent,
       sessions: { getFile },
@@ -457,7 +456,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello(["sessions.files.set"]),
+      hello: gatewayHelloForMethods(["sessions.files.set"]),
       sessionKey: "agent:main:current",
       sessionWorkspaceDraftScope: "pane-left",
       settings: { gatewayUrl: "wss://gateway-a.example" },
@@ -490,7 +489,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello(methods, scopes),
+      hello: gatewayHelloForMethods(methods, scopes),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {
@@ -563,7 +562,7 @@ describe("openSessionWorkspaceFile", () => {
         client: { request },
         connected: true,
         handleOpenSidebar: vi.fn(),
-        hello: gatewayHello([]),
+        hello: gatewayHelloForMethods([]),
         agentsList: [],
         sessionKey: "agent:main:current",
         sidebarContent: null,
@@ -634,7 +633,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {
@@ -673,7 +672,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {
@@ -713,7 +712,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {
@@ -777,7 +776,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {
@@ -815,7 +814,7 @@ describe("openSessionWorkspaceFile", () => {
       client: {},
       connected: true,
       handleOpenSidebar,
-      hello: gatewayHello([]),
+      hello: gatewayHelloForMethods([]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
       sessions: {

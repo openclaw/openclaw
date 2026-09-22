@@ -30,7 +30,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../src/test-utils/openclaw-test-state.js";
-import { acquireTestPortBlock } from "../../src/test-utils/port-claims.js";
+import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
 import { cleanupSessionStateForTest } from "../../src/test-utils/session-state-cleanup.js";
 import { sleep } from "../../src/utils.js";
 import { decodeUtf8Tail } from "./bounded-child-output.js";
@@ -754,11 +754,15 @@ export async function createOpenClawTestInstance(
     if (options.port !== undefined) {
       port = options.port;
     } else {
-      const claimed = await acquireTestPortBlock({ offsets: [0, 1], signal });
-      port = claimed.port;
-      releasePortClaims = claimed.release;
-      signal?.throwIfAborted();
-      reservation = await reserveGatewayPort(port, options.verifyCleanup);
+      const reserved = await reserveTestPortListener({
+        offsets: [0, 1],
+        signal,
+        createListener: () => net.createServer((socket) => socket.destroy()),
+        verifyCleanup: options.verifyCleanup,
+      });
+      port = reserved.claim.port;
+      releasePortClaims = reserved.claim.release;
+      reservation = { release: reserved.releaseListener };
     }
     signal?.throwIfAborted();
     state = await createOpenClawTestState({

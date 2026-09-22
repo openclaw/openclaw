@@ -191,24 +191,30 @@ export async function killSubagentRun(params: {
   let killClaim: ReturnType<typeof claimSubagentRunKill>;
   let stopAccepted = false;
   let preparationResult: Awaited<ReturnType<typeof killSubagentRun>> | undefined;
+  const cancellationFailure = (
+    error: unknown,
+    declined?: true,
+  ): NonNullable<typeof preparationResult> => {
+    let reason = formatErrorMessage(error);
+    if (killClaim && !stopAccepted) {
+      try {
+        releaseSubagentRunKillClaim({
+          runId: params.entry.runId,
+          expected: params.entry,
+          claim: killClaim,
+        });
+      } catch (releaseError) {
+        reason += ` Kill intent could not be released: ${formatErrorMessage(releaseError)}`;
+      }
+    }
+    return { killed: false, sessionId, ...(declined ? { declined } : {}), error: reason };
+  };
   const declineRevokedCancellation = (): typeof preparationResult => {
     try {
       params.cancellationControl?.assertCurrent();
       return undefined;
     } catch (error) {
-      let reason = formatErrorMessage(error);
-      if (killClaim && !stopAccepted) {
-        try {
-          releaseSubagentRunKillClaim({
-            runId: params.entry.runId,
-            expected: params.entry,
-            claim: killClaim,
-          });
-        } catch (releaseError) {
-          reason += ` Kill intent could not be released: ${formatErrorMessage(releaseError)}`;
-        }
-      }
-      return { killed: false, sessionId, declined: true, error: reason };
+      return cancellationFailure(error, true);
     }
   };
   const killOwnerCurrent = () =>
@@ -256,6 +262,13 @@ export async function killSubagentRun(params: {
     scope: resolved.storePath,
     identities: [childSessionKey, sessionId],
     prepare: async () => {
+      for (
+        let pending = params.cancellationControl?.prepareRead?.();
+        pending;
+        pending = params.cancellationControl?.prepareRead?.()
+      ) {
+        await pending;
+      }
       if (!isCurrent()) {
         return;
       }
@@ -359,6 +372,21 @@ export async function killSubagentRun(params: {
             : "Subagent is still active; try the kill again in a moment.",
         };
       }
+      let readFailure: { error: unknown } | undefined;
+      try {
+        for (
+          let pending = params.cancellationControl?.prepareRead?.();
+          pending;
+          pending = params.cancellationControl?.prepareRead?.()
+        ) {
+          await pending;
+        }
+      } catch (error) {
+        if (!stopAccepted) {
+          return cancellationFailure(error);
+        }
+        readFailure = { error };
+      }
       // Runtime loading and admission draining yield. Fence the exact row before
       // touching session-owned queues so a successor cannot inherit an older kill.
       if (!isCurrent()) {
@@ -367,7 +395,9 @@ export async function killSubagentRun(params: {
       if (killClaim && !ownsSessionIncarnation()) {
         return releaseChangedSessionKill(killClaim);
       }
-      params.refreshDescendants();
+      if (!readFailure) {
+        params.refreshDescendants();
+      }
       const targetStateAfterRuntimeLoad = resolveSubagentKillTargetState(params.entry);
       if (targetStateAfterRuntimeLoad) {
         const killedTarget =
@@ -381,9 +411,10 @@ export async function killSubagentRun(params: {
           killed: killedTarget && claimedCurrentKill,
           sessionId,
           targetState: targetStateAfterRuntimeLoad,
+          ...(readFailure ? { error: formatErrorMessage(readFailure.error) } : {}),
         };
       }
-      const declined = declineRevokedCancellation();
+      const declined = readFailure ? undefined : declineRevokedCancellation();
       if (declined && !stopAccepted) {
         return declined;
       }
@@ -459,10 +490,19 @@ export async function killSubagentRun(params: {
         if (!killOwnerCurrent()) {
           return { killed: false, sessionId, superseded: true };
         }
-        if (declined) {
-          // This target accepted the earlier interruption. Revocation fences new
-          // stops and queue changes, while its exact claim still owns settlement.
-          return await settleTargetCancellation();
+        if (readFailure || declined) {
+          // Missing caller facts or revocation fence new effects, but the accepted
+          // interruption's exact claim still owns settlement.
+          const settled: Awaited<ReturnType<typeof killSubagentRun>> =
+            await settleTargetCancellation();
+          return readFailure
+            ? {
+                ...settled,
+                error: [settled.error, formatErrorMessage(readFailure.error)]
+                  .filter(Boolean)
+                  .join(" "),
+              }
+            : settled;
         }
         const active = sessionId ? runtime.isEmbeddedAgentRunActive(sessionId) : false;
         if (!ownsSessionIncarnation()) {

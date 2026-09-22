@@ -529,6 +529,8 @@ export type PluginManifest = {
 };
 
 export type PluginManifestContracts = {
+  /** Executor ids implemented by the plugin's code-mode-executor-api artifact. */
+  codeModeExecutors?: string[];
   embeddedExtensionFactories?: string[];
   agentToolResultMiddleware?: string[];
   trustedToolPolicies?: string[];

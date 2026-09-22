@@ -127,6 +127,7 @@ export function createAgentTurnService(
       context,
       respond,
       reserveDedupe: dedupeLifecycle.reserve,
+      bindDedupeSessionTarget: dedupeLifecycle.bindSessionTarget,
       clearDedupe: dedupeLifecycle.clearUnaccepted,
     });
     if (!routing) {
@@ -393,6 +394,12 @@ export function createAgentTurnService(
           return;
         }
         const persistedSession = await persistAgentSessionPhase({
+          onSessionCommitted: (committedEntry) =>
+            dedupeLifecycle.bindSessionTarget({
+              sessionKey: canonicalSessionKey,
+              agentId: sessionAgentId,
+              sessionId: committedEntry.sessionId,
+            }),
           assertAdmissionCurrent,
           request,
           cfg: cfgLocal,

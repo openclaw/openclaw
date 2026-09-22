@@ -113,9 +113,11 @@ export function withSqliteReclamationWorker<T>(
   claim: OpenClawAgentDatabaseClaim,
   run: (worker: SqliteReclamationWorker) => Promise<T>,
   assertRequestCurrent: () => void,
+  signal?: AbortSignal,
 ): Promise<T> {
-  return runExclusiveSqliteTranscriptArchiveWorker(() =>
-    useReclamationWorker(retained, options, claim, run, assertRequestCurrent),
+  return runExclusiveSqliteTranscriptArchiveWorker(
+    () => useReclamationWorker(retained, options, claim, run, assertRequestCurrent),
+    signal,
   );
 }
 

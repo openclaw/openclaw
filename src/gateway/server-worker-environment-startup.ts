@@ -41,8 +41,8 @@ import type { WorkerBootstrapArtifactTransferHttpCallback } from "./worker-envir
 import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bundle-retention.js";
 import type { WorkerSessionToolExecutor } from "./worker-environments/worker-session-tool-result.js";
 
-type WorkerEnvironmentStore = ReturnType<
-  typeof import("./worker-environments/store.js").createWorkerEnvironmentStore
+type WorkerEnvironmentStore = Awaited<
+  ReturnType<typeof import("./worker-environments/store.js").createWorkerEnvironmentStore>
 >;
 type WorkerEnvironmentRecord = ReturnType<WorkerEnvironmentStore["list"]>[number];
 type WorkerEnvironmentLogger = {
@@ -88,7 +88,7 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
       import("./worker-environments/store.js"),
       import("./worker-environments/placement-store.js"),
     ]);
-  const store = createWorkerEnvironmentStore();
+  const store = await createWorkerEnvironmentStore();
   const placementStore = createWorkerSessionPlacementStore();
   const records = store.list();
   const durableProviderIds = uniqueStrings(
@@ -550,7 +550,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       })
       .map((record) => record.environmentId);
     for (const environmentId of environmentIds) {
-      params.startup.store.revokeEnvironmentCredential(environmentId);
+      await params.startup.store.revokeEnvironmentCredential(environmentId);
     }
     await Promise.all(
       environmentIds.map(async (environmentId) => {

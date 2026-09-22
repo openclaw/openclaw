@@ -52,10 +52,10 @@ it("repairs the subscription selector while preserving fallbacks and model setti
   const repaired = repairRetiredConfigModelRefs(cfg, resolve);
 
   expect(repaired.config.agents?.defaults?.model).toEqual({
-    primary: "xai/grok-4.6",
+    primary: "xai/grok-4.7",
     fallbacks: ["xai/grok-4.3"],
   });
-  expect(repaired.config.agents?.defaults?.models?.["xai/grok-4.6"]?.params).toEqual({
+  expect(repaired.config.agents?.defaults?.models?.["xai/grok-4.7"]?.params).toEqual({
     temperature: 0.25,
   });
   expect(cfg.agents?.defaults?.model).toEqual({ primary: "xai/auto", fallbacks: ["xai/grok-4.3"] });
@@ -79,8 +79,8 @@ it("repairs a session override without changing its selected profile", async () 
     authProfileOverrideSource: "user",
   };
   const resolve = createRetiredModelRefRepairResolver({ cfg, env: state.env });
-  expect(repairRetiredSessionModelRef(entry, "main", resolve, "xai/grok-4.6", [])).toBe(true);
-  expect(entry.modelOverride).toBe("grok-4.6");
+  expect(repairRetiredSessionModelRef(entry, "main", resolve, "xai/grok-4.7", [])).toBe(true);
+  expect(entry.modelOverride).toBe("grok-4.7");
   expect(entry.authProfileOverride).toBe("xai:fixture");
   expect(entry.authProfileOverrideSource).toBe("user");
 });
@@ -111,7 +111,7 @@ it("repairs an unpinned config for its declared owner without credentials", asyn
   const resolve = createRetiredModelRefRepairResolver({ cfg, env: state.env, warnings });
   expect(resolve({ modelRef: "xai/auto", agentId: "main" })).toEqual({
     kind: "replace",
-    modelRef: "xai/grok-4.6",
+    modelRef: "xai/grok-4.7",
     reason: "retirement",
     retirementScope: "owner",
   });
@@ -159,7 +159,7 @@ it("keeps a pinned session when its successor is outside the allowed models", as
     warnings,
     checkModelPolicy: true,
   });
-  expect(repairRetiredSessionModelRef(entry, "main", resolve, "xai/grok-4.6", warnings)).toBe(
+  expect(repairRetiredSessionModelRef(entry, "main", resolve, "xai/grok-4.7", warnings)).toBe(
     false,
   );
   expect(entry.modelOverride).toBe("auto");

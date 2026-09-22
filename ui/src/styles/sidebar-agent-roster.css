@@ -128,6 +128,10 @@ openclaw-sidebar-agent-roster {
   margin: 0;
 }
 
+.sidebar-agent-roster__header + .sidebar-recent-sessions__group {
+  min-height: 0;
+}
+
 .sidebar-new-session-menu::part(menu) {
   min-width: 180px;
 }
@@ -261,6 +265,7 @@ openclaw-sidebar-agent-roster {
   align-items: center;
   gap: var(--team-slot-gap);
   margin: 0;
+  margin-inline-end: calc(var(--radius-md) * var(--openclaw-corner-radius-scale));
 }
 .sidebar-recent-session--team openclaw-viewer-facepile:not(:has(.viewer-facepile)),
 .sidebar-recent-session--team

@@ -20,6 +20,11 @@ export const cliRecoveryEntrypoints = {
     sourceWorkerName: "../commands/doctor-lint-process",
     distWorkerPath: "commands/doctor-lint-process.js",
   },
+  doctorHealth: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../../extensions/memory-core/doctor-health-api",
+    distWorkerPath: "extensions/memory-core/doctor-health-api.js",
+  },
   signalExitBarrier: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "signal-exit-barrier",

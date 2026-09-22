@@ -27,6 +27,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/state/openclaw-agent-worker-store.runtime.test-support.ts",
   "cli/update-cli/update-command-legacy-finalize-entrypoint.test-support":
     "src/cli/update-cli/update-command-legacy-finalize-entrypoint.test-support.ts",
+  "cli/update-cli/update-command-migrated-fixture-entrypoint.test-support":
+    "src/cli/update-cli/update-command-migrated-fixture-entrypoint.test-support.ts",
   "extensions/logbook/sqlite-backend-entrypoint.test-support":
     "extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts",
   "extensions/team-reports/sqlite-backend-entrypoint.test-support":
@@ -36,6 +38,8 @@ export const vitestWorkerDeclarationEntries = {
   "infra/update-managed-service-handoff-runtime-assets":
     "src/infra/update-managed-service-handoff-runtime-assets.ts",
   "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
+  "infra/sqlite-readonly-worker.compile-cache-runtime.test-support":
+    "src/infra/sqlite-readonly-worker.compile-cache-runtime.test-support.ts",
   "cli/cli-entrypoint.test-support": "src/cli/cli-entrypoint.test-support.ts",
   ...(nativeSchtasksIntegrationEnabled
     ? {
@@ -71,6 +75,8 @@ export const vitestWorkerDeclarationEntries = {
   "gateway/session-title-retention.test-support":
     "src/gateway/session-title-retention.test-support.ts",
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
+  "worker/worker-runtime-background-exec-entrypoints.test-support":
+    "src/worker/worker-runtime-background-exec-entrypoints.test-support.ts",
   "skills/library/persistence-runtime.test-support":
     "src/skills/library/persistence-runtime.test-support.ts",
   "snapshot/git-backup-command-runtime.test-support":

@@ -24,6 +24,8 @@ export type PluginSkillPreviewState = {
   error: string | null;
   result: PluginsSkillsReadResult | null;
   activePath: string;
+  pendingPaths: Set<string>;
+  fileErrors: Map<string, string>;
 };
 
 export class PluginPreviewController {
@@ -46,6 +48,8 @@ export class PluginPreviewController {
       error: connection ? null : t("pluginsPage.connectToManage"),
       result: null,
       activePath: "SKILL.md",
+      pendingPaths: new Set(),
+      fileErrors: new Map(),
     };
     this.host.requestUpdate();
     if (!connection) {
@@ -60,6 +64,9 @@ export class PluginPreviewController {
       if (current() && this.state) {
         this.state.result = result;
         this.state.activePath = result.entryPath;
+        if (result.version) {
+          this.state.request = { ...this.state.request, version: result.version };
+        }
       }
     } catch (error) {
       if (current() && this.state) {
@@ -79,14 +86,68 @@ export class PluginPreviewController {
   }
 
   retry(): void {
-    if (this.state) {
+    if (this.state?.result) {
+      void this.select(this.state.activePath);
+    } else if (this.state) {
       void this.open(this.state.request);
     }
   }
-  select(path: string): void {
-    if (this.state?.result?.files.some((file) => file.path === path)) {
-      this.state.activePath = path;
-      this.host.requestUpdate();
+  async select(path: string): Promise<void> {
+    const state = this.state;
+    const file = state?.result?.files.find((candidate) => candidate.path === path);
+    if (!state || !file) {
+      return;
+    }
+    state.activePath = path;
+    this.host.requestUpdate();
+    if (
+      state.pendingPaths.has(path) ||
+      (file.status !== "deferred" && file.status !== "unavailable")
+    ) {
+      return;
+    }
+    const connection = this.gateway.capture();
+    if (!connection) {
+      state.fileErrors.set(path, t("pluginsPage.connectToManage"));
+      return;
+    }
+    const current = () => this.state === state && this.gateway.isCurrent(connection);
+    state.pendingPaths.add(path);
+    state.fileErrors.delete(path);
+    try {
+      const result = await connection.client.request<PluginsSkillsReadResult>(
+        "plugins.skills.read",
+        { ...state.request, path },
+      );
+      if (!current() || !state.result) {
+        return;
+      }
+      const selected = result.files.find((candidate) => candidate.path === path);
+      if (
+        result.version !== state.result.version ||
+        result.rootPath !== state.result.rootPath ||
+        !selected ||
+        selected.status === "deferred"
+      ) {
+        throw new Error(t("filePreview.bundle.unavailable"));
+      }
+      // Merge only this requested body. Late sibling responses never replace the
+      // foreground selection or discard already loaded bodies in this preview.
+      state.result = {
+        ...state.result,
+        files: state.result.files.map((candidate) =>
+          candidate.path === path ? selected : candidate,
+        ),
+      };
+    } catch (error) {
+      if (current()) {
+        state.fileErrors.set(path, formatUiError(error));
+      }
+    } finally {
+      if (current()) {
+        state.pendingPaths.delete(path);
+        this.host.requestUpdate();
+      }
     }
   }
   /** Dismissal, route changes and connection changes retire outstanding reads. */
@@ -107,10 +168,16 @@ export function renderPluginSkillPreview(controller: PluginPreviewController) {
   const files: FilePreviewModalFile[] =
     state.result?.files.map((file) => ({
       path: file.path,
-      size: `${file.sizeBytes.toLocaleString()} B`,
+      size: "",
       contents: file.content ?? "",
-      ...(file.status !== "ready" ? { message: t(`filePreview.bundle.${file.status}`) } : {}),
+      ...(file.status !== "ready" && file.status !== "deferred"
+        ? { message: t(`filePreview.bundle.${file.status}`) }
+        : {}),
     })) ?? [];
+  const activeFile = state.result?.files.find((file) => file.path === state.activePath);
+  const fileError =
+    state.fileErrors.get(state.activePath) ??
+    (activeFile?.status === "unavailable" ? t("filePreview.bundle.unavailable") : "");
   const incomplete =
     state.result &&
     (!state.result.inventoryComplete ||
@@ -124,7 +191,8 @@ export function renderPluginSkillPreview(controller: PluginPreviewController) {
     .activePath=${state.activePath}
     layout="document"
     .loading=${state.loading}
-    .error=${state.error ?? ""}
+    .fileLoading=${state.pendingPaths.has(state.activePath)}
+    .error=${state.error ?? (state.pendingPaths.has(state.activePath) ? "" : fileError)}
     .notice=${incomplete ? t("filePreview.bundle.incomplete") : ""}
     @file-preview-select=${(event: CustomEvent<string>) => controller.select(event.detail)}
     @file-preview-retry=${() => controller.retry()}

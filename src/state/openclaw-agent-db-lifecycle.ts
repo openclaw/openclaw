@@ -507,6 +507,16 @@ export function listOpenIncognitoAgentDatabases(): Array<{ agentId: string; stor
     );
 }
 
+/** Borrow committed process-held facts without opening or querying a private store. */
+export function getOpenIncognitoAgentDatabase(agentId: string, pathname: string) {
+  const database = cache.databases.get(path.resolve(pathname));
+  return database?.db.isOpen &&
+    database.agentId === normalizeAgentId(agentId) &&
+    cache.incognito.has(database)
+    ? database
+    : undefined;
+}
+
 /** Return the generation of process-held incognito database membership. */
 export function readOpenIncognitoAgentDatabaseGeneration(): number {
   return cache.generation;

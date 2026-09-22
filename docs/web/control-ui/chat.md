@@ -210,6 +210,8 @@ Collapsed tool rows keep the tool label visible and truncate long summaries with
 
 Tool activity summaries count the operations inside a workflow rather than counting its wrapper again. Execution calls show the agent-provided purpose when available; titles describe intended work, while results determine success or failure. Recorded child calls appear under their operation instead of as separate peer rows. Expand the operation to inspect its children, then expand a child for its command, full output, and reported exit status. **Tool input** retains the wrapper's source and output. Collapsed operations include failures from their children, even when the wrapper or later calls succeed. Error messages and diagnostic paths stay inside the expandable tool details. Nested relationships use recorded call metadata from the same run and survive reloading; calls without an available, unambiguous parent stay separate. Untitled command previews flatten line breaks and truncate long commands; expanded details retain the original source.
 
+Native Codex Code Mode calls show **run JavaScript** when no purpose is available. Expand **Tool input** to read the source. Captured text-block responses display their text directly, and completed command envelopes show readable output with nonzero exit codes kept visible. JSON output is indented without changing number or string values. **Raw details** retains the original response, including execution metadata. For long results, choose **Show full output** to inspect the complete response; copy and download preserve those captured bytes.
+
 A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
 
 Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
@@ -532,8 +534,10 @@ Task progress cards are enabled by default. Toggle **Show task progress cards** 
 **Settings → Appearance → Chat** to hide or show the composer card in this browser.
 Hiding it does not stop agent work or clear saved progress.
 
-The task progress card above the composer collapses after deliberate upward
-scrolling settles. Returning to the end and progress updates leave it collapsed;
+On mobile, the task progress card above the composer starts collapsed and stays
+collapsed when you send a new message or the run completes. You can still open it
+manually. The card also collapses after deliberate upward scrolling settles.
+Returning to the end and progress updates leave it collapsed; on desktop,
 completion can reopen it only while you are already at the end. Manual choices
 are remembered per session. Continued scrolling after a manual reopen uses a
 higher threshold, and a second reopen keeps it open for that visit and task.
@@ -548,6 +552,16 @@ browser, including one signed in as you, does not count as a local send. Scroll
 back to the end or select **Latest** to resume following explicitly. Assistant
 text stays visible as it streams and becomes saved history, without a reply
 entry fade or slide.
+
+Hover an external web link, or focus it with the keyboard, to see its page title,
+description, and social image when available. GitHub repository and public
+landing-page links use the same card; issue and pull-request links keep their
+dedicated previews. The card uses
+OpenClaw's theme and includes **Open in your browser**. Press Escape to dismiss it.
+Pages without metadata keep the link label and destination. Touch taps open links
+normally. GitHub sign-in, account, and profile links do not trigger page previews.
+These anonymous previews respect **Automatically Fetch Link Favicons**; see
+[the request and privacy details](/web/control-ui/security-model#content-security-policy).
 
 Completed replies can show a compact **Sources** strip when their web links match
 recorded `web_search` or `web_fetch` results from the same run. Select a title and
@@ -645,6 +659,20 @@ The full Tasks page displays the supplied transcript. Core session transcripts
 are currently capped at 8,000 characters per text block. The Chat panel's full-text recovery may be unavailable
 after a temporary session is removed; loading earlier messages does not recover
 a capped reply's missing text.
+
+## Conversations stopped for review
+
+When a provider stops a conversation as a misalignment precaution, chat holds
+ordinary sends, queued input, and Talk. **Review findings** opens the available
+explanation. If the provider and runtime support continuation, the dialog shows
+the exact continuation message and asks you to **Acknowledge findings and
+continue**. Sending that request keeps the chat paused until the provider accepts
+it; a refresh, another session, or newer findings cannot confirm an older review.
+
+Queued messages remain held after continuation. Review and retry each one
+separately if it is still needed. Without a supported continuation, the
+conversation remains stopped. See [misalignment precautions](/concepts/model-failover#misalignment-precautions)
+for runtime support and recovery limits.
 
 ## Chat message width
 

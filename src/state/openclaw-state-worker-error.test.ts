@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
+import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import {
   isSqliteNativeOpenFailure,
@@ -61,6 +62,17 @@ describe("shared-state worker error transport", () => {
     expect(decoded).toMatchObject({ name: error.name, message: error.message });
     expect(decoded.cause).toBeInstanceOf(Error);
     expect(decoded.cause).toMatchObject({ name: "SyntaxError", message: cause.message });
+  });
+
+  it("preserves the attachment conflict identity used for credential recovery", () => {
+    const original = new WorkerSessionAlreadyAttachedError("session", "environment");
+    const decoded = roundTrip(original);
+    expect(decoded).toBeInstanceOf(WorkerSessionAlreadyAttachedError);
+    expect(decoded).toMatchObject({
+      message: original.message,
+      sessionId: "session",
+      environmentId: "environment",
+    });
   });
 
   it.each([undefined, "SQLITE_IOERR"])(

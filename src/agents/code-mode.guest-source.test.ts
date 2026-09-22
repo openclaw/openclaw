@@ -31,9 +31,9 @@ describe("Code Mode guest source validation", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("accepts command as an exec-compatible code alias", async () => {

@@ -14,7 +14,7 @@ const cachePath = (assigned: typeof spec) => assigned.env.OPENCLAW_VITEST_FS_MOD
 
 describe("Vitest cache slot ownership", () => {
   it("reuses an idle config cache while another config occupies its former scheduler slot", async () => {
-    const run = createVitestCacheSlots(2, "linux");
+    const run = createVitestCacheSlots("linux");
     const first = createDeferred<{ groupJoined: boolean }>();
     const peer = createDeferred<{ groupJoined: boolean }>();
     const third = createDeferred<{ groupJoined: boolean }>();
@@ -48,7 +48,7 @@ describe("Vitest cache slot ownership", () => {
   });
 
   it("reuses lexical root and config aliases without sharing live leases", async () => {
-    const run = createVitestCacheSlots(2, "linux");
+    const run = createVitestCacheSlots("linux");
     const first = createDeferred<{ groupJoined: boolean }>();
     let firstPath: string | undefined;
     const pending = run(spec, (assigned) => {
@@ -81,7 +81,7 @@ describe("Vitest cache slot ownership", () => {
   });
 
   it("keeps fresh indices distinct across root spellings even after an unjoined lease", async () => {
-    const run = createVitestCacheSlots(2, "linux");
+    const run = createVitestCacheSlots("linux");
     const first = createDeferred<{ groupJoined: boolean }>();
     const paths: string[] = [];
     const pending = run(spec, (assigned) => {
@@ -112,7 +112,7 @@ describe("Vitest cache slot ownership", () => {
   });
 
   it("holds concurrent leases until joined and reuses a failed command's completed slot", async () => {
-    const run = createVitestCacheSlots(2, "linux");
+    const run = createVitestCacheSlots("linux");
     const first = createDeferred<{ groupJoined: boolean; code: number }>();
     const second = createDeferred<{ groupJoined: boolean; code: number }>();
     const paths: string[] = [];
@@ -141,7 +141,7 @@ describe("Vitest cache slot ownership", () => {
   it.each(["child-only", "rejected"])(
     "retires a %s lease without reusing its directory",
     async (mode) => {
-      const run = createVitestCacheSlots(2, "linux");
+      const run = createVitestCacheSlots("linux");
       let retired: string | undefined;
       const attempt = run(spec, async (assigned) => {
         retired = cachePath(assigned);
@@ -164,18 +164,20 @@ describe("Vitest cache slot ownership", () => {
     },
   );
 
-  it.each(["caller", "serial", "watch", "windows"])(
+  it.each(["caller", "unassigned", "watch", "windows"])(
     "preserves the %s cache owner",
     async (mode) => {
       const input = {
         ...spec,
         watchMode: mode === "watch",
-        cacheAssignment: mode === "caller" ? { kind: "caller" as const } : spec.cacheAssignment,
+        cacheAssignment:
+          mode === "unassigned"
+            ? undefined
+            : mode === "caller"
+              ? { kind: "caller" as const }
+              : spec.cacheAssignment,
       };
-      const run = createVitestCacheSlots(
-        mode === "serial" ? 1 : 2,
-        mode === "windows" ? "win32" : "linux",
-      );
+      const run = createVitestCacheSlots(mode === "windows" ? "win32" : "linux");
       await run(input, async (assigned) => {
         expect(assigned).toBe(input);
         return { groupJoined: false };

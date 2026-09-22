@@ -28,12 +28,7 @@ import {
 } from "../../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
-import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
-import {
-  resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryControlRuntimeForTests,
-} from "../../../tasks/task-registry.test-support.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-registry.test-support.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -240,8 +235,6 @@ export function installSpawnAuthorityFixture() {
     resetSubagentRegistryForTests({ persist: false });
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
-    // The source test supplies the real ESM owner through the existing CJS runtime seam.
-    setTaskRegistryControlRuntimeForTests(taskControlRuntime);
     registryTesting.setDepsForTest({
       loadAgentRuntimePluginRegistryHandle: () => undefined,
       callGateway: async (request) => {
@@ -259,7 +252,6 @@ export function installSpawnAuthorityFixture() {
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     schedulerTesting.reset();
-    resetTaskRegistryControlRuntimeForTests();
     await cleanupSessionStateForTest({ stateDir });
     registryTesting.setDepsForTest();
     spawnTesting.setDepsForTest();

@@ -146,6 +146,7 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    readPreparedRowContext: () => rowContext,
     capture: describe,
     findBySessionId: (query) =>
       [...rows.values()].filter(

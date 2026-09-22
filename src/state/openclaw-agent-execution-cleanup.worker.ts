@@ -6,9 +6,8 @@ import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import type { OpenClawStateWorkerCleanupOperations } from "./openclaw-state-worker-contract.js";
 
 export function executeAgentDatabaseCleanupCommand(
-  command: Extract<
-    SqliteWorkerCommand<OpenClawStateWorkerCleanupOperations>,
-    { type: "agentDatabases.releaseExitedLease" }
+  command: SqliteWorkerCommand<
+    Pick<OpenClawStateWorkerCleanupOperations, "agentDatabases.releaseExitedLease">
   >,
   database: OpenClawStateDatabase,
   env: NodeJS.ProcessEnv,

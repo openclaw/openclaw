@@ -462,7 +462,7 @@ export async function runSqliteSessionReclamation(params: {
   }
   return await withSqliteMutationWorkerLifetime(
     params.plan.databaseOptions,
-    async ({ assertCurrent, commitGate }) => {
+    async ({ assertCurrent, commitGate, signal }) => {
       const assertRequestCurrent = () => {
         assertCurrent();
         params.assertCommitAllowed?.();
@@ -504,6 +504,7 @@ export async function runSqliteSessionReclamation(params: {
             );
           },
           assertRequestCurrent,
+          signal,
         );
       } finally {
         claim.release();

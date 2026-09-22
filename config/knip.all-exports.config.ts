@@ -57,6 +57,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/type-contracts/**/*.ts!",
   // The module-generation test launches this Bun regression directly from its source path.
   "src/plugins/plugin-module-generation.bun.test-support.ts!",
+  // The plugin artifact suite launches these Node tests with the native tooling preload.
+  "src/cli/plugins-feature-artifact.native.test-support.ts!",
   // ExecHostTransportProofTests.swift launches this isolated native client by path.
   "src/infra/exec-host.native.test-support.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.
@@ -139,6 +141,8 @@ const workspaces = Object.fromEntries(
               TEST_ENTRY_GLOB,
               // Vitest's root aliases execute these Discord-owned runtime adapters.
               ...(workspace === "extensions/discord" ? ["test/*-runtime.ts!"] : []),
+              // Core owner tests load this Telegram fixture through the bundled facade loader.
+              ...(workspace === "extensions/telegram" ? ["native-command.test-support.ts!"] : []),
               // QA Lab loads these plugin fixtures by path during the Gateway
               // E2E, so nothing imports their entry files. Matched as a group:
               // a per-fixture list silently rots into a knip failure the next

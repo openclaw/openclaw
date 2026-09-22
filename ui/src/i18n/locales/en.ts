@@ -2559,7 +2559,12 @@ export const en: TranslationMap & {
     codeMode: {
       title: "Code Mode",
       description:
-        "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
+        "Set the global default for compact JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
+      executor: "Code Mode executor",
+      executorDescription:
+        "Node.js is for trusted code; its VM is not a security sandbox. QuickJS runs code in an isolated WebAssembly runtime. Calls through OpenClaw tools use the same permissions. Applies to new runs; agent overrides take precedence.",
+      executorNode: "Node.js (default)",
+      executorQuickjs: "QuickJS (isolated)",
     },
 
     swarm: {
@@ -3040,6 +3045,10 @@ export const en: TranslationMap & {
     "reload-required": "Refresh required",
     offline: "Disconnected",
     reconnecting: "Reconnecting…",
+    interruptedRetrying:
+      "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket {code})",
+    interrupted:
+      "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket {code})",
     restarting: "Restarting…",
     suspending: "Suspending…",
     suspended: "Suspended",
@@ -3303,6 +3312,7 @@ export const en: TranslationMap & {
     copyError: "Copy error",
     providerAccessRemoved:
       "This reply stopped because the provider was signed out. Sign in again or choose another model.",
+    providerReview: {},
     providerPolicy: {
       bufferingTitle: "Cyber safety review",
       bufferingBody: "OpenAI is reviewing this response for cyber safety.",
@@ -4378,10 +4388,7 @@ export const en: TranslationMap & {
       toolInput: "Tool input",
       toolOutput: "Tool output",
       providerResponse: "Provider tool response",
-      providerResponseNote:
-        "Captured before context processing. The exact model input is unverified.",
       executionOutput: "Execution output",
-      executionOutputNote: "Captured execution output, not a verified model input.",
       showFullOutput: "Show full output",
       fullOutputUnavailable: "Full output unavailable. Only the captured output is shown.",
       copyOutput: "Copy available output",

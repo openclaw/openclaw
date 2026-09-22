@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { probeTreeClone } from "@openclaw/fs-safe/copy";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,8 @@ import {
 } from "./sqlite-wal.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+vi.mock("@openclaw/fs-safe/copy", { spy: true });
 
 function createMockDb(checkpointResult = { busy: 0, log: 0, checkpointed: 0 }): DatabaseSync {
   return {
@@ -415,11 +418,12 @@ describe("sqlite WAL maintenance", () => {
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
   });
 
-  it("uses rollback journaling when mount classification times out", () => {
+  it("uses rollback journaling when mount classification times out without native evidence", () => {
     const tempDir = tempDirs.make("openclaw-sqlite-mount-timeout-");
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+    vi.mocked(probeTreeClone).mockReturnValueOnce(undefined);
     vi.spyOn(fs, "readFileSync").mockImplementation(() => {
       throw new Error("no proc mountinfo");
     });

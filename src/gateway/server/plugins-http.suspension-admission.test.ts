@@ -3,6 +3,7 @@ import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayActiveWorkInspectors } from "../../infra/gateway-active-work.js";
 import {
   prepareGatewaySuspend,
@@ -26,14 +27,6 @@ import {
 
 const ROUTE_PATH = "/plugin/suspension-proof";
 let rateLimitEpochMs = Date.now();
-
-function deferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 function createRoute(
   params: Partial<PluginHttpRouteRegistration> & Pick<PluginHttpRouteRegistration, "handler">,
@@ -122,8 +115,8 @@ afterEach(() => {
 
 describe("plugin HTTP suspension admission", () => {
   it("keeps an in-flight ordinary route visible to suspension preparation", async () => {
-    const started = deferred();
-    const finish = deferred();
+    const started = createDeferred();
+    const finish = createDeferred();
     const handler = createRequestHandler([
       createRoute({
         handler: async () => {
@@ -311,8 +304,8 @@ describe("plugin HTTP suspension admission", () => {
 
 describe("plugin upgrade suspension admission", () => {
   it("keeps an in-flight upgrade visible to suspension preparation", async () => {
-    const started = deferred();
-    const finish = deferred();
+    const started = createDeferred();
+    const finish = createDeferred();
     const handler = createUpgradeHandler([
       createRoute({
         handler: () => false,

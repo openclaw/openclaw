@@ -533,7 +533,6 @@ extensions/imessage/src/client.ts	3
 extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
 extensions/imessage/src/monitor/conversation-repair.ts	1
-extensions/imessage/src/monitor/inbound-processing.ts	2
 extensions/imessage/src/monitor/monitor-provider.ts	1
 extensions/imessage/src/probe.ts	1
 extensions/imessage/src/remote-host.ts	1
@@ -704,7 +703,7 @@ extensions/memory-core/src/memory/manager-db.ts	2
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-embedding-ops.ts	1
 extensions/memory-core/src/memory/manager-search-orchestration.ts	1
-extensions/memory-core/src/memory/manager-search.ts	6
+extensions/memory-core/src/memory/manager-search.ts	5
 extensions/memory-core/src/memory/manager-sync-base.ts	3
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/memory/manager.ts	2
@@ -913,7 +912,7 @@ extensions/qa-lab/src/cron-run-wait.ts	1
 extensions/qa-lab/src/discovery-eval.ts	1
 extensions/qa-lab/src/docker-up.runtime.ts	1
 extensions/qa-lab/src/evidence-gallery.ts	2
-extensions/qa-lab/src/fixture-utils.ts	10
+extensions/qa-lab/src/fixture-utils.ts	9
 extensions/qa-lab/src/gateway-child-artifacts.ts	1
 extensions/qa-lab/src/gateway-process-boundary.ts	1
 extensions/qa-lab/src/harness-parity.ts	1
@@ -1396,7 +1395,7 @@ packages/ai/src/providers/clean-for-gemini.ts	12
 packages/ai/src/providers/google-shared.ts	3
 packages/ai/src/providers/mistral.ts	5
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
-packages/ai/src/providers/openai-chatgpt-responses.ts	26
+packages/ai/src/providers/openai-chatgpt-responses.ts	20
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
 packages/ai/src/providers/openai-completions.ts	6
 packages/ai/src/providers/openai-reasoning-effort.ts	6
@@ -1613,9 +1612,7 @@ src/agents/cli-runner/session-history.ts	3
 src/agents/code-mode-namespaces.ts	5
 src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
-src/agents/code-mode-worker.ts	2
 src/agents/code-mode.ts	2
-src/agents/code-mode.worker.ts	5
 src/agents/codex-mcp-config.ts	1
 src/agents/command/attempt-execution.helpers.ts	7
 src/agents/command/attempt-execution.ts	1
@@ -1860,7 +1857,7 @@ src/agents/sessions/session-manager.ts	2
 src/agents/sessions/settings-manager.ts	11
 src/agents/sessions/steering-message-identity.ts	2
 src/agents/sessions/tools/bash.ts	2
-src/agents/sessions/tools/edit.ts	14
+src/agents/sessions/tools/edit.ts	12
 src/agents/sessions/tools/grep.ts	2
 src/agents/sessions/tools/tool-definition-wrapper.ts	1
 src/agents/sessions/tools/write.ts	3
@@ -1965,7 +1962,6 @@ src/agents/transcript-redact-replay.ts	1
 src/agents/transcript-redact.ts	2
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
-src/agents/utils/tools-manager.ts	2
 src/agents/workspace-legacy-state.ts	2
 src/agents/workspace-state-store.ts	1
 src/agents/workspace.ts	5
@@ -2075,8 +2071,7 @@ src/channels/feedback-reflection.ts	1
 src/channels/ids.ts	1
 src/channels/inbound-event/context.ts	6
 src/channels/location.ts	1
-src/channels/message-access/admission-evidence.ts	3
-src/channels/message-access/runtime.ts	2
+src/channels/message-access/admission-evidence.ts	1
 src/channels/message/adapter.ts	1
 src/channels/message/capabilities.ts	2
 src/channels/message/ingress-claim-owner.ts	1
@@ -2447,7 +2442,6 @@ src/config/runtime-overrides.ts	2
 src/config/runtime-snapshot.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.ts	1
-src/config/sessions/archive-compression.ts	1
 src/config/sessions/cleanup-service.ts	3
 src/config/sessions/conversation-delivery-store.ts	2
 src/config/sessions/group.ts	1
@@ -2479,7 +2473,7 @@ src/config/sessions/session-accessor.transcript-turn.ts	1
 src/config/sessions/session-entry-json.ts	1
 src/config/sessions/session-reset-boundary-event.ts	5
 src/config/sessions/session-snapshot-merge.ts	26
-src/config/sessions/session-sqlite-target.ts	3
+src/config/sessions/session-sqlite-target.ts	2
 src/config/sessions/session-store-config.ts	2
 src/config/sessions/session-transcript-reconcile.worker.ts	1
 src/config/sessions/skill-prompt-blobs.ts	5
@@ -2743,7 +2737,6 @@ src/gateway/session-lifecycle-state.ts	1
 src/gateway/session-observer-rpc.ts	1
 src/gateway/session-recovery-service.ts	2
 src/gateway/session-sharing-target-input.ts	2
-src/gateway/session-sharing.ts	1
 src/gateway/session-transcript-derived-readers.ts	2
 src/gateway/session-transcript-files.fs.ts	2
 src/gateway/session-transcript-title-reader.ts	1
@@ -2772,7 +2765,6 @@ src/gateway/worker-environments/placement-state.ts	3
 src/gateway/worker-environments/placement-store.ts	1
 src/gateway/worker-environments/service-validation.ts	3
 src/gateway/worker-environments/state.ts	1
-src/gateway/worker-environments/store.ts	9
 src/gateway/worker-environments/worker-session-tool-executor.ts	1
 src/gateway/worker-environments/worker-turn-admission.ts	3
 src/gateway/worker-environments/workspace-accepted-publication.ts	1
@@ -3187,7 +3179,7 @@ src/plugins/loader-channel-runtime.ts	1
 src/plugins/loader-channel-setup.ts	14
 src/plugins/loader-discovery.ts	1
 src/plugins/loader-load-context.ts	4
-src/plugins/loader-module-runtime.ts	7
+src/plugins/loader-module-runtime.ts	5
 src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
 src/plugins/loader-shared.ts	2
@@ -3300,7 +3292,7 @@ src/secrets/runtime-state.ts	4
 src/secrets/runtime-web-tools.shared.ts	2
 src/secrets/runtime-web-tools.ts	4
 src/secrets/runtime.ts	4
-src/secrets/store/secret-store.ts	3
+src/secrets/store/secret-store.ts	2
 src/secrets/target-registry-query.ts	1
 src/security/audit-channel.ts	4
 src/security/audit-extra.async.ts	2
@@ -3370,7 +3362,7 @@ src/state/openclaw-agent-board-schema.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	2
 src/state/openclaw-agent-db-registry.ts	1
-src/state/openclaw-agent-db-schema.ts	2
+src/state/openclaw-agent-db-schema.ts	1
 src/state/openclaw-agent-db-session-migrations.ts	4
 src/state/openclaw-agent-db-session-provenance.ts	2
 src/state/openclaw-agent-standing-intents-schema.ts	1
@@ -3394,7 +3386,6 @@ src/state/user-profiles.ts	1
 src/status/summary.runtime.ts	1
 src/system-agent/agent-turn.ts	4
 src/system-agent/assistant-prompts.ts	1
-src/system-agent/assistant-timeout.ts	1
 src/system-agent/greeting.ts	1
 src/system-agent/hosted-setup.runtime.ts	1
 src/system-agent/operations-execute.ts	1
@@ -3421,7 +3412,6 @@ src/tasks/generated-media-task-activity.ts	1
 src/tasks/task-flow-registry.store.ts	1
 src/tasks/task-flow-registry.ts	1
 src/tasks/task-flow-registry.types.ts	2
-src/tasks/task-registry-query.ts	4
 src/tasks/task-registry.process-state.ts	1
 src/tasks/task-registry.sqlite.shared.ts	1
 src/tasks/task-registry.ts	1

@@ -136,6 +136,8 @@ const coordinatorPool = resolveGlobalSingleton(
     exitCloseRegistered: false,
     closeOnExit: closeIdleCoordinatorsOnExit,
   }),
+  () => closeIdleCoordinatorPool(),
+  "close-only",
 );
 const { runInCoordinatorPoolContext, idleCoordinators, failedIdleCloses } = coordinatorPool;
 
@@ -191,14 +193,10 @@ function closeIdleCoordinatorsOnExit() {
   }
 }
 
-/** Dispose a removed runtime's idle connections after its active owners have settled. */
-export function closeIdleSqliteCoordinators(rootPath: string): void {
-  const root = path.resolve(rootPath);
-  const databases = new Map(
-    [...failedIdleCloses].filter(([, location]) => isPathInside(root, location)),
-  );
+function closeIdleCoordinatorPool(include: (location: string) => boolean = () => true): void {
+  const databases = new Map([...failedIdleCloses].filter(([, location]) => include(location)));
   for (const [location] of idleCoordinators) {
-    if (!isPathInside(root, location)) {
+    if (!include(location)) {
       continue;
     }
     const idle = takeIdleCoordinator(location);
@@ -215,6 +213,12 @@ export function closeIdleSqliteCoordinators(rootPath: string): void {
     }
   }
   throwSqliteLifecycleErrors(errors, "Idle SQLite coordinator cleanup failed");
+}
+
+/** Dispose a removed runtime's idle connections after its active owners have settled. */
+export function closeIdleSqliteCoordinators(rootPath: string): void {
+  const root = path.resolve(rootPath);
+  closeIdleCoordinatorPool((location) => isPathInside(root, location));
 }
 
 function readCoordinatorIdentity(location: string): fs.BigIntStats | undefined {

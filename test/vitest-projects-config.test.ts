@@ -559,7 +559,7 @@ describe("projects vitest config", () => {
       defaultPool,
     );
     expect(requireTestConfig(createAgentsEmbeddedRunVitestConfig()).pool).toBe(defaultPool);
-    expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe("forks");
     expect(requireTestConfig(createAgentsToolsVitestConfig()).pool).toBe(defaultPool);
     expect(requireTestConfig(createCommandsLightVitestConfig()).pool).toBe(defaultPool);
     expect(requireTestConfig(createCommandsVitestConfig()).pool).toBe("forks");

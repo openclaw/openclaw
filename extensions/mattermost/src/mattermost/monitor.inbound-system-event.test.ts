@@ -18,7 +18,11 @@ import {
   createMessageReceiptFromOutboundResults,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  createTestInboundDebounceFlush,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { createRuntimeEnv as testRuntime } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -29,7 +33,7 @@ import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { registerMattermostBlockProgressTests } from "./monitor.block-progress.test-support.js";
 import { monitorMattermostProvider } from "./monitor.js";
-import type { OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
+import type { OpenClawConfig, ReplyPayload } from "./runtime-api.js";
 
 class FakeWebSocket {
   public readonly sent: string[] = [];
@@ -488,6 +492,7 @@ function createRuntimeCore(
         updateLastRoute: vi.fn(async () => {}),
       },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         run,
       },
       text: {
@@ -520,15 +525,6 @@ vi.mock("../runtime.js", () => ({
   getMattermostRuntime: () => mockState.runtimeCore,
   getOptionalMattermostRuntime: () => mockState.runtimeCore,
 }));
-
-const testRuntime = (): RuntimeEnv =>
-  ({
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: ((code: number): never => {
-      throw new Error(`exit ${code}`);
-    }) as RuntimeEnv["exit"],
-  }) satisfies RuntimeEnv;
 
 function startTestMonitor(
   config: OpenClawConfig,

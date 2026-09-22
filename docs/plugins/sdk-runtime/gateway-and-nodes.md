@@ -40,10 +40,43 @@ cleanup while keeping the assertion and callable abort-reason values bound to
 the plugin instance. Plugin retirement also ends captured access.
 
 The Gateway binds the returned authority to the original person and carries it
-through WebSocket and HTTP requests. Ordinary transport disconnect is distinct
+through WebSocket and HTTP requests, and through commands admitted for a linked
+channel sender. Linked administrators must satisfy the same role-bound person
+policy, including after awaited command preparation. Revoking an admitted grant
+ends that command's authority; a replacement grant applies only to new admission.
+Explicitly configured command owners retain their independent authority.
+Ordinary transport disconnect is distinct
 from revocation. A policy must preserve independent staff access; it must not
 infer the requesting person's authority from a session's creator, display name,
 or sandbox state. Shared-secret system authority remains outside person policies.
+
+### Durable person access grants
+
+A policy that supports deferred shared publication returns a stable UUID as
+`grantId` on its access authority and implements
+`resume({ config, profile, requiredByRole, grantId })`. The Gateway records the plugin ID and this
+original grant reference with the accepted requester and scope ceiling; it does
+not persist the authority callback, signal, credentials, or email aliases.
+
+The Gateway also retains opaque lifetime IDs for the person's original email
+bindings. Moving an original alias to another profile ends that publication
+authority, even if the alias is later restored. Display edits and changes to
+aliases added after admission preserve the original binding. The plugin's grant
+UUID remains independently checked; these identity facts cannot replace it.
+
+`resume` must check that exact original grant, even when the person's current role
+would otherwise be exempt. Return its current authority while it remains active,
+and `undefined` only when the grant is definitively ended, absent, or replaced.
+Throw while the service is starting or its state is unavailable, so recovery
+retains the pending request instead of treating an unreadable grant as revoked.
+A renewal can retain the UUID only if it commits before the old grant expires;
+reinvitation after expiry or revocation must use a new UUID.
+
+Policies without durable grant support still govern live admission. Their
+unclassified authority cannot be converted into a restartable shared publication
+request. Shared publication currently supports one original governing grant;
+multiple dependencies cannot be inferred from that single reference. A newly
+applicable policy also requires fresh publication admission.
 
 <AccordionGroup>
   <Accordion title="api.runtime.gateway">

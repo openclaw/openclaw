@@ -16,6 +16,7 @@ import {
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
+import { admitUpdateRequesterContinuation } from "./update-command-managed-context.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
 import {
@@ -130,7 +131,13 @@ async function runAdmittedUpdate(
     }
     const presentation = createUpdateProgress(!opts.json, run);
     disposePresentation = presentation.dispose;
-    const executeWith = (executor: UpdateCommandExecutor) => {
+    const executeWith = async (executor: UpdateCommandExecutor) => {
+      await admitUpdateRequesterContinuation(
+        run,
+        executor,
+        resolveUpdateCommandAdmissionRoot(prepared),
+        initialization?.target.managedServiceRoot ?? prepared.servicePlan?.serviceRoot,
+      );
       executionStarted = true;
       return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
         updateCommandInternal(

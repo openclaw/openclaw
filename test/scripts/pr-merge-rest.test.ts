@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 const { fixture, outcomeRef, describePosix, unknownProjection } =
@@ -24,6 +25,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     expect(f.state().mutations).toBe(1);
     expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
     expect(f.state().restMergePayload).not.toHaveProperty("commit_title");
+    expect(f.state().nodeArgs).toEqual(resolveVitestNodeArgs());
     expect(f.state().calls.filter((call) => call.includes("PUT"))).toHaveLength(1);
     expect(
       f
@@ -53,6 +55,84 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     ]);
     expect(f.state().calls.some((call) => call[1] === "pr" && call[2] === "merge")).toBe(false);
   });
+
+  it.each([unknownProjection, { mergeable: "UNKNOWN" }, { mergeStateStatus: "UNKNOWN" }])(
+    "resolves UNKNOWN REST admission %j through GraphQL before one pinned merge",
+    (projection) => {
+      const f = restFixture();
+      f.save({
+        ...f.state(),
+        pr: { ...f.state().pr, ...projection },
+        observations: [{ pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } }],
+      });
+
+      const run = f.run();
+
+      expect(run.status, run.output).toBe(0);
+      expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+      expect(f.record()).not.toHaveProperty("transport");
+      expect(f.state().restMergePayload).toBeNull();
+      expect(f.state().mutations).toBe(1);
+      expect(f.state().graphqlMergePayloads).toEqual([
+        {
+          pullRequestId: "fixture-pr",
+          expectedHeadOid: f.head,
+          mergeMethod: "SQUASH",
+          commitBody: f.state().mergeBody,
+        },
+      ]);
+    },
+  );
+
+  it.each(["head-changed", "unavailable"])(
+    "refuses UNKNOWN REST admission when GraphQL is %s",
+    (fault) => {
+      const f = restFixture();
+      f.save({
+        ...f.state(),
+        pr: { ...f.state().pr, ...unknownProjection },
+        quotaAt: fault === "unavailable" ? "observe" : "",
+        observations: [
+          { pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", headRefOid: f.base } },
+        ],
+      });
+
+      const run = f.run();
+
+      expect(run.status, run.output).not.toBe(0);
+      expect(f.state().mutations).toBe(0);
+      expect(f.state().posts).toBe(0);
+      expect(() => f.record()).toThrow();
+      expect(f.captures()).toEqual([]);
+    },
+  );
+
+  it.each(["identity", "policy"])(
+    "refuses final REST %s changes after intent without dispatching a mutation",
+    (restDispatchChange) => {
+      const f = restFixture();
+      f.save({ ...f.state(), restDispatchChange });
+
+      const run = f.run();
+
+      expect(run.status, run.output).toBe(1);
+      expect(f.state().restDispatchChange).toBe("");
+      expect(f.state().mutations).toBe(0);
+      expect(f.state().posts).toBe(0);
+      expect(f.record()).toMatchObject({
+        phase: "intent",
+        accepted: false,
+        transport: "rest",
+        head: f.head,
+      });
+      expect(f.captures()).toHaveLength(1);
+      expect(run.output).toContain(
+        restDispatchChange === "identity"
+          ? "immediate squash requires the prepared open, non-draft, clean PR head"
+          : "PR or policy changed before merge dispatch",
+      );
+    },
+  );
 
   it.each(["core", "secondary", "access"])(
     "does not dispatch after REST %s failure without an available alternate",
@@ -491,6 +571,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     "no-admin",
     "main-advance",
     "open-main-advance",
+    "unknown-projection",
   ])(
     "reconciles a lost REST merge reply after policy changes to %s without submitting another mutation",
     (restPolicy) => {
@@ -507,6 +588,9 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       const state = f.state();
       if (restPolicy === "no-admin") {
         state.repoAuthority.permissions = { admin: false };
+      }
+      if (restPolicy === "unknown-projection") {
+        Object.assign(state.pr, unknownProjection);
       }
       if (restPolicy === "open-main-advance") {
         state.restMainAdvance = {

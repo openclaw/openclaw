@@ -422,14 +422,14 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
               .progress=${props.installProgress}
             ></openclaw-plugin-install-action
             >${renderPluginAskAction(props.onAskPlugin, false)}`
-        : html`${renderPluginAskAction(props.onAskPlugin)}${renderPluginLifecycle(
+        : renderPluginLifecycle(
             {
               ...props,
               settingsHref: props.settingsHref ?? "#configuration",
               onSettings: () => props.onTabChange("configuration"),
             },
             plugin,
-          )}`,
+          ),
       sidebar:
         catalog || plugin.version || props.inspection?.overview || props.catalogLoading
           ? renderPluginMetadata(

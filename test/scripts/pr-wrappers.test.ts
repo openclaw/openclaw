@@ -1248,6 +1248,20 @@ exec "$OPENCLAW_TEST_NODE" "$@"
 
   it("materializes the origin/main anchor wrapper when canonical is parked elsewhere", () => {
     const fixture = makeMismatchedWrapperRepo();
+    const names = [
+      "space name",
+      ...(process.platform === "win32"
+        ? []
+        : ["tab\tname", 'quote"name', "backslash\\name", "control\u0001name", "newline\nname"]),
+    ];
+    const directory = "scripts/pr-lib/path-spelling";
+    mkdirSync(join(fixture.canonical, directory));
+    for (const name of names) {
+      writeFileSync(join(fixture.canonical, directory, name), "anchored path bytes\n");
+    }
+    fixture.git(fixture.canonical, ["add", "--", directory]);
+    fixture.git(fixture.canonical, ["commit", "-m", "test: anchored path spellings"]);
+    fixture.git(fixture.canonical, ["push", "origin", "main"]);
     parkCanonicalOffAnchor(fixture);
     const result = spawnSync(join(fixture.linked, "scripts", "pr"), ["ci-dispatch", "123"], {
       cwd: fixture.linked,
@@ -1264,6 +1278,15 @@ exec "$OPENCLAW_TEST_NODE" "$@"
       "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
     );
     expect(result.stderr).not.toContain("Refusing to silently substitute");
+    const anchors = readdirSync(fixture.root).filter((name) =>
+      name.startsWith("openclaw-pr-anchor."),
+    );
+    expect(anchors).toHaveLength(1);
+    for (const name of names) {
+      expect(readFileSync(join(fixture.root, anchors[0]!, directory, name), "utf8")).toBe(
+        "anchored path bytes\n",
+      );
+    }
   });
 
   itPosix("materializes the anchor when tar stops before the producer's trailing padding", () => {
@@ -1292,16 +1315,35 @@ fi
     expect(result.stderr).not.toContain("Refusing to silently substitute");
   });
 
-  itPosix.each(["producer failure", "truncated archive", "reader failure"])(
-    "refuses anchor extraction on %s",
-    (failure) => {
-      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
-      parkCanonicalOffAnchor(fixture);
-      const git = join(fixture.bin, "git");
-      writeFileSync(
-        git,
-        `#!/bin/sh
-if [ "$3" = archive ]; then
+  itPosix.each([
+    "producer failure",
+    "truncated archive",
+    "reader failure",
+    "listing producer failure",
+    "hash producer failure",
+    "incomplete hash output",
+    "unterminated listing",
+    "omitted required inventory component",
+    "leaf symlink",
+    "parent symlink",
+  ])("refuses anchor extraction on %s", (failure) => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    parkCanonicalOffAnchor(fixture);
+    const git = join(fixture.bin, "git");
+    writeFileSync(
+      git,
+      `#!/bin/sh
+git_command() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -c|-C) shift 2 ;;
+      -c?*|-C?*|--no-pager|--literal-pathspecs|--no-replace-objects) shift ;;
+      *) printf '%s\\n' "$1"; return ;;
+    esac
+  done
+}
+command=$(git_command "$@")
+if [ "$command" = archive ]; then
   if [ "$OPENCLAW_TEST_FAILURE" = 'truncated archive' ]; then
     "$OPENCLAW_TEST_GIT" "$@" > "$OPENCLAW_TEST_ARCHIVE" || exit
     dd if="$OPENCLAW_TEST_ARCHIVE" bs=512 count=3 2>/dev/null
@@ -1313,44 +1355,97 @@ if [ "$3" = archive ]; then
   fi
   exit 0
 fi
+case "$command:$OPENCLAW_TEST_FAILURE" in
+  'ls-tree:listing producer failure'|'hash-object:hash producer failure')
+    "$OPENCLAW_TEST_GIT" "$@" || exit
+    exit 42
+    ;;
+  'ls-tree:unterminated listing'|'ls-tree:omitted required inventory component'|'hash-object:incomplete hash output')
+    "$OPENCLAW_TEST_GIT" "$@" > "$OPENCLAW_TEST_GIT_OUTPUT" || exit
+    exec "$OPENCLAW_TEST_NODE" -e '
+const { readFileSync, writeFileSync } = require("node:fs");
+const output = readFileSync(process.env.OPENCLAW_TEST_GIT_OUTPUT);
+let changed;
+if (process.env.OPENCLAW_TEST_FAILURE === "unterminated listing") {
+  changed = output.subarray(0, -1);
+} else {
+  const separator = output.includes(0) ? 0 : 10;
+  const records = [];
+  let start = 0;
+  for (let end = 0; end < output.length; end++) {
+    if (output[end] === separator) {
+      records.push(output.subarray(start, end));
+      start = end + 1;
+    }
+  }
+  const retained = process.env.OPENCLAW_TEST_FAILURE === "incomplete hash output"
+    ? records.slice(0, -1)
+    : records.filter((record) => !record.subarray(record.indexOf(9) + 1).equals(Buffer.from("package.json")));
+  changed = Buffer.concat(retained.flatMap((record) => [record, Buffer.from([separator])]));
+}
+writeFileSync(1, changed);
+'
+    ;;
+esac
 exec "$OPENCLAW_TEST_GIT" "$@"
 `,
-      );
-      chmodSync(git, 0o755);
-      const tar = join(fixture.bin, "tar");
-      writeFileSync(
-        tar,
-        `#!/bin/sh
+    );
+    chmodSync(git, 0o755);
+    const tar = join(fixture.bin, "tar");
+    writeFileSync(
+      tar,
+      `#!/bin/sh
 printf 'started\\n' >> "$OPENCLAW_TEST_READER_LOG"
 "$OPENCLAW_TEST_TAR" "$@" || exit
 if [ "$OPENCLAW_TEST_FAILURE" = 'reader failure' ]; then
   exit 42
 fi
+case "$OPENCLAW_TEST_FAILURE" in
+  'leaf symlink') linked_path=scripts/lib/plain-gh.mjs ;;
+  'parent symlink') linked_path=scripts/lib ;;
+  *) exit 0 ;;
+esac
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-C" ]; then
+    mv "$2/$linked_path" "$OPENCLAW_TEST_LINK_TARGET" || exit
+    ln -s "$OPENCLAW_TEST_LINK_TARGET" "$2/$linked_path"
+    exit
+  fi
+  shift
+done
+exit 99
 `,
-      );
-      chmodSync(tar, 0o755);
-      const readerLog = join(fixture.root, "reader.log");
-      const result = spawnSync(join(fixture.linked, "scripts/pr"), ["unknown-command"], {
-        cwd: fixture.linked,
-        encoding: "utf8",
-        env: {
-          ...fixture.env,
-          OPENCLAW_TEST_GIT: resolveCommand("git"),
-          OPENCLAW_TEST_TAR: resolveCommand("tar"),
-          OPENCLAW_TEST_FAILURE: failure,
-          OPENCLAW_TEST_ARCHIVE: join(fixture.root, "complete.tar"),
-          OPENCLAW_TEST_READER_LOG: readerLog,
-        },
-      });
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-      expect(result.stderr).toContain("Refusing to silently substitute");
-      expect(result.stderr).not.toContain("running wrapper code materialized from");
-      expect(existsSync(readerLog)).toBe(failure !== "producer failure");
-      expect(
-        readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
-      ).toEqual([]);
-    },
-  );
+    );
+    chmodSync(tar, 0o755);
+    const readerLog = join(fixture.root, "reader.log");
+    const result = spawnSync(join(fixture.linked, "scripts/pr"), ["unknown-command"], {
+      cwd: fixture.linked,
+      encoding: "utf8",
+      env: {
+        ...fixture.env,
+        OPENCLAW_TEST_GIT: resolveCommand("git"),
+        OPENCLAW_TEST_TAR: resolveCommand("tar"),
+        OPENCLAW_TEST_FAILURE: failure,
+        OPENCLAW_TEST_ARCHIVE: join(fixture.root, "complete.tar"),
+        OPENCLAW_TEST_GIT_OUTPUT: join(fixture.root, "git-output"),
+        OPENCLAW_TEST_LINK_TARGET: join(fixture.root, "anchor-matching-link-target"),
+        OPENCLAW_TEST_NODE: process.execPath,
+        OPENCLAW_TEST_READER_LOG: readerLog,
+      },
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+    expect(result.stderr).toContain("Refusing to silently substitute");
+    expect(result.stderr).not.toContain("running wrapper code materialized from");
+    expect(
+      result.stderr
+        .split("\n")
+        .find((line) => line.startsWith("differing wrapper components vs origin/main:")),
+    ).toBe("differing wrapper components vs origin/main: scripts/pr-lib");
+    expect(existsSync(readerLog)).toBe(failure !== "producer failure");
+    expect(
+      readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+    ).toEqual([]);
+  });
 
   itPosix("executes extracted helpers through a symlinked temporary root", () => {
     const fixture = makeMismatchedWrapperRepo({ realModules: true });

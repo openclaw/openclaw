@@ -32,7 +32,7 @@ export type ProgressDisclosureEvent =
       readingHistory: boolean;
     }
   | { type: "run"; runId: string; open: boolean }
-  | { type: "complete"; runId: string }
+  | { type: "complete"; runId: string; reopen: boolean }
   | { type: "history"; readingHistory: boolean }
   | { type: "gesture"; distancePx: number }
   | { type: "settle" }
@@ -88,7 +88,7 @@ export function resolveProgressDisclosure(
             completedRunId: event.runId,
             open:
               state.manualOpen === undefined
-                ? state.readingHistory
+                ? state.readingHistory || !event.reopen
                   ? state.open
                   : true
                 : Boolean(state.manualOpen),

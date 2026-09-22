@@ -45,8 +45,13 @@ read-only behavior: `users.github.*` requires `operator.read` plus the exact
 authenticated durable profile. That person can connect, poll, cancel,
 reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
-and per-agent GitHub changes remain `operator.admin`. Publication remains
-`operator.write` plus current session authorization. See
+and per-agent GitHub changes remain `operator.admin`.
+
+With `operator.sessions.write`, a requester can publish ordinary changes from
+sessions they created through the shared GitHub account. Workflow definition
+changes require the original requester's current full `operator.write`
+authority. Personal publication also requires `operator.write`. Every publication
+still requires current session authorization. See
 [GitHub connections](/concepts/user-model#github-connections).
 
 Unknown future `operator.*` scopes require an exact match unless the caller
@@ -204,8 +209,14 @@ reject grants without a matching durable identity when roles are enabled.
 Include `operator.admin` explicitly only when that role should retain
 administrative connection authority.
 
-Named roles apply only to connections with an authenticated durable
-profile. They organize collaboration within one trusted Gateway domain and do
+An administrator-attested [channel identity link](/concepts/user-model#channel-identity-links)
+also lets a sender inherit channel-owner authority from their effective role's
+`operator.admin` scope. This does not require an additional identity-scope grant.
+When roles are absent, channel ownership uses a matching administrative
+identity-scope grant instead. Connection scope grants and ceilings are unchanged.
+
+Named roles apply to authenticated durable profiles and their attested channel
+identities. They organize collaboration within one trusted Gateway domain and do
 not replace separate Gateways when hostile-tenant isolation is required.
 Diagnostic audit methods, including `audit.run.inspect`, remain shared-domain
 `operator.read` surfaces and are not filtered by session role. Likewise,

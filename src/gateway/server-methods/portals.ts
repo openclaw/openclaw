@@ -94,7 +94,8 @@ export const portalHandlers: GatewayRequestHandlers = {
         const owner = request.environmentId
           ? attachedPortalOwner(options, request.environmentId)
           : undefined;
-        owner?.environments.touchSessionAttachment(owner.binding);
+        await owner?.environments.touchSessionAttachment(owner.binding);
+        owner?.assertCurrent();
         const connection = owner
           ? await owner.environments.openNodePortal({
               environmentId: owner.binding.environmentId,
@@ -121,7 +122,8 @@ export const portalHandlers: GatewayRequestHandlers = {
                     owner.environments.assertSessionAttachment(owner.binding);
                     const stream = await connection.connect();
                     try {
-                      owner.environments.touchSessionAttachment(owner.binding);
+                      await owner.environments.touchSessionAttachment(owner.binding);
+                      owner.assertCurrent();
                       return stream;
                     } catch (error) {
                       stream.destroy();

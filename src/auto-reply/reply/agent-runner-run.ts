@@ -535,6 +535,7 @@ export async function runReplyAgent(
   } else {
     const replyTurnKind = resolveReplyTurnKind(opts);
     const admission = await admitReplyTurn({
+      providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
       agentId: followupRun.run.agentId,
       resolveGatewayContext,
       sessionId: followupRun.run.sessionId,

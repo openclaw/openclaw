@@ -945,6 +945,29 @@ function main([requestedRoute, ...args]) {
       );
     }
     process.stdout.write(`${JSON.stringify(result)}\n`);
+  } else if (
+    requestedRoute === "plain-quota" &&
+    args[0] === "api" &&
+    args.includes("graphql") &&
+    args.some((arg) => /^query=\s*query\b/.test(arg))
+  ) {
+    // Mergeability and viewer previews must describe the writer, not a pooled reader.
+    const response = parseGithubResponse(
+      execPrGh(
+        [...args, "--include"],
+        { encoding: "utf8", stdio: ["inherit", "pipe", "pipe"] },
+        route,
+      ),
+    );
+    if (
+      response.status !== "200" ||
+      !response.body ||
+      typeof response.body !== "object" ||
+      Array.isArray(response.body)
+    ) {
+      throw invalidMetadata("GitHub did not return a valid writer GraphQL response.");
+    }
+    process.stdout.write(`${JSON.stringify(response.body)}\n`);
   } else {
     if (args[0] === "pr" && !option(args, "--repo") && !option(args, "-R")) {
       const repo = repositoryLocator(undefined, route);

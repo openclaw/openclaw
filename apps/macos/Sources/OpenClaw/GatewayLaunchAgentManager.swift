@@ -27,7 +27,7 @@ enum GatewayLaunchAgentManager {
 
     private static var plistURL: URL {
         self.plistURL(
-            homeDirectory: FileManager().homeDirectoryForCurrentUser,
+            homeDirectory: LaunchAgentPlist.homeDirectoryURL,
             profile: .current)
     }
 

@@ -1,6 +1,5 @@
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-/** Owns subagent registration and queued collector launch transitions. */
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -27,14 +26,13 @@ import { bindSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { registerRequiredQueuedSubagent } from "./subagent-registry-queued-registration.js";
-import { createSubagentRegistrationRecord } from "./subagent-registry-run-launch-record.js";
+import {
+  createSubagentRegistrationRecord,
+  type RegisterSubagentRunParams,
+} from "./subagent-registry-run-launch-record.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
 import { captureQueuedSubagentTaskOwner } from "./subagent-registry-task-owner.js";
-import type {
-  RegisterSubagentRunOptions,
-  RegisterSubagentRunParams,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { RegisterSubagentRunOptions, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
   nextSubagentRunGeneration,
@@ -64,8 +62,7 @@ function resolveSwarmWaitOwnerSessionKeys(
   return ownerSessionKeys;
 }
 
-export type { RegisterSubagentRunParams } from "./subagent-registry.types.js";
-
+/** Owns subagent registration and queued collector launch transitions. */
 export class SubagentLaunchManager extends SubagentRecoveryManager {
   private findRunByIdentity(runId: string): SubagentRunRecord | undefined {
     return (

@@ -620,16 +620,24 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             );
             const probe = writeFixture(
               directory,
-              "provider-hook.mts",
+              owner ? "provider-hook.mjs" : "provider-hook.mts",
               `
             import assert from 'node:assert/strict';
             import fs from 'node:fs';
-            import {createEmptyPluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/registry-empty.ts")).href)};
-            import {getPluginRegistryState} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime-state.ts")).href)};
-            import {withPluginRuntimeRegistryScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/gateway-request-scope.ts")).href)};
-            import {clearActivePluginRegistry,setActivePluginRegistry} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime.ts")).href)};
-            import {withPluginRuntimeGenerationScope} from ${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/generation-scope.ts")).href)};
-            import {createPluginMetadataSnapshot} from ${JSON.stringify(pathToFileURL(path.join(root, "src/config/plugin-auto-enable.test-helpers.ts")).href)};
+            import {
+              createEmptyPluginRegistry,getPluginRegistryState,withPluginRuntimeRegistryScope,
+              clearActivePluginRegistry,setActivePluginRegistry,withPluginRuntimeGenerationScope,
+              createPluginMetadataSnapshot,loadOpenClawPlugins,getPluginRuntimeLoadContext,
+            } from ${JSON.stringify(
+              pathToFileURL(
+                owner
+                  ? path.join(
+                      owner.descriptor.directory,
+                      "dist/test-support/provider-hook-scope.js",
+                    )
+                  : path.join(root, "test/scripts/provider-hook-scope.test-support.ts"),
+              ).href,
+            )};
             const events = ${JSON.stringify(events)};
             const observed = () => fs.existsSync(events) ? fs.readFileSync(events,'utf8').trim().split('\\n').map(line=>JSON.parse(line)) : [];
             const started = performance.now();
@@ -655,7 +663,6 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             assert.deepEqual(observed(),[], 'error formatting must not materialize the provider');
             let scopedPreparationRecordCount = 0;
             if (${scope === "scoped"}) {
-              const {loadOpenClawPlugins} = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/loader.ts")).href)});
               const scopedHook = registry.providers[0].provider.classifyFailoverReason;
               registry = loadOpenClawPlugins({config:{plugins:{allow:['fixture-hook'],entries:{'fixture-hook':{enabled:true}}}},onlyPluginIds:['fixture-hook'],activate:false});
               const loadedOwner = registry.providers.find(entry=>entry.pluginId==='fixture-hook');
@@ -696,7 +703,6 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             assert.ok(payloads.some(payload=>payload.isError && payload.text.includes('temporarily overloaded')));
             assert.equal(getPluginRegistryState()?.activeRegistry ?? null,null,'preparation and error handling must not install a global registry');
             if (${scope === "scoped"}) {
-              const {getPluginRuntimeLoadContext} = await import(${JSON.stringify(pathToFileURL(path.join(root, "src/plugins/runtime/load-context.ts")).href)});
               const loadContext = getPluginRuntimeLoadContext(registry);
               const config = loadContext?.rawConfig;
               const manifestRegistry = loadContext?.manifestRegistry;

@@ -75,7 +75,7 @@ async function createPreparedNodeAcknowledgement(root: string) {
           });
           expect(drained).toMatchObject({ code: 0, termination: "exit", stdout: "drained\n" });
         }
-        startup.store.transition({
+        await startup.store.transition({
           environmentId: record.environmentId,
           from: "attached",
           to: "idle",
@@ -288,7 +288,7 @@ async function createPreparedNodeAcknowledgement(root: string) {
       });
     });
     runtime.bindDeviceNodeControl?.(nodeWorkerSupervisorTransport);
-    startup.store.createIntent({
+    await startup.store.createIntent({
       environmentId,
       providerId: "fake",
       profileId: "prepared",
@@ -316,8 +316,8 @@ async function createPreparedNodeAcknowledgement(root: string) {
       },
       provisionOperationId: "prepared-wire",
     });
-    startup.store.ensureNodeEnrollment(environmentId);
-    const record = startup.store.transition({
+    await startup.store.ensureNodeEnrollment(environmentId);
+    const record = await startup.store.transition({
       environmentId,
       from: "requested",
       to: "provisioning",
@@ -339,8 +339,8 @@ async function createPreparedNodeAcknowledgement(root: string) {
         assertCurrent: () => {},
         signal,
       });
-    const attach = () => {
-      startup.store.transition({
+    const attach = async () => {
+      await startup.store.transition({
         environmentId,
         from: "provisioning",
         to: "ready",
@@ -362,7 +362,7 @@ async function createPreparedNodeAcknowledgement(root: string) {
           },
         },
       });
-      const attached = startup.store.transition({
+      const attached = await startup.store.transition({
         environmentId,
         from: "ready",
         to: "attached",

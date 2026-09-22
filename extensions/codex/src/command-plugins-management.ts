@@ -9,7 +9,7 @@ import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
 import { isOpenAiCuratedMarketplaceName } from "./app-server/plugin-inventory.js";
 import type { v2 } from "./app-server/protocol.js";
-import { canMutateCodexHost } from "./command-authorization.js";
+import { assertCodexHostOwnerCurrent, canMutateCodexHost } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import { buildCodexPluginAppLinks } from "./command-plugin-app-links.js";
 import {
@@ -58,11 +58,12 @@ const AVAILABLE_USAGE =
   "Usage: /codex plugins available [query] [--page <positive integer>]. Search text must be at most 100 characters; use -- before literal query text that contains options.";
 
 export async function handleCodexPluginsSubcommand(
-  ctx: PluginCommandContext,
+  input: PluginCommandContext,
   rest: string[],
   io: CodexPluginsManagementIO,
   runtime?: CodexPluginsManagementRuntime,
 ): Promise<PluginCommandResult> {
+  const ctx = { ...input, gatewayClientScopes: input.gatewayClientScopes?.slice() };
   const [verb = "list", ...args] = rest;
   const normalized = verb.toLowerCase();
 
@@ -193,7 +194,7 @@ export async function handleCodexPluginsSubcommand(
     if (!runtime) {
       return { text: "Codex plugin installation is unavailable for this command." };
     }
-    return await installCodexPlugin(args[0], io, runtime);
+    return await installCodexPlugin(args[0], io, runtime, ctx);
   }
 
   const target = args[0];
@@ -229,13 +230,17 @@ export async function handleCodexPluginsSubcommand(
       };
     }
     const configKey = configured.configKey;
-    await io.mutate((block) => {
-      if (wantEnabled) {
-        block.enabled = true;
-      }
-      block.plugins ??= {};
-      block.plugins[configKey] = { ...block.plugins[configKey], enabled: wantEnabled };
-    });
+    assertCodexHostOwnerCurrent(ctx);
+    await io.mutate(
+      (block) => {
+        if (wantEnabled) {
+          block.enabled = true;
+        }
+        block.plugins ??= {};
+        block.plugins[configKey] = { ...block.plugins[configKey], enabled: wantEnabled };
+      },
+      () => assertCodexHostOwnerCurrent(ctx),
+    );
     return {
       text: `${formatCodexDisplayText(configKey)}: ${wantEnabled ? "enabled" : "disabled"} in openclaw.json. ${POLICY_REFRESH_HINT}`,
     };
@@ -359,6 +364,7 @@ async function installCodexPlugin(
   requestedId: string,
   io: CodexPluginsManagementIO,
   runtime: CodexPluginsManagementRuntime,
+  ctx: PluginCommandContext,
 ): Promise<PluginCommandResult> {
   const requested = parseCodexPluginMarketplaceId(requestedId);
   if (!requested) {
@@ -449,6 +455,7 @@ async function installCodexPlugin(
       };
     }
     try {
+      assertCodexHostOwnerCurrent(ctx);
       result = await runtime.install(requestParams);
     } catch (error) {
       return {
@@ -459,33 +466,37 @@ async function installCodexPlugin(
 
   const selectedPlugin = plugin;
   try {
-    await io.mutate((block) => {
-      block.plugins ??= {};
-      const configured = resolveInstalledPluginKey(block.plugins, selectedPlugin);
-      if (configured.status === "ambiguous" || configured.status === "mismatched") {
-        throw new Error(
-          describeConfiguredPluginIdentityConflict(selectedPlugin.id, configured.status),
-        );
-      }
-      const curated = isOpenAiCuratedMarketplaceName(selectedPlugin.marketplaceName);
-      const canonicalId = curated
-        ? `${selectedPlugin.pluginName}@${CODEX_PLUGINS_MARKETPLACE_NAME}`
-        : selectedPlugin.id;
-      const configKey = configured.status === "matched" ? configured.configKey : canonicalId;
-      const existing = block.plugins[configKey];
-      block.enabled = true;
-      const updated = {
-        ...existing,
-        enabled: true,
-        marketplaceName:
-          existing?.marketplaceName ??
-          (curated ? CODEX_PLUGINS_MARKETPLACE_NAME : selectedPlugin.marketplaceName),
-        pluginName:
-          existing?.pluginName ??
-          (curated ? selectedPlugin.pluginName : persistedPluginName(selectedPlugin)),
-      };
-      block.plugins[configKey] = updated;
-    });
+    assertCodexHostOwnerCurrent(ctx);
+    await io.mutate(
+      (block) => {
+        block.plugins ??= {};
+        const configured = resolveInstalledPluginKey(block.plugins, selectedPlugin);
+        if (configured.status === "ambiguous" || configured.status === "mismatched") {
+          throw new Error(
+            describeConfiguredPluginIdentityConflict(selectedPlugin.id, configured.status),
+          );
+        }
+        const curated = isOpenAiCuratedMarketplaceName(selectedPlugin.marketplaceName);
+        const canonicalId = curated
+          ? `${selectedPlugin.pluginName}@${CODEX_PLUGINS_MARKETPLACE_NAME}`
+          : selectedPlugin.id;
+        const configKey = configured.status === "matched" ? configured.configKey : canonicalId;
+        const existing = block.plugins[configKey];
+        block.enabled = true;
+        const updated = {
+          ...existing,
+          enabled: true,
+          marketplaceName:
+            existing?.marketplaceName ??
+            (curated ? CODEX_PLUGINS_MARKETPLACE_NAME : selectedPlugin.marketplaceName),
+          pluginName:
+            existing?.pluginName ??
+            (curated ? selectedPlugin.pluginName : persistedPluginName(selectedPlugin)),
+        };
+        block.plugins[configKey] = updated;
+      },
+      () => assertCodexHostOwnerCurrent(ctx),
+    );
   } catch (error) {
     return {
       text: `${formatCodexDisplayText(requestedId)} was installed in Codex but could not be authorized in OpenClaw and will not be exposed: ${formatCodexDisplayText(errorMessage(error))}`,

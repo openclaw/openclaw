@@ -451,19 +451,20 @@ export function buildCliRunResult(params: {
       : sourceReplyMirror.delivered
         ? undefined
         : text
-          ? [
-              assistantTranscriptOwned
+          ? (output.textParts ?? [text]).map((partText, assistantMessageIndex) =>
+              assistantTranscriptOwned || output.textParts
                 ? setReplyPayloadMetadata(
-                    { text },
+                    { text: partText },
                     {
-                      assistantTranscriptOwned: true,
+                      ...(output.textParts ? { assistantMessageIndex } : {}),
+                      ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
                       ...(assistantTranscriptIdempotencyKey
                         ? { assistantTranscriptIdempotencyKey }
                         : {}),
                     },
                   )
-                : { text },
-            ]
+                : { text: partText },
+            )
           : resolveReplyExpectation(runParams) === "optional"
             ? [{ text: SILENT_REPLY_TOKEN }]
             : undefined;

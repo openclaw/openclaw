@@ -1,4 +1,5 @@
 import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS,
   ExecApprovalLifecycle,
@@ -77,17 +78,15 @@ export class ExecApprovalManager<
   ): Promise<{ decision: Promise<ExecApprovalDecision | null> }> {
     this.assertNotRetired();
     return this.trackMutation(async () => {
-      if (
-        record.agentRuntimeDelegatedAuthority &&
-        this.options.validateAgentRuntimeDelegatedAuthority?.(
-          record.agentRuntimeDelegatedAuthority,
-        ) !== true
-      ) {
-        throw new Error("agent runtime approval authority is no longer active");
-      }
-      if (record.approvalAuthority && record.approvalAuthority() === false) {
-        throw new Error("approval authority is no longer active");
-      }
+      const requestSignal = getAsyncWorkSignal();
+      const assertCurrent = () => {
+        requestSignal?.throwIfAborted();
+        this.assertNotRetired();
+        if (!this.isRuntimeAuthorityActive(record)) {
+          throw new Error("approval authority is no longer active");
+        }
+      };
+      assertCurrent();
       const persistence = this.options.persistence;
       const presentation = prepareExecApprovalPresentation(
         this.approvalKind,
@@ -102,21 +101,18 @@ export class ExecApprovalManager<
         throw new Error(`approval id '${record.id}' already resolved`);
       }
 
+      const approval = await prepareExecApprovalRegistration({
+        record,
+        kind: this.approvalKind,
+        presentation,
+        runtimeEpoch: persistence.runtimeEpoch,
+        resolveAudienceSessionKeys: this.options.resolveAudienceSessionKeys,
+      });
+      assertCurrent();
       const inserted = await insertOperatorApproval({
-        approval: prepareExecApprovalRegistration({
-          record,
-          kind: this.approvalKind,
-          presentation,
-          runtimeEpoch: persistence.runtimeEpoch,
-          resolveAudienceSessionKeys: this.options.resolveAudienceSessionKeys,
-        }),
+        approval,
         databaseOptions: persistence.databaseOptions,
-        assertCurrent: () => {
-          this.assertNotRetired();
-          if (!this.isRuntimeAuthorityActive(record)) {
-            throw new Error("approval authority is no longer active");
-          }
-        },
+        assertCurrent,
       });
       if (inserted.outcome === "conflict") {
         throw new Error(`approval id '${record.id}' conflicts with persisted state`);

@@ -17,15 +17,17 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
+import {
+  linkCanonicalUserProfileEmail,
+  setCanonicalUserProfileRole,
+} from "../../state/user-profile-writes.js";
 import { UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import {
   getUserProfileDisplay,
   getUserProfileListItem,
-  linkEmail,
   listProfiles,
   setAvatar,
   setDisplayName,
-  setUserProfileRole,
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
@@ -37,8 +39,10 @@ import {
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { usersAuthConnectHandlers } from "./users-auth-connect.js";
+import { usersChannelIdentityHandlers } from "./users-channel-identities.js";
 import { usersGitHubHandlers } from "./users-github.js";
 import {
+  prepareUserProfileAdministration,
   requireProfileMutationAccess,
   resolveAuthenticatedProfileId,
 } from "./users-profile-access.js";
@@ -47,8 +51,8 @@ import { assertValidParams } from "./validation.js";
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
   profile: { id: string; updatedAt: number },
+  display = getUserProfileDisplay(profile.id),
 ): ReturnType<typeof getUserProfileDisplay> {
-  const display = getUserProfileDisplay(profile.id);
   context.refreshConnectedUserProfile?.({
     ...display,
     updatedAt: profile.updatedAt,
@@ -77,6 +81,7 @@ function profileError(error: unknown) {
 
 export const usersHandlers: GatewayRequestHandlers = {
   ...usersAuthConnectHandlers,
+  ...usersChannelIdentityHandlers,
   ...usersGitHubHandlers,
   "users.list": async ({ params, respond }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
@@ -199,7 +204,8 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.linkEmail": ({ context, params, respond }) => {
+  "users.linkEmail": async (options) => {
+    const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersLinkEmailParams, "users.linkEmail", respond)) {
       return;
     }
@@ -208,9 +214,13 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "email must not be empty"));
       return;
     }
+    const targetProfileId = params.targetProfileId;
     try {
-      const profile = linkEmail(email, params.targetProfileId);
-      refreshConnectedProfile(context, profile);
+      const assertCurrent = await prepareUserProfileAdministration(options);
+      const { profile, display } = await linkCanonicalUserProfileEmail(email, targetProfileId, {
+        assertCurrent,
+      });
+      refreshConnectedProfile(context, profile, display);
       broadcastChatMetadataChanged(context);
       respond(true, { profile });
     } catch (error) {
@@ -234,27 +244,31 @@ export const usersHandlers: GatewayRequestHandlers = {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.setRole": ({ context, params, respond }) => {
+  "users.setRole": async (options) => {
+    const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersSetRoleParams, "users.setRole", respond)) {
       return;
     }
-    const roleDefinitions = context.getRuntimeConfig().gateway?.roles?.definitions;
-    if (
-      params.role !== null &&
-      (!roleDefinitions || !Object.hasOwn(roleDefinitions, params.role))
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `unknown operator role "${params.role}"; define it under gateway.roles.definitions before assigning it`,
-        ),
-      );
+    const { profileId, role } = params;
+    const isConfiguredRole = () => {
+      const definitions = context.getRuntimeConfig().gateway?.roles?.definitions;
+      return role === null || (definitions !== undefined && Object.hasOwn(definitions, role));
+    };
+    const unknownRoleMessage = `unknown operator role "${role}"; define it under gateway.roles.definitions before assigning it`;
+    if (!isConfiguredRole()) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, unknownRoleMessage));
       return;
     }
     try {
-      const profile = setUserProfileRole(params.profileId, params.role);
+      const assertCurrent = await prepareUserProfileAdministration(options);
+      const profile = await setCanonicalUserProfileRole(profileId, role, {
+        assertCurrent: () => {
+          assertCurrent();
+          if (!isConfiguredRole()) {
+            throw new Error(unknownRoleMessage);
+          }
+        },
+      });
       invalidateOperatorRolePolicy(profile.id);
       context.disconnectClientsForUserProfile?.(profile.id);
       respond(true, { profile });

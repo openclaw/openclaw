@@ -8,9 +8,12 @@ import * as desktopFilter from "../../src/gateway/desktop/rfb-view-only-filter.j
 import { createWorkerEnvironmentStore } from "../../src/gateway/worker-environments/store.js";
 import type { WorkerProvider } from "../../src/plugins/types.js";
 import * as processExec from "../../src/process/exec.js";
-import { closeOpenClawStateDatabaseByPath } from "../../src/state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPath,
+} from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
-import { withEnv } from "../../src/test-utils/env.js";
+import { withEnvAsync } from "../../src/test-utils/env.js";
 import {
   createDesktopResizeGuest,
   observeDesktopEndpointPackets,
@@ -27,6 +30,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function fixture(carrier: DesktopResizeFixture["carrier"] = "ssh"): DesktopResizeFixture {
   return {
     carrier,
+    bootstrapReceipt: {
+      bundleHash: "b".repeat(64),
+      openclawVersion: "2026.9.21",
+      protocolFeatures: ["fixture-runtime"],
+    },
     ssh: {
       host: "127.0.0.1",
       port: 2222,
@@ -116,21 +124,22 @@ describe("desktop resize fixture provenance and carrier", () => {
 
   it.each(["ssh", "node"] as const)(
     "persists a ready %s worker and synthetic receipt across reopen",
-    (carrier) => {
+    async (carrier) => {
       const root = tempDirs.make("desktop-resize-store-");
-      withEnv({ OPENCLAW_STATE_DIR: root }, () => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
         const database = openOpenClawStateDatabase();
         try {
           expect(database.path).toBe(path.join(root, "state", "openclaw.sqlite"));
           const value = fixture(carrier);
           if (carrier === "node") {
-            expect(() => seedDesktopResizeSources(value)).toThrow("actually admitted");
-            expect(createWorkerEnvironmentStore().list()).toEqual([]);
+            await expect(seedDesktopResizeSources(value)).rejects.toThrow("prepared node device");
+            expect((await createWorkerEnvironmentStore()).list()).toEqual([]);
           }
-          seedDesktopResizeSources(value, carrier === "node" ? "admitted-device" : undefined);
+          await seedDesktopResizeSources(value, carrier === "node" ? "admitted-device" : undefined);
+          await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseByPath(database.path);
           expect(database.db.isOpen).toBe(false);
-          const reopened = createWorkerEnvironmentStore();
+          const reopened = await createWorkerEnvironmentStore();
           expect(reopened.list()).toHaveLength(Object.keys(resizeSources).length);
           for (const [kind, environmentId] of Object.entries(resizeSources)) {
             expect(reopened.get(environmentId)).toMatchObject({
@@ -140,15 +149,12 @@ describe("desktop resize fixture provenance and carrier", () => {
               sshEndpoint: carrier === "node" ? null : value.ssh,
               sharedHost: false,
               desktop: kind === "fixed" ? value.fixedDesktop : value.desktop,
-              bootstrapReceipt: {
-                bundleHash: "a".repeat(64),
-                openclawVersion: "2026.9.1",
-                protocolFeatures: [],
-              },
+              bootstrapReceipt: value.bootstrapReceipt,
             });
           }
         } finally {
           // Close the exact store before restoring selectors or removing its root.
+          await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseByPath(database.path);
         }
       });

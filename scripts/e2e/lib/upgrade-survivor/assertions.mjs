@@ -11,7 +11,7 @@ import {
   validatePrepublishPluginRegistryArtifact,
 } from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
-import { readPostCoreSnapshot } from "./diagnostics.mjs";
+import { readPostCoreSnapshot, recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
 import {
   assertExecApprovalPolicySurvived,
   seedLegacyExecApprovalPolicy,
@@ -1708,8 +1708,27 @@ function assertExpectedMissingCodexOutcomes(result, expectedVersion) {
 }
 
 function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
-  assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
-  const result = readUpdateJson(file, observationRoot);
+  let result;
+  let outcome = "failed";
+  let message;
+  try {
+    assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
+    result = readUpdateJson(file, observationRoot);
+    assertSuccessfulUpdateResult(result, expectedVersion);
+    outcome = "passed";
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+    throw error;
+  } finally {
+    recordSuccessfulUpdateCheck(observationRoot, {
+      outcome,
+      message,
+      plugins: result?.postUpdate?.plugins ?? null,
+    });
+  }
+}
+
+function assertSuccessfulUpdateResult(result, expectedVersion) {
   const plugins = result?.postUpdate?.plugins;
   assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
   if (

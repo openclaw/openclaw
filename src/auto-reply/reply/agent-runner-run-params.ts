@@ -141,6 +141,7 @@ export async function buildEmbeddedRunBaseParams(params: {
   );
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   const runParams = {
+    providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
     cwd: params.run.cwd,

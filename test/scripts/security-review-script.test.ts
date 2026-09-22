@@ -42,6 +42,7 @@ const jobs = {
   jobs: [{ name: "openclaw/ci-gate", status: "completed", conclusion: "success" }],
 };
 const rolePath = "GET /repos/openclaw/openclaw/collaborators/maintainer/permission";
+const statusPath = `POST /repos/openclaw/openclaw/statuses/${head}`;
 const runsPath = `GET ${actions}/workflows/ci.yml/runs`;
 const jobsPath = `GET ${actions}/runs/10/attempts/1/jobs`;
 const files = [
@@ -251,11 +252,32 @@ describe("combined security review entry point", () => {
     },
   );
 
-  it("rereads authority after a rate-limited success write instead of replaying it", () => {
+  it.each([
+    { httpError: 500 },
+    { httpError: 502 },
+    { httpError: 503 },
+    { httpError: 504 },
+    { transportError: "ECONNRESET" },
+  ])("restarts evaluation after a transient status publication failure: %j", (failure) => {
+    const result = evaluate({ [statusPath]: { responses: [failure, {}] } });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    const afterWait = result.requests.slice(
+      result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+    );
+    expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
+    expect(result.combined.at(-1)).toBe("success");
+  });
+
+  it.each([
+    { httpError: 429 },
+    { httpError: 500, recordStatusBeforeError: true },
+    { transportError: "ECONNRESET" },
+  ])("rereads authority after a failed success write instead of replaying it: %j", (failure) => {
     const result = evaluate({
       // First POST records pending; the dependency guard then records failure and success.
-      [`POST /repos/openclaw/openclaw/statuses/${head}`]: {
-        responses: [{}, {}, { httpError: 429 }, {}],
+      [statusPath]: {
+        responses: [{}, {}, failure, {}],
       },
       [rolePath]: {
         responses: [{ role_name: "maintain" }, { role_name: "maintain" }, { role_name: "read" }],
@@ -269,6 +291,83 @@ describe("combined security review entry point", () => {
     expect(afterWait[0]?.path).toBe(pullPath);
     expect(afterWait.some((entry) => entry.body?.state === "success")).toBe(false);
     expect(result.combined.at(-1)).toBe("failure");
+  });
+
+  it("stops after the head changes while recovering a failed success write", () => {
+    const result = evaluate({
+      [statusPath]: { responses: [{}, {}, { httpError: 500 }, {}] },
+      [`GET ${pullPath}`]: {
+        responses: [pr, pr, pr, { ...pr, head: { ...pr.head, sha: "d".repeat(40) } }],
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    expect(result.stdout).toContain("Superseded");
+    const afterWait = result.requests.slice(
+      result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+    );
+    expect(afterWait.every((entry) => entry.method === "GET")).toBe(true);
+    expect(result.combined).not.toContain("success");
+  });
+
+  it("rereads CI after a failed combined-success publication", () => {
+    const result = evaluate({
+      [statusPath]: { responses: [{}, {}, {}, {}, {}, { httpError: 500 }, {}] },
+      [jobsPath]: {
+        responses: [jobs, { ...jobs, jobs: [{ ...jobs.jobs[0], conclusion: "failure" }] }],
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    expect(result.combined.at(-1)).toBe("failure");
+    expect(result.requests.filter((entry) => `GET ${entry.path}` === jobsPath)).toHaveLength(2);
+  });
+
+  it("bounds persistent status publication failures without granting approval", () => {
+    const result = evaluate({ [statusPath]: { httpError: 500 } });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([1_000, 2_000, 4_000]);
+    expect(result.requests.filter((entry) => entry.method === "POST")).toHaveLength(4);
+    expect(result.stderr).toContain("recovery budget exhausted");
+    expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
+  });
+
+  it("shares three evaluation restarts between status failures and rate limits", () => {
+    const result = evaluate({
+      [statusPath]: {
+        responses: [{ httpError: 500 }, { httpError: 429 }, { httpError: 500 }],
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.waits).toHaveLength(3);
+    expect(result.waits[0]).toBe(1_000);
+    expect(result.waits[1]).toBeGreaterThanOrEqual(120_000);
+    expect(result.waits[1]).toBeLessThan(137_000);
+    expect(result.waits[2]).toBe(4_000);
+    expect(result.requests.filter((entry) => entry.method === "POST")).toHaveLength(4);
+    expect(result.stderr).toContain("recovery budget exhausted");
+    expect(result.combined).not.toContain("success");
+  });
+
+  it.each([
+    { name: "comment only", statusReplies: [{}] },
+    { name: "failure report also fails", statusReplies: [{}, {}, {}, {}, {}, { httpError: 500 }] },
+    { name: "sibling status also fails", statusReplies: [{}, {}, {}, { httpError: 500 }, {}] },
+  ])("does not restart evaluation for a failed comment publication: $name", ({ statusReplies }) => {
+    const commentPath = "/repos/openclaw/openclaw/issues/7/comments";
+    const result = evaluate({
+      [statusPath]: { responses: statusReplies },
+      [`GET ${pullPath}`]: { ...pr, changed_files: 1 },
+      [`GET ${pullPath}/files`]: [files[1]],
+      [`POST ${commentPath}`]: { httpError: 500 },
+    });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([]);
+    expect(
+      result.requests.filter((entry) => entry.method === "POST" && entry.path === commentPath),
+    ).toHaveLength(1);
+    expect(result.combined.at(-1)).toBe("failure");
+    expect(result.stderr).toContain(`GitHub API POST ${commentPath} failed: 500`);
   });
 
   it("recovers rate-limited notice writes instead of treating them as missing permissions", () => {
@@ -294,24 +393,30 @@ describe("combined security review entry point", () => {
     expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
   });
 
-  it("does not shorten a server wait to fit the shared recovery deadline", () => {
-    const result = evaluate(
-      { [`GET ${pullPath}`]: { httpError: 429, headers: { "retry-after": "120" } } },
-      "enforce",
-      Date.parse("2026-01-02T00:01:00Z"),
-    );
+  it.each([
+    {
+      route: `GET ${pullPath}`,
+      failure: { httpError: 429, headers: { "retry-after": "120" } },
+      deadline: "2026-01-02T00:01:00Z",
+    },
+    { route: statusPath, failure: { httpError: 500 }, deadline: "2026-01-02T00:00:30Z" },
+  ])("keeps $route recovery within the shared deadline", ({ route, failure, deadline }) => {
+    const result = evaluate({ [route]: failure }, "enforce", Date.parse(deadline));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("recovery budget exhausted");
     expect(result.waits).toEqual([]);
-    expect(result.combined).toEqual([]);
+    expect(result.combined).not.toContain("success");
   });
 
-  it("does not retry an ordinary permission rejection", () => {
-    const result = evaluate({ [rolePath]: { httpError: 403 } });
-    expect(result.status).toBe(1);
-    expect(result.waits).toEqual([]);
-    expect(result.combined.at(-1)).toBe("failure");
-  });
+  it.each([rolePath, statusPath])(
+    "does not retry an ordinary permission rejection: %s",
+    (route) => {
+      const result = evaluate({ [route]: { httpError: 403 } });
+      expect(result.status).toBe(1);
+      expect(result.waits).toEqual([]);
+      expect(result.combined).toEqual(route === rolePath ? ["pending", "failure"] : ["pending"]);
+    },
+  );
 
   it("requires successful CI and both guard decisions on the actual PR head", () => {
     const result = evaluate();
@@ -779,10 +884,13 @@ describe("combined security review entry point", () => {
     expect(result.combined).not.toContain("success");
   });
 
-  it("keeps an unchanged PR approved when main advances during evaluation", () => {
+  it("ignores main advancement and absent-to-null metadata during evaluation", () => {
     const result = evaluate({
       [`GET ${pullPath}`]: {
-        responses: [pr, { ...pr, base: { ...pr.base, sha: "e".repeat(40) } }],
+        responses: [
+          pr,
+          { ...pr, base: { ...pr.base, sha: "e".repeat(40) }, maintainer_can_modify: null },
+        ],
       },
     });
     expect(result.status, result.stderr).toBe(0);
@@ -791,27 +899,58 @@ describe("combined security review entry point", () => {
   });
 
   it.each([
-    { name: "head", changedPr: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } }, status: 0 },
-    { name: "target branch", changedPr: { ...pr, base: { ...pr.base, ref: "stable" } }, status: 1 },
-    { name: "missing head", changedPr: { ...pr, head: { ...pr.head, sha: undefined } }, status: 1 },
-  ])("does not publish combined success after a changed $name", ({ changedPr, status }) => {
+    {
+      name: "head",
+      changedPr: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } },
+      changedFields: [],
+    },
+    {
+      name: "target branch",
+      changedPr: { ...pr, base: { ...pr.base, ref: "stable" } },
+      changedFields: ["base.ref"],
+    },
+    {
+      name: "missing head",
+      changedPr: { ...pr, head: { ...pr.head, sha: undefined } },
+      changedFields: ["head.sha"],
+    },
+    {
+      name: "author and edit permission",
+      changedPr: {
+        ...pr,
+        user: { id: 2, login: "changed-author", type: "Bot" },
+        maintainer_can_modify: false,
+      },
+      changedFields: ["user.id", "user.login", "user.type", "maintainer_can_modify"],
+    },
+    {
+      name: "file count after file-list recovery",
+      changedPr: { ...pr, changed_files: 3 },
+      changedFields: ["changed_files"],
+    },
+  ])("does not publish combined success after a changed $name", ({ changedPr, changedFields }) => {
     const result = evaluate({
       [`GET ${pullPath}`]: {
         responses: [pr, pr, pr, pr, pr, changedPr],
       },
     });
-    expect(result.status).toBe(status);
-    expect(result.stdout + result.stderr).toContain(
-      status === 0 ? "Superseded" : "pull request changed",
-    );
+    const superseded = changedFields.length === 0;
+    expect(result.status).toBe(superseded ? 0 : 1);
     expect(result.combined).not.toContain("success");
-    if (status === 0) {
+    if (superseded) {
+      expect(result.stdout).toContain("Superseded");
+      expect(result.stderr).toBe("");
       expect(result.requests.at(-1)).toMatchObject({ method: "GET", path: pullPath });
       expect(
         result.requests
           .filter((entry) => entry.method === "POST" && entry.path.includes("/statuses/"))
           .every((entry) => entry.path.endsWith(head)),
       ).toBe(true);
+    } else {
+      // Only fixed field names belong in the diagnostic, never the PR's values.
+      expect(result.stderr.trim()).toBe(
+        `The pull request changed during security review (changed fields: ${changedFields.join(", ")}); the next automatic event will evaluate it.`,
+      );
     }
   });
 

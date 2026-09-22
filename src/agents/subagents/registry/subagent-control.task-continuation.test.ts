@@ -1,17 +1,12 @@
 /** Stable task cancellation must target its current, still-owned execution generation. */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { runTaskInFlowForOwner } from "../../../tasks/task-executor.js";
 import {
   createManagedTaskFlow,
   getTaskFlowById,
 } from "../../../tasks/task-flow-runtime-internal.js";
-import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
 import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
-import {
-  resetTaskRegistryControlRuntimeForTests,
-  setTaskRegistryControlRuntimeForTests,
-} from "../../../tasks/task-registry.test-support.js";
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { subagentRegistryDeps } from "./subagent-registry-deps.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -22,8 +17,6 @@ import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 
 const fixture = useSubagentControlFixture();
-beforeEach(() => setTaskRegistryControlRuntimeForTests(taskControlRuntime));
-afterEach(() => resetTaskRegistryControlRuntimeForTests());
 
 it.each(["canonical", "managed"] as const)(
   "cancels a resumed yielded subagent through its %s task without changing task identity",

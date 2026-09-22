@@ -39,13 +39,16 @@ function projection(rows: SessionTranscriptProjectionSourceRow[], source: "sqlit
     db.exec(`CREATE TABLE session_windows (session_id TEXT PRIMARY KEY, transcript_updated_at INTEGER);
       CREATE TABLE transcript_rewrite_watermarks (session_id TEXT PRIMARY KEY, generation TEXT);
       CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT, created_at INTEGER,
+        event_zstd BLOB, event_utf8_bytes INTEGER, navigation_json TEXT,
         PRIMARY KEY (session_id, seq));`);
     db.prepare("INSERT INTO session_windows VALUES (?, ?)").run(SESSION_ID, 42);
     db.prepare("INSERT INTO transcript_rewrite_watermarks VALUES (?, ?)").run(
       SESSION_ID,
       "projection-generation",
     );
-    const insert = db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, ?)");
+    const insert = db.prepare(
+      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+    );
     for (const sourceRow of rows) {
       insert.run(SESSION_ID, sourceRow.seq, JSON.stringify(sourceRow.event), sourceRow.createdAt);
     }

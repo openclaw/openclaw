@@ -28,6 +28,7 @@ import {
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 import {
   assertOwnedTranscriptWriteCommit,
   SessionTranscriptWriterClaimReboundError,
@@ -112,7 +113,7 @@ export function prepareTranscriptRewriteSync(
                 .onRef("event.session_id", "=", "identity.session_id")
                 .onRef("event.seq", "=", "identity.seq"),
             )
-            .select("event.event_json")
+            .select(transcriptEventJsonSql(current.db, "event").as("event_json"))
             .where("identity.session_id", "=", resolved.sessionId)
             .where("identity.event_id", "=", source.id),
         );

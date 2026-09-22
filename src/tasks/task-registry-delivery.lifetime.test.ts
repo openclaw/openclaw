@@ -82,8 +82,9 @@ vi.mock("./task-notification-mutation.async.js", async () => {
   };
 });
 vi.mock("./task-flow-runtime-internal.js", () => ({ getTaskFlowById: () => undefined }));
-vi.mock("./task-registry-runtime-loaders.js", () => ({
-  loadTaskRegistryDeliveryRuntime: async () => ({ sendMessage: storage.send }),
+vi.mock("./task-registry-delivery-runtime.js", () => ({
+  sendMessage: storage.send,
+  resolveTaskControlUiSessionUrl: () => undefined,
 }));
 vi.mock("../infra/system-events.js", () => ({ enqueueSystemEvent: storage.enqueue }));
 vi.mock("../infra/heartbeat-wake.js", () => ({ requestHeartbeat: storage.heartbeat }));

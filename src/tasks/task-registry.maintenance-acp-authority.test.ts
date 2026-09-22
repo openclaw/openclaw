@@ -8,7 +8,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { loadTaskAcpSessionCloser, type CloseAcpSession } from "./task-registry-acp-cleanup.js";
 import {
-  resetTaskRegistryMaintenanceRuntimeForTests,
+  configureTaskRegistryMaintenance,
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { createAcpSessionStoreEntry } from "./task-registry.maintenance.test-support.js";
@@ -41,7 +41,7 @@ async function withAcpCleanupState(
     async () => {
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
-      resetTaskRegistryMaintenanceRuntimeForTests();
+      configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
       try {
         await run(createCleanupEffects());
       } finally {
@@ -57,7 +57,7 @@ afterEach(async () => {
   vi.mocked(loadTaskAcpSessionCloser).mockReset();
   vi.mocked(listAcpSessionEntries).mockReset();
   vi.mocked(readAcpSessionEntry).mockReset();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
   await drainGlobalSingletonLifecycleState("close");

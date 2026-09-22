@@ -167,6 +167,7 @@ describe("SQLite transcript context accounting", () => {
         // The connection-local view corrupts reads without changing canonical rows or projections.
         database.db.exec(`CREATE TEMP VIEW transcript_events AS
           SELECT event.session_id, event.seq, event.created_at,
+            event.event_zstd, event.event_utf8_bytes, event.navigation_json,
             CASE identity.event_id
               WHEN 'oldest' THEN ${failureKind === "sql" ? "json_extract('{broken', '$')" : "'{\"old\":}'"}
               WHEN 'middle' THEN '{"newer":}'

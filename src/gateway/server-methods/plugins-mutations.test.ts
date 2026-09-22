@@ -521,7 +521,7 @@ describe("plugin management Gateway mutation handlers", () => {
       application,
       plugin: { ...workboard, enabled: true, state: "enabled" },
       changedPaths: ["plugins.entries.workboard.enabled"],
-      warnings: ['Exclusive slot "memory" switched to "workboard".'],
+      warnings: ['Disabled other "memory" slot plugins: memory-core.'],
     });
 
     const result = await callHandler("plugins.setEnabled", {
@@ -538,7 +538,7 @@ describe("plugin management Gateway mutation handlers", () => {
     expect(result.response).toMatchObject({
       ok: true,
       restartRequired: false,
-      warnings: ['Exclusive slot "memory" switched to "workboard".'],
+      warnings: ['Disabled other "memory" slot plugins: memory-core.'],
     });
   });
 

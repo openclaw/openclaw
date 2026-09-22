@@ -116,7 +116,7 @@ function notifyOpenClawStateDatabaseClosed(database: StateDatabaseHandle): void 
 }
 
 export function requireOpenClawStateDatabaseIdentity(
-  database: StateDatabaseHandle,
+  database: Pick<StateDatabaseHandle, "db">,
 ): DatabasePathIdentity {
   const identity = databaseIdentities.get(database.db);
   if (!identity) {

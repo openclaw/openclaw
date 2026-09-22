@@ -112,7 +112,7 @@ describe("worker node desktop carrier", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("reloads desktop policy without replacing workers or closing other desktop sources", async () => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-policy");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-policy");
     const proof = nodeProof(record.nodeDeviceId!);
     const transport = pendingTransport({ proof, isProofCurrent: () => true });
     const streamed = fakeBroker();
@@ -202,7 +202,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("releases abandoned observer slots when requesting connections close", async () => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-cancel-churn");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-cancel-churn");
     const proof = nodeProof(record.nodeDeviceId!);
     const transport = pendingTransport({ proof, isProofCurrent: () => true });
     const streamed = fakeBroker();
@@ -241,7 +241,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("releases abandoned observations without disconnecting the requester or taking control", async () => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-abandon");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-abandon");
     const proof = nodeProof(record.nodeDeviceId!);
     const transport = pendingTransport({ proof, isProofCurrent: () => true });
     const streamed = fakeBroker();
@@ -291,7 +291,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("joins invocation settlement when owner stop overlaps observation release", async () => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-release-stop");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-release-stop");
     const proof = nodeProof(record.nodeDeviceId!);
     const transport = pendingTransport({ proof, isProofCurrent: () => true });
     const invocation = deferred<Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>>();
@@ -343,7 +343,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("joins a retiring epoch when stopAll interrupts its replacement", async () => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-replacement-stop");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-replacement-stop");
     let current = record;
     const transport = pendingTransport({
       proof: nodeProof(record.nodeDeviceId!),
@@ -417,7 +417,7 @@ describe("worker node desktop carrier", () => {
         signal: new AbortController().signal,
         isCurrent: () => !client.invalidated,
       };
-      const record = support.seedReadyNodeDesktop("worker-node-desktop-observe");
+      const record = await support.seedReadyNodeDesktop("worker-node-desktop-observe");
       if (username) {
         record.desktop = { ...record.desktop!, username };
       }
@@ -488,7 +488,7 @@ describe("worker node desktop carrier", () => {
     { auth: "ard-account" as const },
     { auth: "vnc-password" as const, vncPassword: "secret" },
   ])("rejects cloud ARD metadata without managed account authentication: %j", async (metadata) => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-ard-mismatch");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-ard-mismatch");
     record.desktop = { ...record.desktop!, username: "worker" };
     const transport = pendingTransport({
       proof: nodeProof(record.nodeDeviceId!),
@@ -509,7 +509,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("cancels and joins an admitted app launch before its first microtask", async () => {
-    const record = support.seedReadyNodeDesktop("worker-desktop-queued-launch-stop");
+    const record = await support.seedReadyNodeDesktop("worker-desktop-queued-launch-stop");
     const transport = pendingTransport({
       proof: nodeProof(record.nodeDeviceId!),
       isProofCurrent: () => true,
@@ -567,7 +567,7 @@ describe("worker node desktop carrier", () => {
       }),
     ],
   ] as const)("rejects an attach after the durable %s changes", async (_name, mutate) => {
-    const record = support.seedReadyNodeDesktop(`worker-node-desktop-stale-${_name}`);
+    const record = await support.seedReadyNodeDesktop(`worker-node-desktop-stale-${_name}`);
     let current: WorkerEnvironmentRecord | undefined = record;
     const proof = nodeProof(record.nodeDeviceId!);
     const transport = pendingTransport({ proof, isProofCurrent: () => true });
@@ -588,7 +588,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("rejects an attach after the node pairing proof changes", async () => {
-    const record = support.seedReadyNodeDesktop("worker-node-desktop-stale-pairing");
+    const record = await support.seedReadyNodeDesktop("worker-node-desktop-stale-pairing");
     let proofCurrent = true;
     const transport = pendingTransport({
       proof: nodeProof(record.nodeDeviceId!),
@@ -611,7 +611,7 @@ describe("worker node desktop carrier", () => {
   });
 
   it("deduplicates one exact launch and aborts it on owner teardown", async () => {
-    const record = support.seedReadyNodeDesktop("worker-node-desktop-launch");
+    const record = await support.seedReadyNodeDesktop("worker-node-desktop-launch");
     const transport = pendingTransport({
       proof: nodeProof(record.nodeDeviceId!),
       isProofCurrent: () => true,
@@ -650,7 +650,7 @@ describe("worker node desktop carrier", () => {
     { name: "missing receipt", payloadJSON: null, succeeds: false },
     { name: "open receipt", payloadJSON: '{"status":"ready","extra":true}', succeeds: false },
   ])("validates the closed node launcher $name result", async (testCase) => {
-    const record = support.seedReadyNodeDesktop(
+    const record = await support.seedReadyNodeDesktop(
       `worker-node-desktop-${testCase.name.replaceAll(" ", "-")}`,
     );
     const proof = nodeProof(record.nodeDeviceId!);
@@ -685,7 +685,9 @@ describe("worker node desktop carrier", () => {
   it.each(["durable owner", "pairing proof"] as const)(
     "rejects a successful launch receipt after the %s becomes stale",
     async (staleBoundary) => {
-      const record = support.seedReadyNodeDesktop(`worker-node-launch-stale-${staleBoundary}`);
+      const record = await support.seedReadyNodeDesktop(
+        `worker-node-launch-stale-${staleBoundary}`,
+      );
       let current: WorkerEnvironmentRecord | undefined = record;
       let proofCurrent = true;
       const proof = nodeProof(record.nodeDeviceId!);

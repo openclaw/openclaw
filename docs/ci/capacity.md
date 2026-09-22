@@ -214,9 +214,11 @@ local scheduling is unchanged.
 | 16                         | 4 / 15.42 GiB       |                                3 |                         2 |
 | 32                         | 8 / 30.95 GiB       |                                8 |                         2 |
 
-Group pins can lower these ceilings. The `agentic-gateway-core-2` family, commands groups, and
-whole `agentic-cli` group use measured workers on Blacksmith and hybrid profiles,
-with `fallbackMaxWorkers: 2`. Full CLI bins request
+Group pins can lower these ceilings. The `agentic-gateway-core-2`,
+`agentic-agents-embedded-base-*`, `agentic-agents-embedded-run`, and
+`agentic-agents-tools` families, commands groups, and the whole `agentic-cli`
+group use measured workers on Blacksmith and hybrid profiles, with
+`fallbackMaxWorkers: 2`. Full CLI bins request
 `blacksmith-32vcpu-ubuntu-2404` after packing and retain serial execution. The
 observed eight-CPU/30.95-GiB allocation can admit eight workers; actual CPU,
 memory, and load still determine the ceiling. The shard runner applies the
@@ -260,6 +262,14 @@ by file count and bounded below by the longest file. Runtime preparation is not
 divided. Separate timing identities preserve direct two/eight-worker samples;
 new parallel observations are not divided as though they were serial. Live
 CPU load and memory pressure can lower the scheduler's allocation.
+
+Embedded base, attempt-runner, and tool files follow the shared scheduler's file
+parallelism. The base keeps three balanced stripes for its large harness files;
+the separate overflow-compaction and incomplete-turn configs remain serial.
+Parallel agent wall times use distinct timing keys. Until those measurements
+arrive, the planner divides legacy serial costs by two effective workers while
+retaining the largest indivisible file's cost. Fresh parallel measurements
+replace that fallback without another discount.
 
 Agents-core files share the configured worker pool, including local scheduling
 and its one-worker throttle. Compact agents-core groups retain a two-worker cap.
@@ -622,6 +632,22 @@ family also retains its prior timings: distributing its new parent total by the
 existing file weights prices an indivisible child at 239 seconds, beyond its
 200-second contract. That family needs a separate file-cost refit; its assertions
 and budget remain unchanged.
+
+The September 21 isolated Gateway refresh replaces its original one-file
+30-second weight with 1,043 seconds. The unchanged refit reducer measured the
+complete child spans in the newest five successful main-push contributors within
+the frozen September 14–21 window ending at 14:07:53 UTC: `35591186572`,
+`35592313474`, `35593033375`, `35601102699`, and `35607421993`. The median is
+1,043.136 seconds across both `gateway-server-isolated` and
+`gateway-database-workers`; one child's wall is not the complete family cost.
+Two repeated inventory-specific children retain their measured 396- and
+690-second weights. Other families and profiles keep their existing measurements.
+The matching fallback covers future inventory changes without suppressing refits.
+The existing 150-second split threshold produces 12 children, including the
+separate runtime-prerequisite child. This is distinct from exclusive-bin packing:
+Gateway configs retain exclusive plan admission and their current worker policy.
+With the tooling release tier and measured tooling workers applied, broad fallback
+fits the unchanged caps: 111 hybrid, 120 GitHub, and 117 Blacksmith PR Node rows.
 
 At the inspected inventory, hybrid compact descriptors change from 29 to 51 on
 push and 53 to 75 on broad PRs; the maximum prediction remains 518 seconds for the

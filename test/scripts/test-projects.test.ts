@@ -1035,7 +1035,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/docs-i18n/main_test.go", ["test/scripts/docs-i18n.test.ts"]],
       [
         "scripts/docs-i18n/go.mod",
-        ["test/scripts/docs-i18n.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+        ["test/scripts/docs-i18n.test.ts", "test/scripts/ci-workflow-planning.test.ts"],
       ],
     ] as const;
     for (const [modulePath, targets] of cases) {
@@ -1135,6 +1135,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-platform-checkout.test.ts",
         "src/scripts/ci-changed-scope.git-owner.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/ci-workflow-evidence.test.ts",
       ]),
     });
   });
@@ -1176,6 +1177,8 @@ describe("scripts/test-projects changed-target routing", () => {
     [
       ".github/workflows/ci.yml",
       [
+        "test/scripts/ci-workflow-planning.test.ts",
+        "test/scripts/ci-workflow-evidence.test.ts",
         "test/scripts/changed-lanes.test.ts",
         "test/scripts/check-workflows.test.ts",
         "test/scripts/plugin-contract-test-plan.test.ts",
@@ -1499,7 +1502,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/ci-platform-checkout.test.ts",
         "src/scripts/ci-changed-scope.git-owner.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
-        ...(workflow === "docs-sync-publish" ? ["test/scripts/docs-mirror-freshness.test.ts"] : []),
+        ...(workflow === "docs-sync-publish"
+          ? ["test/scripts/docs-mirror-freshness.test.ts"]
+          : ["test/scripts/ci-workflow-planning.test.ts"]),
       ],
     );
   });
@@ -2294,16 +2299,17 @@ describe("scripts/test-projects changed-target routing", () => {
     },
   );
 
-  it.each(["src/state/openclaw-state-db.test.ts", "src/worker/worker.runtime.test.ts"])(
-    "routes native shared-state consumer %s exactly once to its broker owner",
-    (testFile) => {
-      expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
-        config: "test/vitest/vitest.infra.config.ts",
-        includePatterns: [testFile],
-      });
-      expect(databaseWorkerCoreTestFiles.filter((file) => file === testFile)).toEqual([testFile]);
-    },
-  );
+  it.each([
+    "src/agents/command/session-store.test.ts",
+    "src/state/openclaw-state-db.test.ts",
+    "src/worker/worker.runtime.test.ts",
+  ])("routes native shared-state consumer %s exactly once to its broker owner", (testFile) => {
+    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
+      config: "test/vitest/vitest.infra.config.ts",
+      includePatterns: [testFile],
+    });
+    expect(databaseWorkerCoreTestFiles.filter((file) => file === testFile)).toEqual([testFile]);
+  });
 
   it.each(databaseWorkerCoreTestFiles)(
     "routes host-owned database consumer %s to the infra fork shard",
@@ -2448,19 +2454,21 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it.each(["src/plugin-state", "src/plugin-sdk", "src/agents", "src/commands", "test/plugins"])(
-    "retains database worker ownership for directory and glob target %s",
-    (directory) => {
-      const expected = databaseWorkerCoreTestFiles.filter((file) =>
-        file.startsWith(`${directory}/`),
-      );
-      for (const target of [directory, `${directory}/**/*.test.ts`]) {
-        const plans = buildVitestRunPlans([target]);
-        const infra = plans.find((plan) => plan.config === "test/vitest/vitest.infra.config.ts");
-        expect(infra?.includePatterns).toEqual(expected);
-      }
-    },
-  );
+  it.each([
+    "src/plugin-state",
+    "src/plugin-sdk",
+    "src/agents",
+    "src/commands",
+    "src/config",
+    "test/plugins",
+  ])("retains database worker ownership for directory and glob target %s", (directory) => {
+    const expected = databaseWorkerCoreTestFiles.filter((file) => file.startsWith(`${directory}/`));
+    for (const target of [directory, `${directory}/**/*.test.ts`]) {
+      const plans = buildVitestRunPlans([target]);
+      const infra = plans.find((plan) => plan.config === "test/vitest/vitest.infra.config.ts");
+      expect(infra?.includePatterns).toEqual(expected);
+    }
+  });
 
   it.each(agentVitestProjectOwners.coreIsolated.include)(
     "routes isolated agent test %s to the isolated agents-core shard",

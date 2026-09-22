@@ -31,7 +31,7 @@ export function resolveDirectSessionTargets(
   }
   const record = params as Record<string, unknown>;
   const candidates = [record.key, record.sessionKey];
-  if (Array.isArray(record.keys)) {
+  if (method.startsWith("sessions.") && Array.isArray(record.keys)) {
     candidates.push(...record.keys);
   }
   if (Array.isArray(record.sessionKeys)) {

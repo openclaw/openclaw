@@ -310,7 +310,7 @@ describe("saved update failure resolution", () => {
       });
       expect(result).toMatchObject({
         ok: false,
-        summary: expect.stringContaining('Plugin "codex" state migration is pending'),
+        summary: expect.stringContaining('Plugin "codex" data/settings upgrade is unfinished'),
       });
       expect(result.summary).toContain("Let the current update or repair finish.");
     },

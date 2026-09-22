@@ -99,7 +99,7 @@ describe("worker turn launcher remote handoff", () => {
     if (!bootstrapReceipt) {
       throw new Error("expected bootstrap receipt");
     }
-    const acknowledgeCredentialDelivery = vi.fn(() => true);
+    const acknowledgeCredentialDelivery = vi.fn(async () => true);
     const reconcileWorkspace = vi.fn(
       async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
         if (request.source.kind !== "local") {
@@ -489,7 +489,7 @@ describe("worker turn launcher remote handoff", () => {
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => browserEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () => tunnel),
       stopTunnel: vi.fn(async () => {}),
       destroy: vi.fn(async () => attachedEnvironment()),

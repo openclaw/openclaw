@@ -17,6 +17,7 @@ import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js
 import {
   filterSessionCandidateEntries,
   filterSessionEntries,
+  projectSessionListCandidateOptions,
   type SessionListFilteredEntries,
   type SessionListFilterParams,
 } from "./session-list-filters.js";
@@ -324,13 +325,15 @@ export function prepareProjectedSessionList(params: {
   let candidates: SessionEntryPair[] | undefined;
   // Person references resolve against the full visible roster before candidate filtering.
   if (!opts.spawnedBy && !opts.involvingProfileId) {
-    const { limit: _limit, offset: _offset, ...candidateOptions } = opts;
+    const candidateOptions = projectSessionListCandidateOptions(opts);
     const key = JSON.stringify([exactKey, candidateOptions]);
     let cached = sessionListCandidates.get(prepared.entries);
     if (cached?.key !== key) {
       cached = {
         key,
-        entries: runSynchronousWork(filterSessionCandidateEntries(prepared)),
+        entries: runSynchronousWork(
+          filterSessionCandidateEntries({ ...prepared, opts: candidateOptions }),
+        ),
       };
       sessionListCandidates.set(prepared.entries, cached);
     }

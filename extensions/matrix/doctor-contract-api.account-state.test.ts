@@ -144,6 +144,7 @@ if (process.versions.bun) {
       VITEST_WORKER_ID: undefined,
     },
     maxBuffer: 4 * 1024 * 1024,
+    timeoutMs: 120_000,
   });
 }
 

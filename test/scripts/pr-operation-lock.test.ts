@@ -31,6 +31,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
+import { createProcessGroupTimingPreload } from "./pr-operation-lock.test-support.js";
 import {
   validClawsweeperReviewCommentPages,
   validReview,
@@ -73,25 +74,6 @@ function realpathSpecialFixtureWithNode(filePath: string): string {
     ["--eval", 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))', filePath],
     { encoding: "utf8" },
   );
-}
-
-// Direct preload affects only the supervisor; operation fixtures keep real clocks.
-// The source assertions below pin the production safety durations being accelerated.
-function createProcessGroupTimingPreload() {
-  const dir = tempDirs.make("openclaw-pr-operation-lock-timing-");
-  const preloadPath = join(dir, "preload.cjs");
-  writeFileSync(
-    preloadPath,
-    [
-      "const realNow = Date.now.bind(Date);",
-      "const startedAt = realNow();",
-      "Date.now = () => startedAt + (realNow() - startedAt) * 100;",
-      "const realSetTimeout = globalThis.setTimeout;",
-      "globalThis.setTimeout = (callback, delay, ...args) =>",
-      "  realSetTimeout(callback, delay === 5000 ? 50 : delay, ...args);",
-    ].join("\n"),
-  );
-  return preloadPath;
 }
 
 function spawnDetached(command: string, args: readonly string[], options: SpawnOptions = {}) {
@@ -364,7 +346,12 @@ async function runSupervisedFixture(
   const controller = spawn(
     process.execPath,
     [
-      ...(options.accelerateTimeouts ? ["--require", createProcessGroupTimingPreload()] : []),
+      ...(options.accelerateTimeouts
+        ? [
+            "--require",
+            createProcessGroupTimingPreload(tempDirs.make("openclaw-pr-operation-lock-timing-")),
+          ]
+        : []),
       processGroupRunner,
       repoDir,
       fixture,
@@ -1921,6 +1908,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         '      printf \'{"data":{"addComment":{"commentEdge":{"node":{"url":"https://example.invalid/comment"}}}}}\\n\'',
         "      exit 0",
         "    fi",
+        '    if [[ " $* " == *" --include "* ]]; then printf "HTTP/2.0 200 OK\\n\\n"; fi',
         '    state=OPEN; if grep -q "^merged$" "$OPENCLAW_TEST_LIFECYCLE"; then state=MERGED; fi',
         `    jq -cn --arg state "$state" --arg head '${preparedHead}' '{data:{repository:{id:"fixture-repo",databaseId:123,url:"https://github.com/fixture/repo",nameWithOwner:"fixture/repo",ref:{target:{oid:$head}},pullRequest:{id:"fixture-pr",number:42,url:"https://github.com/fixture/repo/pull/42",state:$state,headRefOid:$head,baseRefName:"main",isDraft:false,mergeCommit:(if $state=="MERGED" then {oid:$head} else null end),autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false,mergeable:"MERGEABLE",mergeStateStatus:"CLEAN"}}}}' ;;`,
         '  "api user --include" | "api --hostname github.com user --include")',
@@ -2730,10 +2718,19 @@ describePosix("scripts/pr per-PR operation lock", () => {
       ") &",
       'wait "$!"',
     ]);
-    const controller = spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
-      cwd: repoDir,
-      stdio: ["ignore", "ignore", "pipe"],
-    });
+    const controller = spawn(
+      process.execPath,
+      [
+        "--require",
+        createProcessGroupTimingPreload(tempDirs.make("openclaw-pr-operation-lock-timing-"), {
+          accelerateClock: false,
+        }),
+        processGroupRunner,
+        repoDir,
+        fixture,
+      ],
+      { cwd: repoDir, stdio: ["ignore", "ignore", "pipe"] },
+    );
     let stderr = "";
     let stderrOverflow = false;
     controller.stderr.setEncoding("utf8");

@@ -21,6 +21,7 @@ import {
 } from "../../../plugins/runtime.js";
 import type { PluginRuntime } from "../../../plugins/runtime/types.js";
 import { createPluginRecord } from "../../../plugins/status.test-fixtures.js";
+import { createChannelTestPluginBase } from "../../../test-utils/channel-plugins.js";
 import { dispatchChannelMessageAction } from "../message-action-dispatch.js";
 import { getBundledChannelPluginAsync } from "./test-helpers/bundled-channel-plugin-loader.js";
 
@@ -100,6 +101,21 @@ async function withReadFixture(
       },
     },
   });
+  if (options.currentProvider === "slack") {
+    // The requester needs discovery metadata, not the bundled Slack runtime.
+    const requester = createPluginRecord({
+      id: "slack",
+      origin: "config",
+      trustedOfficialInstall: false,
+    });
+    owner.registry.plugins.push(requester);
+    owner.createApi(requester, { config: {}, registrationMode: "full" }).registerChannel({
+      plugin: {
+        ...createChannelTestPluginBase({ id: "slack" }),
+        actions: { describeMessageTool: () => ({ actions: [] }) },
+      },
+    });
+  }
   setActivePluginRegistry(owner.registry);
   for (const key of [
     "HTTPS_PROXY",

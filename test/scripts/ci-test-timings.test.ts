@@ -326,7 +326,15 @@ describe("runtime placement observations", () => {
         infrastructure,
         ...(gatewayRecipient ? [] : ["test/vitest/vitest.gateway-database-workers.config.ts"]),
       ]);
-      const compactSpy = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
+      // Synthetic recipients must not inherit production costs that split their fixture jobs.
+      const compactSpy = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
+        gatewayRecipient
+          ? {
+              "agentic-gateway-server-isolated": 30,
+              "agentic-agents-core-subagents": 20,
+            }
+          : {},
+      );
       const spy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
       const options = {
         compactMode,

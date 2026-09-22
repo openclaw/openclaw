@@ -398,6 +398,56 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     ]);
   });
 
+  it.each(["bun-compatible", "dual"] as const)(
+    "applies the measured UI JIT policy only to the Bun child under %s",
+    async (policy) => {
+      const seen: Array<Record<string, string | undefined>> = [];
+      await expect(
+        runShardPlans([{ kind: "group", name: "ui", plan: { configs: ["ui/vitest.config.ts"] } }], {
+          env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
+          scratchDir: makeScratchDir(),
+          runChild: async (_args, env) => {
+            seen.push({
+              runtime: env.OPENCLAW_VITEST_RUNTIME,
+              warmup: env.BUN_JSC_thresholdForFTLOptimizeAfterWarmUp,
+              soon: env.BUN_JSC_thresholdForFTLOptimizeSoon,
+              ftlEnabled: env.BUN_JSC_useFTLJIT,
+            });
+            return 0;
+          },
+        }),
+      ).resolves.toBe(0);
+      expect(seen).toEqual([
+        { runtime: "node", warmup: undefined, soon: undefined, ftlEnabled: undefined },
+        { runtime: "bun", warmup: "512000", soon: "8000", ftlEnabled: undefined },
+      ]);
+    },
+  );
+
+  it.each([
+    { vitestArgs: ["--root=another-root"] },
+    { vitestArgs: ["--config", "another.config.ts"] },
+    { vitestArgs: ["--pool=threads"] },
+    { vitestArgs: ["--watch"] },
+    { vitestArgs: ["--shard=4/3"] },
+    { vitestArgs: ["--reporter=custom.mts"] },
+    { vitestArgs: ["--maxWorkers"] },
+    { includePatterns: ["ui/src/pages/skills/view.test.ts"] },
+    { targets: ["ui/src/pages/skills/view.test.ts"] },
+    { configs: [], targets: ["ui/src/pages/skills/view.test.ts"], env: {} },
+    { configs: ["ui/vitest.config.ts", bunConfig] },
+    {
+      env: { OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: "external.json" },
+    },
+  ])("keeps unproven UI execution envelopes on Node: %s", (overrides) => {
+    const selection = {
+      configs: ["ui/vitest.config.ts"],
+      ...overrides,
+    };
+    expect(resolveCiTestRuntimeSelections(selection, "dual")).toEqual([{ runtime: "node" }]);
+    expect(ciTestShardRequiresBun(selection, "bun-compatible")).toBe(false);
+  });
+
   it.each([
     { shard: { configs: [bunConfig] }, expected: true },
     { shard: { configs: [] }, expected: false },

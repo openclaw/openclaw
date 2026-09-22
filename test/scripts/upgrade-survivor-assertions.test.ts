@@ -1320,6 +1320,7 @@ function assertCompanionPluginRecords(
       mkdirSync(join(isolatedScripts, "lib"), { recursive: true });
       for (const file of [
         "release-version.mjs",
+        "sqlite-transcript-payload.mjs",
         "upgrade-survivor-policy.mjs",
         "upgrade-survivor-scenarios.json",
       ]) {

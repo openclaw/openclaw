@@ -29,6 +29,95 @@ describe("doctor --fix include write ownership", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it.each([false, true])(
+    "preserves browser references across environment rotation and successive writes (authority=%s)",
+    async (authority) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync(
+          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", BROWSER_BIN: "/opt/example/browser-planning" },
+          async () => {
+            const configPath = await writeOpenClawConfig(home, {
+              agents: { entries: { main: {} } },
+              browser: { $include: "./browser.json" },
+              gateway: { mode: "local" },
+              plugins: { enabled: false },
+            });
+            const includePath = path.join(path.dirname(configPath), "browser.json");
+            const includeRaw = JSON.stringify({
+              enabled: true,
+              relayBindHost: "127.0.0.1",
+              executablePath: "${BROWSER_BIN}",
+            });
+            await fs.writeFile(includePath, includeRaw);
+            const rootRaw = await fs.readFile(configPath, "utf8");
+            const ctx = await prepareDoctorContext(configPath);
+            expect(ctx.configResult.shouldWriteConfig).toBe(true);
+            expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
+            expect(ctx.cfg.browser).toEqual({
+              enabled: true,
+              executablePath: "/opt/example/browser-planning",
+            });
+            const write = () =>
+              captureUpdateDoctorConfigWrites(
+                configPath,
+                () => runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
+                authority
+                  ? { inputHash: hashConfigRaw(rootRaw), assertCurrent: () => {} }
+                  : undefined,
+              );
+            await withEnvAsync({ BROWSER_BIN: "/opt/example/browser-first" }, async () => {
+              expect(await write()).toBe(true);
+              expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual({
+                enabled: true,
+                executablePath: "${BROWSER_BIN}",
+              });
+              expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
+                "/opt/example/browser-first",
+              );
+            });
+            const firstBytes = await fs.readFile(includePath, "utf8");
+            await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(includeRaw);
+            ctx.cfg = { ...ctx.cfg, browser: { ...ctx.cfg.browser, enabled: false } };
+            await withEnvAsync({ BROWSER_BIN: "/opt/example/browser-second" }, async () => {
+              expect(await write()).toBe(true);
+              const snapshot = await readConfigFileSnapshot();
+              expect(snapshot.sourceConfig.browser).toEqual({
+                enabled: false,
+                executablePath: "/opt/example/browser-second",
+              });
+              expect(ctx.configResult.confirmedConfigSource?.hash).toBe(snapshot.hash);
+            });
+            expect(JSON.parse(await fs.readFile(includePath, "utf8")).executablePath).toBe(
+              "${BROWSER_BIN}",
+            );
+            await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(firstBytes);
+            await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
+            const secondBytes = await fs.readFile(includePath, "utf8");
+            expect(await write()).toBe(true);
+            await expect(fs.readFile(includePath, "utf8")).resolves.toBe(secondBytes);
+            await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(firstBytes);
+            const committed = structuredClone({
+              receipt: ctx.configResult.confirmedConfigSource,
+              baseline: ctx.cfgForPersistence,
+            });
+            await fs.appendFile(includePath, "\n");
+            const files = (await fs.readdir(path.dirname(configPath))).toSorted();
+            const retainedBytes = await fs.readFile(includePath, "utf8");
+            ctx.cfg = { ...ctx.cfg, browser: { ...ctx.cfg.browser, headless: true } };
+            expect(await write()).toBe(false);
+            expect(ctx.configWriteRefusal).toBe("config-conflict");
+            expect(ctx.configResult.confirmedConfigSource).toStrictEqual(committed.receipt);
+            expect(ctx.cfgForPersistence).toStrictEqual(committed.baseline);
+            await expect(fs.readFile(includePath, "utf8")).resolves.toBe(retainedBytes);
+            await expect(fs.readFile(`${includePath}.bak`, "utf8")).resolves.toBe(firstBytes);
+            await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
+            expect((await fs.readdir(path.dirname(configPath))).toSorted()).toEqual(files);
+          },
+        );
+      });
+    },
+  );
+
   it.each([
     { shape: "nested-defaults", authority: false },
     { shape: "nested-defaults", authority: true },
@@ -378,6 +467,7 @@ describe("doctor --fix include write ownership", () => {
         const configPath = await writeOpenClawConfig(home, {});
         await fs.unlink(configPath);
         const ctx = await prepareDoctorContext(configPath);
+        expect(ctx.configResult.referenceSource).toBeUndefined();
         expect(ctx.configResult.confirmedConfigSource).toEqual({
           path: configPath,
           hash: hashConfigRaw(null),

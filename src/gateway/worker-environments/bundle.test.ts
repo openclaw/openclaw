@@ -5,6 +5,7 @@ import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -312,17 +313,22 @@ describe("worker bundle producer", () => {
         },
       });
       try {
-        const store = createWorkerEnvironmentStore({
+        const store = await createWorkerEnvironmentStore({
           database: openOpenClawStateDatabase({ path: databasePath }),
         });
-        store.createIntent({
+        await store.createIntent({
           environmentId: "preparing",
           providerId: "fixture",
           profileId: "test",
           provisionOperationId: "prepare-project",
           profileSnapshot: { settings: {}, project: { ...project, preparation } },
         });
-        store.transition({ environmentId: "preparing", from: "requested", to: "provisioning" });
+        await store.transition({
+          environmentId: "preparing",
+          from: "requested",
+          to: "provisioning",
+        });
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
 
         await writeFixture(packageRoot, "export const value = 2;\n");
@@ -333,7 +339,7 @@ describe("worker bundle producer", () => {
         });
         const current = await successor.prepare();
         expect(current.bundleHash).not.toBe(admitted.bundleHash);
-        const reopened = createWorkerEnvironmentStore({
+        const reopened = await createWorkerEnvironmentStore({
           database: openOpenClawStateDatabase({ path: databasePath }),
         });
         expect(reopened.get("preparing")).toMatchObject({
@@ -346,11 +352,16 @@ describe("worker bundle producer", () => {
         await successor.prune(retained);
         await expect(fs.readFile(admitted.tarballPath)).resolves.toEqual(admittedBytes);
 
-        reopened.transition({ environmentId: "preparing", from: "provisioning", to: "failed" });
+        await reopened.transition({
+          environmentId: "preparing",
+          from: "provisioning",
+          to: "failed",
+        });
         await successor.prune(retained);
         await expect(fs.stat(admitted.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
       } finally {
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
       }
     });

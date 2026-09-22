@@ -991,20 +991,26 @@ describe("dependency guard script", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry a connection error after the caller aborts", async () => {
-    const controller = new AbortController();
-    const error = new TypeError("fetch failed", {
-      cause: Object.assign(new Error(), { code: "ECONNRESET" }),
-    });
-    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
-      controller.abort();
-      throw error;
-    });
-    await expect(
-      githubApi("token", { fetchImpl }).request(pullPath, { signal: controller.signal }),
-    ).rejects.toMatchObject({ cause: error });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
+  it.each(["GET", "POST"])(
+    "does not retry or mark an aborted %s connection error for recovery",
+    async (method) => {
+      const controller = new AbortController();
+      const error = new TypeError("fetch failed", {
+        cause: Object.assign(new Error(), { code: "ECONNRESET" }),
+      });
+      const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
+        controller.abort();
+        throw error;
+      });
+      const request = githubApi("token", { fetchImpl }).request(pullPath, {
+        method,
+        signal: controller.signal,
+      });
+      await expect(request).rejects.toMatchObject({ cause: error });
+      await expect(request).rejects.not.toHaveProperty("code");
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("bounds successful GitHub API response bodies", async () => {
     const request = githubApi("token", {

@@ -6,6 +6,10 @@ import {
   prepareGitHubReadIdentity,
   resolveConfiguredGitHubToolIdentity,
 } from "../../agents/github-tool-identity.js";
+import {
+  getSubagentSessionListReadSnapshotIdentity,
+  prepareSubagentSessionListReadCache,
+} from "../../agents/subagents/registry/subagent-registry-state.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { truncateUtf16Safe } from "../../utils.js";
@@ -39,8 +43,14 @@ import type {
 
 type LoadGitHubPreview = typeof gitHubPublicApi.loadControlUiGitHubPreview;
 
+class GitHubReadRequestInactiveError extends Error {
+  constructor() {
+    super("GitHub request is no longer active. Try again.");
+  }
+}
+
 async function prepareControlUiGitHubIdentity(
-  { context, client, signal }: GatewayRequestHandlerOptions,
+  { context, client, signal, hasCurrentClientAuthority }: GatewayRequestHandlerOptions,
   agentId: string,
 ): Promise<{
   identity: ControlUiGitHubPreviewIdentity | undefined;
@@ -54,15 +64,19 @@ async function prepareControlUiGitHubIdentity(
       resolveConfiguredGitHubToolIdentity({ config: current, agentId, scope: "system" })
     );
   };
+  // Nested plugin requests may decorate the client; transport authority retains its owner.
   const assertActive = () => {
     if (
       signal?.aborted ||
-      (client?.connId &&
-        !context.getClientConnIds?.((current) => current === client).has(client.connId))
+      (hasCurrentClientAuthority
+        ? !hasCurrentClientAuthority()
+        : client?.connId &&
+          !context.getClientConnIds?.((current) => current === client).has(client.connId))
     ) {
-      throw new GitHubIdentityError("changed");
+      throw new GitHubReadRequestInactiveError();
     }
   };
+  assertActive();
   // Without a managed selection, retain service/env/anonymous access without
   // probing native gh. Both paths must still own the selection at delivery.
   const identity = configuredIdentity()
@@ -119,6 +133,7 @@ function createGitHubReadHandler<T>(
         options,
         resolved.agentId,
       );
+      assertSelected();
       const result =
         params.refresh === true
           ? await load(target, identity, undefined, true)
@@ -127,9 +142,11 @@ function createGitHubReadHandler<T>(
       respond(true, result, undefined);
     } catch (error) {
       const { message, ...details } =
-        error instanceof GitHubIdentityError
-          ? { message: error.message, retryable: error.reason !== "unavailable" }
-          : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
+        error instanceof GitHubReadRequestInactiveError
+          ? { message: error.message, retryable: true }
+          : error instanceof GitHubIdentityError
+            ? { message: error.message, retryable: error.reason !== "unavailable" }
+            : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
     }
   };
@@ -151,7 +168,7 @@ type LoadSessionPreview = (
   sessionKey: string,
   context: GatewayRequestContext,
   client: GatewayClient | null,
-) => SessionPreviewSource | null | Promise<SessionPreviewSource | null>;
+) => SessionPreviewSource | null;
 
 const SESSION_PREVIEW_TEXT_MAX_CHARS = 200;
 
@@ -360,7 +377,7 @@ export function createControlUiHandlers(
       (params) => gitHubPublicApi.parseGitHubTarget(params),
       (...args) => gitHubPublicApi.loadGitHubDetail(...args),
     ),
-    "controlUi.sessionPreview": async ({ params, client, context, respond }) => {
+    "controlUi.sessionPreview": async ({ params, client, context, respond, signal }) => {
       const sessionKey = parseSessionPreviewKey(params);
       if (!sessionKey) {
         respond(
@@ -371,11 +388,12 @@ export function createControlUiHandlers(
         return;
       }
       try {
-        respond(
-          true,
-          projectSessionPreview(await loadSessionPreview(sessionKey, context, client)),
-          undefined,
-        );
+        while (!getSubagentSessionListReadSnapshotIdentity()) {
+          await prepareSubagentSessionListReadCache();
+        }
+        signal?.throwIfAborted();
+        const preview = loadSessionPreview(sessionKey, context, client);
+        respond(true, projectSessionPreview(preview), undefined);
       } catch {
         respond(
           false,

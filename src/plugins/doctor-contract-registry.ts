@@ -19,6 +19,7 @@ import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { findUninspectedPluginDiagnostic } from "./discovery-availability.js";
 import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
+import { applyPluginDoctorCompatibilityMigration } from "./doctor-compatibility-migration.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import {
   coercePluginDoctorContractModule,
@@ -741,20 +742,27 @@ export function applyPluginDoctorCompatibilityMigrations(
 ): {
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 } {
   let nextCfg = cfg;
   const changes: string[] = [];
+  const warnings: string[] = [];
   for (const entry of resolvePluginDoctorContracts({
     ...params,
     config: params?.config ?? cfg,
     surface: "configRepair",
   })) {
-    const mutation = entry.normalizeCompatibilityConfig?.({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
+    if (!entry.normalizeCompatibilityConfig) {
       continue;
     }
+    const mutation = applyPluginDoctorCompatibilityMigration({
+      pluginId: entry.pluginId,
+      config: nextCfg,
+      normalize: entry.normalizeCompatibilityConfig,
+    });
     nextCfg = mutation.config;
     changes.push(...mutation.changes);
+    warnings.push(...(mutation.warnings ?? []));
   }
-  return { config: nextCfg, changes };
+  return { config: nextCfg, changes, ...(warnings.length ? { warnings } : {}) };
 }

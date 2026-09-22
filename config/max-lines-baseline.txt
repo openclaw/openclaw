@@ -130,8 +130,6 @@ extensions/memory-core/src/dreaming-phases.ts
 extensions/memory-core/src/dreaming.test.ts
 extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
-extensions/memory-core/src/memory/manager-search.test.ts
-extensions/memory-core/src/memory/manager-search.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
 extensions/memory-core/src/tools.test.ts
@@ -625,7 +623,6 @@ src/gateway/test-helpers.server.ts
 src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
-src/gateway/worker-environments/store.ts
 src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts
 src/infra/command-explainer/extract.ts

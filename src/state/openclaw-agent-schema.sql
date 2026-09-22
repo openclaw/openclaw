@@ -519,10 +519,41 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_goal_operations_expiry
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
-  event_json TEXT NOT NULL,
+  event_json TEXT,
   created_at INTEGER NOT NULL,
+  event_zstd BLOB,
+  event_utf8_bytes INTEGER CHECK (event_utf8_bytes IS NULL OR event_utf8_bytes >= 0),
+  navigation_json TEXT,
   PRIMARY KEY (session_id, seq),
-  FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE
+  FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE,
+  CHECK (
+    (event_json IS NOT NULL AND event_zstd IS NULL)
+    OR (
+      event_json IS NULL AND event_zstd IS NOT NULL
+      AND event_utf8_bytes IS NOT NULL
+      AND event_utf8_bytes BETWEEN 1 AND 4194304
+      AND length(event_zstd) BETWEEN 1 AND 4194304
+      AND navigation_json IS NOT NULL
+    )
+  ),
+  CHECK (
+    navigation_json IS NULL OR CASE WHEN json_valid(navigation_json) THEN coalesce(
+      octet_length(navigation_json) <= 16384
+      AND json_type(navigation_json, '$.version') = 'integer'
+      AND json_extract(navigation_json, '$.version') = 1
+      AND json_type(navigation_json, '$.report') = 'object'
+      AND json_extract(navigation_json, '$.report.kind') IN ('canonical', 'leaf', 'link', 'ignored')
+      AND json_type(navigation_json, '$.navigation') = 'object'
+      AND json_type(navigation_json, '$.reset') = 'object'
+      AND json_type(navigation_json, '$.model') = 'object'
+      AND json_type(navigation_json, '$.modelBytes') = 'integer'
+      AND json_extract(navigation_json, '$.modelBytes') BETWEEN 0 AND 4194304
+      AND json_type(navigation_json, '$.modelWithoutCheckpointBytes') = 'integer'
+      AND json_extract(navigation_json, '$.modelWithoutCheckpointBytes') BETWEEN 0 AND 4194304
+      AND json_type(navigation_json, '$.withoutCustomDataBytes') = 'integer'
+      AND json_extract(navigation_json, '$.withoutCustomDataBytes') BETWEEN 0 AND 4194304,
+      0) ELSE 0 END
+  )
 ) STRICT;
 
 -- Canonical cold-tier owner for reclaimed transcript generations. The derived
@@ -689,7 +720,8 @@ CREATE TABLE IF NOT EXISTS memory_index_sources (
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS memory_index_chunks (
-  id TEXT PRIMARY KEY,
+  chunk_rowid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
   path TEXT NOT NULL,
   source TEXT NOT NULL DEFAULT 'memory',
   start_line INTEGER NOT NULL,
@@ -697,7 +729,7 @@ CREATE TABLE IF NOT EXISTS memory_index_chunks (
   hash TEXT NOT NULL,
   model TEXT NOT NULL,
   text TEXT NOT NULL,
-  embedding TEXT NOT NULL,
+  embedding BLOB NOT NULL,
   updated_at INTEGER NOT NULL
 ) STRICT;
 
@@ -740,7 +772,7 @@ CREATE TABLE IF NOT EXISTS memory_embedding_cache (
   model TEXT NOT NULL,
   provider_key TEXT NOT NULL,
   hash TEXT NOT NULL,
-  embedding TEXT NOT NULL,
+  embedding BLOB NOT NULL,
   dims INTEGER,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (provider, model, provider_key, hash)
@@ -813,7 +845,6 @@ CREATE TABLE IF NOT EXISTS session_transcript_index_state (
   needs_rebuild INTEGER NOT NULL DEFAULT 0,
   active_event_count INTEGER NOT NULL DEFAULT 0,
   active_message_count INTEGER NOT NULL DEFAULT 0,
-  fts_row_count INTEGER,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
 ) STRICT;
@@ -839,14 +870,6 @@ CREATE INDEX IF NOT EXISTS idx_agent_transcript_context_pending
   ON session_transcript_active_events(session_id)
   WHERE context_eligible IS NULL;
 
-CREATE TABLE IF NOT EXISTS session_transcript_fts_rows (
-  session_id TEXT NOT NULL,
-  fts_rowid INTEGER NOT NULL PRIMARY KEY
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_transcript_fts_rows_session
-  ON session_transcript_fts_rows(session_id);
-
 CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
   text,
   session_id UNINDEXED,
@@ -855,6 +878,21 @@ CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts USING fts5(
   timestamp UNINDEXED,
   tokenize = 'unicode61 remove_diacritics 2'
 );
+
+CREATE TABLE IF NOT EXISTS session_transcript_fts_rows (
+  id INTEGER PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  message_id TEXT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_session_transcript_fts_rows_session_message
+  ON session_transcript_fts_rows(session_id, message_id);
+
+CREATE TRIGGER IF NOT EXISTS session_transcript_fts_rows_after_delete
+AFTER DELETE ON session_transcript_fts_rows
+BEGIN
+  DELETE FROM session_transcript_fts WHERE rowid = OLD.id;
+END;
 
 INSERT OR IGNORE INTO memory_index_state (id, revision) VALUES (1, 0);
 

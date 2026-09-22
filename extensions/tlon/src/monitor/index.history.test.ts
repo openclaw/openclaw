@@ -65,6 +65,7 @@ vi.mock("../runtime.js", () => ({
         shouldComputeCommandAuthorized: inboundRuntimeMock.shouldComputeCommandAuthorized,
       },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: inboundRuntimeMock.buildContext,
         dispatch: inboundRuntimeMock.dispatch,
       },
@@ -214,3 +215,4 @@ describe("monitorTlonProvider history ownership", () => {
     },
   );
 });
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";

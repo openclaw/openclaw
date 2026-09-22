@@ -13,7 +13,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
-import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import type { RequesterSettleWakeReplay } from "./agent-turn/internal-facade.types.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import {
@@ -25,7 +25,6 @@ import {
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { ADMIN_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import {
   dispatchGatewayRequestInProcessRaw,
   type GatewayMethodDispatchResponse,
@@ -43,6 +42,7 @@ import type {
   GatewayRequestOptions,
   TrustedAgentToolCaller,
 } from "./server-methods/types.js";
+import { resolveInProcessGatewaySyntheticScopes } from "./server-plugin-in-process-scopes.js";
 import {
   createSyntheticPluginRuntimeClient,
   mergePluginRuntimeClientInternal,
@@ -156,16 +156,13 @@ export async function runWithOperatorToolGatewayContinuationContext<T>(
   if (!getInProcessGatewayRequestContext(resolveGatewayContext)) {
     return await runWithOperatorToolGatewayCleanupContext(run);
   }
-  const invocation = operatorToolGatewayAuthority.getStore();
-  const scopes =
-    caller?.operatorAuthority?.scopes ?? invocation?.scopes ?? scope?.client?.connect.scopes;
   // Use the normal dispatch owner to intersect scopes and validate the live caller
   // before transferring its source. A cleanup scope alone retains request lifetime.
-  const resolved = resolveInProcessGatewayDispatch("agent", {
+  const resolved = resolveInProcessGatewayDispatch("agent", undefined, {
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" },
     resolveGatewayContext,
-    ...(scopes ? { syntheticScopes: [...scopes] } : {}),
+    syntheticScopeMode: "exact",
   });
   const captured = captureGatewayOperatorRunAuthority({
     client: resolved.operatorSourceClient,
@@ -225,6 +222,8 @@ type DispatchGatewayMethodInProcessOptions = {
   sessionCreation?: TrustedSessionCreation;
   requireScopedClient?: boolean;
   syntheticScopes?: string[];
+  /** Built-in adapters distinguish method minima from explicit or retained scope ceilings. */
+  syntheticScopeMode?: "minimum" | "exact";
   timeoutMs?: number;
   signal?: AbortSignal;
   hasCurrentClientAuthority?: GatewayRequestOptions["hasCurrentClientAuthority"];
@@ -234,6 +233,7 @@ type DispatchGatewayMethodInProcessOptions = {
 
 type ResolvedInProcessGatewayDispatch = {
   assertContextCurrent: () => void;
+  assertCreatedInputSourceCurrent?: () => void;
   assertInvocationCurrent: () => void;
   client: NonNullable<GatewayRequestOptions["client"]>;
   context: GatewayRequestContext;
@@ -245,12 +245,14 @@ type ResolvedInProcessGatewayDispatch = {
 
 function resolveInProcessGatewayDispatch(
   method: string,
+  params: unknown,
   options?: DispatchGatewayMethodInProcessOptions,
 ): ResolvedInProcessGatewayDispatch {
   const inheritedOperatorAuthority = operatorToolGatewayAuthority.getStore();
   const scope = getPluginRuntimeGatewayRequestScope();
+  const caller = getGatewayToolCallerIdentity();
   const operatorRunAuthority =
-    getGatewayToolCallerIdentity()?.operatorAuthority ??
+    caller?.operatorAuthority ??
     inheritedOperatorAuthority?.operatorRunAuthority ??
     scope?.client?.internal?.operatorRunAuthority;
   // A registered settle cohort owns its wake after the spawning tool has finished.
@@ -260,6 +262,13 @@ function resolveInProcessGatewayDispatch(
   const isHostOwnedAgentRun =
     method === "agent" && Boolean(options?.agentRunTracking || assertSettleWakeCurrent);
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const transfersCreatedInput =
+    method === "sessions.create" &&
+    options?.sessionCreation?.via === "spawn" &&
+    caller?.operationalRunInstance !== undefined &&
+    assertCallerCurrent !== undefined &&
+    options.agentToolCaller?.agentId === caller.agentId &&
+    options.agentToolCaller.sessionKey === caller.sessionKey;
   const assertInvocationCurrent = () => {
     assertSettleWakeCurrent?.();
     if (!isHostOwnedAgentRun || !operatorRunAuthority) {
@@ -355,29 +364,35 @@ function resolveInProcessGatewayDispatch(
   const delegatedToolPolicyHandoffId = options?.delegatedToolPolicyHandoff
     ? registerSubagentCompletionToolHandoff(options.delegatedToolPolicyHandoff)
     : undefined;
-  const requestedSyntheticScopes = options?.syntheticScopes ?? [WRITE_SCOPE];
-  const operatorScopes =
+  // Built-in requests retain the explicit ceiling of a positively scoped System caller.
+  const scopedSystemScopes =
+    options?.syntheticScopeMode !== undefined && scopedActor?.kind === "system"
+      ? (scope?.client?.connect.scopes ?? [])
+      : undefined;
+  const sourceScopes =
     operatorRunAuthority && scope?.client && matchesOperatorSource
       ? intersectOperatorScopes(operatorRunAuthority.scopes, scope.client.connect.scopes ?? [])
       : (operatorRunAuthority?.scopes ??
         operatorAuthority?.scopes ??
+        (options?.syntheticScopeMode !== undefined
+          ? inheritedOperatorAuthority?.scopes
+          : undefined) ??
         (operatorRoleActor?.kind === "operator"
           ? (verifiedOperatorAuthority?.scopes ?? scope?.client?.connect.scopes ?? [])
           : undefined));
-  // Narrow by authority, not literal membership: write also authorizes reads
-  // and Talk, including tools called by a synthetic continuation.
-  const syntheticScopes = operatorScopes
-    ? requestedSyntheticScopes.filter((requestedScope) =>
-        roleScopesAllow({
-          role: "operator",
-          requestedScopes: [requestedScope],
-          allowedScopes: operatorScopes,
-        }),
-      )
-    : options?.syntheticScopes;
-  if (operatorScopes?.includes(ADMIN_SCOPE) && !syntheticScopes?.includes(ADMIN_SCOPE)) {
-    syntheticScopes?.push(ADMIN_SCOPE);
-  }
+  const operatorScopes =
+    scopedSystemScopes && sourceScopes
+      ? intersectOperatorScopes(sourceScopes, scopedSystemScopes)
+      : (scopedSystemScopes ?? sourceScopes);
+  const syntheticScopes = resolveInProcessGatewaySyntheticScopes({
+    method,
+    requestParams: params,
+    syntheticScopes: options?.syntheticScopes,
+    syntheticScopeMode: options?.syntheticScopeMode,
+    operatorScopes,
+    scopedClientScopes: scope?.client?.connect.scopes,
+    registeredScope: context.getGatewayMethodRegistry?.().getScope(method),
+  });
   const baseSyntheticClient = createSyntheticPluginRuntimeClient({
     ...(operatorAuthority
       ? { authenticatedUserProfile: operatorAuthority.authenticatedUserProfile }
@@ -475,19 +490,23 @@ function resolveInProcessGatewayDispatch(
     }
     bindInProcessSubagentResume(client.internal, resume);
   }
+  const assertSourceCurrent = () => {
+    operatorRunAuthority?.assertCurrent();
+    if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
+      throw new Error(
+        `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
+      );
+    }
+  };
   return {
     assertInvocationCurrent,
     assertContextCurrent: () => {
-      operatorRunAuthority?.assertCurrent();
+      assertSourceCurrent();
       if (method !== "agent") {
         assertCallerCurrent?.(method);
       }
-      if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
-        throw new Error(
-          `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
-        );
-      }
     },
+    ...(transfersCreatedInput ? { assertCreatedInputSourceCurrent: assertSourceCurrent } : {}),
     client,
     context,
     delegatedToolPolicyHandoffId,
@@ -514,11 +533,15 @@ export function prepareInProcessAgentExecution(params: {
   resolveGatewayContext?: GatewayContextResolver;
 }) {
   const inheritedAuthority = operatorToolGatewayAuthority.getStore();
-  const resolved = resolveInProcessGatewayDispatch("agent", {
-    agentRunTracking: "plugin_subagent",
-    pluginRuntimeOwnerId: params.pluginRuntimeOwnerId,
-    resolveGatewayContext: params.resolveGatewayContext,
-  });
+  const resolved = resolveInProcessGatewayDispatch(
+    "agent",
+    { agentId: params.agentId },
+    {
+      agentRunTracking: "plugin_subagent",
+      pluginRuntimeOwnerId: params.pluginRuntimeOwnerId,
+      resolveGatewayContext: params.resolveGatewayContext,
+    },
+  );
   // Profile verification updates the original connection. Sessionless work needs
   // that live principal, not the dispatch copy carrying session tracking metadata.
   const client = getPluginRuntimeGatewayRequestScope()?.client ?? resolved.client;
@@ -569,10 +592,11 @@ export function prepareInProcessAgentExecution(params: {
 
 async function withInProcessGatewayDispatch<T>(
   method: string,
+  params: unknown,
   options: DispatchGatewayMethodInProcessOptions | undefined,
   run: (resolved: ResolvedInProcessGatewayDispatch) => Promise<T>,
 ): Promise<T> {
-  const resolved = resolveInProcessGatewayDispatch(method, options);
+  const resolved = resolveInProcessGatewayDispatch(method, params, options);
   let releaseOperatorAuthority: (() => void) | undefined;
   try {
     const captured = captureGatewayOperatorRunAuthority({
@@ -590,6 +614,13 @@ async function withInProcessGatewayDispatch<T>(
         assertContextCurrent();
         captured.authority.assertCurrent();
       };
+      const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
+      if (assertCreatedInputSourceCurrent) {
+        resolved.assertCreatedInputSourceCurrent = () => {
+          assertCreatedInputSourceCurrent();
+          captured.authority.assertCurrent();
+        };
+      }
     }
     // A launched agent is autonomous; retaining tool-call AsyncLocalStorage would
     // leak the human authority into later model-selected work after closure.
@@ -609,7 +640,15 @@ export async function dispatchGatewayMethodInProcessRaw(
   params: unknown,
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<GatewayMethodDispatchResponse> {
-  return await withInProcessGatewayDispatch(method, options, async (resolved) => {
+  return await withInProcessGatewayDispatch(method, params, options, async (resolved) => {
+    const assertExplicitRequestCurrent = () => {
+      throwIfGatewayDispatchAborted(method, options?.signal);
+      if (resolved.hasCurrentClientAuthority?.() === false) {
+        throw new Error(`Gateway client authority closed before dispatching ${method}.`);
+      }
+      options?.sessionMutationCommitGuard?.();
+    };
+    const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
     return await dispatchGatewayRequestInProcessRaw(method, params, {
       client: resolved.client,
       context: resolved.context,
@@ -625,12 +664,16 @@ export async function dispatchGatewayMethodInProcessRaw(
         resolved.assertContextCurrent();
         resolved.assertInvocationCurrent();
         // Nested RPCs keep the original request owner through preparation and final I/O.
-        throwIfGatewayDispatchAborted(method, options?.signal);
-        if (resolved.hasCurrentClientAuthority?.() === false) {
-          throw new Error(`Gateway client authority closed before dispatching ${method}.`);
-        }
-        options?.sessionMutationCommitGuard?.();
+        assertExplicitRequestCurrent();
       },
+      ...(assertCreatedInputSourceCurrent
+        ? {
+            assertCreatedInputSourceCurrent: () => {
+              assertCreatedInputSourceCurrent();
+              assertExplicitRequestCurrent();
+            },
+          }
+        : {}),
       timeoutMs: options?.timeoutMs,
       ...(options?.signal ? { signal: options.signal } : {}),
     });
@@ -654,7 +697,7 @@ export async function dispatchGatewayMethodInProcess<T>(
   options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<T> {
   if (method === "agent" || method === "agent.wait") {
-    return await withInProcessGatewayDispatch(method, options, async (resolved) => {
+    return await withInProcessGatewayDispatch(method, params, options, async (resolved) => {
       const createAgentTurnFacade = resolved.context.createAgentTurnFacade;
       if (!createAgentTurnFacade) {
         throw new Error(`Gateway instance agent turn facade unavailable for ${method}`);

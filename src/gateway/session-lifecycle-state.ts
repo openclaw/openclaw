@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
@@ -14,12 +15,17 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  readAgentRunProviderReview,
+  type ProviderReviewTerminalFact,
+} from "../sessions/provider-review-terminal.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   recordGatewaySessionRunFailure,
   resolveSessionRunError,
 } from "../sessions/session-run-error.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
@@ -329,6 +335,22 @@ function acceptsCronRunContinuationLifecycleEvent(params: {
   return Boolean(marker?.phase === "continuing" && runId && marker.ownerRunId === runId);
 }
 
+function matchesProviderReviewWriter(
+  entry: SessionEntry,
+  fact: ProviderReviewTerminalFact,
+): boolean {
+  return (
+    entry.sessionId === fact.target.sessionId &&
+    entry.lifecycleRevision === fact.target.lifecycleRevision &&
+    (entry.activeWriterRunId === fact.expectedWriterRunId ||
+      entry.lifecycleRunId === fact.expectedWriterRunId) &&
+    (entry.activeWriterRunId === undefined ||
+      entry.activeWriterRunId === fact.expectedWriterRunId) &&
+    (entry.lifecycleRunId === undefined || entry.lifecycleRunId === fact.expectedWriterRunId) &&
+    (!entry.providerReview || isDeepStrictEqual(entry.providerReview, fact.review))
+  );
+}
+
 export async function persistGatewaySessionLifecycleEvent(params: {
   sessionKey: string;
   agentId?: string;
@@ -352,6 +374,27 @@ export async function persistGatewaySessionLifecycleEvent(params: {
   if (!sessionEntry.entry) {
     return;
   }
+  // Incognito keeps its existing native lifecycle writer. The runtime's private fact
+  // joins that same entry update; public event data cannot introduce a review pause.
+  const terminalReview =
+    (phase === "error" || (phase === "end" && params.event.data?.stopReason === "error")) &&
+    isIncognitoSessionKey(sessionEntry.canonicalKey) &&
+    params.event.runId
+      ? readAgentRunProviderReview(params.event.runId)
+      : undefined;
+  const providerReview =
+    terminalReview &&
+    terminalReview.target.sessionKey === sessionEntry.canonicalKey &&
+    terminalReview.target.storePath === sessionEntry.storePath &&
+    terminalReview.target.sessionId === params.event.sessionId &&
+    terminalReview.review.runId === params.event.runId &&
+    terminalReview.lifecycleGeneration === params.event.lifecycleGeneration &&
+    params.event.ts >= terminalReview.capturedAtMs &&
+    (terminalReview.lifecycleStartedAt === undefined ||
+      terminalReview.lifecycleStartedAt === params.event.data?.startedAt) &&
+    matchesProviderReviewWriter(sessionEntry.entry, terminalReview)
+      ? terminalReview
+      : undefined;
   const owningSessionId =
     typeof params.event.sessionId === "string" && params.event.sessionId
       ? params.event.sessionId
@@ -369,6 +412,9 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       terminalRecovery = undefined;
       failedRun = undefined;
       const entry = storedEntry as SessionEntry;
+      if (providerReview && !matchesProviderReviewWriter(entry, providerReview)) {
+        return null;
+      }
       const expected = params.expectedWriter;
       if (
         expected &&
@@ -414,10 +460,14 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         // their async persistence can settle out of order.
         return null;
       }
-      const patch = derivePersistedSessionLifecyclePatch({
-        entry,
-        event: params.event,
-      });
+      const patch: Partial<PersistedLifecycleSessionShape> & Pick<SessionEntry, "providerReview"> =
+        derivePersistedSessionLifecyclePatch({
+          entry,
+          event: params.event,
+        });
+      if (providerReview && Object.keys(patch).length > 0) {
+        patch.providerReview = providerReview.review;
+      }
       if (
         (phase === "error" || phase === "end") &&
         eventRunId &&
@@ -450,13 +500,21 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       skipMaintenance: true,
       takeCacheOwnership: true,
       requireWriteSuccess: true,
+      ...(providerReview ? { providerReviewMutation: true } : {}),
       onCommitted: () =>
         sessionChanges.emit({
           sessionKey: sessionEntry.canonicalKey,
           agentId: sessionEntry.agentId,
           storePath: sessionEntry.storePath,
         }),
-      ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
+      ...(params.assertCommitAllowed || providerReview
+        ? {
+            assertCommitAllowed: () => {
+              params.assertCommitAllowed?.();
+              providerReview?.assertCurrent();
+            },
+          }
+        : {}),
     },
   );
   if (persisted && terminalRecovery) {

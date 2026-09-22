@@ -83,6 +83,7 @@ async function withSubagentKillScope<T>(
   const taskControl = captureTaskCancellationControl();
   const cancellationControl = params.assertCurrent
     ? {
+        prepareRead: taskControl?.prepareRead,
         assertCurrent: () => {
           taskControl?.assertCurrent();
           params.assertCurrent?.();
@@ -293,6 +294,13 @@ async function killLatestSubagentRun(params: {
   result: Awaited<ReturnType<typeof killSubagentRun>>;
 }> {
   const { tree, scope } = params;
+  for (
+    let pending = scope.cancellationControl?.prepareRead?.();
+    pending;
+    pending = scope.cancellationControl?.prepareRead?.()
+  ) {
+    await pending;
+  }
   const matchesExpected = (entry: SubagentRunRecord) =>
     (params.expectedGeneration === undefined || entry.generation === params.expectedGeneration) &&
     (!params.expectedOwnerKey || entry.requesterSessionKey === params.expectedOwnerKey);

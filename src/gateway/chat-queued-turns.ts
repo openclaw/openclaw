@@ -192,6 +192,8 @@ export function listQueuedChatTurnsForSession(params: {
   chatQueuedTurns: QueuedChatTurnMap;
   sessionKeys: Iterable<string>;
   sessionIds?: Iterable<string | undefined>;
+  /** A narrow caller needs both the key and the originally admitted incarnation. */
+  requiredSessionId?: string;
   agentId?: string;
   defaultAgentId?: string;
 }): QueuedChatTurnMatch[] {
@@ -213,6 +215,12 @@ export function listQueuedChatTurnsForSession(params: {
       continue;
     }
     if (!sessionKeys.has(entry.sessionKey) && !sessionIds.has(entry.sessionId)) {
+      continue;
+    }
+    if (
+      params.requiredSessionId !== undefined &&
+      (!sessionKeys.has(entry.sessionKey) || entry.sessionId !== params.requiredSessionId)
+    ) {
       continue;
     }
     if (

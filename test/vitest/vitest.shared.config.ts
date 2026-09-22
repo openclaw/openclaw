@@ -7,6 +7,7 @@ import normalizationCorePackageJson from "../../packages/normalization-core/pack
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mts";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
+import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
 import {
   isCiLikeEnv,
   resolveLocalVitestScheduling,
@@ -16,7 +17,10 @@ import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
-import { loadVitestPerformanceConfig } from "./vitest.performance-config.ts";
+import {
+  createVitestProjectCachePlugin,
+  loadVitestPerformanceConfig,
+} from "./vitest.performance-config.ts";
 import { createRedactingReporterPlugin } from "./vitest.reporters.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
@@ -153,6 +157,7 @@ export const sharedVitestConfig = {
     },
     createStateSchemaInlinePlugin(repoRoot),
     compiledSubprocessesPlugin(),
+    createVitestProjectCachePlugin(),
     createRedactingReporterPlugin(),
   ],
   resolve: {
@@ -502,6 +507,8 @@ export const sharedVitestConfig = {
     unstubGlobals: true,
     isolate: false,
     pool: workerConfig.pool,
+    // Native imports keep the invocation owner's isolated source-cache policy.
+    execArgv: process.versions.bun ? [] : ["--import", resolveTsxImport(repoRoot)],
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,

@@ -17,7 +17,10 @@ import {
 type Host = ChatComposerScope;
 type PayloadUpdate = Pick<ChatQueueItem, "attachments" | "attachmentPayload"> & {
   attachmentStorageError?: undefined;
-} & ({ sendState: "unconfirmed"; sendError: string } | { sendState?: never; sendError?: never });
+} & (
+    | { sendState: "unconfirmed" | "held"; sendError: string }
+    | { sendState?: never; sendError?: never }
+  );
 type PayloadResult =
   | { status: "ready"; update: PayloadUpdate }
   | { status: "failed"; reason: OutboxPayloadFailure };
@@ -36,7 +39,12 @@ export function failOutboxPayload(item: ChatQueueItem, reason: OutboxPayloadFail
   return {
     ...item,
     attachmentStorageError: reason,
-    sendState: attempted ? ("unconfirmed" as const) : ("failed" as const),
+    sendState:
+      item.sendState === "held"
+        ? ("held" as const)
+        : attempted
+          ? ("unconfirmed" as const)
+          : ("failed" as const),
     sendError: outboxPayloadError(reason),
   };
 }
@@ -146,7 +154,7 @@ async function preparePayload(
           update: {
             ...update,
             attachmentPayload: copy.value,
-            sendState: "unconfirmed",
+            sendState: item.sendState === "held" ? "held" : "unconfirmed",
             sendError: t("chat.sendErrors.outboxPayloadCopied"),
           },
         };

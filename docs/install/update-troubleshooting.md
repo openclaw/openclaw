@@ -228,6 +228,21 @@ restarting the same 2026.9.4 fleet resolves the failed-update condition.
 
 ## Plugin repair warnings
 
+`post-update-plugins` / `plugin-convergence` with
+`post-plugin-doctor-execution-failed` can describe a Doctor child failure after
+the package was already installed. Updated convergence records that execution
+failure as a warning, retains its exit reason and available plugin diagnostics,
+and continues to config validation, readiness checks, and Gateway activation.
+`openclaw update status` shows the warning even when the update succeeds. A later
+failure report keeps it in a separate **Warnings** section.
+
+A throwing plugin config-repair hook leaves that plugin's input unchanged and
+names the plugin in its warning. Repair the plugin, then run
+`openclaw doctor --fix` or `openclaw update repair`.
+Explicit state-migration or config-write refusals remain blocking. So does a
+Doctor child whose shutdown could not be confirmed: it may still write state.
+Preserve the backup and resolve that specific refusal before retrying.
+
 Doctor's configured-plugin repair and payload-verification warnings do not block
 Gateway readiness. A tracked plugin whose payload is unavailable is marked
 unavailable, and its configuration and pending migration inputs stay preserved.

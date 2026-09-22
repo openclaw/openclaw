@@ -70,11 +70,11 @@ export type ExecApprovalManagerOptions<TPayload> = {
     databaseOptions?: OpenClawStateDatabaseOptions;
   };
   resolveAllowedDecisions?: (request: TPayload) => readonly ExecApprovalDecision[];
-  /** Gateway owns lineage lookup; absence seeds only the requesting session. */
+  /** Gateway may await lineage preparation; absence seeds only the requesting session. */
   resolveAudienceSessionKeys?: (
     sourceSessionKey: string,
     sourceAgentId?: string | null,
-  ) => string[];
+  ) => string[] | Promise<string[]>;
   onError?: (
     error: Error,
     context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },

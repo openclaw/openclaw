@@ -170,6 +170,7 @@ export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
     !item.localCommandName &&
     (item.sendState === "failed" ||
       item.sendState === "unconfirmed" ||
+      item.sendState === "held" ||
       item.sendState === "waiting-reconnect" ||
       (item.sendState === "waiting-idle" && Boolean(item.sendError)))
   );

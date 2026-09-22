@@ -39,7 +39,7 @@ describe("Swarm pipeline backpressure", () => {
         ? { status: outcome.status, value: outcome.value }
         : { status: outcome.status, error: outcome.reason.message });
     `;
-      let result: CodeModeWorkerResult = await testing.runCodeModeWorker(
+      let result: CodeModeWorkerResult = await testing.runCodeModeExecutor(
         {
           kind: "exec",
           source,
@@ -49,12 +49,12 @@ describe("Swarm pipeline backpressure", () => {
           namespaces: [],
           swarmEnabled: true,
         },
-        10_000,
+        { timeoutMs: 10_000, executor: config.executor },
       );
       const collectors = new Map<string, string>();
       const spawnedPrompts: string[] = [];
       const progressItems: unknown[] = [];
-      // Drive real worker snapshots with controlled child results; this tests request
+      // Drive real executor continuations with controlled child results; this tests request
       // admission and resumption, not a mock of the guest's Promise implementation.
       for (let round = 0; result.status === "waiting" && round < count * 8; round++) {
         expect(result.pendingRequests.length).toBeGreaterThan(0);
@@ -95,9 +95,15 @@ describe("Swarm pipeline backpressure", () => {
           }
           return { id: request.id, ok: true as const, json: JSON.stringify(value) };
         });
-        result = await testing.runCodeModeWorker(
-          { kind: "resume", snapshot: result.snapshot, config, settledRequests, pendingRequests },
-          10_000,
+        result = await testing.runCodeModeExecutor(
+          {
+            kind: "resume",
+            continuation: result.continuation,
+            config,
+            settledRequests,
+            pendingRequests,
+          },
+          { timeoutMs: 10_000, executor: config.executor },
         );
       }
       expect(result.status, result.status === "failed" ? result.error : undefined).toBe(
@@ -141,7 +147,7 @@ describe("Swarm pipeline backpressure", () => {
       const config = resolveCodeModeConfig({
         tools: { codeMode: { enabled: true, maxPendingToolCalls: 1 } },
       });
-      let result = await testing.runCodeModeWorker(
+      let result = await testing.runCodeModeExecutor(
         {
           kind: "exec",
           source: `
@@ -156,9 +162,10 @@ describe("Swarm pipeline backpressure", () => {
         `,
           config,
           catalog: [],
+          namespaces: [],
           swarmEnabled: true,
         },
-        10_000,
+        { timeoutMs: 10_000, executor: config.executor },
       );
       expect(result).toMatchObject({
         status: "waiting",
@@ -189,9 +196,9 @@ describe("Swarm pipeline backpressure", () => {
                 },
           ),
         }));
-        result = await testing.runCodeModeWorker(
-          { kind: "resume", snapshot: result.snapshot, config, settledRequests },
-          10_000,
+        result = await testing.runCodeModeExecutor(
+          { kind: "resume", continuation: result.continuation, config, settledRequests },
+          { timeoutMs: 10_000, executor: config.executor },
         );
       }
       expect(result.status).toBe("completed");

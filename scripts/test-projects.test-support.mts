@@ -2271,7 +2271,7 @@ function resolveDocsI18nGoTargets(changedPath: string) {
   }
   const targets = ["test/scripts/docs-i18n.test.ts"];
   if (changedPath === "scripts/docs-i18n/go.mod") {
-    targets.push("test/scripts/ci-workflow-guards.test.ts");
+    targets.push("test/scripts/ci-workflow-planning.test.ts");
   }
   return targets;
 }
@@ -2315,6 +2315,8 @@ const packageAcceptance = "package-acceptance-workflow";
 const dockerBuild = "docker-build-helper";
 const dockerE2e = "docker-e2e-plan";
 const workflowGuards = "ci-workflow-guards";
+const workflowPlanning = "ci-workflow-planning";
+const workflowEvidence = "ci-workflow-evidence";
 const pluginPrerelease = "plugin-prerelease-test-plan";
 const releaseCheck = "test/release-check.test.ts";
 const installDocker = "test-install-sh-docker";
@@ -2350,6 +2352,7 @@ const pluginSdkEntryOwners = [
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
+  [".github/actions/setup-android-toolchain/action.yml", [workflowPlanning]],
   [".github/workflows/docs-sync-publish.yml", ["docs-sync-publish"]],
   [".github/workflows/docs-agent.yml", ["docs-agent-workflow"]],
   ["scripts/generate-ci-git-owner.mts", ["ci-git-owner"]],
@@ -2587,6 +2590,8 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^\.github\/workflows\/ci\.yml$/u,
     [
       workflowGuards,
+      workflowPlanning,
+      workflowEvidence,
       "changed-lanes",
       "check-workflows",
       "plugin-contract-test-plan",
@@ -2600,7 +2605,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^\.github\/workflows\/ci-check-arm-testbox\.yml$/u, [workflowGuards, packageAcceptance]],
   [/^\.github\/workflows\/crabbox-hydrate\.yml$/u, [workflowGuards, packageAcceptance]],
-  [/^\.github\/workflows\/ci-build-artifacts-testbox\.yml$/u, [packageAcceptance, workflowGuards]],
+  [
+    /^\.github\/workflows\/ci-build-artifacts-testbox\.yml$/u,
+    [packageAcceptance, workflowGuards, workflowPlanning],
+  ],
   [
     /^\.github\/workflows\/full-release-validation\.yml$/u,
     [
@@ -2623,7 +2631,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/workflows\/openclaw-release-checks\.yml$/u,
-    [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker],
+    [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker, workflowEvidence],
   ],
   [
     /^\.github\/workflows\/docker-release(?:-prepare)?\.yml$/u,
@@ -2696,6 +2704,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["mantis-web-ui-chat-proof-workflow", packageAcceptance, workflowGuards],
   ],
   [/^\.github\/workflows\/android-release\.yml$/u, [packageAcceptance, workflowGuards]],
+  [
+    /^\.github\/workflows\/(?:qa-profile-evidence|maturity-scorecard|mantis-discord-(?:status-reactions|thread-attachment))\.yml$/u,
+    [workflowEvidence],
+  ],
   [
     /^\.github\/(?:actions\/(?:ensure-base-commit|git-owner|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)/u,
     [

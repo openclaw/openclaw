@@ -265,10 +265,10 @@ export async function printResult(
   }
   defaultRuntime.log("");
   defaultRuntime.log(theme.heading(report.headline));
-  for (const line of report.lines) {
-    defaultRuntime.log(line);
-  }
   if (reportPath) {
     defaultRuntime.log(`Report: ${reportPath}`);
+  }
+  for (const line of report.lines) {
+    defaultRuntime.log(line);
   }
 }

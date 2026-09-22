@@ -331,18 +331,14 @@ describe("composer overflow presentation", () => {
 
   it("restores full mention names after narrowing and reconnecting the composer", async () => {
     container.className = "";
-    const part = render(
-      renderChatComposer(
-        createComposerProps({
-          draft: "@Jordan Rivera @Morgan Williams",
-          mentions: [
-            { profileId: "jordan", start: 0, end: 14 },
-            { profileId: "morgan", start: 15, end: 31 },
-          ],
-        }),
-      ),
-      container,
-    );
+    const props = createComposerProps({
+      draft: "@Jordan Rivera @Morgan Williams",
+      mentions: [
+        { profileId: "jordan", start: 0, end: 14 },
+        { profileId: "morgan", start: 15, end: 31 },
+      ],
+    });
+    const part = render(renderChatComposer(props), container);
     const strip = container.querySelector<HTMLElement>('[role="status"]')!;
     const visibleNames = () =>
       [...strip.querySelectorAll<HTMLElement>(".composer-context-strip__person")]
@@ -352,6 +348,25 @@ describe("composer overflow presentation", () => {
     for (const avatar of strip.querySelectorAll<HTMLElement>('[role="img"]')) {
       expect(avatar.getBoundingClientRect().width).toBe(16);
       expect(avatar.getBoundingClientRect().height).toBe(16);
+    }
+    await document.fonts.ready;
+    await afterLayout();
+    const mutations = vi.fn();
+    const observer = new MutationObserver(mutations);
+    observer.observe(strip.querySelector(".composer-context-strip__people")!, {
+      subtree: true,
+      attributes: true,
+      // Avatar fallback classes can refresh independently of recipient sizing.
+      attributeFilter: ["hidden", "style"],
+      childList: true,
+      characterData: true,
+    });
+    try {
+      render(renderChatComposer({ ...props, draft: props.draft + " please review" }), container);
+      await afterLayout();
+      expect(mutations).not.toHaveBeenCalled();
+    } finally {
+      observer.disconnect();
     }
     container.style.width = "300px";
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
@@ -365,6 +380,19 @@ describe("composer overflow presentation", () => {
     part.setConnected(true);
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
     expect(more.hidden).toBe(true);
+    const longName = "Morgan Alexandra Penelope Williams ".repeat(3).trim();
+    const draft = "@Jordan Rivera @" + longName;
+    render(
+      renderChatComposer({
+        ...props,
+        draft,
+        mentions: [props.mentions![0]!, { profileId: "morgan", start: 15, end: draft.length }],
+      }),
+      container,
+    );
+    await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
+    expect(more.hidden).toBe(false);
+    expect(more.title).toBe("@" + longName);
   });
 
   async function expectEdges(

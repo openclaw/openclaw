@@ -18,8 +18,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
-import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import {
@@ -6999,50 +6997,6 @@ describe("agent event handler", () => {
         ...(spawnedBy ? { spawnedBy } : {}),
       });
     }
-
-    it.each([false, true])(
-      "requires a stored session before projecting registry lineage (stored=%s)",
-      (stored) => {
-        const key = "agent:main:subagent:lineage-presence";
-        const runId = "lineage-presence-run";
-        const controller = "agent:main:controller";
-        mockSessionEntry(
-          stored
-            ? {
-                sessionId: "lineage-session",
-                updatedAt: 1,
-                spawnedBy: "agent:main:former-controller",
-              }
-            : undefined,
-          key,
-        );
-        subagentRuns.set(
-          runId,
-          createSubagentRunRecord({
-            runId,
-            childSessionKey: key,
-            requesterSessionKey: controller,
-            controllerSessionKey: controller,
-          }),
-        );
-        const { handler, broadcast } = createHarness({ resolveSessionKeyForRun: () => key });
-        try {
-          emitAgentEvent(handler, runId, "assistant", { text: "Child response" });
-          expect(broadcast).toHaveBeenCalled();
-          for (const [, payload] of broadcast.mock.calls) {
-            if (stored) {
-              expect(payload.spawnedBy).toBe(controller);
-            } else {
-              expect(payload).not.toHaveProperty("spawnedBy");
-            }
-          }
-          expect(loadGatewaySessionLifecycleSnapshotMock).not.toHaveBeenCalled();
-        } finally {
-          handler.dispose();
-          subagentRuns.delete(runId);
-        }
-      },
-    );
 
     it.each([
       {

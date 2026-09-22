@@ -17,7 +17,10 @@ import {
   type ActiveEmbeddedRunOwner,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { captureYieldedMainSessionContinuation } from "../../agents/main-session-recovery/main-session-restart-recovery-target.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import {
+  clearSessionQueues,
+  prepareSessionFollowupCleanup,
+} from "../../auto-reply/reply/queue/cleanup.js";
 import {
   isConfiguredSessionStoreAgentId,
   resolveExistingAgentSessionStoreTargetsSync,
@@ -55,6 +58,10 @@ import {
   descendantAbortError,
 } from "./chat-abort-runtime.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import {
+  bindGatewayRequestHandlerMutationAuthority,
+  readGatewayRequestMutationAuthority,
+} from "./session-mutation-guards.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -144,15 +151,10 @@ function resolveScopedAbortKey(params: {
 }
 
 export const sessionAbortHandlers: GatewayRequestHandlers = {
-  "sessions.abort": async ({
-    req,
-    params,
-    respond,
-    context,
-    client,
-    isWebchatConnect,
-    sessionMutationAuthorization,
-  }) => {
+  "sessions.abort": async (options) => {
+    const { params, respond, context, client, sessionMutationAuthorization } = options;
+    const authority = readGatewayRequestMutationAuthority(options);
+    const narrow = authority.sessionScope === "operator.sessions.write";
     if (!assertValidParams(params, validateSessionsAbortParams, "sessions.abort", respond)) {
       return;
     }
@@ -301,12 +303,31 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         ...(requestedGlobalAgentId ? { storeAgentId: requestedGlobalAgentId } : {}),
       });
     const sessionEntry = loadedSession?.entry;
+    const admittedTarget = sessionMutationAuthorization?.admittedTarget;
+    if (
+      narrow &&
+      (!admittedTarget?.sessionId.trim() ||
+        admittedTarget.sessionKey !== canonicalKey ||
+        admittedTarget.agentId !== normalizeAgentId(targetAgentId) ||
+        sessionEntry?.sessionId !== admittedTarget.sessionId)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session target is unavailable"),
+      );
+      return;
+    }
+    const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
     const embeddedRunMatchesSession = Boolean(
       embeddedRun &&
       resolveSessionKeyAgentId(embeddedRun.sessionKey, cfg) === normalizeAgentId(targetAgentId) &&
-      (embeddedRun.sessionKey === key ||
-        embeddedRun.sessionKey === canonicalKey ||
-        sessionEntry?.sessionId === embeddedRun.sessionId),
+      (narrow
+        ? embeddedRun.sessionId === requiredSessionId &&
+          (embeddedRun.sessionKey === key || embeddedRun.sessionKey === canonicalKey)
+        : embeddedRun.sessionKey === key ||
+          embeddedRun.sessionKey === canonicalKey ||
+          sessionEntry?.sessionId === embeddedRun.sessionId),
     );
     if (embeddedRun && !embeddedRunMatchesSession) {
       respond(
@@ -326,7 +347,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       context,
       requestedKey: key,
       canonicalKey,
-      activeRunSessionKey: scopedActiveRunSessionKey,
+      activeRunSessionKey: narrow ? undefined : scopedActiveRunSessionKey,
       aliasKeys: requestedKeyAliases,
       agentId: requestedGlobalAgentId,
       defaultAgentId: stableTargetOwner,
@@ -337,9 +358,21 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const lifecycleRevision = sessionEntry?.lifecycleRevision;
     const assertAbortCurrent = () => {
+      authority.assertCurrent();
       sessionMutationAuthorization?.assertCurrent();
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     };
+    const queueKeys = [key, ...(requestedKeyAliases ?? []), canonicalKey, sessionEntry?.sessionId];
+    const clearCapturedFollowups =
+      narrow && clearQueued && !requestedRunId && requiredSessionId
+        ? prepareSessionFollowupCleanup({
+            keys: queueKeys,
+            agentId: targetAgentId,
+            sessionKey: canonicalKey,
+            sessionId: requiredSessionId,
+            assertCurrent: assertAbortCurrent,
+          })
+        : undefined;
     const persistSessionAbort = (
       owner: Pick<ActiveEmbeddedRunOwner, "runId" | "sessionId" | "startedAtMs">,
     ) =>
@@ -375,6 +408,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         sessionKey: embeddedRun.sessionKey ?? canonicalKey,
         agentId: targetAgentId,
         requesterTurnRunId: embeddedRun.runId,
+        assertCurrent: assertAbortCurrent,
         // A captured handle may decline Stop. Hold its children before signaling,
         // but authorize their cancellation only when this exact parent accepts.
         beforeKill: () => {
@@ -407,6 +441,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     // Snapshot before abort can remove controllers. Agent run IDs are idempotency
     // keys, so preserve their dedupe namespace instead of colliding with chat.send.
     const preAbortRuns = new Map(context.chatAbortControllers);
+    const preAbortDedupe = new Map(context.dedupe);
     const preAbortSessions = new Map(
       [...preAbortRuns].map(([runId, entry]) => [runId, captureAgentJobSession(entry)]),
     );
@@ -418,9 +453,17 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     let descendantsCancelled = false;
     let responseMeta: Record<string, unknown> | undefined;
     const persistedSessionId = sessionEntry?.sessionId;
-    const sessionEmbeddedRun = persistedSessionId
+    const capturedSessionEmbeddedRun = persistedSessionId
       ? resolveActiveEmbeddedRunOwner(persistedSessionId)
       : undefined;
+    const sessionEmbeddedRun =
+      !narrow ||
+      (capturedSessionEmbeddedRun &&
+        capturedSessionEmbeddedRun.sessionId === requiredSessionId &&
+        (capturedSessionEmbeddedRun.sessionKey === key ||
+          capturedSessionEmbeddedRun.sessionKey === canonicalKey))
+        ? capturedSessionEmbeddedRun
+        : undefined;
     const embeddedController = sessionEmbeddedRun
       ? preAbortRuns.get(sessionEmbeddedRun.runId)
       : undefined;
@@ -471,24 +514,24 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             assertAbortCurrent();
             let queueCleared = false;
             if (clearQueued && canonicalKey !== "global") {
-              // Explicit full-session stops clear first so an aborting run cannot
-              // promote queued work. Ordinary sessions.abort calls preserve it.
-              const cleared = clearSessionQueues([
-                key,
-                ...(requestedKeyAliases ?? []),
-                canonicalKey,
-                ...(persistedSessionId ? [persistedSessionId] : []),
-              ]);
-              queueCleared = cleared.followupCleared > 0 || cleared.laneCleared > 0;
+              // Narrow Stop clears captured pending sources. Controller signals own lane
+              // entries; clearing a lane by key would also cancel unrelated maintenance.
+              if (clearCapturedFollowups) {
+                queueCleared = clearCapturedFollowups() > 0;
+              } else {
+                const cleared = clearSessionQueues(queueKeys);
+                queueCleared = cleared.followupCleared > 0 || cleared.laneCleared > 0;
+              }
             }
             // Persisted channel replies are active session work even when they
             // have no connection-owned chat controller.
             const wasActive = persistedSessionId && isEmbeddedAgentRunActive(persistedSessionId);
+            assertAbortCurrent();
             const embeddedAborted =
               persistedSessionId && canonicalKey !== "global" && !embeddedController
                 ? sessionEmbeddedRun
                   ? sessionEmbeddedRun.abort()
-                  : abortEmbeddedAgentRun(persistedSessionId)
+                  : !narrow && abortEmbeddedAgentRun(persistedSessionId)
                 : false;
             if (embeddedAborted && sessionEmbeddedRun) {
               embeddedAbortPersistence = persistSessionAbort(sessionEmbeddedRun);
@@ -503,6 +546,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
               persistedSessionId &&
               (canonicalKey === "global" || !wasActive || embeddedAborted)
             ) {
+              assertAbortCurrent();
               mcpRetirement ??= retireSessionMcpRuntime({
                 sessionId: persistedSessionId,
                 reason: "session-stop",
@@ -517,13 +561,14 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       sessionKeyAliases: [key, ...(requestedKeyAliases ?? [])],
       agentId: targetAgentId,
       sessionId: persistedSessionId,
+      requiredSessionId,
       session: loadedSession ? { ok: true, value: loadedSession } : undefined,
       defaultAgentId: stableTargetOwner,
       runId: requestedRunId,
       abortOrigin: "rpc",
       stopReason: "rpc",
       requester: resolveChatAbortRequester(client),
-      assertCurrent: sessionMutationAuthorization?.assertCurrent,
+      assertCurrent: assertAbortCurrent,
       onAuthorizedAfterQueuedAbort,
     });
     if (queuedAbort) {
@@ -546,64 +591,70 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       return;
     }
     await handleChatAbortRequestWithLifecycle(
-      {
-        req,
-        params: {
-          sessionKey: abortSessionKey,
-          runId: requestedRunId,
-          ...(abortAgentId ? { agentId: abortAgentId } : {}),
-        },
-        respond: (ok, payload, error, meta) => {
-          if (!ok) {
-            failedResponse = [ok, payload, error, meta];
-            return;
-          }
-          chatAbortSucceeded = true;
-          responseMeta = meta;
-          const runIds =
-            payload &&
-            typeof payload === "object" &&
-            Array.isArray((payload as { runIds?: unknown[] }).runIds)
-              ? (payload as { runIds: unknown[] }).runIds.filter((value): value is string =>
-                  Boolean(normalizeOptionalString(value)),
-                )
-              : [];
-          const firstAbortedRunId = runIds[0] ?? null;
-          abortedRunIds = runIds;
-          abortedRunId = firstAbortedRunId;
-          aborted =
-            firstAbortedRunId !== null ||
-            (payload !== null &&
+      bindGatewayRequestHandlerMutationAuthority(
+        options,
+        {
+          ...options,
+          params: {
+            sessionKey: abortSessionKey,
+            runId: requestedRunId,
+            ...(abortAgentId ? { agentId: abortAgentId } : {}),
+          },
+          respond: (ok, payload, error, meta) => {
+            if (!ok) {
+              failedResponse = [ok, payload, error, meta];
+              return;
+            }
+            chatAbortSucceeded = true;
+            responseMeta = meta;
+            const runIds =
+              payload &&
               typeof payload === "object" &&
-              (payload as { aborted?: unknown }).aborted === true);
-          const workerOnly = Boolean(workerRunSessionId && !activeRun);
-          if (firstAbortedRunId && !workerOnly) {
-            const endedAt = Date.now();
-            const runKind = preAbortRuns.get(firstAbortedRunId)?.kind;
-            const dedupePrefix = runKind === "agent" ? "agent" : "chat";
-            setGatewayDedupeEntry({
-              dedupe: context.dedupe,
-              key: `${dedupePrefix}:${firstAbortedRunId}`,
-              session: preAbortSessions.get(firstAbortedRunId),
-              entry: {
-                ts: endedAt,
-                ok: true,
-                payload: {
-                  status: "timeout",
-                  runId: firstAbortedRunId,
-                  ...(abortAgentId ? { agentId: abortAgentId } : {}),
-                  stopReason: "rpc",
-                  endedAt,
+              Array.isArray((payload as { runIds?: unknown[] }).runIds)
+                ? (payload as { runIds: unknown[] }).runIds.filter((value): value is string =>
+                    Boolean(normalizeOptionalString(value)),
+                  )
+                : [];
+            const firstAbortedRunId = runIds[0] ?? null;
+            abortedRunIds = runIds;
+            abortedRunId = firstAbortedRunId;
+            aborted =
+              firstAbortedRunId !== null ||
+              (payload !== null &&
+                typeof payload === "object" &&
+                (payload as { aborted?: unknown }).aborted === true);
+            const workerOnly = Boolean(workerRunSessionId && !activeRun);
+            if (firstAbortedRunId && !workerOnly) {
+              const endedAt = Date.now();
+              const runKind = preAbortRuns.get(firstAbortedRunId)?.kind;
+              const dedupePrefix = runKind === "agent" ? "agent" : "chat";
+              const dedupeKey = `${dedupePrefix}:${firstAbortedRunId}`;
+              // Nested cancellation can yield after the old controller ends. A new
+              // receipt owns its outcome; this supplemental timeout must not replace it.
+              if (context.dedupe.get(dedupeKey) !== preAbortDedupe.get(dedupeKey)) {
+                return;
+              }
+              setGatewayDedupeEntry({
+                dedupe: context.dedupe,
+                key: dedupeKey,
+                session: preAbortSessions.get(firstAbortedRunId),
+                entry: {
+                  ts: endedAt,
+                  ok: true,
+                  payload: {
+                    status: "timeout",
+                    runId: firstAbortedRunId,
+                    ...(abortAgentId ? { agentId: abortAgentId } : {}),
+                    stopReason: "rpc",
+                    endedAt,
+                  },
                 },
-              },
-            });
-          }
+              });
+            }
+          },
         },
-        context,
-        client,
-        isWebchatConnect,
-        sessionMutationAuthorization,
-      },
+        undefined,
+      ),
       {
         ...(onAuthorizedAfterQueuedAbort ? { onAuthorizedAfterQueuedAbort } : {}),
         ...(!requestedRunId ? { cascadeDescendants: true as const } : {}),

@@ -154,6 +154,7 @@ jobs:
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
       strict_control_ui_i18n: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.strict_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
+      ui_test_runtime_policy: ${{ steps.manifest.outputs.ui_test_runtime_policy }}
       run_control_ui_performance: ${{ steps.manifest.outputs.run_control_ui_performance }}
       run_ui_e2e: ${{ steps.manifest.outputs.run_ui_e2e }}
       ui_e2e_matrix: ${{ steps.manifest.outputs.ui_e2e_matrix }}
@@ -1795,6 +1796,16 @@ jobs:
                 ? "dual"
                 : "node"
             : "node";
+          const uiTestRuntimePolicy = !compatibilityTarget && testRuntimePolicy?.ciTestShardRequiresBun({
+            configs: ["ui/vitest.config.ts"],
+            vitestArgs: [
+              "--maxWorkers", "3",
+              "--reporter=verbose",
+              "--reporter=github-actions",
+              "--reporter=./scripts/lib/vitest-resource-reporter.mts",
+              ...(frozenTarget ? [] : ["--shard=1/3"]),
+            ],
+          }, testRuntimeMode) ? testRuntimeMode : "node";
           const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
           const knownToolingConfigs = new Set([
             goToolingConfig,
@@ -1968,6 +1979,7 @@ jobs:
             run_format_check: runFormatCheck,
             run_control_ui_i18n: runControlUiI18n,
             run_ui_tests: runUiTests,
+            ui_test_runtime_policy: uiTestRuntimePolicy,
             run_control_ui_performance: runControlUiPerformance,
             run_ui_e2e: runUiE2e,
             ui_e2e_matrix: createMatrix(Array.from({ length: uiE2eJobCount }, (_, index) => {
@@ -2855,6 +2867,10 @@ jobs:
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           restore-test-caches: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 'true' || 'false' }}
 
+      - name: Setup pinned Bun test runtime
+        if: needs.preflight.outputs.ui_test_runtime_policy == 'bun-compatible' || needs.preflight.outputs.ui_test_runtime_policy == 'dual'
+        uses: ./.ci-harness/.github/actions/setup-test-bun
+
       - &cache_playwright_chromium
         name: Cache Playwright Chromium
         if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.compatibility_target != 'true'
@@ -2888,6 +2904,7 @@ jobs:
 
       - name: Test Control UI
         env:
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ needs.preflight.outputs.ui_test_runtime_policy }}
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: ${{ github.workspace }}/.artifacts/control-ui-e2e-timeouts/ui-shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: '["ui/vitest.config.ts"]'
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
@@ -3303,10 +3320,10 @@ jobs:
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope*.test.ts test/scripts/changed-lanes.test.ts test/scripts/changed-path-facts.test.ts test/scripts/ci-changed-node-test-plan.test.ts test/scripts/ci-docker-seed-plan.test.ts test/scripts/ci-run-node-test-shard.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/ci-workflow-planning.test.ts test/scripts/ci-workflow-evidence.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             coercion-helpers)
               pnpm check:coercion-helpers
@@ -3370,7 +3387,7 @@ jobs:
         # Main owns full coverage. PRs need an exact-tree coverage receipt from
         # their admitted Node plan; release gates retain their separate merge tree.
         # State cases mutate process-global config and database state. Independent
-        # files let Vitest distribute the complete matrix across four workers.
+        # files let Vitest distribute the complete matrix across up to four workers.
         if: matrix.task == 'baseline-ratchets' && !(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.preflight.outputs.run_check == 'true') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'pull_request' && needs.preflight.outputs.startup_corpus_node_revision && needs.preflight.outputs.startup_corpus_node_revision == needs.preflight.outputs.checkout_revision)
         run: |
           set -euo pipefail
@@ -3385,7 +3402,9 @@ jobs:
             fi
           }
           if [[ -f test/vitest/vitest.startup-corpus-paths.mjs ]]; then
-            run_startup_corpus --maxWorkers=4 src/config/config-startup-corpus.test.ts \
+            # Runner labels can advertise more CPUs than this process can use.
+            startup_workers="$(node -p 'Math.min(4, require("node:os").availableParallelism())')"
+            run_startup_corpus --maxWorkers="$startup_workers" src/config/config-startup-corpus.test.ts \
               src/config/state-startup-corpus*.test.ts
             exit 0
           elif [[ "${{ needs.preflight.outputs.frozen_target }}" != "true" ]]; then
@@ -3393,25 +3412,42 @@ jobs:
             exit 1
           fi
           # Frozen targets before the file split retain their complete legacy matrix.
+          cores="$(node -p 'require("node:os").availableParallelism()')"
+          # Worker compilation also uses CPU: reserve four cores per invocation.
+          # The 4-vCPU ratchets label can deliver only two usable CPUs.
+          concurrency=$((cores / 4))
+          if (( concurrency < 1 )); then concurrency=1; fi
+          if (( concurrency > 5 )); then concurrency=5; fi
+          echo "[corpus:resources] logicalCpuCount=$cores admitted runs=$concurrency"
           pids=()
           labels=()
-          run_startup_corpus src/config/config-startup-corpus.test.ts &
-          pids+=("$!")
-          labels+=("config corpus")
-          for shard in {1..4}; do
-            OPENCLAW_TEST_STARTUP_CORPUS_SHARD="${shard}/4" \
-              run_startup_corpus src/config/state-startup-corpus.test.ts &
+          result=0
+          wait_corpus_batch() {
+            for index in "${!pids[@]}"; do
+              if ! wait "${pids[$index]}"; then
+                echo "::error::${labels[$index]} failed"
+                result=1
+              fi
+            done
+            pids=()
+            labels=()
+          }
+          for shard in {0..4}; do
+            if (( shard == 0 )); then
+              run_startup_corpus src/config/config-startup-corpus.test.ts &
+              labels+=("config corpus")
+            else
+              OPENCLAW_TEST_STARTUP_CORPUS_SHARD="${shard}/4" \
+                run_startup_corpus src/config/state-startup-corpus.test.ts &
+              labels+=("state corpus ${shard}/4")
+            fi
             pids+=("$!")
-            labels+=("state corpus ${shard}/4")
-          done
-          status=0
-          for index in "${!pids[@]}"; do
-            if ! wait "${pids[$index]}"; then
-              echo "::error::${labels[$index]} failed"
-              status=1
+            if (( ${#pids[@]} == concurrency )); then
+              wait_corpus_batch
             fi
           done
-          exit "$status"
+          wait_corpus_batch
+          exit "$result"
 
   qa-smoke-ci-profile:
     permissions:
@@ -5585,6 +5621,14 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      # Full pairing/share UI proof stays in full-manual validation; fast regressions join smoke below.
+      - name: Prove native managed document download and export
+        id: ios_attachment_tests
+        if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
+        env:
+          BASELINE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: /bin/bash scripts/test-ios-chat-attachments.sh "$BASELINE_SHA"
+
       - name: Run focused iOS voice cleanup simulator tests
         id: ios_voice_cleanup_tests
         if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
@@ -5615,6 +5659,9 @@ jobs:
             -only-testing:OpenClawTests/TalkRealtimeConsultCancellationTests \
             -only-testing:OpenClawTests/TalkRealtimeTranscriptWriteQueueTests \
             -only-testing:OpenClawTests/TalkModeManagerTests \
+            -only-testing:OpenClawTests/ManagedDocumentEnvelopeTests \
+            -only-testing:OpenClawTests/IOSMediaArtifactLoaderTests \
+            -only-testing:OpenClawTests/OpenClawTypographyTests \
             test
 
       # App compilation and screenshots do not execute approval or notification
@@ -5736,13 +5783,15 @@ jobs:
             test-without-building
 
       - name: Upload iOS lifecycle simulator evidence
-        if: ${{ always() && ((steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped') || (steps.ios_voice_cleanup_tests.outcome != '' && steps.ios_voice_cleanup_tests.outcome != 'skipped')) }}
+        if: ${{ always() && ((steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped') || (steps.ios_voice_cleanup_tests.outcome != '' && steps.ios_voice_cleanup_tests.outcome != 'skipped') || (steps.ios_attachment_tests.outcome != '' && steps.ios_attachment_tests.outcome != 'skipped')) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-lifecycle-tests-${{ needs.preflight.outputs.checkout_revision }}
           path: |
             apps/ios/build/LifecycleTestResults/*.xcresult
             apps/ios/build/LifecycleTestResults/*.log
+            apps/ios/build/LifecycleTestResults/Attachment-*
+            apps/ios/build/LifecycleTestResults/attachments-*
           if-no-files-found: warn
           retention-days: 14
 

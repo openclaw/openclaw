@@ -23,7 +23,12 @@ type CodeModeErrorCode =
 `invalid_input` covers bad `exec`/`wait` arguments, including retired `language`
 and `typecheck` fields, rejected module access, JavaScript syntax errors, unknown/expired/
 wrong-scope `runId` values, and too many suspended runs. `runtime_unavailable`
-covers a QuickJS worker that fails to start or exits non-zero.
+covers an unavailable executor or a worker that fails to start or exits
+unexpectedly. Check the selected `tools.codeMode.executor` and its plugin
+availability; the `quickjs` executor requires the bundled `code-mode-quickjs`
+runtime. Explicit selection activates that bundle despite generic plugin disable
+or allowlist settings, but an explicit deny or disabled entry still blocks it.
+OpenClaw does not switch executors automatically.
 `aborted` means the caller cancelled an active `exec` or `wait`; OpenClaw
 terminates the worker or drops the suspended run, so that `runId` cannot be
 resumed. It is distinct from `timeout`, which means an execution deadline was
@@ -40,7 +45,9 @@ or replay it automatically. This no-dispatch outcome does not enable
 guest code, including `SyntaxError`, remain runtime failures.
 
 Errors returned to the guest are plain data; host `Error` instances, stack
-objects, prototypes, and host functions do not cross into QuickJS.
+objects and prototypes are not passed through the JSON result bridge. This
+bridge contract does not make the Node executor a security boundary; see
+[Code Mode executors](/tools/code-mode/executors).
 
 A bridge failure can occur after a tool has performed its action. When a result
 reports `failurePhase: "bridge"` and `replaySafe: false`, check the destination
@@ -60,7 +67,7 @@ policy narrows that catalog.
 Catalog teardown retains only these final aggregate diagnostics, not executable
 tools or VM state. If teardown closes a suspended run while `wait` is observing
 pending work, that wait returns `failed` with `code: "aborted"` and the final
-telemetry; pending calls are canceled and the snapshot is dropped. Retained
+telemetry; pending calls are canceled and the continuation is released. Retained
 diagnostics grant no authority to resume or repair the closed run.
 
 The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the

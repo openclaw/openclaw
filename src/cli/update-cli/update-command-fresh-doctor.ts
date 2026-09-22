@@ -35,9 +35,13 @@ import {
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
-import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
+import {
+  redactPublicSupportDiagnosticLine,
+  redactSupportString,
+} from "../../logging/diagnostic-support-redaction.js";
 import { formatCommandOutput } from "../../process/command-error.js";
 import {
+  CommandProcessCleanupError,
   createSanitizedCommandError,
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
@@ -52,6 +56,7 @@ import {
   inspectUpdateDoctorChildSupport,
   withUpdateDoctorChild,
 } from "./update-command-doctor-child.js";
+import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
 import {
@@ -121,7 +126,7 @@ function createPostPluginDoctorExecutionFailure(
       ...(pluginUpdate.warnings ?? []),
       {
         reason,
-        message: "Updated plugin migrations could not be run in a fresh process.",
+        message: `Post-update plugin Doctor did not complete: ${reason}`,
         guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
       },
     ],
@@ -145,7 +150,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   assertCurrent?: () => void;
   /** Propagate a refused child authority to the finalization owner without retrying it. */
   onAuthorityRefused?: () => void;
-}): Promise<void> {
+}): Promise<PluginUpdateWarning | void> {
   const {
     run,
     executorFence,
@@ -173,6 +178,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
   const doctorResultPath = createUpdatePostInstallDoctorResultPath();
   let doctorResult: UpdatePostInstallDoctorResult | null = null;
+  let doctorSettled = true;
   let result: { stdout?: unknown; stderr?: unknown } | undefined;
   assertCurrent();
   try {
@@ -261,6 +267,13 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     }
   } catch (error) {
     if (
+      hasCommandProcessCleanupError(error) ||
+      (isRecord(error) && error.cleanup === "uncertain")
+    ) {
+      doctorSettled = false;
+      throw new CommandProcessCleanupError({ cause: error });
+    }
+    if (
       collectNestedErrorCandidates(error).some(
         (cause) =>
           cause instanceof UpdateCommandRecoveryPendingError ||
@@ -295,20 +308,28 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
     }
     const exitCode = isRecord(error) && typeof error.exitCode === "number" ? error.exitCode : null;
     const redaction = { env: process.env, stateDir: resolveStateDir() };
-    const failureFacts = doctorResult?.failureFacts?.length
-      ? doctorResult.failureFacts
-      : [
+    const failureFacts = doctorResult?.configWriteRefusal
+      ? [
           createUpdateFailureFact({
-            check: "doctor",
-            code: "doctor-failed",
-            message:
-              typeof result?.stderr === "string" && result.stderr.trim()
-                ? result.stderr
-                : error instanceof Error
-                  ? error.message
-                  : String(error),
+            check: "config-write",
+            code: doctorResult.configWriteRefusal.reason,
+            message: doctorResult.configWriteRefusal.message,
           }),
-        ];
+        ]
+      : doctorResult?.failureFacts?.length
+        ? doctorResult.failureFacts
+        : [
+            createUpdateFailureFact({
+              check: "doctor",
+              code: "doctor-failed",
+              message:
+                typeof result?.stderr === "string" && result.stderr.trim()
+                  ? result.stderr
+                  : error instanceof Error
+                    ? error.message
+                    : String(error),
+            }),
+          ];
     const details = (["stderr", "stdout"] as const).flatMap((stream) => {
       const output = result?.[stream];
       if (typeof output !== "string" || !output.trim()) {
@@ -327,20 +348,29 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       }
       return excerpt ? [`${stream}: ${excerpt}`] : [];
     });
-    if (details.length > 0) {
-      throw new UpdateDoctorError(
-        `Updated ${params.phase} Doctor failed:\n${details.join("\n")}`,
-        failureFacts,
-        { cause: error, exitCode },
-      );
+    const message = details.length
+      ? `Updated ${params.phase} Doctor failed:\n${details.join("\n")}`
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    // Explicit writer/migration refusals and unsettled writers retain their safety decision.
+    // An execution failure alone does not establish that installed state is unsafe.
+    if (
+      params.phase === "post-plugin" &&
+      !(isRecord(error) && error.isCanceled === true) &&
+      failureFacts.every((fact) => fact.check === "doctor" && fact.code === "doctor-failed")
+    ) {
+      return {
+        reason: "doctor-advisory",
+        message: `Post-update plugin Doctor did not complete${exitCode == null ? "" : ` (exit ${exitCode})`}: ${message}`,
+        guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
+      };
     }
-    throw new UpdateDoctorError(
-      error instanceof Error ? error.message : String(error),
-      failureFacts,
-      { cause: error, exitCode },
-    );
+    throw new UpdateDoctorError(message, failureFacts, { cause: error, exitCode });
   } finally {
-    doctorResult ??= await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+    if (doctorSettled) {
+      doctorResult ??= await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+    }
     if (doctorResult?.warnings?.length) {
       params.onWarnings?.(doctorResult.warnings);
     }
@@ -408,9 +438,22 @@ async function validatePostPluginConfigInFreshProcess(params: {
         },
         ...(["stderr", "stdout"] as const).flatMap((stream) => {
           const output = result[stream];
-          return typeof output === "string" && output.trim()
-            ? [{ check: "config", code: "command-failed", message: `${stream}: ${output}` }]
-            : [];
+          if (typeof output !== "string" || !output.trim()) {
+            return [];
+          }
+          // Node may print a location or source frame before the actual error.
+          // Extract known public causes before single-line fact normalization loses them.
+          const diagnostic = redactPublicSupportDiagnosticLine(output, {
+            env: process.env,
+            stateDir: resolveStateDir(),
+          });
+          return [
+            {
+              check: "config",
+              code: "command-failed",
+              message: `${stream}: ${diagnostic === "[redacted-diagnostic]" ? output : diagnostic}`,
+            },
+          ];
         }),
       ]),
     };
@@ -458,7 +501,7 @@ export async function completePostCorePluginUpdate(params: {
       }
       if (params.freshDoctorRequired || hasDeferredUpdateModelRetirement()) {
         await params.beforeDoctor?.();
-        await runUpdateFinalizationDoctorInFreshProcess({
+        const warning = await runUpdateFinalizationDoctorInFreshProcess({
           ...params,
           assertCurrent,
           onAuthorityRefused: () => {
@@ -467,9 +510,17 @@ export async function completePostCorePluginUpdate(params: {
           entryPath,
           phase: "post-plugin",
         });
+        if (warning) {
+          pluginUpdate = {
+            ...pluginUpdate,
+            status: "warning",
+            reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+            warnings: [...(pluginUpdate.warnings ?? []), warning],
+          };
+        }
       }
     } catch (err) {
-      if (authorityFailed) {
+      if (authorityFailed || hasCommandProcessCleanupError(err)) {
         throw err;
       }
       // Lost updater authority must not become an advisory that starts more children.

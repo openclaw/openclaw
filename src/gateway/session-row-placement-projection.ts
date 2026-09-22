@@ -11,6 +11,7 @@ import type { WorkerSessionPlacementStore } from "./worker-environments/placemen
 /** Placement facts share the resident row lifecycle; private exact reads retain only their frame. */
 export function createSessionRowPlacementProjection(
   reader: Pick<WorkerSessionPlacementStore, "readProjection"> | undefined,
+  prepareReadFacts: () => Promise<void> | undefined,
 ) {
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const resident = new Map<string, SessionRowPlacementFacts>();
@@ -147,6 +148,9 @@ export function createSessionRowPlacementProjection(
       consume: () => T,
     ): Promise<Awaited<T>> {
       while (true) {
+        for (let pending = prepareReadFacts(); pending; pending = prepareReadFacts()) {
+          await pending;
+        }
         if (disposed) {
           break;
         }
@@ -157,6 +161,10 @@ export function createSessionRowPlacementProjection(
         }
         const captured = revision;
         const snapshot = await inOwnerContext(() => reader.readProjection(requested));
+        // Caller facts can retire while the placement read yields.
+        for (let pending = prepareReadFacts(); pending; pending = prepareReadFacts()) {
+          await pending;
+        }
         if (disposed) {
           break;
         }

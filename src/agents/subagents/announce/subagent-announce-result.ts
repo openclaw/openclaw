@@ -6,7 +6,7 @@ import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../../sessions/transcript-events.js";
-import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";

@@ -608,7 +608,7 @@ export async function executePluginOwnedProcess(params: {
         outstanding.replayUnsafe = true;
         throw new Error("CLI plugin runtime emitted an invalid structured stream event.");
       }
-      if (next.value.type === "result") {
+      if (next.value.type === "result" && next.value.openclaw_interim_result !== true) {
         terminalResult =
           terminalResult === "error" ||
           next.value.is_error === true ||

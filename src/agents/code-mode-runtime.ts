@@ -2,18 +2,15 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { modelKey } from "../shared/model-key.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import type { CodeModeOutputSource } from "./code-mode-json.js";
+import type { CodeModeFailureCode } from "./code-mode-executor-types.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { CODE_MODE_RESULTS_API_FILE } from "./code-mode-results-api.js";
 import {
   MAX_CODE_MODE_PENDING_TOOL_CALLS,
   type CodeModeConfig as CodeModeWorkerConfig,
-  type CodeModeFailurePhase,
-  type CodeModeWorkerThreadResult,
 } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
@@ -38,7 +35,7 @@ export const MAX_HEADLESS_TOOL_CALLS = 200;
 export type CodeModeConfig = CodeModeWorkerConfig & {
   /** Effective activation policy; "auto" follows the model catalog flag. */
   enabled: boolean | "auto";
-  runtime: "quickjs-wasi";
+  executor: "node" | "quickjs";
   mode: "only";
   snapshotTtlSeconds: number;
   searchDefaultLimit: number;
@@ -51,14 +48,8 @@ export type {
   SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
 
-export type CodeModeFailureCode =
-  | "aborted"
-  | "invalid_input"
-  | "runtime_unavailable"
-  | "timeout"
-  | "output_limit_exceeded"
-  | "snapshot_limit_exceeded"
-  | "internal_error";
+export type { CodeModeFailureCode, CodeModeWorkerResult } from "./code-mode-executor-types.js";
+export { codeModeFailureCode, codeModeFailureMessage } from "./code-mode-errors.js";
 
 export type CodeModeHeadlessResult =
   | {
@@ -73,17 +64,6 @@ export type CodeModeHeadlessResult =
       error: string;
       output: unknown[];
       toolCallCount: number;
-    };
-
-export type CodeModeWorkerResult =
-  | Extract<CodeModeWorkerThreadResult, { status: "completed" | "waiting" }>
-  | {
-      status: "failed";
-      error: string;
-      code: CodeModeFailureCode;
-      failurePhase: CodeModeFailurePhase;
-      bridgeDispatchStarted: boolean;
-      output: CodeModeOutputSource;
     };
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
@@ -131,6 +111,16 @@ function readEnabled(value: unknown): boolean | "auto" {
   return typeof value === "boolean" || value === "auto" ? value : false;
 }
 
+function readExecutor(value: unknown): CodeModeConfig["executor"] {
+  if (value === undefined) {
+    return "node";
+  }
+  if (value === "node" || value === "quickjs") {
+    return value;
+  }
+  throw new ToolInputError('Code Mode executor must be "node" or "quickjs".');
+}
+
 export function readPositiveInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
@@ -149,7 +139,7 @@ export function resolveCodeModeConfig(
   );
   return {
     enabled: readEnabled(raw.enabled),
-    runtime: "quickjs-wasi",
+    executor: readExecutor(raw.executor),
     mode: "only",
     timeoutMs: clampNumber(readPositiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS), 100, 60_000),
     memoryLimitBytes: clampNumber(
@@ -237,23 +227,6 @@ export function resolveCodeModeHeadlessConfig(
   return resolveCodeModeConfig({
     tools: { codeMode: { ...base, ...definedOverrides } },
   } as OpenClawConfig);
-}
-
-function isRuntimeInterruptedError(error: unknown): boolean {
-  return (error instanceof Error ? error.message : error) === "interrupted";
-}
-
-export function codeModeFailureCode(error: unknown): CodeModeFailureCode {
-  if (isRuntimeInterruptedError(error)) {
-    return "timeout";
-  }
-  return error instanceof ToolInputError ? "invalid_input" : "internal_error";
-}
-
-export function codeModeFailureMessage(error: unknown): string {
-  return isRuntimeInterruptedError(error)
-    ? "code mode timeout exceeded"
-    : formatErrorMessage(error);
 }
 
 export function readCode(args: unknown): {

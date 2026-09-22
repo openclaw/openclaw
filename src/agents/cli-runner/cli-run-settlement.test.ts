@@ -181,3 +181,26 @@ describe("CLI native continuity projection", () => {
     },
   );
 });
+
+it("preserves completed result boundaries for independent final delivery", async () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  const result = buildCliRunResult({
+    context,
+    output: { text: "First answer.\nLast answer.", textParts: ["First answer.", "Last answer."] },
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: true,
+    preparedContextAgentMeta: {},
+    assistantTranscriptOwned: true,
+    assistantTranscriptIdempotencyKey: "synthetic-turn",
+  });
+  expect(result.payloads).toEqual([{ text: "First answer." }, { text: "Last answer." }]);
+  const { getReplyPayloadMetadata } = await import("../../auto-reply/reply-payload.js");
+  for (const [assistantMessageIndex, payload] of (result.payloads ?? []).entries()) {
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
+      assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "synthetic-turn",
+      assistantMessageIndex,
+    });
+  }
+});

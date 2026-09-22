@@ -55,6 +55,9 @@ attention keep their explanation and recovery action. The same status appears in
 embedded dashboard. Connection status does not replace the Gateway name in the account menu.
 
 The client retries ordinary connection loss automatically with backoff (800 ms up to 15 s).
+If the browser provides no reason for the disconnect, the connection tooltip explains that
+the connection was interrupted and whether automatic reconnection is underway. It retains
+the WebSocket close code for troubleshooting; specific Gateway errors keep their explanation.
 Open the account menu and use **Retry now** to request an immediate attempt when offered.
 Sign-in failures use the sign-in flow, and a required dashboard refresh uses its reload flow;
 retrying the connection does not replace either action. Live updates and realtime/session actions pause until the connection

@@ -428,6 +428,7 @@ export async function buildDiscordMessageProcessContext(params: {
     {
       agentId: route.agentId,
       sessionKey: effectiveSessionKey,
+      nativeChannelId: messageChannelId,
       messageId: canonicalMessageId ?? message.id,
       inboundEventKind: ctx.inboundEventKind,
     },

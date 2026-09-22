@@ -1,6 +1,7 @@
 import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-legacy-oauth.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
+import type { DoctorConfigReferenceSource } from "../commands/doctor/shared/config-flow-steps.js";
 import type { ShippedPluginInstallConfigImport } from "../commands/doctor/shared/plugin-registry-migration.js";
 import type { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,8 +21,9 @@ import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
-  /** Source before the first write; later writes use cfgForPersistence. */
-  sourceConfigForWrite?: OpenClawConfig;
+  warnings?: string[];
+  /** Original authored/resolved pair; retained across every committed Doctor write. */
+  referenceSource?: DoctorConfigReferenceSource;
   pluginInstallConfigImport?: ShippedPluginInstallConfigImport;
   path?: string;
   shouldWriteConfig?: boolean;

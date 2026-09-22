@@ -643,6 +643,11 @@ const enSettings = {
       checksDisabledAutomaticHint: "Turn on Check for updates to resume automatic updates.",
       statusTitle: "Update status",
       scheduleStatus: "Status",
+      activePhase: "Updating · {phase}",
+      currentStep: "Current step",
+      runTarget: "Update target",
+      lastProgress: "Last progress",
+      scheduledUpdate: "Automatic update",
       commits: "Commits",
       available: "Update available {target}",
       upToDate: "Up to date",
@@ -1149,9 +1154,9 @@ const enSettings = {
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
         "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
-      collapseTaskProgress: "Collapse task progress by default",
+      collapseTaskProgress: "Collapse task progress by default on desktop",
       collapseTaskProgressHint:
-        "Start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session.",
+        "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",
     },
     sessionSources: {
       title: "Session sources",
@@ -1256,6 +1261,9 @@ const enSettings = {
         waking: "Waking memory…",
         hibernating: "Memory is hibernating",
         needsAttention: "Memory needs attention",
+        noSearchRuntime: "Host memory search is unavailable",
+        noSearchRuntimeDescription:
+          "{engine} does not provide a host memory search runtime. Other memory integrations may run independently.",
         activeDescription: "{engine} · {mode}",
         loadingDescription: "Checking this agent's memory engine and dream cycle.",
         offDescription: "Choose a memory engine in Settings to wake it up.",

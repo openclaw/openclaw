@@ -46,7 +46,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
@@ -60,6 +60,7 @@ import * as gatewayAuth from "../auth.js";
 import { buildDeviceAuthPayload } from "../device-auth.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../server-constants.js";
+import { publishWorkerEnvironmentFixture } from "../worker-environments/placement-test-fixtures.js";
 import { createWorkerEnvironmentStore } from "../worker-environments/store.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
@@ -314,21 +315,21 @@ async function attachStartupNodeConnect(params: {
   };
 }
 
-function seedProvisioningNodeSetup() {
-  const store = createWorkerEnvironmentStore();
-  const intent = store.createIntent({
+async function seedProvisioningNodeSetup() {
+  const store = await createWorkerEnvironmentStore();
+  const intent = await store.createIntent({
     environmentId: "startup-worker-environment",
     providerId: "startup-provider",
     profileId: "startup-profile",
     profileSnapshot: { settings: {} },
     provisionOperationId: "provision:startup-worker-environment",
   });
-  store.transition({
+  await store.transition({
     environmentId: intent.environmentId,
     from: intent.state,
     to: "provisioning",
   });
-  const setupId = store.ensureNodeEnrollment(intent.environmentId).nodeSetupId;
+  const setupId = (await store.ensureNodeEnrollment(intent.environmentId)).nodeSetupId;
   if (!setupId) {
     throw new Error("startup worker setup id was not persisted");
   }
@@ -518,7 +519,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
     await withStartupTestState(
       { label: "gateway-startup-cloud-worker", layout: "state-only" },
       async (state) => {
-        const { store, setupId } = seedProvisioningNodeSetup();
+        const { store, setupId } = await seedProvisioningNodeSetup();
         const issued = await ensureDevicePairSetupBootstrapToken({
           setupId,
           profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -557,8 +558,8 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
   });
 
   it.each([
+    // Node preparation goes directly from provisioning to ready; bootstrapping is SSH-only.
     ["provisioning", false],
-    ["bootstrapping", false],
     ["ready", false],
     ["idle", false],
     ["attached", false],
@@ -569,7 +570,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       await withStartupTestState(
         { label: "gateway-startup-cloud-worker-uncertain-retry", layout: "state-only" },
         async (state) => {
-          const { store, setupId } = seedProvisioningNodeSetup();
+          const { store, setupId } = await seedProvisioningNodeSetup();
           const issued = await ensureDevicePairSetupBootstrapToken({
             setupId,
             profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -595,14 +596,22 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
             }),
           ).resolves.toMatchObject({ completion: { deliveryState: "uncertain" } });
           if (environmentState !== "provisioning") {
-            openOpenClawStateDatabase()
-              .db.prepare(
-                "UPDATE worker_environments SET state = ?, lease_id = ? WHERE node_setup_id = ?",
-              )
-              .run(environmentState, "startup-worker-lease", setupId);
+            runOpenClawStateWriteTransaction((database) => {
+              database.db
+                .prepare(
+                  "UPDATE worker_environments SET state = ?, lease_id = ?, attached_session_ids_json = ? WHERE node_setup_id = ?",
+                )
+                .run(
+                  environmentState,
+                  "startup-worker-lease",
+                  JSON.stringify(environmentState === "attached" ? ["startup-worker-session"] : []),
+                  setupId,
+                );
+              publishWorkerEnvironmentFixture(database.db, "startup-worker-environment");
+            });
           }
           if (destroyRequested) {
-            store.requestDestroy({
+            await store.requestDestroy({
               environmentId: "startup-worker-environment",
               state: "provisioning",
             });
@@ -657,7 +666,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       await withStartupTestState(
         { label: "gateway-startup-cloud-worker-drain-race", layout: "state-only" },
         async (state) => {
-          const { store, setupId } = seedProvisioningNodeSetup();
+          const { store, setupId } = await seedProvisioningNodeSetup();
           const issued = await ensureDevicePairSetupBootstrapToken({
             setupId,
             profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -760,7 +769,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
     await withStartupTestState(
       { label: "gateway-startup-cloud-worker-reject", layout: "state-only" },
       async (state) => {
-        const { store, setupId } = seedProvisioningNodeSetup();
+        const { store, setupId } = await seedProvisioningNodeSetup();
         const nonCloud = await ensureDevicePairSetupBootstrapToken({
           setupId,
           profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -823,7 +832,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       await withStartupTestState(
         { label: "gateway-startup-cloud-worker-invalid", layout: "state-only" },
         async (state) => {
-          const { store } = seedProvisioningNodeSetup();
+          const { store } = await seedProvisioningNodeSetup();
           const rateLimiter = createAuthRateLimiter({
             maxAttempts: 1,
             windowMs: 60_000,

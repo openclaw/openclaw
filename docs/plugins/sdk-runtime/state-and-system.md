@@ -136,6 +136,13 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
     const blob = await blobs.lookup("artifact-1");
     ```
 
+    For command-owned writes, `store.register(key, value, { assertCurrent })`
+    and `store.delete(key, { assertCurrent })` carry the captured owner assertion
+    through worker preparation and admission. The assertion remains in the host;
+    it is never serialized into stored data. Revocation prevents a pending write
+    from being admitted, while a write already accepted by the worker still
+    settles normally.
+
     Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `observe(...)` with `compareAndApply(...)` when a mutation depends on the current value; the comparison and mutation run in one SQLite worker transaction. Each namespace owns its `maxEntries` retention policy and optional TTL expiry; there is no aggregate row limit across a plugin’s namespaces. JSON values are limited to 1 MiB of UTF-8 encoded JSON. By default, a write over `maxEntries` sheds the oldest live rows only from that namespace. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at the namespace limit, while existing keys remain updateable. Growth in a sibling cache cannot reject or evict those ownership records. Existing databases need no migration or cleanup when upgrading; their stored rows are preserved.
 
     To retain records without count-based eviction, use the async opener with `retention: "retained"` instead of `maxEntries`:
@@ -409,6 +416,13 @@ commit grant orders the commit before later revocation; an earlier refusal rolls
 back. Callers must preserve committed or unknown outcomes and never replay them.
 Private file owners can use `runSqliteWorkerStoreWrite` with their own admission
 and lifetime; it does not supply the shared agent queue or lease.
+
+`runSqliteWorkerStoreOperation(store, operation, undefined, assertCurrent)` retains
+one existing worker actor and checks the supplied authority through broker
+admission. Use it when a private store has prepared a command asynchronously;
+checking only before worker opening leaves pending work authorized by an old
+snapshot. This operation helper preserves accepted native settlement and does
+not add a transaction/commit handshake to backends that do not implement one.
 
 Worker backends can load module prerequisites asynchronously in `prepare(command)`.
 Preparation carries captured state/runtime facts and performs no native work.

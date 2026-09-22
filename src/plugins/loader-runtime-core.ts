@@ -189,7 +189,6 @@ export function loadOpenClawPluginsCore(
                 subagent: options.runtimeOptions?.subagent ?? borrowedSubagent,
                 nodes: options.runtimeOptions?.nodes ?? borrowedNodes,
               },
-              loadPluginModule,
             });
     const capabilityCatalogContext =
       options.capabilityCatalogContext ??

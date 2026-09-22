@@ -156,7 +156,7 @@ describe("prepared worker schema migration", () => {
             "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
           )
           .get(),
-      ).toEqual({ value_json: "17" });
+      ).toEqual({ value_json: String(OPENCLAW_STATE_SCHEMA_VERSION) });
       expect(
         db.prepare("SELECT preparation_consumed_at_ms FROM worker_environments").get(),
       ).toEqual({

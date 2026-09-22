@@ -158,6 +158,8 @@ export type ChatQueueItem = {
     | "sending"
     | "waiting-reconnect"
     | "unconfirmed"
+    // Provider review requires a new operator decision even if delivery has prior attempts.
+    | "held"
     | "failed";
   sendSubmittedAtMs?: number;
   sendRequestStartedAtMs?: number;

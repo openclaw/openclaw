@@ -33,6 +33,7 @@ import {
   type PackageUpdateTransaction,
   type StagedPackageInstall,
 } from "./package-update-swap.js";
+import { createPackageVerificationFailureStep } from "./package-update-verification-step.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
@@ -921,15 +922,13 @@ export async function runGlobalPackageUpdateSteps(params: {
       );
     }
     if (verificationErrors.length > 0) {
-      steps.push({
-        name: "package-verify",
-        command: `verify ${verificationPackageRoot}`,
-        cwd: verificationPackageRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: verificationErrors.join("\n"),
-        stdoutTail: null,
-      });
+      steps.push(
+        createPackageVerificationFailureStep(
+          verificationPackageRoot,
+          verificationErrors,
+          params.env,
+        ),
+      );
     }
     let failedVerification = verificationErrors.length > 0;
     if (verificationErrors.length === 0) {

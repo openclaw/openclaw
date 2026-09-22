@@ -428,6 +428,7 @@ jobs:
 
       - &windows_pnpm
         name: Setup pnpm
+        id: setup_pnpm
         if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' || inputs.run_private_node_provisioning || inputs.windows_ci_replay != '' }}
         env:
           NODE_OPTIONS: ${{ inputs.windows_ci_replay != '' && '--max-old-space-size=8192' || env.NODE_OPTIONS }}
@@ -583,13 +584,13 @@ jobs:
           OPENCLAW_VITEST_MAX_WORKERS: ${{ steps.replay_input.outputs.max_workers }}
           REPLAY_EVIDENCE: ${{ steps.replay_input.outputs.evidence }}
           REPLAY_RUNNER_LABEL: ${{ inputs.runner_label }}
+          REPLAY_PACKAGE_MANAGER_VERSION: ${{ steps.setup_pnpm.outputs.pnpm-version }}
         run: |
           set -euo pipefail
           export PATH="$NODE_BIN:$PATH"
           evidence_dir="$(cygpath -u "$REPLAY_EVIDENCE")"
           REPLAY_NPM_VERSION="$(npm -v)"
-          REPLAY_PNPM_VERSION="$(pnpm -v)"
-          export REPLAY_NPM_VERSION REPLAY_PNPM_VERSION
+          export REPLAY_NPM_VERSION
           # Preserve the original dispatcher invocation; the input contains data, not shell or CLI options.
           set +e
           node --input-type=module <<'WINDOWS_REPLAY' 2>&1 | tee "$evidence_dir/replay.log"
@@ -606,7 +607,7 @@ jobs:
           const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
           const require = createRequire(path.join(process.cwd(), "package.json"));
           const vitestVersion = require("vitest/package.json").version;
-          if (process.env.REPLAY_PNPM_VERSION !== binding.packageManager.slice(5).split("+")[0]) {
+          if (process.env.REPLAY_PACKAGE_MANAGER_VERSION !== binding.packageManager.slice(5).split("+")[0]) {
             throw new Error("Active pnpm differs from the frozen repository pin");
           }
           if (process.platform !== "win32" || process.arch !== "x64" || process.versions.node !== binding.nodeVersion || sourceSha !== identity.sourceSha || vitestVersion !== binding.vitestVersion) {
@@ -620,7 +621,7 @@ jobs:
           writeFileSync(path.join(evidence, "runtime.json"), JSON.stringify({
             sourceSha, node: process.versions.node, nodeSha256: hash(process.execPath),
             vitest: vitestVersion, packageManager: require("./package.json").packageManager,
-            npm: process.env.REPLAY_NPM_VERSION, pnpm: process.env.REPLAY_PNPM_VERSION,
+            npm: process.env.REPLAY_NPM_VERSION, pnpm: process.env.REPLAY_PACKAGE_MANAGER_VERSION,
             platform: process.platform, arch: process.arch, osRelease: os.release(),
             runnerLabel: process.env.REPLAY_RUNNER_LABEL,
             logicalCpuCount: os.cpus().length, availableParallelism: os.availableParallelism(),

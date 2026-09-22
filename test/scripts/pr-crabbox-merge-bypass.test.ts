@@ -386,9 +386,11 @@ else if (args[0] === "pr" && args[1] === "checks" && args.includes("--required")
 } else if (args[0] === "pr" && args[1] === "merge") out("synthetic merge request accepted");
 else if (args[0] === "workflow" && args[1] === "run") { value.dispatched = true; save(); }
 else if (endpoint === "graphql" && args.some(arg => arg.includes("viewerMergeBodyText"))) {
+  if (args.includes("--include")) process.stdout.write("HTTP/2.0 200 OK\\n\\n");
   out({data:{repository:{pullRequest:{...pr,viewerMergeHeadlineText:"Fixture merge headline",viewerMergeBodyText:value.mergePreview}}}});
 }
 else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(owner:"))) {
+  if (args.includes("--include")) process.stdout.write("HTTP/2.0 200 OK\\n\\n");
   out({data:{repository:{...repo,id:repoNodeId,databaseId:repo.id,ref:{target:{oid:"${mainSha}"}},pullRequest:pr}}});
 } else if (endpoint === "user") {
   if (JSON.stringify(args) === JSON.stringify(["api", "user", "--include"])) out("HTTP/2.0 200 OK\\n\\n" + JSON.stringify(value.actor));

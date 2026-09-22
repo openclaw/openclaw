@@ -89,8 +89,8 @@ import {
   QA_RUNTIME_PAIR_LANES,
   readQaScenarioPack,
   type QaRuntimePairLane,
+  type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
-import { scenarioMatchesQaProviderLane } from "./scenario-lane.js";
 import { attachQaProfileScorecardEvidenceToFile } from "./scorecard-evidence.js";
 import {
   qaScorecardChannelDriverSchema,
@@ -104,7 +104,11 @@ import {
   runQaSuite,
   runQaSuiteWithInfraRetry,
 } from "./suite-launch.runtime.js";
-import { resolveQaSuiteScenarioChannel, resolveQaSuiteScenarioChannels } from "./suite-planning.js";
+import {
+  resolveQaSuiteScenarioChannel,
+  resolveQaSuiteScenarioChannels,
+  selectQaScenarioDefinitionsForChannelResolution,
+} from "./suite-planning.js";
 import {
   readCompletedQaSuiteSummaryFile,
   readQaSuiteFailedOrSkippedScenarioCountFromFile,
@@ -164,6 +168,7 @@ export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
   cliAuthMode?: string;
   parityPack?: string;
   scenarioIds?: string[];
+  scenarioDefinitions?: QaSeedScenarioWithSource[];
   enabledPluginIds?: string[];
   image?: string;
   cpus?: number;
@@ -825,34 +830,6 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   process.stdout.write(`QA profile scorecard: ${evidencePath}\n`);
 }
 
-function selectQaScenarioDefinitionsForChannelResolution(params: {
-  scenarioIds: string[];
-  providerMode: QaProviderMode;
-  primaryModel: string;
-  channelDriver?: QaScorecardChannelDriver | null;
-  channel?: string | null;
-  claudeCliAuthMode?: QaCliBackendAuthMode;
-}) {
-  const scenarios = readQaScenarioPack().scenarios;
-  if (params.scenarioIds.length > 0) {
-    const scenarioById = new Map(scenarios.map((scenario) => [scenario.id, scenario]));
-    return params.scenarioIds.flatMap((scenarioId) => {
-      const scenario = scenarioById.get(scenarioId);
-      return scenario ? [scenario] : [];
-    });
-  }
-  return scenarios.filter((scenario) =>
-    scenarioMatchesQaProviderLane({
-      scenario,
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      channelDriver: params.channelDriver,
-      channel: params.channel ?? scenario.execution.channel,
-      claudeCliAuthMode: params.claudeCliAuthMode,
-    }),
-  );
-}
-
 function normalizeQaRunProfile(value: string, profileIds: readonly string[]) {
   if (profileIds.length === 0) {
     throw new Error("taxonomy.yaml does not define QA run profiles.");
@@ -1130,6 +1107,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
     ...(thinkingDefault ? { thinkingDefault } : {}),
     ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
     scenarioIds: liveChannelId ? scenarioIds : hostScenarioIds,
+    ...(opts.scenarioDefinitions ? { scenarioDefinitions: opts.scenarioDefinitions } : {}),
     ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
     ...(liveChannelId
       ? {

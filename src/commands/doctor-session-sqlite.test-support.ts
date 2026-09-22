@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { afterEach, aroundEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { ExitError } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -139,6 +140,8 @@ export function useDoctorSessionSqliteTestFixture() {
     OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
   };
   const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
+  // Reuse child imports within each case; snapshots still admit and read fresh state.
+  aroundEach((runTest) => withSqliteReadOnlyWorkerScope(runTest));
   beforeEach(() => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();

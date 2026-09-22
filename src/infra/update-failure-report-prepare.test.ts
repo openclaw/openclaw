@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { preparePublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
 // Prepare the real catalog/worker prerequisites before individual test deadlines.
 await preparePublicUpdateFailureIdentifiers();
@@ -18,6 +20,31 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it.each([
+    "Package rollback launcher backup changed",
+    "Package rollback verification timed out",
+    "Package rollback verification failed",
+  ])("preserves the recorded %s cause without publishing private details", async (cause) => {
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "swap-summary",
+        result: { mode: "npm", status: "error", steps: [], durationMs: 1 },
+        recordedRun: {
+          runId: "swap-summary",
+          steps: updateRunStepsFromResultStep({
+            name: "package-swap",
+            exitCode: 1,
+            stderrTail: `${cause}: /private/customer/launcher. Installation recovery is unverified; inspect the installation and backups before restarting.`,
+          }),
+        },
+      },
+      context,
+    );
+    expect(report.body).toContain(`Failed phase package-swap: exit 1 (${cause})`);
+    expect(report.body).not.toContain("/private/customer");
+    expect(report.body).not.toContain("Installation recovery is unverified");
+  });
+
   it("includes every named lint finding using the existing public diagnostic redaction", async () => {
     const findings = Array.from({ length: 40 }, (_, index) => ({
       checkId: "core/doctor/security",
@@ -229,6 +256,11 @@ describe("update report diagnostic command boundary", () => {
               status: "failed",
               detail: `${message} private-customer-text\nprivate second line`,
             },
+            {
+              step: "warning:post-plugin-doctor",
+              status: "completed",
+              detail: "EACCES: permission denied at /private/customer/plugin",
+            },
             { step: "finalize:package-rollback-not-needed", status: "skipped" },
           ],
         },
@@ -239,9 +271,81 @@ describe("update report diagnostic command boundary", () => {
     expect(report.body).toContain(`Update mode: ${matches ? "package" : "unknown"}`);
     expect(report.body.includes(message)).toBe(matches);
     expect(report.body.includes("package rollback not needed: no package mutation")).toBe(matches);
+    expect(report.body.includes("## Warnings\n\n- EACCES; Permission denied")).toBe(matches);
     expect(report.body).not.toContain("private-customer-text");
     expect(report.body).not.toContain("private second line");
+    expect(report.body).not.toContain("/private/customer");
   });
+
+  it.each(["step", "plugin-summary"])(
+    "reports private-safe warnings from %s without changing the failed phase",
+    async (source) => {
+      const message = "EACCES: permission denied at /private/customer/plugin token=synthetic-token";
+      const result: UpdateRunResult = {
+        status: "error",
+        mode: "npm",
+        durationMs: 1,
+        steps: [
+          ...(source === "step"
+            ? [
+                {
+                  name: "post-plugin-doctor",
+                  command: "doctor --fix",
+                  cwd: "/candidate",
+                  durationMs: 1,
+                  exitCode: 1,
+                  advisory: { kind: "recoverable-maintenance" as const, message },
+                },
+              ]
+            : []),
+          { name: "verifying", command: "", cwd: "", durationMs: 1, exitCode: 1 },
+        ],
+        ...(source === "plugin-summary"
+          ? {
+              postUpdate: {
+                plugins: {
+                  status: "warning" as const,
+                  changed: true,
+                  warnings: ["discord", "private-customer-plugin"].map((pluginId) => ({
+                    pluginId,
+                    reason: "post-plugin-doctor-execution-failed",
+                    message,
+                    guidance: ["custom-tool private-customer-command"],
+                  })),
+                  sync: {
+                    changed: false,
+                    switchedToBundled: [],
+                    switchedToNpm: [],
+                    warnings: [],
+                    errors: [],
+                  },
+                  npm: { changed: false, outcomes: [] },
+                  integrityDrifts: [],
+                },
+              },
+            }
+          : {}),
+      };
+      const request = { attemptId: "plugin-warning-report", result };
+      const report = await prepareUpdateFailureReport(request, context);
+      expect(report.body).toContain("## Warnings");
+      expect(report.body).toContain("EACCES; Permission denied");
+      expect(report.body).toContain("- Failed phase: verifying\n");
+      expect(report.body).not.toContain("Failed phase post-plugin-doctor");
+      expect(report.body).not.toContain("private-customer");
+      expect(report.body).not.toContain("/private/customer");
+      expect(report.body).not.toContain("synthetic-token");
+      if (source === "plugin-summary") {
+        expect(report.body).toContain(
+          "Plugin convergence (post-plugin-doctor-execution-failed); plugin discord",
+        );
+        expect(report.body).toContain("plugin [redacted-plugin]");
+      }
+      await expect(
+        prepareUpdateFailureReport({ ...request, result: { ...result, status: "ok" } }, context),
+      ).rejects.toThrow("Only a final failed update can be reported.");
+    },
+  );
 
   it.each(
     (["check", "code", "pluginId", "affectedKey", "errorName"] as const).flatMap((field) =>

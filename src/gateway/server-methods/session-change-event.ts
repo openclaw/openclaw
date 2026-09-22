@@ -434,8 +434,11 @@ export function emitSessionsChanged(
       ...(pending.catalogChanged ? { catalogChanged: true as const } : {}),
     };
     if (pending.latest?.key === key) {
+      const next = captureSessionChange(context, latestPayload, scope, key);
       pending.latest.payload = latestPayload;
       pending.latest.scope = scope;
+      pending.latest.captured = next.captured;
+      pending.latest.captureFailed = next.captureFailed;
     } else {
       const next = captureSessionChange(context, latestPayload, scope, key);
       // Retain the first deletion and newest notice. Intermediate unpublished

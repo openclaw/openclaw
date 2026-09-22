@@ -3,6 +3,7 @@ import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import { createGlobalInstallEnv } from "./update-global.js";
+import { createNpmFailureFacts } from "./update-npm-failure.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
 import type {
   CommandRunner,
@@ -73,6 +74,15 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   const durationMs = Date.now() - started;
   const stdoutTail = trimLogTail(result.stdout, MAX_LOG_CHARS);
   const stderrTail = trimLogTail(result.stderr, MAX_LOG_CHARS);
+  if (
+    !failureFacts &&
+    result.code !== 0 &&
+    ["package-install", "package-install-omit-optional", "package-pack"].includes(name) &&
+    (/(?:^|[\\/])npm(?:\.cmd|\.exe)?$/iu.test(argv[0] ?? "") ||
+      /\bnpm (?:ERR!|error)(?:\s|$)/u.test(`${result.stderr}\n${result.stdout}`))
+  ) {
+    failureFacts = createNpmFailureFacts(result.stdout, result.stderr, env);
+  }
   failureFacts ??=
     result.code !== 0 || result.killed || result.termination === "timeout"
       ? [

@@ -1,14 +1,57 @@
 /* @vitest-environment jsdom */
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import {
   composerFixture,
   people,
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
-import { findPrimaryButton } from "./chat-composer.test-support.ts";
+import { createComposerProps, findPrimaryButton } from "./chat-composer.test-support.ts";
+import { renderChatComposer } from "./components/chat-composer.ts";
 
 afterEach(resetMentionComposerFixture);
+
+it("keeps ordinary edits around a selected person off the pane render path", () => {
+  const container = document.createElement("div");
+  let draft = "@Alex ";
+  let mentions: readonly HumanMention[] = [{ profileId: "alex", start: 0, end: 5 }];
+  const props = createComposerProps({
+    draft,
+    mentions,
+    getDraft: () => draft,
+    getMentions: () => mentions,
+    onDraftChange: (next, selected: readonly HumanMention[] = mentions) => {
+      draft = next;
+      mentions = selected;
+    },
+  });
+  const redraw = vi.fn(() => render(renderChatComposer({ ...props, draft, mentions }), container));
+  props.onRequestUpdate = redraw;
+  render(renderChatComposer(props), container);
+  const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+  const edit = (value: string, start: number, end = start) => {
+    textarea.setSelectionRange(start, end);
+    textarea.dispatchEvent(
+      new InputEvent("beforeinput", { bubbles: true, inputType: "insertText" }),
+    );
+    textarea.value = value;
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  };
+
+  edit("@Alex please review", 6);
+  edit("Ask @Alex please review", 0);
+  expect(redraw).not.toHaveBeenCalled();
+  expect(draft).toBe("Ask @Alex please review");
+  expect(mentions).toEqual([{ profileId: "alex", start: 4, end: 9 }]);
+  expect(container.querySelector(".composer-context-strip__person-name")?.textContent).toBe("Alex");
+
+  edit("Ask @Alix please review", 7, 8);
+  expect(redraw).toHaveBeenCalledOnce();
+  expect(mentions).toEqual([]);
+  expect(container.querySelector(".composer-context-strip")).toBeNull();
+});
 
 describe("chat inline commands with human mentions", () => {
   it("sends an ordinary message with its recipient while history loads", () => {

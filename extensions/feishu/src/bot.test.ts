@@ -1,5 +1,8 @@
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
-import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  createTestInboundDebounceFlush,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 // Feishu tests cover bot plugin behavior.
 import type {
   ensureConfiguredBindingRouteReady,
@@ -16,6 +19,9 @@ import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage, parseFeishuMessageEvent } from "./bot.js";
 import {
+  createBoundConversation,
+  createConfiguredBindingReadiness,
+  createConfiguredFeishuRoute,
   createFeishuTestConfig,
   createFeishuTestEvent,
   createFeishuTestRoute,
@@ -68,115 +74,6 @@ type DeepPartial<T> = {
         : T[K];
 };
 
-function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
-  return {
-    bindingResolution: {
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "ou_sender_1",
-      },
-      compiledBinding: {
-        channel: "feishu",
-        accountPattern: "default",
-        binding: {
-          type: "acp",
-          agentId: "codex",
-          match: {
-            channel: "feishu",
-            accountId: "default",
-            peer: { kind: "direct", id: "ou_sender_1" },
-          },
-        },
-        bindingConversationId: "ou_sender_1",
-        target: {
-          conversationId: "ou_sender_1",
-        },
-        agentId: "codex",
-        provider: {
-          compileConfiguredBinding: () => ({ conversationId: "ou_sender_1" }),
-          matchInboundConversation: () => ({ conversationId: "ou_sender_1" }),
-        },
-        targetFactory: {
-          driverId: "acp",
-          materialize: () => ({
-            record: {
-              bindingId: "config:acp:feishu:default:ou_sender_1",
-              targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-              targetKind: "session",
-              conversation: {
-                channel: "feishu",
-                accountId: "default",
-                conversationId: "ou_sender_1",
-              },
-              status: "active",
-              boundAt: 0,
-              metadata: { source: "config" },
-            },
-            statefulTarget: {
-              kind: "stateful",
-              driverId: "acp",
-              sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-              agentId: "codex",
-            },
-          }),
-        },
-      },
-      match: {
-        conversationId: "ou_sender_1",
-      },
-      record: {
-        bindingId: "config:acp:feishu:default:ou_sender_1",
-        targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-        targetKind: "session",
-        conversation: {
-          channel: "feishu",
-          accountId: "default",
-          conversationId: "ou_sender_1",
-        },
-        status: "active",
-        boundAt: 0,
-        metadata: { source: "config" },
-      },
-      statefulTarget: {
-        kind: "stateful",
-        driverId: "acp",
-        sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-        agentId: "codex",
-      },
-    },
-    route: {
-      agentId: "codex",
-      channel: "feishu",
-      accountId: "default",
-      sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-      mainSessionKey: "agent:codex:main",
-      lastRoutePolicy: "session",
-      matchedBy: "binding.channel",
-    } as ResolvedAgentRoute,
-  };
-}
-
-function createConfiguredBindingReadiness(ok: boolean, error?: string): BindingReadiness {
-  return (ok ? { ok: true } : { ok: false, error: error ?? "unknown error" }) as BindingReadiness;
-}
-
-function createBoundConversation(): NonNullable<BoundConversation> {
-  return {
-    bindingId: "default:oc_group_chat:topic:om_topic_root",
-    targetSessionKey: "agent:codex:acp:binding:feishu:default:feedface",
-    targetKind: "session",
-    conversation: {
-      channel: "feishu",
-      accountId: "default",
-      conversationId: "oc_group_chat:topic:om_topic_root",
-      parentConversationId: "oc_group_chat",
-    },
-    status: "active",
-    boundAt: 0,
-  };
-}
-
 let currentRuntimeConfig = {} as ClawdbotConfig;
 
 function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
@@ -214,6 +111,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         buildPairingReply: vi.fn(),
       },
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: buildChannelInboundEventContext,
         run: vi.fn(async (params) => {
           const input = await params.adapter.ingest(params.raw);
