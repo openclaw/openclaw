@@ -900,7 +900,7 @@ describe("renderUpdates", () => {
     );
 
     const report = row("Failure report");
-    expect(report.textContent).toContain("GitHub CLI submission was unavailable");
+    expect(report.textContent).toContain("Review and submit the prefilled issue in your browser.");
     expect(report.textContent).not.toContain("/private/report.md");
     expect(report.querySelector("a")?.getAttribute("href")).toContain("issues/new");
   });
