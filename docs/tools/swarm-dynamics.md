@@ -31,11 +31,7 @@ Calls without `dynamics` keep their existing behavior.
 ## Contract
 
 ```typescript
-type DynamicsBoundary =
-  | "isolated"
-  | "artifact-only"
-  | "evidence-only"
-  | "summary-only";
+type DynamicsBoundary = "isolated" | "artifact-only" | "evidence-only" | "summary-only";
 
 type DynamicsRequirement = "optional" | "required";
 
