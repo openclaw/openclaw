@@ -144,6 +144,48 @@ export async function readDeferredPluginMigrationsAsync(
   return pending ?? [];
 }
 
+/** Completion receipts resolve historical warnings without loading their retired reports. */
+export function readDeferredPluginMigrationCompletions(
+  options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
+) {
+  return (
+    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+      if (!tableExists(db, "migration_runs")) {
+        return [];
+      }
+      return executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "migration_runs">>(db)
+          .selectFrom("migration_runs")
+          .select(["id", "finished_at"])
+          .where("id", "like", `${RUN_PREFIX}%`)
+          .where("status", "=", "completed"),
+      ).rows.flatMap(({ id, finished_at }) =>
+        finished_at === null
+          ? []
+          : [{ pluginId: id.slice(RUN_PREFIX.length), completedAtMs: finished_at }],
+      );
+    }, options) ?? []
+  );
+}
+
+export async function readDeferredPluginMigrationCompletionsAsync(
+  options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
+) {
+  const context = captureOpenClawStateWorkerContext(options);
+  const { runOpenClawStateWorkerOperation } =
+    await import("../state/openclaw-state-worker-store.js");
+  context.admission.assertCurrent();
+  const completed = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({ type: "plugins.deferredMigrations.completions.read", input: undefined }),
+    { existingOnly: true },
+  );
+  context.admission.assertCurrent();
+  return completed ?? [];
+}
+
 /** Bind asynchronous settlement to the same pending records, including newly added owners. */
 export function assertDeferredPluginMigrationsCurrent(params: {
   env?: NodeJS.ProcessEnv;
