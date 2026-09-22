@@ -1,5 +1,30 @@
 // MTS declarations preserve the source extension before runner preparation.
 export const scriptModuleEntrypoints = {
+  docsLinkAudit: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "docs-link-audit",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/docs-link-audit.js",
+  },
+  packageTarball: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "check-openclaw-package-tarball",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/check-openclaw-package-tarball.js",
+  },
+  liveShard: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "test-live-shard",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/test-live-shard.js",
+  },
+  watchNode: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "watch-node",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/watch-node.js",
+  },
+
   vitestBatchRunner: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "lib/vitest-batch-runner",

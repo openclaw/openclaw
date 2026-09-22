@@ -15,6 +15,8 @@ export const runtimeProcessDeclarationEntries = {
     "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
 };
 export const vitestWorkerDeclarationEntries = {
+  "extensions/diagnostics-prometheus/src/install-runtime-entrypoints.test-support":
+    "extensions/diagnostics-prometheus/src/install-runtime-entrypoints.test-support.mts",
   ...runtimeProcessDeclarationEntries,
   "test-support/bench-session-history-runtime":
     "scripts/bench-session-history-runtime.test-support.ts",

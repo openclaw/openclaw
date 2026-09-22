@@ -97,6 +97,13 @@ import { nativeSchtasksIntegrationEnabled } from "./vitest-worker-declarations.m
 
 // These fixture hooks require physical module boundaries and complete namespaces.
 export const preservedModuleBuildSources = [
+  "scripts/docs-link-audit.mts",
+  "scripts/check-openclaw-package-tarball.mts",
+  "scripts/test-live-shard.mts",
+  "scripts/watch-node.mts",
+  "scripts/lib/plugin-npm-runtime-build.mts",
+  "scripts/lib/plugin-npm-package-manifest.mts",
+
   "packages/gateway-client/src/websocket-data.ts",
   "scripts/e2e/parallels/npm-update-smoke.ts",
   "scripts/e2e/parallels/host-command.ts",
