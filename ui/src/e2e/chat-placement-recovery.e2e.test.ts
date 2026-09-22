@@ -91,7 +91,7 @@ suite.define(() => {
         placement: recovered.placement,
       });
       await expect
-        .poll(() => page.getByRole("textbox", { name: "Chat composer" }).isEnabled())
+        .poll(() => page.getByRole("combobox", { name: "Chat composer" }).isEnabled())
         .toBe(true);
       await expect.poll(() => error.count()).toBe(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
@@ -161,7 +161,7 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-      const composer = page.getByRole("textbox", { name: "Chat composer" });
+      const composer = page.getByRole("combobox", { name: "Chat composer" });
       await page.getByText("Repository worker required", { exact: true }).waitFor();
       expect(await composer.isEnabled()).toBe(false);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);

@@ -486,6 +486,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     dir=${draftDirection}
                     ?disabled=${!canCompose}
                     ?readonly=${dictation?.locksComposer === true || goalComposer.pending}
+                    role="combobox"
                     aria-autocomplete="list"
                     aria-controls=${ifDefined(
                       slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible

@@ -377,7 +377,7 @@ suite.define(() => {
                 stage = "open same-origin authenticated Chat";
                 await page.goto(url.href);
                 await waitForControlUiGatewayReady(page);
-                const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+                const composer = page.getByRole("combobox", { name: "Chat composer", exact: true });
                 await composer.fill("Finish this fixture turn.");
                 await page.getByRole("button", { name: "Send message", exact: true }).click();
                 const stop = page.getByRole("button", { name: "Stop generating", exact: true });
