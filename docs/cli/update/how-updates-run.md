@@ -150,6 +150,14 @@ warning when it has no explicit writer or migration refusal. The updater still
 validates the final config and readiness, then starts the Gateway. A child whose
 termination cannot be confirmed remains blocking because it may still write state.
 
+Doctor's disposable database migration and repair connections use a 64 MiB SQLite
+page-cache allowance to reduce repeated reads while rebuilding large stores.
+The allowance ends when each connection closes; serving connections keep their
+existing cache policy. Transcript conversion also reuses parsed JSON while
+preparing navigation metadata, preserving the original transcript bytes. These
+candidate-side improvements apply when an older updater invokes the new Doctor;
+they do not change that updater's deadlines, integrity checks, or rollback rules.
+
 In the private migration rehearsal, Doctor lint defers optional core inspections
 until after activation. This includes per-agent model and tool-schema diagnostics;
 lint does not prepare their runtime metadata when those checks are deferred.
@@ -561,6 +569,17 @@ Gateway handoff remain supported.
 <a id="candidate-validation-and-service-definitions" />
 
 #### Update validation and service definitions
+
+Before restarting a writable managed service, update finalization uses the
+shared service audit and native installer to repair recognized stale policy.
+It backs up the definition, preserves supported custom settings, and records
+changed keys and backup paths in update warnings. Unknown operator edits remain
+unchanged. Update-time Doctor reports drift and leaves this rewrite to finalization.
+
+Candidate-owned rollback restores the verified definition backup before running
+the previous installer's recovery. When an older published updater owns rollback,
+that release's installer regenerates the definition with the settings it supports;
+the retained backup records the original bytes.
 
 With a local managed service and restart enabled, update validation precedes
 the stop as described above. The updater reports `Gateway: restarted and verified.`

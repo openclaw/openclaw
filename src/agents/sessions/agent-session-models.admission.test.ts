@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { drainStoreWriterQueuesForTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -53,16 +53,32 @@ const lastModel = { ...startModel, id: "admission-last", reasoning: true };
 const models = [startModel, nextModel, lastModel];
 type ModelSelectEvent = Extract<ExtensionEvent, { type: "model_select" }>;
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+async function closeDatabaseRoots(roots: Iterable<string>) {
+  for (const root of roots) {
+    await closeOpenClawAgentDatabasesAsync(root);
+    closeOpenClawAgentDatabasesForTest(root);
+  }
+}
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeDatabaseRoots(tempDirs.dirs);
+    cleanup();
+  }),
+);
+const suiteTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterAll(async () => {
+    await closeDatabaseRoots(suiteTempDirs.dirs);
+    cleanup();
+  }),
+);
+let suiteRoot: string | undefined;
+let nextFixtureId = 0;
 
 describe("model transitions after SQLite write admission", () => {
   const releases: Array<() => void> = [];
   const pending: Promise<unknown>[] = [];
 
-  afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-  });
   registerAgentSessionLoopTestLifecycle();
   afterEach(async () => {
     for (const release of releases.splice(0)) {
@@ -81,12 +97,14 @@ describe("model transitions after SQLite write admission", () => {
   async function createModelSession(
     onSelect?: (event: ModelSelectEvent) => Promise<void>,
     onThinkingSelect?: (event: ThinkingLevelSelectEvent) => Promise<void>,
+    rootOverride?: string,
   ) {
-    const root = fs.realpathSync(tempDirs.make("openclaw-model-admission-"));
+    const root = rootOverride ?? (suiteRoot ??= suiteTempDirs.make("openclaw-model-admission-"));
+    const sessionId = `model-admission-${++nextFixtureId}`;
     const target = {
       agentId: "main",
-      sessionKey: "agent:main:model-admission",
-      sessionId: "model-admission",
+      sessionKey: `agent:main:${sessionId}`,
+      sessionId,
       storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
@@ -156,7 +174,8 @@ describe("model transitions after SQLite write admission", () => {
   it.runIf(process.platform !== "win32").each(["model", "thinking"] as const)(
     "preserves private database-family modes through a warm %s metadata action",
     async (kind) => {
-      const { session, options, target } = await createModelSession();
+      const root = tempDirs.make("openclaw-model-admission-permissions-");
+      const { session, options, target } = await createModelSession(undefined, undefined, root);
       await session.setModel(nextModel);
       const databasePath = openOpenClawAgentDatabase(options).path;
       const before = await loadTranscriptEvents(target);
@@ -374,8 +393,8 @@ describe("model transitions after SQLite write admission", () => {
       await session.setModel(nextModel);
       const replacement = {
         ...target,
-        sessionId: "replacement-after-settlement",
-        sessionKey: "agent:main:replacement-after-settlement",
+        sessionId: `${target.sessionId}-replacement-after-settlement`,
+        sessionKey: `${target.sessionKey}-replacement-after-settlement`,
       };
       await replaceSessionEntry(replacement, { sessionId: replacement.sessionId, updatedAt: 2 });
       const replacementManager = SessionManager.open(replacement);
@@ -468,8 +487,8 @@ describe("model transitions after SQLite write admission", () => {
       await session.setModel(nextModel);
       const replacement = {
         ...target,
-        sessionId: "replacement-after-commit",
-        sessionKey: "agent:main:replacement-after-commit",
+        sessionId: `${target.sessionId}-replacement-after-commit`,
+        sessionKey: `${target.sessionKey}-replacement-after-commit`,
       };
       if (changedOwner !== "extension") {
         await replaceSessionEntry(replacement, { sessionId: replacement.sessionId, updatedAt: 2 });
@@ -545,8 +564,9 @@ describe("model transitions after SQLite write admission", () => {
   it.each(["model", "thinking"] as const)(
     "retains committed %s metadata when the stale transcript view cannot be decoded",
     async (kind) => {
+      const root = tempDirs.make("openclaw-model-admission-corruption-");
       const { session, sessionManager, settingsManager, options, target } =
-        await createModelSession();
+        await createModelSession(undefined, undefined, root);
       await session.setModel(nextModel);
       const firstModel = sessionManager.getEntries().find((entry) => entry.type === "model_change");
       if (!firstModel) {
@@ -761,8 +781,8 @@ describe("model transitions after SQLite write admission", () => {
     const { session, sessionManager, target, options, transitions } = await createModelSession();
     const replacementTarget = {
       ...target,
-      sessionId: "replacement",
-      sessionKey: "agent:main:replacement",
+      sessionId: `${target.sessionId}-replacement`,
+      sessionKey: `${target.sessionKey}-replacement`,
     };
     await replaceSessionEntry(replacementTarget, {
       sessionId: replacementTarget.sessionId,

@@ -927,7 +927,9 @@ retains that pool for canonical cleanup retry. Path-specific close drains only
 operations admitted for that database.
 A best-effort quarantine read preserves the domain result, but unconfirmed
 quarantine reader cleanup also requires worker retirement before source release.
-Its original failures remain available if that retirement fails.
+Its original failures remain available if that retirement fails. Once validated,
+a quarantine decision remains a refusal even when its reader fails to close;
+the integrity error retains the cleanup failure as its cause.
 Ordinary fixed reads observe independently committed database
 state, even when an unrelated cached native cursor still sees an older snapshot.
 The cached writer stays open and retained through read settlement; its captured

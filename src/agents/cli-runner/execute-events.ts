@@ -11,11 +11,16 @@ import type {
   CliToolUseStartDelta,
 } from "../cli-output-contracts.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
-import { sanitizeToolArgs, sanitizeToolResult } from "../embedded-agent-tool-results.js";
+import {
+  extractToolErrorMessage,
+  sanitizeToolArgs,
+  sanitizeToolResult,
+} from "../embedded-agent-tool-results.js";
+import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
-import { stripOpenClawMcpToolPrefix } from "./tool-policy.js";
+import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 type CliToolResult = {
@@ -41,10 +46,16 @@ export function createCliEventHandlers(params: {
   let signaledToolExecutionStarted = false;
   let signaledAssistantOutputStarted = false;
   let commentaryCounter = 0;
-  const toolSummaryById = new Map<string, { name: string; failed: boolean }>();
+  const toolSummaryById = new Map<
+    string,
+    { name: string; failed: boolean; terminalObserved?: boolean }
+  >();
   // CLI results report an outcome without repeating the request, so the terminal
   // progress event would otherwise describe the output instead of the command.
-  const toolArgsByCallId = new Map<string, { args: Record<string, unknown>; tracked: boolean }>();
+  const toolArgsByCallId = new Map<
+    string,
+    { args: Record<string, unknown>; tracked: boolean; startedAt: number }
+  >();
   const emitToolEvent = (
     data: Parameters<typeof projectAgentToolActivity>[0] & {
       result?: unknown;
@@ -80,16 +91,18 @@ export function createCliEventHandlers(params: {
     toolSummaryNames.push(name);
   };
   const recordToolSummary = (event: { toolCallId: string; name: string }, failed: boolean) => {
-    const current = toolSummaryById.get(event.toolCallId);
+    let current = toolSummaryById.get(event.toolCallId);
     if (current) {
       current.failed ||= failed;
       if (!current.name && event.name) {
         current.name = event.name;
       }
     } else {
-      toolSummaryById.set(event.toolCallId, { name: event.name, failed });
+      current = { name: event.name, failed };
+      toolSummaryById.set(event.toolCallId, current);
     }
     rememberToolName(event.name);
+    return current;
   };
   const getToolSummary = (): ToolSummaryTrace => ({
     calls: toolSummaryById.size,
@@ -99,7 +112,7 @@ export function createCliEventHandlers(params: {
   const emitToolUseStart = (event: CliToolUseStartDelta, tracked: boolean) => {
     observedCliActivity = true;
     // Empty arguments are meaningful: progress-card calls use {} to clear the card.
-    toolArgsByCallId.set(event.toolCallId, { args: event.args, tracked });
+    toolArgsByCallId.set(event.toolCallId, { args: event.args, tracked, startedAt: Date.now() });
     recordToolSummary(event, false);
     if (!signaledToolExecutionStarted) {
       signaledToolExecutionStarted = true;
@@ -124,19 +137,46 @@ export function createCliEventHandlers(params: {
   };
   const emitToolResult = (event: CliToolResult, tracked: boolean) => {
     observedCliActivity = true;
-    recordToolSummary(event, event.isError);
+    const summary = recordToolSummary(event, event.isError);
+    const firstTerminal = !summary.terminalObserved;
+    summary.terminalObserved = true;
     const loopbackOutcome = tracked
       ? params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId)
       : undefined;
     const executedArgs = tracked ? params.toolTracking.handleCliToolResult(event) : undefined;
+    const startedCall = toolArgsByCallId.get(event.toolCallId);
+    toolArgsByCallId.delete(event.toolCallId);
+    // Gateway owns loopback completion even when CLI correlation is absent or ambiguous.
+    if (
+      event.name.trim() &&
+      firstTerminal &&
+      !runParams.isolatedCompletion &&
+      !loopbackOutcome &&
+      stripOpenClawMcpToolPrefix(event.name) === event.name
+    ) {
+      const result = sanitizeToolResult(event.result);
+      void runAgentHarnessAfterToolCallHook({
+        toolName: normalizeCliToolName(event.name),
+        toolCallId: event.toolCallId,
+        runId: runParams.runId,
+        agentId: runParams.agentId,
+        sessionId: runParams.sessionId,
+        sessionKey: runParams.sessionKey,
+        channelId: runParams.currentChannelId,
+        startArgs: executedArgs ?? startedCall?.args ?? {},
+        result,
+        ...(event.isError
+          ? { error: extractToolErrorMessage(result) ?? "CLI tool execution failed" }
+          : {}),
+        startedAt: startedCall?.startedAt,
+      }).catch(() => {});
+    }
     if (emitLiveEvents) {
       const strippedName = stripOpenClawMcpToolPrefix(event.name);
       const resultContentSource = tracked
         ? context.resultContentSourceByToolName?.get(strippedName)
         : undefined;
-      const startedCall = toolArgsByCallId.get(event.toolCallId);
       const startedArgs = startedCall?.args;
-      toolArgsByCallId.delete(event.toolCallId);
       const planUpdate =
         tracked &&
         startedCall?.tracked &&

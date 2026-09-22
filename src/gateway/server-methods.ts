@@ -23,6 +23,7 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
+  getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
   tryBeginGatewayPreparedRestartRootWorkAdmission,
@@ -466,7 +467,11 @@ export async function runWithGatewayRequestEnvelope<T>(
       }),
     );
   }
-  if (!rootWorkAdmission && !SUSPEND_CONTROL_METHODS.has(method)) {
+  const restartProgressRead =
+    method === "update.runs.get" &&
+    getGatewayRestartDrainSignal().aborted &&
+    getGatewaySuspendAdmissionPhase() === "accepting";
+  if (!rootWorkAdmission && !SUSPEND_CONTROL_METHODS.has(method) && !restartProgressRead) {
     const restartDraining = isGatewayRestartDraining();
     return await options.reject(
       errorShape(

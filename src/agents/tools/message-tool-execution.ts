@@ -727,7 +727,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           }
           const response = toolResult ?? jsonResult(result.payload);
-          const notice = result.kind === "send" ? result.normalization?.notice : undefined;
+          const notice =
+            result.kind === "send" && !result.dryRun ? result.normalization?.notice : undefined;
           return embeddedMessageDelivery.attachEmbeddedMessageDeliveryFact(
             notice
               ? { ...response, content: [...response.content, { type: "text", text: notice }] }

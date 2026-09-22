@@ -65,7 +65,7 @@ export class GitHubPublicationBranchChangedError extends GitHubPublicationKnownF
     super("GitHub publication cannot safely extend the published branch.", {
       code: "push_rejected",
       nextAction:
-        "Preserve your local work and inspect the published head. To refresh the existing PR, apply the intended changes on top of that head without rewriting its history; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never force-pushes.",
+        "Preserve your local work and inspect the published head. To refresh the existing PR, apply the intended changes on top of that head without rewriting its history; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never rewrites published history.",
     });
   }
 }
@@ -86,6 +86,16 @@ export class GitHubPublicationRequesterUnavailableError extends GitHubPublicatio
       code: "identity_changed",
       nextAction:
         "Review any recorded or unconfirmed GitHub effects, then request publication again from an authorized session. Saved work and existing pull requests are retained.",
+    });
+  }
+}
+
+export class GitHubPublicationWorkflowChangesError extends GitHubPublicationKnownFailure {
+  constructor() {
+    super("Publishing GitHub workflow changes requires full operator write permission.", {
+      code: "github_rejected",
+      nextAction:
+        "Your saved changes are intact. Ask a maintainer with full write access to publish the GitHub workflow changes, or restore the workflow definitions and request publication again.",
     });
   }
 }

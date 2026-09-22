@@ -4,6 +4,7 @@ import * as agentIdentity from "../agents/identity.js";
 import * as catalogLookup from "../agents/model-catalog-lookup.js";
 import {
   assignSessionOwner,
+  deleteSessionEntryLifecycle,
   loadSessionEntry,
   recordSessionParticipant,
   replaceSessionEntrySync,
@@ -17,6 +18,7 @@ import {
   createSessionMaintenanceFinalizationOperation,
   runSqliteSessionReclamation,
 } from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -29,6 +31,121 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("reuses descendants after parent progress while keeping inherited models current", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main", default: true }],
+        defaults: { model: "unit-test/default" },
+      },
+    };
+    const parentKey = "agent:main:discord:channel:parent";
+    const children = ["agent:main:child", `${parentKey}:thread:child`];
+    const siblingKey = "agent:main:sibling";
+    const scope = { agentId: "main", sessionKey: parentKey };
+    const parent: SessionEntry = {
+      sessionId: "parent",
+      updatedAt: 1,
+      providerOverride: "unit-test",
+      modelOverride: "selected",
+      modelOverrideSource: "user",
+    };
+    replaceSessionEntrySync(scope, { ...parent });
+    for (const [index, sessionKey] of [...children, siblingKey].entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: `child-${index}`,
+          updatedAt: index + 2,
+          ...(sessionKey === children[0] ? { parentSessionKey: parentKey } : {}),
+        },
+      );
+    }
+    const release = projectionWork.retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const list = () => listProjectedSessions({ projection, opts: {} });
+    const sequence = (key: string) =>
+      projection.capture({ agentId: "main", key })?.materializedSequence;
+    try {
+      await list();
+      const original = children.map(sequence);
+      const siblingSequence = sequence(siblingKey);
+      for (const change of [undefined, { label: "Updated parent", updatedAt: 10 }]) {
+        if (change) {
+          Object.assign(parent, change);
+          replaceSessionEntrySync(scope, { ...parent });
+        } else {
+          sessionChanges.emit(scope);
+        }
+        await list();
+        expect(children.map(sequence)).toEqual(original);
+      }
+      const cases: Array<{ change: Partial<SessionEntry>; provider: string; model: string }> = [
+        { change: { providerOverride: "other-test" }, provider: "other-test", model: "selected" },
+        { change: { modelOverride: "changed" }, provider: "other-test", model: "changed" },
+        { change: { modelOverrideSource: "default" }, provider: "unit-test", model: "default" },
+        {
+          change: {
+            modelOverrideSource: "auto",
+            modelOverrideFallbackOriginProvider: "other-test",
+            modelOverrideFallbackOriginModel: "changed",
+          },
+          provider: "other-test",
+          model: "changed",
+        },
+        {
+          change: { modelOverrideFallbackOriginModel: "original" },
+          provider: "unit-test",
+          model: "default",
+        },
+        {
+          change: {
+            modelOverrideFallbackOriginModel: "changed",
+            modelOverrideFallbackOriginProvider: "original-test",
+          },
+          provider: "unit-test",
+          model: "default",
+        },
+      ];
+      for (const { change, provider, model } of cases) {
+        Object.assign(parent, change);
+        replaceSessionEntrySync(scope, { ...parent });
+        const result = await list();
+        for (const key of children) {
+          expect(result.sessions.find((row) => row.key === key)).toMatchObject({
+            modelProvider: provider,
+            model,
+          });
+        }
+        expect(sequence(siblingKey)).toBe(siblingSequence);
+      }
+      parent.modelOverrideSource = "user";
+      replaceSessionEntrySync(scope, { ...parent });
+      const pinned = await list();
+      for (const key of children) {
+        expect(pinned.sessions.find((row) => row.key === key)?.model).toBe("changed");
+      }
+      await deleteSessionEntryLifecycle({
+        ...scope,
+        storePath: projection.capture({ agentId: "main", key: parentKey })!.storeTarget.storePath,
+        archiveTranscript: false,
+        target: { canonicalKey: parentKey, storeKeys: [parentKey] },
+      });
+      const deleted = await list();
+      expect(deleted.sessions.some((row) => row.key === parentKey)).toBe(false);
+      expect(deleted.sessions.filter((row) => children.includes(row.key))).toEqual(
+        expect.arrayContaining(
+          children.map((key) => expect.objectContaining({ key, model: "default" })),
+        ),
+      );
+    } finally {
+      await projection.ensureMaterialized();
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 it.each(["maintenance-finalize", "lifecycle-artifacts"] as const)(
   "publishes %s removals before row listeners recreate the key",

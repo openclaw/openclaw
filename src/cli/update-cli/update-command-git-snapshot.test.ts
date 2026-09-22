@@ -84,11 +84,10 @@ it.each([true, false])(
           root,
           switchToGit: false,
           installKind: "git",
-          timeoutMs: 5000,
+          timeoutMs: undefined,
           startedAt: Date.now(),
           progress: {},
           channel: "dev",
-          tag: "latest",
           devTarget: { mode: "detached", ref: target },
           beforeGitMutation,
           validateCandidate,
@@ -96,9 +95,15 @@ it.each([true, false])(
           getManagedServiceEnv: () => undefined,
           getSnapshotSource,
           jsonMode: true,
-          allowGatewayServiceRepair: false,
-          allowGatewayActivation: false,
         });
+        const headCommandOptions = vi
+          .mocked(processRunner.runCommandWithTimeout)
+          .mock.calls.find(([argv]) => argv.join(" ") === `git -C ${root} rev-parse HEAD`)?.[1];
+        expect(
+          typeof headCommandOptions === "number"
+            ? headCommandOptions
+            : headCommandOptions?.timeoutMs,
+        ).toBe(20 * 60_000);
         expect(result).toMatchObject(
           current
             ? { status: "skipped", reason: "already-current" }

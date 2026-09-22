@@ -21,6 +21,7 @@ import {
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { prepareSessionCreatorProfile } from "./session-creator.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizePreparedSessionMutation,
@@ -137,6 +138,21 @@ function prepareRequesterPolicy(
           "GitHub publication session authorization is unavailable; retry after session storage is ready.",
           { cause: error },
         );
+      }
+      // Publication's creator restriction must preserve independently admitted capabilities.
+      if (
+        snapshot.actor.kind === "operator" &&
+        !roleScopesAllow({
+          role: "operator",
+          requestedScopes: ["operator.write"],
+          allowedScopes: snapshot.scopes,
+        }) &&
+        !prepareSessionCreatorProfile(
+          snapshot.actor.profileId,
+          current.aliases,
+        )(facts.target.entry.createdActor)
+      ) {
+        throw new GitHubPublicationRequesterUnavailableError();
       }
       if (
         authorizePreparedSessionMutation({ cfg: config, client, ...session }, facts, {

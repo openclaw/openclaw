@@ -11,7 +11,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { createRuntimeProcessBuildEntries } from "../scripts/lib/runtime-process-core-build-entries.mts";
 import {
-  legacyFinalizerBuildSources,
+  preservedModuleBuildSources,
   vitestWorkerBuildEntries,
 } from "../scripts/lib/vitest-worker-build-entries.mts";
 import { vitestWorkerDeclarationEntries } from "../scripts/lib/vitest-worker-declarations.mts";
@@ -130,7 +130,7 @@ const workspaces = Object.fromEntries(
             ...vitestWorkerBuildEntries,
             ...vitestWorkerDeclarationEntries,
           }),
-          ...legacyFinalizerBuildSources,
+          ...preservedModuleBuildSources,
         ].flatMap((source) => {
           const relative = path.relative(workspace, source).replaceAll("\\", "/");
           return relative.startsWith("../") ? [] : [`${relative}!`];

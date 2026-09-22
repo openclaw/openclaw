@@ -295,3 +295,12 @@ function diagnosticsEnabled() {
 Recheck the gates when emitting a delayed summary. Keep fields bounded and
 content-free, and preserve the operation's result if the diagnostic sink fails.
 This predicate does not enable or authorize [audit identity collection](/gateway/audit).
+
+`onInternalDiagnosticEvent(listener, interest?)` filters events before copying
+their payload for the listener. `include` and `exclude` apply to every event;
+the optional `includeTrusted` list further restricts only events marked trusted
+by the dispatcher. Omitting it preserves existing behavior, and an empty list
+accepts only untrusted events that pass `include`/`exclude`. Event payload fields
+cannot override the dispatcher's trust metadata. Accepted events retain their
+individual frozen copies; this filter does not change diagnostic collection or
+queue behavior.

@@ -271,7 +271,7 @@ describe("shared missing skill ancestors", () => {
         }
       >();
       captureFailure = () => {
-        failureSnapshot = JSON.stringify({
+        failureSnapshot ??= JSON.stringify({
           ancestor,
           phase,
           pendingTimers: Array.from(pendingTimers.values(), ({ delayMs, createdAt, stack }) => ({
@@ -513,6 +513,10 @@ describe("shared missing skill ancestors", () => {
         await writeSkill(second, "recreated-proof");
         phase = "discover recreated sibling skill";
         await expect.poll(() => read(second), { timeout: 3_000 }).toContain("recreated-proof");
+      } catch (error) {
+        // Preserve live observations before this body's finally retires watches.
+        captureFailure?.();
+        throw error;
       } finally {
         unregister();
         await closeSkillsWatchers(true);

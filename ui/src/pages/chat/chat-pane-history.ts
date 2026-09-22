@@ -159,7 +159,12 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
     const historyLoad = getChatHistoryLoadState(state);
     const startup = historyLoad.phase === "failed" && historyLoad.startup;
-    void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false, startup });
+    void refreshPageChat(state, {
+      historyLoad: loadChatHistory(state, { startup, supersedeInFlight: true }),
+      awaitHistory: true,
+      scheduleScroll: false,
+      startup,
+    });
   };
 
   protected hasOlderMessages(): boolean {

@@ -50,7 +50,11 @@ describe("renderUpdates", () => {
       name: "failed check with a known update",
       props: {
         update: {
-          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+          updateStatusCheckBanner: {
+            mode: "manual",
+            tone: "warn",
+            text: "Could not check for updates: timeout",
+          },
         },
       },
       status: "Could not check for updates: timeout",
@@ -70,7 +74,11 @@ describe("renderUpdates", () => {
             install: { kind: "git", git: { status: "behind", commitsBehind: 3 } },
           },
           updateAvailable: null,
-          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+          updateStatusCheckBanner: {
+            mode: "manual",
+            tone: "warn",
+            text: "Could not check for updates: timeout",
+          },
         },
       },
       status: "Could not check for updates: timeout",
@@ -93,7 +101,11 @@ describe("renderUpdates", () => {
             },
           },
           updateAvailable: null,
-          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+          updateStatusCheckBanner: {
+            mode: "manual",
+            tone: "warn",
+            text: "Could not check for updates: timeout",
+          },
         },
       },
       status: "Could not check for updates: timeout",
@@ -108,7 +120,11 @@ describe("renderUpdates", () => {
         update: {
           updateSchedule: null,
           updateAvailable: null,
-          updateStatusCheckBanner: { tone: "warn", text: "Could not check for updates: timeout" },
+          updateStatusCheckBanner: {
+            mode: "manual",
+            tone: "warn",
+            text: "Could not check for updates: timeout",
+          },
         },
       },
       status: "Could not check for updates: timeout",
@@ -210,7 +226,7 @@ describe("renderUpdates", () => {
               updateStatusBanner: { tone: "danger", text: "Update error: build failed" },
               updateStatusCheckBanner: statusChecking
                 ? null
-                : { tone: "warn", text: "Could not check for updates: timeout" },
+                : { mode: "manual", tone: "warn", text: "Could not check for updates: timeout" },
             },
           }),
         ),

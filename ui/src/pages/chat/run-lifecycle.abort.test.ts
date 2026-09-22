@@ -382,6 +382,7 @@ describe("handleAbortChat", () => {
       runId: "run-main",
     });
     expect(host.chatMessage).toBe("@Alex keep this draft");
+    expect(host.chatRunId).toBe("run-main");
     expect(host.chatMentions).toEqual([{ profileId: "alex-profile", start: 0, end: 5 }]);
     expect(host.chatError ?? null).toBeNull();
     expect(request).not.toHaveBeenCalled();

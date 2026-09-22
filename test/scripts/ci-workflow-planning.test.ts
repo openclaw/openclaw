@@ -38,6 +38,7 @@ import {
   startupCorpusTestFiles,
   stateStartupCorpusTestFiles,
 } from "../vitest/vitest.startup-corpus-paths.mjs";
+import { assertStartupCorpusCommand } from "./ci-startup-corpus.test-support.js";
 import {
   AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC,
   CACHE_SAVE_V5,
@@ -173,6 +174,7 @@ function runCiManifestFixture(options: {
   nodeTestShards?: Record<string, unknown>[];
   nodeTestGroupsCodec?: boolean;
   bunTestRuntime?: boolean;
+  bunUiTestRuntime?: boolean | "requires-ftl-flag";
   startupCorpusCoverage?: boolean;
   changedPlannerSource?: string | null;
   changedPlannerDependencies?: string[];
@@ -215,8 +217,11 @@ function runCiManifestFixture(options: {
     if (options.bunTestRuntime) {
       writeFileSync(
         path.join(scriptsDir, "ci-test-runtime.mts"),
-        `export const ciTestShardRequiresBun = (shard, policy) =>
-          policy !== "node" && shard.configs?.includes("fixture-bun.config.ts");`,
+        `${options.bunUiTestRuntime ? `import { ciTestShardRequiresBun as currentRuntime } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-test-runtime.mts")).href)};` : ""}
+        export const ciTestShardRequiresBun = (shard, policy) =>
+          policy !== "node" && (shard.configs?.includes("fixture-bun.config.ts") ||
+            ${options.bunUiTestRuntime === "requires-ftl-flag" ? 'shard.env?.BUN_JSC_useFTLJIT === "false" &&' : ""}
+            ${options.bunUiTestRuntime ? `currentRuntime(shard, policy, ${JSON.stringify(process.cwd())})` : "false"});`,
       );
     }
     for (const dependency of options.changedPlannerDependencies ?? []) {
@@ -1365,6 +1370,7 @@ describe("ci workflow guards", () => {
           : {
               smoke: [
                 "Swift lint",
+                ...(historical ? [] : ["Prepare iOS simulator"]),
                 "Build iOS app",
                 ...(historical ? [] : ["Run focused iOS voice cleanup simulator tests"]),
               ],
@@ -1372,6 +1378,7 @@ describe("ci workflow guards", () => {
               tests: [
                 "Test Watch RTC engine",
                 "Swift lint",
+                "Prepare iOS simulator",
                 "Build iOS app",
                 "Run focused iOS voice cleanup simulator tests",
                 "Run focused iOS lifecycle simulator tests",
@@ -4217,16 +4224,82 @@ describe("ci workflow guards", () => {
   });
 
   it.each([
-    { eventName: "pull_request", capability: true, policy: "bun-compatible", bun: true },
-    { eventName: "workflow_dispatch", capability: true, policy: "dual", bun: true },
-    { eventName: "push", capability: true, policy: "node", bun: false },
-    { eventName: "workflow_dispatch", capability: false, policy: "node", bun: false },
+    {
+      eventName: "pull_request",
+      capability: true,
+      uiCapability: true,
+      policy: "bun-compatible",
+      uiPolicy: "bun-compatible",
+      bun: true,
+    },
+    {
+      eventName: "workflow_dispatch",
+      capability: true,
+      uiCapability: true,
+      policy: "dual",
+      uiPolicy: "dual",
+      bun: true,
+    },
+    {
+      eventName: "workflow_dispatch",
+      releaseGate: true,
+      capability: true,
+      uiCapability: true,
+      policy: "bun-compatible",
+      uiPolicy: "bun-compatible",
+      bun: true,
+    },
+    {
+      eventName: "push",
+      capability: true,
+      uiCapability: true,
+      policy: "node",
+      uiPolicy: "node",
+      bun: false,
+    },
+    {
+      eventName: "workflow_dispatch",
+      capability: false,
+      uiCapability: false,
+      policy: "node",
+      uiPolicy: "node",
+      bun: false,
+    },
+    {
+      eventName: "pull_request",
+      capability: true,
+      uiCapability: false,
+      policy: "bun-compatible",
+      uiPolicy: "node",
+      bun: true,
+    },
+    {
+      eventName: "workflow_dispatch",
+      capability: true,
+      uiCapability: "requires-ftl-flag",
+      policy: "dual",
+      uiPolicy: "node",
+      bun: true,
+    },
+    {
+      eventName: "workflow_dispatch",
+      historicalCompatibility: true,
+      capability: true,
+      uiCapability: true,
+      policy: "dual",
+      uiPolicy: "node",
+      bun: true,
+    },
   ] as const)(
     "routes test runtimes without adding jobs ($eventName, capability=$capability)",
-    ({ eventName, capability, policy, bun }) => {
+    (scenario) => {
+      const { eventName, capability, uiCapability, policy, uiPolicy, bun } = scenario;
       const manifest = runCiManifestFixture({
+        historicalCompatibility: false,
+        ...scenario,
         bundledPlanner: true,
         bunTestRuntime: capability,
+        bunUiTestRuntime: uiCapability,
         eventName,
         nodeTestShards: [
           {
@@ -4245,6 +4318,7 @@ describe("ci workflow guards", () => {
       ).include;
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ test_runtime_policy: policy, requires_bun: bun });
+      expect(manifest.outputs.ui_test_runtime_policy).toBe(uiPolicy);
       const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
       const context = {
         eventName,
@@ -4262,6 +4336,19 @@ describe("ci workflow guards", () => {
       expect(evaluateWorkflowExpression(`\${{ ${bunSetup.if} }}`, context)).toBe(bun);
       expect(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_RUNTIME_POLICY, context)).toBe(
         policy,
+      );
+      const ui = readCiWorkflow().jobs["checks-ui"];
+      const uiContext = { ...context, preflightOutputs: manifest.outputs };
+      const uiBunSetup = ui.steps.find(
+        (step: WorkflowStep) => step.name === "Setup pinned Bun test runtime",
+      );
+      expect(uiBunSetup.uses).toBe("./.ci-harness/.github/actions/setup-test-bun");
+      expect(evaluateWorkflowExpression(`\${{ ${uiBunSetup.if} }}`, uiContext)).toBe(
+        uiPolicy !== "node",
+      );
+      const uiRun = ui.steps.find((step: WorkflowStep) => step.name === "Test Control UI");
+      expect(evaluateWorkflowExpression(uiRun.env.OPENCLAW_CI_TEST_RUNTIME_POLICY, uiContext)).toBe(
+        uiPolicy,
       );
     },
   );
@@ -4526,6 +4613,37 @@ describe("ci workflow guards", () => {
         }
       }
     }
+  });
+
+  it.each([
+    { cpus: 1, slots: 1 },
+    { cpus: 2, slots: 1 },
+    { cpus: 4, slots: 1 },
+    { cpus: 8, slots: 2 },
+    { cpus: 32, slots: 5 },
+    { cpus: 2, slots: 1, fail: "1/4" },
+  ])("bounds frozen legacy startup corpus admission: %j", (scenario) => {
+    const steps: WorkflowStep[] = readCiWorkflow().jobs["checks-fast-core"].steps;
+    const step = steps.find((candidate) => candidate.name === "Check startup corpus");
+    const script = expectDefined(step?.run, "startup corpus command").replace(
+      /\$\{\{[\s\S]*?\}\}/gu,
+      (expression) =>
+        String(
+          evaluateWorkflowExpression(expression, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            releaseGate: true,
+            frozenTarget: true,
+            runAttempt: 1,
+          }),
+        ),
+    );
+    assertStartupCorpusCommand(
+      script,
+      tempDirs.make("startup-corpus-admission-"),
+      { ...scenario, frozenTarget: true },
+      runWorkflowShellScript,
+    );
   });
 
   it("runs all baseline ratchets against the exact tested tree", () => {
