@@ -605,11 +605,16 @@ describe("worker provider project preparation ownership", () => {
     "revokes retained project callbacks after provider %s",
     async (outcome) => {
       const git = await repository("closure-project");
+      if (outcome === "timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      const entered = createDeferredCore();
       const release = createDeferredCore();
       let retained: ProjectPreparation | undefined;
       const service = createService(
         async (_profile, _operationId, options) => {
           retained = options?.project;
+          entered.resolve();
           if (outcome === "timeout") {
             await release.promise;
           }
@@ -618,16 +623,25 @@ describe("worker provider project preparation ownership", () => {
         outcome === "timeout" ? 20 : undefined,
       );
       try {
-        const creation = service.createWithRequest({
-          profileId: "development",
-          idempotencyKey: "closure",
-          projectPath: git.root,
-        });
+        const creation = service
+          .createWithRequest({
+            profileId: "development",
+            idempotencyKey: "closure",
+            projectPath: git.root,
+          })
+          .catch((error: unknown) => error);
+        await Promise.race([
+          entered.promise,
+          creation.then((result) => {
+            throw new Error("Creation ended before provider invocation", { cause: result });
+          }),
+        ]);
         if (outcome === "timeout") {
-          await expect(creation).rejects.toMatchObject({ code: "provider_failure" });
-        } else {
-          await expect(creation).resolves.toMatchObject({ state: "ready" });
+          await vi.advanceTimersByTimeAsync(20);
         }
+        expect(await creation).toMatchObject(
+          outcome === "timeout" ? { code: "provider_failure" } : { state: "ready" },
+        );
         const project = expectDefined(retained, "retained project callback");
         expect(project.signal.aborted).toBe(true);
         const transport = {
