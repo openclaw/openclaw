@@ -74,6 +74,64 @@ afterEach(() => {
 });
 
 describe("agent.wait gateway dedupe observations", () => {
+  it.each(["failure-first", "queue-timeout-first"] as const)(
+    "reports the provider failure through agent.wait when observations arrive %s",
+    async (order) => {
+      const runId = `run-provider-failure-over-queue-timeout-${order}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      const providerFailure = {
+        dedupe,
+        key: `agent:${runId}`,
+        entry: {
+          ts: 200,
+          ok: false,
+          payload: {
+            runId,
+            status: "error",
+            startedAt: 100,
+            endedAt: 200,
+            error: "provider request failed",
+            stopReason: "error",
+            providerStarted: true,
+          },
+        },
+      };
+      const queueTimeout = {
+        dedupe,
+        key: `agent:${runId}`,
+        entry: {
+          ts: 300,
+          ok: true,
+          payload: {
+            runId,
+            status: "timeout",
+            startedAt: 100,
+            endedAt: 210,
+            timeoutPhase: "queue",
+          },
+        },
+      };
+
+      for (const observation of order === "failure-first"
+        ? [providerFailure, queueTimeout]
+        : [queueTimeout, providerFailure]) {
+        setGatewayDedupeEntry(observation);
+      }
+
+      const waiter = waitThroughGateway({ runId, timeoutMs: 0 });
+      await waiter.promise;
+      expect(waiter.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId,
+          status: "error",
+          error: "provider request failed",
+          stopReason: "error",
+        }),
+      );
+    },
+  );
+
   it.each([undefined, true] as const)(
     "retires a sticky terminal only for an admitted new attempt: %s",
     async (startNewAttempt) => {
