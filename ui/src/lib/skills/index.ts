@@ -48,6 +48,7 @@ type SkillsState = {
   clawhubVerdictsLoading: boolean;
   clawhubVerdictsError: string | null;
   skillCardContents: Record<string, string>;
+  skillCardRevision: number;
   skillCardContentKeys: Record<string, string>;
   skillCardLoadingKey: string | null;
   skillCardErrors: Record<string, string>;
@@ -198,6 +199,11 @@ export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
   state.clawhubVerdicts = {};
   state.clawhubVerdictsLoading = false;
   state.clawhubVerdictsError = null;
+  resetSkillCardState(state);
+}
+
+export function resetSkillCardState(state: SkillsState) {
+  state.skillCardRevision++;
   state.skillCardContents = {};
   state.skillCardContentKeys = {};
   state.skillCardLoadingKey = null;
@@ -294,18 +300,22 @@ async function loadCurrentSkillsForOperation(
 export async function refreshSkills(state: SkillsState, loadAgents: () => Promise<void>) {
   const client = state.client;
   if (!client || !state.connected || state.skillsLoading || state.skillOperation) {
-    return;
+    return false;
   }
   const operation = { kind: "refresh" } as const;
   // Reserve one operation across both awaits so a second refresh or write
   // cannot enter while agent discovery is still pending.
   state.skillOperation = operation;
+  // File contents can change without changing the inventory's path, size or version.
+  // Revoke earlier reads before awaiting status, including when Refresh fails.
+  resetSkillCardState(state);
   try {
     await loadAgents();
     if (!ownsSkillOperation(state, client, operation)) {
-      return;
+      return false;
     }
     await loadCurrentSkillsForOperation(state, client, operation, true);
+    return ownsSkillOperation(state, client, operation);
   } finally {
     releaseSkillOperation(state, operation);
   }
@@ -336,9 +346,11 @@ function pruneSkillCardState(state: SkillsState, report: SkillStatusReport) {
 }
 
 export async function loadSkillCard(state: SkillsState, skillKey: string) {
+  const client = state.client;
   if (
-    !state.client ||
+    !client ||
     !state.connected ||
+    state.skillOperation?.kind === "refresh" ||
     state.skillCardLoadingKey === skillKey ||
     (state.skillCardContents[skillKey] !== undefined &&
       state.skillCardContentKeys[skillKey] === currentSkillCardCacheKey(state, skillKey))
@@ -350,12 +362,17 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
     return;
   }
   const agentScope = captureSkillsAgentScope(state);
+  const revision = state.skillCardRevision;
+  const ownsRead = () =>
+    state.client === client &&
+    state.skillCardRevision === revision &&
+    isSkillsAgentScopeCurrent(state, agentScope);
   const requestParams = { ...stateSkillsAgentParams(state), skillKey };
   state.skillCardLoadingKey = skillKey;
   const { [skillKey]: _previousError, ...nextErrors } = state.skillCardErrors;
   state.skillCardErrors = nextErrors;
   try {
-    const response = await state.client.request<{
+    const response = await client.request<{
       schema: "openclaw.skills.skill-card.v1";
       skillKey: string;
       path: string;
@@ -363,7 +380,8 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
       content: string;
     }>("skills.skillCard", requestParams);
     if (
-      isSkillsAgentScopeCurrent(state, agentScope) &&
+      state.connected &&
+      ownsRead() &&
       response?.skillKey === skillKey &&
       typeof response.content === "string" &&
       currentSkillCardCacheKey(state, skillKey) === cacheKey
@@ -372,14 +390,14 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
       state.skillCardContentKeys = { ...state.skillCardContentKeys, [skillKey]: cacheKey };
     }
   } catch (err) {
-    if (isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (state.connected && ownsRead() && currentSkillCardCacheKey(state, skillKey) === cacheKey) {
       state.skillCardErrors = {
         ...state.skillCardErrors,
         [skillKey]: formatUiError(err),
       };
     }
   } finally {
-    if (isSkillsAgentScopeCurrent(state, agentScope) && state.skillCardLoadingKey === skillKey) {
+    if (ownsRead() && state.skillCardLoadingKey === skillKey) {
       state.skillCardLoadingKey = null;
     }
   }
