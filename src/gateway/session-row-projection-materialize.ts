@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { readCommittedSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
@@ -52,43 +52,85 @@ export function createSessionRowMaterializer(owner: {
   ) => boolean;
   forgetBackfill: (id: string) => void;
 }) {
-  return (ids: readonly string[], prepared?: ReadonlyMap<string, SessionRowDatabaseFacts>) => {
+  function refresh(ids: readonly string[], accepted = false) {
     if (!owner.isActive()) {
       return;
     }
     const started = performance.now();
     const cfg = owner.prepare();
-    const configuredAgentIds = new Set(listAgentIds(cfg));
-    const readRow = createSessionRowMaterializationBatch();
-    for (const [offset, id] of ids.entries()) {
-      if (offset > 0 && performance.now() - started >= 12) {
-        break;
+    withAgentRosterFactsBatch(cfg, () => {
+      const configuredAgentIds = new Set(listAgentIds(cfg));
+      const readRow = createSessionRowMaterializationBatch();
+      for (const [offset, id] of ids.entries()) {
+        if (offset > 0 && performance.now() - started >= 12) {
+          break;
+        }
+        const current = owner.rows.get(id),
+          revision = owner.revision();
+        const databaseFacts = accepted ? current?.pendingDatabaseFacts : undefined;
+        if (accepted && !databaseFacts) {
+          continue;
+        }
+        const row =
+          current && (accepted ? current : owner.acquireEntry(current, owner.readEntry(current)));
+        if (row && isColdArchivedSessionRow(row)) {
+          owner.dirty.delete(id);
+          owner.forgetBackfill(id);
+          continue;
+        }
+        if (
+          row &&
+          owner.materialize(row, configuredAgentIds, readRow, databaseFacts) &&
+          owner.revision() === revision
+        ) {
+          row.pendingDatabaseFacts = undefined;
+          owner.dirty.delete(id);
+        }
+        if (owner.revision() !== revision) {
+          break;
+        }
       }
-      const current = owner.rows.get(id),
-        revision = owner.revision();
-      const databaseFacts = prepared?.get(id);
-      const row =
-        current &&
-        owner.acquireEntry(
-          databaseFacts ? { ...current, hasBoard: databaseFacts.hasBoard } : current,
-          prepared ? databaseFacts?.entry : owner.readEntry(current),
-        );
-      if (row && isColdArchivedSessionRow(row)) {
-        owner.dirty.delete(id);
-        owner.forgetBackfill(id);
-        continue;
+    });
+  }
+  return {
+    refresh,
+    refreshPending(ids: readonly string[]) {
+      const pending = ids.filter((id) => owner.rows.get(id)?.pendingDatabaseFacts);
+      if (pending.length === 0) {
+        return false;
       }
-      if (
-        row &&
-        owner.materialize(row, configuredAgentIds, readRow, databaseFacts) &&
-        owner.revision() === revision
-      ) {
-        owner.dirty.delete(id);
+      refresh(pending, true);
+      return true;
+    },
+    accept(ids: readonly string[], facts: ReadonlyMap<string, SessionRowDatabaseFacts>) {
+      if (!owner.isActive()) {
+        return;
       }
-      if (owner.revision() !== revision) {
-        break;
-      }
-    }
+      const cfg = owner.prepare();
+      const revision = owner.revision();
+      withAgentRosterFactsBatch(cfg, () => {
+        for (const id of ids) {
+          const current = owner.rows.get(id);
+          const databaseFacts = facts.get(id);
+          const row =
+            current &&
+            owner.acquireEntry(
+              databaseFacts ? { ...current, hasBoard: databaseFacts.hasBoard } : current,
+              databaseFacts?.entry,
+            );
+          if (owner.revision() !== revision) {
+            break;
+          }
+          if (row && isColdArchivedSessionRow(row)) {
+            owner.dirty.delete(id);
+            owner.forgetBackfill(id);
+          } else if (row) {
+            row.pendingDatabaseFacts = databaseFacts;
+          }
+        }
+      });
+      refresh(ids, true);
+    },
   };
 }
 

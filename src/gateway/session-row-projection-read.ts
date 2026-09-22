@@ -17,14 +17,17 @@ import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-age
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { identity, isCurrentGeneration, type Row } from "./session-row-projection-record.js";
 
-/** Retain each selected store until its prepared rows have been consumed by the projection. */
+/** Retain each selected store until its prepared facts have entered the resident row owner. */
 export async function withSessionRowDatabaseFacts(
   owner: {
     rows: ReadonlyMap<string, Row>;
     dirty: ReadonlySet<string>;
     revision: () => number | undefined;
   },
-  consume: (ids: readonly string[], facts: ReadonlyMap<string, SessionRowDatabaseFacts>) => void,
+  consume: {
+    refreshPending: (ids: readonly string[]) => boolean;
+    accept: (ids: readonly string[], facts: ReadonlyMap<string, SessionRowDatabaseFacts>) => void;
+  },
 ): Promise<void> {
   const revision = owner.revision();
   const registrySnapshot = getSubagentSessionListReadSnapshotIdentity();
@@ -34,6 +37,10 @@ export async function withSessionRowDatabaseFacts(
     if (ids.length === MAX_SESSION_ROW_FACTS_KEYS) {
       break;
     }
+  }
+  // New dirty keys append after this batch; finish its accepted rows before another read.
+  if (consume.refreshPending(ids)) {
+    return;
   }
   const rows = ids.flatMap((id) => owner.rows.get(id) ?? []);
   const env = cloneEnvWithPlatformSemantics(process.env);
@@ -139,7 +146,7 @@ export async function withSessionRowDatabaseFacts(
                 isCurrentGeneration(row, owner.rows.get(identity(row))),
             )
             .map(identity);
-          consume(currentIds, facts);
+          consume.accept(currentIds, facts);
           assertCurrent();
         }
       },

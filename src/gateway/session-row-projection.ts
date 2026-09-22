@@ -309,6 +309,10 @@ export async function createSessionRowProjection(params: {
           change,
           typeof change.scope === "string" ? rows.values() : matching(change.scope),
         );
+      } else if (!presentationOnly) {
+        for (const row of rows.values()) {
+          row.pendingDatabaseFacts = undefined;
+        }
       }
     } else if (change.scope === "automation") {
       records.markAutomation(
@@ -321,6 +325,7 @@ export async function createSessionRowProjection(params: {
       const exact = matching(query);
       const registryFactsReady = inOwnerContext(getSubagentSessionListReadSnapshotIdentity);
       for (const previous of new Set([...exact, ...matching(query, "id")])) {
+        previous.pendingDatabaseFacts = undefined;
         if (previous.entry) {
           placementFacts.invalidate(previous.entry.sessionId);
         }
@@ -424,7 +429,7 @@ export async function createSessionRowProjection(params: {
     });
     return true;
   }
-  const refresh = createSessionRowMaterializer({
+  const materializer = createSessionRowMaterializer({
     isActive: () => !disposed,
     rows,
     dirty,
@@ -461,7 +466,7 @@ export async function createSessionRowProjection(params: {
     }
     await withSessionRowDatabaseFacts(
       { rows, dirty, revision: () => (disposed ? undefined : databaseRevision) },
-      (ids, facts) => withAgentRosterFactsBatch(cfg, () => refresh(ids, facts)),
+      materializer,
     );
   }
   function needsMaterialization() {
@@ -487,6 +492,7 @@ export async function createSessionRowProjection(params: {
       epoch++;
       databaseRevision++;
       revisionToken = undefined;
+      row.pendingDatabaseFacts = undefined;
       dirty.add(id);
       backfill.enqueue(id);
       void ensureMaterialized().catch(() => {});
@@ -546,7 +552,7 @@ export async function createSessionRowProjection(params: {
         if (row && dirty.has(records.identity(row))) {
           // Keyed reads refresh only their owner; unrelated bulk work never gates a response.
           const id = records.identity(row);
-          withAgentRosterFactsBatch(cfg, () => refresh([id]));
+          materializer.refresh([id]);
           row = lookup(query);
         }
         row = archive.describe(row);
