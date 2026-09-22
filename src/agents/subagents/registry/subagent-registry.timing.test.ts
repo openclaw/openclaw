@@ -11,7 +11,7 @@ import { onAgentEvent } from "../../../infra/agent-events.js";
 import { flushLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission.js";
-import { resetTaskRegistryMaintenanceRuntimeForTests } from "../../../tasks/task-registry.maintenance.js";
+import { configureTaskRegistryMaintenance } from "../../../tasks/task-registry.maintenance.js";
 import { getTaskRegistryStore } from "../../../tasks/task-registry.store.js";
 import {
   resetTaskFlowRegistryForTests,
@@ -48,7 +48,7 @@ describe("subagent timing completion", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     logFile = path.join(stateDir, "reproduction.log");
     setLoggerOverride({ level: "warn", file: logFile, consoleLevel: "silent" });
-    resetTaskRegistryMaintenanceRuntimeForTests();
+    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     announce.mockClear();
@@ -73,7 +73,7 @@ describe("subagent timing completion", () => {
         resetTaskFlowRegistryForTests({ persist: false });
       },
     });
-    resetTaskRegistryMaintenanceRuntimeForTests();
+    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     setLoggerOverride(null);
     envSnapshot.restore();
   });

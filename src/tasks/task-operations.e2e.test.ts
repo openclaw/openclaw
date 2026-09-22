@@ -24,7 +24,6 @@ import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
 import { createTaskRecord, getTaskById } from "./task-registry.js";
 import {
   configureTaskRegistryMaintenance,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   stopTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import {
@@ -77,7 +76,7 @@ function requireTask(taskId: string) {
 
 async function resetTaskOperationsRuntime(): Promise<void> {
   await stopTaskRegistryMaintenance();
-  resetTaskRegistryMaintenanceRuntimeForTests();
+  configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
   resetDetachedTaskLifecycleRuntimeForTests();
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });

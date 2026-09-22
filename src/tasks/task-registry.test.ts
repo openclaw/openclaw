@@ -95,7 +95,6 @@ import {
   getInspectableTaskAuditSummary,
   getTaskRegistryMaintenanceDiagnostics,
   previewTaskRegistryMaintenance,
-  resetTaskRegistryMaintenanceRuntimeForTests,
   reconcileInspectableTasks,
   runTaskRegistryMaintenance,
   startTaskRegistryMaintenance,
@@ -104,6 +103,7 @@ import {
 } from "./task-registry.maintenance.js";
 import {
   configureTaskRegistryMaintenanceRuntimeForTest,
+  resetTaskRegistryMaintenanceMocks,
   createAcpSessionStoreEntry,
 } from "./task-registry.maintenance.test-support.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
@@ -328,7 +328,7 @@ describe("task-registry", () => {
     resetSystemEventsForTest();
     resetAgentEventsForTest({ preserveListeners: true });
     resetCronActiveJobs();
-    resetTaskRegistryMaintenanceRuntimeForTests();
+    resetTaskRegistryMaintenanceMocks();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();

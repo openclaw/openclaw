@@ -52,7 +52,7 @@ import {
 } from "./task-registry.js";
 import {
   getInspectableActiveTaskRestartBlockers,
-  resetTaskRegistryMaintenanceRuntimeForTests,
+  configureTaskRegistryMaintenance,
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
@@ -205,7 +205,7 @@ describe("task-registry store runtime", () => {
     testState.applyEnv();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
-    resetTaskRegistryMaintenanceRuntimeForTests();
+    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     loggingState.rawConsole = null;
     setLoggerOverride(null);
     resetLogger();
