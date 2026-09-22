@@ -22,7 +22,9 @@ import {
 import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import {
   formatMattermostFinalDeliveryOutcomeLog,
+  pinMattermostProgressLabel,
   resolveMattermostReplyRootId,
+  resolveMattermostProgressDeliveryPolicy,
   shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
 } from "./monitor-context.js";
@@ -37,6 +39,10 @@ import { deliverMattermostReplyPayload, joinMattermostVisibleContent } from "./r
 import type { HistoryEntry, ReplyPayload } from "./runtime-api.js";
 import { createChannelMessageReplyPipeline } from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
+import {
+  createMattermostSeparateProgressController,
+  discardMattermostSeparateProgressPending,
+} from "./separate-progress.js";
 import { recordMattermostThreadParticipation } from "./thread-participation.js";
 
 type MattermostInboundTurnParams = {
@@ -61,6 +67,7 @@ function createDisabledMattermostDraftStream(): ReturnType<typeof createMattermo
     clear: noopAsync,
     deleteCurrentMessage: noopAsync,
     discardPending: noopAsync,
+    retainTerminalText: async () => false,
     seal: noopAsync,
     stop: noopAsync,
     forceNewMessage: noopAsync,
@@ -115,11 +122,18 @@ export async function dispatchMattermostInboundTurn(
     (account.streamingMode === "progress" || shouldUpdateMattermostDraftToolProgress(account));
   const suppressDefaultToolProgressMessages =
     draftPreviewEnabled && shouldSuppressMattermostDefaultToolProgressMessages(account);
+  const {
+    separate: separateProgressFinalDelivery,
+    postType: progressPostType,
+    pinnedLabel: pinnedProgressLabel,
+    seed: progressSeed,
+  } = resolveMattermostProgressDeliveryPolicy(account, channelId);
   const draftStream = draftPreviewEnabled
     ? createMattermostDraftStream({
         client,
         channelId,
         rootId: effectiveReplyToId,
+        ...(progressPostType ? { postType: progressPostType } : {}),
         throttleMs: 1200,
         chunkText: (value) =>
           core.channel.text.chunkMarkdownTextWithMode(
@@ -148,10 +162,11 @@ export async function dispatchMattermostInboundTurn(
     entry: account.config,
     mode: account.streamingMode,
     active: draftPreviewEnabled,
-    seed: `${account.accountId}:${channelId}`,
-    shouldStartNow: (line) => typeof line === "object" && line.kind === "item",
+    seed: progressSeed,
+    shouldStartNow: (line) =>
+      separateProgressFinalDelivery || (typeof line === "object" && line.kind === "item"),
     update: async (previewText, options) => {
-      draftStream.update(previewText);
+      draftStream.update(pinMattermostProgressLabel(previewText, pinnedProgressLabel));
       if (options?.flush) {
         await draftStream.flush();
       }
@@ -196,14 +211,27 @@ export async function dispatchMattermostInboundTurn(
           flush: draftStream.flush,
           id: draftStream.postId,
           seal: draftStream.seal,
-          discardPending: draftStream.discardPending,
+          discardPending: () =>
+            discardMattermostSeparateProgressPending({
+              enabled: separateProgressFinalDelivery,
+              discardPending: draftStream.discardPending,
+              logVerboseMessage: monitor.logVerboseMessage,
+            }),
           clear: draftStream.clear,
         }
       : undefined,
     onFinalStarted: () => progressDraft.markFinalReplyStarted(),
     onFinalDelivered: () => progressDraft.markFinalReplyDelivered(),
+    retainOnError: separateProgressFinalDelivery,
     onCleanupFailure: (err) =>
       monitor.logVerboseMessage(`mattermost draft preview cleanup failed: ${String(err)}`),
+  });
+  const separateProgress = createMattermostSeparateProgressController({
+    enabled: separateProgressFinalDelivery,
+    pinnedLabel: pinnedProgressLabel,
+    draftStream,
+    hasAcceptedFinal: () => previewLifecycle.finalDelivered,
+    logVerboseMessage: monitor.logVerboseMessage,
   });
 
   const resolvePreviewFinalText = (text?: string): MattermostPreviewFinalResolution | undefined => {
@@ -308,8 +336,12 @@ export async function dispatchMattermostInboundTurn(
     deliver: async (payloadEntry: ReplyPayload, info) => {
       if (info.kind === "final") {
         await enterBlockPreviewActivity("text");
-        // Final text uses only confirmed-visible generations, so join prior boundary work before deciding whether to edit in place.
-        await draftStream.settleBoundaries();
+        if (!separateProgressFinalDelivery) {
+          // In-place final text uses only confirmed-visible generations, so join prior
+          // boundary work before deciding whether to edit the preview.
+          await draftStream.settleBoundaries();
+        }
+        await separateProgress.prepareFinal(payloadEntry.isError === true);
       }
       // A visible same-thread final can be a send or an in-place draft edit; either path records participation.
       let threadParticipationRecorded = false;
@@ -333,12 +365,14 @@ export async function dispatchMattermostInboundTurn(
         client,
         previewLifecycle,
         effectiveReplyToId,
+        separateProgressFinalDelivery,
         resolvePreviewFinalText,
         logVerboseMessage: monitor.logVerboseMessage,
         recordThreadParticipation: markThreadParticipation,
         deliverPayload: async (payloadToDeliver) => {
           const finalTextResolution =
             info.kind === "final" &&
+            !separateProgressFinalDelivery &&
             !payloadToDeliver.isError &&
             typeof payloadToDeliver.text === "string"
               ? draftStream.resolveFinalText(payloadToDeliver.text)
@@ -387,10 +421,16 @@ export async function dispatchMattermostInboundTurn(
       if (result.visibleReplySent) {
         await markThreadParticipation();
       }
+      if (info.kind === "final") {
+        await separateProgress.settleFinal(result, payloadEntry.isError === true);
+      }
       return result;
     },
     onError: (err, info) => {
       runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
+      if (info.kind === "final") {
+        separateProgress.observeDeliveryError();
+      }
     },
   };
   const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
@@ -543,8 +583,13 @@ export async function dispatchMattermostInboundTurn(
         }),
       },
     });
+  } catch (error: unknown) {
+    previewLifecycle.observeFailure();
+    await separateProgress.settleTurnError();
+    throw error;
   } finally {
     try {
+      await separateProgress.settlePendingDeliveryError();
       await draftStream.stop();
       await previewLifecycle.cleanup();
     } catch (err) {

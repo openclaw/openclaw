@@ -37,6 +37,7 @@ type MattermostDraftPreviewDeliverParams = {
   client: MattermostClient;
   previewLifecycle: LivePreviewLifecycle<ReplyPayload, string>;
   effectiveReplyToId?: string;
+  separateProgressFinalDelivery?: boolean;
   resolvePreviewFinalText: (text?: string) => MattermostPreviewFinalResolution | undefined;
   logVerboseMessage: (message: string) => void;
   deliverPayload: (payload: ReplyPayload) => Promise<MattermostReplyDeliveryResult>;
@@ -79,7 +80,9 @@ export async function deliverMattermostReplyWithDraftPreview(
   let outcome: "text" | "media" = "text";
   const ttsSupplement = getReplyPayloadTtsSupplement(params.payload);
   const previewFinalResolution =
-    params.info.kind === "final" && !params.previewLifecycle.previewFinalized
+    params.info.kind === "final" &&
+    !params.separateProgressFinalDelivery &&
+    !params.previewLifecycle.previewFinalized
       ? params.resolvePreviewFinalText(params.payload.text ?? ttsSupplement?.spokenText)
       : undefined;
   const confirmedPreviewDelivery = previewFinalResolution?.confirmedDelivery;
@@ -110,6 +113,9 @@ export async function deliverMattermostReplyWithDraftPreview(
       isError: params.payload.isError,
       adapter: {
         buildFinalEdit: (payload) => {
+          if (params.separateProgressFinalDelivery) {
+            return undefined;
+          }
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
           const previewFinalText = previewFinalResolution?.editText;
 

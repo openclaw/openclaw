@@ -8,3 +8,6 @@ export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 
 export type MattermostAccountConfig = z.input<typeof MattermostAccountSchemaBase>;
 export type MattermostConfig = z.input<typeof MattermostConfigSchema>;
+export type MattermostProgressFinalDelivery = NonNullable<
+  NonNullable<NonNullable<MattermostAccountConfig["streaming"]>["progress"]>["finalDelivery"]
+>;

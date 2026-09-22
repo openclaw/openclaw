@@ -317,11 +317,37 @@ Preview streaming is **on by default** in `partial` mode. Configure via `channel
 }
 ```
 
+To keep a visible status marker while the turn runs and deliver the final answer as a separate
+post:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          label: "|",
+          finalDelivery: "separate",
+        },
+      },
+    },
+  },
+}
+```
+
+`progress.finalDelivery` defaults to `"in-place"`, preserving existing behavior. `"separate"`
+applies only when `streaming.mode` is `"progress"`. The temporary post uses Mattermost type
+`custom_openclaw_progress`, so peer OpenClaw bots ignore it while ordinary human messages with the
+same visible prefix remain actionable. OpenClaw pins the configured label, sends the final as a
+normal post, and removes progress only after core confirms final delivery. A failed run or failed
+final send retains a sanitized `Failed.` status instead.
+
 <AccordionGroup>
   <Accordion title="Streaming modes">
     - `partial` (default): one preview post that is edited as the reply grows, then finalized with the complete answer.
     - `block` rotates the preview between completed text and tool-activity blocks, so each block stays visible as its own post instead of being overwritten in place. Parallel and consecutive tool updates share the current tool-activity post.
-    - `progress` shows a status preview while generating and only posts the final answer at completion.
+    - `progress` shows a status preview while generating and completes with the final answer. Set `progress.finalDelivery: "separate"` to send that answer as a new post and remove the temporary status only after confirmed delivery.
     - `off` disables preview streaming. With `streaming.block.enabled: true`, completed assistant blocks are still delivered as normal block replies (separate posts) rather than a single coalesced final post.
 
   </Accordion>

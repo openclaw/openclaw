@@ -13,6 +13,7 @@ import {
 
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
 const DEFAULT_THROTTLE_MS = 1000;
+export const MATTERMOST_PROGRESS_POST_TYPE = "custom_openclaw_progress";
 
 type MattermostDraftPublishedPart = {
   messageId: string;
@@ -43,6 +44,7 @@ type MattermostDraftStream = {
   clear: () => Promise<void>;
   deleteCurrentMessage: () => Promise<void>;
   discardPending: () => Promise<void>;
+  retainTerminalText: (text: string) => Promise<boolean>;
   seal: () => Promise<void>;
   stop: () => Promise<void>;
   forceNewMessage: () => Promise<void>;
@@ -112,6 +114,7 @@ export function createMattermostDraftStream(params: {
   throttleMs?: number;
   renderText?: (text: string) => string;
   chunkText?: (text: string) => string[];
+  postType?: string;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): MattermostDraftStream {
@@ -173,6 +176,7 @@ export function createMattermostDraftStream(params: {
           channelId: params.channelId,
           message: normalized,
           rootId: params.rootId,
+          postType: params.postType,
         });
         target.postId = sent.id;
         target.lastProviderText = sent.message ?? normalized;
@@ -288,6 +292,7 @@ export function createMattermostDraftStream(params: {
             channelId: params.channelId,
             message: firstChunk,
             rootId: params.rootId,
+            postType: params.postType,
           });
           recordPublishedAssistantPart(firstPost.id, firstPost.message ?? firstChunk, 0);
         }
@@ -296,6 +301,7 @@ export function createMattermostDraftStream(params: {
             channelId: params.channelId,
             message: chunk,
             rootId: params.rootId,
+            postType: params.postType,
           });
           recordPublishedAssistantPart(post.id, post.message ?? chunk, publishedAssistantOffset);
         }
@@ -348,6 +354,35 @@ export function createMattermostDraftStream(params: {
     await stopForClear();
     await currentGeneration.ready;
     assertNoAcceptedDeliveryFailure();
+  };
+  const retainTerminalText = async (text: string) => {
+    assertNoAcceptedDeliveryFailure();
+    await discardPending();
+    await currentGeneration.ready;
+    assertNoAcceptedDeliveryFailure();
+    const rendered = params.renderText?.(text) ?? text;
+    const normalized = normalizeMattermostDraftText(rendered, maxChars);
+    if (!normalized) {
+      return false;
+    }
+    if (currentGeneration.postId) {
+      const updated = await updateMattermostPost(params.client, currentGeneration.postId, {
+        message: normalized,
+      });
+      currentGeneration.lastProviderText = updated.message ?? normalized;
+      currentGeneration.lastSentText = normalized;
+      return true;
+    }
+    const sent = await createMattermostPost(params.client, {
+      channelId: params.channelId,
+      message: normalized,
+      rootId: params.rootId,
+      postType: params.postType,
+    });
+    currentGeneration.postId = sent.id;
+    currentGeneration.lastProviderText = sent.message ?? normalized;
+    currentGeneration.lastSentText = normalized;
+    return true;
   };
   const clear = async () => {
     assertNoAcceptedDeliveryFailure();
@@ -445,6 +480,7 @@ export function createMattermostDraftStream(params: {
     clear,
     deleteCurrentMessage,
     discardPending,
+    retainTerminalText,
     seal,
     stop,
     forceNewMessage,
