@@ -235,6 +235,24 @@ describe("managed plugin instances", () => {
     await current.dispose();
   });
 
+  it("shares explicit process runtime stores across plugin instances and host recovery", async () => {
+    const store = createPluginRuntimeStore<string>({
+      key: "plugin-runtime:test:process-owner",
+      errorMessage: "not set",
+    });
+    const connectionOwner = new PluginInstance("shared");
+    const outboundAdapter = new PluginInstance("shared");
+
+    connectionOwner.run(() => store.setRuntime("connected"));
+
+    expect(outboundAdapter.run(store.getRuntime)).toBe("connected");
+    expect(store.getRuntime()).toBe("connected");
+
+    store.clearRuntime();
+    await outboundAdapter.dispose();
+    await connectionOwner.dispose();
+  });
+
   it("preserves class receivers and fences callable re-exports, including frozen getters", async () => {
     const instance = new PluginInstance("classes");
     class Counter {

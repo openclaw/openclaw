@@ -3,7 +3,7 @@ import { getPluginInstanceRuntimeSlot } from "../plugins/plugin-instance-scope.j
 import { getNamedPluginRuntimeStoreSlot } from "./runtime-store-registry.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 type PluginRuntimeStoreKeyOptions = {
-  /** Explicit global registry key for shared runtime slots. */
+  /** Explicit process-global registry key for shared runtime slots. */
   key: string;
   /** Error thrown by getRuntime before setRuntime initializes this slot. */
   errorMessage: string;
@@ -74,10 +74,18 @@ export function createPluginRuntimeStore<T>(options: string | PluginRuntimeStore
           // still share one runtime for the same plugin id or explicit key.
           return getNamedPluginRuntimeStoreSlot(resolved.key);
         })();
-  const instanceKey = typeof options === "string" ? Symbol(resolved.key) : resolved.key;
-  // Bundled module functions can survive a reload. Resolve their slot from the
-  // invoking instance so preparing a candidate cannot overwrite the live runtime.
-  const resolveSlot = () => getPluginInstanceRuntimeSlot(instanceKey) ?? defaultSlot;
+  const instanceKey =
+    typeof options === "string"
+      ? Symbol(resolved.key)
+      : "pluginId" in options
+        ? resolved.key
+        : undefined;
+  // Plugin-id stores belong to the invoking managed instance so preparing a
+  // candidate cannot overwrite the live runtime. Explicit keys intentionally
+  // name process owners shared across instances, module graphs, and host recovery.
+  const resolveSlot = () =>
+    (instanceKey === undefined ? undefined : getPluginInstanceRuntimeSlot(instanceKey)) ??
+    defaultSlot;
 
   return {
     setRuntime(next: T) {
