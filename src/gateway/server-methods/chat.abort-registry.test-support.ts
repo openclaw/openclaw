@@ -44,8 +44,9 @@ export function useChatAbortRegistryFixture() {
   let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
   const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
   beforeEach(async () => {
+    // A failed drain retains its stores; the next case must not replace their owner.
     if (stateDir) {
-      throw new Error("Previous chat abort fixture cleanup did not complete");
+      throw new Error("Previous chat abort registry fixture cleanup is incomplete");
     }
     stateDir = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-abort-errors-")));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -67,23 +68,28 @@ export function useChatAbortRegistryFixture() {
       await settle();
     } catch (error) {
       failures.push(error);
-    } finally {
-      deliveries?.[Symbol.dispose]();
-      deliveries = undefined;
     }
-    // Detached notification writers retain their stores and environment until
-    // both their result promises and tracked Gateway cleanup have settled.
+    // Delivery results can settle before their detached root's cleanup tail.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
         resetSubagentRegistryForTests({ persist: false });
         resetTaskRegistryForTests({ persist: false });
         resetTaskFlowRegistryForTests({ persist: false });
         schedulerTesting.reset();
-        await cleanupSessionStateForTest({ stateDir });
+        await cleanupSessionStateForTest({ stateDir: stateDir || undefined });
         clearConfigCache();
         clearRuntimeConfigSnapshot();
-        await rm(stateDir, { recursive: true, force: true });
+        if (stateDir) {
+          // Resource cleanup finished; removal failure must not retain a retired owner.
+          try {
+            await rm(stateDir, { recursive: true, force: true });
+          } catch (error) {
+            failures.push(error);
+          }
+        }
         env.restore();
+        deliveries?.[Symbol.dispose]();
+        deliveries = undefined;
         stateDir = "";
       } catch (error) {
         failures.push(error);
@@ -93,7 +99,7 @@ export function useChatAbortRegistryFixture() {
       throw failures[0];
     }
     if (failures.length > 1) {
-      throw new AggregateError(failures, "Chat abort fixture cleanup failed");
+      throw new AggregateError(failures, "Chat abort registry fixture cleanup failed");
     }
   });
 
