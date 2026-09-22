@@ -3819,6 +3819,7 @@ class ChatController internal constructor(
       content = userContent,
       timestampMs = System.currentTimeMillis(),
       idempotencyKey = "$runId:user",
+      runId = runId,
     )
   }
 
@@ -7517,7 +7518,7 @@ class ChatController internal constructor(
       val original = optimistic ?: unresolved ?: fallbackMessage
       // Run ownership can change independently of the client key persisted on the
       // user row. Only history proof may replace that transcript identity.
-      val rekeyed = original.copy(idempotencyKey = messageIdempotencyKey)
+      val rekeyed = original.copy(idempotencyKey = messageIdempotencyKey, runId = newRunId)
       if (optimistic != null) optimisticMessagesByRunId[newRunId] = rekeyed
       if (unresolved != null) unresolvedRepliesByRunId[newRunId] = rekeyed
       if (terminalWithoutReply) terminalWithoutReplyRunIds.add(newRunId)

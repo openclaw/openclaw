@@ -1,5 +1,8 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.ui.chat.ChatTimelineItem
+import ai.openclaw.app.ui.chat.buildTimeline
+import ai.openclaw.app.ui.chat.prepareChatHistory
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -10,6 +13,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -312,6 +316,84 @@ class ChatControllerStreamReplayTest {
         assertEquals(followupTools, controller.pendingToolCalls.value)
         tool("a-followup", "shared-call", "result")
         assertTrue(controller.pendingToolCalls.value.isEmpty())
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun optimisticPromptsKeepToolDisclosuresThroughDelayedHistoryAndAckRekey() =
+    runTest {
+      withPendingRunReplay {
+        assertTrue(send("z-original"))
+        tool("z-original", "original-tool")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        gateway.respond("chat.send") {
+          entered.complete(Unit)
+          release.await()
+          sendAck("canonical-followup", "started")
+        }
+
+        fun toolGroups(): Map<String, List<String?>> =
+          prepareChatHistory(controller.messages.value, owner.sessionKey, owner.sessionKey)
+            .buildTimeline(controller.pendingRunCount.value, controller.toolActivities.value, null)
+            .items
+            .filterIsInstance<ChatTimelineItem.ToolActivity>()
+            .associate { it.disclosureKey to it.tools.map { tool -> tool.toolCallId } }
+        val expected = mapOf("z-original:user" to listOf("original-tool"), "a-followup:user" to listOf("followup-tool"))
+        val followup = async { send("a-followup") }
+        try {
+          runCurrent()
+          assertTrue(entered.isCompleted)
+          tool("a-followup", "followup-tool")
+          controller.refresh()
+          runCurrent()
+          assertTrue("History remains delayed while both prompts are optimistic", controller.historyLoading.value)
+          assertEquals(2, controller.messages.value.size)
+          assertEquals(2, controller.toolActivities.value.size)
+          assertEquals(expected, toolGroups())
+          val originalPrompt = controller.messages.value.single { it.idempotencyKey == "a-followup:user" }
+          release.complete(Unit)
+          assertTrue(followup.await())
+          val rekeyed = controller.messages.value.single { it.idempotencyKey == originalPrompt.idempotencyKey }
+          assertEquals(originalPrompt.id, rekeyed.id)
+          assertEquals("canonical-followup", rekeyed.runId)
+          assertEquals(expected, toolGroups())
+
+          val response =
+            json
+              .parseToJsonElement(
+                historyResponse(
+                  "session-concurrent",
+                  listOf(
+                    ReplayHistoryMessage("user", "z-original", 1_000, idempotencyKey = "z-original:user"),
+                    ReplayHistoryMessage("user", "a-followup", 2_000, idempotencyKey = "a-followup:user"),
+                  ),
+                  inFlightRun = "canonical-followup" to "",
+                  activeRunIds = listOf("z-original", "canonical-followup"),
+                ),
+              ).jsonObject
+          val persisted =
+            (response.getValue("messages") as JsonArray).mapIndexed { index, message ->
+              JsonObject(
+                message.jsonObject + (
+                  "__openclaw" to
+                    buildJsonObject {
+                      put("id", JsonPrimitive("persisted-$index"))
+                      put("runId", JsonPrimitive(if (index == 0) "z-original" else "canonical-followup"))
+                    }
+                ),
+              )
+            }
+          gateway.respondWith("chat.history", JsonObject(response + ("messages" to JsonArray(persisted))).toString())
+          controller.refresh()
+          runCurrent()
+          assertFalse(controller.historyLoading.value)
+          assertEquals(listOf("persisted-0", "persisted-1"), controller.messages.value.map { it.entryId })
+          assertEquals(expected, toolGroups())
+        } finally {
+          release.complete(Unit)
+        }
       }
     }
 
