@@ -1,3 +1,4 @@
+import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   BuildSessionEntryOptions,
   SessionFileEntry,
@@ -187,6 +188,13 @@ type SessionMembershipFactsWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+type SessionProgressCardWorkerInput = {
+  kind: "session-progress-card";
+  database: { agentId: string; path: string };
+  sessionKey: string;
+  env: NodeJS.ProcessEnv;
+};
+
 type SessionUsageCacheWorkerInput = {
   kind: "usage-cache";
   database: { agentId: string; path: string };
@@ -282,6 +290,7 @@ export type SessionHistoryWorkerInput =
   | SessionRowPresenceWorkerInput
   | SessionMembersWorkerInput
   | SessionMembershipFactsWorkerInput
+  | SessionProgressCardWorkerInput
   | SessionEntryListWorkerInput
   | SessionExactEntriesWorkerInput
   | SessionRowFactsWorkerInput
@@ -315,6 +324,7 @@ export type SessionTranscriptWorkerValues = {
   "session-row-presence": boolean;
   "session-members": SessionMember[];
   "session-membership-facts": SessionMembershipFacts;
+  "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
   "session-entry-list": SessionEntryListWorkerResult;
   "session-exact-entries": SessionExactEntriesWorkerResult;
   "session-row-facts": SessionRowFactsWorkerResult;
@@ -385,6 +395,9 @@ export type SessionHistoryWorkerDatabase = {
   readMembershipFacts: (
     input: Omit<SessionMembershipFactsWorkerInput, "kind" | "database">,
   ) => Promise<SessionMembershipFacts>;
+  readProgressCard: (
+    input: Omit<SessionProgressCardWorkerInput, "kind" | "database">,
+  ) => Promise<ProgressCard | null>;
   readUsageCache: (
     input: Omit<SessionUsageCacheWorkerInput, "kind" | "database">,
   ) => Promise<SessionCostUsageCacheReadResult>;
