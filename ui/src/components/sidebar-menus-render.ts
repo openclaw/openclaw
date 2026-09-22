@@ -210,6 +210,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
     return nothing;
   }
   const context = host.sessionDataContext;
+  const client = context?.gateway.snapshot.client;
+  const trigger = controller.sessionMenuTrigger;
+  let closedCurrentMenu = false;
   const pluginActionSignal = controller.pluginActionLifetime.signal;
   const currentSession = host.findSidebarSessionByKey(menu.session.key);
   // Read again at dispatch: session updates can arrive before the menu rerenders.
@@ -308,6 +311,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         }
         .onClose=${() => {
           if (controller.sessionMenu === menu) {
+            closedCurrentMenu = true;
             controller.closeSessionMenu();
           }
         }}
@@ -344,6 +348,17 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               }
               break;
             case "toggle-pin":
+              if (
+                closedCurrentMenu &&
+                controller.sessionMenu === null &&
+                host.sessionDataContext === context &&
+                context?.gateway.snapshot.client === client &&
+                host.findSidebarSessionByKey(session.key)?.sessionId === session.sessionId &&
+                trigger?.isConnected &&
+                host.querySelector(".sidebar")?.contains(trigger)
+              ) {
+                trigger.focus({ preventScroll: true });
+              }
               void host.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
               break;
             case "toggle-involving-me":

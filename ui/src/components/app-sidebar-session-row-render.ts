@@ -442,6 +442,7 @@ export function renderRecentSession(params: {
       class=${rowClass}
       style=${color ? `--session-color: var(--session-color-${color})` : nothing}
       data-session-key=${session.key}
+      data-session-id=${session.sessionId ?? nothing}
       data-catalog-session-key=${display?.catalogIdentityKey ?? nothing}
       role=${ifDefined(listItem ? "listitem" : undefined)}
       draggable=${rowDraggable ? "true" : "false"}
