@@ -40,6 +40,12 @@ const groupId = `swarm:${sessionKey}:${parentRunId}`;
 const replayKey = `${codeModeRunId}:${requestId}`;
 const task = "Explore one independent explanation.";
 
+type DispatchGatewayMethodInProcess = NonNullable<
+  NonNullable<
+    Parameters<typeof subagentSpawnTesting.setDepsForTest>[0]
+  >["dispatchGatewayMethodInProcess"]
+>;
+
 let stateDir = "";
 
 async function writeConfig(): Promise<OpenClawConfig> {
@@ -111,16 +117,13 @@ describe("Code Mode dynamics lifecycle integration", () => {
 
   it("projects terminal debt into one advisory and releases the parent observer", async () => {
     const config = await writeConfig();
-    const dispatchGatewayMethodInProcess = vi.fn(
-      async <T>(
-        _method: string,
-        _params: Record<string, unknown>,
-        _options?: unknown,
-      ) => {
-        // SAFETY: this fixture supplies the accepted Gateway response shape for the generic T.
-        return { runId: "native-lifecycle-run", status: "accepted" } as T;
-      },
-    );
+    const dispatchGatewayMethodInProcess: DispatchGatewayMethodInProcess = async <T>(
+      _method: string,
+      _params: Record<string, unknown>,
+    ) => {
+      // SAFETY: this fixture supplies the accepted Gateway response shape for the generic T.
+      return { runId: "native-lifecycle-run", status: "accepted" } as T;
+    };
     subagentSpawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
       dispatchGatewayMethodInProcess,
